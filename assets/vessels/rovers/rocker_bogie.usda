@@ -27,29 +27,13 @@ def Xform "RockerBogie" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
+    prepend variantSets = "driveLaw"
+    variants = {
+        string driveLaw = "builtin"
+    }
 )
 {
     uniform bool lunco:spawnable = true
-    # Emission REQUIRES a material: USD has no "display emissive" primvar the way
-    # it has `displayColor`/`displayOpacity`, so the headlight glow is a
-    # UsdPreviewSurface input on a Shader, bound to both lenses.
-    def Scope "Looks"
-    {
-        def Material "Lens_Mat"
-        {
-            token outputs:surface.connect = </RockerBogie/Looks/Lens_Mat/Surface.outputs:surface>
-
-            def Shader "Surface"
-            {
-                uniform token info:id = "UsdPreviewSurface"
-                color3f inputs:diffuseColor = (1.0, 0.95, 0.85)
-                # HDR (>1) so the lens reads as a GLOW the sun cannot wash out.
-                color3f inputs:emissiveColor = (5.0, 4.75, 4.25)
-                token outputs:surface
-            }
-        }
-    }
-
     # --- VEHICLE MASS & DAMPING ---
     # Edit the chassis mass here (default 300 kg)
     float physics:mass = 300.0
@@ -135,90 +119,22 @@ def Xform "RockerBogie" (
     }
 
     # Headlights
-    def Xform "Headlight_L"
+    def Xform "Headlight_L" (
+        prepend references = @lunco://components/lights/headlight.usda@</Headlight>
+    )
     {
         double3 xformOp:translate = (-0.5, 0.1, -0.9)
         double3 xformOp:rotateXYZ = (-15, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-
-        def SphereLight "Light"
-        (
-            prepend apiSchemas = ["ShapingAPI", "ShadowAPI", "LunCoLightAPI"]
-        )
-        {
-            float inputs:intensity = 1000000.0
-            float inputs:exposure = 0.0
-            color3f inputs:color = (1.0, 0.95, 0.85)
-            bool inputs:shadow:enable = true
-            float inputs:shaping:cone:angle = 45.0
-            float inputs:shaping:cone:softness = 0.3
-            float lunco:light:range = 60.0
-        }
-
-        def Cylinder "Casing"
-        {
-            uniform token axis = "Z"
-            double radius = 0.1
-            double height = 0.15
-            double3 xformOp:translate = (0, 0, 0.075)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)]
-            bool physics:collisionEnabled = false
-        }
-
-        def Cylinder "Lens"
-        {
-            uniform token axis = "Z"
-            double radius = 0.09
-            double height = 0.02
-            double3 xformOp:translate = (0, 0, -0.01)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            rel material:binding = </RockerBogie/Looks/Lens_Mat>
-            bool physics:collisionEnabled = false
-        }
     }
 
-    def Xform "Headlight_R"
+    def Xform "Headlight_R" (
+        prepend references = @lunco://components/lights/headlight.usda@</Headlight>
+    )
     {
         double3 xformOp:translate = (0.5, 0.1, -0.9)
         double3 xformOp:rotateXYZ = (-15, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-
-        def SphereLight "Light"
-        (
-            prepend apiSchemas = ["ShapingAPI", "ShadowAPI", "LunCoLightAPI"]
-        )
-        {
-            float inputs:intensity = 1000000.0
-            float inputs:exposure = 0.0
-            color3f inputs:color = (1.0, 0.95, 0.85)
-            bool inputs:shadow:enable = true
-            float inputs:shaping:cone:angle = 45.0
-            float inputs:shaping:cone:softness = 0.3
-            float lunco:light:range = 60.0
-        }
-
-        def Cylinder "Casing"
-        {
-            uniform token axis = "Z"
-            double radius = 0.1
-            double height = 0.15
-            double3 xformOp:translate = (0, 0, 0.075)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)]
-            bool physics:collisionEnabled = false
-        }
-
-        def Cylinder "Lens"
-        {
-            uniform token axis = "Z"
-            double radius = 0.09
-            double height = 0.02
-            double3 xformOp:translate = (0, 0, -0.01)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            rel material:binding = </RockerBogie/Looks/Lens_Mat>
-            bool physics:collisionEnabled = false
-        }
     }
 
     # ── Left rocker ─────────────────────────────────────────────────────────
@@ -315,7 +231,6 @@ def Xform "RockerBogie" (
 
             # --- WHEEL DYNAMICS CONFIGURATION ---
             int lunco:wheel:index = 0
-            float physxVehicleWheel:radius = 0.4
         }
     }
 
@@ -406,7 +321,6 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int lunco:wheel:index = 1
-            float physxVehicleWheel:radius = 0.4
         }
     }
 
@@ -513,7 +427,6 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int lunco:wheel:index = 2
-            float physxVehicleWheel:radius = 0.4
         }
 
         # Rear Left Wheel
@@ -532,7 +445,6 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int lunco:wheel:index = 4
-            float physxVehicleWheel:radius = 0.4
         }
     }
 
@@ -632,7 +544,6 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int lunco:wheel:index = 3
-            float physxVehicleWheel:radius = 0.4
         }
 
         # Rear Right Wheel
@@ -651,7 +562,6 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int lunco:wheel:index = 5
-            float physxVehicleWheel:radius = 0.4
         }
     }
 
@@ -801,5 +711,23 @@ def Xform "RockerBogie" (
         uniform token physics:axis = "X"
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
+    }
+
+    # --- Drive law: how throttle/steer become per-side drive ---------------
+    # `builtin` keeps the instant Rust skid kernel
+    # (PhysxVehicleTankDifferentialAPI above); `modelica` swaps in a
+    # solver-clocked per-side motor lag via the SAME skid component the other
+    # skid rovers reference — a variant chooses a component, it never restates
+    # one. The wheels here carry no `lunco:drivePort`, so they use the
+    # index-parity default (even 0/2/4 = FL/ML/RL ⇒ drive_left, odd 1/3/5 =
+    # FR/MR/RR ⇒ drive_right) — exactly the port pair the skid law writes.
+    variantSet "driveLaw" = {
+        "builtin" {
+        }
+
+        "modelica" (
+            prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
+        ) {
+        }
     }
 }

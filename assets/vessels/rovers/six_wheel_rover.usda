@@ -28,6 +28,10 @@ def Xform "SixWheelRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
+    prepend variantSets = "driveLaw"
+    variants = {
+        string driveLaw = "builtin"
+    }
 )
 {
     uniform bool lunco:spawnable = true
@@ -50,16 +54,21 @@ def Xform "SixWheelRover" (
     float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)
     float3 physics:centerOfMass = (0.0, -0.1, 0.0)
 
-    # Chassis collider + visual — 2.0 m × 0.3 m × 5.0 m (longer than the 4-wheel).
+    # Chassis collider + hull — 2.0 m × 0.3 m × 5.0 m (longer than the 4-wheel).
     def Cube "Chassis" (
-        kind = "subcomponent"
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
     {
-        double size = 1.0
         double3 xformOp:scale = (2.0, 0.3, 5.0)
-        uniform token[] xformOpOrder = ["xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+        # Sand-gold identity via the hull paint, not displayColor (the hull
+        # shader replaces it).
+        over "HullLook"
+        {
+            over "Shader"
+            {
+                color3f inputs:hull_color = (0.80, 0.68, 0.30)
+            }
+        }
     }
 
     # --- Left bank (binds to drive_left) ------------------------------------
@@ -70,15 +79,10 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         double3 xformOp:translate = (-1.0, -0.15, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
         int lunco:wheel:index = 0
-        float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_left"
     }
 
@@ -89,15 +93,10 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         double3 xformOp:translate = (-1.0, -0.15, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(1.0, 0.4, 0.0)]
 
         int lunco:wheel:index = 2
-        float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_left"
     }
 
@@ -108,15 +107,10 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         double3 xformOp:translate = (-1.0, -0.15, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
         int lunco:wheel:index = 4
-        float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_left"
     }
 
@@ -128,15 +122,10 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         double3 xformOp:translate = (1.0, -0.15, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
         int lunco:wheel:index = 1
-        float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_right"
     }
 
@@ -147,15 +136,10 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         double3 xformOp:translate = (1.0, -0.15, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(1.0, 0.4, 0.0)]
 
         int lunco:wheel:index = 3
-        float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_right"
     }
 
@@ -166,15 +150,26 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         double3 xformOp:translate = (1.0, -0.15, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
         int lunco:wheel:index = 5
-        float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_right"
+    }
+
+    # --- Drive law: how throttle/steer become per-side drive ---------------
+    # ORTHOGONAL to `drivetrain` (which realizes the wheels physically):
+    # `builtin` keeps the instant Rust skid kernel; `modelica` swaps in a
+    # solver-clocked first-order motor lag (RoverDrivetrain.mo) via the
+    # component the variant references — a variant chooses a component, it
+    # never restates one.
+    variantSet "driveLaw" = {
+        "builtin" {
+        }
+
+        "modelica" (
+            prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
+        ) {
+        }
     }
 }

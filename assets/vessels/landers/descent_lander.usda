@@ -568,12 +568,17 @@ def Xform "DescentLander" (
     # lander catches on its legs instead of the struts clipping through terrain
     # (and a rover cannot drive through a leg). Lowest point is the pads (y=-5.0).
     #
-    # Each strut carries a `leg_spring.rhai` program — a damped visual shock
-    # absorber that compresses the strut along its own axis at touchdown and
-    # settles slightly loaded (see that script for what moves and what does
-    # not). Params are the strut's FOOT point and foot→hull unit axis in the
-    # vessel frame; they must agree with the authored translate/rotate/scale,
-    # which the program reproduces exactly at full extension.
+    # Each strut is SPRUNG, structured across the three authoring layers:
+    #   models/LegStrut.mo      — the physics: contact-gated spring-damper,
+    #                             one instance per leg (`Strut` below), wired
+    #                             to the altimeter and body vertical speed
+    #   scenarios/leg_spring.rhai — the actuator (`Actuator` below): applies
+    #                             the model's `stroke` to the strut geometry,
+    #                             foot pinned, sliding it into its piston
+    #   Piston* cylinders       — the fixed outer tube the strut slides into
+    # Actuator params are the strut's FOOT point and foot→hull unit axis in
+    # the vessel frame; they must agree with the authored translate/rotate/
+    # scale, which the actuator reproduces exactly at zero stroke.
     def Cube "LegPX"
     {
         double size = 1.0
@@ -584,7 +589,33 @@ def Xform "DescentLander" (
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Spring"
+        # The strut's PHYSICS — a Modelica spring-damper (one instance per
+        # leg), wired to the airframe's own sensors exactly the way the GNC
+        # component wires its inputs. The Actuator beside it reads `stroke`
+        # and slides the strut into its piston sleeve. No Rust anywhere.
+        def LunCoProgram "Strut"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+
+            # The spring, EXPOSED TO USD — a parameter is an input with a
+            # constant instead of a connection (the GNC convention). Re-tune a
+            # leg from any scene with an `over`; wire one later and nothing
+            # about the model changes. The live `stroke` comes back the same
+            # way: it is this prim's `outputs:stroke` port on the composed
+            # stage, which is exactly what the sibling Actuator (and usdview)
+            # reads.
+            float inputs:k = 4000.0
+            float inputs:c = 2200.0
+            float inputs:m_eff = 500.0
+            float inputs:contact_alt = 1.8
+            float inputs:gate_width = 0.4
+            float inputs:kv_impact = 900.0
+            float inputs:stroke_max = 0.8
+        }
+        def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
             custom float lunco:param:bx = 5.5
@@ -606,6 +637,57 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = true
     }
 
+    # Shock-absorber PISTON sleeves — one per leg, fixed at the strut's HULL
+    # anchor and reaching 2.6 m down the strut axis. The sleeve does not move;
+    # on touchdown `leg_spring.rhai` shortens the strut upward from the foot,
+    # so the strut visibly slides INTO its sleeve — the compression reads as a
+    # mechanism, not as a scale trick. Wider than the strut (r 0.12 over the
+    # 0.15 cube) so the overlap hides the strut's sliding end. Visual only.
+    def Cylinder "PistonPX"
+    {
+        uniform token axis = "Y"
+        double radius = 0.12
+        double height = 2.6
+        double3 xformOp:translate = (2.949, 0.462, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 25.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "PistonNX"
+    {
+        uniform token axis = "Y"
+        double radius = 0.12
+        double height = 2.6
+        double3 xformOp:translate = (-2.949, 0.462, 0)
+        double3 xformOp:rotateXYZ = (0, 0, -25.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "PistonPZ"
+    {
+        uniform token axis = "Y"
+        double radius = 0.12
+        double height = 2.6
+        double3 xformOp:translate = (0, 0.462, 2.949)
+        double3 xformOp:rotateXYZ = (-25.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "PistonNZ"
+    {
+        uniform token axis = "Y"
+        double radius = 0.12
+        double height = 2.6
+        double3 xformOp:translate = (0, 0.462, -2.949)
+        double3 xformOp:rotateXYZ = (25.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        bool physics:collisionEnabled = false
+    }
+
     def Cube "LegNX"
     {
         double size = 1.0
@@ -616,7 +698,29 @@ def Xform "DescentLander" (
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Spring"
+        def LunCoProgram "Strut"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+
+            # The spring, EXPOSED TO USD — a parameter is an input with a
+            # constant instead of a connection (the GNC convention). Re-tune a
+            # leg from any scene with an `over`; wire one later and nothing
+            # about the model changes. The live `stroke` comes back the same
+            # way: it is this prim's `outputs:stroke` port on the composed
+            # stage, which is exactly what the sibling Actuator (and usdview)
+            # reads.
+            float inputs:k = 4000.0
+            float inputs:c = 2200.0
+            float inputs:m_eff = 500.0
+            float inputs:contact_alt = 1.8
+            float inputs:gate_width = 0.4
+            float inputs:kv_impact = 900.0
+            float inputs:stroke_max = 0.8
+        }
+        def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
             custom float lunco:param:bx = -5.5
@@ -648,7 +752,29 @@ def Xform "DescentLander" (
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Spring"
+        def LunCoProgram "Strut"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+
+            # The spring, EXPOSED TO USD — a parameter is an input with a
+            # constant instead of a connection (the GNC convention). Re-tune a
+            # leg from any scene with an `over`; wire one later and nothing
+            # about the model changes. The live `stroke` comes back the same
+            # way: it is this prim's `outputs:stroke` port on the composed
+            # stage, which is exactly what the sibling Actuator (and usdview)
+            # reads.
+            float inputs:k = 4000.0
+            float inputs:c = 2200.0
+            float inputs:m_eff = 500.0
+            float inputs:contact_alt = 1.8
+            float inputs:gate_width = 0.4
+            float inputs:kv_impact = 900.0
+            float inputs:stroke_max = 0.8
+        }
+        def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
             custom float lunco:param:bx = 0.0
@@ -680,7 +806,29 @@ def Xform "DescentLander" (
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Spring"
+        def LunCoProgram "Strut"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+
+            # The spring, EXPOSED TO USD — a parameter is an input with a
+            # constant instead of a connection (the GNC convention). Re-tune a
+            # leg from any scene with an `over`; wire one later and nothing
+            # about the model changes. The live `stroke` comes back the same
+            # way: it is this prim's `outputs:stroke` port on the composed
+            # stage, which is exactly what the sibling Actuator (and usdview)
+            # reads.
+            float inputs:k = 4000.0
+            float inputs:c = 2200.0
+            float inputs:m_eff = 500.0
+            float inputs:contact_alt = 1.8
+            float inputs:gate_width = 0.4
+            float inputs:kv_impact = 900.0
+            float inputs:stroke_max = 0.8
+        }
+        def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
             custom float lunco:param:bx = 0.0

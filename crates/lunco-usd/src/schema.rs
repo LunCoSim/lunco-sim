@@ -172,6 +172,12 @@ pub struct PropertySpec {
     /// unit. From [`CORE_LINEAR_UNITS`] for core USD, from a `lunco:unit` entry in
     /// the property's `customData` for schemas of ours.
     pub linear: LinearUnit,
+    /// Slider bounds/unit the SCHEMA declares for this property
+    /// (`customData { min, max, unit }` on the schema attribute). The
+    /// schema-level default for every asset that composes the schema; a
+    /// per-asset authored `customData` still overrides it
+    /// (`produce_usd_param_view` asks the composed attribute first).
+    pub ui_hint: Option<lunco_usd_bevy::AttrUiHint>,
 }
 
 /// The parsed `luncoSchema` plus the core `uniform` table.
@@ -351,9 +357,10 @@ impl SchemaRegistry {
                     // the one thing USD's type system cannot — that its scalar is a
                     // length. Core USD annotates nothing this way, so it is stamped
                     // from `CORE_LINEAR_UNITS` instead.
-                    let linear = match spec.get("customData") {
+                    let (linear, ui_hint) = match spec.get("customData") {
                         Some(sdf::Value::Dictionary(d)) => {
-                            match d.get("lunco:unit").cloned().and_then(token_or_string) {
+                            let linear = match d.get("lunco:unit").cloned().and_then(token_or_string)
+                            {
                                 None => LinearUnit::None,
                                 Some(u) if u == "length" => {
                                     LinearUnit::Length { stage_units_per_unit: 1.0 }
@@ -369,13 +376,18 @@ impl SchemaRegistry {
                                     );
                                     LinearUnit::None
                                 }
-                            }
+                            };
+                            // Schema-declared slider bounds — the ONE decoder
+                            // (`AttrUiHint::from_dict`) shared with the composed-
+                            // stage per-asset read.
+                            (linear, lunco_usd_bevy::AttrUiHint::from_dict(d))
                         }
-                        _ => LinearUnit::None,
+                        _ => (LinearUnit::None, None),
                     };
                     let prop = PropertySpec {
                         type_name,
                         linear,
+                        ui_hint,
                         // Unauthored ⇒ `varying`, USD's default. `uniform` is
                         // the only variability USDA actually writes out.
                         variability: match spec.get("variability") {
@@ -485,6 +497,14 @@ impl SchemaRegistry {
         name.starts_with("lunco:") && !self.by_name.contains_key(name)
     }
 
+    /// The slider hint the schema declares for `name` (bare-name precedence
+    /// lookup, same rule as [`property`](Self::property)). Per-asset authored
+    /// `customData` still overrides — callers ask the composed attribute first
+    /// and fall back here.
+    pub fn ui_hint(&self, name: &str) -> Option<lunco_usd_bevy::AttrUiHint> {
+        self.property(name).and_then(|p| p.ui_hint.clone())
+    }
+
     /// The concrete typed schemas `luncoSchema` defines.
     pub fn prim_types(&self) -> &[String] {
         &self.prim_types
@@ -521,6 +541,16 @@ pub fn is_custom(name: &str) -> bool {
         .read()
         .map(|r| r.is_custom(name))
         .unwrap_or(false)
+}
+
+/// Schema-declared slider hint for `name`. Convenience over
+/// [`SchemaRegistry::global`] — see [`variability_of`] for the locking note.
+/// A poisoned lock degrades to `None` (no derived slider), never a panic.
+pub fn ui_hint_of(name: &str) -> Option<lunco_usd_bevy::AttrUiHint> {
+    SchemaRegistry::global()
+        .read()
+        .ok()
+        .and_then(|r| r.ui_hint(name))
 }
 
 #[cfg(test)]
@@ -594,10 +624,40 @@ mod tests {
         assert!(
             missing.is_empty() && extra.is_empty(),
             "schema.usda and generatedSchema.usda disagree — regenerate with \
-             `usdGenSchema schema.usda .`\n  in source but NOT generated (invisible to \
+             `python3 scripts/gen_schema.py`\n  in source but NOT generated (invisible to \
              the runtime): {missing:?}\n  in generated but NOT source (authored by \
              hand?): {extra:?}"
         );
+    }
+
+    /// Schema-declared UI hints must survive regeneration: the hints are
+    /// authored in `schema.usda` but the runtime loads GENERATED_SCHEMA, so a
+    /// forgotten `python3 scripts/gen_schema.py` would silently strip every
+    /// derived slider. Pin one representative hint per wheel-domain API.
+    #[test]
+    fn wheel_schema_declares_ui_hints() {
+        let reg = SchemaRegistry::global().read().unwrap();
+        for name in [
+            "lunco:wheel:maxDriveOmega",
+            "lunco:wheel:driveDamping",
+            "lunco:wheel:stallTorqueGain",
+            "lunco:wheel:contactGripStiffness",
+            "lunco:wheel:driveForcePerNormal",
+            "lunco:suspension:restLength",
+            "lunco:tire:frictionCoefficient",
+        ] {
+            let hint = reg.ui_hint(name).unwrap_or_else(|| {
+                panic!("{name} declares no schema-level UI hint — regenerate with gen_schema.py")
+            });
+            let (min, max) = (hint.min.expect("min"), hint.max.expect("max"));
+            assert!(max > min, "{name}: degenerate hint range {min}..{max}");
+        }
+        // And the per-asset override contract: an authored customData beats the
+        // schema hint (produce_usd_param_view asks the composed attr FIRST) —
+        // nothing to assert here at registry level, but the registry must not
+        // invent hints for un-annotated names.
+        assert!(reg.ui_hint("lunco:wheel:index").is_none(),
+            "lunco:wheel:index should carry no slider hint (wiring identity, not a knob)");
     }
 
     /// Every schema class must be registered in `plugInfo.json`.

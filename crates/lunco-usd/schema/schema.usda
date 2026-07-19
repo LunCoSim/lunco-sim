@@ -765,6 +765,11 @@ class "LunCoSuspensionAPI" (
 )
 {
     float lunco:suspension:restLength (
+        customData = {
+            double min = 0.05
+            double max = 2
+            string unit = "m"
+        }
         doc = """Natural standoff of a raycast wheel below its mount, metres — the
         distance at which the analytical spring exerts zero force. `float`, like the
         `physxVehicleSuspension:*` attrs it sits beside (and like the
@@ -802,10 +807,19 @@ class "LunCoWheelAPI" (
         `wheel.usda`."""
     )
     double lunco:wheel:contactGripStiffness (
+        customData = {
+            double min = 0
+            double max = 500
+        }
         doc = """Slope of contact friction vs slip, before the Coulomb cone bites.
         Read by the wheel loader (lunco-usd-sim)."""
     )
     double lunco:wheel:driveForcePerNormal (
+        customData = {
+            double min = 0
+            double max = 10
+            string unit = "×N"
+        }
         doc = """Drive force as a multiple of the wheel's normal force — traction
         authority before the friction cone limits it. Per wheel, so a heavy hauler
         and a light scout can differ."""
@@ -815,13 +829,26 @@ class "LunCoWheelAPI" (
         axis (cars); a raked fork authors e.g. `(0, 0.91, 0.42)` for ~25°."""
     )
     double lunco:wheel:maxDriveOmega (
+        customData = {
+            double min = 0
+            double max = 60
+            string unit = "rad/s"
+        }
         doc = """Joint-wheel drive tuning (rigid-axle rovers): free-spin cap of the
         axle motor, rad/s."""
     )
     double lunco:wheel:driveDamping (
+        customData = {
+            double min = 0
+            double max = 200
+        }
         doc = """Joint-wheel drive tuning: damping of the axle motor."""
     )
     double lunco:wheel:stallTorqueGain (
+        customData = {
+            double min = 0
+            double max = 20
+        }
         doc = """Joint-wheel drive tuning: torque gain as the axle approaches
         stall."""
     )
@@ -844,6 +871,11 @@ class "LunCoTireAPI" (
 )
 {
     double lunco:tire:frictionCoefficient (
+        customData = {
+            double min = 0
+            double max = 2
+            string unit = "μ"
+        }
         doc = """Coulomb μ between this tire and the ground — the slip limit is
         atan(μ). No fallback: a tire that does not say what it grips with is an
         authoring bug, not a μ of 1.0."""

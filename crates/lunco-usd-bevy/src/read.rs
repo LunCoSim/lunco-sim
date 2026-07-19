@@ -21,7 +21,7 @@ use crate::view::StageView;
 /// data-driven parameter slider derives from an asset. All fields optional; a
 /// caller typically requires `min`+`max` to render a bounded control and falls
 /// back otherwise. Plain-Rust so consumers need no `openusd` dependency.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AttrUiHint {
     pub min: Option<f64>,
     pub max: Option<f64>,
@@ -29,6 +29,24 @@ pub struct AttrUiHint {
     /// Value type for write-back `SetAttribute` (`customData.type`), e.g.
     /// `"float"` / `"double"` / `"int"`.
     pub type_name: Option<String>,
+}
+
+impl AttrUiHint {
+    /// Parse the hint fields out of a `customData` dictionary — the ONE
+    /// decoder, shared by the composed-stage read (`attr_ui_hint`, authored
+    /// per-asset opinions) and the schema registry (schema-declared hints, so
+    /// every asset composing the schema inherits its sliders). `None` when the
+    /// dictionary carries no hint field at all — an unrelated `customData`
+    /// (e.g. only `lunco:unit`) is not a hint.
+    pub fn from_dict(dict: &openusd::sdf::Dictionary) -> Option<AttrUiHint> {
+        let hint = AttrUiHint {
+            min: dict_f64(dict, "min"),
+            max: dict_f64(dict, "max"),
+            unit: dict_string(dict, "unit"),
+            type_name: dict_string(dict, "type"),
+        };
+        (hint != AttrUiHint::default()).then_some(hint)
+    }
 }
 
 /// A numeric `customData` field, tolerant of `double`/`float`/`int` authoring.
@@ -509,12 +527,7 @@ impl UsdRead for StageView<'_> {
             Some(openusd::sdf::Value::Dictionary(d)) => d,
             _ => return None,
         };
-        Some(AttrUiHint {
-            min: dict_f64(&dict, "min"),
-            max: dict_f64(&dict, "max"),
-            unit: dict_string(&dict, "unit"),
-            type_name: dict_string(&dict, "type"),
-        })
+        AttrUiHint::from_dict(&dict)
     }
 
     fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {

@@ -1,0 +1,50 @@
+#usda 1.0
+(
+    defaultPrim = "DriveLaw"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Modelica DRIVE LAW for the SIX-INDEPENDENT rover — the `driveLaw = "modelica"`
+# variant references this into the rover ROOT, exactly as `modelica_skid.usda`
+# does for the skid rovers: a variant CHOOSES a component, it never restates
+# one. Everything below composes onto the rover; `</DriveLaw.…>` paths
+# translate to the HOST rover root through the reference arc.
+#
+# What it does: replaces the authored `lunco:driveMix` (the instant six-channel
+# skid mix) with a physical command→torque law. The MODEL is the same
+# `models/RoverDrivetrain.mo` the skid law uses — deliberately: the law is
+# per-SIDE (one motor controller per bank), and fanning a side out to three
+# wheel ports is wiring, not physics. Only the BRIDGE differs: it writes the
+# rover's six per-wheel FSW ports (`drive_w0..w2` = left bank,
+# `drive_w3..w5` = right bank) instead of `drive_left`/`drive_right`.
+# USD wires + Modelica physics + a rhai actuator; no Rust anywhere.
+#
+# NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
+def Xform "DriveLaw" (
+    kind = "component"
+)
+{
+    # Stand the built-in mixing down. An unresolved scripted kernel is a
+    # DELIBERATE no-op in `apply_drive_mix` (the hook lookup misses and no port
+    # is written) — which is exactly what a program-driven drive law needs:
+    # nothing else may write the six wheel ports it owns.
+    string lunco:driveKernel = "external"
+
+    # The physics: per-side first-order motor lag, solver-clocked.
+    def LunCoProgram "Drivetrain"
+    {
+        uniform asset lunco:program:sourceAsset = @lunco://models/RoverDrivetrain.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        # `</DriveLaw.…>` = the host rover root after arc translation: the
+        # model reads the same FSW command ports the built-in kernels read.
+        float inputs:throttle.connect = </DriveLaw.outputs:throttle>
+        float inputs:steer.connect = </DriveLaw.outputs:steer>
+    }
+
+    # The actuation: per-side model outputs fanned out to the six wheel ports.
+    def LunCoProgram "DriveBridge"
+    {
+        uniform asset lunco:program:sourceAsset = @lunco://scenarios/rover_modelica_drive_w6.rhai@
+    }
+}

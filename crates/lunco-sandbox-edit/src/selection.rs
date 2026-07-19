@@ -187,6 +187,34 @@ fn find_selectable(
     Some(hit)
 }
 
+/// The nearest PRIM-BACKED entity on the chain from `hit` up to (excluding)
+/// `root` — the drill target the Inspector's USD-parameter section aims at.
+///
+/// The picked leaf is often a synthesized visual child (a wheel's `*_visual`
+/// split, a glTF node) that carries no `UsdPrimPath`; the prim entity — the one
+/// whose attributes `ApplyUsdOp` can address — is an ancestor. `None` when
+/// nothing strictly below the root is prim-backed (the drill then keeps the raw
+/// hit for material-scoped editing).
+fn find_prim_part(
+    hit: Entity,
+    root: Entity,
+    q_prims: &Query<Entity, With<lunco_usd_bevy::UsdPrimPath>>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    const MAX_DEPTH: usize = 32;
+    let mut entity = hit;
+    for _ in 0..MAX_DEPTH {
+        if entity == root {
+            return None;
+        }
+        if q_prims.get(entity).is_ok() {
+            return Some(entity);
+        }
+        entity = q_parents.get(entity).ok()?.parent();
+    }
+    None
+}
+
 /// Selects the entity under the pointer, driven by **bevy_picking**.
 ///
 /// Registered as a global `On<Pointer<Click>>` observer. bevy_picking (with
@@ -203,8 +231,9 @@ fn find_selectable(
 ///   (un-modified) click is owned by the avatar's possess/follow/focus observer
 ///   (`avatar_raycast_possession`). Selecting only highlights; possession stays
 ///   available (a gizmo handle drag, not mere selection, blocks possession).
-/// - **Shift+click on a sub-part** of the already-selected primary DRILLS the
-///   Inspector to that part instead of toggling the whole object off.
+/// - **Alt+Shift+click on a sub-part** of the already-selected primary DRILLS the
+///   Inspector to that part (plain Shift+click stays the selection toggle, so
+///   deselecting a compound object still works).
 ///
 /// Deselect is explicit (Escape/Backspace via [`handle_deselect_keys`], the
 /// Explorer, or selecting another entity) — a click on empty space or a panel
@@ -217,6 +246,7 @@ pub fn on_scene_click_select(
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
+    q_prims: Query<Entity, With<lunco_usd_bevy::UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
     q_selected_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,
@@ -273,11 +303,20 @@ pub fn on_scene_click_select(
         return;
     };
 
-    // DRILL: Shift+click on a sub-part of the ALREADY-selected primary aims the
-    // Inspector at that part instead of toggling the whole object out of the
-    // selection.
-    if prev_selected == Some(entity) && hit_entity != entity {
-        inspector_target.part = Some(hit_entity);
+    // DRILL: **Alt+Shift+click** on a sub-part of the ALREADY-selected primary
+    // aims the Inspector at that part. Its own modifier, NOT plain Shift+click:
+    // Shift+click is the multi-selection toggle, and for any compound object
+    // (a rover — the picked mesh is always a descendant, never the root) a
+    // shift-drill would SHADOW deselect entirely. Resolved to the nearest
+    // PRIM-BACKED ancestor of the picked leaf (a wheel's `*_visual` mesh
+    // drills to the wheel PRIM, whose `lunco:wheel:*` params the USD section
+    // can then edit); the raw hit is kept only when nothing below the root
+    // carries a prim path.
+    let alt_held = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    if alt_held && prev_selected == Some(entity) && hit_entity != entity {
+        inspector_target.part = Some(
+            find_prim_part(hit_entity, entity, &q_prims, &q_parents).unwrap_or(hit_entity),
+        );
         return;
     }
 

@@ -60,7 +60,18 @@ def Cylinder "Wheel" (
 
     # --- Physics ---
     bool physics:rigidBodyEnabled = true
-    float physics:mass = 25.0
+    # The slider hint is authored HERE, per-asset: `physics:mass` is core
+    # UsdPhysics, and the vendored core schema is never stamped with LunCo
+    # opinions (unlike our own physxSchema reconstruction, which carries hints
+    # at schema level). One wheel mass for BOTH wheel kinds — the old
+    # raycast-25/physical-100 Rust fork is gone.
+    float physics:mass = 25.0 (
+        customData = {
+            double min = 1
+            double max = 500
+            string unit = "kg"
+        }
+    )
     bool physics:collisionEnabled = true
 
     # --- Wheel dynamics (Omniverse PhysX vehicle schema) ---

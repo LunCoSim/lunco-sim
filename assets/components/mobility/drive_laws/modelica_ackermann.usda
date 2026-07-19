@@ -1,0 +1,51 @@
+#usda 1.0
+(
+    defaultPrim = "DriveLaw"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Modelica DRIVE LAW for an ACKERMANN rover — the `driveLaw = "modelica"`
+# variant references this into the rover ROOT, exactly as `modelica_skid.usda`
+# does for the skid rovers: a variant CHOOSES a component, it never restates
+# one. Everything below composes onto the rover; `</DriveLaw.…>` paths
+# translate to the HOST rover root through the reference arc.
+#
+# What it does: replaces the instant built-in Ackermann linear kernel with a
+# physical command→torque law — `models/RoverAckermannDrivetrain.mo` integrates
+# ONE first-order motor lag on the shared axle (Ackermann steers with the front
+# knuckles, not a torque differential), and the rhai bridge writes the model's
+# normalized outputs onto the rover's `drive_left`/`drive_right`/`steering`
+# ports each tick. `steering` is a model passthrough: the built-in kernel this
+# law displaces writes all three ports, so the law must feed all three.
+# USD wires + Modelica physics + a rhai actuator; no Rust anywhere.
+#
+# NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
+def Xform "DriveLaw" (
+    kind = "component"
+)
+{
+    # Stand the built-in mixing down. An unresolved scripted kernel is a
+    # DELIBERATE no-op in `apply_drive_mix` (the hook lookup misses and no port
+    # is written) — which is exactly what a program-driven drive law needs:
+    # nothing else may write the drive/steering ports it owns.
+    string lunco:driveKernel = "external"
+
+    # The physics: shared-axle first-order motor lag + steering passthrough,
+    # solver-clocked.
+    def LunCoProgram "Drivetrain"
+    {
+        uniform asset lunco:program:sourceAsset = @lunco://models/RoverAckermannDrivetrain.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        # `</DriveLaw.…>` = the host rover root after arc translation: the
+        # model reads the same FSW command ports the built-in kernels read.
+        float inputs:throttle.connect = </DriveLaw.outputs:throttle>
+        float inputs:steer.connect = </DriveLaw.outputs:steer>
+    }
+
+    # The actuation: model outputs → the rover's drive + steering ports.
+    def LunCoProgram "DriveBridge"
+    {
+        uniform asset lunco:program:sourceAsset = @lunco://scenarios/rover_modelica_ackermann_drive.rhai@
+    }
+}

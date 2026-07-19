@@ -18,4 +18,15 @@ over "Tire" (
 )
 {
     double lunco:tire:frictionCoefficient = 0.4
+
+    # The look states the grip: tread gone — a smooth, dusty drum.
+    over "TireLook"
+    {
+        over "Shader"
+        {
+            float inputs:lug_depth = 0.05
+            float inputs:wear = 0.95
+            float inputs:dust_amount = 0.55
+        }
+    }
 }

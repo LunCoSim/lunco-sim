@@ -48,33 +48,14 @@ def Xform "SkidRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
-    prepend variantSets = "drivetrain"
+    prepend variantSets = ["drivetrain", "driveLaw"]
     variants = {
         string drivetrain = "raycast"
+        string driveLaw = "builtin"
     }
 )
 {
     uniform bool lunco:spawnable = true
-    # Emission REQUIRES a material: USD has no "display emissive" primvar the way
-    # it has `displayColor`/`displayOpacity`, so the headlight glow is a
-    # UsdPreviewSurface input on a Shader, bound to both lenses.
-    def Scope "Looks"
-    {
-        def Material "Lens_Mat"
-        {
-            token outputs:surface.connect = </SkidRover/Looks/Lens_Mat/Surface.outputs:surface>
-
-            def Shader "Surface"
-            {
-                uniform token info:id = "UsdPreviewSurface"
-                color3f inputs:diffuseColor = (1.0, 0.95, 0.85)
-                # HDR (>1) so the lens reads as a GLOW the sun cannot wash out.
-                color3f inputs:emissiveColor = (5.0, 4.75, 4.25)
-                token outputs:surface
-            }
-        }
-    }
-
     # Mass & damping live on the rigid body root.
     float physics:mass = 1000.0
     # Principal inertia for that mass. Authoring `physics:mass` alone overrides
@@ -108,105 +89,28 @@ def Xform "SkidRover" (
 
     # Chassis collider + visual — 2.0 m × 0.3 m × 3.5 m.
     def Cube "Chassis" (
-        kind = "subcomponent"
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
     {
-        double size = 1.0
-        double3 xformOp:scale = (2.0, 0.3, 3.5)
-        uniform token[] xformOpOrder = ["xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)]
     }
 
     # Headlights (Spotlights pointing forward and tilted down by 15 deg, with visual geometry and light source)
-    def Xform "Headlight_L"
+    def Xform "Headlight_L" (
+        prepend references = @lunco://components/lights/headlight.usda@</Headlight>
+    )
     {
         double3 xformOp:translate = (-0.8, 0.2, -1.75)
         double3 xformOp:rotateXYZ = (-15, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-
-        def SphereLight "Light"
-        (
-            prepend apiSchemas = ["ShapingAPI", "ShadowAPI", "LunCoLightAPI"]
-        )
-        {
-            float inputs:intensity = 1000000.0  # 1M lumens for daylight exposure visibility
-            float inputs:exposure = 0.0
-            color3f inputs:color = (1.0, 0.95, 0.85) # Warm white halogen light
-            bool inputs:shadow:enable = true
-            float inputs:shaping:cone:angle = 45.0
-            float inputs:shaping:cone:softness = 0.3
-            float lunco:light:range = 60.0
-        }
-
-        # Casing of the headlight
-        def Cylinder "Casing"
-        {
-            uniform token axis = "Z"
-            double radius = 0.1
-            double height = 0.15
-            double3 xformOp:translate = (0, 0, 0.075)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)] # Dark grey/black matte housing
-            bool physics:collisionEnabled = false
-        }
-
-        # Glowing lens of the headlight
-        def Cylinder "Lens"
-        {
-            uniform token axis = "Z"
-            double radius = 0.09
-            double height = 0.02
-            double3 xformOp:translate = (0, 0, -0.01)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            rel material:binding = </SkidRover/Looks/Lens_Mat>
-            bool physics:collisionEnabled = false
-        }
     }
 
-    def Xform "Headlight_R"
+    def Xform "Headlight_R" (
+        prepend references = @lunco://components/lights/headlight.usda@</Headlight>
+    )
     {
         double3 xformOp:translate = (0.8, 0.2, -1.75)
         double3 xformOp:rotateXYZ = (-15, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-
-        def SphereLight "Light"
-        (
-            prepend apiSchemas = ["ShapingAPI", "ShadowAPI", "LunCoLightAPI"]
-        )
-        {
-            float inputs:intensity = 1000000.0
-            float inputs:exposure = 0.0
-            color3f inputs:color = (1.0, 0.95, 0.85)
-            bool inputs:shadow:enable = true
-            float inputs:shaping:cone:angle = 45.0
-            float inputs:shaping:cone:softness = 0.3
-            float lunco:light:range = 60.0
-        }
-
-        # Casing of the headlight
-        def Cylinder "Casing"
-        {
-            uniform token axis = "Z"
-            double radius = 0.1
-            double height = 0.15
-            double3 xformOp:translate = (0, 0, 0.075)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)]
-            bool physics:collisionEnabled = false
-        }
-
-        # Glowing lens of the headlight
-        def Cylinder "Lens"
-        {
-            uniform token axis = "Z"
-            double radius = 0.09
-            double height = 0.02
-            double3 xformOp:translate = (0, 0, -0.01)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            rel material:binding = </SkidRover/Looks/Lens_Mat>
-            bool physics:collisionEnabled = false
-        }
     }
 
     # --- Wheels (reference the reusable mobility component) ---
@@ -221,14 +125,9 @@ def Xform "SkidRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
         int lunco:wheel:index = 0
-        float physxVehicleWheel:radius = 0.4
     }
 
     def Cylinder "Wheel_FR" (
@@ -240,14 +139,9 @@ def Xform "SkidRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
         int lunco:wheel:index = 1
-        float physxVehicleWheel:radius = 0.4
     }
 
     def Cylinder "Wheel_RL" (
@@ -259,14 +153,9 @@ def Xform "SkidRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
         int lunco:wheel:index = 2
-        float physxVehicleWheel:radius = 0.4
     }
 
     def Cylinder "Wheel_RR" (
@@ -278,14 +167,9 @@ def Xform "SkidRover" (
         ]
     )
     {
-        uniform token axis = "X"
-        double radius = 0.4
-        double height = 0.3
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
         int lunco:wheel:index = 3
-        float physxVehicleWheel:radius = 0.4
     }
 
     # --- Comms ---------------------------------------------------------
@@ -318,6 +202,24 @@ def Xform "SkidRover" (
 
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
+        ) {
+        }
+    }
+
+    # --- Drive law: how throttle/steer become per-side drive ---------------
+    # ORTHOGONAL to `drivetrain` (which realizes the wheels physically):
+    # `builtin` keeps the instant Rust skid kernel; `modelica` swaps in a
+    # solver-clocked first-order motor lag (RoverDrivetrain.mo) via the
+    # component the variant references — a variant chooses a component, it
+    # never restates one. The wheels here use the index-parity default
+    # (even ⇒ drive_left, odd ⇒ drive_right), which is exactly the port pair
+    # the skid law writes.
+    variantSet "driveLaw" = {
+        "builtin" {
+        }
+
+        "modelica" (
+            prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
         ) {
         }
     }

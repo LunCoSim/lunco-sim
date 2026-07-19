@@ -21,4 +21,15 @@ over "Tire" (
 )
 {
     double lunco:tire:frictionCoefficient = 1.3
+
+    # The look states the grip: fewer, deeper cleats at full relief.
+    over "TireLook"
+    {
+        over "Shader"
+        {
+            float inputs:tread_lugs = 14.0
+            float inputs:lug_depth = 1.0
+            float inputs:dust_amount = 0.5
+        }
+    }
 }

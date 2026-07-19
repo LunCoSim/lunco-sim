@@ -206,3 +206,73 @@ fn a_wheel_composes_its_tire() {
         "Wheel_FL must compose its tire's tread shader, with the shipped-asset scheme intact"
     );
 }
+
+/// P1 pin for the UNIFIED wheel parameter model: every wheel of every rover
+/// satisfies the ONE strict reader both wheel kinds spawn from
+/// (`lunco_usd_sim::wheel_params::WheelParams::read`). This is the
+/// asset-contract half of the strictness bargain — the loader refuses a wheel
+/// missing any required attr, so the library must compose the complete set
+/// onto every wheel, and a broken arc fails HERE naming the exact attrs
+/// instead of as a silent no-spawn in the app.
+#[test]
+fn every_rover_wheel_satisfies_the_unified_param_reader() {
+    let rovers = [
+        "vessels/rovers/skid_rover.usda",
+        "vessels/rovers/ackermann_rover.usda",
+        "vessels/rovers/six_wheel_rover.usda",
+        "vessels/rovers/six_wheel_independent.usda",
+        "vessels/rovers/rocker_bogie.usda",
+        "vessels/rovers/rucheyok/rucheyok.usda",
+    ];
+    for rover in rovers {
+        let stage = compose(rover);
+        let view = stage.view();
+        let mut wheels = 0;
+        for p in view.prim_paths() {
+            if !view.has_api_schema(&p, "PhysxVehicleWheelAPI") {
+                continue;
+            }
+            wheels += 1;
+            let params = lunco_usd_sim::wheel_params::WheelParams::read(&view, &p, None)
+                .unwrap_or_else(|missing| {
+                    panic!("{rover}: wheel {} is missing {:?}", p.as_str(), missing)
+                });
+            assert!(params.radius > 0.0, "{rover}: {} radius", p.as_str());
+            assert!(params.mass > 0.0, "{rover}: {} mass", p.as_str());
+            assert!(params.peak_torque > 0.0, "{rover}: {} peakTorque", p.as_str());
+            assert!(params.friction_mu > 0.0, "{rover}: {} tire μ", p.as_str());
+            // Default-variant rovers are raycast: no wheel functions without
+            // composed suspension compliance.
+            assert!(
+                params.suspension.is_some(),
+                "{rover}: {} composes no suspension — raycast spawn would refuse it",
+                p.as_str()
+            );
+        }
+        assert!(wheels > 0, "{rover}: no PhysxVehicleWheelAPI wheels composed");
+    }
+}
+
+/// The live-resync CLAIM must be prim-scoped: `physics:mass` on a WHEEL routes
+/// to the in-place wheel resync, while the same attr on the CHASSIS keeps the
+/// generic refresh path (avian mass overrides rebuild there). Wheel-only
+/// namespaces are claimed anywhere they appear.
+#[test]
+fn wheel_resync_claims_are_prim_scoped() {
+    use lunco_usd_sim::wheel_params::claims_edit;
+    let stage = compose("vessels/rovers/skid_rover.usda");
+    let view = stage.view();
+    let wheel = SdfPath::new("/SkidRover/Wheel_FL").unwrap();
+    let chassis = SdfPath::new("/SkidRover/Chassis").unwrap();
+    let root = SdfPath::new("/SkidRover").unwrap();
+
+    assert!(claims_edit(&view, &wheel, "physics:mass"));
+    assert!(!claims_edit(&view, &chassis, "physics:mass"));
+    assert!(claims_edit(&view, &wheel, "lunco:wheel:maxDriveOmega"));
+    assert!(claims_edit(&view, &wheel, "physxVehicleEngine:peakTorque"));
+    assert!(claims_edit(&view, &wheel, "physxVehicleSuspension:springStrength"));
+    assert!(claims_edit(&view, &root, "lunco:driveKernel"));
+    assert!(claims_edit(&view, &root, "physxVehicleAckermannSteering:maxSteerAngle"));
+    assert!(!claims_edit(&view, &chassis, "primvars:displayColor"));
+    assert!(!claims_edit(&view, &root, "lunco:spawnable"));
+}

@@ -45,12 +45,22 @@ pub struct UsdParamView {
 /// attributes into [`UsdParamView`].
 pub fn produce_usd_param_view(
     selected: Option<Res<crate::SelectedEntities>>,
+    target: Option<Res<crate::InspectorTarget>>,
     q: Query<&UsdPrimPath>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     mut view: ResMut<UsdParamView>,
 ) {
-    let entity = selected.as_deref().and_then(|s| s.primary());
+    // A DRILLED prim-backed subpart wins over the primary: Shift+click a wheel
+    // of the selected rover and the section edits the WHEEL's own attrs
+    // (`lunco:wheel:*`), addressed at its own prim path. A part that carries no
+    // `UsdPrimPath` (raw mesh drill for material editing) falls back to the
+    // primary's params.
+    let entity = target
+        .as_deref()
+        .and_then(|t| t.part)
+        .filter(|p| q.get(*p).is_ok())
+        .or_else(|| selected.as_deref().and_then(|s| s.primary()));
     view.entity = entity;
     view.params.clear();
 
@@ -75,7 +85,14 @@ pub fn produce_usd_param_view(
     };
 
     for attr in stage_view.attr_names(&sdf) {
-        let Some(hint) = stage_view.attr_ui_hint(&sdf, &attr) else {
+        // Per-asset authored `customData` wins; the SCHEMA's declared hint is
+        // the fallback — so an attribute whose schema authors bounds (all of
+        // `LunCoWheelAPI`/`LunCoSuspensionAPI`, the physxVehicle attrs we
+        // read) gets a slider on EVERY asset with zero per-asset authoring.
+        let Some(hint) = stage_view
+            .attr_ui_hint(&sdf, &attr)
+            .or_else(|| lunco_usd::schema::ui_hint_of(&attr))
+        else {
             continue;
         };
         let (Some(min), Some(max)) = (hint.min, hint.max) else {
@@ -86,7 +103,17 @@ pub fn produce_usd_param_view(
         }
         let value = stage_view.real(&sdf, &attr).unwrap_or(min).clamp(min, max);
         let unit = hint.unit.unwrap_or_default();
-        let type_name = hint.type_name.unwrap_or_else(|| "float".to_string());
+        // Write-back type: the hint's `type` field, else the schema's declared
+        // type for the attribute, else the historical `float` guess.
+        let type_name = hint
+            .type_name
+            .or_else(|| {
+                lunco_usd::schema::SchemaRegistry::global()
+                    .read()
+                    .ok()
+                    .and_then(|r| r.property(&attr).map(|p| p.type_name.clone()))
+            })
+            .unwrap_or_else(|| "float".to_string());
         let label = attr.rsplit(':').next().unwrap_or(&attr).to_string();
         view.params.push(UsdParam {
             name: attr,

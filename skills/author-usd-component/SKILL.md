@@ -365,17 +365,27 @@ A twin is a folder with `twin.toml` (`name`, `[usd] default_scene`), addressed a
 `twin://<name>/<rel>`; runtime state lands in `.lunco/runtime/`, journal in
 `history/`.
 
-## Adding a new `lunco:*` property — the three-file rule
+## Adding a new `lunco:*` property — source + regenerate
 
-A new property is **inert** unless you edit all three
-(`docs/architecture/50-usd-driven-visuals.md:132`):
+A new property is **inert** until it reaches the registered layer:
 
-1. `crates/lunco-usd/schema/schema.usda` — the source, **never read at runtime**
-2. `crates/lunco-usd/schema/generatedSchema.usda` — the one actually compiled in
-3. `crates/lunco-usd/schema/plugInfo.json` — the Types map
+1. Edit `crates/lunco-usd/schema/schema.usda` — the source, **never read at runtime**
+2. Run `python3 scripts/gen_schema.py` — regenerates
+   `crates/lunco-usd/schema/generatedSchema.usda`, the file actually compiled in
+   (never hand-edit it)
+3. A new CLASS additionally needs a `crates/lunco-usd/schema/plugInfo.json`
+   Types entry (`every_schema_class_is_registered_in_pluginfo` pins this)
 
-`usdGenSchema` is not installed, (2) is hand-maintained, and **nothing tests that
-it matches (1)**. Edit (1) only and your property silently does nothing.
+Registry tests pin source↔generated class parity and (for the wheel domain)
+schema UI hints, so a forgotten regenerate fails loudly.
+
+**Schema-level sliders.** `customData = { double min; double max; string unit }`
+on a SCHEMA attribute gives every asset composing that schema a derived
+Inspector slider with zero per-asset authoring (`SchemaRegistry::ui_hint`,
+consumed by `produce_usd_param_view`). Per-asset authored `customData` still
+overrides. Hints are UI metadata only — value defaults stay in the component
+`.usda` (no-fallback doctrine), e.g. `components/mobility/wheel.usda` for
+wheels.
 
 ## Verify
 
@@ -400,7 +410,9 @@ traversed — a different bug from "patch rejected".
 - ❌ `physics:friction` — does not exist.
 - ❌ `string doc` inside `customData` — not a key; use prim `doc` metadata.
 - ❌ `lunco:program:sourceAsset` typed as `string` — must be `asset`.
-- ❌ Editing `schema.usda` alone and expecting a new `lunco:*` to work.
+- ❌ Editing `schema.usda` without running `scripts/gen_schema.py` — the
+  runtime reads only the generated layer.
+- ❌ Hand-editing `generatedSchema.usda` — the next regenerate erases it.
 - ❌ Assuming `kind` does something.
 - ❌ Inferring geometry from a screenshot when a number would settle it. Trim
   loops, control nets and joints are arithmetic — check the arithmetic. A view

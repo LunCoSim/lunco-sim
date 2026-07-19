@@ -26,6 +26,7 @@
     mesh_view_bindings::view,
     mesh_functions,
 }
+#import lunco::noise::fbm
 
 const TAU: f32 = 6.28318530718;
 // Ambient/earthshine floor so a horizon-occluded wheel is dim, never pure black.
@@ -41,6 +42,14 @@ const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 //!@default tread_lugs  24
 //!@ui      spoke_width 0.05 0.9 "Spoke width (of sector)"
 //!@default spoke_width 0.35
+//!@ui      dust_color  color "Regolith dust"
+//!@default dust_color  0.42,0.40,0.38
+//!@ui      lug_depth   0 1 "Lug relief depth"
+//!@default lug_depth   0.6
+//!@ui      wear        0 1 "Tread wear"
+//!@default wear        0.15
+//!@ui      dust_amount 0 1 "Dust coverage"
+//!@default dust_amount 0.35
 //!@engine  sun_vis
 //!@default sun_vis     1
 struct Material {
@@ -50,6 +59,10 @@ struct Material {
     tread_lugs:  f32,
     spoke_width: f32,
     sun_vis:     f32,  // engine-filled: horizon-shadow sun visibility
+    dust_color:  vec3<f32>,
+    lug_depth:   f32,
+    wear:        f32,
+    dust_amount: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -100,8 +113,26 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
         // Angle around the axle from the local normal (radial on the barrel),
         // so lugs are mesh-fixed and stream past as the wheel rolls.
         let ang = atan2(n_local.z, n_local.x) / TAU + 0.5;
-        let lug = fract(ang * lug_count) < 0.5;
-        color = select(rubber, tread, lug);
+        // Lug PROFILE instead of a hard on/off stripe: `wear` rounds and
+        // flattens it toward bald (a worn tire's lug↔groove contrast fades),
+        // `lug_depth` fakes relief — groove valleys pick up contact AO.
+        let s = abs(fract(ang * lug_count) - 0.5) * 2.0;      // 0 valley … 1 lug top
+        let edge = mix(0.25, 0.6, mat.wear);                   // wear rounds the shoulder
+        let lug_m = smoothstep(0.5 - edge * 0.5, 0.5 + edge * 0.5, s)
+            * (1.0 - mat.wear * 0.85);                         // wear flattens contrast
+        color = mix(rubber, tread, lug_m);
+        color *= 1.0 - mat.lug_depth * 0.35 * (1.0 - lug_m);   // valley AO
+    }
+
+    // Regolith dust coating — noise-masked in OBJECT space so it spins with
+    // the wheel. Strongest where the tire touches soil (lug tops / lower
+    // sidewall reads too fine-grained to distinguish here; a mesh-fixed patchy
+    // coat sells it).
+    if (mat.dust_amount > 0.0) {
+        let p_local = transpose(R) * (input.world_position.xyz - m[3].xyz);
+        let dust_n = fbm(p_local * 7.0, 3, 0.5);
+        let dust_m = mat.dust_amount * smoothstep(0.30, 0.75, dust_n);
+        color = mix(color, mat.dust_color, dust_m);
     }
 
     // Full scene lighting (real sun direction, shadow maps, ambient) over

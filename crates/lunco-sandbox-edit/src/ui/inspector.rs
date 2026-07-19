@@ -471,57 +471,14 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                 });
         }
 
-        // ── Wheel (Raycast) component ────────────────────────────────
-        if ctx.get::<WheelRaycast>(entity).is_some() {
-            egui::CollapsingHeader::new("Wheel (Raycast)")
-                .default_open(false)
-                .show(ui, |ui| {
-                    if let Some(r0) = ctx.get::<WheelRaycast>(entity).map(|w| w.wheel_radius as f32) {
-                        let mut radius = r0;
-                        let r_changed = ui.add(egui::Slider::new(&mut radius, 0.1..=2.0).text("Wheel Radius (m)")).changed();
-                        if r_changed {
-                            ctx.defer(move |world| {
-                                if let Some(mut wheel) = world.get_mut::<WheelRaycast>(entity) {
-                                    wheel.wheel_radius = radius as f64;
-                                }
-                            });
-                        }
-                    }
-                });
-        }
-
-        // ── Suspension component ─────────────────────────────────────
-        if ctx.get::<Suspension>(entity).is_some() {
-            egui::CollapsingHeader::new("Suspension")
-                .default_open(false)
-                .show(ui, |ui| {
-                    if let Some((rest0, k0, d0)) = ctx.get::<Suspension>(entity).map(|s| {
-                        (
-                            s.rest_length as f32,
-                            s.spring_k as f32,
-                            s.damping_c as f32,
-                        )
-                    }) {
-                        let mut rest = rest0;
-                        let mut k = k0;
-                        let mut d = d0;
-
-                        let rest_changed = ui.add(egui::Slider::new(&mut rest, 0.1..=2.0).text("Rest Length (m)")).changed();
-                        let k_changed = ui.add(egui::Slider::new(&mut k, 100.0..=100000.0).text("Spring K (N/m)").logarithmic(true)).changed();
-                        let d_changed = ui.add(egui::Slider::new(&mut d, 100.0..=10000.0).text("Damping C (N·s/m)").logarithmic(true)).changed();
-
-                        if rest_changed || k_changed || d_changed {
-                            ctx.defer(move |world| {
-                                if let Some(mut susp) = world.get_mut::<Suspension>(entity) {
-                                    if rest_changed { susp.rest_length = rest as f64; }
-                                    if k_changed { susp.spring_k = k as f64; }
-                                    if d_changed { susp.damping_c = d as f64; }
-                                }
-                            });
-                        }
-                    }
-                });
-        }
+        // Wheel + suspension dynamics have NO hand-coded sections here: they are
+        // USD-authored (`lunco:wheel:*`, `lunco:suspension:*`, `physxVehicle*`)
+        // and surface as derived sliders via `usd_parameters_section` (customData
+        // UI hints). Edits go through `ApplyUsdOp` and re-derive the spawned
+        // components in place (`lunco_usd_sim::wheel_params::resync_wheels_for_stage`)
+        // — the direct-ECS sliders that used to live here bypassed the document,
+        // so their edits neither persisted, journaled, nor replicated, and the
+        // resync would now overwrite them on the next document change.
 
         // ── Materials ────────────────────────────────────────────────
         let parts = editable_parts(ctx, entity);
@@ -662,14 +619,42 @@ fn grid_absolute_of(ctx: &PanelCtx, entity: Entity) -> Option<bevy::math::DVec3>
 }
 
 fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    let params: Vec<crate::ui::usd_params::UsdParam> =
+    // The producer aims the view at the DRILLED prim-backed part when one is
+    // set (see `produce_usd_param_view`), else at the primary. Render whenever
+    // the view belongs to this inspector context — primary or its drill.
+    let part = ctx
+        .resource::<crate::InspectorTarget>()
+        .and_then(|t| t.part);
+    let (target, params): (Entity, Vec<crate::ui::usd_params::UsdParam>) =
         match ctx.resource::<crate::ui::usd_params::UsdParamView>() {
-            Some(v) if v.entity == Some(entity) && !v.params.is_empty() => v.params.clone(),
+            Some(v)
+                if !v.params.is_empty()
+                    && (v.entity == Some(entity) || (v.entity.is_some() && v.entity == part)) =>
+            {
+                (v.entity.unwrap(), v.params.clone())
+            }
             _ => return,
         };
     egui::CollapsingHeader::new("🎚 Parameters")
         .default_open(true)
         .show(ui, |ui| {
+            // Breadcrumb when drilled into a subpart: name the part being
+            // edited and offer the way back to the whole vehicle.
+            if target != entity {
+                ui.horizontal(|ui| {
+                    let part_name = ctx
+                        .get::<Name>(target)
+                        .map(|n| n.as_str().to_string())
+                        .unwrap_or_else(|| format!("{target:?}"));
+                    ui.label(egui::RichText::new(format!("part: {part_name}")).italics());
+                    if ui.small_button("⏶ back to root").clicked() {
+                        ctx.defer(|world| {
+                            world.resource_mut::<crate::InspectorTarget>().part = None;
+                        });
+                    }
+                });
+                ui.separator();
+            }
             let mut edits: Vec<(String, String, String)> = Vec::new();
             for p in &params {
                 let mut v = p.value;
@@ -687,7 +672,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
             }
             for (name, type_name, value) in edits {
                 ctx.defer(move |world| {
-                    apply_usd_attribute_change(world, entity, &name, &type_name, value);
+                    apply_usd_attribute_change(world, target, &name, &type_name, value);
                 });
             }
         });

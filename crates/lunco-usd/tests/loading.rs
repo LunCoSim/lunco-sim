@@ -58,6 +58,15 @@ def Xform "Rover" {
         float physxVehicleWheel:radius = 0.4
         int lunco:wheel:index = 0
 
+        # The unified reader (`lunco_usd_sim::wheel_params`) requires the FULL
+        # drivetrain set — these previously fell back to Rust constants and are
+        # now part of the contract this fixture pins.
+        float physics:mass = 25.0
+        float physxVehicleEngine:peakTorque = 300.0
+        float physxVehicleEngine:maxRotationSpeed = 60.0
+        float physxVehicleWheel:maxBrakeTorque = 1500.0
+        float physxVehicleTire:longitudinalStiffness = 8000.0
+
         float lunco:suspension:restLength = 0.7
         float physxVehicleSuspension:springStrength = 5000.0
         float physxVehicleSuspension:springDamperRate = 600.0

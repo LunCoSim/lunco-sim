@@ -359,9 +359,17 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         let (name, rel) = lunco_assets::split_twin_rel(&rel)?;
         world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
     });
+    // The shared USD preview is a second legitimate mount: its scene_root is
+    // deliberately NOT a `UsdSceneRoot` (it is `UsdPreviewOnly`, so sim/avian
+    // walkers bail at it), so the query above never sees it. Without this, an
+    // editor viewport doc is tracked but never projected — `ApplyUsdOp` edits
+    // author into the document yet the preview keeps the stale visuals.
+    let viewport_doc: Option<DocumentId> = world
+        .get_resource::<crate::ui::viewport::UsdViewportState>()
+        .and_then(|s| s.active_doc());
 
     for (doc, name, rel, synced, overlay_synced) in entries {
-        if active_doc != Some(doc) {
+        if active_doc != Some(doc) && viewport_doc != Some(doc) {
             continue;
         }
         // Cheap generation probe FIRST — then early-out. The expensive payloads
@@ -592,6 +600,26 @@ fn apply_incremental_op_to_stage(
                 },
                 None => false,
             };
+            // Wheel/vehicle dynamics attrs: re-derive the spawned wheel
+            // components IN PLACE from the composed stage instead of the
+            // subtree refresh below — `reinstantiate_entity` on a wheel prim
+            // despawns its synthesized `PhysicalPort` children and visual child
+            // while `UsdSimProcessed` survives, leaving a dead-port
+            // `MotorActuator` and a dangling joint. Checked before the `string`
+            // fast-path: `lunco:driveKernel`/`lunco:driveMix` are strings and
+            // must still resync.
+            if authored {
+                let claimed = world
+                    .get_non_send::<CanonicalStages>()
+                    .and_then(|s| s.get(scene_id))
+                    .is_some_and(|cs| {
+                        lunco_usd_sim::wheel_params::claims_edit(&cs.view(), &sp, name)
+                    });
+                if claimed {
+                    lunco_usd_sim::wheel_params::resync_wheels_for_stage(world, scene_id);
+                    return;
+                }
+            }
             // A `string` attribute is non-visual metadata/behavior (`lunco:script`,
             // descriptions, `lunco:policy:source`) — no geometry/material
             // consequence, and a refresh would hot-reload a running scenario

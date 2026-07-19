@@ -1,42 +1,37 @@
-// Landing-leg SHOCK ABSORBER — a signal consumer, like `flame.rhai`.
+// Landing-leg strut ACTUATOR — the display half of the sprung leg.
 //
-// Mounted as a `def LunCoProgram "Spring"` child on each leg strut. On touchdown
-// it compresses the strut along its own axis with a damped spring response and
-// settles slightly short of full extension — the "landing legs compress,
-// soaking up the impact" the episode narration promises, made visible.
+// The PHYSICS lives in `models/LegStrut.mo`: one Modelica spring-damper per
+// leg, wired in `descent_lander.usda` to the vessel's altimeter and vertical
+// speed, integrating its stroke on the solver clock. This script owns NO
+// dynamics — it reads the sibling strut model's `stroke` output each tick and
+// applies it to the strut geometry, exactly as `flame.rhai` applies the
+// engine model's `throttle` to the plume cone. USD wires + Modelica physics +
+// a rhai actuator; no custom Rust anywhere.
 //
 // WHAT MOVES AND WHAT DOES NOT. The strut is a unit cube whose authored
-// `xformOp:scale.y` IS its length (same idiom as the flame cone and the
-// altimeter beam: unit mesh, live length in the transform). Compression keeps
-// the strut's FOOT end pinned — the pad stays planted where physics put it —
-// and shortens the strut upward, so the sliding joint disappears under the
-// hull's silhouette instead of opening a visible gap at the ground. The pads
-// and their colliders are untouched: the vehicle keeps resting on exactly the
-// contact set the solver resolved. This is a visual spring, not a physics
-// joint — the compound body stays rigid, which is what keeps it cheap and
-// deterministic.
+// `xformOp:scale.y` IS its length (unit-mesh idiom, same as the flame cone).
+// Compression keeps the FOOT end pinned — the pad stays planted where physics
+// put it — and shortens the strut upward, sliding it INTO the fixed piston
+// sleeve (`Piston*` cylinders) anchored at the hull end: small tube into
+// bigger tube, the mechanism read the audience expects. The colliders are
+// untouched; the compound body stays rigid.
 //
-// Per-instance geometry arrives as typed params (the script is generic across
-// all four legs; nothing here infers a name):
-//   bx,by,bz — the strut's FOOT point, in the vessel's local frame
-//   ux,uy,uz — unit axis from foot toward hull attach, local frame
-//   len      — authored strut length (the unit cube's scale.y)
-//   girth    — authored strut thickness (scale.x/z)
+// Mounted as `def LunCoProgram "Actuator"` on each leg. `me` is the LEG prim
+// (a program's `me` is the prim that carries it); the strut model is mounted
+// beside it, so "the sibling that publishes `stroke`" is the whole lookup —
+// no name inference, same predicate style as flame.rhai's child_light().
 //
-// Touchdown is detected from the same ancestor ports the episode script flies
-// by: `height` (altimeter, reads ≈5 parked) and `velocity_y`. The walk-up is
-// `nearest_throttle`'s, generalised.
+// Per-instance geometry (typed params, one set per leg):
+//   bx,by,bz — the strut's FOOT point, vessel-local
+//   ux,uy,uz — unit axis from foot toward hull attach, vessel-local
+//   len      — authored strut length   girth — authored strut thickness
 
-fn nearest_port(me, key) {
-    let cur = parent(me);
-    let hops = 0;
-    while cur != () && hops < 5 {
-        let v = get(cur, key);
-        if v != () { return v; }
-        cur = parent(cur);
-        hops += 1;
+fn sibling_stroke(me) {
+    for c in children(me) {
+        let s = get(c, "stroke");
+        if s != () { return s; }
     }
-    ()
+    0.0
 }
 
 fn on_tick(me) {
@@ -49,36 +44,10 @@ fn on_tick(me) {
     let uy = param(me, "uy", 1.0);
     let uz = param(me, "uz", 0.0);
 
-    let h  = nearest_port(me, "height");
-    let vy = nearest_port(me, "velocity_y");
-
-    if this.landed != true {
-        // Airborne: remember the sink rate — the impact amplitude is the LAST
-        // airborne reading, not the post-contact one the solver has already
-        // nulled by the time the altimeter gate trips.
-        if vy != () && vy < -0.05 { this.impact_vy = vy; }
-        // Touchdown: low AND arriving with real downward speed remembered.
-        if h != () && h < 6.2 && this.impact_vy != () && this.impact_vy < -0.3 {
-            this.landed = true;
-            this.t = 0.0;
-            // Stroke fraction of the strut: ~3% floor plus ~1.8%/(m/s) of
-            // impact, capped at 10% (0.73 m on this leg) so a hard arrival
-            // reads as a deep flex, never as the hull swallowing the legs.
-            let iv = -this.impact_vy;
-            this.amp = min(0.10, 0.03 + 0.018 * iv);
-        }
-        return;
-    }
-
-    // Damped spring: rises from 0 at contact, overshoots to peak flex in
-    // ~0.3 s, rings down and SETTLES at 35% of peak — legs stay visibly
-    // loaded under the vehicle's weight, as sprung struts do.
-    this.t += 0.02;
-    let t = this.t;
-    let c = this.amp * (0.35 + 0.65 * (-2.2 * t).exp() * (8.0 * t - 2.14).cos());
-    if c < 0.0 { c = 0.0; }
-
-    let live = len * (1.0 - c);
+    // No calculation here beyond applying the model's answer: LegStrut.mo
+    // already clamps `stroke` to [0, stroke_max] — the physics, including its
+    // own limits, lives in Modelica.
+    let live = len - sibling_stroke(me);
     set(me, "Transform.scale", [girth, live, girth]);
     set(me, "Transform.translation", [
         bx + ux * live * 0.5,

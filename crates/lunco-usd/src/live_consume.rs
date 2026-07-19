@@ -409,10 +409,28 @@ pub(crate) fn refresh_edited_prims_live(
     // are simply skipped here.
     let mut prims: Vec<String> = Vec::new();
     let mut behavior_updates: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+    // Wheel/vehicle dynamics edits are claimed by the in-place resync (same
+    // shape as the `lunco:behavior` special-case below): excluded from the
+    // subtree refresh — which would corrupt a spawned wheel — and folded into
+    // ONE `resync_wheels_for_stage` call after the loop.
+    let mut wheels_dirty = false;
     for p in info_only {
         let Some((prim, attr)) = p.split_once('.') else {
             continue;
         };
+        {
+            let claimed = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(id))
+                .zip(SdfPath::new(prim).ok())
+                .is_some_and(|(cs, sp)| {
+                    lunco_usd_sim::wheel_params::claims_edit(&cs.view(), &sp, attr)
+                });
+            if claimed {
+                wheels_dirty = true;
+                continue;
+            }
+        }
         if attr == "lunco:behavior" || attr == "lunco:behaviorPath" {
             // Read value under stage borrow
             if let Some(stages) = world.get_non_send::<CanonicalStages>() {
@@ -433,6 +451,10 @@ pub(crate) fn refresh_edited_prims_live(
         if !prims.iter().any(|s| s == prim) {
             prims.push(prim.to_string());
         }
+    }
+
+    if wheels_dirty {
+        lunco_usd_sim::wheel_params::resync_wheels_for_stage(world, id);
     }
 
     // Apply any inline behavior XML or path updates directly to the entity

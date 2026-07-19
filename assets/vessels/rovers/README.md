@@ -2,6 +2,10 @@
 
 This directory contains the USD definitions for all surface rovers in LunCoSim. Since LunCoSim follows **Article X of the Project Constitution (The Tunability Mandate)**, all vehicle masses, joints, motor torques, and suspension settings are driven directly by attributes authored in these USD files rather than being hardcoded in Rust.
 
+**One parameter set, two wheel kinds.** Raycast and physical (joint) wheels read the SAME attributes through one strict reader (`lunco-usd-sim/src/wheel_params.rs`); only force generation differs. Every drivetrain/tire attribute is **required** — a wheel missing any refuses to spawn and the error names all of them. The defaults live in `components/mobility/wheel.usda` (+ tires/suspensions), which every wheel composes; a rover authors only its own decisions (pose, `lunco:wheel:index`, port overrides, variants). The composed completeness is pinned by `crates/lunco-usd/tests/mobility_composition.rs`.
+
+**Live tuning.** All wheel params carry schema-level slider hints: select a rover, Shift+click a wheel to drill into it, and edit in the Inspector's 🎚 Parameters section. Edits flow `ApplyUsdOp → document → in-place resync` (entities and joints survive). See `skills/build-vehicle/SKILL.md` for the full assembly recipe.
+
 ---
 
 ## 🛠️ Editing Vehicle Parameters

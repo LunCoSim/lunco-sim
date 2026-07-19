@@ -77,6 +77,9 @@ use leafwing_input_manager::prelude::ActionState;
 use lunco_controller::get_avatar_input_map;
 use std::collections::HashMap;
 
+pub mod wheel_params;
+use wheel_params::{SuspensionParams, WheelParams};
+
 /// Plugin for mapping simulation-specific USD schemas (like NVIDIA PhysX Vehicles)
 /// to LunCo's optimized simulation models.
 ///
@@ -1136,30 +1139,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         // steering schema the asset declares (Omniverse PhysX Vehicle names) or an
         // explicit `lunco:driveMix` linear table. There is NO per-arch Rust
         // component/branch — `apply_drive_mix` looks the named kernel up and runs it.
-        let drive_mix = if let Some(hook_id) =
-            reader.text(&sdf_path, "lunco:driveKernel")
-        {
-            // Scripted (rhai) kernel: the hook computes the per-port outputs, so it
-            // takes precedence over the built-in skid/linear schemas. `apply_drive_mix`
-            // falls back to the `lunco_hooks` hook named by `DriveMix.kernel`.
-            info!("Scripted drive kernel '{}' for {}", hook_id, prim_path.path);
-            Some(DriveMix::scripted(&hook_id))
-        } else if let Some(spec) =
-            reader.text(&sdf_path, "lunco:driveMix")
-        {
-            info!("Explicit linear driveMix for {}", prim_path.path);
-            Some(DriveMix::parse_linear(&spec))
-        } else if reader.has_api_schema(&sdf_path, "PhysxVehicleTankDifferentialAPI") {
-            info!("Tank differential (skid kernel) for {}", prim_path.path);
-            Some(DriveMix::skid("drive_left", "drive_right"))
-        } else if reader.has_api_schema(&sdf_path, "PhysxVehicleAckermannSteeringAPI") {
-            // Ackermann: non-differential drive (both sides get throttle) + a
-            // dedicated steering port; the front wheels castor (see steering gate).
-            info!("Ackermann steering (linear kernel) for {}", prim_path.path);
-            Some(DriveMix::parse_linear("drive_left=1,0 drive_right=1,0 steering=0,1"))
-        } else {
-            None
-        };
+        let drive_mix = derive_drive_mix(reader, &sdf_path, &prim_path.path);
         if let Some(mix) = drive_mix {
             commands.entity(entity).try_insert(mix);
         }
@@ -1232,18 +1212,6 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         // "happens to carry a wheel-ish attr" — any prim with a stray radius was
         // a wheel, and a wheel could not be authored without one.
         if reader.has_api_schema(&sdf_path, "PhysxVehicleWheelAPI") {
-            // `radius` is required by the API and has no fallback — a wheel without
-            // one is an asset bug, surfaced rather than defaulted (doc 53 §4).
-            let Some(radius) = reader.real_f32(&sdf_path, "physxVehicleWheel:radius") else {
-                error!(
-                    "USD wheel {} applies PhysxVehicleWheelAPI but authors no \
-                     physxVehicleWheel:radius (required, no fallback) — refusing to \
-                     spawn.",
-                    sdf_path.as_str()
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            };
             // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed
             // this prim. We'll retry next frame (not marking UsdSimProcessed).
             // Headless (no renderer) or recovered (watchdog): the mesh never
@@ -1276,6 +1244,32 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
             info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
+            // ONE unified read for BOTH wheel kinds (see `wheel_params`): every
+            // drivetrain/tire/inertia number plus suspension, resolved via the
+            // canonical two-step path (attachment prim, else flat off the wheel
+            // prim). Strict — all missing required attrs are collected and the
+            // wheel refuses to spawn; the authored defaults live in
+            // components/mobility/wheel.usda, which every wheel composes.
+            // Read BEFORE spawning the port entities so an invalid wheel
+            // synthesizes nothing.
+            let attachment_susp =
+                wheel_params::attachment_suspension_path(prim_path, wheel_attachment_targets);
+            let params = match WheelParams::read(reader, &sdf_path, attachment_susp.as_ref()) {
+                Ok(p) => p,
+                Err(missing) => {
+                    error!(
+                        "USD wheel {} is missing required wheel attributes {:?} — \
+                         refusing to spawn. They are authored in \
+                         components/mobility/wheel.usda; a wheel that does not \
+                         compose it has no handling to speak of.",
+                        sdf_path.as_str(),
+                        missing
+                    );
+                    commands.entity(entity).try_insert(UsdSimProcessed);
+                    return;
+                }
+            };
+
             // Create physical ports for drive and steering. Owned by the wheel via
             // `ChildOf` so the single recursive scene-clear reclaims them with the
             // wheel — synthesized backing entities are never left detached at the root
@@ -1307,109 +1301,6 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 drive_port_name,
                 steer_port_name,
             });
-
-            // Suspension parameters, resolved via the canonical two-step path
-            // (doc 53 §3.2): (1) if a `PhysxVehicleWheelAttachmentAPI` prim
-            // targets this wheel, read the attrs off the referenced suspension
-            // prim; (2) otherwise read them flat, off the wheel prim itself.
-            // `None` means no suspension resolves — a raycast wheel treats that
-            // as a hard asset error (doc 53 §4), a joint-based wheel does not
-            // need it (§4.2: rigid axles use `PhysicsRevoluteJoint` directly).
-            //
-            // ATTR NAMES: `springStrength` / `springDamperRate` are NVIDIA's
-            // canonical `PhysxVehicleSuspensionAPI` names (see the reconstructed
-            // `core/physxSchema.usda`). `restLength` has NO PhysX equivalent —
-            // PhysX models travel as `travelDistance` + `sprungMass` — so LunCo's
-            // raycast rest-length is authored under the LunCo namespace.
-            let suspension = resolve_suspension_params(
-                reader,
-                prim_path,
-                &sdf_path,
-                wheel_attachment_targets,
-            );
-
-            // Tire spin dynamics — read from the standard Omniverse PhysX
-            // vehicle schema (`PhysxVehicleWheelAPI` / `PhysxVehicleEngineAPI` /
-            // `PhysxVehicleTireAPI`) plus standard UsdPhysics `physics:mass`.
-            let read_f = |name: &str| -> Option<f64> { reader.real(&sdf_path, name) };
-            // Mass (UsdPhysicsMassAPI) → rotational inertia. `physxVehicleWheel:moi`
-            // overrides the derived ½·m·r² if explicitly authored.
-            let wheel_mass = read_f("physics:mass").unwrap_or(25.0);
-            let wheel_moi = read_f("physxVehicleWheel:moi").unwrap_or(0.0);
-            // Engine peak torque drives the axle; max rotation speed bounds the
-            // free spin. Bearing drag uses the wheel's own `dampingRate` when
-            // authored, else is derived so the airborne spin terminates at the
-            // engine's max rotation speed (peakTorque / maxRotationSpeed).
-            let drive_torque_max = read_f("physxVehicleEngine:peakTorque").unwrap_or(220.0);
-            let max_rotation_speed = read_f("physxVehicleEngine:maxRotationSpeed")
-                .unwrap_or(600.0)
-                .max(1e-3);
-            let bearing_damping = read_f("physxVehicleWheel:dampingRate")
-                .filter(|&d| d > 0.0)
-                .unwrap_or(drive_torque_max / max_rotation_speed);
-            // Tire longitudinal stiffness → grip toward v/r before saturation.
-            let slip_stiffness = read_f("physxVehicleTire:longitudinalStiffness").unwrap_or(8000.0);
-            // Wheel brake torque caps the lock-up authority.
-            let brake_torque_max = read_f("physxVehicleWheel:maxBrakeTorque")
-                .unwrap_or(drive_torque_max * 3.0);
-            // The `LunCoWheelAPI` knobs. REQUIRED, no fallbacks: they are authored in
-            // `components/mobility/wheel.usda`, which every wheel composes. A missing
-            // one is an asset error, not a value to invent — every missing name is
-            // collected so one bad wheel reports all of them, not just the first.
-            let mut missing: Vec<&'static str> = Vec::new();
-            let mut req = |name: &'static str| -> f64 {
-                match reader.real(&sdf_path, name) {
-                    Some(v) => v,
-                    None => {
-                        missing.push(name);
-                        0.0
-                    }
-                }
-            };
-            let contact_grip_stiffness = req("lunco:wheel:contactGripStiffness");
-            let drive_force_per_normal = req("lunco:wheel:driveForcePerNormal");
-            let joint_drive = JointDriveParams {
-                wheel_mass: read_f("physics:mass").unwrap_or(100.0),
-                max_omega: req("lunco:wheel:maxDriveOmega"),
-                drive_damp: req("lunco:wheel:driveDamping"),
-                stall_torque_gain: req("lunco:wheel:stallTorqueGain"),
-            };
-            // Coulomb μ for the drive-traction model (`apply_wheel_drive`), from the
-            // wheel's TIRE (`LunCoTireAPI`, composed through the `tire` variant).
-            // PhysX's own grip model is a ground-material friction TABLE, not a
-            // scalar on the tire, so this is a LunCo name. Required: a tire that
-            // does not say what it grips with is a bug, not a μ of 1.0 — that
-            // fallback silently gave every unauthored wheel perfect traction.
-            let friction_mu = req("lunco:tire:frictionCoefficient");
-            if !missing.is_empty() {
-                error!(
-                    "USD wheel {} is missing required LunCoWheelAPI attributes {:?} — \
-                     refusing to spawn. They are authored in \
-                     components/mobility/wheel.usda; a wheel that does not compose it \
-                     has no handling to speak of.",
-                    sdf_path.as_str(),
-                    missing
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-
-            // Raked steering-head axis (`lunco:wheel:steerAxis`, wheel-local). `(0,1,0)`
-            // is a vertical yaw axis (cars); a motorcycle fork authors e.g.
-            // `(0, 0.91, 0.42)` for a ~25° rake. Authored in `wheel.usda` with the
-            // rest of `LunCoWheelAPI` — no Rust-side `+Y` fallback.
-            let Some(wheel_steer_axis) =
-                lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:wheel:steerAxis")
-                    .map(|v| DVec3::new(v[0], v[1], v[2]))
-            else {
-                error!(
-                    "USD wheel {} is missing required LunCoWheelAPI attribute \
-                     lunco:wheel:steerAxis — refusing to spawn.",
-                    sdf_path.as_str()
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            };
 
             // Standard-USD discriminator: an authored `PhysicsRevoluteJoint`
             // pointing at this wheel via `physics:body1` ⇒ joint-based.
@@ -1453,10 +1344,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 setup_physical_wheel(
                     &mut commands, entity, prim_path, &existing_tf,
                     maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
-                    radius, p_drive,
-                    drive_torque_max,
+                    &params, p_drive,
                     steer_for_wheel, max_steer_angle,
-                    joint_drive,
                 );
             } else {
                 // Strict validation (doc 53 §4): a raycast wheel uses an
@@ -1466,7 +1355,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 // spawning a wheel with fabricated k/c/rest values. Joint/rigid
                 // wheels took the `setup_physical_wheel` branch above and are
                 // unaffected (§4.2).
-                let Some(suspension) = suspension else {
+                let Some(suspension) = params.suspension else {
                     error!(
                         "USD raycast wheel {} has no suspension compliance \
                          (neither authored via physxVehicleSuspension:* nor resolvable \
@@ -1481,20 +1370,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 setup_raycast_wheel(
                     &mut commands, entity, prim_path, &existing_tf,
                     maybe_mesh, maybe_mat, maybe_shader_mat, maybe_child_of,
-                    radius, index, &suspension,
+                    &params, &suspension,
                     p_drive, p_steer, steer_for_wheel, max_steer_angle,
-                    WheelSpinParams {
-                        mass: wheel_mass,
-                        moment_of_inertia: wheel_moi,
-                        drive_torque_max,
-                        bearing_damping,
-                        friction_mu,
-                        slip_stiffness,
-                        contact_grip_stiffness,
-                        brake_torque_max,
-                        drive_force_per_normal,
-                        steer_axis: wheel_steer_axis,
-                    },
                 );
             }
         }
@@ -1519,22 +1396,36 @@ fn net_override_markers(replicate: Option<bool>, authority: Option<&str>) -> (bo
     (excluded, opaque)
 }
 
-/// Authored suspension parameters, read once and shared by both wheel
-/// implementations. The raycast wheel emulates this spring analytically; the
-/// joint wheel realises it as a real prismatic spring.
-///
-/// USD attr provenance: `spring_k` / `damping_c` come from NVIDIA's canonical
-/// `PhysxVehicleSuspensionAPI` names (`physxVehicleSuspension:springStrength` /
-/// `:springDamperRate`). `rest_length` has no PhysX equivalent — authored as
-/// `lunco:suspension:restLength`. See `core/physxSchema.usda`.
-#[derive(Clone, Copy)]
-struct SuspensionParams {
-    /// Natural standoff of the wheel below its mount (raycast resting length).
-    rest_length: f64,
-    /// Spring stiffness, N/m (`physxVehicleSuspension:springStrength`).
-    spring_k: f64,
-    /// Spring damping, N·s/m (`physxVehicleSuspension:springDamperRate`).
-    damping_c: f64,
+/// Derive the vehicle-root `DriveMix` from its authored schema — the kernel is
+/// selected by the differential / steering schema the asset declares (Omniverse
+/// PhysX Vehicle names), an explicit `lunco:driveMix` linear table, or a
+/// scripted `lunco:driveKernel` hook. Shared by the spawn path and the live
+/// wheel-param resync so an edited kernel re-derives identically.
+fn derive_drive_mix<R: UsdRead>(
+    reader: &R,
+    sdf_path: &SdfPath,
+    prim_path_str: &str,
+) -> Option<DriveMix> {
+    if let Some(hook_id) = reader.text(sdf_path, "lunco:driveKernel") {
+        // Scripted (rhai) kernel: the hook computes the per-port outputs, so it
+        // takes precedence over the built-in skid/linear schemas. `apply_drive_mix`
+        // falls back to the `lunco_hooks` hook named by `DriveMix.kernel`.
+        info!("Scripted drive kernel '{}' for {}", hook_id, prim_path_str);
+        Some(DriveMix::scripted(&hook_id))
+    } else if let Some(spec) = reader.text(sdf_path, "lunco:driveMix") {
+        info!("Explicit linear driveMix for {}", prim_path_str);
+        Some(DriveMix::parse_linear(&spec))
+    } else if reader.has_api_schema(sdf_path, "PhysxVehicleTankDifferentialAPI") {
+        info!("Tank differential (skid kernel) for {}", prim_path_str);
+        Some(DriveMix::skid("drive_left", "drive_right"))
+    } else if reader.has_api_schema(sdf_path, "PhysxVehicleAckermannSteeringAPI") {
+        // Ackermann: non-differential drive (both sides get throttle) + a
+        // dedicated steering port; the front wheels castor (see steering gate).
+        info!("Ackermann steering (linear kernel) for {}", prim_path_str);
+        Some(DriveMix::parse_linear("drive_left=1,0 drive_right=1,0 steering=0,1"))
+    } else {
+        None
+    }
 }
 
 /// The vehicle whose steering system this wheel belongs to: the nearest ancestor
@@ -1566,95 +1457,6 @@ fn steering_vehicle_of<R: UsdRead>(reader: &R, wheel_path: &str) -> Option<SdfPa
     None
 }
 
-/// Resolve a wheel's suspension params via the canonical two-step path
-/// (doc 53 §3.2):
-///
-/// 1. **Canonical (relationship):** if a `PhysxVehicleWheelAttachmentAPI` prim
-///    targets this wheel, read the suspension attrs off the referenced
-///    suspension prim. This is the Omniverse topology — a separate attachment
-///    prim binds wheel + suspension via `rel`s, no naming heuristics.
-/// 2. **Flat (fallback):** read the attrs directly off the wheel prim. This is
-///    LunCo's compact composition, where the wheel references the suspension
-///    directly (`prepend references = […@suspensions/standard.usda@]`) and the
-///    attrs compose onto the wheel prim itself.
-///
-/// Returns `None` when neither path yields all three params — the caller treats
-/// that as a hard asset error for raycast wheels (doc 53 §4) and a non-issue for
-/// joint/rigid wheels (§4.2). No silent defaults: a missing schema is a bug, not
-/// a 15000 N/m spring.
-fn resolve_suspension_params<R: UsdRead>(
-    reader: &R,
-    wheel_prim: &UsdPrimPath,
-    wheel_sdf: &SdfPath,
-    wheel_attachment_targets: &HashMap<(Handle<UsdStageAsset>, String), String>,
-) -> Option<SuspensionParams> {
-    // Canonical path: an attachment prim names this wheel. The Pass-1 scan
-    // recorded the suspension prim path it binds us to — read attrs there.
-    // Keyed by (stage, wheel path), like `joint_targets`: prim paths are only
-    // unique WITHIN a stage, so the same rover asset loaded twice repeats
-    // `/Rover/Wheel_FL`. Matching on the path alone would let one instance
-    // resolve another instance's suspension.
-    let canonical_susp_path = wheel_attachment_targets
-        .get(&(wheel_prim.stage_handle.clone(), wheel_prim.path.clone()))
-        .and_then(|s| SdfPath::new(s).ok());
-
-    if let Some(susp_path) = canonical_susp_path {
-        if let Some(p) = read_suspension_attrs(reader, &susp_path) {
-            return Some(p);
-        }
-        // The relationship exists but the referenced prim carries no authored
-        // attrs — fall through to the flat path rather than silently returning
-        // None, so a half-authored attachment doesn't read as "no suspension".
-    }
-
-    // Flat path: attrs composed onto the wheel prim itself.
-    read_suspension_attrs(reader, wheel_sdf)
-}
-
-/// Read the three suspension attrs off one prim. `None` unless all three are
-/// authored — partial authoring is treated as missing (no per-field defaults).
-fn read_suspension_attrs<R: UsdRead>(reader: &R, prim: &SdfPath) -> Option<SuspensionParams> {
-    Some(SuspensionParams {
-        rest_length: reader.real(prim, "lunco:suspension:restLength")?,
-        spring_k: reader.real(prim, "physxVehicleSuspension:springStrength")?,
-        damping_c: reader.real(prim, "physxVehicleSuspension:springDamperRate")?,
-    })
-}
-
-/// USD-derived tire spin dynamics, forwarded onto the `WheelRaycast` so the
-/// spin integrator (`lunco_mobility::update_wheel_spin`) runs on authored data.
-struct WheelSpinParams {
-    mass: f64,
-    /// Explicit axle moment of inertia (kg·m²); 0 ⇒ derive ½·m·r².
-    moment_of_inertia: f64,
-    drive_torque_max: f64,
-    bearing_damping: f64,
-    friction_mu: f64,
-    slip_stiffness: f64,
-    contact_grip_stiffness: f64,
-    brake_torque_max: f64,
-    /// Drive force as a multiple of normal force (`lunco:driveForcePerNormal`).
-    drive_force_per_normal: f64,
-    /// Raked steering-head axis in the wheel's local frame (`lunco:wheel:steerAxis`).
-    steer_axis: DVec3,
-}
-
-/// Joint-wheel drive tuning, read from USD so a dynamic vehicle's feel is
-/// authored rather than hardcoded. Defaults reproduce the values verified in
-/// `project_physical_rover_suspension` (the comment at the use site explains
-/// why each was chosen).
-struct JointDriveParams {
-    /// Rigid-axle wheel-body mass (kg). `physics:mass`, default 100 — heavier
-    /// than the raycast wheel to damp the joint↔solver impulse echo.
-    wheel_mass: f64,
-    /// Motor target spin at full throttle (rad/s). `lunco:maxDriveOmega`.
-    max_omega: f64,
-    /// Velocity-tracking aggressiveness (1/s). `lunco:driveDamping`.
-    drive_damp: f64,
-    /// Stall torque = `peakTorque × this`. `lunco:stallTorqueGain`.
-    stall_torque_gain: f64,
-}
-
 /// Sets up a raycast wheel with entity splitting for correct raycasting.
 ///
 /// Raycast wheels need two entities:
@@ -1669,34 +1471,16 @@ fn setup_raycast_wheel(
     maybe_mat: Option<&PbrLook>,
     maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
-    radius: f32,
-    _index: i32,
+    params: &WheelParams,
     susp: &SuspensionParams,
     p_drive: Entity,
     p_steer: Entity,
     steer: Option<Entity>,
     max_steer_angle: f64,
-    spin: WheelSpinParams,
 ) {
     info!("Setting up RAYCAST wheel {}", prim_path.path);
 
-    let mut wheel = WheelRaycast {
-        wheel_radius: radius as f64,
-        visual_entity: Some(entity),
-        drive_port: p_drive,
-        steer_port: p_steer,
-        mass: spin.mass,
-        moment_of_inertia: spin.moment_of_inertia,
-        drive_torque_max: spin.drive_torque_max,
-        bearing_damping: spin.bearing_damping,
-        friction_mu: spin.friction_mu,
-        slip_stiffness: spin.slip_stiffness,
-        contact_grip_stiffness: spin.contact_grip_stiffness,
-        brake_torque_max: spin.brake_torque_max,
-        drive_force_per_normal: spin.drive_force_per_normal,
-        steer_axis: spin.steer_axis,
-        ..default()
-    };
+    let mut wheel = params.to_wheel_raycast(p_drive, p_steer, Some(entity));
 
     // --- Wheel Entity Splitting (always) ---
     // The physics entity needs identity rotation so `RayCaster::NEG_Y`
@@ -1838,17 +1622,16 @@ fn setup_physical_wheel(
     maybe_mat: Option<&PbrLook>,
     maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
-    radius: f32,
+    params: &WheelParams,
     p_drive: Entity,
-    peak_torque: f64,
     steer: Option<Entity>,
     max_steer_angle: f64,
-    drive: JointDriveParams,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
+    let radius = params.radius as f32;
 
-    // `peak_torque` (N·m at full throttle) is the engine's `peakTorque`, the
-    // SAME drive authority the raycast wheel uses — NOT the joint's
+    // `params.peak_torque` (N·m at full throttle) is the engine's `peakTorque`,
+    // the SAME drive authority the raycast wheel uses — NOT the joint's
     // `drive:angular:physics:maxForce`. That joint attribute is a PhysX
     // joint-drive *saturation* limit (authored at 12000 in the demo scenes);
     // feeding it straight into the motor made the rover apply ~30× its lunar
@@ -1912,17 +1695,10 @@ fn setup_physical_wheel(
         .remove::<RayCaster>()
         .remove::<RayHits>();
 
-    // Wheel mass via DENSITY, not a forced `Mass`. avian auto-derives
-    // `AngularInertia` from the collider at `ColliderDensity` (default 1.0) EVEN
-    // when `Mass` is set — so `Mass(100)` on a density-1 cylinder gave a 100 kg
-    // linear mass with the angular inertia of a ~0.1 kg cylinder. That
-    // mass/inertia DESYNC left the contact+joint solver unable to build enough
-    // support impulse, so the rover slowly sank THROUGH the (one-sided) terrain
-    // heightfield instead of resting. Deriving both from one density keeps them
-    // consistent while preserving the intended heavy wheel (USD-overridable via
-    // `physics:mass`). `cylinder(radius, height=radius*0.5)` ⇒ volume = π·r²·(r/2).
-    let wheel_volume = std::f64::consts::PI * (radius as f64).powi(2) * (radius as f64 * 0.5);
-    let wheel_density = (drive.wheel_mass / wheel_volume.max(1e-6)) as f32;
+    // Wheel mass via DENSITY, not a forced `Mass` — see
+    // `WheelParams::wheel_density` for why a forced mass desyncs mass from
+    // angular inertia and sinks the rover through the terrain.
+    let wheel_density = params.wheel_density();
 
     commands.entity(entity).try_insert((
         PhysicalWheel {
@@ -2023,27 +1799,13 @@ fn setup_physical_wheel(
     // fragile bearing the chassis weight; the fix for vertical travel is the rigid
     // axle + `SubstepCount(12)`. See `project_physical_rover_suspension`.)
 
-    // Velocity-controlled axle drive: pure velocity control (stiffness 0),
-    // mass-auto-scaled. A raw constant axle torque sat in avian's low-slip
-    // friction dead-zone (barely moved) at small values and broke traction at
-    // large ones; commanding the spin rate instead is stable and self-limits the
-    // top speed at traction.
-    //
-    // `max_torque` is the motor's STALL torque — how hard it can drive the wheel
-    // toward the commanded spin. It must be well above the engine `peakTorque`
-    // (the steady traction figure): for a SKID turn the inner wheels are
-    // commanded to *reverse* while the body still carries forward momentum, and a
-    // low cap lets them just keep rolling forward with the rover → no speed
-    // differential → no yaw. A high stall torque lets the wheels actually enforce
-    // their left/right speed split and pivot the body. Velocity control self-caps
-    // the spin, so a high stall torque can't run away (unlike raw torque). Now
-    // USD-tunable (`lunco:maxDriveOmega` / `lunco:driveDamping` /
-    // `lunco:stallTorqueGain`); defaults reproduce the verified feel.
-    let drive_motor = AngularMotor::new(MotorModel::AccelerationBased {
-        stiffness: 0.0,
-        damping: drive.drive_damp,
-    })
-    .with_max_torque(peak_torque * drive.stall_torque_gain);
+    // Velocity-controlled axle drive — THE one drive-motor definition lives in
+    // `WheelParams::drive_motor` (raw torque sat in avian's low-slip friction
+    // dead-zone; commanding spin rate is stable and self-limits top speed at
+    // traction; the high stall torque is what lets a skid turn enforce its
+    // left/right speed split). USD-tunable via `lunco:wheel:maxDriveOmega` /
+    // `:driveDamping` / `:stallTorqueGain`.
+    let drive_motor = params.drive_motor();
 
     // Joint construction lives in `lunco-usd-avian` (the single home for all
     // Avian joint-building); we add the mobility/hardware actuators on top.
@@ -2081,7 +1843,7 @@ fn setup_physical_wheel(
         // and the front frame-steer does the turning.
         MotorActuator {
             port_entity: p_drive,
-            max_omega: drive.max_omega,
+            max_omega: params.max_drive_omega,
             drive_sign: -1.0,
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),

@@ -46,6 +46,9 @@ over "Tire" (
             color3f inputs:tire_color = (0.06, 0.06, 0.07)
             float inputs:spoke_count = 6.0
             float inputs:tread_lugs = 48.0                  # fine, dense tread — hard ground
+            float inputs:lug_depth = 0.3                    # shallow profile
+            float inputs:wear = 0.05                        # prepared surfaces barely wear it
+            float inputs:dust_amount = 0.1                  # stays clean on the pad
             token outputs:surface
         }
     }

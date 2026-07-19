@@ -25,4 +25,16 @@ over "Tire" (
 )
 {
     double lunco:tire:frictionCoefficient = 0.5
+
+    # The look states the grip: rounded, flattened lugs under a heavy coat of
+    # the hundred klicks that wore them.
+    over "TireLook"
+    {
+        over "Shader"
+        {
+            float inputs:lug_depth = 0.4
+            float inputs:wear = 0.7
+            float inputs:dust_amount = 0.6
+        }
+    }
 }

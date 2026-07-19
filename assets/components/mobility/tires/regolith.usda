@@ -54,6 +54,9 @@ over "Tire" (
             color3f inputs:tire_color = (0.10, 0.10, 0.11)  # rubber
             float inputs:spoke_count = 6.0
             float inputs:tread_lugs = 24.0                  # deep, widely-spaced lugs — soil
+            float inputs:lug_depth = 0.7                    # full-relief working tread
+            float inputs:wear = 0.1                         # near-new
+            float inputs:dust_amount = 0.45                 # lives in the soil it grips
             token outputs:surface
         }
     }

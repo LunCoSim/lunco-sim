@@ -1,0 +1,51 @@
+#usda 1.0
+(
+    defaultPrim = "Chassis"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A box utility CHASSIS — collider + panelised hull material in one reusable
+# component, the body-side sibling of `mobility/wheel.usda`. A rover references
+# it INTO its own `Chassis` prim (same prim path, so authored joints and wheel
+# mounts are untouched) and overrides only its own decisions — the footprint,
+# and the paint:
+#
+#   def Cube "Chassis" (
+#       prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
+#   )
+#   {
+#       double3 xformOp:scale = (2.0, 0.3, 5.0)   # a longer flatbed
+#   }
+#
+# Difficulty tiers restyle by overriding `HullLook/Shader.inputs:hull_color` /
+# `inputs:accent_color` — never `displayColor`, which the hull shader replaces.
+
+def Cube "Chassis" (
+    kind = "subcomponent"
+    prepend apiSchemas = ["PhysicsCollisionAPI"]
+)
+{
+    double size = 1.0
+    double3 xformOp:scale = (2.0, 0.3, 3.5)
+    uniform token[] xformOpOrder = ["xformOp:scale"]
+
+    rel material:binding = </Chassis/HullLook>
+
+    def Material "HullLook"
+    {
+        token outputs:surface.connect = </Chassis/HullLook/Shader.outputs:surface>
+
+        def Shader "Shader"
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:wgsl:sourceAsset = @lunco://shaders/rover_hull.wgsl@
+            color3f inputs:hull_color = (0.78, 0.78, 0.80)
+            color3f inputs:accent_color = (0.85, 0.45, 0.10)
+            float inputs:panel_scale = 2.0
+            float inputs:wear = 0.2
+            float inputs:dust_amount = 0.4
+            token outputs:surface
+        }
+    }
+}
