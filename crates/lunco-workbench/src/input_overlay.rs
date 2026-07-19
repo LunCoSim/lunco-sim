@@ -91,8 +91,8 @@ pub fn draw_input_overlay(
         .map(|t| t.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
 
-    let panel_w = 340.0;
-    let panel_h = 45.0;
+    let panel_w = 430.0;
+    let panel_h = 52.0;
     let x = (window.width() - panel_w) / 2.0;
     let y = window.height() - panel_h - 20.0;
 
@@ -107,14 +107,39 @@ pub fn draw_input_overlay(
                 .corner_radius(6.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        // Keyboard Key visualizer
+                        // Keyboard key visualizer, drawn as KEYCAP CHIPS. A pressed
+                        // key fills its chip with the warning (amber) token and
+                        // flips the glyph dark — a colored-text-only pressed state
+                        // (the previous styling) was invisible at video scale over
+                        // dark footage, which defeats the overlay's whole purpose
+                        // (it exists FOR the recordings).
                         let draw_key = |ui: &mut egui::Ui, text: &str, is_pressed: bool| {
-                            let color = if is_pressed {
-                                theme.tokens.accent
+                            let (fill, glyph, border) = if is_pressed {
+                                (
+                                    theme.tokens.warning,
+                                    theme.tokens.overlay_backdrop,
+                                    theme.tokens.warning,
+                                )
                             } else {
-                                theme.tokens.inactive
+                                (
+                                    egui::Color32::TRANSPARENT,
+                                    theme.tokens.inactive,
+                                    theme.tokens.overlay_border,
+                                )
                             };
-                            ui.colored_label(color, egui::RichText::new(text).strong().size(13.0));
+                            egui::Frame::new()
+                                .fill(fill)
+                                .stroke(egui::Stroke::new(1.0, border))
+                                .corner_radius(4.0)
+                                .inner_margin(egui::Margin::symmetric(7, 3))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(text)
+                                            .strong()
+                                            .size(15.0)
+                                            .color(glyph),
+                                    );
+                                });
                         };
 
                         ui.label(egui::RichText::new("⌨").size(15.0).weak());

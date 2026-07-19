@@ -181,7 +181,7 @@ impl Panel for CommandDeck {
                 if ui.button("🏁 Take control").clicked() {
                     let v = vessel;
                     ctx.defer(move |world| {
-                        world.trigger(lunco_avatar::PossessVessel { avatar: None, target: v });
+                        world.trigger(lunco_avatar::PossessVessel { avatar: None, target: v, bind_camera: true });
                     });
                 }
             }

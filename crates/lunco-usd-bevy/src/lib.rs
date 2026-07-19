@@ -223,7 +223,16 @@ impl Plugin for UsdBevyPlugin {
             // `FixedPostUpdate` registration looked correct while ordering nothing.
             // `PostUpdate` runs after `PreUpdate` within the frame, so the sample sees
             // this frame's resolved clock by schedule order.
-            .add_systems(Update, camera_path::resolve_camera_paths)
+            .add_systems(
+                Update,
+                (
+                    camera_path::resolve_camera_paths,
+                    // After resolve, so an aim target that spawns on the very frame
+                    // its path resolves binds immediately rather than one frame late.
+                    camera_path::bind_aim_targets,
+                )
+                    .chain(),
+            )
             .add_systems(
                 PostUpdate,
                 (camera_path::drive_camera_paths, camera_path::apply_camera_paths)
