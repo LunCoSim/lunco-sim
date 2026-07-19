@@ -82,16 +82,26 @@ impl Plugin for ScreenshotPlugin {
         // holds the HTTP response open for the PNG instead of answering `command_accepted`
         // and making the caller poll).
         app.register_deferred_command::<CaptureScreenshot>()
+            .init_resource::<PendingScreenshotResponses>()
+            // Answers deferred HTTP screenshots once their worker-side encode
+            // lands — the encode itself never runs on the frame loop.
+            .add_systems(Update, pump_screenshot_responses)
             .add_observer(deliver_screenshot);
 
         // Offline Frame-by-Frame Recording Mode
         app.init_resource::<lunco_core::KeepAwake>()
             .init_resource::<OfflineRecordingState>()
             .init_resource::<OfflineSaveQueue>()
+            .init_resource::<OfflineVideoSink>()
             .add_observer(deliver_offline_frame)
             // Collects finished async frame saves. `Update`, unconditionally:
             // the queue must drain even after the recording deactivates.
-            .add_systems(Update, pump_offline_saves)
+            // The limit/exit systems are inert without their opt-in resources
+            // (`OfflineRecordLimit` / `ExitAfterRecording`).
+            .add_systems(
+                Update,
+                (pump_offline_saves, stop_recording_at_limit, exit_when_recording_drained),
+            )
             // The readiness gate. `Update` (not `Last`): it must run before
             // `drive_offline_clock`, which only acts once `state.active` is set —
             // so the shot begins on the same frame it was cleared to begin.
@@ -145,6 +155,7 @@ struct PendingCapture {
 fn on_capture_screenshot(
     trigger: On<CaptureScreenshot>,
     pending_request: Res<PendingApiRequest>,
+    capture_target: Option<Res<OfflineCaptureTarget>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -184,7 +195,14 @@ fn on_capture_screenshot(
     // Spawned HERE, not by a domain-side observer. It used to be the latter, and that
     // observer only shipped in `lunco-avatar` — so binaries that didn't pull it in (lunica,
     // hello_workbench) never produced a screenshot at all: curl simply hung.
-    commands.spawn((Screenshot::primary_window(), request));
+    //
+    // Offscreen (`--offscreen`) has no window — "the screen" is the offscreen
+    // render target, so API screenshots read that image.
+    let shot = match capture_target.as_ref() {
+        Some(target) => Screenshot::image(target.0.clone()),
+        None => Screenshot::primary_window(),
+    };
+    commands.spawn((shot, request));
 }
 
 register_commands!(
@@ -194,61 +212,41 @@ register_commands!(
     on_stop_offline_recording
 );
 
-/// The picture landed — crop, encode, and either save it or answer the deferred request.
+/// The picture landed — hand it to a worker, which crops, encodes, and either
+/// saves it or produces the bytes for the deferred HTTP answer. The main thread
+/// does nothing per-pixel here: the image is STOLEN from the event (`mem::take`,
+/// O(1)) — safe because the other observer, `deliver_offline_frame`, bails on
+/// entities that carry a `PendingCapture` marker (this flow's), and this one
+/// bails on everything else.
 fn deliver_screenshot(
-    trigger: On<ScreenshotCaptured>,
+    mut trigger: On<ScreenshotCaptured>,
     requests: Query<&PendingCapture>,
-    mut commands: Commands,
+    mut responses: ResMut<PendingScreenshotResponses>,
 ) {
-    let event = trigger.event();
-    // Not one of ours (an offline-recording frame) — bail out BEFORE the full-frame
-    // clone+convert below, which costs ~8 MB per 1080p frame.
-    let Ok(pending) = requests.get(event.entity) else {
+    let Ok(pending) = requests.get(trigger.event().entity) else {
         return;
     };
     let correlation_id = pending.correlation_id;
     let save_path = pending.save_path.clone();
     let region = pending.region;
+    let image = std::mem::take(&mut trigger.event_mut().image);
 
-    let Ok(mut dyn_img) = event.image.clone().try_into_dynamic() else {
-        error!("[screenshot] failed to convert the captured image");
-        return;
-    };
-
-    // Crop to the requested region, clamped to the image bounds.
-    if let Some((x, y, w, h)) = region {
-        let (iw, ih) = (dyn_img.width(), dyn_img.height());
-        if x < iw && y < ih && w > 0 && h > 0 {
-            let cw = w.min(iw - x);
-            let ch = h.min(ih - y);
-            dyn_img = dyn_img.crop_imm(x, y, cw, ch);
-        } else {
-            error!(
-                "[screenshot] region {:?} lies outside the {}x{} image — saving the full frame",
-                region, iw, ih
-            );
-        }
-    }
-
+    let pool = bevy::tasks::AsyncComputeTaskPool::get();
     if let Some(path) = save_path {
-        // save_to_file mode — the response was already sent; just write the file.
-        if let Err(e) = dyn_img.save(&path) {
-            error!("[screenshot] failed to save to '{path}': {e}");
-        }
+        // save_to_file mode — the response was already sent; the write is
+        // fire-and-forget (detach), errors surface in the log from the worker.
+        pool.spawn(async move {
+            if let Err(e) = encode_and_store(image, region, std::path::Path::new(&path)) {
+                error!("[screenshot] failed to save to '{path}': {e}");
+            }
+        })
+        .detach();
     } else if let Some(cid) = correlation_id {
-        // raw-PNG mode — encode and answer the deferred HTTP request.
-        let mut png_bytes: Vec<u8> = Vec::new();
-        if dyn_img
-            .write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
-            .is_ok()
-        {
-            commands.trigger(ApiResponseEvent {
-                response: ApiResponse::Screenshot { png_bytes },
-                correlation_id: cid,
-            });
-        } else {
-            error!("[screenshot] failed to encode the screenshot as PNG");
-        }
+        // raw-PNG mode — encode on the worker; the deferred HTTP request is
+        // answered by `pump_screenshot_responses` when the bytes land.
+        let task = pool
+            .spawn(async move { encode_capture(image, region, image::ImageFormat::Png) });
+        responses.0.push((cid, task));
     }
 }
 
@@ -424,8 +422,14 @@ pub struct OfflineRecordingState {
     pub active: bool,
     /// Sequential frame index.
     pub frame_index: u64,
-    /// Destination directory.
+    /// Destination: a directory for a PNG sequence, or a video file when
+    /// [`Self::video`] is set.
     pub output_dir: std::path::PathBuf,
+    /// Encode straight to a video file via a spawned `ffmpeg` instead of a PNG
+    /// sequence. Chosen by the destination's extension (see
+    /// [`output_is_video`]); demoted back to a PNG sequence at activation if
+    /// `ffmpeg` is not installed — a missing encoder must degrade, not crash.
+    pub video: bool,
     /// Video target FPS (determines delta virtual time step per frame).
     pub fps: u32,
     /// Kept for status-payload compatibility; the pipelined capture cycle no
@@ -461,6 +465,7 @@ impl OfflineRecordingState {
         Self {
             active: true,
             frame_index: 0,
+            video: output_is_video(&output_dir),
             output_dir,
             fps: fps.max(1),
             is_waiting_for_frame: false,
@@ -507,6 +512,173 @@ struct OfflineFrameCapture {
 /// and the render rate, not by this cap.
 const MAX_OUTSTANDING_CAPTURES: u32 = 6;
 
+/// Does this recording destination mean "encode a video file" rather than
+/// "write a PNG sequence into this directory"? Container choice is the caller's;
+/// these are the ones ffmpeg infers an H.264-capable muxer for by extension.
+pub fn output_is_video(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        Some("mp4" | "mkv" | "mov")
+    )
+}
+
+/// Is a runnable `ffmpeg` on PATH? Probed once at activation so a machine
+/// without it demotes the recording to a PNG sequence with a loud `warn!`
+/// instead of failing on the first frame.
+#[cfg(not(target_arch = "wasm32"))]
+fn ffmpeg_available() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+/// No child processes on wasm — video mode always demotes there.
+#[cfg(target_arch = "wasm32")]
+fn ffmpeg_available() -> bool {
+    false
+}
+
+/// When present, offline recording captures THIS image each frame instead of
+/// the primary window — the offscreen (`--offscreen`) mode's render target.
+/// Inserted by the binary that owns the mode (`SandboxOffscreenPlugin`); the
+/// recorder itself stays target-agnostic.
+#[derive(Resource)]
+pub struct OfflineCaptureTarget(pub Handle<bevy::image::Image>);
+
+/// Stop the recording automatically once `frame_index` reaches this count —
+/// the CLI `--record-frames <n>` one-shot contract. Routed through the SAME
+/// `StopOfflineRecording` command a scenario would send, so the drain,
+/// finalization and status behaviour cannot diverge between the two.
+#[derive(Resource)]
+pub struct OfflineRecordLimit(pub u64);
+
+/// Marker: exit the app once a recording has fully drained (frames delivered,
+/// saves finished, video finalized). Inserted by one-shot modes (`--offscreen`);
+/// a windowed session never wants it.
+#[derive(Resource)]
+pub struct ExitAfterRecording;
+
+/// The live `ffmpeg` a video-mode recording is streaming into. `sink` is `None`
+/// until the first frame delivers (the encoder needs the real capture
+/// dimensions, which are only known then); `draining` holds the writer thread's
+/// completion flag after finalization hand-off, so [`exit_when_recording_drained`]
+/// can wait for the container trailer to actually hit disk.
+#[derive(Resource, Default)]
+pub struct OfflineVideoSink {
+    #[cfg(not(target_arch = "wasm32"))]
+    sink: Option<VideoSink>,
+    #[cfg(not(target_arch = "wasm32"))]
+    draining: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+/// How many raw frames may sit in the channel to the writer thread. Bounded so
+/// an encoder slower than the render loop blocks the save workers, which fills
+/// [`OfflineSaveQueue`], which holds the clock — the same back-pressure chain
+/// as the PNG path, ending in a paused capture instead of unbounded memory
+/// (raw frames are ~16 MB each at 2560×1552; 8 ≈ 128 MB ceiling).
+#[cfg(not(target_arch = "wasm32"))]
+const VIDEO_CHANNEL_DEPTH: usize = 8;
+
+/// A spawned `ffmpeg` encoding `rawvideo` from stdin, fed by a dedicated writer
+/// thread. The writer owns the ONLY ordering concern in the pipeline: PNG
+/// frames are order-independent files, but a video stream is strictly
+/// sequential, so deliveries (which may arrive out of order) are staged in a
+/// reorder buffer and written contiguously from frame 0.
+#[cfg(not(target_arch = "wasm32"))]
+struct VideoSink {
+    /// Save workers send `(frame_index, rgba8_bytes)` here.
+    tx: std::sync::mpsc::SyncSender<(u64, Vec<u8>)>,
+    /// First failure reported by the writer thread (pipe broke, ffmpeg died,
+    /// missing frame at finalization). Read by [`pump_offline_saves`].
+    error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// Set by the writer thread after `ffmpeg` exits — the file is complete.
+    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Dimensions the encoder was started with — a window resize mid-recording
+    /// would corrupt the raw stream, so a mismatching frame aborts instead.
+    width: u32,
+    height: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl VideoSink {
+    /// Spawn `ffmpeg` writing to `path` and the writer thread that feeds it.
+    fn spawn(path: &std::path::Path, width: u32, height: u32, fps: u32) -> std::io::Result<Self> {
+        let mut child = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(["-f", "rawvideo", "-pixel_format", "rgba"])
+            .arg("-video_size")
+            .arg(format!("{width}x{height}"))
+            .arg("-framerate")
+            .arg(fps.to_string())
+            .args(["-i", "-"])
+            // veryfast: at cinematic resolutions the default preset encodes
+            // slower than the capture produces frames, and the back-pressure
+            // chain would pace the whole recording down to the encoder.
+            .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"])
+            // yuv420p for player compatibility; the crop keeps odd window
+            // dimensions legal for it (4:2:0 needs even width/height).
+            .args(["-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2"])
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(u64, Vec<u8>)>(VIDEO_CHANNEL_DEPTH);
+        let error: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
+        let done: std::sync::Arc<std::sync::atomic::AtomicBool> = Default::default();
+        let err_slot = error.clone();
+        let done_flag = done.clone();
+        std::thread::Builder::new()
+            .name("offline-video-writer".into())
+            .spawn(move || {
+                use std::io::Write;
+                let mut stdin = child.stdin.take().expect("stdin was piped above");
+                let fail = |m: String| {
+                    *err_slot.lock().unwrap() = Some(m);
+                };
+                let mut reorder: std::collections::BTreeMap<u64, Vec<u8>> = Default::default();
+                let mut next: u64 = 0;
+                // Runs until every sender is dropped (finalization) or the first
+                // write failure — exiting drops `rx`, which errors any blocked
+                // sender, which aborts the recording via the task results.
+                'recv: for (index, bytes) in rx {
+                    reorder.insert(index, bytes);
+                    while let Some(bytes) = reorder.remove(&next) {
+                        if let Err(e) = stdin.write_all(&bytes) {
+                            fail(format!("ffmpeg pipe write failed at frame {next}: {e}"));
+                            break 'recv;
+                        }
+                        next += 1;
+                    }
+                }
+                if !reorder.is_empty() {
+                    fail(format!(
+                        "video is missing frame {next}; {} delivered frame(s) after the gap \
+                         were dropped",
+                        reorder.len()
+                    ));
+                }
+                // EOF tells ffmpeg to finish the file; wait for the trailer.
+                drop(stdin);
+                match child.wait() {
+                    Ok(status) if status.success() => {
+                        info!("[offline-record] video finalized: {next} frames encoded");
+                    }
+                    Ok(status) => fail(format!("ffmpeg exited with {status}")),
+                    Err(e) => fail(format!("waiting for ffmpeg failed: {e}")),
+                }
+                done_flag.store(true, std::sync::atomic::Ordering::Release);
+            })?;
+
+        Ok(Self { tx, error, done, width, height })
+    }
+}
+
 /// Frame saves still being encoded/written by the async task pool.
 ///
 /// A separate resource rather than a field on [`OfflineRecordingState`] because
@@ -541,6 +713,88 @@ pub struct OfflineSaveQueue {
 /// ~85 fps — above what the render loop delivers, so in practice it only bites
 /// when the disk stalls.
 const MAX_IN_FLIGHT_SAVES: usize = 6;
+
+/// Convert a captured [`Image`] to encoded bytes — the CPU-heavy tail shared by
+/// EVERY capture consumer (recorder frames, `save_to_file` screenshots, raw-PNG
+/// HTTP answers). Runs on task-pool workers, never on the frame loop.
+///
+/// `region` crops first (clamped; an out-of-bounds region keeps the full frame,
+/// loudly, matching the historical screenshot behaviour). `format` follows the
+/// destination — [`image::ImageFormat::from_path`] for files, PNG for wire.
+fn encode_capture(
+    image: bevy::image::Image,
+    region: Option<(u32, u32, u32, u32)>,
+    format: image::ImageFormat,
+) -> Result<Vec<u8>, String> {
+    let mut dyn_img = image
+        .try_into_dynamic()
+        .map_err(|e| format!("convert failed: {e}"))?;
+    if let Some((x, y, w, h)) = region {
+        let (iw, ih) = (dyn_img.width(), dyn_img.height());
+        if x < iw && y < ih && w > 0 && h > 0 {
+            dyn_img = dyn_img.crop_imm(x, y, w.min(iw - x), h.min(ih - y));
+        } else {
+            error!(
+                "[screenshot] region {region:?} lies outside the {iw}x{ih} image — \
+                 keeping the full frame"
+            );
+        }
+    }
+    let mut bytes = Vec::new();
+    dyn_img
+        .write_to(&mut Cursor::new(&mut bytes), format)
+        .map_err(|e| format!("encode failed: {e}"))?;
+    Ok(bytes)
+}
+
+/// [`encode_capture`] + write THROUGH `lunco_storage` — the storage API is the
+/// write path for every file this codebase produces (and the only one that
+/// exists on wasm/OPFS); the `DynamicImage::save` calls this replaces were
+/// holes in that rule. Format follows the path's extension, PNG when unnamed.
+fn encode_and_store(
+    image: bevy::image::Image,
+    region: Option<(u32, u32, u32, u32)>,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let format = image::ImageFormat::from_path(path).unwrap_or(image::ImageFormat::Png);
+    let bytes = encode_capture(image, region, format)?;
+    lunco_storage::write_file_sync(path, &bytes).map_err(|e| format!("write failed: {e}"))
+}
+
+/// Raw-PNG HTTP screenshots whose encode is still on a worker. Polled by
+/// [`pump_screenshot_responses`], which triggers the deferred `ApiResponseEvent`
+/// on the main world once the bytes are ready — the one step a worker cannot do.
+#[derive(Resource, Default)]
+struct PendingScreenshotResponses(Vec<(u64, bevy::tasks::Task<Result<Vec<u8>, String>>)>);
+
+/// Answer deferred HTTP screenshot requests whose worker-side encode finished.
+/// Failure logs and drops the request (the API layer's watchdog times the
+/// held response out), matching the synchronous behaviour this replaced.
+fn pump_screenshot_responses(
+    mut pending: ResMut<PendingScreenshotResponses>,
+    mut commands: Commands,
+) {
+    if pending.0.is_empty() {
+        return;
+    }
+    use bevy::tasks::futures_lite::future;
+    pending.0.retain_mut(|(cid, task)| {
+        match future::block_on(future::poll_once(&mut *task)) {
+            None => true,
+            Some(Ok(png_bytes)) => {
+                commands.trigger(ApiResponseEvent {
+                    response: ApiResponse::Screenshot { png_bytes },
+                    correlation_id: *cid,
+                });
+                false
+            }
+            Some(Err(e)) => {
+                error!("[screenshot] failed to produce the HTTP screenshot ({e})");
+                false
+            }
+        }
+    });
+}
 
 /// Command to start frame-by-frame recording.
 #[Command(default)]
@@ -588,9 +842,21 @@ fn on_start_offline_recording(
 
     // Fail here rather than after the wait: an unwritable destination is the
     // caller's mistake and should be reported at the point of the request.
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        error!("[offline-record] failed to create output directory {}: {e}", dir.display());
-        return;
+    // A video destination (`out.mp4`) needs its PARENT to exist — creating the
+    // path itself would plant a directory where ffmpeg wants a file.
+    let dir_to_create = if output_is_video(&dir) {
+        dir.parent().map(std::path::Path::to_path_buf).unwrap_or_default()
+    } else {
+        dir.clone()
+    };
+    if !dir_to_create.as_os_str().is_empty() {
+        if let Err(e) = std::fs::create_dir_all(&dir_to_create) {
+            error!(
+                "[offline-record] failed to create output directory {}: {e}",
+                dir_to_create.display()
+            );
+            return;
+        }
     }
 
     info!(
@@ -618,6 +884,31 @@ fn activate_recording(
     commands: &mut Commands,
 ) {
     *state = OfflineRecordingState::start(pending.output_dir.clone(), pending.fps);
+
+    // Video mode needs a runnable `ffmpeg`. Probe NOW, not at the first frame:
+    // a missing encoder must demote the recording to a PNG sequence with a loud
+    // warning — never crash the shot, and never fail after frames were taken.
+    if state.video && !ffmpeg_available() {
+        let fallback = state.output_dir.with_extension("frames");
+        warn!(
+            "[offline-record] {} requested a video but ffmpeg is not installed — \
+             falling back to a PNG sequence in {} (install ffmpeg for direct video \
+             recording)",
+            state.output_dir.display(),
+            fallback.display(),
+        );
+        if let Err(e) = std::fs::create_dir_all(&fallback) {
+            error!(
+                "[offline-record] fallback directory {} could not be created ({e}) — \
+                 aborting the shot",
+                fallback.display()
+            );
+            state.active = false;
+            return;
+        }
+        state.output_dir = fallback;
+        state.video = false;
+    }
 
     // Freeze time initially by setting manual duration to 0.
     // This allows guarded simulation systems to execute but see a 0 delta.
@@ -1027,6 +1318,7 @@ fn drive_offline_clock(
     // about.
     pending: Option<Res<PendingShotStart>>,
     save_queue: Res<OfflineSaveQueue>,
+    capture_target: Option<Res<OfflineCaptureTarget>>,
     mut commands: Commands,
 ) {
     // PHASE 0 — armed, waiting for the scene. Freeze virtual time.
@@ -1069,8 +1361,14 @@ fn drive_offline_clock(
     // *advancing*, never drop a step that was taken.
     if state.advanced_this_frame {
         state.advanced_this_frame = false;
+        // Offscreen mode captures the render-target image; windowed mode the
+        // primary window. Same pipeline either side of this one expression.
+        let shot = match capture_target.as_ref() {
+            Some(target) => Screenshot::image(target.0.clone()),
+            None => Screenshot::primary_window(),
+        };
         commands.spawn((
-            Screenshot::primary_window(),
+            shot,
             OfflineFrameCapture {
                 index: state.frame_index,
                 path: state
@@ -1101,17 +1399,18 @@ fn drive_offline_clock(
 
 /// Observer for Bevy's ScreenshotCaptured event.
 fn deliver_offline_frame(
-    trigger: On<ScreenshotCaptured>,
+    mut trigger: On<ScreenshotCaptured>,
     captures: Query<&OfflineFrameCapture>,
     mut state: ResMut<OfflineRecordingState>,
     mut queue: ResMut<OfflineSaveQueue>,
+    mut video_sink: ResMut<OfflineVideoSink>,
+    mut commands: Commands,
 ) {
-    let event = trigger.event();
     // Positive identification via the marker — see [`OfflineFrameCapture`]. Not
     // gated on `state.active`: a delivery arriving after stop belongs to a step
     // taken while active, and the take's tail must land (drain), even if the
     // next shot is already recording into a different directory.
-    let Ok(capture) = captures.get(event.entity) else {
+    let Ok(capture) = captures.get(trigger.event().entity) else {
         return;
     };
     let frame_idx = capture.index;
@@ -1119,10 +1418,16 @@ fn deliver_offline_frame(
     let readback = capture.requested_at.elapsed().as_secs_f32() * 1000.0;
     state.outstanding_captures = state.outstanding_captures.saturating_sub(1);
 
+    // STEAL the image, don't clone it: `mem::take` moves the ~16 MB buffer out
+    // of the event in O(1), replacing it with `Image::default()`. Cloning here
+    // was the last per-frame main-thread cost worth naming (~10-20 ms at
+    // 2560×1552). Safe because this event's only other observer,
+    // `deliver_screenshot`, bails on the missing `PendingCapture` before it
+    // touches the image — and our entities never carry that component.
+    let image = std::mem::take(&mut trigger.event_mut().image);
+
     // Hand the frame to a worker immediately: convert+encode+write (~70 ms
-    // measured at 2560×1552) never touches the render loop's critical path. The
-    // clone is the one cost that must stay here — the event only lends us the
-    // image.
+    // measured at 2560×1552) never touches the render loop's critical path.
     //
     // Failure policy is drain-and-abort, surfaced in [`pump_offline_saves`] up
     // to [`MAX_IN_FLIGHT_SAVES`] frames late: the recording aborts loudly and
@@ -1131,30 +1436,96 @@ fn deliver_offline_frame(
     // never with a silent mid-sequence hole, which is what the abort exists to
     // prevent (a disk filling mid-capture is the ordinary trigger, and the video
     // encoder would happily splice across a gap).
-    //
-    // Default PNG compression, on purpose. `CompressionType::Fast` was tried and
-    // MEASURED (2026-07-19, ~390-frame A/B at 2560×1552, default sandbox scene):
-    // 65 ms vs 77.5 ms save — Fast was SLOWER at the same ~4 MB/frame. If save
-    // cost matters again, the lever is more overlap, not a cheaper deflate.
-    let t_clone = web_time::Instant::now();
-    let image = event.image.clone();
-    let t_clone = t_clone.elapsed();
-    let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let dyn_img = image
-            .try_into_dynamic()
-            .map_err(|e| format!("frame {frame_idx} convert failed: {e}"))?;
-        dyn_img
-            .save(&path)
-            .map_err(|e| format!("frame {frame_idx} save failed: {e}"))?;
-        Ok(frame_idx)
-    });
-    queue.tasks.push(task);
+    let pool = bevy::tasks::AsyncComputeTaskPool::get();
+    if state.video {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // The encoder starts on the FIRST delivered frame — only then are
+            // the real capture dimensions known. `ffmpeg_available` was probed
+            // at activation, so a spawn failure here is an abort, not a demote.
+            if video_sink.sink.is_none() {
+                match VideoSink::spawn(
+                    &state.output_dir,
+                    image.width(),
+                    image.height(),
+                    state.fps,
+                ) {
+                    Ok(sink) => {
+                        info!(
+                            "[offline-record] streaming {}x{} @ {} FPS into {} via ffmpeg",
+                            image.width(),
+                            image.height(),
+                            state.fps,
+                            state.output_dir.display(),
+                        );
+                        video_sink.sink = Some(sink);
+                    }
+                    Err(e) => {
+                        error!(
+                            "[offline-record] failed to start ffmpeg ({e}) — aborting recording"
+                        );
+                        teardown_recording(&mut state, &mut commands);
+                        return;
+                    }
+                }
+            }
+            let sink = video_sink.sink.as_ref().expect("filled above");
+            if (sink.width, sink.height) != (image.width(), image.height()) {
+                error!(
+                    "[offline-record] window resized mid-recording ({}x{} → {}x{}) — a raw \
+                     video stream cannot change size, aborting",
+                    sink.width,
+                    sink.height,
+                    image.width(),
+                    image.height(),
+                );
+                teardown_recording(&mut state, &mut commands);
+                return;
+            }
+            // The worker converts to tightly-packed RGBA and sends into the
+            // writer thread's bounded channel; a full channel blocks the worker,
+            // which fills the queue, which holds the clock (back-pressure).
+            let tx = sink.tx.clone();
+            let task = pool.spawn(async move {
+                let rgba = image
+                    .try_into_dynamic()
+                    .map_err(|e| format!("frame {frame_idx} convert failed: {e}"))?
+                    .into_rgba8()
+                    .into_raw();
+                tx.send((frame_idx, rgba))
+                    .map_err(|_| format!("frame {frame_idx}: the video writer terminated"))?;
+                Ok(frame_idx)
+            });
+            queue.tasks.push(task);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Activation demotes video mode on wasm (no child processes); an
+            // active video state here is a logic error, not a user condition.
+            let _ = &mut video_sink;
+            error!("[offline-record] video mode is unavailable on wasm — aborting");
+            teardown_recording(&mut state, &mut commands);
+            return;
+        }
+    } else {
+        // PNG-sequence mode: encode + write through `lunco_storage` (see
+        // [`encode_and_store`]). Default PNG compression, on purpose:
+        // `CompressionType::Fast` was tried and MEASURED (2026-07-19, ~390-frame
+        // A/B at 2560×1552) — 65 ms vs 77.5 ms save, SLOWER at the same
+        // ~4 MB/frame. If save cost matters again the lever is more overlap,
+        // not a cheaper deflate.
+        let task = pool.spawn(async move {
+            encode_and_store(image, None, &path)
+                .map_err(|e| format!("frame {frame_idx}: {e}"))?;
+            Ok(frame_idx)
+        });
+        queue.tasks.push(task);
+    }
 
     debug!(
-        "[offline-record] frame {}: readback={:.1}ms clone={:.1}ms outstanding={} saves_in_flight={}",
+        "[offline-record] frame {}: readback={:.1}ms outstanding={} saves_in_flight={}",
         frame_idx,
         readback,
-        t_clone.as_secs_f32() * 1000.0,
         state.outstanding_captures,
         queue.tasks.len(),
     );
@@ -1172,11 +1543,9 @@ fn deliver_offline_frame(
 fn pump_offline_saves(
     mut queue: ResMut<OfflineSaveQueue>,
     mut state: ResMut<OfflineRecordingState>,
+    mut video_sink: ResMut<OfflineVideoSink>,
     mut commands: Commands,
 ) {
-    if queue.tasks.is_empty() {
-        return;
-    }
     use bevy::tasks::futures_lite::future;
     let mut first_failure: Option<String> = None;
     queue.tasks.retain_mut(|task| {
@@ -1201,6 +1570,103 @@ fn pump_offline_saves(
             teardown_recording(&mut state, &mut commands);
         }
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Surface writer-thread failures (broken pipe, ffmpeg died) on the main
+        // world, where the recording can actually be aborted.
+        if let Some(sink) = video_sink.sink.as_ref() {
+            let failure = sink.error.lock().unwrap().take();
+            if let Some(e) = failure {
+                error!("[offline-record] video sink failed ({e}) — aborting recording");
+                if state.active {
+                    teardown_recording(&mut state, &mut commands);
+                }
+            }
+        }
+        // Finalize: recording over, every readback delivered, every worker done.
+        // Dropping the sink drops the last sender; the writer thread flushes its
+        // reorder buffer, closes ffmpeg's stdin and waits the trailer out,
+        // logging completion from its own thread.
+        if video_sink.sink.is_some()
+            && !state.active
+            && state.outstanding_captures == 0
+            && queue.tasks.is_empty()
+        {
+            info!("[offline-record] all frames handed to the encoder — finalizing video");
+            if let Some(sink) = video_sink.sink.take() {
+                // Keep the writer's completion flag so a one-shot run can wait
+                // for the container trailer before exiting the process.
+                video_sink.draining = Some(sink.done.clone());
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = &mut video_sink;
+}
+
+/// One-shot length contract: stop after `--record-frames` frames, through the
+/// SAME `StopOfflineRecording` command a scenario would send — so drain,
+/// finalization and status behave identically however a shot ends.
+fn stop_recording_at_limit(
+    state: Res<OfflineRecordingState>,
+    limit: Option<Res<OfflineRecordLimit>>,
+    mut commands: Commands,
+) {
+    let Some(limit) = limit else { return };
+    if state.active && state.frame_index >= limit.0 {
+        info!(
+            "[offline-record] reached the requested {} frames — stopping",
+            limit.0
+        );
+        commands.trigger(StopOfflineRecording {});
+    }
+}
+
+/// One-shot process contract (`--offscreen`): exit once the recording has fully
+/// drained — recorder inactive, no readback in flight, no save on a worker, and
+/// (video mode) the container trailer written. Without every one of those
+/// clauses the exit truncates the take; with them the process end IS the
+/// "recording is on disk" signal a script can wait on.
+fn exit_when_recording_drained(
+    exit_requested: Option<Res<ExitAfterRecording>>,
+    state: Res<OfflineRecordingState>,
+    pending: Option<Res<PendingShotStart>>,
+    queue: Res<OfflineSaveQueue>,
+    video_sink: Res<OfflineVideoSink>,
+    mut exit: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
+    mut fired: Local<bool>,
+) {
+    if exit_requested.is_none() || *fired {
+        return;
+    }
+    // Not before the shot even started: armed (gate waiting) or active means
+    // in progress. And a take must have actually CAPTURED something — without
+    // `frame_index > 0` an `--offscreen` session launched for API-driven work
+    // (no `--record-offline`) exits the moment it boots, every condition
+    // vacuously true.
+    if pending.is_some() || state.active || state.frame_index == 0 {
+        return;
+    }
+    if state.outstanding_captures > 0 || !queue.tasks.is_empty() {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if video_sink.sink.is_some() {
+            return;
+        }
+        if let Some(done) = video_sink.draining.as_ref() {
+            if !done.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = &video_sink;
+    *fired = true;
+    info!("[offline-record] recording drained — exiting (one-shot mode)");
+    exit.write(bevy::app::AppExit::Success);
 }
 
 struct GetOfflineRecordingStatusProvider;
@@ -1215,6 +1681,8 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
             "active": state.active,
             "frame_index": state.frame_index,
             "is_waiting_for_frame": state.is_waiting_for_frame,
+            // Encoding straight to a video file (ffmpeg) vs a PNG sequence.
+            "video": state.video,
             // Captures whose GPU readback hasn't delivered yet.
             "outstanding_captures": state.outstanding_captures,
             // Frames still deflating/writing on workers. `active == false` with
