@@ -348,6 +348,9 @@ pub fn enforce_script_authority(
     op: &str,
     target_gid: Option<u64>,
 ) -> Result<(), String> {
+    // TODO(multiplayer): script authority/RBAC enforcement deferred — current focus
+    // is singleplayer and RBAC is disabled for ease of debugging. Revisit before
+    // multiplayer hardening (see REVIEW-2026-07-19.md #2).
     let Some(session) = script_authority() else {
         return Ok(());
     };
@@ -383,16 +386,18 @@ fn command_target_gid(world: &World, name: &str, params: &serde_json::Value) -> 
 /// Run `f` with the scoped World, or return `None` outside a script evaluation.
 ///
 /// SAFETY: the pointer is only ever set to a live `&mut World` borrow held by an
-/// evaluation for the duration of the call; verbs run synchronously and never
-/// re-enter while a borrow is outstanding, so the reconstructed `&mut` is unique.
+/// evaluation for the duration of the call, and it is TAKEN out of the slot while
+/// `f` runs — a nested `with_world` sees null and returns `None` instead of
+/// reconstructing a second live `&mut` — so the reconstructed `&mut` is unique.
 pub fn with_world<R>(f: impl FnOnce(&mut World) -> R) -> Option<R> {
     WORLD_PTR.with(|p| {
-        let ptr = p.get();
+        let ptr = p.replace(std::ptr::null_mut());
         if ptr.is_null() {
-            None
-        } else {
-            Some(f(unsafe { &mut *ptr }))
+            return None;
         }
+        let result = f(unsafe { &mut *ptr });
+        p.set(ptr);
+        Some(result)
     })
 }
 

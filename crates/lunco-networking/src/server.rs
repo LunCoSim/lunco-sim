@@ -1154,6 +1154,10 @@ fn collect_scenario_input(
             .cloned()
             .collect(),
     };
+    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+    // ease of debugging. The host ships whatever the unconfined closure walker
+    // reached (see `closure::reference_closure`). Revisit before multiplayer
+    // hardening (REVIEW-2026-07-19.md finding #5).
     for f in lunco_usd_bevy::closure::reference_closure(&roots) {
         if f.starts_with(&twin.root) {
             continue; // in-tree — already enumerated by the folder walk

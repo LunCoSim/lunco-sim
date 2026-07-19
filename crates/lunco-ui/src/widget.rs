@@ -128,22 +128,16 @@ pub fn widget<W: WidgetSystem + 'static>(world: &mut World, ui: &mut egui::Ui, i
         world.insert_resource(WidgetCache::<W>::default());
     }
 
-    // SAFETY: We use raw pointers to split the mutable borrow of world.
-    // WidgetCache only holds SystemState handles (not ECS data), so there
-    // is no overlap between what the cache holds and what the widget queries.
-    let cache_ptr = world.resource_mut::<WidgetCache<W>>().as_mut() as *mut WidgetCache<W>;
-
-    // Check if we already have a cached state
-    let has_state = unsafe { (*cache_ptr).states.contains_key(&id) };
-
-    if !has_state {
-        let state = SystemState::<W>::new(world);
-        unsafe { (*cache_ptr).states.insert(id, state) };
-    }
-
-    // Get the cached state and run the widget
-    let state = unsafe { (*cache_ptr).states.get_mut(&id).unwrap() };
-    W::run(world, state, ui, id);
+    // `resource_scope` temporarily removes the cache from the world, so the widget
+    // gets `&mut World` while we hold `&mut` into its cached SystemState — the
+    // borrow split done soundly.
+    world.resource_scope(|world, mut cache: Mut<WidgetCache<W>>| {
+        let state = cache
+            .states
+            .entry(id)
+            .or_insert_with(|| SystemState::<W>::new(world));
+        W::run(world, state, ui, id);
+    });
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────

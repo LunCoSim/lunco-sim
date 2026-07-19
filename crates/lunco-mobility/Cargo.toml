@@ -11,6 +11,7 @@ lunco-core = { path = "../lunco-core" }
 # `apply_drive_mix` falls back to a hook named by `DriveMix.kernel` when it isn't a
 # built-in `ControlKernelRegistry` entry. Dependency-free (no rhai/bevy).
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }

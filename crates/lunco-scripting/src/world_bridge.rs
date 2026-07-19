@@ -651,6 +651,11 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // registrations), so a scenario re-shapes policy live, no rebuild — the
     // doc-37 §8 "policy = rhai" surface. `src` must define `fn <entry>(...)`;
     // returns false (and logs why) on a compile error.
+    //
+    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+    // ease of debugging. No allow-list on which hook ids a script may replace, and
+    // `deterministic` is hard-coded false. Revisit before multiplayer hardening
+    // (REVIEW-2026-07-19.md finding #4).
     engine.register_fn(
         "register_hook",
         |id: ImmutableString, entry: ImmutableString, src: ImmutableString| -> bool {

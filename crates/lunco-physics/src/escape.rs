@@ -231,11 +231,16 @@ fn report_escaped_bodies(
     }
 }
 
-/// Clear the once-per-entity report set when a scene is torn down, so a reloaded
+/// Drop despawned bodies from the once-per-entity report set, so a reloaded
 /// scene can report the same failure again. Entity ids are recycled, and a stale
 /// id in the set would silence a genuinely new escape.
-pub fn clear_reported_escapes(mut reported: ResMut<ReportedEscapes>) {
-    reported.0.clear();
+pub fn clear_reported_escapes(
+    mut removed: RemovedComponents<RigidBody>,
+    mut reported: ResMut<ReportedEscapes>,
+) {
+    for entity in removed.read() {
+        reported.0.remove(&entity);
+    }
 }
 
 /// Installs the "left the world" diagnostic. Registered by [`PhysicsGatePlugin`]
@@ -265,7 +270,7 @@ impl Plugin for EscapeDiagnosticPlugin {
             // resolves the identical problem the identical way.
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
-                (update_world_bounds, report_escaped_bodies)
+                (update_world_bounds, clear_reported_escapes, report_escaped_bodies)
                     .chain()
                     .in_set(PhysicsSystems::Writeback)
                     .after(avian3d::schedule::PhysicsStepSystems::Last)
@@ -387,11 +392,7 @@ mod tests {
         let e = Entity::from_raw_u32(7).unwrap();
         assert!(reported.0.insert(e), "first sighting reports");
         assert!(!reported.0.insert(e), "every later tick is silent");
-        clear_reported_escapes_inner(&mut reported);
-        assert!(reported.0.insert(e), "a scene reload reports afresh");
-    }
-
-    fn clear_reported_escapes_inner(r: &mut ReportedEscapes) {
-        r.0.clear();
+        reported.0.remove(&e);
+        assert!(reported.0.insert(e), "a despawned body's id reports afresh");
     }
 }

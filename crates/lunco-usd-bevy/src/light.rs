@@ -218,8 +218,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // both would count the sky twice and wash out every shadow.
             let Some(env) = dome::read_dome_environment(reader, sdf_path, asset_server, stage_id)
             else {
-                let intensity =
-                    get_attribute_as_f32(reader, sdf_path, "inputs:intensity").unwrap_or(0.0);
+                let intensity = read_intensity_with_exposure(reader, sdf_path, 1.0);
                 commands
                     .entity(entity)
                     .try_insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
@@ -274,7 +273,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
 
             if let Some(cone_angle_deg) = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:angle") {
                 // Spotlight path (UsdLuxShapingAPI applied)
-                let outer_angle = (cone_angle_deg.to_radians() / 2.0).clamp(0.0, std::f32::consts::FRAC_PI_2);
+                let outer_angle = cone_angle_deg.to_radians().clamp(0.0, std::f32::consts::FRAC_PI_2);
                 let softness = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:softness")
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0);

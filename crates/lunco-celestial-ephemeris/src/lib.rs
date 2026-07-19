@@ -306,6 +306,38 @@ pub fn equatorial_to_ecliptic(p: IcrfAu) -> EclipticAu {
     ))
 }
 
+impl CelestialEphemerisProvider {
+    /// P8(d) for the built-in bodies: an evaluation error is `None` — "we do not
+    /// know" — never a zero vector, which is a *position* (the frame origin) and
+    /// indistinguishable from a real result.
+    fn emb_heliocentric(&self, tdb: &TDB) -> Option<Vector3> {
+        self.emb.heliocentric_position(tdb).ok().or_else(|| {
+            bevy::log::warn_once!(
+                "[ephemeris] VSOP2013 EMB evaluation failed — Earth and Moon will not be placed."
+            );
+            None
+        })
+    }
+
+    fn earth_heliocentric(&self, tdb: &TDB) -> Option<Vector3> {
+        self.earth.heliocentric_position(tdb).ok().or_else(|| {
+            bevy::log::warn_once!(
+                "[ephemeris] VSOP2013 Earth evaluation failed — Earth and Moon will not be placed."
+            );
+            None
+        })
+    }
+
+    fn moon_geocentric_icrs(&self, tdb: &TDB) -> Option<[f64; 3]> {
+        self.moon.geocentric_position_icrs(tdb).ok().or_else(|| {
+            bevy::log::warn_once!(
+                "[ephemeris] ELP/MPP02 Moon evaluation failed — the Moon will not be placed."
+            );
+            None
+        })
+    }
+}
+
 impl EphemerisProvider for CelestialEphemerisProvider {
     /// P8(c): read from the tree, which is the registry's — not a `match` that duplicates it.
     fn parent_id(&self, body_id: i32) -> Option<i32> {
@@ -319,12 +351,12 @@ impl EphemerisProvider for CelestialEphemerisProvider {
         match body_id {
             10 => Some(EclipticAu::ZERO), // the Sun IS the origin of this frame
             3 => {
-                let p = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
+                let p = self.emb_heliocentric(&tdb)?;
                 Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(p.x, p.y, p.z))))
             }
             399 => {
-                let p_emb = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
-                let p_earth = self.earth.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
+                let p_emb = self.emb_heliocentric(&tdb)?;
+                let p_earth = self.earth_heliocentric(&tdb)?;
                 Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_earth.x - p_emb.x,
                     p_earth.y - p_emb.y,
@@ -332,7 +364,7 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                 ))))
             }
             301 => {
-                let p_m_geo_arr = self.moon.geocentric_position_icrs(&tdb).unwrap_or_else(|_| [0.0, 0.0, 0.0]);
+                let p_m_geo_arr = self.moon_geocentric_icrs(&tdb)?;
                 const AU_KM: f64 = 149_597_870.7;
                 let p_m_geo_au = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_m_geo_arr[0] / AU_KM,
@@ -340,8 +372,8 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                     p_m_geo_arr[2] / AU_KM,
                 )));
 
-                let p_emb = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
-                let p_earth = self.earth.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
+                let p_emb = self.emb_heliocentric(&tdb)?;
+                let p_earth = self.earth_heliocentric(&tdb)?;
                 let p_earth_rel_emb = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_earth.x - p_emb.x,
                     p_earth.y - p_emb.y,

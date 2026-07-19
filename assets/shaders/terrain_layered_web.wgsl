@@ -245,14 +245,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         roughness = clamp(mix(roughness, s.r, mat.weight_rough), 0.05, 1.0);
         albedo *= mix(1.0, s.g, mat.weight_ao);
     }
+    // Normal: perturb the procedural normal toward the map's baked normal.
+    // The baked map stores world-space normals (see derive.rs pack_normal_rgba8),
+    // so decode directly — no tangent basis involved.
     if (mat.weight_normal > 0.0) {
-        let tn = textureSample(normal_tex, normal_smp, uv).xyz * 2.0 - 1.0;
-        var up = vec3(0.0, 1.0, 0.0);
-        if (abs(n.y) > 0.99) { up = vec3(1.0, 0.0, 0.0); }
-        let t = normalize(cross(up, n));
-        let b = cross(n, t);
-        let mapped = normalize(t * tn.x + b * tn.y + n * max(tn.z, 0.1));
-        n = normalize(mix(n, mapped, mat.weight_normal));
+        let n_baked = normalize(textureSample(normal_tex, normal_smp, uv).xyz * 2.0 - 1.0);
+        n = normalize(mix(n, n_baked, mat.weight_normal));
     }
 #endif
 

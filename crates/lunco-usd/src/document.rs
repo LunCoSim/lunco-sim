@@ -918,6 +918,21 @@ fn prim_in(data: &sdf::Data, sdf: &SdfPath) -> bool {
     matches!(data.spec(sdf), Some(s) if s.ty == SpecType::Prim)
 }
 
+/// The `xformOpOrder` tokens `data` holds for `prim`, flattening any list-op
+/// authoring. Empty when unauthored.
+fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
+    let Ok(attr) = prim.append_property("xformOpOrder") else {
+        return Vec::new();
+    };
+    match data.field(&attr, "default").cloned() {
+        Some(sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
+        Some(sdf::Value::StringVec(v)) => v,
+        Some(sdf::Value::TokenListOp(op)) => op.flatten().into_iter().map(Into::into).collect(),
+        Some(sdf::Value::StringListOp(op)) => op.flatten(),
+        _ => Vec::new(),
+    }
+}
+
 /// The identity contract: one document per file, content refreshed from disk,
 /// unsaved edits never clobbered. Everything here already existed as inherent
 /// methods — this just hands them to the generic
@@ -1071,7 +1086,7 @@ impl Document for UsdDocument {
             UsdOp::SetTranslate { path, value, .. } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
                 // Pre-state is read from the TARGET layer: the inverse restores
-                // that layer's opinion, and `xformOpOrder` we synthesize lands
+                // that layer's opinion, and `xformOpOrder` we author lands
                 // there too.
                 let layer = self.layer(target);
                 let translate_existed = prim_sdf
@@ -1079,12 +1094,13 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let order_existed = prim_sdf
-                    .append_property("xformOpOrder")
-                    .ok()
-                    .and_then(|p| layer.spec(&p).map(|_| ()))
-                    .is_some();
                 let old_translate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:translate");
+                // The op order is checked against the COMPOSED opinion: a weaker
+                // layer may already list ops this edit must not discard. When
+                // the op is missing, materialise that order plus the new op into
+                // the target layer — append, never clobber.
+                let composed_order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
+                let append_op = !composed_order.iter().any(|t| t == "xformOp:translate");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -1092,22 +1108,20 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set(value)
                     .map_err(author_err)?;
-                // Establish the op order only when the prim has none yet in this
-                // layer — never clobber an existing xform stack.
-                if !order_existed {
-                    let order = parse_attribute_value("token[]", "[\"xformOp:translate\"]")
-                        .map_err(author_err)?;
+                if append_op {
+                    let mut order = composed_order;
+                    order.push("xformOp:translate".into());
                     stage
                         .create_attribute(format!("{path}.xformOpOrder"), "token[]")
                         .map_err(author_err)?
-                        .set(order)
+                        .set(sdf::Value::token_vec(order))
                         .map_err(author_err)?;
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
                 // Typed inverse only when this purely overwrote an existing
-                // translate in this layer (no `xformOpOrder` was synthesized).
-                let inverse = if translate_existed && order_existed {
+                // translate in this layer (no `xformOpOrder` was authored).
+                let inverse = if translate_existed && !append_op {
                     old_translate
                         .map(|old| UsdOp::SetTranslate {
                             edit_target: id.clone(),
@@ -1132,7 +1146,7 @@ impl Document for UsdDocument {
             UsdOp::SetRotate { path, value, .. } => {
                 // Direct mirror of `SetTranslate` for `xformOp:rotateXYZ`
                 // (Euler XYZ degrees). Same target-layer pre-state read, same
-                // "synthesize op order only when the prim has none yet" rule.
+                // composed-order append rule.
                 let prim_sdf = self.require_prim_anywhere(&path)?;
                 let layer = self.layer(target);
                 let rotate_existed = prim_sdf
@@ -1140,12 +1154,9 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let order_existed = prim_sdf
-                    .append_property("xformOpOrder")
-                    .ok()
-                    .and_then(|p| layer.spec(&p).map(|_| ()))
-                    .is_some();
                 let old_rotate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
+                let composed_order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
+                let append_op = !composed_order.iter().any(|t| t == "xformOp:rotateXYZ");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -1153,18 +1164,18 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set(value)
                     .map_err(author_err)?;
-                if !order_existed {
-                    let order = parse_attribute_value("token[]", "[\"xformOp:rotateXYZ\"]")
-                        .map_err(author_err)?;
+                if append_op {
+                    let mut order = composed_order;
+                    order.push("xformOp:rotateXYZ".into());
                     stage
                         .create_attribute(format!("{path}.xformOpOrder"), "token[]")
                         .map_err(author_err)?
-                        .set(order)
+                        .set(sdf::Value::token_vec(order))
                         .map_err(author_err)?;
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
-                let inverse = if rotate_existed && order_existed {
+                let inverse = if rotate_existed && !append_op {
                     old_rotate
                         .map(|old| UsdOp::SetRotate {
                             edit_target: id.clone(),

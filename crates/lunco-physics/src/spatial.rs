@@ -50,24 +50,27 @@ use bevy::prelude::*;
 #[derive(SystemParam)]
 pub struct GridSpatialQuery<'w, 's> {
     spatial: SpatialQuery<'w, 's>,
-    /// Any physics body serves as the frame reference: its grid-absolute
+    /// Any STATIC physics body serves as the frame reference: its grid-absolute
     /// `Position` minus its render `GlobalTransform` translation is the
-    /// (entity-independent) render→physics shift.
-    frame_ref: Query<'w, 's, (&'static Position, &'static GlobalTransform), With<RigidBody>>,
+    /// (entity-independent) render→physics shift. Static bodies only: a dynamic
+    /// body's render translation is an eased pose while `interpolate_all()` is
+    /// on, so it would contribute its interpolation offset to the shift.
+    frame_ref:
+        Query<'w, 's, (&'static Position, &'static GlobalTransform, &'static RigidBody)>,
 }
 
 impl<'w, 's> GridSpatialQuery<'w, 's> {
     /// The render→physics translation: add it to a render-space point to get its
     /// grid-absolute physics-frame position. It is a global constant (identical for
     /// every entity — the floating origin's grid-absolute position), so any single
-    /// body yields it; `DVec3::ZERO` when no body exists (a near-origin scene needs
-    /// no shift).
+    /// static body yields it; `DVec3::ZERO` when no static body exists (a
+    /// near-origin scene needs no shift).
     #[inline]
     pub fn frame_shift(&self) -> DVec3 {
         self.frame_ref
             .iter()
-            .next()
-            .map(|(p, gt)| p.0 - gt.translation().as_dvec3())
+            .find(|(_, _, rb)| matches!(rb, RigidBody::Static))
+            .map(|(p, gt, _)| p.0 - gt.translation().as_dvec3())
             .unwrap_or(DVec3::ZERO)
     }
 

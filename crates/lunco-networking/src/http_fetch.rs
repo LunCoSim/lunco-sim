@@ -91,6 +91,11 @@ pub fn fetch_missing_assets_http(
     let Some(manifest) = remote.manifest.as_ref() else {
         return;
     };
+    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+    // ease of debugging. `asset_base_url` is host-advertised and unconstrained —
+    // attacker-chosen outbound GET; constrain to the connected host's origin.
+    // Revisit before multiplayer hardening (REVIEW-2026-07-19.md §2 Security,
+    // LOW-MED).
     let Some(base) = manifest.asset_base_url.as_deref() else {
         return; // no HTTP endpoint → the QUIC chunk path handles this scenario
     };

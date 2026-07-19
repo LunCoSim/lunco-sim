@@ -197,7 +197,10 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     if (mat.morph_end > mat.morph_start) {
         morph = smoothstep(mat.morph_start, mat.morph_end, dist);
     }
-    let m = max(morph, 1.0 - mat.reveal);
+    // `morph` alone — deliberately. A per-tile term here (the old `reveal` settle)
+    // makes two neighbours at the same depth and distance disagree at their shared
+    // edge, cracking the seam. Keep this a pure function of world position.
+    let m = morph;
     let local_pos = mix(vertex.position, vertex.morph_target, m);
     // Shade the surface we actually DRAW: the position lerps toward the parent
     // lattice, so the normal must lerp with it. Leaving the fine normal here made

@@ -268,11 +268,12 @@ fn contact_friction(
 /// `.max(0)` cliff. The cliff (clamping the *total* to ≥0) dropped damping on the
 /// rebound half-cycle → an undamped suspension limit-cycle (the forward+turn
 /// jitter); unbounded `c·v` also spiked the force on hard hits. Bounding the
-/// damping term fixes both.
+/// damping term fixes both. The total is capped at [`MAX_SUSPENSION_FORCE_N`],
+/// so a wheel spawned intersecting terrain can't launch the rover.
 fn suspension_force_mag(compression: f64, spring_k: f64, relative_vel: f64, damping_c: f64) -> f64 {
     let spring = compression * spring_k;
     let damping = (relative_vel * damping_c).clamp(-spring, spring);
-    spring + damping
+    (spring + damping).clamp(0.0, MAX_SUSPENSION_FORCE_N)
 }
 
 /// A high-performance wheel model using emulated suspension rays.
@@ -594,7 +595,7 @@ fn apply_wheel_drive(
                 // Traction only exists when the ray is hitting the ground. Bind
                 // the hit so its surface normal defines the contact plane (needed
                 // for leaning single-track wheels).
-                if let Some(ground_hit) = hits.iter().next() {
+                if let Some(ground_hit) = hits.iter_sorted().next() {
                     let normal_force = wheel.last_normal_force;
                     if normal_force < 1.0 {
                         // Not enough contact to transmit meaningful force

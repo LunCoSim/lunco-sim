@@ -199,8 +199,8 @@ pub fn wire_terrain_materials(
                 m.height_map.as_ref() != Some(&map.image)
                     || m.shadow_cache != cache_image
                     || m.get_scalar("shadow_cache_on").is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
-                    || m.get_vec4("sun_dir")
-                        .is_none_or(|v| (v.truncate() - sun_local).length() > 1e-4)
+                    || m.get_vec3("sun_dir")
+                        .is_none_or(|v| (v - sun_local).length() > 1e-4)
                     || m.get_scalar("csm_far").is_none_or(|c| (c - csm_far).abs() > 1e-3)
             });
             if needs {

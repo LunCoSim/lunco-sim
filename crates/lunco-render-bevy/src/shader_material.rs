@@ -260,6 +260,12 @@ impl ShaderMaterial {
             _ => None,
         }
     }
+    pub fn get_vec3(&self, name: &str) -> Option<Vec3> {
+        match self.get(name)? {
+            ParamValue::Vec3(v) => Some(Vec3::from_array(v)),
+            _ => None,
+        }
+    }
 }
 
 /// Pipeline key carrying the per-instance shader handles into `specialize`.

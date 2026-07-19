@@ -119,17 +119,13 @@ var<uniform> mat: Material;
 
 /// Three decorrelated values in [0,1) from an integer lattice cell.
 ///
-/// Cell coordinates stay small here (|p| ≈ `star_density`, i.e. tens), which is
-/// the regime where the classic `sin`-based hash is well behaved — it degrades
-/// only once the argument is large enough that `sin`'s period aliases against
-/// float precision.
+/// Arithmetic (sin-free) hash: call sites add `mat.seed` (0–999) to the cell
+/// coords, and at that magnitude a `sin`-based hash aliases against f32
+/// precision differently per driver's polynomial — this one stays exact.
 fn hash33(p: vec3<f32>) -> vec3<f32> {
-    let q = vec3<f32>(
-        dot(p, vec3(127.1, 311.7, 74.7)),
-        dot(p, vec3(269.5, 183.3, 246.1)),
-        dot(p, vec3(113.5, 271.9, 124.6)),
-    );
-    return fract(sin(q) * 43758.5453123);
+    var p3 = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yxx) * p3.zyx);
 }
 
 fn hash13(p: vec3<f32>) -> f32 {

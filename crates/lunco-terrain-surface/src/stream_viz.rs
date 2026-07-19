@@ -333,7 +333,13 @@ fn evolve_cover(
         .filter(|p| p.children().iter().all(|k| cover.contains(k)))
         .map(|p| (slack(p), p))
         .collect();
-    merges.sort_by(|a, b| b.0.total_cmp(&a.0));
+    // Total order for peer determinism: slack, then coord (a slack-only sort
+    // leaves equal keys in HashSet iteration order, so a budget truncation
+    // would edit different nodes on different peers/runs).
+    merges.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| (a.1.depth, a.1.x, a.1.z).cmp(&(b.1.depth, b.1.x, b.1.z)))
+    });
 
     let mut edits = 0usize;
     let mut merge_one = |cover: &mut HashSet<QuadCoord>, p: QuadCoord| {
@@ -382,7 +388,10 @@ fn evolve_cover(
         .map(|c| (slack(c), c))
         .filter(|&(s, _)| s < 1.0)
         .collect();
-    splits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    splits.sort_by(|a, b| {
+        a.0.total_cmp(&b.0)
+            .then_with(|| (a.1.depth, a.1.x, a.1.z).cmp(&(b.1.depth, b.1.x, b.1.z)))
+    });
     for &(_, c) in splits.iter() {
         if edits >= MAX_COVER_EDITS || cover.len() + 3 > budget {
             break;
@@ -585,6 +594,12 @@ fn band_bucket(morph_end: f32) -> u32 {
     (morph_end.max(1.0).ln() * 4.0).floor() as u32
 }
 
+/// The geomorph start/end ratio, read off the core quadtree type so the shader
+/// band cannot drift from the `Quadtree::morph_ratio` the CPU selection uses.
+fn morph_ratio() -> f32 {
+    Quadtree::new(1.0, 0, 1.0, 1.0).morph_ratio as f32
+}
+
 /// Snap a selected morph band to its bucket's representative values, so the tile
 /// and its cached material agree exactly. Snapping DOWN (floor bucket) means a
 /// tile always finishes morphing *before* the selection swaps in its parent — a
@@ -595,7 +610,7 @@ fn snap_band(morph_end: f32) -> (f32, f32, u32) {
         return (1.0e20, 1.0e21, bucket);
     }
     let end = (bucket as f32 * 0.25).exp();
-    (0.7 * end, end, bucket)
+    (morph_ratio() * end, end, bucket)
 }
 
 /// Runtime-tunable LOD knobs (Inspector → "Terrain LOD"). Global across terrains.
@@ -671,7 +686,9 @@ pub struct TerrainNodeErrors {
     oracle_ptr: usize,
 }
 
-/// Cache of baked tile meshes keyed by quadtree node. A tile's geometry is a pure
+/// Cache of baked tile meshes keyed by quadtree node and mesh resolution (a 49²
+/// streamed tile and a 2049² cinematic tile at the same coord must not collide).
+/// A tile's geometry is a pure
 /// function of its `QuadCoord` (deterministic DEM sampling), so a despawned tile
 /// re-selected later (LOD-boundary oscillation, revisiting an area) reuses its mesh
 /// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
@@ -682,7 +699,7 @@ pub struct TerrainNodeErrors {
 /// mid-load) would seat the mesh at a different height than it was baked for and the
 /// tile would jump/jitter. Stored together, mesh and placement can never disagree.
 #[derive(Resource, Default)]
-pub struct LodMeshCache(HashMap<(Entity, QuadCoord), (Handle<Mesh>, f64)>);
+pub struct LodMeshCache(HashMap<(Entity, QuadCoord, usize), (Handle<Mesh>, f64)>);
 
 impl LodMeshCache {
     /// Drop cached meshes a live height edit invalidated, scoped to one `terrain`.
@@ -696,8 +713,8 @@ impl LodMeshCache {
     /// alone) is what stops one terrain reusing another's mesh for a shared coord.
     pub fn drop_region(&mut self, terrain: Entity, bounds: Option<[f64; 4]>, root_half_extent: f64) {
         match bounds {
-            None => self.0.retain(|(e, _), _| *e != terrain),
-            Some(aabb) => self.0.retain(|(e, coord), _| {
+            None => self.0.retain(|(e, _, _), _| *e != terrain),
+            Some(aabb) => self.0.retain(|(e, coord, _), _| {
                 *e != terrain || !node_overlaps_aabb(*coord, root_half_extent, aabb)
             }),
         }
@@ -740,6 +757,8 @@ struct BakedTile {
     mesh: Mesh,
     center: [f64; 2],
     depth: u32,
+    /// Verts per side the mesh was baked at — part of the mesh-cache key.
+    res: usize,
     morph_end: f32,
     /// Surface height at the tile centre the mesh Y was rebased by (see `LodMeshCache`).
     origin_y: f64,
@@ -794,8 +813,8 @@ pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShad
 ///   there would only blur real relief).
 /// - `weight_ao` / `weight_tone` stay partially on everywhere (bowls genuinely
 ///   receive less sky light at any range) and saturate on coarse tiles.
-fn tile_map_weights(depth: u32, map_res: usize) -> (f32, f32, f32) {
-    let r = map_res as f32 / (((1u32 << depth.min(24)) * (TILE_RES as u32 - 1)) as f32);
+fn tile_map_weights(depth: u32, map_res: usize, tile_res: usize) -> (f32, f32, f32) {
+    let r = map_res as f32 / (((1u32 << depth.min(24)) * (tile_res as u32 - 1)) as f32);
     let w_normal = ((r - 0.75) / 1.5).clamp(0.0, 1.0);
     let w_ao = (0.35 + (r - 0.5) * 0.4).clamp(0.35, 1.0);
     let w_tone = (0.5 + (r - 0.5) * 0.35).clamp(0.5, 1.0);
@@ -808,10 +827,15 @@ fn tile_map_weights(depth: u32, map_res: usize) -> (f32, f32, f32) {
 /// The map handles are part of `ShaderLook::key()`, so two terrains with different
 /// baked maps correctly get different materials, and every tile of ONE terrain at
 /// one depth still shares a single one.
-pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMaps, depth: u32) {
+pub(crate) fn apply_maps_to_look(
+    look: &mut ShaderLook,
+    maps: &TerrainDerivedMaps,
+    depth: u32,
+    tile_res: usize,
+) {
     look.textures.insert(TextureLayer::Surface, maps.surface.clone());
     look.textures.insert(TextureLayer::Normal, maps.normal.clone());
-    let (w_normal, w_ao, w_tone) = tile_map_weights(depth, maps.res);
+    let (w_normal, w_ao, w_tone) = tile_map_weights(depth, maps.res, tile_res);
     set_param(look, "weight_normal", ParamValue::F32(w_normal));
     set_param(look, "weight_ao", ParamValue::F32(w_ao));
     set_param(look, "weight_tone", ParamValue::F32(w_tone));
@@ -832,6 +856,7 @@ pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMap
 fn tile_look(
     mode: TerrainShaderMode,
     depth: u32,
+    tile_res: usize,
     morph_start: f32,
     morph_end: f32,
     maps: Option<&TerrainDerivedMaps>,
@@ -851,7 +876,7 @@ fn tile_look(
         }
         TerrainShaderMode::Lit => {
             if let Some(maps) = maps {
-                apply_maps_to_look(&mut look, maps, depth);
+                apply_maps_to_look(&mut look, maps, depth, tile_res);
             }
             if let Some(shadow) = shadow {
                 apply_shadow_cache_to_look(&mut look, shadow);
@@ -876,6 +901,7 @@ fn spawn_tile(
     mesh: Handle<Mesh>,
     center: [f64; 2],
     depth: u32,
+    tile_res: usize,
     morph_end: f32,
     mode: TerrainShaderMode,
     maps: Option<&TerrainDerivedMaps>,
@@ -890,12 +916,12 @@ fn spawn_tile(
     let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
-    // snapped end at the fixed 0.7 ratio).
+    // snapped end at the quadtree's morph ratio).
     let (ms, me, _bucket) = snap_band(morph_end);
     commands
         .spawn((
             Mesh3d(mesh),
-            tile_look(mode, depth, ms, me, maps, shadow, overlay),
+            tile_look(mode, depth, tile_res, ms, me, maps, shadow, overlay),
             cell,
             Transform::from_translation(local),
             Visibility::Inherited,
@@ -1059,6 +1085,11 @@ pub fn update_lod_tiles(
         if !enable_shaders {
             mode = TerrainShaderMode::Plain;
         }
+        // The frozen cover is ONE tile for the whole terrain, so it carries the
+        // detail the whole quadtree used to spread over thousands — mesh it far
+        // finer than a streamed tile. `viz.tile_res` (49) over the full window
+        // would be ~20 m between vertices: one tile, and no terrain.
+        let tile_res = if frozen { CINEMATIC_TILE_RES } else { viz.tile_res };
         // The terrain's current height generation: a tile/bake tagged with an older
         // gen is stale (a live re-bake changed the heights) and is replaced near-first.
         let cur_gen = tiles.gen;
@@ -1075,7 +1106,7 @@ pub fn update_lod_tiles(
             for &(ent, depth, morph_end) in swaps.iter() {
                 // Each tile carries its own morph band; restate it under the new mode.
                 let (ms, me, _) = snap_band(morph_end);
-                let look = tile_look(mode, depth, ms, me, maps, shadow, overlay);
+                let look = tile_look(mode, depth, tile_res, ms, me, maps, shadow, overlay);
                 commands.entity(ent).try_insert(look);
             }
             tiles.mode = mode;
@@ -1122,7 +1153,10 @@ pub fn update_lod_tiles(
             sig.write_u64(cfg.tile_budget as u64);
             sig.write_u64(cfg.max_depth as u64);
             // Dynamic-body footprints (rovers): their forced max-depth refinement
-            // follows them, so a moving body must re-select.
+            // follows them, so a moving body must re-select. XOR-folded so the
+            // signature is independent of query (archetype) order — an entity
+            // moving between archetypes must not read as world-state change.
+            let mut body_sig = 0u64;
             for (rb, gt) in &bodies {
                 if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
                     continue;
@@ -1131,9 +1165,12 @@ pub fn update_lod_tiles(
                 if (lb.x as f64).abs() > h || (lb.z as f64).abs() > h {
                     continue; // off this DEM — doesn't affect its selection
                 }
-                sig.write_u64(q(lb.x as f64));
-                sig.write_u64(q(lb.z as f64));
+                let mut b = lunco_precompute::Fnv1a::new();
+                b.write_u64(q(lb.x as f64));
+                b.write_u64(q(lb.z as f64));
+                body_sig ^= b.finish();
             }
+            sig.write_u64(body_sig);
             let sig = sig.finish();
             if pending.0.is_empty() && tiles.last_sig == Some(sig) && tiles.coarse_ready {
                 // Idle: resident tiles already match. Contribute this terrain's
@@ -1376,7 +1413,7 @@ pub fn update_lod_tiles(
             }
             let handle = meshes.add(baked.mesh);
             let oy = baked.origin_y;
-            mesh_cache.0.insert((terrain, coord), (handle.clone(), oy));
+            mesh_cache.0.insert((terrain, coord, baked.res), (handle.clone(), oy));
             // No longer selected while it baked → keep the cached mesh, skip spawning.
             if !wanted.contains(&coord) {
                 continue;
@@ -1387,7 +1424,7 @@ pub fn update_lod_tiles(
             // spawn-time recompute) keeps mesh and placement in lock-step across gens.
             let ent = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center, depth,
-                baked.morph_end, mode, maps, shadow, overlay, oy,
+                baked.res, baked.morph_end, mode, maps, shadow, overlay, oy,
             );
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -1416,7 +1453,10 @@ pub fn update_lod_tiles(
         // "async" there means "a few per frame on the main thread" — still fine at
         // 0.69 ms/tile).
         coarse.clear();
-        if !tiles.coarse_ready {
+        // A frozen terrain draws ONE cinematic tile and nothing else — enumerating
+        // the coarse base would queue all ~341 fallback tiles at the cinematic
+        // resolution (~235 MB of CPU mesh EACH).
+        if !frozen && !tiles.coarse_ready {
             // BREADTH-FIRST, shallowest depth first. This ordering is the whole point
             // of the coarse base, not a detail: enumerated depth-first (a LIFO stack)
             // the bake dives to `COARSE_N` in ONE corner before touching the others,
@@ -1451,12 +1491,12 @@ pub fn update_lod_tiles(
             // Per-node morph band: finite for sub-root nodes, "never" for the root
             // (the sentinel `snap_band` maps to the no-morph bucket).
             let morph_end = if s.morph_end.is_finite() { s.morph_end as f32 } else { 1.0e21 };
-            if let Some((cached, oy)) = mesh_cache.0.get(&(terrain, s.coord)) {
+            if let Some((cached, oy)) = mesh_cache.0.get(&(terrain, s.coord, tile_res)) {
                 // Placed at the mesh's OWN baked `origin_y` (stored beside it), never a
                 // recompute — otherwise a cache hit against a since-composed oracle jumps.
                 let ent = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, morph_end, mode, maps, shadow, overlay, *oy,
+                    s.region.center, depth, tile_res, morph_end, mode, maps, shadow, overlay, *oy,
                 );
                 if let Some(old) = tiles
                     .tiles
@@ -1475,11 +1515,6 @@ pub fn update_lod_tiles(
             let oracle_arc = hf.0.clone();
             let coord = s.coord;
             let region = s.region;
-            // The frozen cover is ONE tile for the whole terrain, so it carries the
-            // detail the whole quadtree used to spread over thousands — mesh it far
-            // finer than a streamed tile. `viz.tile_res` (49) over the full window
-            // would be ~20 m between vertices: one tile, and no terrain.
-            let tile_res = if frozen { CINEMATIC_TILE_RES } else { viz.tile_res };
             let half = h;
             let center = s.region.center;
             let task = pool.spawn(async move {
@@ -1519,7 +1554,7 @@ pub fn update_lod_tiles(
                 // oracle at the tile centre). Carried on `BakedTile` so the main thread
                 // places the tile at exactly the height its mesh was baked for.
                 let origin_y = oracle_arc.height_at(center[0], center[1]);
-                BakedTile { mesh, center, depth, morph_end, origin_y }
+                BakedTile { mesh, center, depth, res: tile_res, morph_end, origin_y }
             });
             pending.0.insert(s.coord, (cur_gen, task));
         }
@@ -1619,7 +1654,7 @@ pub fn update_lod_tiles(
         // cache permanently defeated, every trailing-edge tile re-baking on demand.
         if mesh_cache.0.len() > CACHE_CAP * terrain_count {
             let resident: HashSet<QuadCoord> = tiles.tiles.keys().copied().collect();
-            mesh_cache.0.retain(|(e, c), _| *e != terrain || resident.contains(c));
+            mesh_cache.0.retain(|(e, c, _), _| *e != terrain || resident.contains(c));
         }
     }
 }
@@ -1661,7 +1696,7 @@ pub fn despawn_orphaned_lod_tiles(
     // ~164 MB) leaked FOREVER across every twin reload / scene swap — and once the
     // dead entries alone exceeded the cap, they also defeated the live terrain's
     // cache every frame.
-    mesh_cache.0.retain(|(t, _), _| !dead(t));
+    mesh_cache.0.retain(|(t, _, _), _| !dead(t));
 }
 
 /// When a terrain's derived maps finish baking AFTER its tiles exist (the
@@ -1674,18 +1709,19 @@ pub fn despawn_orphaned_lod_tiles(
 /// writing them there would only mint pointless material variants.
 pub(crate) fn bind_derived_maps_to_tiles(
     changed: Query<
-        (&TerrainDerivedMaps, &LodTiles),
-        (Changed<TerrainDerivedMaps>, With<TerrainLodViz>),
+        (&TerrainDerivedMaps, &LodTiles, &TerrainLodViz, Has<LodFrozen>),
+        Changed<TerrainDerivedMaps>,
     >,
     mut looks: Query<&mut ShaderLook>,
 ) {
-    for (maps, tiles) in &changed {
+    for (maps, tiles, viz, frozen) in &changed {
         if tiles.mode != TerrainShaderMode::Lit {
             continue;
         }
+        let tile_res = if frozen { CINEMATIC_TILE_RES } else { viz.tile_res };
         for (depth, entity) in tiles.tiles_with_depth() {
             if let Ok(mut look) = looks.get_mut(entity) {
-                apply_maps_to_look(&mut look, maps, depth);
+                apply_maps_to_look(&mut look, maps, depth, tile_res);
             }
         }
     }

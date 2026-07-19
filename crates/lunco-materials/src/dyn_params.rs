@@ -105,15 +105,20 @@ pub enum ParamValue {
 
 impl ParamValue {
     /// Writes this value's raw f32-bit lanes into `flat` starting at f32 index
-    /// `i` (offset/4 — offsets are always 4-aligned).
-    fn write_flat(&self, flat: &mut [f32; BLOCK_F32S], i: usize) {
+    /// `i` (offset/4 — offsets are always 4-aligned), capped at `lanes` so a
+    /// wider value (e.g. `set_color`'s Vec4) never spills past its field.
+    fn write_flat(&self, flat: &mut [f32; BLOCK_F32S], i: usize, lanes: usize) {
+        let write = |flat: &mut [f32; BLOCK_F32S], v: &[f32]| {
+            let n = v.len().min(lanes);
+            flat[i..i + n].copy_from_slice(&v[..n]);
+        };
         match *self {
-            ParamValue::F32(v) => flat[i] = v,
-            ParamValue::I32(v) => flat[i] = f32::from_bits(v as u32),
-            ParamValue::U32(v) => flat[i] = f32::from_bits(v),
-            ParamValue::Vec2(v) => flat[i..i + 2].copy_from_slice(&v),
-            ParamValue::Vec3(v) => flat[i..i + 3].copy_from_slice(&v),
-            ParamValue::Vec4(v) => flat[i..i + 4].copy_from_slice(&v),
+            ParamValue::F32(v) => write(flat, &[v]),
+            ParamValue::I32(v) => write(flat, &[f32::from_bits(v as u32)]),
+            ParamValue::U32(v) => write(flat, &[f32::from_bits(v)]),
+            ParamValue::Vec2(v) => write(flat, &v),
+            ParamValue::Vec3(v) => write(flat, &v),
+            ParamValue::Vec4(v) => write(flat, &v),
         }
     }
     /// Best-effort parse from a comma-separated string for the given type
@@ -198,7 +203,7 @@ impl ParamSchema {
             }
             let v = values.get(&f.name).copied().or(f.default);
             if let Some(v) = v {
-                v.write_flat(&mut flat, i);
+                v.write_flat(&mut flat, i, f.ty.components());
             }
         }
         std::array::from_fn(|i| Vec4::from_array([flat[i * 4], flat[i * 4 + 1], flat[i * 4 + 2], flat[i * 4 + 3]]))
@@ -262,7 +267,14 @@ fn round_up(x: usize, a: usize) -> usize {
 fn extract_struct_body(wgsl: &str, name: &str) -> Option<String> {
     let stripped = strip_line_comments(wgsl);
     let key = format!("struct {name}");
-    let start = stripped.find(&key)?;
+    let mut from = 0;
+    let start = loop {
+        let i = stripped[from..].find(&key)? + from;
+        match stripped[i + key.len()..].chars().next() {
+            Some(c) if c.is_ascii_alphanumeric() || c == '_' => from = i + key.len(),
+            _ => break i,
+        }
+    };
     let open = stripped[start..].find('{')? + start;
     let close = stripped[open..].find('}')? + open;
     Some(stripped[open + 1..close].to_string())
