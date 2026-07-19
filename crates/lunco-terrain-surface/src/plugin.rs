@@ -24,6 +24,8 @@ impl Plugin for TerrainSurfacePlugin {
         // Runtime-tunable LOD knobs (Inspector → "Terrain LOD") + the tile-mesh cache.
         app.init_resource::<crate::stream_viz::TerrainLodConfig>();
         app.register_type::<crate::stream_viz::TerrainLodConfig>();
+        // `SetTerrainLod` — the same knobs, addressable from the API/scripts.
+        crate::stream_viz::register_all_commands(app);
         app.init_resource::<crate::stream_viz::LodMeshCache>();
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
         // Off by default: interactive play wants real-time-paced streaming. Set by

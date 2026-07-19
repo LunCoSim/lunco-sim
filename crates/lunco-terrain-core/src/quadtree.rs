@@ -218,28 +218,6 @@ impl Quadtree {
         out
     }
 
-    /// Select using a **measured per-node geometric error** instead of the uniform
-    /// `root / 2^depth` schedule. `node_error(coord, region)` returns the vertical
-    /// error (metres) of drawing that node at its own mesh resolution — see
-    /// [`crate::error::measure_node_error`]. A node refines when the focus is within
-    /// `range_factor · node_error(coord)`, so flat ground stays coarse and rims /
-    /// peaks earn deeper subdivision automatically.
-    ///
-    /// `prev` is the **previous frame's selected cover** (the [`Selected::coord`] set
-    /// — empty on the first selection). It supplies the [`REFINE_HYSTERESIS`] band: a
-    /// node that was already refined last frame keeps its children until the focus
-    /// backs out past `1.15 ×` the refine range. Without it a camera hovering ON a
-    /// node's refine boundary flips that node in/out EVERY frame — the mesh cache
-    /// absorbs the re-bake, but each flip still costs a despawn + spawn + a 0.35 s
-    /// reveal animation on a tile whose LOD never actually changed. The band is a
-    /// *view* concern: it makes the visual selection depend on the previous frame, so
-    /// it is NOT peer-deterministic — pass an empty set for the deterministic
-    /// (physics-ring / headless) walk, which is what [`select`](Self::select) does.
-    ///
-    /// `node_error` must be a **pure function of the surface** (same inputs → same
-    /// output on every platform). It is called only for nodes the walk visits (lazy,
-    /// O(visited) — no eager error map). To bound the coarsest tile size over a truly
-    /// flat region, have the caller clamp `node_error` to a floor.
     /// Distance at which a node with MEASURED surface `error` refines — the same
     /// `range_factor · error` the recursive walk uses, exposed so an incremental
     /// selector evolves the cover under the identical metric instead of a copy of
@@ -265,6 +243,35 @@ impl Quadtree {
         Selected { coord, region: self.region(coord), morph_start, morph_end }
     }
 
+    /// Select using a **measured per-node geometric error** instead of the uniform
+    /// `root / 2^depth` schedule. `node_error(coord, region)` returns the vertical
+    /// error (metres) of drawing that node at its own mesh resolution — see
+    /// [`crate::error::measure_node_error`]. A node refines when the focus is within
+    /// `range_factor · node_error(coord)`, so flat ground stays coarse and rims /
+    /// peaks earn deeper subdivision automatically.
+    ///
+    /// `prev` is the **previous frame's selected cover** (the [`Selected::coord`] set
+    /// — empty on the first selection). It supplies the [`REFINE_HYSTERESIS`] band: a
+    /// node that was already refined last frame keeps its children until the focus
+    /// backs out past `1.15 ×` the refine range. Without it a camera hovering ON a
+    /// node's refine boundary flips that node in/out EVERY frame — the mesh cache
+    /// absorbs the re-bake, but each flip still costs a despawn + spawn + a 0.35 s
+    /// reveal animation on a tile whose LOD never actually changed. The band is a
+    /// *view* concern: it makes the visual selection depend on the previous frame, so
+    /// it is NOT peer-deterministic — pass an empty set for the deterministic
+    /// (physics-ring / headless) walk, which is what [`select`](Self::select) does.
+    ///
+    /// `node_error` must be a **pure function of the surface** (same inputs → same
+    /// output on every platform). It is called only for nodes the walk visits (lazy,
+    /// O(visited) — no eager error map). To bound the coarsest tile size over a truly
+    /// flat region, have the caller clamp `node_error` to a floor.
+    ///
+    /// NOTE: nothing outside this module calls this any more. The live streaming
+    /// cover is built by `lunco-terrain-surface`'s `evolve_cover`, which evolves it
+    /// incrementally under the same metric (via
+    /// [`error_refine_range`](Self::error_refine_range)) so it can also hold the 2:1
+    /// edge restriction this recursive walk never enforced. What is left here is the
+    /// one-shot, history-free form, exercised only by this module's own tests.
     pub fn select_with_error(
         &self,
         focus_xz: [f64; 2],

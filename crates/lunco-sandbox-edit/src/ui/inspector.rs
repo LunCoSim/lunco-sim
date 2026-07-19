@@ -319,16 +319,18 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             .show(ui, |ui| terrain_overlay_section(ui, ctx));
         ui.separator();
 
+        // ── Terrain LOD (runtime streaming knobs + streaming health) ─
+        // Above the long Obstacle Field section so the health readout is on
+        // screen when an area looks coarse.
+        egui::CollapsingHeader::new("Terrain LOD")
+            .default_open(true)
+            .show(ui, |ui| terrain_lod_section(ui, ctx));
+        ui.separator();
+
         // ── Obstacle Field (procedural craters + rocks) ──────────────
         egui::CollapsingHeader::new("Obstacle Field (Craters & Rocks)")
             .default_open(true)
             .show(ui, |ui| obstacle_field_section(ui, ctx));
-        ui.separator();
-
-        // ── Terrain LOD (runtime streaming knobs) ────────────────────
-        egui::CollapsingHeader::new("Terrain LOD")
-            .default_open(true)
-            .show(ui, |ui| terrain_lod_section(ui, ctx));
         ui.separator();
 
         // Get current selection
@@ -1080,10 +1082,6 @@ fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     }
 }
 
-/// Live tuning for the procedural obstacle field. Edits the
-/// `ObstacleFieldSpec` resource via [`PanelCtx::resource_scope`] (the
-/// narrow mutate-during-paint surface); the field rebuilds only on slider
-/// release / button press.
 /// Runtime LOD knobs for streamed DEM terrain — detail-vs-distance + load
 /// smoothness, applied live (no rebuild). Edits the global `TerrainLodConfig`.
 fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
@@ -1102,11 +1100,46 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .on_hover_text("Deepest refinement = closest-up detail.");
         ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
             .on_hover_text("1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.");
+        ui.add(egui::Slider::new(&mut cfg.tile_budget, 64usize..=2048).text("Tile budget"))
+            .on_hover_text(
+                "Cap on SELECTED tiles per terrain — the dominant terrain GPU cost. \
+                 If the pixel-error metric wants more tiles than this, the excess \
+                 splits are refused and the far field sits on coarser parents.",
+            );
     });
+    // Streaming health — pure derived read of `TerrainStreamStatus`.
+    if let Some(status) = ctx.resource::<lunco_terrain_surface::TerrainStreamStatus>().copied() {
+        ui.separator();
+        ui.label(format!(
+            "Tiles: {}/{} resident · {} baking",
+            status.resident, status.wanted, status.pending
+        ))
+        .on_hover_text(
+            "Wanted tiles with a mesh on screen / wanted by the current selection; \
+             baking = off-thread height bakes in flight (transient fill).",
+        );
+        if status.budget_refused > 0 {
+            // Semantic status colour from the active Theme (§3.1); egui
+            // placeholder when headless.
+            let warning_col = ctx
+                .resource::<lunco_theme::Theme>()
+                .map(|t| t.tokens.warning)
+                .unwrap_or(egui::Color32::PLACEHOLDER);
+            ui.colored_label(
+                warning_col,
+                format!("{} splits refused by tile budget", status.budget_refused),
+            )
+            .on_hover_text(
+                "The pixel-error metric wants finer tiles than the budget allows, so \
+                 those areas hold on coarser parents. This does NOT resolve by \
+                 waiting — raise the tile budget or the pixel error.",
+            );
+        }
+    }
 }
 
-/// Slope-hazard analysis overlay controls — the render VIEW of the terrain slope
-/// field. Edits the global `TerrainOverlayParams`; the tile shader colourises live
+/// Terrain analysis-overlay controls — slope hazard or LOD depth, the render VIEW
+/// of the terrain. Edits the global `TerrainOverlayParams`; the tile shader colourises live
 /// (no re-bake). Read a Copy, edit locally, write back ONLY on a real change so the
 /// live-sync system stays change-driven instead of firing every frame.
 fn terrain_overlay_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
@@ -1116,19 +1149,26 @@ fn terrain_overlay_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         return;
     };
     let mut p = cur;
-    ui.checkbox(&mut p.enabled, "Slope hazard overlay")
-        .on_hover_text("Colour the terrain by steepness: green traversable → red impassable.");
+    ui.checkbox(&mut p.enabled, "Analysis overlay")
+        .on_hover_text("Composite an analysis view over the lit terrain.");
     ui.add_enabled_ui(p.enabled, |ui| {
-        ui.add(egui::Slider::new(&mut p.safe_deg, 0.0..=45.0).text("Safe ≤ (°)"))
-            .on_hover_text("Slopes at/below this stay green.");
-        ui.add(egui::Slider::new(&mut p.cliff_deg, 0.0..=45.0).text("Cliff ≥ (°)"))
-            .on_hover_text("The critical angle: slopes at/above this go red. Tunes live, no re-bake.");
+        ui.checkbox(&mut p.lod_depth, "LOD depth view")
+            .on_hover_text(
+                "Colour tiles by quadtree depth (cycling palette) instead of slope — \
+                 the streaming diagnostic, composited over the production look.",
+            );
         ui.add(egui::Slider::new(&mut p.opacity, 0.0..=1.0).text("Opacity"));
-        // Keep the band ordered so the ramp never inverts.
-        if p.safe_deg > p.cliff_deg {
-            p.safe_deg = p.cliff_deg;
+        if !p.lod_depth {
+            ui.add(egui::Slider::new(&mut p.safe_deg, 0.0..=45.0).text("Safe ≤ (°)"))
+                .on_hover_text("Slopes at/below this stay green.");
+            ui.add(egui::Slider::new(&mut p.cliff_deg, 0.0..=45.0).text("Cliff ≥ (°)"))
+                .on_hover_text("The critical angle: slopes at/above this go red. Tunes live, no re-bake.");
+            // Keep the band ordered so the ramp never inverts.
+            if p.safe_deg > p.cliff_deg {
+                p.safe_deg = p.cliff_deg;
+            }
+            draw_slope_legend(ui, p.safe_deg, p.cliff_deg);
         }
-        draw_slope_legend(ui, p.safe_deg, p.cliff_deg);
     });
     if p != cur {
         ctx.resource_scope(|_c, r: &mut TerrainOverlayParams| *r = p);

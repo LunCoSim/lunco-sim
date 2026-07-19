@@ -137,6 +137,24 @@ impl TerrainLayerStack {
         self.0.len() != before
     }
 
+    /// Fold of every scattering layer's [`scatter_fingerprint`] (with its stack
+    /// id), in stack order — the stack-level half of the idempotent-swap check
+    /// (`finish_dem_restamp`). Layers that spawn nothing contribute nothing, so
+    /// height-only param edits don't disturb the scatter key.
+    ///
+    /// [`scatter_fingerprint`]: TerrainLayer::scatter_fingerprint
+    pub fn scatter_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for e in &self.0 {
+            if let Some(f) = e.layer.scatter_fingerprint() {
+                e.id.0.hash(&mut h);
+                f.hash(&mut h);
+            }
+        }
+        h.finish()
+    }
+
     /// The current consolidated edits layer (a clone), or an empty one.
     fn edits_layer(&self) -> edits::EditsLayer {
         self.0
@@ -186,6 +204,12 @@ impl TerrainLayerStack {
 /// regenerate removes it). Stamp layers run in the DEM build; this gates the rest.
 #[derive(Component)]
 pub struct TerrainLayersApplied;
+
+/// The [`TerrainLayerStack::scatter_fingerprint`] of the stack whose scatter is
+/// CURRENTLY spawned on this terrain — written where the scatter applies, read
+/// by `finish_dem_restamp` to no-op recomposes that change nothing.
+#[derive(Component)]
+pub struct ScatteredContent(pub u64);
 
 /// Marker on every entity a scatter layer spawns, so a regenerate can despawn the
 /// whole set generically (independent of which layer produced it).
@@ -267,6 +291,15 @@ pub trait TerrainLayer: Send + Sync + 'static {
     // StageSink projects per-prim by path, so this folds in for free.
     // See docs/architecture/terrain-substrate.md → "Dynamic modification".
     fn id(&self) -> &'static str;
+    /// Runtime fingerprint of the params that change what
+    /// [`scatter`](Self::scatter) spawns; `None` = this layer spawns nothing.
+    /// Compared across recomposes to make the restamp swap idempotent
+    /// (`finish_dem_restamp`). Never persisted — within-run comparison only.
+    /// A layer that overrides `scatter` MUST override this too, or edits to its
+    /// params will be treated as no-ops.
+    fn scatter_fingerprint(&self) -> Option<u64> {
+        None
+    }
     /// The layer's **analytic** height contribution: a
     /// [`HeightModifier`](lunco_terrain_core::HeightModifier) folded into the
     /// terrain's [`SurfaceOracle`](crate::oracle::SurfaceOracle), sampled by the
@@ -385,7 +418,9 @@ pub fn scatter_terrain_layers(
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
         // this terrain in the same frame, so the entity may be gone by the time
         // these deferred commands apply — skip silently rather than panic.
-        commands.entity(entity).try_insert(TerrainLayersApplied);
+        commands
+            .entity(entity)
+            .try_insert((TerrainLayersApplied, ScatteredContent(stack.scatter_fingerprint())));
         // Material/shader layers configure the terrain entity first…
         for entry in &stack.0 {
             entry.layer.configure(entity, &mut commands);

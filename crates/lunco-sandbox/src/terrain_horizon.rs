@@ -81,10 +81,19 @@ pub(crate) fn start_streamed_horizon_bakes(
             // the deadline out → exactly one coalesced bake).
             Some(stale) if now - stale.since < REBAKE_DEBOUNCE_SECS => continue,
             Some(_) => {}
-            // No map and nothing armed → this is the terrain's FIRST bake.
             // Map present and nothing armed → it is current; nothing to do.
             None if has_map => continue,
-            None => {}
+            // No map and nothing armed → the terrain's FIRST bake. ARM the same
+            // debounce rather than baking now: composition is not finished when
+            // the entity appears (the DEM builds, then layers regenerate and swap
+            // the oracle), so an immediate bake runs against a pre-regeneration
+            // oracle and is thrown away. Arming coalesces build + regenerate into
+            // ONE bake; any further layer change inside the window pushes the
+            // deadline out, exactly as it does for edits.
+            None => {
+                commands.entity(entity).try_insert(StreamedHorizonStale { since: now });
+                continue;
+            }
         }
         let oracle = hf.0.clone();
         let res = cfg.resolution.max(2);

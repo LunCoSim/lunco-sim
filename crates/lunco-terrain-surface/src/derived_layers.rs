@@ -57,10 +57,16 @@ use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
 
 /// Texels per side of each baked data layer. 1024² over the moonbase ±4 km
-/// window ≈ 8 m/texel — enough for the ≥15 m crater population that defines the
-/// far-field look; the streamed tiles' geometry + procedural FBM own everything
-/// finer. The bake (`res² · ao_dirs · ao_steps` height samples) stays a few
-/// seconds off-thread and is content-address cached, so it runs once per surface.
+/// window ≈ 8 m/texel.
+///
+/// Raising this cannot close a mid-depth detail hole: the map only blends in
+/// where it is FINER than the tile mesh (`tile_map_weights` needs
+/// `r = LAYER_RES / (2^depth · 48) > 0.75`, depth ≤ 4.8 at 1024), while over-zoom
+/// craterlets fade out going COARSER — any gap between the two is closed from the
+/// MESH side (the scene's `lunco:layer:maxFeature`), not by resolution the far
+/// field never samples. Do NOT close it by giving `w_normal` a floor either: the
+/// map stores the FULL surface normal, not a residual, so blending it where the
+/// mesh already resolves that relief double-shades it.
 const LAYER_RES: usize = 1024;
 /// AO ray budget per texel (directions × march steps).
 const AO_DIRS: usize = 8;

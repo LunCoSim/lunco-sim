@@ -9,7 +9,9 @@
 //!   `max_radius` down to `min_radius`, hashed per spatial cell (nothing stored,
 //!   infinite extent), sizes following the lunar equilibrium size-frequency shape
 //!   (`N(>r) ∝ r⁻²` within a band — many small, few large), each evaluated
-//!   analytically through the shared [`crater_profile`];
+//!   analytically through [`crater_profile_rim_limited`](crate::crater::crater_profile_rim_limited),
+//!   which widens the lip to the sampling step so a craterlet rim never falls
+//!   between samples and alias into a spike;
 //! - **micro-relief** — a few octaves of value-noise FBM for the gentle undulation
 //!   between craterlets.
 //!
@@ -24,7 +26,7 @@
 
 use std::sync::Arc;
 
-use crate::crater::{crater_profile, CRATER_REACH};
+use crate::crater::{crater_profile_rim_limited, CRATER_REACH};
 use crate::modifier::HeightModifier;
 use crate::source::{hash01, vnoise};
 
@@ -230,7 +232,21 @@ impl Overzoom {
                     // Deep (fresh) craterlets are paraboloid, shallow (degraded)
                     // ones flat dishes — same morphology tie as the crater layer.
                     let bowl_power = 6.0 - 4.0 * ud;
-                    sum += crater_profile(dist, depth, rim, bowl_power) * fade;
+                    // The fade above guarantees the BOWL is resolvable; the thin
+                    // lip is not — widen it to the sampling step at full height
+                    // so it stays representable. The profile's residual at the
+                    // reach is subtracted so the field cuts off continuously.
+                    let rim_sigma_n = 0.5 * self.min_wavelength / r;
+                    let prof =
+                        crater_profile_rim_limited(dist, depth, rim, bowl_power, rim_sigma_n);
+                    let tail = crater_profile_rim_limited(
+                        CRATER_REACH,
+                        depth,
+                        rim,
+                        bowl_power,
+                        rim_sigma_n,
+                    );
+                    sum += (prof - tail) * fade;
                 }
             }
         }
@@ -327,6 +343,43 @@ mod tests {
             }
         }
         assert!(hi - lo > 0.05, "spread {} too flat", hi - lo);
+    }
+
+    #[test]
+    fn coarse_sampling_keeps_the_rim_lip() {
+        // 10 m craterlet under a 5.2 m sampling wavelength: the bowl resolves but
+        // the exact lip (σ = 1.4 m) is sub-vertex. The rim-limited profile must
+        // keep the lip at ~full height.
+        use crate::crater::{crater_profile, crater_profile_rim_limited};
+        let (depth, rim, p) = (1.5, 0.6, 3.0);
+        let sigma_n = 0.5 * 5.2 / 10.0;
+        let exact = crater_profile(0.98, depth, rim, p);
+        let wide = crater_profile_rim_limited(0.98, depth, rim, p, sigma_n);
+        assert!(
+            (wide - exact).abs() < 0.05 * exact.abs().max(0.1),
+            "widened lip should hold full height: exact {exact}, wide {wide}"
+        );
+        // …and rim_sigma_n = 0 is bit-for-bit the exact profile (ungated
+        // consumers see no change).
+        for d in [0.0, 0.5, 0.98, 1.15, 1.4] {
+            assert_eq!(
+                crater_profile_rim_limited(d, depth, rim, p, 0.0),
+                crater_profile(d, depth, rim, p)
+            );
+        }
+    }
+
+    #[test]
+    fn gated_field_is_continuous_at_the_craterlet_reach() {
+        // The reach-tail subtraction must hold under a coarse gate too: walk
+        // radially across band cells and require no step anywhere.
+        let s = Overzoom { min_wavelength: 5.2, ..Default::default() };
+        let eps = 1e-4;
+        for k in 0..400 {
+            let x = k as f64 * 0.25;
+            let d = (s.delta_at(x + eps, 7.7) - s.delta_at(x - eps, 7.7)).abs();
+            assert!(d < 0.05, "step {d} at x={x} under a 5.2 m gate");
+        }
     }
 
     #[test]

@@ -152,6 +152,32 @@ pub fn crater_profile(d: f64, depth: f64, rim_height: f64, bowl_power: f64) -> f
     crater_profile_limited(d, depth, rim_height, bowl_power, 0.0)
 }
 
+/// [`crater_profile`] with the rim lip widened to at least `rim_sigma_n`
+/// (normalised by the rim radius) at **full height** — the opposite trade from
+/// [`crater_profile_limited`]'s quadratic melt, for the opposite regime:
+/// `crater_profile_limited` serves craters whose whole ring may be unresolvable
+/// (a full-height rim there smears into a broad swell, so it melts); this serves
+/// craters whose bowl IS resolved while only the thin lip (σ = `RIM_SIGMA`·r)
+/// falls between sample points — widening the lip to the sampling width keeps it
+/// a sharp, representable ring instead of aliasing away.
+///
+/// The width clamps to `[RIM_SIGMA, 0.35]`: at 0 it is exactly
+/// [`crater_profile`]; wider than 0.35 would itself read as a swell.
+#[inline]
+pub fn crater_profile_rim_limited(
+    d: f64,
+    depth: f64,
+    rim_height: f64,
+    bowl_power: f64,
+    rim_sigma_n: f64,
+) -> f64 {
+    let bowl = if d < 1.0 { -depth * (1.0 - d.powf(bowl_power)) } else { 0.0 };
+    let rim_sigma = rim_sigma_n.clamp(RIM_SIGMA, 0.35);
+    let rim = rim_height * gauss(d, RIM_CENTER, rim_sigma);
+    let apron = rim_height * APRON_FRAC * gauss(d, APRON_CENTER, APRON_SIGMA);
+    bowl + rim + apron
+}
+
 /// Band-limited crater cross-section: the profile convolved — in closed form,
 /// term by term — with a sampling kernel of width `sigma_n` (normalised by the
 /// rim radius). A Gaussian of width `σ` blurred by `σₙ` widens to

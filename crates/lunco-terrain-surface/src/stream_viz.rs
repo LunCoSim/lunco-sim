@@ -37,7 +37,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
-use lunco_core::WorldGrid;
+use lunco_core::{on_command, register_commands, Command, WorldGrid};
 use lunco_obstacle_field::grid_mesh;
 use lunco_materials::{
     ParamValue, ShaderLook, TextureLayer, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
@@ -71,10 +71,16 @@ const CINEMATIC_TILE_RES: usize = 2049;
 /// Deepest LOD the viz refines to. Bounds the tile count near the camera. With
 /// error-driven selection only feature tiles (rims, peaks) actually reach it, so
 /// 8 (≈0.65 m vertex pitch on a ±4 km DEM) stays cheap while crater rims resolve.
+/// Going deeper cannot sharpen craterlets: [`Overzoom`]'s Nyquist gate is already
+/// at full amplitude by depth 8 for any authored `lunco:layer:maxFeature` — where
+/// detail dies is a property of the layer parameters, not of this cap.
 const MAX_DEPTH: u8 = 8;
 /// On-screen error (px, at the canonical viewport) at which a node refines —
-/// the ONE detail-vs-cost knob of the error-driven metric. Smaller = finer.
-const TARGET_PIXEL_ERROR: f64 = 3.0;
+/// the ONE detail-vs-cost knob of the error-driven metric. Smaller = finer, and
+/// refine ranges scale as its inverse, so it also sets how far out craters
+/// resolve before the camera reaches them. Cost is bounded by `tile_budget` +
+/// nearest-first splits.
+const TARGET_PIXEL_ERROR: f64 = 2.0;
 /// Canonical viewport for the screen metric (fixed → selection is independent of
 /// any client's real resolution/FOV; peers select identically).
 const CANON_SCREEN_H_PX: f64 = 1080.0;
@@ -283,6 +289,58 @@ fn coarse_base_coords() -> impl Iterator<Item = QuadCoord> {
 /// re-deriving hundreds. High enough that a fast camera converges in a few frames.
 const MAX_COVER_EDITS: usize = 64;
 
+/// The up-to-4 same-depth edge-neighbour coords of `c` (clipped at the root square).
+fn edge_neighbours(c: QuadCoord) -> impl Iterator<Item = QuadCoord> {
+    let side = 1i64 << c.depth;
+    [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)].into_iter().filter_map(move |(dx, dz)| {
+        let x = c.x as i64 + dx;
+        let z = c.z as i64 + dz;
+        (x >= 0 && z >= 0 && x < side && z < side)
+            .then(|| QuadCoord { depth: c.depth, x: x as u32, z: z as u32 })
+    })
+}
+
+/// Depth at which the cover covers `q`'s region from ABOVE: `Some(d ≤ q.depth)`
+/// if `q` itself or an ancestor is in the cover, `None` if the region is covered
+/// by strictly deeper nodes. Exactness (every point under exactly one cover node)
+/// is what makes these three cases exhaustive.
+fn covering_depth(cover: &HashSet<QuadCoord>, mut q: QuadCoord) -> Option<u8> {
+    loop {
+        if cover.contains(&q) {
+            return Some(q.depth);
+        }
+        q = q.parent()?;
+    }
+}
+
+/// Would replacing `p`'s four children by `p` break the 2:1 edge restriction?
+/// True iff some region edge-adjacent to `p` is covered at depth ≥ `p.depth + 2`.
+/// Tested on the depth-`p.depth+1` rim coords just outside `p`: by exactness,
+/// "neither the coord nor any ancestor is in the cover" ⟺ covered strictly
+/// deeper than `p.depth + 1`.
+fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool {
+    let d1 = p.depth + 1;
+    let side = 1i64 << d1;
+    let (x0, z0) = (2 * p.x as i64, 2 * p.z as i64);
+    let rim = [
+        (x0 - 1, z0),
+        (x0 - 1, z0 + 1), // left
+        (x0 + 2, z0),
+        (x0 + 2, z0 + 1), // right
+        (x0, z0 - 1),
+        (x0 + 1, z0 - 1), // below
+        (x0, z0 + 2),
+        (x0 + 1, z0 + 2), // above
+    ];
+    rim.into_iter().any(|(x, z)| {
+        x >= 0
+            && z >= 0
+            && x < side
+            && z < side
+            && covering_depth(cover, QuadCoord { depth: d1, x: x as u32, z: z as u32 }).is_none()
+    })
+}
+
 /// Evolve the PERSISTENT cover one bounded step toward what the metric wants.
 ///
 /// This replaces the global budget fit. That fit re-derived `pixel_error` every
@@ -305,6 +363,19 @@ const MAX_COVER_EDITS: usize = 64;
 /// The cover stays an exact, disjoint REPLACE cover throughout: a split swaps one
 /// node for its four children, a merge swaps four siblings for their parent, and
 /// nothing else touches it.
+///
+/// It also stays RESTRICTED (edge-adjacent nodes differ by ≤ 1 depth — the CDLOD
+/// morph contract; a 2-level seam has no band wide enough to blend it). The cover
+/// starts at `{ROOT}`, which is trivially restricted, so the invariant holds by
+/// induction: every merge is guarded ([`merge_violates_restriction`]) and every
+/// split first force-splits any coarser edge-neighbour (which, ON a restricted
+/// cover, is at most one level up — so the cascade is depth-1 per neighbour,
+/// recursing only through the chain it builds). The recursive `select_with_error`
+/// walk never enforced this, which is one of the reasons it was replaced.
+///
+/// Returns the number of splits refused because they would exceed `budget` —
+/// zero at any fixed point whose wanted set fits (see
+/// [`TerrainStreamStatus::budget_refused`]).
 fn evolve_cover(
     qt: &Quadtree,
     cover: &mut HashSet<QuadCoord>,
@@ -312,7 +383,7 @@ fn evolve_cover(
     eye_height: f64,
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
-) {
+) -> usize {
     if cover.is_empty() {
         cover.insert(QuadCoord::ROOT);
     }
@@ -336,7 +407,8 @@ fn evolve_cover(
     merges.sort_by(|a, b| b.0.total_cmp(&a.0));
 
     let mut edits = 0usize;
-    let mut merge_one = |cover: &mut HashSet<QuadCoord>, p: QuadCoord| {
+    let mut budget_refused = 0usize;
+    let merge_one = |cover: &mut HashSet<QuadCoord>, p: QuadCoord| {
         // Re-check: an earlier merge in this pass may have consumed these children.
         if !p.children().iter().all(|k| cover.contains(k)) {
             return false;
@@ -356,6 +428,13 @@ fn evolve_cover(
         if s < REFINE_HYSTERESIS {
             break; // sorted: nothing further out remains
         }
+        // Restriction guard — also what makes cascade splits STABLE: a node
+        // force-split for a neighbour's sake drifts past the hysteresis band, but
+        // merging it back would re-violate, so the guard refuses and the cover
+        // keeps its fixed point instead of flip-flopping.
+        if merge_violates_restriction(cover, p) {
+            continue;
+        }
         if merge_one(cover, p) {
             edits += 1;
         }
@@ -369,6 +448,14 @@ fn evolve_cover(
         for &(_, p) in merges.iter().rev() {
             if cover.len() <= budget {
                 break;
+            }
+            // Restricted merges are skipped, so a budget shrink can stay over
+            // budget for a frame or two — the deepest quads always merge freely
+            // (their neighbours can be at most one level deeper than THEM, never
+            // two below the parent), and each pass of bottom-up merging unlocks
+            // the next, so it converges instead of stalling.
+            if merge_violates_restriction(cover, p) {
+                continue;
             }
             merge_one(cover, p);
         }
@@ -384,17 +471,60 @@ fn evolve_cover(
         .collect();
     splits.sort_by(|a, b| a.0.total_cmp(&b.0));
     for &(_, c) in splits.iter() {
-        if edits >= MAX_COVER_EDITS || cover.len() + 3 > budget {
+        if edits >= MAX_COVER_EDITS {
             break;
         }
-        if !cover.remove(&c) {
+        if !cover.contains(&c) {
+            continue; // consumed by an earlier chain's cascade
+        }
+        // Splitting `c` puts depth `c.depth + 1` against every edge-adjacent
+        // region, so any neighbour covered COARSER than `c` must split first —
+        // the classic restricted-quadtree cascade. On a restricted cover each
+        // such neighbour is exactly one level up, and its own cascade needs (the
+        // ancestors the loop pushes transitively), so the chain stays short and
+        // the walk terminates at the root.
+        let mut chain = vec![c];
+        let mut i = 0;
+        while i < chain.len() {
+            let n = chain[i];
+            for nb in edge_neighbours(n) {
+                if let Some(nd) = covering_depth(cover, nb) {
+                    if nd < n.depth {
+                        let shift = nb.depth - nd;
+                        let a = QuadCoord { depth: nd, x: nb.x >> shift, z: nb.z >> shift };
+                        if !chain.contains(&a) {
+                            chain.push(a);
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        // The whole chain lands or none of it does — a partial cascade would leave
+        // the violation it exists to prevent. `continue`, not `break`: a later,
+        // cheaper split (no cascade) may still fit the remaining budget.
+        if edits + chain.len() > MAX_COVER_EDITS {
+            continue; // transient: retried next pass once the edit budget frees up
+        }
+        if cover.len() + 3 * chain.len() > budget {
+            // Unlike the edit cap this does not resolve by waiting, so it is
+            // counted and surfaced.
+            budget_refused += 1;
             continue;
         }
-        for k in c.children() {
-            cover.insert(k);
+        // Coarsest first, so every forced split lands on an already-conforming rim.
+        chain.sort_by_key(|q| q.depth);
+        for q in chain {
+            if !cover.remove(&q) {
+                continue;
+            }
+            for k in q.children() {
+                cover.insert(k);
+            }
+            edits += 1;
         }
-        edits += 1;
     }
+    budget_refused
 }
 
 fn build_draw_partition(
@@ -482,6 +612,10 @@ pub struct LodTiles {
     /// permanently incomplete and the fallback it exists to provide would silently
     /// not be there. Also lets the enumeration be skipped once complete.
     coarse_ready: bool,
+    /// Budget-refused split count from the last live [`evolve_cover`] pass. Kept
+    /// on the component because the idle fast path skips selection — a
+    /// starved-but-idle terrain must keep reporting, not read as healthy.
+    budget_refused: usize,
 }
 
 impl LodTiles {
@@ -639,7 +773,10 @@ impl Default for TerrainLodConfig {
         #[cfg(target_arch = "wasm32")]
         let tile_budget = 64;
         #[cfg(not(target_arch = "wasm32"))]
-        let tile_budget = 512;
+        // Must roughly fit the metric's steady-state want at TARGET_PIXEL_ERROR:
+        // refused splits leave the far field on coarse parents indefinitely
+        // (surfaced as `TerrainStreamStatus::budget_refused`).
+        let tile_budget = 768;
         // On wasm32 the `AsyncComputeTaskPool` has NO threads: the "off-thread"
         // bake future runs to completion on the MAIN thread the instant it is
         // polled. A tile bake is ~12k composed-oracle samples (2401 verts ×
@@ -649,7 +786,9 @@ impl Default for TerrainLodConfig {
         #[cfg(target_arch = "wasm32")]
         let bakes_per_frame = 1;
         #[cfg(not(target_arch = "wasm32"))]
-        let bakes_per_frame = 4;
+        // Sized so the coarse-parent fallback fills before it reads as missing
+        // terrain at the default pixel error.
+        let bakes_per_frame = 8;
         TerrainLodConfig {
             pixel_error: TARGET_PIXEL_ERROR,
             max_depth: MAX_DEPTH,
@@ -658,6 +797,37 @@ impl Default for TerrainLodConfig {
         }
     }
 }
+
+/// Live-tune [`TerrainLodConfig`] from the API/scripts — the same fields the
+/// Inspector's "Terrain LOD" section edits. Omitted fields keep their current
+/// values. Written through raw: the selection pass clamps at its use sites, so
+/// command and Inspector edits go through the same guards.
+#[Command(default)]
+pub struct SetTerrainLod {
+    pub pixel_error: Option<f64>,
+    pub max_depth: Option<u8>,
+    pub bakes_per_frame: Option<usize>,
+    pub tile_budget: Option<usize>,
+}
+
+#[on_command(SetTerrainLod)]
+fn on_set_terrain_lod(trigger: On<SetTerrainLod>, mut cfg: ResMut<TerrainLodConfig>) {
+    let ev = trigger.event();
+    if let Some(v) = ev.pixel_error {
+        cfg.pixel_error = v;
+    }
+    if let Some(v) = ev.max_depth {
+        cfg.max_depth = v;
+    }
+    if let Some(v) = ev.bakes_per_frame {
+        cfg.bakes_per_frame = v;
+    }
+    if let Some(v) = ev.tile_budget {
+        cfg.tile_budget = v;
+    }
+}
+
+register_commands!(on_set_terrain_lod);
 
 /// Memoized per-node measured geometric error for a terrain's current oracle —
 /// the cache behind error-driven CDLOD selection. Keyed by quadtree node; wiped
@@ -809,6 +979,10 @@ fn tile_map_weights(depth: u32, map_res: usize) -> (f32, f32, f32) {
 /// baked maps correctly get different materials, and every tile of ONE terrain at
 /// one depth still shares a single one.
 pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMaps, depth: u32) {
+    // Depth for the LOD-depth analysis overlay. Keyed, not live: it is genuinely
+    // per-tile, and tiles already share one material PER DEPTH (the map weights
+    // below are the same function of depth), so this adds no material splits.
+    set_param(look, "lod_depth", ParamValue::F32(depth as f32));
     look.textures.insert(TextureLayer::Surface, maps.surface.clone());
     look.textures.insert(TextureLayer::Normal, maps.normal.clone());
     let (w_normal, w_ao, w_tone) = tile_map_weights(depth, maps.res);
@@ -930,6 +1104,11 @@ pub struct TerrainStreamStatus {
     pub resident: usize,
     /// Off-thread bakes in flight.
     pub pending: usize,
+    /// Splits the selection wanted but `tile_budget` refused (summed over
+    /// terrains). Unlike `pending` this is not transient: non-zero at a still
+    /// camera means areas hold on coarser parents until `tile_budget` is raised
+    /// or `pixel_error` coarsened.
+    pub budget_refused: usize,
 }
 
 /// **Run tile streaming in LOCKSTEP with the frame instead of against the wall
@@ -1207,6 +1386,7 @@ pub fn update_lod_tiles(
                 // resident count so the status bar still reads "done", not "0/0".
                 stream_status.wanted += tiles.tiles.len();
                 stream_status.resident += tiles.tiles.len();
+                stream_status.budget_refused += tiles.budget_refused;
                 continue;
             }
             tiles.last_sig = Some(sig);
@@ -1316,7 +1496,8 @@ pub fn update_lod_tiles(
         // INCREMENTAL: evolve the persistent cover a bounded step, then read the
         // selection off it. No global metric moves, so no mass re-selection exists to
         // oscillate — see `evolve_cover`.
-        evolve_cover(&qt, &mut tiles.cover, focus, eye_height, &node_error, budget);
+        tiles.budget_refused =
+            evolve_cover(&qt, &mut tiles.cover, focus, eye_height, &node_error, budget);
         sel = tiles
             .cover
             .iter()
@@ -1688,6 +1869,7 @@ pub fn update_lod_tiles(
         stream_status.wanted += wanted.len();
         stream_status.resident += wanted.iter().filter(|c| tiles.tiles.contains_key(c)).count();
         stream_status.pending += pending.0.len();
+        stream_status.budget_refused += tiles.budget_refused;
 
         // Bound the mesh cache: when it grows past the cap, drop THIS terrain's
         // non-resident meshes (deterministic geometry → they re-bake on demand).
@@ -1998,6 +2180,96 @@ mod draw_partition_tests {
         }
     }
 
+    /// Do two cover nodes share a boundary SEGMENT (not merely a corner)? Normalised
+    /// `[0,1]` extents are exact powers of two, so the touch/overlap tests are exact
+    /// — no epsilon.
+    fn edge_adjacent(a: QuadCoord, b: QuadCoord) -> bool {
+        let ext = |c: QuadCoord| {
+            let s = 0.5f64.powi(c.depth as i32);
+            (c.x as f64 * s, c.x as f64 * s + s, c.z as f64 * s, c.z as f64 * s + s)
+        };
+        let (ax0, ax1, az0, az1) = ext(a);
+        let (bx0, bx1, bz0, bz1) = ext(b);
+        let touch_x = ax1 == bx0 || bx1 == ax0;
+        let touch_z = az1 == bz0 || bz1 == az0;
+        let over_x = ax0 < bx1 && bx0 < ax1;
+        let over_z = az0 < bz1 && bz0 < az1;
+        (touch_x && over_z) || (touch_z && over_x)
+    }
+
+    /// Worst neighbour depth gap in a cover, with the offending pair.
+    fn worst_depth_gap(cover: &HashSet<QuadCoord>) -> (u32, Option<(QuadCoord, QuadCoord)>) {
+        let v: Vec<QuadCoord> = cover.iter().copied().collect();
+        let mut worst = 0u32;
+        let mut pair = None;
+        for i in 0..v.len() {
+            for j in (i + 1)..v.len() {
+                if !edge_adjacent(v[i], v[j]) {
+                    continue;
+                }
+                let gap = (v[i].depth as i32 - v[j].depth as i32).unsigned_abs();
+                if gap > worst {
+                    worst = gap;
+                    pair = Some((v[i], v[j]));
+                }
+            }
+        }
+        (worst, pair)
+    }
+
+    /// CONTROL for [`evolving_cover_stays_restricted`]: the checker itself must
+    /// accept a hand-built restricted cover and flag a hand-built 2-level seam,
+    /// or a pass over `evolve_cover` output proves nothing.
+    #[test]
+    fn the_restriction_checker_detects_seams() {
+        let d1 = |x, z| QuadCoord { depth: 1, x, z };
+        // (1,0,0) replaced by its four children: every edge crosses ≤ 1 level.
+        let mut restricted: HashSet<QuadCoord> =
+            [d1(1, 0), d1(0, 1), d1(1, 1)].into_iter().collect();
+        restricted.extend((0..2).flat_map(|x| (0..2).map(move |z| QuadCoord { depth: 2, x, z })));
+        let (gap, pair) = worst_depth_gap(&restricted);
+        assert!(gap <= 1, "checker rejects a restricted cover: gap {gap} at {pair:?}");
+        // (1,0,0) replaced by its SIXTEEN depth-3 descendants: they touch the
+        // depth-1 siblings directly — a 2-level seam the checker must flag.
+        let mut seamed: HashSet<QuadCoord> =
+            [d1(1, 0), d1(0, 1), d1(1, 1)].into_iter().collect();
+        seamed.extend((0..4).flat_map(|x| (0..4).map(move |z| QuadCoord { depth: 3, x, z })));
+        let (gap, _) = worst_depth_gap(&seamed);
+        assert_eq!(gap, 2, "checker missed a 2-level seam");
+    }
+
+    /// THE CDLOD RESTRICTION: edge-adjacent selected nodes must differ by at most one
+    /// level, because a single morph band is all that blends them — a 2-level jump has
+    /// no band wide enough and the seam becomes a hard edge (visible as a staircase
+    /// where sub-DEM detail switches on).
+    ///
+    /// `evolve_cover` enforces this by construction — guarded merges + cascade
+    /// splits, from a trivially-restricted `{ROOT}` start (see its docs). This test
+    /// is the proof it stays that way under a camera sweep; it FAILED (gap 2 at
+    /// step 4) before the guards existed.
+    #[test]
+    fn evolving_cover_stays_restricted() {
+        let qt = test_qt();
+        // Depth-decaying error — see the control test for why a constant one is
+        // degenerate here.
+        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
+        let budget = 40;
+        let mut cover = HashSet::new();
+
+        for step in 0..60 {
+            let x = -900.0 + (step as f64) * 30.0;
+            evolve_cover(&qt, &mut cover, [x, 0.0], 2.0, &err, budget);
+            let (gap, pair) = worst_depth_gap(&cover);
+            assert!(gap <= 1, "step {step}: neighbour depth gap {gap} > 1 at {pair:?}");
+        }
+        for step in 0..30 {
+            let h = 100.0 + (step as f64) * 400.0;
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], h, &err, budget);
+            let (gap, pair) = worst_depth_gap(&cover);
+            assert!(gap <= 1, "height step {step}: neighbour depth gap {gap} > 1 at {pair:?}");
+        }
+    }
+
     /// A STATIONARY camera must reach a fixed point and then stop editing. The old
     /// fit could not: it alternated `wanted` 349 <-> 532 every frame forever, which
     /// is what re-cut hundreds of tiles per frame and read as jitter.
@@ -2015,6 +2287,36 @@ mod draw_partition_tests {
             assert_eq!(
                 cover, settled,
                 "cover still churning on a stationary camera — no fixed point"
+            );
+        }
+    }
+
+    /// The refusal counter is starvation, not fill progress: any budget that
+    /// covers the metric's want reports zero at the fixed point, any budget
+    /// below it reports the refused splits.
+    #[test]
+    fn budget_starvation_is_reported() {
+        let qt = test_qt();
+        let err = |_c: QuadCoord, _r: Square| 120.0f64;
+        let settle = |budget: usize| {
+            let mut cover = HashSet::new();
+            for _ in 0..200 {
+                evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, budget);
+            }
+            (evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, budget), cover)
+        };
+        let (refused, unconstrained) = settle(usize::MAX);
+        assert_eq!(refused, 0, "fixed point within budget must not report refusals");
+        let want = unconstrained.len();
+        let (refused, _) = settle(want);
+        assert_eq!(refused, 0, "budget == want must not report refusals");
+        for budget in [want / 2, want / 8, 16] {
+            let (refused, cover) = settle(budget);
+            assert!(
+                refused > 0,
+                "budget {budget} < want {want} (cover {}) reached a fixed point \
+                 without reporting refusals",
+                cover.len()
             );
         }
     }
