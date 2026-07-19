@@ -904,19 +904,40 @@ pub fn pump_commands_to_worker(channels: Res<ModelicaChannels>) {
         return;
     }
     while let Ok(cmd) = channels.rx_cmd.try_recv() {
-        // Boot-race gate: Compile / UpdateParameters need the worker's
-        // MSL index to be populated, otherwise rumoca emits silent
-        // "unresolved reference Modelica.*" failures. Queue them until
-        // install_msl_in_worker drains the queue. Other commands
-        // (Step/Reset/Despawn) pass through unchanged.
-        if command_needs_msl(&cmd) && !msl_installed() {
-            PENDING_COMMANDS.with(|q| q.borrow_mut().push(cmd));
-            continue;
-        }
-        // Compile / parse / step traffic always goes to the primary worker
-        // (0) so a Fast Run fanned out to other workers can't reorder it.
-        post_msg_to(0, &WireMessage::Command(cmd), "command");
+        post_command_or_queue(cmd);
     }
+}
+
+/// Post a command to the primary worker (0) — compile / parse / step traffic
+/// always goes there so a Fast Run fanned out to other workers can't reorder
+/// it — or re-queue it when that worker can't serve it yet.
+///
+/// The gate is worker 0's OWN [`MslState`], mirroring the Fast Run dispatch in
+/// [`assign_and_post_run_fast`]: readiness is a per-worker fact. `MSL_INSTALLED`
+/// is a process-global latch that never clears, so after a crash-recycle it
+/// still reads "installed" while worker 0 is re-decoding into an empty session —
+/// a Compile / UpdateParameters shipped into that window fails with silent
+/// "unresolved reference Modelica.*". Commands that need no MSL (Step / Reset /
+/// Despawn) never recompile and pass through unconditionally.
+///
+/// Re-queued commands leave on the next `MslReady` event; this cannot recurse
+/// because [`flush_pending_commands`] iterates a drained snapshot.
+fn post_command_or_queue(cmd: ModelicaCommand) {
+    if command_needs_msl(&cmd) && !primary_msl_ready() {
+        bevy::log::debug!(
+            "[worker_transport] primary worker MSL not Ready — queued compile-path command"
+        );
+        PENDING_COMMANDS.with(|q| q.borrow_mut().push(cmd));
+        return;
+    }
+    post_msg_to(0, &WireMessage::Command(cmd), "command");
+}
+
+/// Whether worker 0 — the only worker compile-path traffic is posted to — has
+/// the MSL bundle live in its session *right now*.
+fn primary_msl_ready() -> bool {
+    let p = pool().lock_or_recover();
+    p.worker_count() > 0 && matches!(p.msl.first(), Some(MslState::Ready))
 }
 
 /// Post a Fast Run request to the pool. Gated behind MSL install just like
@@ -1091,21 +1112,11 @@ fn flush_pending_commands() {
         drained.len()
     );
     for cmd in drained {
-        let envelope = WireMessage::Command(cmd);
-        let bytes = match bincode::serde::encode_to_vec(&envelope, bincode::config::standard()) {
-            Ok(b) => b,
-            Err(e) => {
-                bevy::log::error!("[worker_transport] flushed encode failed: {e}");
-                continue;
-            }
-        };
-        post_to_worker_bytes(&bytes, "command(flushed)");
+        // Same readiness gate as the live path: a flush triggered by a
+        // secondary's `MslReady` says nothing about worker 0, so a command can
+        // legitimately go straight back on the queue.
+        post_command_or_queue(cmd);
     }
-}
-
-/// Post raw bytes to the primary worker (0). Compile/parse/ping traffic.
-fn post_to_worker_bytes(bytes: &[u8], label: &str) {
-    post_bytes_to(0, bytes, label);
 }
 
 /// Serialize and post a `WireMessage` to the primary worker (0).

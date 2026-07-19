@@ -65,7 +65,7 @@ use lunco_materials::ShaderLook;
 use lunco_render::{PbrLook, SceneCamera};
 use openusd::sdf::Path as SdfPath;
 use lunco_mobility::{WheelRaycast, DifferentialCoupling, SuspensionPiston, SuspensionSpring, Suspension};
-use lunco_core::kernels::DriveMix;
+use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
@@ -1132,7 +1132,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         }
 
         // 2. Detect the drive allocation → a `DriveMix { kernel, ports, entries }`
-        // (`lunco_core::kernels`). The kernel is selected by the differential /
+        // (`lunco_mobility::kernels`). The kernel is selected by the differential /
         // steering schema the asset declares (Omniverse PhysX Vehicle names) or an
         // explicit `lunco:driveMix` linear table. There is NO per-arch Rust
         // component/branch — `apply_drive_mix` looks the named kernel up and runs it.

@@ -27,7 +27,7 @@
 //! // Define a minimal document type:
 //! struct Counter { id: DocumentId, value: i32, generation: u64 }
 //!
-//! #[derive(Clone, Debug)]
+//! #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 //! enum CounterOp { Inc(i32) }
 //! impl DocumentOp for CounterOp {}
 //!
@@ -477,7 +477,19 @@ impl std::error::Error for DocumentError {}
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Trait for a typed, reversible mutation to a [`Document`].
-pub trait DocumentOp: Clone + fmt::Debug + Send + Sync + 'static {}
+///
+/// The serde bounds are part of the contract, not a convenience. An op only
+/// counts as a mutation the system can *replay* if it survives a round trip:
+/// journalled to disk and read back as the SAME typed op, or sent to a peer and
+/// applied there. Without the bound the journal can only keep an erased
+/// `serde_json::Value` — enough to render a history entry, not enough to
+/// re-apply or invert one, which is what blocks collaboration and replay.
+/// Requiring it here means no op type can enter the system that cannot make the
+/// trip.
+pub trait DocumentOp:
+    Clone + fmt::Debug + Send + Sync + serde::Serialize + serde::de::DeserializeOwned + 'static
+{
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Document
@@ -863,7 +875,7 @@ mod tests {
         generation: u64,
     }
 
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
     enum TextOp {
         /// Insert `text` at byte position `pos`.
         Insert { pos: usize, text: String },

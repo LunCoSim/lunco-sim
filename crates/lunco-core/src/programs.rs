@@ -16,7 +16,7 @@
 //!
 //! ## Why this is not `ControlKernelRegistry`
 //!
-//! [`crate::kernels::ControlKernelRegistry`] maps a name to a `fn` pointer because a
+//! `lunco_mobility::kernels::ControlKernelRegistry` maps a name to a `fn` pointer because a
 //! `ControlKernel` is **pure** — inputs and params in, port writes out, no world
 //! access. A program driver is not: it reads a sensor and writes a `Transform`, so a
 //! `fn` pointer would have to take `&mut World` and give up parallelism for every

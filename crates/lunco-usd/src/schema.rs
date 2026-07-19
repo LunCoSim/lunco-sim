@@ -109,15 +109,30 @@ pub struct PropertySpec {
 /// The parsed `luncoSchema` plus the core `uniform` table.
 #[derive(Debug, Default)]
 pub struct SchemaRegistry {
-    /// Keyed by property NAME, not `(schema, name)`.
+    /// Every declaration, keyed by `(declaring schema, property name)`.
     ///
-    /// Sound for OUR properties because `luncoSchema` forbids bare names — a
-    /// terrain layer's bare `size` would collide with `UsdGeomCube`'s real
-    /// `double size` both in this map and in USD itself. Core schemas DO declare
-    /// bare names across files (`radius`, `axis`, `basis`, …); a redeclaration
-    /// that disagrees on type or variability is warned at ingest rather than
-    /// silently last-wins.
-    properties: HashMap<String, PropertySpec>,
+    /// The declaring schema is part of the key because a property name is not
+    /// unique in USD: core schemas declare bare names across files (`radius`,
+    /// `axis`, `basis`, …) with types that need not agree, and an asset-shipped
+    /// library may legitimately declare a name core already uses. Keyed by name
+    /// alone, the second file to declare a name ERASED the first — the registry
+    /// then answered for a schema the prim does not even apply.
+    properties: HashMap<(String, String), PropertySpec>,
+    /// Which declaration answers a lookup by BARE NAME — the shape almost every
+    /// caller has, because an authoring call site knows the property it is
+    /// writing and not the schema that declared it.
+    ///
+    /// PRECEDENCE. A declaration from one of *our* schemas (`luncoSchema` and
+    /// asset-shipped libraries, ingested with `own`) outranks any vendored core
+    /// declaration, because those are the namespaces we control and can be held
+    /// to. Within a tier the most recently ingested declaration wins, which is
+    /// what makes re-registering an extension refresh it rather than be ignored.
+    /// Divergent redeclarations are still warned at ingest: the tie-break makes
+    /// the answer *defined*, it does not make the collision *fine*.
+    ///
+    /// Callers that must have a specific schema's answer ask
+    /// [`property_in`](SchemaRegistry::property_in) and skip this index.
+    by_name: HashMap<String, (String, bool)>,
     /// Concrete typed schemas (`LunCoEnvironment`, `LunCoPolicy`).
     prim_types: Vec<String>,
     /// Applied API schemas (`LunCoTerrainAPI`, …).
@@ -174,9 +189,10 @@ impl SchemaRegistry {
 
     /// Parse [`CORE_SCHEMAS`] and [`GENERATED_SCHEMA`] — every schema, one parser.
     ///
-    /// Core goes in FIRST so that if `luncoSchema` ever declared a name core also
-    /// declares, ours would win. It never should: the schema forbids bare names
-    /// precisely so a `lunco:`-namespaced property cannot collide with a core one.
+    /// Core goes in FIRST, though the outcome no longer depends on it: ours
+    /// outranks core by precedence, not by ingest order. It should never come up
+    /// anyway — the schema forbids bare names precisely so a `lunco:`-namespaced
+    /// property cannot collide with a core one.
     ///
     /// A malformed embedded schema is a build-time bug, not a runtime condition —
     /// it cannot vary per user. It is still tolerated rather than panicking (a
@@ -250,29 +266,43 @@ impl SchemaRegistry {
                         },
                         declared_by: prim.to_string(),
                     };
-                    // TODO(backlog): properties are keyed by name alone, so two
-                    // schemas legitimately declaring the same property name with
-                    // different types collide (last one wins, warned below). Full
-                    // (schema, property) keying is deferred — see the
-                    // engineering-backlog doc in docs/architecture (schema property
-                    // keying).
-                    if let Some(prev) = reg.properties.get(name) {
-                        if prev.type_name != prop.type_name
-                            || prev.variability != prop.variability
-                        {
-                            bevy::log::warn!(
-                                "[schema] property '{name}': {} declares {} {:?}, \
-                                 overwriting {}'s {} {:?}",
-                                prop.declared_by,
-                                prop.type_name,
-                                prop.variability,
-                                prev.declared_by,
-                                prev.type_name,
-                                prev.variability,
-                            );
+                    // Both declarations are KEPT — only which one answers a
+                    // bare-name lookup is a choice, and it follows the precedence
+                    // documented on `by_name`. The warning stays for a genuine
+                    // divergence (same name, different type or variability from a
+                    // different schema): the tie-break resolves it, nobody
+                    // authored it deliberately.
+                    if let Some((prev_schema, _)) = reg.by_name.get(name) {
+                        if let Some(prev) = reg.properties.get(&(prev_schema.clone(), name.to_string())) {
+                            if *prev_schema != prop.declared_by
+                                && (prev.type_name != prop.type_name
+                                    || prev.variability != prop.variability)
+                            {
+                                bevy::log::warn!(
+                                    "[schema] property '{name}': {} declares {} {:?}, \
+                                     {} declares {} {:?} — lookups by name resolve to \
+                                     the higher-precedence declaration",
+                                    prop.declared_by,
+                                    prop.type_name,
+                                    prop.variability,
+                                    prev.declared_by,
+                                    prev.type_name,
+                                    prev.variability,
+                                );
+                            }
                         }
                     }
-                    reg.properties.insert(name.to_string(), prop);
+                    // Ours outranks vendored core; within a tier the newest wins.
+                    let wins = match reg.by_name.get(name) {
+                        Some((_, prev_own)) => own || !*prev_own,
+                        None => true,
+                    };
+                    if wins {
+                        reg.by_name
+                            .insert(name.to_string(), (prop.declared_by.clone(), own));
+                    }
+                    reg.properties
+                        .insert((prop.declared_by.clone(), name.to_string()), prop);
                 }
                 _ => {}
             }
@@ -281,8 +311,30 @@ impl SchemaRegistry {
 
     /// What a schema declares about property `name`, or `None` when no schema this
     /// registry knows declares it.
+    ///
+    /// When several schemas declare the name, this answers with the
+    /// highest-precedence one — see the rule on `by_name`. Use
+    /// [`property_in`](Self::property_in) when the prim's schema is known and the
+    /// answer must be that schema's.
     pub fn property(&self, name: &str) -> Option<&PropertySpec> {
-        self.properties.get(name)
+        let (schema, _) = self.by_name.get(name)?;
+        self.properties.get(&(schema.clone(), name.to_string()))
+    }
+
+    /// What `schema` specifically declares about `name` — no precedence, no
+    /// fallback to another schema's declaration of the same name.
+    pub fn property_in(&self, schema: &str, name: &str) -> Option<&PropertySpec> {
+        self.properties.get(&(schema.to_string(), name.to_string()))
+    }
+
+    /// Every schema this registry knows that declares `name`, in no fixed order.
+    /// More than one is normal for core USD bare names, not an error.
+    pub fn declaring_schemas(&self, name: &str) -> Vec<&str> {
+        self.properties
+            .keys()
+            .filter(|(_, n)| n == name)
+            .map(|(schema, _)| schema.as_str())
+            .collect()
     }
 
     /// The variability to author `name` with — the schema's, else USD's default
@@ -299,7 +351,7 @@ impl SchemaRegistry {
     /// declare — the one case we can *know* is custom. See the module docs for why
     /// we don't generalise this to every unknown property.
     pub fn is_custom(&self, name: &str) -> bool {
-        name.starts_with("lunco:") && !self.properties.contains_key(name)
+        name.starts_with("lunco:") && !self.by_name.contains_key(name)
     }
 
     /// The concrete typed schemas `luncoSchema` defines.
@@ -532,6 +584,53 @@ class "HabitatShieldingAPI" (
             "api schemas: {:?}",
             reg.api_schemas()
         );
+    }
+
+    /// Two schemas declaring the same name COEXIST — the second no longer erases
+    /// the first, and each can still be asked for its own answer.
+    ///
+    /// `radius` is the real case: `usdGeom` declares it on Sphere, Cylinder, Cone
+    /// and Capsule. Under name-only keying the registry held exactly one of them
+    /// and answered with it for every prim type.
+    #[test]
+    fn same_name_in_two_schemas_coexists() {
+        let reg = SchemaRegistry::global().read().unwrap();
+        let declarers = reg.declaring_schemas("radius");
+        assert!(
+            declarers.len() > 1,
+            "radius is declared by several core schemas, got {declarers:?}"
+        );
+        for schema in declarers {
+            assert_eq!(reg.property_in(schema, "radius").unwrap().type_name, "double");
+        }
+        // The bare-name lookup still answers, and answers with a real declarer.
+        let resolved = reg.property("radius").unwrap();
+        assert!(reg.property_in(&resolved.declared_by, "radius").is_some());
+    }
+
+    /// Our own declarations outrank vendored core for a bare-name lookup, whatever
+    /// the ingest order — the precedence rule, pinned.
+    #[test]
+    fn our_schema_outranks_core_for_bare_name_lookup() {
+        const SQUATTER: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+)
+class "SquatterAPI" (
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    uniform token squatter:probe = "x"
+}
+"#;
+        assert!(SchemaRegistry::register_extension(SQUATTER));
+        let reg = SchemaRegistry::global().read().unwrap();
+        assert_eq!(
+            reg.property("squatter:probe").unwrap().declared_by,
+            "SquatterAPI"
+        );
+        // Core's own declarations are untouched by the extension.
+        assert_eq!(reg.property("physics:mass").unwrap().type_name, "float");
     }
 
     /// Core USD types come from the real schema too — not a table of what someone

@@ -888,7 +888,7 @@ pub fn eval_curve(points: &[Vec3], basis: CurveBasis, periodic: bool, u: f32) ->
         1 => points[0],
         _ => match basis {
             CurveBasis::Linear => eval_linear(points, periodic, u),
-            CurveBasis::Bezier => eval_bezier(points, u),
+            CurveBasis::Bezier => eval_bezier(points, periodic, u),
             CurveBasis::CatmullRom => eval_catmull_rom(points, periodic, u),
         },
     }
@@ -932,16 +932,25 @@ fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
         + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 }
 
-/// Cubic Bezier: 4 points per segment with shared endpoints (1 + 3n points).
-fn eval_bezier(points: &[Vec3], u: f32) -> Vec3 {
+/// Cubic Bezier: 4 CVs per segment, consecutive segments sharing an endpoint.
+///
+/// Segment counting follows UsdGeomBasisCurves: a `nonperiodic` cubic bezier
+/// carries `4 + 3(segs − 1)` CVs, a `periodic` one exactly `3·segs`. The
+/// periodic form authors no closing CV — the final segment borrows the first CV
+/// back as its endpoint, which is what makes the loop close rather than stop.
+/// Too few CVs to form even one cubic segment degrades to the control polygon.
+fn eval_bezier(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     let n = points.len();
-    let segs = ((n.saturating_sub(1)) / 3).max(1);
+    let segs = if periodic { n / 3 } else { (n - 1) / 3 };
+    if segs == 0 {
+        return eval_linear(points, periodic, u);
+    }
     let (i, f) = segment(segs, u);
     let b = i * 3;
-    if b + 3 >= n {
-        return points[n - 1];
-    }
-    let (p0, p1, p2, p3) = (points[b], points[b + 1], points[b + 2], points[b + 3]);
+    // Wrapping the index is the whole of periodicity here: only the closing
+    // segment's `b + 3` ever reaches `n`, and there it lands back on CV 0.
+    let cv = |k: usize| points[(b + k) % n];
+    let (p0, p1, p2, p3) = (cv(0), cv(1), cv(2), cv(3));
     let mt = 1.0 - f;
     p0 * (mt * mt * mt) + p1 * (3.0 * mt * mt * f) + p2 * (3.0 * mt * f * f) + p3 * (f * f * f)
 }
@@ -1043,5 +1052,28 @@ mod tests {
         ];
         assert!((eval_curve(&p, CurveBasis::Bezier, false, 0.0) - p[0]).length() < 1e-5);
         assert!((eval_curve(&p, CurveBasis::Bezier, false, 1.0) - p[3]).length() < 1e-5);
+    }
+
+    /// `wrap = "periodic"` means the closing segment ends on CV 0, so `u = 1`
+    /// lands exactly where `u = 0` did — a loop with no seam to jump across.
+    /// 6 CVs = 2 periodic segments (`3·segs`), none of them a closing endpoint.
+    #[test]
+    fn periodic_bezier_closes_onto_its_first_cv() {
+        let p = vec![
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(2.0, 1.0, 0.0),
+            Vec3::new(3.0, 0.0, 0.0),
+            Vec3::new(2.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+        ];
+        let start = eval_curve(&p, CurveBasis::Bezier, true, 0.0);
+        let end = eval_curve(&p, CurveBasis::Bezier, true, 1.0);
+        assert!((start - p[0]).length() < 1e-5, "periodic start is CV 0");
+        assert!((end - start).length() < 1e-5, "periodic end wraps back onto the start");
+        // The same CVs read nonperiodically span only one segment (4 + 3(segs−1)
+        // ⇒ segs = 1) and stop on CV 3 — the wrap is what adds the return leg.
+        let open_end = eval_curve(&p, CurveBasis::Bezier, false, 1.0);
+        assert!((open_end - p[3]).length() < 1e-5, "nonperiodic stops at its last endpoint");
     }
 }

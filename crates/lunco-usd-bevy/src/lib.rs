@@ -160,6 +160,7 @@ impl Plugin for UsdBevyPlugin {
             .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
             .register_type::<UsdAnimated>()
+            .register_type::<UsdResetXformStack>()
             .register_type::<camera_track::CameraTrack>()
             .init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
@@ -199,6 +200,12 @@ impl Plugin for UsdBevyPlugin {
             // as a grid-direct follower (so it can host the FloatingOrigin at
             // full precision). `resolve` rigs it once during load; `follow`
             // tracks the mount each frame, before transform propagation.
+            // `!resetXformStack!` detachment. In `Update`, so the reparent has
+            // flushed long before `PostUpdate` propagates transforms — a prim
+            // never renders one frame with the ancestor chain still applied.
+            // Runs every frame rather than once: the ancestry a prim must be
+            // lifted out of is itself spawned asynchronously during load.
+            .add_systems(Update, detach_reset_xform_stack_prims)
             .add_systems(Update, camera_mount::resolve_camera_mounts)
             .add_systems(
                 PostUpdate,
@@ -460,6 +467,19 @@ impl Default for UsdPrimPath {
 /// Prevents the system from re-processing the same entity on subsequent frames.
 #[derive(Component)]
 pub struct UsdVisualSynced;
+
+/// Marker: this prim's `xformOpOrder` begins with the `!resetXformStack!`
+/// sentinel, so UsdGeomXformable defines its local-to-world as its OWN op stack
+/// alone — the ancestor chain is not part of it.
+///
+/// Composition of the prim's local transform already honours the sentinel
+/// ([`compose_xform_order_at`]); the marker is what carries that fact into the
+/// ECS, where "world" is an accumulated `GlobalTransform` and the only way to
+/// ignore ancestors is to stop being their descendant.
+/// [`detach_reset_xform_stack_prims`] does the reparent.
+#[derive(Component, Reflect, Debug, Clone, Copy, Default)]
+#[reflect(Component)]
+pub struct UsdResetXformStack;
 
 /// Marker: this entity's local `Transform` is driven by USD `timeSamples` on its
 /// xform ops (`xformOp:translate` / `xformOp:rotateXYZ` / `xformOp:scale`).
@@ -1260,6 +1280,15 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // animation-preview domain so the transport (play/pause/scrub/rate) reaches it.
         if prim_is_animated(reader, &sdf_path) {
             commands.entity(entity).try_insert(UsdAnimated);
+        }
+
+        // UsdGeomXformable's `!resetXformStack!`: composition above already
+        // yielded the sentinel-honouring LOCAL transform, but "ignores its
+        // ancestors" is a statement about parentage, which only
+        // `detach_reset_xform_stack_prims` can act on. Tag now, while the reader
+        // is in hand — the ancestry it needs may not exist yet this frame.
+        if prim_resets_xform_stack(reader, &sdf_path) {
+            commands.entity(entity).try_insert(UsdResetXformStack);
         }
 
         // Tag a prim authoring `lunco:activeCamera` timeSamples as an editorial
@@ -3005,11 +3034,88 @@ impl openusd::usd::SchemaBase for XformablePrim {
 impl openusd::schemas::geom::Imageable for XformablePrim {}
 impl openusd::schemas::geom::Xformable for XformablePrim {}
 
-// TODO(backlog): `!resetXformStack!` now composes correctly *locally* (openusd's
-// Xformable honors the sentinel), but the ECS projection still parents the entity
-// under its prim parent — the world-space detachment the sentinel demands is
-// unwired. See the engineering-backlog doc in docs/architecture (resetXformStack
-// detachment).
+/// The `!resetXformStack!` sentinel, as UsdGeomXformable spells it in
+/// `xformOpOrder`.
+const RESET_XFORM_STACK: &str = "!resetXformStack!";
+
+/// How far up a `ChildOf` chain the stage-root walk will look before giving up.
+/// USD prim hierarchies are shallow; a chain deeper than this is a cycle or a
+/// mid-load half-built ancestry, and either way is not worth spinning on.
+const MAX_USD_ANCESTRY_DEPTH: usize = 64;
+
+/// True iff the prim's `xformOpOrder` **begins** with `!resetXformStack!`.
+///
+/// Position matters: UsdGeomXformable gives the sentinel meaning only as the
+/// first entry — anywhere else it is a malformed stack, which
+/// [`compose_xform_order_at`] already rejects by returning `None`.
+fn prim_resets_xform_stack<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
+    read_xform_op_order(reader, path)
+        .is_some_and(|order| order.first().is_some_and(|op| op == RESET_XFORM_STACK))
+}
+
+/// Re-anchor every `!resetXformStack!` prim onto its stage's world frame.
+///
+/// UsdGeomXformable: a prim whose op order opens with the sentinel is
+/// **world-anchored, not parent-relative** — its local-to-world is its own op
+/// stack and nothing else. A projection that leaves it parented under its USD
+/// parent silently multiplies the ancestor chain back in, which is the exact
+/// value the author asked to drop (the canonical use is a prop authored
+/// underneath a moving rig that must nonetheless stay put in the world).
+///
+/// The anchor is the topmost ancestor still belonging to the SAME stage: the
+/// entity that carries this stage's world frame in the projection. Reparenting
+/// to that entity rather than to nothing keeps the stage's own placement — a
+/// twin mounted into a grid at a spawn pose stays inside its twin, and the
+/// grid/`big_space` frame contract (a prim is never grid-direct; see the
+/// anchoring contract in the child spawn) is preserved. What the sentinel drops
+/// is everything USD-authored between the prim and that root, which is the whole
+/// of the ancestor chain the stage itself defines.
+///
+/// Idempotent: after the reparent the walk finds the same anchor and the parent
+/// already matches, so the system settles to a no-op. Re-running is also how a
+/// prim spawned before its ancestry finished materialising gets fixed later.
+pub fn detach_reset_xform_stack_prims(
+    mut commands: Commands,
+    q_reset: Query<(Entity, &UsdPrimPath, &ChildOf), With<UsdResetXformStack>>,
+    q_prims: Query<(&UsdPrimPath, Option<&ChildOf>)>,
+) {
+    for (entity, prim, child_of) in q_reset.iter() {
+        let mut anchor = None;
+        let mut node = child_of.parent();
+        for _ in 0..MAX_USD_ANCESTRY_DEPTH {
+            let Ok((ancestor, ancestor_parent)) = q_prims.get(node) else {
+                // Above the stage's own prims — the grid/mount anchor. Whatever
+                // we found last is the stage root.
+                break;
+            };
+            if ancestor.stage_handle != prim.stage_handle {
+                // A different stage mounted above this one; its frame is the
+                // mount, not this stage's world.
+                break;
+            }
+            anchor = Some(node);
+            match ancestor_parent {
+                Some(p) => node = p.parent(),
+                None => break,
+            }
+        }
+        let Some(anchor) = anchor else {
+            // Already a child of something that is not a USD prim of this stage
+            // ⇒ nothing of the stage's chain is being applied. Nothing to drop.
+            continue;
+        };
+        if anchor == child_of.parent() {
+            continue;
+        }
+        info!(
+            "[usd-bevy] {} opens with {RESET_XFORM_STACK} — detaching from its USD ancestry \
+             onto the stage world frame ({anchor:?})",
+            prim.path
+        );
+        commands.entity(entity).insert(ChildOf(anchor));
+    }
+}
+
 /// Compose the prim's local `Transform` at time `time` from its `xformOpOrder`,
 /// via openusd's spec implementation
 /// ([`Xformable::local_to_parent_transform`](openusd::schemas::geom::Xformable::local_to_parent_transform)):

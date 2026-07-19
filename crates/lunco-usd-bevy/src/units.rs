@@ -43,10 +43,18 @@
 //!
 //! ## Save
 //!
-//! Not yet inverted on write-back: authoring a transform onto a **non-canonical**
-//! stage writes canonical values into a stage that declares other metrics.
-//! [`StageMetrics::from_reader`] logs that once, loudly, when it sees such a
-//! stage. Doc 41's staged plan puts `from_canonical`-on-save at step 4.
+//! Write-back runs the same map backwards: every read-side conversion has a
+//! `stage_*` counterpart applying `S⁻¹ = (1/k)·Q⁻¹`
+//! ([`ConventionTransform::stage_point`] and friends). An authoring command
+//! converts canonical → stage frame immediately before it writes, so a value
+//! read off a Z-up centimetre stage and written straight back is the value that
+//! was already there.
+//!
+//! The inverse always exists and is exact in the same sense the forward map is:
+//! `Q` is a rotation (USD admits only the identity or one ±90° axis swap) and
+//! [`StageMetrics::from_reader`] rejects any `metersPerUnit` that is not finite
+//! and positive, so `S` is a similarity and is never singular. There is no stage
+//! whose metrics can make a save unrepresentable.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -95,8 +103,8 @@ impl StageMetrics {
     ///   defines those two) → treated as `Y`;
     /// - a non-finite or non-positive `metersPerUnit` is an **error** → `1.0`;
     /// - a *supported but non-canonical* stage (Z-up and/or non-metre) logs a
-    ///   one-shot warning naming what is being converted, plus the known save-side
-    ///   gap (write-back is not yet inverted).
+    ///   one-shot warning naming what is being converted, so an unexpected
+    ///   Omniverse/Isaac stage is visible rather than merely handled.
     pub fn from_reader<R: UsdRead>(reader: &R) -> Self {
         let up_axis = match reader.stage_up_axis().as_deref() {
             None | Some("Y") => UpAxis::Y,
@@ -124,9 +132,8 @@ impl StageMetrics {
         if !metrics.is_canonical() {
             warn_once!(
                 "[usd-units] non-canonical stage: upAxis = {:?}, metersPerUnit = {} — converting \
-                 to canonical Y-up SI metres at import. NOTE: write-back (gizmo/authoring \
-                 commands) is NOT yet inverted, so edits authored onto this stage will be written \
-                 in canonical units. See docs/architecture/41-axes-and-units.md.",
+                 to canonical Y-up SI metres at import, and back to the stage's own frame on \
+                 write. See docs/architecture/41-axes-and-units.md.",
                 metrics.up_axis,
                 metrics.meters_per_unit
             );
@@ -268,6 +275,83 @@ impl ConventionTransform {
             scale: self.scale_vec(t.scale),
         }
     }
+
+    // ---- Write-back: the inverse map `S⁻¹ = (1/k)·Q⁻¹` --------------------
+    //
+    // Authoring is the read path run backwards. Each `stage_*` below is the
+    // exact inverse of the same-named forward conversion, so a value decoded
+    // from the stage and re-authored unchanged reproduces the authored number —
+    // the round-trip is the identity, not merely "close". Any command that
+    // writes a spatial value onto a stage must pass it through the matching one;
+    // writing a canonical value directly is how a Z-up centimetre stage ends up
+    // 100× off and rotated, which is precisely what the reader corrects for.
+
+    /// A canonical **position** → the stage's frame and units: `Q⁻¹·p / k`.
+    /// Inverse of [`point`](Self::point).
+    pub fn stage_point(&self, p: Vec3) -> Vec3 {
+        self.rot.inverse() * (p / self.scale as f32)
+    }
+
+    /// A canonical **direction** → the stage's frame: `Q⁻¹·v`. Rotated, never
+    /// scaled. Inverse of [`dir`](Self::dir).
+    pub fn stage_dir(&self, v: Vec3) -> Vec3 {
+        self.rot.inverse() * v
+    }
+
+    /// [`stage_point`](Self::stage_point) in `f64`, for the joint anchors the
+    /// physics bridge keeps in [`DVec3`]. Same `f32`-rotation caveat as
+    /// [`point_d`](Self::point_d).
+    pub fn stage_point_d(&self, p: DVec3) -> DVec3 {
+        self.rot.as_dquat().inverse() * (p / self.scale)
+    }
+
+    /// [`stage_dir`](Self::stage_dir) in `f64` — a joint's rotation axis.
+    pub fn stage_dir_d(&self, v: DVec3) -> DVec3 {
+        self.rot.as_dquat().inverse() * v
+    }
+
+    /// A canonical **geometry orientation** → the stage's frame: `Q⁻¹·q`.
+    /// Inverse of [`orient`](Self::orient).
+    pub fn stage_orient(&self, q: Quat) -> Quat {
+        self.rot.inverse() * q
+    }
+
+    /// A **length** in metres → the stage's linear unit: `x / k`. Inverse of
+    /// [`length`](Self::length) — a 2.5 m radius authored onto a centimetre
+    /// stage is written as `250`.
+    pub fn stage_length(&self, x: f64) -> f64 {
+        x / self.scale
+    }
+
+    /// A canonical **local rotation** → the stage's basis: `Q⁻¹·q·Q`. Inverse of
+    /// [`rotation`](Self::rotation), and separable per channel for the same
+    /// reason.
+    pub fn stage_rotation(&self, q: Quat) -> Quat {
+        self.rot.inverse() * q * self.rot
+    }
+
+    /// A canonical **local scale** → the stage's axis order. Inverse of
+    /// [`scale_vec`](Self::scale_vec); exact for the only two `Q` USD can
+    /// produce.
+    pub fn stage_scale_vec(&self, s: Vec3) -> Vec3 {
+        let s = self.rot.inverse() * s;
+        Vec3::new(s.x.abs(), s.y.abs(), s.z.abs())
+    }
+
+    /// De-conjugate a prim's **local** transform back to the stage's frame:
+    /// `L = S⁻¹·L'·S`. Inverse of
+    /// [`local_transform`](Self::local_transform) — this is what an authoring
+    /// command hands to `xformOp:translate` / `:orient` / `:scale`.
+    pub fn stage_local_transform(&self, t: Transform) -> Transform {
+        if self.is_identity() {
+            return t;
+        }
+        Transform {
+            translation: self.stage_point(t.translation),
+            rotation: self.stage_rotation(t.rotation),
+            scale: self.stage_scale_vec(t.scale),
+        }
+    }
 }
 
 /// The stage → canonical conversion for `reader`'s stage. Cheap (two metadata
@@ -344,5 +428,59 @@ mod tests {
             got.abs_diff_eq(expected, 1e-4),
             "conjugated chain {got:?} must equal converted world point {expected:?}"
         );
+    }
+
+    /// The save-side contract: read a value off a non-canonical stage, author it
+    /// straight back, and the stage holds what it held. Anything less and an
+    /// edit to one prim silently rescales or rotates it on every save.
+    #[test]
+    fn write_back_round_trips_through_a_non_canonical_stage() {
+        let ct = ConventionTransform::from_stage_metrics(&StageMetrics {
+            meters_per_unit: 0.01,
+            up_axis: UpAxis::Z,
+        });
+
+        let p = Vec3::new(123.0, -45.0, 6.75);
+        assert!(ct.stage_point(ct.point(p)).abs_diff_eq(p, 1e-3), "point");
+        assert!(ct.stage_dir(ct.dir(p)).abs_diff_eq(p, 1e-4), "dir");
+        assert!((ct.stage_length(ct.length(250.0)) - 250.0).abs() < 1e-9, "length");
+
+        let pd = DVec3::new(123.0, -45.0, 6.75);
+        assert!(ct.stage_point_d(ct.point_d(pd)).abs_diff_eq(pd, 1e-3), "point_d");
+        assert!(ct.stage_dir_d(ct.dir_d(pd)).abs_diff_eq(pd, 1e-4), "dir_d");
+
+        let q = Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.2);
+        assert!(ct.stage_orient(ct.orient(q)).abs_diff_eq(q, 1e-6), "orient");
+        assert!(ct.stage_rotation(ct.rotation(q)).abs_diff_eq(q, 1e-6), "rotation");
+
+        let t = Transform::from_xyz(400.0, 10.0, -25.0)
+            .with_rotation(q)
+            .with_scale(Vec3::new(1.0, 2.0, 3.0));
+        let back = ct.stage_local_transform(ct.local_transform(t));
+        assert!(back.translation.abs_diff_eq(t.translation, 1e-3), "local translation");
+        assert!(back.rotation.abs_diff_eq(t.rotation, 1e-6), "local rotation");
+        assert!(back.scale.abs_diff_eq(t.scale, 1e-5), "local scale");
+    }
+
+    /// The write path must be a no-op on a canonical stage — every asset we ship
+    /// takes it, so authoring must stay bit-for-bit what it was.
+    #[test]
+    fn canonical_stage_write_back_is_the_identity() {
+        let ct = ConventionTransform::from_stage_metrics(&StageMetrics::default());
+        let t = Transform::from_xyz(1.0, 2.0, 3.0).with_scale(Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(ct.stage_local_transform(t), t);
+        assert_eq!(ct.stage_length(7.5), 7.5);
+    }
+
+    /// A centimetre stage's authored numbers, spelled out: 2.5 m is `250`, and a
+    /// point 1 m up the canonical +Y is 100 units up the stage's +Z.
+    #[test]
+    fn write_back_uses_the_stages_own_units_and_axes() {
+        let ct = ConventionTransform::from_stage_metrics(&StageMetrics {
+            meters_per_unit: 0.01,
+            up_axis: UpAxis::Z,
+        });
+        assert!((ct.stage_length(2.5) - 250.0).abs() < 1e-9);
+        assert!(ct.stage_point(Vec3::Y).abs_diff_eq(Vec3::new(0.0, 0.0, 100.0), 1e-3));
     }
 }

@@ -8,7 +8,7 @@ use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::{WheelRaycast, Suspension};
-use lunco_core::kernels::DriveMix;
+use lunco_mobility::kernels::DriveMix;
 use avian3d::prelude::*;
 use lunco_fsw::FlightSoftware;
 

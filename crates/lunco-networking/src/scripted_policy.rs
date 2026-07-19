@@ -4,7 +4,7 @@
 //! rhai: the convergent **merge** order ([`lunco_twin_journal::MergePolicy`]) at
 //! [`MERGE_SEAM`], the **authorization** gate ([`lunco_core::session::AUTHORIZE_HOOK`]),
 //! and per-vehicle **drive kernels** (a `lunco:driveKernel` hook id in
-//! [`lunco_core::kernels::DriveMix`]). A scripted policy is only correct if **every
+//! `lunco_mobility::kernels::DriveMix`). A scripted policy is only correct if **every
 //! peer runs the identical one** — most sharply for the merge policy, whose
 //! determinism contract is that all peers linearize history the same way.
 //!

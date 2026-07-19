@@ -29,9 +29,12 @@ use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use lunco_core::architecture::DigitalPort;
 use lunco_core::ports::{PortBackend, PortDirection, PortRef};
-use lunco_core::kernels::{ControlKernelRegistry, DriveMix};
+use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_fsw::FlightSoftware;
 
+/// Drive kernels and the command/mix types they consume. Vehicle-domain, so
+/// they live here rather than in core (see the nothing-into-core rule).
+pub mod kernels;
 mod sensing;
 mod wheel_spin;
 use wheel_spin::update_wheel_spin;
@@ -78,9 +81,11 @@ impl Plugin for LunCoMobilityPlugin {
 
         app.register_type::<Suspension>()
            .register_type::<WheelRaycast>()
-           // `DriveMix` (the kernel-selected allocation spec, replacing the old
-           // per-arch `DifferentialDrive`/`AckermannSteer`/`GenericDriveMix`) is
-           // registered by `lunco-core` alongside the kernel registry.
+           // `DriveMix` — the kernel-selected allocation spec that replaced the
+           // per-arch `DifferentialDrive`/`AckermannSteer`/`GenericDriveMix`.
+           // Registered here with the kernels it selects between; it is a
+           // vehicle-domain type and core carries no domain.
+           .register_type::<DriveMix>()
            .register_type::<DifferentialCoupling>()
            .register_type::<SuspensionPiston>()
            .register_type::<SuspensionSpring>()
@@ -1059,9 +1064,9 @@ fn apply_drive_mix(
         // so brake-coefficient ports engage and drive ports zero out — matching the
         // old per-branch behaviour, now uniform across kernels.
         let inputs = if fsw.brake_active {
-            lunco_core::kernels::DriveInputs { throttle: 0.0, steer: 0.0, brake: 1.0 }
+            kernels::DriveInputs { throttle: 0.0, steer: 0.0, brake: 1.0 }
         } else {
-            lunco_core::kernels::DriveInputs { throttle, steer, brake: 0.0 }
+            kernels::DriveInputs { throttle, steer, brake: 0.0 }
         };
 
         // Allocate command → normalized port writes. A built-in registry kernel
@@ -1160,7 +1165,7 @@ mod force_law_tests {
         assert!(angle_about_axis(DQuat::IDENTITY, axis).abs() < 1e-12);
     }
 
-    // (drive-mix parse + kernel projection now live in `lunco_core::kernels`.)
+    // (drive-mix parse + kernel projection now live in `kernels`.)
 
     // ── scripted (rhai) drive kernel: hook-driven mixing, by DriveMix.kernel id ──
     #[test]

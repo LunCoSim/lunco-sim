@@ -7,7 +7,7 @@ use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::{WheelRaycast, Suspension};
-use lunco_core::kernels::DriveMix;
+use lunco_mobility::kernels::DriveMix;
 use lunco_fsw::FlightSoftware;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
