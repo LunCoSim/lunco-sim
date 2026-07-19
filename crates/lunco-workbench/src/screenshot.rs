@@ -87,11 +87,20 @@ impl Plugin for ScreenshotPlugin {
         // Offline Frame-by-Frame Recording Mode
         app.init_resource::<lunco_core::KeepAwake>()
             .init_resource::<OfflineRecordingState>()
+            .init_resource::<OfflineSaveQueue>()
             .add_observer(deliver_offline_frame)
+            // Collects finished async frame saves. `Update`, unconditionally:
+            // the queue must drain even after the recording deactivates.
+            .add_systems(Update, pump_offline_saves)
             // The readiness gate. `Update` (not `Last`): it must run before
             // `drive_offline_clock`, which only acts once `state.active` is set —
             // so the shot begins on the same frame it was cleared to begin.
-            .add_systems(Update, start_recording_when_scene_ready)
+            // The pacing enforcer is chained after it so a shot activated this
+            // frame gets its knobs applied this frame, not next.
+            .add_systems(
+                Update,
+                (start_recording_when_scene_ready, enforce_recording_pacing).chain(),
+            )
             // `Last`: the strategy written here is read by `TimeSystem` in `First`
             // next frame, so the decision is made after every other system has run.
             .add_systems(Last, drive_offline_clock);
@@ -419,15 +428,119 @@ pub struct OfflineRecordingState {
     pub output_dir: std::path::PathBuf,
     /// Video target FPS (determines delta virtual time step per frame).
     pub fps: u32,
-    /// Lock-step frame latch.
+    /// Kept for status-payload compatibility; the pipelined capture cycle no
+    /// longer waits on individual frames, so this stays `false`.
     pub is_waiting_for_frame: bool,
-    /// Set by `deliver_offline_frame` when a frame lands; consumed by
-    /// `drive_offline_clock` to schedule exactly one `1/fps` time step.
-    pub frame_just_captured: bool,
+    /// The frame currently rendering carries a freshly-advanced sim state that
+    /// has not been captured yet. Written by `drive_offline_clock` when it
+    /// schedules a `1/fps` step; consumed by the same system one frame later to
+    /// request exactly one capture of that state. `false` on the activation
+    /// frame (whatever it rendered predates deterministic stepping) and after a
+    /// back-pressure hold (a frozen frame re-renders an already-captured state).
+    pub advanced_this_frame: bool,
+    /// Capture requests whose GPU readback has not delivered yet. Bounded by
+    /// [`MAX_OUTSTANDING_CAPTURES`] via back-pressure in `drive_offline_clock`.
+    pub outstanding_captures: u32,
     /// Primary window present mode as it was before recording uncapped it,
-    /// restored on stop.
+    /// restored on stop. Doubles as the "uncap already applied" latch for
+    /// [`enforce_recording_pacing`]: `None` while active means the override is
+    /// still owed (e.g. CLI arming happened before a window existed).
     pub prev_present_mode: Option<bevy::window::PresentMode>,
 }
+
+impl OfflineRecordingState {
+    /// The ONE way to construct an entering-recording state, called from
+    /// [`activate_recording`] once the readiness gate clears. Every entry point
+    /// funnels through that gate — the CLI `--record-offline` path arms via
+    /// [`arm_recording_at_startup`] rather than building this struct itself,
+    /// because when it hand-maintained its own field list it drifted (skipped
+    /// the pacing setup → recorded through the power-save throttle at
+    /// 2–10 s/frame) and, starting `active` at app construction, captured its
+    /// opening frames before the scene had loaded (black frame 0).
+    pub fn start(output_dir: std::path::PathBuf, fps: u32) -> Self {
+        Self {
+            active: true,
+            frame_index: 0,
+            output_dir,
+            fps: fps.max(1),
+            is_waiting_for_frame: false,
+            // The activation frame rendered whatever real-time state preceded
+            // the lock-step, so it must NOT be captured: the first capture
+            // happens after the first scheduled `1/fps` step, so frame 0 of the
+            // sequence is step 1 of the deterministic clock — same contract as
+            // every frame after it.
+            advanced_this_frame: false,
+            outstanding_captures: 0,
+            // `enforce_recording_pacing` fills this in when it applies the uncap.
+            prev_present_mode: None,
+        }
+    }
+}
+
+/// Marker on the recorder's own `Screenshot` entities. Positive identification:
+/// an HTTP `CaptureScreenshot` or a behaviour-tree `take_photo` taken
+/// mid-recording spawns a `Screenshot` too, but without this component, so
+/// `deliver_offline_frame` ignores it (and `deliver_screenshot` handles it via
+/// `PendingCapture`, the mirror-image marker of the other flow).
+///
+/// Carrying the slot AND the destination in the component is what makes the
+/// pipeline safe: readbacks may deliver out of order and may deliver after the
+/// recording stopped (drain) or after the NEXT shot started — the frame still
+/// lands at its own index in its own shot's directory, because nothing about it
+/// is read from mutable recorder state at delivery time.
+#[derive(Component)]
+struct OfflineFrameCapture {
+    /// Sequence slot this capture fills (`frame_{index:06}.png`).
+    index: u64,
+    /// Full destination path, resolved at request time.
+    path: std::path::PathBuf,
+    /// Request instant — readback latency probe for the debug log.
+    requested_at: web_time::Instant,
+}
+
+/// Ceiling on capture requests whose GPU readback has not yet delivered.
+///
+/// Each outstanding capture pins a window-sized readback (~16 MB at 2560×1552),
+/// so this bounds memory exactly the way [`MAX_IN_FLIGHT_SAVES`] does on the
+/// save side. It is sized ABOVE the readback latency observed in practice
+/// (~3–6 render frames) so the pipeline is normally governed by the save queue
+/// and the render rate, not by this cap.
+const MAX_OUTSTANDING_CAPTURES: u32 = 6;
+
+/// Frame saves still being encoded/written by the async task pool.
+///
+/// A separate resource rather than a field on [`OfflineRecordingState`] because
+/// `Task` is neither `Clone` nor meaningfully `Default`-able, and because the
+/// queue must keep draining after the state deactivates (stop or abort): a
+/// spawned save owns its pixels and its path and always runs to completion, so
+/// stopping a recording never truncates the tail of the sequence.
+///
+/// This queue is what takes the save OFF the per-frame critical path. The
+/// synchronous design paid `convert + encode + write` (measured ~70 ms at
+/// 2560×1552) inside the clock-freeze window, in series with the render; with
+/// the queue, the freeze clears the moment the captured image is handed to a
+/// worker, and the next frame renders while the previous one deflates.
+/// Determinism is untouched — the capture *head* (one `1/fps` step per captured
+/// frame, in order) is exactly as before; only the save *tail* is concurrent.
+#[derive(Resource, Default)]
+pub struct OfflineSaveQueue {
+    /// Each task resolves to the frame index it saved, or an error string.
+    tasks: Vec<bevy::tasks::Task<Result<u64, String>>>,
+}
+
+/// Ceiling on concurrently in-flight frame saves.
+///
+/// The bound is what makes image-buffered saving safe: the unbounded version of
+/// this idea is exactly the historical OOM (`docs/offline-recording.md`) — raw
+/// frames are ~16 MB at 2560×1552 and the GPU can capture faster than a disk
+/// can deflate+write, so an unbounded queue grows without limit on any long
+/// shot. When the queue is full, `drive_offline_clock` simply holds the clock
+/// and waits (the pre-queue behaviour, applied only under pressure), turning
+/// overload into back-pressure instead of memory growth. 6 slots ≈ 96 MB peak,
+/// and at the measured ~70 ms per save it caps sustained capture throughput at
+/// ~85 fps — above what the render loop delivers, so in practice it only bites
+/// when the disk stalls.
+const MAX_IN_FLIGHT_SAVES: usize = 6;
 
 /// Command to start frame-by-frame recording.
 #[Command(default)]
@@ -496,46 +609,15 @@ fn on_start_offline_recording(
 }
 
 /// Flip the armed recorder live. Split out of [`on_start_offline_recording`] so the
-/// ready path and the timeout path cannot drift apart.
+/// ready path and the timeout path cannot drift apart. The pacing knobs
+/// (`KeepAwake`, present mode) are NOT touched here — [`enforce_recording_pacing`]
+/// applies them from the `active` flag, so every entry point gets them.
 fn activate_recording(
     pending: &PendingShotStart,
     state: &mut OfflineRecordingState,
-    keep_awake: &mut lunco_core::KeepAwake,
-    windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     commands: &mut Commands,
 ) {
-    let dir = pending.output_dir.clone();
-    state.active = true;
-    state.frame_index = 0;
-    state.output_dir = dir;
-    state.fps = pending.fps;
-    state.is_waiting_for_frame = false;
-    // Enter the cycle on the "advance" phase so the very first captured frame is
-    // rendered from a clock that has taken exactly one step, like every frame after it.
-    state.frame_just_captured = true;
-
-    // Ask to stay awake for the duration of the recording. An unattended capture
-    // has no focused window, so the `reactive_low_power` throttle would otherwise
-    // apply: the app sleeps between redraws and the lock-step advances only when
-    // the reactive timer fires — measured at 2-10 s per frame against ~50 ms
-    // awake, turning a ~1 minute episode into hours.
-    //
-    // This states intent and stops there; the pacer applies it. Writing
-    // `WinitSettings` from here would be reverted on the very next frame anyway.
-    keep_awake.acquire();
-    info!("[offline-record] power saving disabled (KeepAwake acquired)");
-
-    // Uncap the presentation rate for the same reason: recording wants frames as
-    // fast as the machine can render them. Under `Fifo` (vsync) the render loop is
-    // pinned to the display's refresh, and the lock-step spends two render frames
-    // per captured frame — a hard ~30 captured FPS ceiling on a 60 Hz panel, for
-    // output whose playback rate is `fps` regardless. Virtual time still advances
-    // exactly `1/fps` per captured frame, so rendering faster changes only how long
-    // the capture takes, never what the video looks like.
-    if let Ok(mut window) = windows.single_mut() {
-        state.prev_present_mode = Some(window.present_mode);
-        window.present_mode = bevy::window::PresentMode::AutoNoVsync;
-    }
+    *state = OfflineRecordingState::start(pending.output_dir.clone(), pending.fps);
 
     // Freeze time initially by setting manual duration to 0.
     // This allows guarded simulation systems to execute but see a 0 delta.
@@ -555,26 +637,17 @@ fn activate_recording(
     );
 }
 
-/// Wind an active recording down: release the wake token, restore the present
-/// mode, and hand the clock back to `Automatic`. EVERY path that ends a recording
-/// — the stop command and the failed-write abort alike — must run this; skipping
-/// it leaves the last-written `ManualDuration(ZERO)` in place with nothing to
-/// replace it, freezing virtual time until the process restarts.
-fn teardown_recording(
-    state: &mut OfflineRecordingState,
-    keep_awake: &mut lunco_core::KeepAwake,
-    windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
-    commands: &mut Commands,
-) {
+/// Wind an active recording down and hand the clock back to `Automatic`. EVERY
+/// path that ends a recording — the stop command and the failed-write abort alike
+/// — must run this; skipping it leaves the last-written `ManualDuration(ZERO)` in
+/// place with nothing to replace it, freezing virtual time until the process
+/// restarts. The wake token and present mode are restored by
+/// [`enforce_recording_pacing`] when it observes `active` drop.
+fn teardown_recording(state: &mut OfflineRecordingState, commands: &mut Commands) {
     state.active = false;
     state.is_waiting_for_frame = false;
-    state.frame_just_captured = false;
+    state.advanced_this_frame = false;
 
-    // Drop the wake request; the pacer restores the binary's idle policy.
-    keep_awake.release();
-    if let (Ok(mut window), Some(prev)) = (windows.single_mut(), state.prev_present_mode.take()) {
-        window.present_mode = prev;
-    }
     // Restore automatic realtime ticking
     commands.insert_resource(TimeUpdateStrategy::Automatic);
 }
@@ -583,8 +656,6 @@ fn teardown_recording(
 fn on_stop_offline_recording(
     _trigger: On<StopOfflineRecording>,
     mut state: ResMut<OfflineRecordingState>,
-    mut keep_awake: ResMut<lunco_core::KeepAwake>,
-    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut commands: Commands,
 ) {
     // Disarm unconditionally: a scenario that gives up on a shot while the gate is
@@ -593,8 +664,77 @@ fn on_stop_offline_recording(
     commands.remove_resource::<PendingShotStart>();
 
     if state.active {
-        teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut commands);
+        teardown_recording(&mut state, &mut commands);
         info!("[offline-record] stopped recording");
+    }
+}
+
+/// Sole applier of the two recording pacing knobs — the [`lunco_core::KeepAwake`]
+/// token and the present-mode uncap — driven off `state.active` instead of being
+/// called from the activation/teardown paths.
+///
+/// Reacting to the flag is what covers BOTH entry points with one piece of code.
+/// The `StartOfflineRecording` command path and the CLI `--record-offline` direct
+/// insert each used to (not) do this setup by hand, and they drifted: the CLI
+/// path skipped both knobs, so an unfocused CLI capture recorded through the
+/// `reactive_low_power` throttle — measured at 2–10 s per frame against ~50 ms
+/// awake, turning a ~1 minute episode into hours — and under `Fifo` (vsync) the
+/// render loop stayed pinned to the display refresh, a hard ~30 captured-FPS
+/// ceiling on a 60 Hz panel. Any future entry point inherits the knobs for free.
+///
+/// * **KeepAwake** states intent and stops there; the pacer (`sim_focus_pace` in
+///   `lunco-modelica`, the sole `WinitSettings` writer) applies it. Acquired on
+///   the rising edge of `active`, released on the falling edge, so the token
+///   stays balanced no matter which path started or ended the recording.
+/// * **Present mode** wants frames as fast as the machine can render them:
+///   virtual time still advances exactly `1/fps` per captured frame, so
+///   rendering faster changes only how long the capture takes, never what the
+///   video looks like. Applied whenever `active` holds and no previous mode is
+///   stashed — a retry loop, because CLI arming happens at app construction,
+///   before the primary window exists. Restored from the stash once `active`
+///   drops.
+fn enforce_recording_pacing(
+    mut state: ResMut<OfflineRecordingState>,
+    mut keep_awake: ResMut<lunco_core::KeepAwake>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut was_active: Local<bool>,
+) {
+    if state.active != *was_active {
+        *was_active = state.active;
+        if state.active {
+            keep_awake.acquire();
+            info!("[offline-record] power saving disabled (KeepAwake acquired)");
+        } else {
+            // Drop the wake request; the pacer restores the binary's idle policy.
+            keep_awake.release();
+        }
+    }
+
+    if state.active {
+        if state.prev_present_mode.is_none() {
+            if let Ok(mut window) = windows.single_mut() {
+                // Only vsynced modes are overridden. A window already presenting
+                // uncapped (`--no-vsync` ⇒ Mailbox, or networked builds) must be
+                // left alone: replacing a known-good Mailbox with AutoNoVsync
+                // lets the driver re-negotiate, and on compositors where the
+                // "NoVsync" chain falls back to Fifo that SLOWS the capture.
+                use bevy::window::PresentMode;
+                match window.present_mode {
+                    PresentMode::Mailbox | PresentMode::Immediate | PresentMode::AutoNoVsync => {}
+                    prev => {
+                        state.prev_present_mode = Some(prev);
+                        window.present_mode = PresentMode::AutoNoVsync;
+                        info!(
+                            "[offline-record] present mode uncapped to AutoNoVsync (was {prev:?})"
+                        );
+                    }
+                }
+            }
+        }
+    } else if state.prev_present_mode.is_some() {
+        if let Ok(mut window) = windows.single_mut() {
+            window.present_mode = state.prev_present_mode.take().unwrap();
+        }
     }
 }
 
@@ -618,6 +758,32 @@ struct PendingShotStart {
     /// log line. Without it a timeout could only say "not ready", which is exactly
     /// the diagnosis a human needs and cannot reconstruct after the fact.
     last_blocker: Option<String>,
+}
+
+/// Arm a recording at app construction — the CLI `--record-offline` path.
+///
+/// Arms, never starts: this inserts the same [`PendingShotStart`] the
+/// `StartOfflineRecording` command does, so the CLI shot waits on the SAME
+/// readiness gate and gets the same pacing setup. The CLI used to insert an
+/// `active` [`OfflineRecordingState`] directly, which meant capture began at
+/// frame 0 of the process — its opening frames were permanently black (nothing
+/// loaded yet), the exact defect [`scene_visuals_ready`] exists to prevent.
+/// [`READY_TIMEOUT`] counting from construction is correct here: it caps the
+/// whole boot-plus-load wait, and a scene that never becomes ready still
+/// records (loudly) rather than never starting.
+pub fn arm_recording_at_startup(
+    app: &mut bevy::app::App,
+    output_dir: std::path::PathBuf,
+    fps: u32,
+) {
+    app.insert_resource(PendingShotStart {
+        output_dir,
+        fps: fps.max(1),
+        requested_at: web_time::Instant::now(),
+        ready_streak: 0,
+        ready_since: None,
+        last_blocker: None,
+    });
 }
 
 /// How long the gate will hold a shot before recording anyway.
@@ -773,8 +939,6 @@ fn scene_visuals_ready(
 fn start_recording_when_scene_ready(
     pending: Option<ResMut<PendingShotStart>>,
     mut state: ResMut<OfflineRecordingState>,
-    mut keep_awake: ResMut<lunco_core::KeepAwake>,
-    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     meshes: Query<&bevy::mesh::Mesh3d>,
     asset_server: Res<AssetServer>,
     // `Option`: the bus belongs to the workbench UI, which a headless/API-only
@@ -822,7 +986,7 @@ fn start_recording_when_scene_ready(
         );
     }
 
-    activate_recording(&pending, &mut state, &mut keep_awake, &mut windows, &mut commands);
+    activate_recording(&pending, &mut state, &mut commands);
     commands.remove_resource::<PendingShotStart>();
 }
 
@@ -832,7 +996,7 @@ fn start_recording_when_scene_ready(
 /// Runs in `Last` so it writes the strategy that Bevy's `TimeSystem` (in `First`)
 /// will read at the top of the NEXT frame. That ordering is what makes the
 /// lock-step deterministic: exactly one strategy write per frame, decided after
-/// every other system — including the `deliver_offline_frame` observer — has run.
+/// every other system has run.
 ///
 /// A second writer of `TimeUpdateStrategy` breaks this outright: whichever system
 /// runs later in the frame wins, and re-freezing to ZERO after a step is scheduled
@@ -840,12 +1004,21 @@ fn start_recording_when_scene_ready(
 /// script sequencing the shots is starved — it can never reach its
 /// `StopOfflineRecording`, so recording spools frames until the process is killed.
 ///
-/// The cycle alternates two render frames per captured frame:
-///   1. **advance** — clock steps `1/fps`, sim and `FixedUpdate` run, scene renders.
-///   2. **capture** — request the screenshot, clock frozen until it lands.
+/// The cycle is PIPELINED — one captured frame per render frame at steady state:
+/// every `Last`, the state the frame just rendered (if it carried a fresh `1/fps`
+/// step) gets a capture request, and the next step is scheduled immediately —
+/// without waiting for the readback. Waiting was the old design, and it was the
+/// recording's dominant cost: a GPU readback is ~50–60 ms of latency during which
+/// the pixels CANNOT change (the snapshot happens at request time), so freezing
+/// the clock until it delivered bought nothing and capped capture at ~9 fps.
 ///
-/// Freezing while a capture is in flight is what keeps a slow (multi-frame)
-/// readback from advancing time more than once per saved frame.
+/// Determinism is the same contract as the serial design, enforced by ordering
+/// within this one system: a scheduled step is ALWAYS captured before the next
+/// step is scheduled (capture-before-advance below), every capture carries its
+/// slot index and destination in its own [`OfflineFrameCapture`], and in-flight
+/// readbacks/saves are bounded by [`MAX_OUTSTANDING_CAPTURES`] /
+/// [`MAX_IN_FLIGHT_SAVES`] back-pressure — under pressure the clock holds, which
+/// re-renders an already-captured state and captures nothing, never skips.
 fn drive_offline_clock(
     mut state: ResMut<OfflineRecordingState>,
     // Armed-but-not-started is a clock phase like any other, so it is owned HERE.
@@ -853,6 +1026,7 @@ fn drive_offline_clock(
     // of `TimeUpdateStrategy`, which is the exact failure this system's doc warns
     // about.
     pending: Option<Res<PendingShotStart>>,
+    save_queue: Res<OfflineSaveQueue>,
     mut commands: Commands,
 ) {
     // PHASE 0 — armed, waiting for the scene. Freeze virtual time.
@@ -888,77 +1062,145 @@ fn drive_offline_clock(
 
     let frame_dur = std::time::Duration::from_secs_f64(1.0 / state.fps as f64);
 
-    if state.is_waiting_for_frame {
-        // Capture in flight — hold the clock so the pending frame stays the one
-        // that was rendered when it was requested.
+    // CAPTURE FIRST, unconditionally. If this frame rendered a fresh step, that
+    // step already happened — skipping its capture under back-pressure would
+    // leave a 2/fps jump between adjacent files, the silent-hole class of bug
+    // the failure policy aborts recordings over. Pressure may only pause
+    // *advancing*, never drop a step that was taken.
+    if state.advanced_this_frame {
+        state.advanced_this_frame = false;
+        commands.spawn((
+            Screenshot::primary_window(),
+            OfflineFrameCapture {
+                index: state.frame_index,
+                path: state
+                    .output_dir
+                    .join(format!("frame_{:06}.png", state.frame_index)),
+                requested_at: web_time::Instant::now(),
+            },
+        ));
+        state.frame_index += 1;
+        state.outstanding_captures += 1;
+    }
+
+    if state.outstanding_captures >= MAX_OUTSTANDING_CAPTURES
+        || save_queue.tasks.len() >= MAX_IN_FLIGHT_SAVES
+    {
+        // Readback or save side is saturated — hold the clock until a slot
+        // frees. The held frame re-renders an already-captured state, so the
+        // capture branch above stays idle; nothing is skipped, nothing grows.
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(
             std::time::Duration::ZERO,
         ));
-    } else if state.frame_just_captured {
-        // A frame landed: let the next frame advance by exactly one step.
-        state.frame_just_captured = false;
-        commands.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dur));
     } else {
-        // Time advanced this frame and the scene is rendered — capture it, then
-        // hold the clock until the readback delivers.
-        commands.spawn(Screenshot::primary_window());
-        state.is_waiting_for_frame = true;
-        commands.insert_resource(TimeUpdateStrategy::ManualDuration(
-            std::time::Duration::ZERO,
-        ));
+        // Schedule the next deterministic step; next `Last` captures it.
+        state.advanced_this_frame = true;
+        commands.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dur));
     }
 }
 
 /// Observer for Bevy's ScreenshotCaptured event.
 fn deliver_offline_frame(
     trigger: On<ScreenshotCaptured>,
-    requests: Query<&PendingCapture>,
+    captures: Query<&OfflineFrameCapture>,
     mut state: ResMut<OfflineRecordingState>,
-    mut keep_awake: ResMut<lunco_core::KeepAwake>,
-    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
-    mut commands: Commands,
+    mut queue: ResMut<OfflineSaveQueue>,
 ) {
-    if !state.active || !state.is_waiting_for_frame {
-        return;
-    }
-
     let event = trigger.event();
-    // A frame with a `PendingCapture` belongs to `deliver_screenshot` — an HTTP
-    // screenshot or a `take_photo` taken mid-recording, not the sequence's frame.
-    if requests.get(event.entity).is_ok() {
-        return;
-    }
-    let Ok(dyn_img) = event.image.clone().try_into_dynamic() else {
-        error!("[offline-record] failed to convert image for frame {}", state.frame_index);
-        state.is_waiting_for_frame = false;
+    // Positive identification via the marker — see [`OfflineFrameCapture`]. Not
+    // gated on `state.active`: a delivery arriving after stop belongs to a step
+    // taken while active, and the take's tail must land (drain), even if the
+    // next shot is already recording into a different directory.
+    let Ok(capture) = captures.get(event.entity) else {
         return;
     };
+    let frame_idx = capture.index;
+    let path = capture.path.clone();
+    let readback = capture.requested_at.elapsed().as_secs_f32() * 1000.0;
+    state.outstanding_captures = state.outstanding_captures.saturating_sub(1);
 
-    let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
+    // Hand the frame to a worker immediately: convert+encode+write (~70 ms
+    // measured at 2560×1552) never touches the render loop's critical path. The
+    // clone is the one cost that must stay here — the event only lends us the
+    // image.
+    //
+    // Failure policy is drain-and-abort, surfaced in [`pump_offline_saves`] up
+    // to [`MAX_IN_FLIGHT_SAVES`] frames late: the recording aborts loudly and
+    // the log names the lost frame, but frames already handed to workers still
+    // land. The sequence can therefore end a few frames after the failed index —
+    // never with a silent mid-sequence hole, which is what the abort exists to
+    // prevent (a disk filling mid-capture is the ordinary trigger, and the video
+    // encoder would happily splice across a gap).
+    //
+    // Default PNG compression, on purpose. `CompressionType::Fast` was tried and
+    // MEASURED (2026-07-19, ~390-frame A/B at 2560×1552, default sandbox scene):
+    // 65 ms vs 77.5 ms save — Fast was SLOWER at the same ~4 MB/frame. If save
+    // cost matters again, the lever is more overlap, not a cheaper deflate.
+    let t_clone = web_time::Instant::now();
+    let image = event.image.clone();
+    let t_clone = t_clone.elapsed();
+    let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+        let dyn_img = image
+            .try_into_dynamic()
+            .map_err(|e| format!("frame {frame_idx} convert failed: {e}"))?;
+        dyn_img
+            .save(&path)
+            .map_err(|e| format!("frame {frame_idx} save failed: {e}"))?;
+        Ok(frame_idx)
+    });
+    queue.tasks.push(task);
 
-    // Save the image synchronously to disk. A failed write ABORTS the recording:
-    // continuing would advance `frame_index` past a frame that never landed, leaving
-    // a hole in the sequence. Nothing downstream notices — the scenario keeps
-    // sequencing off `frame_index`, and the encoder happily renders the remaining
-    // files as a continuous shot that silently jumps. A disk that fills mid-capture
-    // is the ordinary way to hit this, so fail loudly at the first bad frame rather
-    // than emit a corrupt take.
-    if let Err(e) = dyn_img.save(&path) {
-        error!(
-            "[offline-record] failed to save frame {} ({e}) — aborting recording to \
-             avoid a sequence with holes in it",
-            state.frame_index
-        );
-        teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut commands);
+    debug!(
+        "[offline-record] frame {}: readback={:.1}ms clone={:.1}ms outstanding={} saves_in_flight={}",
+        frame_idx,
+        readback,
+        t_clone.as_secs_f32() * 1000.0,
+        state.outstanding_captures,
+        queue.tasks.len(),
+    );
+}
+
+/// Collect finished async frame saves; on the FIRST failure, abort the recording.
+///
+/// The abort arrives up to [`MAX_IN_FLIGHT_SAVES`] frames after the write that
+/// failed — the price of taking the save off the critical path. Policy is
+/// drain-and-abort: stop capturing (teardown), let already-spawned saves finish
+/// (nothing is cancelled — the queue keeps draining while inactive), and keep
+/// the failed frame's index in the log so the take's usable range is knowable.
+/// The alternative — discarding the queue — would throw away frames captured
+/// before the failure that would still land fine.
+fn pump_offline_saves(
+    mut queue: ResMut<OfflineSaveQueue>,
+    mut state: ResMut<OfflineRecordingState>,
+    mut commands: Commands,
+) {
+    if queue.tasks.is_empty() {
         return;
     }
-    trace!("[offline-record] saved frame {}", state.frame_index);
-
-    state.frame_index += 1;
-    state.is_waiting_for_frame = false;
-    // `drive_offline_clock` owns `TimeUpdateStrategy`; just signal that a frame
-    // landed so it can schedule the single `1/fps` step.
-    state.frame_just_captured = true;
+    use bevy::tasks::futures_lite::future;
+    let mut first_failure: Option<String> = None;
+    queue.tasks.retain_mut(|task| {
+        match future::block_on(future::poll_once(&mut *task)) {
+            None => true, // still saving
+            Some(Ok(_frame)) => false,
+            Some(Err(e)) => {
+                if first_failure.is_none() {
+                    first_failure = Some(e);
+                }
+                false
+            }
+        }
+    });
+    if let Some(e) = first_failure {
+        error!(
+            "[offline-record] async frame save failed ({e}) — aborting recording; \
+             the sequence is usable up to the frame named above, later frames may \
+             be missing"
+        );
+        if state.active {
+            teardown_recording(&mut state, &mut commands);
+        }
+    }
 }
 
 struct GetOfflineRecordingStatusProvider;
@@ -967,11 +1209,17 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
         "GetOfflineRecordingStatus"
     }
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::schema::ApiResponse {
+        let pending_saves = world.resource::<OfflineSaveQueue>().tasks.len();
         let state = world.resource::<OfflineRecordingState>();
         lunco_api::schema::ApiResponse::ok(serde_json::json!({
             "active": state.active,
             "frame_index": state.frame_index,
             "is_waiting_for_frame": state.is_waiting_for_frame,
+            // Captures whose GPU readback hasn't delivered yet.
+            "outstanding_captures": state.outstanding_captures,
+            // Frames still deflating/writing on workers. `active == false` with
+            // a non-zero count means a stopped shot is draining its tail.
+            "pending_saves": pending_saves,
         }))
     }
 }
