@@ -52,6 +52,11 @@ pub mod lunco_source;
 pub mod missions;
 pub mod models;
 pub mod msl;
+/// PDS3 `.IMG` raster decode (attached or detached label) — lets the `dem`/
+/// `map` pipelines ingest non-GeoTIFF DEM and ortho products. Native-only:
+/// ingest is an offline build step, never a wasm/page path.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pds_img;
 pub mod process;
 /// Scheme → local filesystem root, as an open registry — the read-side mirror of
 /// [`register_lunco_asset_sources`].

@@ -38,7 +38,8 @@ fn main() {
     // workspace membership needed) and each asset's `dest` resolves against
     // the Twin root, so files download *into* the Twin. Lets a standalone
     // project (e.g. a school twin on disk) self-provision its terrain DTM,
-    // models, etc. Mutually exclusive with `-p` / `-a`.
+    // models, etc. Mutually exclusive with `-p`; composes with `-a KEY` to
+    // fetch/process a single Twin asset.
     let mut twin_dir: Option<&str> = None;
 
     let mut i = 0;
@@ -85,12 +86,19 @@ fn main() {
 
     // `--twin` selects the Twin download/process/list path, which reads the
     // folder's own Assets.toml and resolves dests against the Twin root.
+    // `-a KEY` composes with it: a school twin that lists every candidate
+    // territory would otherwise pull multiple GB on each provisioning run.
     if let Some(dir) = twin_dir {
         let twin_root = PathBuf::from(dir);
-        let result = match action {
-            "download" => download::download_all_for_twin(&twin_root).map_err(|e| e.to_string()),
-            "process" => process_all_for_twin(&twin_root),
-            "list" => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
+        let result = match (action, asset_key) {
+            ("download", Some(key)) => {
+                download::download_one_for_twin(&twin_root, key).map_err(|e| e.to_string())
+            }
+            ("download", None) => {
+                download::download_all_for_twin(&twin_root).map_err(|e| e.to_string())
+            }
+            ("process", key) => process_for_twin(&twin_root, key),
+            ("list", _) => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
             _ => unreachable!(),
         };
         if let Err(e) = result {
@@ -155,11 +163,36 @@ fn process_all(
     dest_root: &std::path::Path,
     twin_root: Option<&std::path::Path>,
 ) -> Result<(), String> {
+    process_filtered(folder, dest_root, twin_root, None)
+}
+
+/// [`process_all`] with an optional `-a KEY` filter — the process-side twin
+/// of the download filter, so a single territory can be re-baked without
+/// touching every other entry's sources.
+fn process_filtered(
+    folder: &std::path::Path,
+    dest_root: &std::path::Path,
+    twin_root: Option<&std::path::Path>,
+    only_key: Option<&str>,
+) -> Result<(), String> {
     let manifest = download::AssetManifest::from_crate_dir(folder)
         .map_err(|e| format!("Failed to read Assets.toml: {}", e))?;
 
+    if let Some(key) = only_key {
+        if !manifest.assets.contains_key(key) {
+            return Err(format!(
+                "no asset `{}` in {}",
+                key,
+                folder.join("Assets.toml").display()
+            ));
+        }
+    }
+
     let mut processed = 0;
     for (key, entry) in &manifest.assets {
+        if only_key.is_some_and(|k| k != key) {
+            continue;
+        }
         if let Some(ref proc_cfg) = entry.process {
             let source_path = dest_root.join(&entry.dest);
             if !source_path.exists() {
@@ -189,8 +222,9 @@ fn process_all_for_crate(crate_dir: &std::path::Path) -> Result<(), String> {
 
 /// Process a Twin folder's `[*.process]` entries: sources + twin-targeted
 /// outputs both resolve against the Twin root (the `--twin <DIR>` path).
-fn process_all_for_twin(twin_root: &std::path::Path) -> Result<(), String> {
-    process_all(twin_root, twin_root, Some(twin_root))
+/// `only_key` narrows to a single entry (`-a KEY`).
+fn process_for_twin(twin_root: &std::path::Path, only_key: Option<&str>) -> Result<(), String> {
+    process_filtered(twin_root, twin_root, Some(twin_root), only_key)
 }
 
 fn process_all_workspace(ws_root: &PathBuf) -> Result<(), String> {
@@ -274,6 +308,8 @@ fn print_usage() {
     println!("  cargo run -p lunco-assets -- download -p NAME      Download for a specific crate");
     println!("  cargo run -p lunco-assets -- download -a KEY       Download a single asset by key");
     println!("  cargo run -p lunco-assets -- download -t DIR       Download a Twin folder's assets (into the Twin)");
+    println!("  cargo run -p lunco-assets -- download -t DIR -a KEY  Download one Twin asset by key (skips the rest)");
+    println!("  cargo run -p lunco-assets -- process  -t DIR -a KEY  Process one Twin asset by key");
     println!("  cargo run -p lunco-assets -- process               Process all downloaded assets");
     println!("  cargo run -p lunco-assets -- process -p NAME       Process assets for a crate");
     println!("  cargo run -p lunco-assets -- process  -t DIR       Process a Twin folder's assets");
@@ -284,7 +320,9 @@ fn print_usage() {
     println!("Process kinds (in an Assets.toml [name.process] section):");
     println!("  kind = \"texture\"  resize/re-encode an image (PNG/JPEG/TIFF/...) [default]");
     println!("  kind = \"gltf\"     clean a .glb for Bevy 0.18 (needs Node/npx)");
-    println!("  kind = \"dem\"      crop a square float32 heightmap + metadata.yaml from a raw LROC DTM");
+    println!("  kind = \"dem\"      crop a square georeferenced float32 heightmap from a raw DTM (GeoTIFF or PDS3 .IMG)");
+    println!("  kind = \"map\"      crop a co-registered ortho/shade/slope raster to the same ROI as an 8-bit PNG layer map");
+    println!("  kind = \"normalmap\" derive a world-space normal-map PNG from a DTM crop");
     println!();
     println!("Examples:");
     println!("  cargo run -p lunco-assets -- download -p lunco-modelica");

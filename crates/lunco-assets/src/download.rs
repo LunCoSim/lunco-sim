@@ -449,6 +449,24 @@ pub fn download_all_for_twin(twin_root: &Path) -> Result<(), DownloadError> {
     Ok(())
 }
 
+/// Downloads a single asset by key from a **Twin folder's** `Assets.toml` —
+/// the `-a KEY` filter composed with `--twin <DIR>`. A twin that manifests
+/// every candidate terrain site would otherwise pull multiple GB of DTMs on
+/// each provisioning run just to refresh one site.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_one_for_twin(twin_root: &Path, asset_key: &str) -> Result<(), DownloadError> {
+    let manifest = AssetManifest::from_crate_dir(twin_root)
+        .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
+    match manifest.assets.get(asset_key) {
+        Some(entry) => download_asset(entry, asset_key, Some(twin_root)),
+        None => Err(DownloadError::ManifestFailed(format!(
+            "no asset `{}` in {}",
+            asset_key,
+            twin_root.join("Assets.toml").display()
+        ))),
+    }
+}
+
 /// Downloads a single asset by key, searching every crate's
 /// `Assets.toml` across the workspace. Returns the first match.
 ///

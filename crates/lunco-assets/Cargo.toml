@@ -2,6 +2,10 @@
 name = "lunco-assets"
 version = "0.1.0"
 edition = "2021"
+# Every doc/manifest in the tree invokes `cargo run -p lunco-assets -- …`;
+# without this, cargo refuses (three [[bin]]s) and the documented command
+# form has never actually run.
+default-run = "lunco-assets"
 license.workspace = true
 description = "Unified asset management for LunCoSim — cache resolution, versioned downloads, texture processing, and loading abstraction"
 
