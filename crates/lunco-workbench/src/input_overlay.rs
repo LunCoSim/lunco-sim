@@ -2,24 +2,11 @@
 //!
 //! Visualizes simulator inputs for video generation or AI agent observation.
 //! Persisted via `lunco-settings` under the `"input_overlay"` key.
-//!
-//! **Off by default, opted into per scenario.** This answers "which keys is the
-//! demonstrator pressing", which is a question only a TEACHING context asks — a
-//! tutorial beat, or a recorded shot where someone is actively flying. Everywhere
-//! else it is chrome: it occupies the bottom of frame, it is baked into every
-//! captured frame by the offline recorder, and on a shot where nobody is touching
-//! the controls it shows an empty keyboard, which is worse than absent.
-//!
-//! Contrast with the vehicle HUD (`lunco-sandbox`'s rover HUD), which is NOT gated:
-//! attitude, speed and telemetry describe the VEHICLE and are wanted whenever one is
-//! on screen. This describes the OPERATOR, and is only wanted when the operator is
-//! the subject.
-//!
-//! Turn it on with `ToggleInputOverlay { enabled: true }`.
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_core::{Command, on_command, register_commands};
+use std::collections::HashSet;
 
 /// Persisted settings for the input overlay HUD.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
@@ -29,25 +16,24 @@ pub struct InputOverlaySettings {
     pub enabled: bool,
 }
 
-
-// DELIBERATELY NOT a `SettingsSection` — this is not a user preference.
-//
-// Whether the key readout is on belongs to the SCENE: a tutorial teaching the
-// controls wants it, a landing film does not. Persisting it makes that choice
-// outlive the scene that made it, so a tutorial run turns it on and every later
-// session — including an unattended recording — inherits it. That is a leak
-// across scenes and across sessions, and it is invisible until it shows up baked
-// into finished footage.
-//
-// So it resets to off on every launch and is opted into per scene, exactly like
-// the camera paths and the HUD state a scenario drives. A setting persists when
-// the USER owns the choice; this one the CONTENT owns.
+/// Simulated inputs from scripts or playback.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct SimulatedInputs {
+    pub keys: HashSet<KeyCode>,
+}
 
 /// Command to toggle the input overlay visibility.
 #[Command(default)]
 pub struct ToggleInputOverlay {
     /// `true` to show the overlay, `false` to hide it.
     pub enabled: bool,
+}
+
+/// Command to simulate a keyboard input for the overlay.
+#[Command(default)]
+pub struct SimulateInput {
+    pub key: String,
+    pub pressed: bool,
 }
 
 #[on_command(ToggleInputOverlay)]
@@ -62,10 +48,35 @@ fn on_toggle_input_overlay(
     }
 }
 
+#[on_command(SimulateInput)]
+fn on_simulate_input(
+    trigger: On<SimulateInput>,
+    mut simulated: ResMut<SimulatedInputs>,
+) {
+    let cmd = trigger.event();
+    let code = match cmd.key.as_str() {
+        "W" | "w" => Some(KeyCode::KeyW),
+        "A" | "a" => Some(KeyCode::KeyA),
+        "S" | "s" => Some(KeyCode::KeyS),
+        "D" | "d" => Some(KeyCode::KeyD),
+        "Space" | "space" => Some(KeyCode::Space),
+        "Shift" | "shift" => Some(KeyCode::ShiftLeft),
+        _ => None,
+    };
+    if let Some(c) = code {
+        if cmd.pressed {
+            simulated.keys.insert(c);
+        } else {
+            simulated.keys.remove(&c);
+        }
+    }
+}
+
 /// System to draw the input overlay HUD in the foreground of the primary egui context.
 pub fn draw_input_overlay(
     mut egui_ctx: EguiContexts,
     settings: Res<InputOverlaySettings>,
+    simulated: Res<SimulatedInputs>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
@@ -107,13 +118,13 @@ pub fn draw_input_overlay(
                         };
 
                         ui.label(egui::RichText::new("⌨").size(15.0).weak());
-                        draw_key(ui, "W", keys.pressed(KeyCode::KeyW));
-                        draw_key(ui, "A", keys.pressed(KeyCode::KeyA));
-                        draw_key(ui, "S", keys.pressed(KeyCode::KeyS));
-                        draw_key(ui, "D", keys.pressed(KeyCode::KeyD));
+                        draw_key(ui, "W", keys.pressed(KeyCode::KeyW) || simulated.keys.contains(&KeyCode::KeyW));
+                        draw_key(ui, "A", keys.pressed(KeyCode::KeyA) || simulated.keys.contains(&KeyCode::KeyA));
+                        draw_key(ui, "S", keys.pressed(KeyCode::KeyS) || simulated.keys.contains(&KeyCode::KeyS));
+                        draw_key(ui, "D", keys.pressed(KeyCode::KeyD) || simulated.keys.contains(&KeyCode::KeyD));
                         ui.separator();
-                        draw_key(ui, "Space", keys.pressed(KeyCode::Space));
-                        draw_key(ui, "Shift", keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
+                        draw_key(ui, "Space", keys.pressed(KeyCode::Space) || simulated.keys.contains(&KeyCode::Space));
+                        draw_key(ui, "Shift", keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) || simulated.keys.contains(&KeyCode::ShiftLeft));
                         ui.separator();
 
                         // Mouse visualizer
@@ -131,14 +142,12 @@ pub fn draw_input_overlay(
         });
 }
 
-register_commands!(on_toggle_input_overlay);
+register_commands!(on_toggle_input_overlay, on_simulate_input);
 
 /// Registers the input overlay resources, settings, commands, and systems.
 pub fn build_input_overlay(app: &mut App) {
-    // No `register_settings_section` — see the note on `InputOverlaySettings`. The
-    // resource starts at its `Default` (off) on every launch, so nothing a previous
-    // scene or session did can turn it on here.
     app.init_resource::<InputOverlaySettings>();
+    app.init_resource::<SimulatedInputs>();
     app.add_systems(bevy_egui::EguiPrimaryContextPass, draw_input_overlay);
     
     register_all_commands(app);
