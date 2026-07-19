@@ -123,11 +123,41 @@ pub struct CameraPath {
     /// `Tangent` (or `Target`, when the legacy whole-path `lunco:path:lookAt` rel
     /// is authored) key at t=0, so the lookup below needs no special case.
     pub aim: Vec<AimKey>,
+    /// The USD path behind every `Target` aim key, kept for the path's life.
+    ///
+    /// The aim target is bound BY PATH, continuously, not by entity once at
+    /// resolve. Two measured failure modes force this:
+    ///
+    /// 1. **Not spawned yet.** The path must resolve the moment its camera
+    ///    exists — the recording gate releases on the recorder's start EDGE, so
+    ///    a path that waited for its aim target could miss the release and hold
+    ///    at frame 0 forever. A target that spawns later (async reference) must
+    ///    still bind. Until then the key holds its `Tangent` placeholder.
+    /// 2. **Stale entity.** A prim path can be carried by more than one entity
+    ///    (spatial twin + data-side twin), and the entity first matched can
+    ///    lack a `Transform` or be despawned/replaced by a later load phase.
+    ///    Either way `world_pose` fails every frame and the camera silently
+    ///    holds one rotation for the whole episode — the recorded symptom was
+    ///    58 s of starfield with the vehicle never in frame.
+    ///
+    /// [`bind_aim_targets`] walks these every frame and patches
+    /// [`Self::aim`] whenever the live, `Transform`-carrying entity for the
+    /// path differs from what the key currently holds.
+    pub aim_sources: Vec<AimTargetSource>,
     /// Control points, in the curve prim's local space.
     pub points: Vec<Vec3>,
     pub basis: CurveBasis,
     /// `wrap = "periodic"` — the curve closes.
     pub periodic: bool,
+}
+
+/// The authored USD path behind one `Target` aim key — see [`CameraPath::aim_sources`].
+#[derive(Debug, Clone)]
+pub struct AimTargetSource {
+    /// Index into [`CameraPath::aim`] (stable: the track is sorted once, at resolve).
+    pub key: usize,
+    /// The target prim's USD path, looked up against spawned prims each frame.
+    pub path: String,
 }
 
 impl CameraPath {
@@ -400,21 +430,26 @@ pub fn resolve_camera_paths(
         // reporting anything — see `UsdRead::texts`/`reals`.
         let times = reader.reals(&path, "lunco:path:aim:times");
         let modes = reader.texts(&path, "lunco:path:aim:modes");
-        let targets: Vec<Entity> = reader
-            .rel_targets(&path, "lunco:path:aim:targets")
-            .iter()
-            .filter_map(by_path)
-            .collect();
+        // The RAW rel paths, not entity lookups. A "target" key is authored
+        // against a PRIM PATH, and the entity for that path is a moving target:
+        // it may not have spawned yet (async reference), may be shadowed by a
+        // non-spatial twin carrying the same path, or may be replaced by a later
+        // load phase. Every one of those, bound once here, produced a camera
+        // silently holding one rotation for a whole take. So resolve authors
+        // only the KEYS (with a tangent placeholder) plus the path each target
+        // key came from; `bind_aim_targets` owns entity binding, every frame.
+        let target_paths = reader.rel_targets(&path, "lunco:path:aim:targets");
 
-        let mut aim: Vec<AimKey> = Vec::new();
+        // (key, target path) — folded into indices after the sort.
+        let mut keys: Vec<(AimKey, Option<String>)> = Vec::new();
         let mut next_target = 0usize;
         for (i, t) in times.iter().enumerate() {
-            let mode = match modes.get(i).map(String::as_str) {
+            let (mode, source) = match modes.get(i).map(String::as_str) {
                 Some("target") => {
-                    let e = targets.get(next_target).copied();
+                    let tp = target_paths.get(next_target);
                     next_target += 1;
-                    match e {
-                        Some(e) => AimMode::Target(e),
+                    match tp {
+                        Some(tp) => (AimMode::Tangent, Some(tp.to_string())),
                         None => {
                             warn!(
                                 "[camera-path] {}: aim key {i} is \"target\" but \
@@ -422,25 +457,29 @@ pub fn resolve_camera_paths(
                                  falling back to tangent",
                                 prim.path
                             );
-                            AimMode::Tangent
+                            (AimMode::Tangent, None)
                         }
                     }
                 }
-                Some("manual") => AimMode::Manual,
-                _ => AimMode::Tangent,
+                Some("manual") => (AimMode::Manual, None),
+                _ => (AimMode::Tangent, None),
             };
-            aim.push(AimKey { t: *t, mode });
+            keys.push((AimKey { t: *t, mode }, source));
         }
-        aim.sort_by(|a, b| a.t.total_cmp(&b.t));
-        if aim.is_empty() {
+        keys.sort_by(|a, b| a.0.t.total_cmp(&b.0.t));
+        if keys.is_empty() {
             // No track: the whole-path rel, else tangent. One key, so `aim_at`
             // needs no empty case.
-            let mode = reader
-                .rel_target(&path, "lunco:path:lookAt")
-                .and_then(|t| by_path(&t))
-                .map(AimMode::Target)
-                .unwrap_or(AimMode::Tangent);
-            aim.push(AimKey { t: 0.0, mode });
+            let source = reader.rel_target(&path, "lunco:path:lookAt").map(|t| t.to_string());
+            keys.push((AimKey { t: 0.0, mode: AimMode::Tangent }, source));
+        }
+        let mut aim: Vec<AimKey> = Vec::with_capacity(keys.len());
+        let mut aim_sources: Vec<AimTargetSource> = Vec::new();
+        for (i, (key, source)) in keys.into_iter().enumerate() {
+            aim.push(key);
+            if let Some(p) = source {
+                aim_sources.push(AimTargetSource { key: i, path: p });
+            }
         }
 
         // `points3` accepts both `point3f[]` and `point3d[]` — a curve authored in
@@ -520,6 +559,7 @@ pub fn resolve_camera_paths(
             camera,
             domain,
             aim,
+            aim_sources,
             points,
             basis,
             periodic,
@@ -558,6 +598,14 @@ pub fn resolve_camera_paths(
                     aim_owned: true,
                     primed: false,
                 },
+                // Fence the interactive camera stack out. `MountedCamera` above is
+                // the only follower THIS crate knows about; the avatar's camera
+                // modes (free-flight, spring-arm, orbit) live a crate away, run in
+                // the same `PostUpdate`, and write the same `Transform` — measured
+                // as a whole take recorded at the spawn heading while the path
+                // moved the eye. The marker is the cross-crate contract; the
+                // avatar side honours it (guards + strip system).
+                lunco_core::CinematicCameraLock,
             ));
         info!(
             "[camera-path] {} → {:?} ({:?}, {} pts, {}s, {})",
@@ -568,6 +616,62 @@ pub fn resolve_camera_paths(
             duration,
             if on_wall { "wall clock" } else { "sim clock" }
         );
+    }
+}
+
+/// Keep every `Target` aim key bound to the live, spatial entity for its prim path.
+///
+/// Runs every frame; paths with no target keys filter out immediately. For each
+/// [`AimTargetSource`] the current best entity is the one that carries BOTH the
+/// prim path and a `Transform` — `drive_camera_paths` aims via `world_pose`,
+/// which starts from the entity's own `Transform`, so a data-side twin without
+/// one is not a usable target no matter how well its path matches. When the best
+/// entity differs from what the key holds (first spawn, respawn, or an earlier
+/// bind to a non-spatial twin) the key is patched in place; when no usable
+/// entity exists the key keeps its `Tangent` placeholder (fresh path) or its
+/// stale `Target` (drive holds the last good rotation) until one appears.
+pub fn bind_aim_targets(
+    q_targets: Query<(Entity, &UsdPrimPath, Has<CellCoord>), With<Transform>>,
+    mut q_paths: Query<(&UsdPrimPath, &mut CameraPath)>,
+) {
+    for (prim, mut path) in q_paths.iter_mut() {
+        if path.aim_sources.is_empty() {
+            continue;
+        }
+        // Bypass change detection until something actually rebinds: `iter_mut`
+        // hands out `Mut`, and marking every path changed every frame would be
+        // noise for any downstream `Changed<CameraPath>` reader.
+        let path = path.bypass_change_detection();
+        for i in 0..path.aim_sources.len() {
+            let source = &path.aim_sources[i];
+            // Best candidate for the path: prefer a grid-anchored entity
+            // (`CellCoord`) over a bare-`Transform` one. A physics vehicle is
+            // grid-direct; a bare-`Transform` match may be a data-side twin
+            // whose pose never tracks the vehicle.
+            let found = q_targets
+                .iter()
+                .filter(|(_, p, _)| p.path.as_str() == source.path.as_str())
+                .max_by_key(|(_, _, has_cell)| *has_cell)
+                .map(|(e, _, _)| e);
+            let Some(e) = found else {
+                if let AimMode::Target(stale) = path.aim[source.key].mode {
+                    warn_once!(
+                        "[camera-path] {}: aim target {} ({stale:?}) no longer has a \
+                         Transform-carrying entity — holding stale bind",
+                        prim.path, source.path
+                    );
+                }
+                continue;
+            };
+            let key = source.key;
+            if path.aim[key].mode != AimMode::Target(e) {
+                info!(
+                    "[camera-path] {}: aim key {key} bound to {} ({e:?})",
+                    prim.path, source.path
+                );
+                path.aim[key].mode = AimMode::Target(e);
+            }
+        }
     }
 }
 
@@ -593,7 +697,10 @@ pub fn drive_camera_paths(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut q_cams: Query<&mut CameraPathDriven>,
+    mut tick: Local<u32>,
 ) {
+    *tick = tick.wrapping_add(1);
+    let chatty = *tick % 100 == 0;
     for (curve_entity, path) in q_paths.iter() {
         let Ok(pb) = q_playback.get(path.domain) else {
             continue;
@@ -611,6 +718,13 @@ pub fn drive_camera_paths(
         let Some((curve_pos, curve_rot)) =
             lunco_core::coords::world_pose(curve_entity, &q_parents, &q_grids, &q_spatial)
         else {
+            // Transient during load (grid ancestry not spawned). If it
+            // PERSISTS the camera is never primed and never driven — a whole
+            // take records from the camera's spawn pose, so say it once.
+            warn_once!(
+                "[camera-path] curve {curve_entity:?} has no resolvable world pose — \
+                 camera not driven"
+            );
             continue;
         };
         let at = |u: f32| -> DVec3 {
@@ -625,8 +739,25 @@ pub fn drive_camera_paths(
         let look_dir = match path.aim_at(t) {
             AimMode::Target(e) => {
                 match lunco_core::coords::world_pose(e, &q_parents, &q_grids, &q_spatial) {
-                    Some((target, _)) => Some((target - world).as_vec3()),
-                    None => None, // target despawned — hold the last rotation
+                    Some((target, _)) => {
+                        info_once!(
+                            "[camera-path] target aim live: eye {:?} -> target {:?}",
+                            world, target
+                        );
+                        Some((target - world).as_vec3())
+                    }
+                    None => {
+                        // Target despawned (or its Transform is gone) — hold the
+                        // last rotation. Loud, because a whole take can record
+                        // with the camera frozen on one heading if this
+                        // persists; `bind_aim_targets` is responsible for
+                        // rebinding a live entity.
+                        warn_once!(
+                            "[camera-path] aim target {e:?} has no resolvable pose — \
+                             holding last rotation"
+                        );
+                        None
+                    }
                 }
             }
             AimMode::Tangent => Some((at((u + 1e-3).min(1.0)) - world).as_vec3()),
@@ -635,6 +766,12 @@ pub fn drive_camera_paths(
             AimMode::Manual => None,
         };
 
+        if chatty {
+            info!(
+                "[camera-path] drive t={t:.2} u={u:.3} eye={world:?} aim={:?} look={look_dir:?}",
+                path.aim_at(t)
+            );
+        }
         if let Ok(mut driven) = q_cams.get_mut(path.camera) {
             // The pose is the curve's value at `t` — no blend with any previous
             // sample, so it carries no history and no dependence on when the frame
@@ -681,14 +818,26 @@ fn find_grid(from: Entity, q_parents: &Query<&ChildOf>, q_is_grid: &Query<(), Wi
 pub fn apply_camera_paths(
     q_grids: Query<&Grid>,
     mut q: Query<(&mut CellCoord, &mut Transform, &ChildOf, &CameraPathDriven)>,
+    mut tick: Local<u32>,
 ) {
+    *tick = tick.wrapping_add(1);
+    let chatty = *tick % 100 == 0;
     for (mut cell, mut tf, child_of, driven) in q.iter_mut() {
         if !driven.primed {
             continue;
         }
         let Ok(grid) = q_grids.get(child_of.parent()) else {
+            if chatty {
+                warn!("[camera-path] apply: camera parent is not a grid — write skipped");
+            }
             continue;
         };
+        if chatty {
+            info!(
+                "[camera-path] apply world={:?} owned={} rot={:?}",
+                driven.target_world, driven.aim_owned, driven.target_rot
+            );
+        }
         // Re-bin the GRID-ABSOLUTE position into `(cell, local)` — the same write-back
         // `follow_mounted_cameras` does, and the reason the sample is kept absolute:
         // a local `Transform` alone is meaningless across a cell boundary.

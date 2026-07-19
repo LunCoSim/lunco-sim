@@ -740,6 +740,12 @@ impl Plugin for LunCoAvatarPlugin {
         // fast-forwarding the simulation must not paralyse or double-speed the user's
         // view. None of them follow an avian body at chase range, so they need no
         // fixed-step lockstep.
+        // The cinematic-lock janitor runs in PreUpdate so a lock inserted (or a
+        // mode re-inserted by ReleaseVessel) is stripped before this frame's
+        // camera systems reason about mode components. The Without<…> guards on
+        // those systems are the same-frame protection; this is the cleanup.
+        app.add_systems(PreUpdate, strip_camera_modes_from_locked);
+
         app.add_systems(PostUpdate, (
             orbital_exit_restore_system,
             // Entry half of the scroll transit — must see the free-flight scroll BEFORE
@@ -1027,7 +1033,7 @@ fn update_spring_arm_impl(
         &ChildOf,
         Option<&SurfaceRelativeMode>,
         &mut CameraZoomInput,
-    ), (With<Avatar>, Without<FrameBlend>)>,
+    ), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
@@ -1206,7 +1212,7 @@ fn spring_arm_system(
         &ChildOf,
         Option<&SurfaceRelativeMode>,
         &mut CameraZoomInput,
-    ), (With<Avatar>, Without<FrameBlend>)>,
+    ), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
@@ -1242,7 +1248,7 @@ fn spring_arm_paused_system(
         &ChildOf,
         Option<&SurfaceRelativeMode>,
         &mut CameraZoomInput,
-    ), (With<Avatar>, Without<FrameBlend>)>,
+    ), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
@@ -1512,7 +1518,7 @@ fn orbit_system(
     // Wall-rooted interaction clock: orbit smoothing (`alpha = 1 - exp(-rate·dt)`) wants
     // a constant `dt` that does not rate-scale with the sim.
     time: lunco_time::InteractionTime,
-    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf, &mut CameraZoomInput, Option<&OrbitFrameSample>), (With<Avatar>, Without<FrameBlend>)>,
+    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf, &mut CameraZoomInput, Option<&OrbitFrameSample>), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<&CelestialBody>,
@@ -1884,6 +1890,47 @@ fn orbit_system(
     }
 }
 
+/// Strip interactive camera-mode components off a cinematically-locked camera.
+///
+/// [`lunco_core::CinematicCameraLock`] marks a camera whose pose is owned by an
+/// authored driver (a USD camera path). The mode components arrive anyway: the
+/// avatar SPAWNS with `FreeFlightCamera`, and `ReleaseVessel` re-inserts it —
+/// both legitimately, both unaware of the lock. The `Without<…>` guards on the
+/// mode systems already keep them from writing the locked `Transform`; this
+/// removes the stale components too, so mode-transition systems (which key on
+/// component presence, not on writes) don't reason about a camera they don't
+/// own. Runs whenever a locked avatar still carries a mode component; steady
+/// state is an empty query.
+fn strip_camera_modes_from_locked(
+    mut commands: Commands,
+    q: Query<
+        Entity,
+        (
+            With<lunco_core::CinematicCameraLock>,
+            Or<(
+                With<FreeFlightCamera>,
+                With<SpringArmCamera>,
+                With<OrbitCamera>,
+                With<SurfaceCamera>,
+                With<FrameBlend>,
+            )>,
+        ),
+    >,
+) {
+    for e in q.iter() {
+        info!("[avatar] {e:?} is cinematically locked — stripping interactive camera modes");
+        commands
+            .entity(e)
+            .remove::<FreeFlightCamera>()
+            .remove::<SpringArmCamera>()
+            .remove::<OrbitCamera>()
+            .remove::<SurfaceCamera>()
+            .remove::<FrameBlend>()
+            .remove::<avian3d::prelude::TranslationInterpolation>()
+            .remove::<avian3d::prelude::RotationInterpolation>();
+    }
+}
+
 /// FreeFlightCamera system: moves the camera in absolute coordinates.
 ///
 /// Only runs when `FreeFlightCamera` is present AND no `FrameBlend` is active.
@@ -1908,7 +1955,7 @@ fn freeflight_system(
         &CellCoord,
         &ChildOf,
         Option<&SurfaceRelativeMode>,
-    ), (With<Avatar>, Without<FrameBlend>, Without<OrbitCamera>)>,
+    ), (With<Avatar>, Without<FrameBlend>, Without<OrbitCamera>, Without<lunco_core::CinematicCameraLock>)>,
     q_grids: Query<&Grid>,
     q_world: Query<(), With<lunco_core::WorldGrid>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
@@ -2081,7 +2128,7 @@ fn surface_camera_system(
         &SurfaceCamera,
         &CellCoord,
         &ChildOf,
-    ), (With<Avatar>, Without<FrameBlend>)>,
+    ), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
     q_grids: Query<&Grid>,
     q_world: Query<(), With<lunco_core::WorldGrid>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
@@ -2128,7 +2175,7 @@ fn apply_fly(
         Has<FreeFlightCamera>,
         Has<SurfaceCamera>,
         Option<&SurfaceRelativeMode>,
-    ), With<Avatar>>,
+    ), (With<Avatar>, Without<lunco_core::CinematicCameraLock>)>,
     q_grids: Query<&Grid>,
     q_world: Query<(), With<lunco_core::WorldGrid>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
@@ -2276,7 +2323,7 @@ fn avatar_behavior_input_system(
     mut q_orbit: Query<&mut OrbitCamera, With<Avatar>>,
     mut q_freeflight: Query<&mut FreeFlightCamera, With<Avatar>>,
     mut q_surface: Query<&mut SurfaceCamera, With<Avatar>>,
-    mut q_tf: Query<(&mut Transform, &CellCoord, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
+    mut q_tf: Query<(&mut Transform, &CellCoord, &ChildOf), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
     q_grids: Query<&Grid>,
     sensitivity: Res<MouseSensitivity>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -2517,10 +2564,10 @@ pub fn avatar_raycast_possession(
     if let Some(target) = body_hit {
         commands.trigger(FocusTarget { avatar: Some(avatar_entity), target });
     } else if let Some(target) = spacecraft_hit {
-        commands.trigger(PossessVessel { avatar: Some(avatar_entity), target });
+        commands.trigger(PossessVessel { avatar: Some(avatar_entity), target, bind_camera: true });
     } else if let Some(target) = nearest_clickable {
         if q_vessel.get(target).is_ok() {
-            commands.trigger(PossessVessel { avatar: Some(avatar_entity), target });
+            commands.trigger(PossessVessel { avatar: Some(avatar_entity), target, bind_camera: true });
         } else {
             commands.trigger(FollowTarget { avatar: Some(avatar_entity), target });
         }
@@ -2756,6 +2803,22 @@ fn on_possess_command(
     // Idempotent: already controlling this exact target — no-op.
     if let Some(link) = existing_link {
         if link.vessel_entity == cmd.target { return; }
+    }
+
+    // Camera-less possession. The authority claim — what actually flips the
+    // vessel's `piloted` gate — already ran in `record_possession_authority`,
+    // and the caller has declared the VIEW is not ours to touch: a recording
+    // scenario drives the vessel through ports while an authored camera path
+    // owns the camera, and the chase-camera bind below would land on that very
+    // path-driven avatar and steal the shot. The `ControllerLink` is NOT camera
+    // work though — it is the control/telemetry binding the vessel HUD keys on
+    // (`draw_rover_hud` shows exactly when the avatar carries one) — so it is
+    // still bound before bailing.
+    if !cmd.bind_camera {
+        commands
+            .entity(avatar_ent)
+            .try_insert(ControllerLink { vessel_entity: cmd.target });
+        return;
     }
 
     // Compute camera absolute position in root frame.

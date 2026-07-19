@@ -19,6 +19,20 @@ pub struct PossessVessel {
     pub avatar: Option<Entity>,
     /// The entity to possess (becomes the controlled vessel).
     pub target: Entity,
+    /// Whether possession also rebinds the avatar's camera to the chase rig —
+    /// the default, interactive behaviour. `false` claims control authority
+    /// only: what a recording scenario wants, where the script drives the
+    /// vessel through ports while an authored camera path owns the view.
+    /// (With no explicit avatar the camera bind falls back to "any local
+    /// avatar" — in a recording scene that IS the path-driven camera, and the
+    /// `SpringArmCamera` would silently steal the shot.)
+    #[serde(default = "default_true")]
+    #[reflect(default = "default_true")]
+    pub bind_camera: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Release possession of the currently controlled vessel.

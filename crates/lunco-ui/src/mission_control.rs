@@ -312,7 +312,7 @@ impl Panel for MissionControl {
             }
             if let Some(target) = possess {
                 ctx.defer(move |world| {
-                    world.trigger(PossessVessel { avatar: Some(av), target });
+                    world.trigger(PossessVessel { avatar: Some(av), target, bind_camera: true });
                 });
             }
             if release {

@@ -2538,6 +2538,22 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
 }
 
 fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World, theme: &lunco_theme::Theme) {
+    // ── Clean capture ───────────────────────────────────────────────
+    // A frame the offline recorder is capturing is a FILM frame: the whole
+    // workbench chrome — menu/title bar, status strip (and its FPS readout),
+    // activity bar, dock — must not be burnt into the footage. Skipping this
+    // pass while a recording is active leaves the 3D view full-bleed; the
+    // deliberate overlays (input HUD, vessel telemetry, notifications) are
+    // drawn by their own systems and survive. Scoped to `active`, so the
+    // editor comes back the instant the recorder stops — and between shots,
+    // where no frame is captured, any flicker is invisible in the footage.
+    if world
+        .get_resource::<screenshot::OfflineRecordingState>()
+        .is_some_and(|r| r.active)
+    {
+        return;
+    }
+
     // ── Edge resize (custom-decorations only) ───────────────────────
     // Bevy's `decorations: false` strips the WM resize handles too, so
     // we re-implement them: when the pointer hovers an N-pixel border,
