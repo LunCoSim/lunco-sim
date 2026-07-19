@@ -96,13 +96,42 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     if !texts.is_empty() {
         return json!(texts);
     }
-    // `int[]` last, matched on the raw `Value`: the fixed-array `TryFrom<Value>`
-    // impls do not cover integer vectors, so `scalar::<Vec<i32>>` does not
-    // compile, let alone read. Same direct match `read_int_array` in
+    // Everything left is matched on the raw `Value`.
+    //
+    // SCALAR VECTORS ARE THE IMPORTANT CASE, and they were missing until
+    // 19 Jul 2026. `xformOp:translate` / `:scale` are `double3`
+    // (`Value::Vec3d`); no typed reader above matches one, so every transform op
+    // in every scene read back as `null`.
+    //
+    // That was not merely a gap, it was a FALSE GREEN. `t_no_local_translate` in
+    // the rhai test lib asserts a translate is ABSENT, `usd_attr` maps a null to
+    // `()`, and `t_absent` accepts `()` as a pass. So the check written
+    // specifically to catch a stray `xformOp:translate` on a NurbsPatch — the
+    // 3.6 m shell offset the whole suite exists for — could not have failed no
+    // matter what was authored. A reader that cannot see a type silently turns
+    // every assertion about that type into a tautology, which is worse than
+    // having no assertion at all.
+    //
+    // `int[]` needs the raw match for a different reason: the fixed-array
+    // `TryFrom<Value>` impls do not cover integer vectors, so `scalar::<Vec<i32>>`
+    // does not compile, let alone read. Same direct match `read_int_array` in
     // lunco-usd-bevy uses (private there, so this restates it rather than
-    // widening that crate's surface for one caller). Covers the `int[]` counts
-    // a trimmed NurbsPatch carries: `trimCurve:counts`, `vertexCounts`, `orders`.
+    // widening that crate's surface for one caller). Covers the `int[]` counts a
+    // trimmed NurbsPatch carries: `trimCurve:counts`, `vertexCounts`, `orders`.
     match view.attr_value(prim, name) {
+        // Scalar 2/3/4-vectors as flat JSON arrays — the same shape `points3`
+        // gives each element of a `point3f[]`, so `v[1]` means "y" whether the
+        // caller is reading one translate or one control point.
+        Some(Value::Vec2f(v)) => json!([v.x, v.y]),
+        Some(Value::Vec2d(v)) => json!([v.x, v.y]),
+        Some(Value::Vec2i(v)) => json!([v.x, v.y]),
+        Some(Value::Vec3f(v)) => json!([v.x, v.y, v.z]),
+        Some(Value::Vec3d(v)) => json!([v.x, v.y, v.z]),
+        Some(Value::Vec3i(v)) => json!([v.x, v.y, v.z]),
+        Some(Value::Vec4f(v)) => json!([v.x, v.y, v.z, v.w]),
+        Some(Value::Vec4d(v)) => json!([v.x, v.y, v.z, v.w]),
+        Some(Value::Vec4i(v)) => json!([v.x, v.y, v.z, v.w]),
+
         Some(Value::IntVec(v)) if !v.is_empty() => json!(v),
         Some(Value::Int64Vec(v)) if !v.is_empty() => {
             json!(v.iter().map(|&x| x as i64).collect::<Vec<_>>())

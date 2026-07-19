@@ -3,9 +3,11 @@
 // TEST-ONLY. This lives under `assets/scripting/tests/`, NOT
 // `assets/scripting/prelude/` — `lunco_assets::scripting::prelude_files()` scans
 // only the prelude directory, so nothing here is ever auto-loaded into a running
-// scenario. Test code must not ride along in production scripts; the runner
-// (`scripts/api/rhai_test.py`) concatenates these libs ahead of a test file
-// explicitly.
+// scenario. Test code must not ride along in production scripts; a harness
+// concatenates these libs ahead of a test file explicitly — either
+// `cargo test -p lunco-scripting --test rhai_test_harness` for the pure suites,
+// or `scripts/api/rhai_eval.py -e "$(cat lib/*.rhai)" -f <test>` for the ones
+// needing a live stage (the shape `scripts/scenario_sync_test.sh` uses).
 //
 // ## Why every helper returns a string
 //
