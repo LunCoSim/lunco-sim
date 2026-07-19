@@ -309,21 +309,6 @@ pub struct ScriptedModel {
     pub outputs: HashMap<String, f64>,
 }
 
-pub fn on_remove_scripted(
-    trigger: On<Remove, ScriptedModel>,
-    q_scripted: Query<&ScriptedModel>,
-    mut script_registry: ResMut<crate::ScriptRegistry>,
-) {
-    let entity = trigger.entity;
-    if let Ok(sm) = q_scripted.get(entity) {
-        if let Some(raw_id) = sm.document_id {
-            if script_registry.documents.remove(&DocumentId::new(raw_id)).is_some() {
-                info!("[scripting] observer: removed Python script document {} for entity {:?}", raw_id, entity);
-            }
-        }
-    }
-}
-
 impl Default for ScriptLanguage {
     fn default() -> Self {
         Self::Python
@@ -362,6 +347,39 @@ mod tests {
         use lunco_twin_journal::{DomainKind, OpPayload};
         assert_eq!(ScriptOp::SetSource("x".into()).domain(), DomainKind::Script);
         assert_eq!(ScriptOp::AddInput("p".into()).domain(), DomainKind::Script);
+    }
+
+    #[test]
+    fn despawn_scripted_model_keeps_document_registered() {
+        let mut app = App::new();
+        app.init_resource::<crate::ScriptRegistry>();
+        app.add_observer(crate::on_close_script_document);
+
+        let id = DocumentId::new(42);
+        app.world_mut()
+            .resource_mut::<crate::ScriptRegistry>()
+            .insert_document(id, ScriptDocument::new(42, ScriptLanguage::Rhai, "print(1);"));
+
+        let entity = app
+            .world_mut()
+            .spawn(ScriptedModel {
+                document_id: Some(42),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            })
+            .id();
+        app.update();
+
+        app.world_mut().entity_mut(entity).despawn();
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<crate::ScriptRegistry>()
+                .documents
+                .contains_key(&id),
+            "despawning a ScriptedModel entity must not close its script document"
+        );
     }
 
     #[test]

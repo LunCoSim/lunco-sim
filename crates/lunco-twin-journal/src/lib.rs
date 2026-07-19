@@ -213,7 +213,11 @@ impl LamportClock {
         }
     }
 
-    /// Observe an external lamport time and return current.
+    /// Observe an external lamport time: sets the clock to `max(local, remote)`
+    /// and returns that value. The return value is the high-water mark, NOT a
+    /// fresh timestamp — using it directly as a new event's timestamp would
+    /// collide with the observed remote event. Always call
+    /// [`tick`](Self::tick) to allocate the next local event's timestamp.
     pub fn observe(&self, remote: u64) -> u64 {
         let mut cur = self.value.load(Ordering::Acquire);
         loop {
@@ -714,6 +718,10 @@ pub enum MergeStrategy {
 /// insertion order, so a load round-trips order exactly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JournalDto {
+    /// DTO schema version. `serde(default)` ⇒ journals written before the
+    /// field existed load as version 0.
+    #[serde(default)]
+    version: u32,
     twin: TwinId,
     local_author: AuthorId,
     /// `LamportClock::current()` — the high-water mark, re-observed on load.
@@ -796,6 +804,7 @@ impl Journal {
 
     fn to_dto(&self) -> JournalDto {
         JournalDto {
+            version: 1,
             twin: self.twin.clone(),
             local_author: self.local_author.clone(),
             clock: self.clock.current(),
@@ -1145,7 +1154,15 @@ impl Journal {
     /// scoped helper on the Bevy side (`JournalResource::change_set`), which
     /// pairs begin/end for you.
     pub fn begin_change_set(&mut self, label: impl Into<String>, author: AuthorTag) -> ChangeSetId {
-        let id = self.open_change_set(label.into(), author);
+        let label = label.into();
+        if let Some(outer) = self.active_change_set {
+            eprintln!(
+                "[journal] begin_change_set(\"{label}\"): nesting detected — replacing \
+                 ambient change set {outer:?}; this un-groups the outer command's tail. \
+                 Wrap only at the outermost handler."
+            );
+        }
+        let id = self.open_change_set(label, author);
         self.active_change_set = Some(id);
         id
     }
@@ -1591,6 +1608,10 @@ impl UndoManager {
         // Pull the remaining siblings off the undo stack (they may not be
         // contiguous if another doc's edits interleaved) and stack them after
         // the head, newest-first.
+        // TODO(multiplayer): insertion-order reversal assumes single-author
+        // contiguous change sets; interleaved multi-author edits break
+        // inverse-application order — revisit before collab ships
+        // (INDEPENDENT-REVIEW-2026-07-19_agy.md JOURNAL-2).
         let siblings: Vec<EntryId> = journal
             .change_set_entries(cs)
             .iter()

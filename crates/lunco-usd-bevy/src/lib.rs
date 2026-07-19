@@ -816,7 +816,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         {
             let mut cfg = lunco_core::HorizonShadowTerrain::default();
             if let Some(r) =
-                get_attribute_as_f32(reader, &sdf_path, "lunco:terrain:horizonMapResolution")
+                reader.real_f32(&sdf_path, "lunco:terrain:horizonMapResolution")
             {
                 cfg.resolution = (r as u32).clamp(64, 4096);
             }
@@ -1776,7 +1776,7 @@ fn apply_standard_material<R: UsdRead>(
         // metallic
         let metallic_texture = load_tex("inputs:metallic", false);
         if metallic_texture.is_none() {
-            if let Some(m) = get_attribute_as_f32(reader, &shader_path, "inputs:metallic") {
+            if let Some(m) = reader.real_f32(&shader_path, "inputs:metallic") {
                 metallic = m;
             }
         }
@@ -1786,7 +1786,7 @@ fn apply_standard_material<R: UsdRead>(
         // just taught callers to author a value usdview will never read.
         let roughness_texture = load_tex("inputs:roughness", false);
         if roughness_texture.is_none() {
-            if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:roughness") {
+            if let Some(r) = reader.real_f32(&shader_path, "inputs:roughness") {
                 roughness = r;
             }
         }
@@ -1807,7 +1807,7 @@ fn apply_standard_material<R: UsdRead>(
         // Specular workflow: `useSpecularWorkflow = 1` describes a dielectric by
         // `specularColor` instead of metalness → force metallic 0 (USD's specular
         // workflow has no metalness channel), and carry the tint.
-        if get_attribute_as_f32(reader, &shader_path, "inputs:useSpecularWorkflow").unwrap_or(0.0) >= 0.5 {
+        if reader.real_f32(&shader_path, "inputs:useSpecularWorkflow").unwrap_or(0.0) >= 0.5 {
             metallic = 0.0;
             if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor") {
                 specular_tint = LinearRgba::rgb(c[0] as f32, c[1] as f32, c[2] as f32);
@@ -1815,23 +1815,23 @@ fn apply_standard_material<R: UsdRead>(
         }
 
         // Clearcoat layer (UsdPreviewSurface ↔ StandardMaterial 1:1).
-        if let Some(c) = get_attribute_as_f32(reader, &shader_path, "inputs:clearcoat") {
+        if let Some(c) = reader.real_f32(&shader_path, "inputs:clearcoat") {
             clearcoat = c;
         }
-        if let Some(cr) = get_attribute_as_f32(reader, &shader_path, "inputs:clearcoatRoughness") {
+        if let Some(cr) = reader.real_f32(&shader_path, "inputs:clearcoatRoughness") {
             clearcoat_roughness = cr;
         }
 
         // Transparency: scalar `inputs:opacity` drives base-color alpha; a
         // *connected* opacity (texture) flips to blended even without a scalar.
-        if let Some(o) = get_attribute_as_f32(reader, &shader_path, "inputs:opacity") {
+        if let Some(o) = reader.real_f32(&shader_path, "inputs:opacity") {
             alpha = o;
         }
         opacity_threshold =
-            get_attribute_as_f32(reader, &shader_path, "inputs:opacityThreshold").unwrap_or(0.0);
+            reader.real_f32(&shader_path, "inputs:opacityThreshold").unwrap_or(0.0);
         opacity_connected = reader.connection_source(&shader_path, "inputs:opacity").is_some();
 
-        if let Some(i) = get_attribute_as_f32(reader, &shader_path, "inputs:ior") {
+        if let Some(i) = reader.real_f32(&shader_path, "inputs:ior") {
             ior = i;
         }
     }
@@ -2980,54 +2980,47 @@ fn has_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     read_xform_op_order(reader, path).is_some()
 }
 
-/// The glam matrix for one `xformOp:*` token at time `time` (already in glam's
-/// column-vector form). Handles every op kind — translate / scale / the six
-/// Euler orders / single-axis / `orient` / the full `transform` matrix — keyed
-/// by the type segment after `xformOp:` (so a named op like
-/// `xformOp:translate:pivot` still resolves). `None` for an unknown or absent op.
-fn op_matrix_at<R: UsdRead>(reader: &R, path: &SdfPath, token: &str, time: f64) -> Option<Mat4> {
-    let kind = token.strip_prefix("xformOp:")?.split(':').next()?;
-    let vec3 = |v: [f64; 3]| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
-    let m = match kind {
-        "translate" => Mat4::from_translation(vec3(read_vec3_f64_at(reader, path, token, time)?)),
-        "scale" => Mat4::from_scale(vec3(read_vec3_f64_at(reader, path, token, time)?)),
-        "orient" => Mat4::from_quat(quat_from_value(&reader.attr_value_at(path, token, time)?)?),
-        "transform" => match reader.attr_value_at(path, token, time)? {
-            Value::Matrix4d(m) => Mat4::from_cols_array(&std::array::from_fn(|i| m.0[i] as f32)),
-            _ => return None,
-        },
-        "rotateX" => Mat4::from_rotation_x(read_scalar_f32_at(reader, path, token, time)?.to_radians()),
-        "rotateY" => Mat4::from_rotation_y(read_scalar_f32_at(reader, path, token, time)?.to_radians()),
-        "rotateZ" => Mat4::from_rotation_z(read_scalar_f32_at(reader, path, token, time)?.to_radians()),
-        "rotateXYZ" | "rotateXZY" | "rotateYXZ" | "rotateYZX" | "rotateZXY" | "rotateZYX" => {
-            let v = read_vec3_f64_at(reader, path, token, time)?;
-            Mat4::from_quat(euler_op_to_quat(&format!("xformOp:{kind}"), vec3(v))?)
-        }
-        _ => return None,
-    };
-    Some(m)
-}
+/// An [`openusd::schemas::geom::Xformable`] view over ANY prim, unchecked —
+/// the transform decoders compose whatever prim carries an `xformOpOrder`, not
+/// just those typed `Xform` (a `Mesh`, a `Camera`, a schema-less `over` are all
+/// xformable). Mirrors the C++ `UsdGeomXformable(prim)` constructor.
+struct XformablePrim(openusd::usd::Prim);
 
-/// Compose the prim's local `Transform` at time `time` from its `xformOpOrder`,
-/// honoring op order and `!invert!` prefixes (USD §`UsdGeomXformable`). USD uses
-/// row vectors with the composite `M = M(opₙ)·…·M(op₀)` (the **last** listed op
-/// is applied first to the geometry — openusd's `Matrix4d::from_trs` builds
-/// `S·R·T` for the standard `["translate","rotateXYZ","scale"]`). In glam's
-/// column-vector form that is `m₀·m₁·…·mₙ`, so each op **right**-multiplies the
-/// accumulator. `None` when no `xformOpOrder` is authored. A listed op that fails
-/// to read is skipped (treated as identity), matching USD's lenient stack.
-pub fn compose_xform_order_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
-    let order = read_xform_op_order(reader, path)?;
-    let mut m = Mat4::IDENTITY;
-    for token in &order {
-        let (token, invert) = match token.strip_prefix("!invert!") {
-            Some(rest) => (rest, true),
-            None => (token.as_str(), false),
-        };
-        let Some(op_mat) = op_matrix_at(reader, path, token, time) else { continue };
-        m *= if invert { op_mat.inverse() } else { op_mat };
+impl openusd::usd::SchemaBase for XformablePrim {
+    const KIND: openusd::usd::SchemaKind = openusd::usd::SchemaKind::AbstractTyped;
+
+    fn prim(&self) -> &openusd::usd::Prim {
+        &self.0
     }
-    Some(Transform::from_matrix(m))
+}
+impl openusd::schemas::geom::Imageable for XformablePrim {}
+impl openusd::schemas::geom::Xformable for XformablePrim {}
+
+// TODO(backlog): `!resetXformStack!` now composes correctly *locally* (openusd's
+// Xformable honors the sentinel), but the ECS projection still parents the entity
+// under its prim parent — the world-space detachment the sentinel demands is
+// unwired. See the engineering-backlog doc in docs/architecture (resetXformStack
+// detachment).
+/// Compose the prim's local `Transform` at time `time` from its `xformOpOrder`,
+/// via openusd's spec implementation
+/// ([`Xformable::local_to_parent_transform`](openusd::schemas::geom::Xformable::local_to_parent_transform)):
+/// op order, `!invert!` prefixes, the leading `!resetXformStack!` sentinel, the
+/// full op-kind set (translate/scale and their single-axis forms, the six Euler
+/// orders, `orient`, `transform`), all composed in f64 before the one narrowing
+/// to Bevy's `Transform`. USD matrices are row-major / row-vector — glam's
+/// column-major / column-vector layout transposed, and the two transposes
+/// cancel (see [`read_matrix_transform_at`]), so the raw 16 elements feed
+/// `Mat4::from_cols_array` directly. `None` when no `xformOpOrder` is authored,
+/// or when the stack is malformed (a misplaced `!resetXformStack!`, a singular
+/// `!invert!` op) — the caller then keeps the entity's existing transform.
+pub fn compose_xform_order_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
+    use openusd::schemas::geom::Xformable as _;
+    read_xform_op_order(reader, path)?;
+    let m = XformablePrim(reader.usd_stage().prim(path.clone()))
+        .local_to_parent_transform(time)
+        .ok()?;
+    let cols: [f32; 16] = std::array::from_fn(|i| m.0[i] as f32);
+    Some(Transform::from_matrix(Mat4::from_cols_array(&cols)))
 }
 
 /// The prim's full local `Transform` at time `time`, **in the canonical frame**:
@@ -3437,20 +3430,20 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
     let point_weights = reader.reals(path, "pointWeights");
 
     let ty = reader.text(path, "type").unwrap_or_else(|| "cubic".to_string());
-    let basis_tok = reader.text(path, "basis").unwrap_or_else(|| "bspline".to_string());
+    // The UsdGeomBasisCurves schema fallback for `basis` is bezier.
+    let basis_tok = reader.text(path, "basis").unwrap_or_else(|| "bezier".to_string());
     let basis = if ty == "linear" {
         // `type = "linear"` is the polygon — `basis` is meaningless and USD says
         // so; honour the type over a stale basis token.
         CurveBasis::Linear
     } else {
         match basis_tok.as_str() {
-            "bezier" => CurveBasis::Bezier,
-            // `catmullRom` is USD's default, and `bspline` currently evaluates
-            // through the same interpolating path — approximating rather than
-            // hitting its hull. Acceptable for a swept tube (the centerline shifts
-            // by less than a wall thickness); a true B-spline basis lands with the
-            // NURBS evaluator.
-            _ => CurveBasis::CatmullRom,
+            // `bspline` evaluates through the interpolating catmullRom path —
+            // approximating rather than hitting its hull. Acceptable for a swept
+            // tube (the centerline shifts by less than a wall thickness); a true
+            // B-spline basis lands with the NURBS evaluator.
+            "catmullRom" | "bspline" => CurveBasis::CatmullRom,
+            _ => CurveBasis::Bezier,
         }
     };
     let periodic = reader.text(path, "wrap").as_deref() == Some("periodic");
@@ -4083,18 +4076,6 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
         mesh.compute_flat_normals();
     }
     Some(mesh)
-}
-
-/// Reads a float-like attribute (`float` / `double` / `int`) from a USD prim.
-/// Falls back to the metadata-based "default" key if not found (needed for dome/light attributes).
-pub fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
-    if let Some(v) = reader.real_f32(path, attr) {
-        return Some(v);
-    }
-    if let Some(v) = reader.scalar::<i32>(path, attr) {
-        return Some(v as f32);
-    }
-    light::get_attribute_as_f32(reader, path, attr)
 }
 
 /// Marker inserted on prim entities that own both a primitive Cube

@@ -847,6 +847,12 @@ fn on_server_disconnected(
     mut serve_tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
     mut replay: ResMut<PendingJournalReplay>,
 ) {
+    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+    // ease of debugging. `TelemetrySubscriptions` is not reaped here: a
+    // disconnecting client's telemetry subscriptions outlive its session
+    // (needs a session/peer field on `TelemetrySubscription`, see
+    // `lunco-api/src/subscription.rs`). Revisit before multiplayer hardening
+    // (report_glm52.md CONC-1 / Tier B7).
     // Resolve the connection key via `RemoteId` when it's still present, else via
     // the entity itself — a despawning client entity may have lost `RemoteId`
     // before this observer runs, and its session must be freed regardless.
@@ -1122,7 +1128,7 @@ fn collect_scenario_input(
             let Ok(rel) = abs_path.strip_prefix(&twin.root) else {
                 continue;
             };
-            let twin_rel = rel.to_string_lossy().replace('\\', "/");
+            let twin_rel = lunco_assets::asset_path::slashed(rel);
             if is_runtime_state(&twin_rel) {
                 continue;
             }
@@ -1154,6 +1160,10 @@ fn collect_scenario_input(
             .cloned()
             .collect(),
     };
+    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+    // ease of debugging. The host ships whatever the unconfined closure walker
+    // reached (see `closure::reference_closure`). Revisit before multiplayer
+    // hardening (REVIEW-2026-07-19.md finding #5).
     for f in lunco_usd_bevy::closure::reference_closure(&roots) {
         if f.starts_with(&twin.root) {
             continue; // in-tree — already enumerated by the folder walk
@@ -1184,7 +1194,7 @@ fn collect_scenario_input(
         let Ok(rel) = abs_path.strip_prefix(&manifest_root) else {
             continue;
         };
-        let rel_path = rel.to_string_lossy().replace('\\', "/");
+        let rel_path = lunco_assets::asset_path::slashed(rel);
         descriptors.push(AssetDescriptor { abs_path, rel_path, media_type });
     }
 
@@ -1218,7 +1228,7 @@ fn collect_scenario_input(
             .join(&ds)
             .strip_prefix(&manifest_root)
             .ok()
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .map(lunco_assets::asset_path::slashed)
             .unwrap_or(ds)
     });
 

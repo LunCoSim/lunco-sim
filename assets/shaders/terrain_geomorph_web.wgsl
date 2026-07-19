@@ -6,9 +6,9 @@
     view_transformations::position_world_to_clip,
     forward_io::VertexOutput,
     mesh_view_bindings::view,
-    mesh_view_bindings::lights,
 }
-#import lunco::pbr_lit::lit_n
+#import lunco::pbr_lit::{lit_n, sun_to_light}
+#import lunco::noise::fbm2d
 #import lunco::horizon::{shadow_fill}
 #import lunco::lunar::regolith_factor
 #import lunco::transfer::{slope_hazard_color, slope_of}
@@ -91,42 +91,6 @@ var shadow_cache: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(11)
 var shadow_cache_sampler: sampler;
 
-// --- 2D value noise + FBM (optimized for WebGL) -------------------------
-
-fn hash12(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fn vnoise2d(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let n00 = hash12(i);
-    let n10 = hash12(i + vec2(1.0, 0.0));
-    let n01 = hash12(i + vec2(0.0, 1.0));
-    let n11 = hash12(i + vec2(1.0, 1.0));
-    return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
-}
-
-fn fbm2d(p: vec2<f32>, octaves: i32, gain: f32) -> f32 {
-    var sum = 0.0;
-    var amp = 1.0;
-    var total = 0.0;
-    var q = p;
-    let rc = cos(2.399963);
-    let rs = sin(2.399963);
-    for (var o = 0; o < octaves; o++) {
-        sum += amp * vnoise2d(q);
-        total += amp;
-        amp *= gain;
-        q *= 2.0;
-        q = vec2(rc * q.x - rs * q.y, rs * q.x + rc * q.y);
-    }
-    return sum / total;
-}
-
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));
 }
@@ -200,7 +164,10 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     if (mat.morph_end > mat.morph_start) {
         morph = smoothstep(mat.morph_start, mat.morph_end, dist);
     }
-    let m = max(morph, 1.0 - mat.reveal);
+    // `morph` alone — deliberately. A per-tile term here (the old `reveal` settle)
+    // makes two neighbours at the same depth and distance disagree at their shared
+    // edge, cracking the seam. Keep this a pure function of world position.
+    let m = morph;
     let local_pos = mix(vertex.position, vertex.morph_target, m);
     // Shade the surface we actually DRAW: the position lerps toward the parent
     // lattice, so the normal must lerp with it. Leaving the fine normal here made
@@ -221,21 +188,6 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
 }
 
 // --- fragment: procedural regolith (optimized) ---------------------------
-
-fn sun_to_light() -> vec3<f32> {
-    var best = vec3(0.0, 1.0, 0.0);
-    var best_lum = -1.0;
-    let n = lights.n_directional_lights;
-    for (var i = 0u; i < n; i = i + 1u) {
-        let dl = lights.directional_lights[i];
-        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > best_lum) {
-            best_lum = lum;
-            best = dl.direction_to_light;
-        }
-    }
-    return best;
-}
 
 // Palette-matched to `lod_rgb` in `stream_viz.rs`. Cycles rather than clamps so
 // adjacent depths always differ; clamping blinds the top depths.
@@ -351,7 +303,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
 #endif
     // Display-referred shadow fill, shared with every marched terrain shader
-    // (see `shadow_fill`, lunco::horizon, which gates itself on `csm_far` so it
+    // (see `shadow_fill`, lunco::horizon, which gates on `wired` — explicitly NOT
+    // on `csm_far`, which reads 0 under a shadowless sun and would strip the fill
+    // from exactly the polar terrain it exists to rescue — so it
     // fires only where the march machinery is actually wired). The emissive-slot hemispheric fill
     // above is scene-referred cd/m2 tuned for the old studio exposure — at the
     // calibrated lunar EV it vanishes and near tiles crushed to black next to

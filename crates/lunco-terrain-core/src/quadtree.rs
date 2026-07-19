@@ -166,6 +166,25 @@ impl Quadtree {
         self.root_geometric_error / (1u64 << depth) as f64
     }
 
+    /// Refine into children when the focus is within this distance of a `depth` node.
+    pub fn refine_range(&self, depth: u8) -> f64 {
+        self.range_factor * self.geometric_error(depth)
+    }
+
+    /// The depth-`depth` node whose region contains local `(x, z)` — the
+    /// point→coord inverse of [`region`](Self::region), clamped to the root
+    /// footprint. Every point→cell derivation (visual refinement, the collider
+    /// ring's wanted set, the physics-readiness probe) goes through this one
+    /// mapping so they cannot disagree on which node covers a body.
+    pub fn node_containing(&self, depth: u8, xz: [f64; 2]) -> QuadCoord {
+        let nodes = 1i64 << depth;
+        let side = (2.0 * self.root_half_extent) / nodes as f64;
+        let idx = |v: f64| {
+            (((v + self.root_half_extent) / side).floor() as i64).clamp(0, nodes - 1) as u32
+        };
+        QuadCoord { depth, x: idx(xz[0]), z: idx(xz[1]) }
+    }
+
     /// World-space square covered by `coord`.
     pub fn region(&self, coord: QuadCoord) -> Square {
         let nodes_per_side = (1u64 << coord.depth) as f64;
@@ -221,9 +240,8 @@ impl Quadtree {
         node_error: impl Fn(QuadCoord, Square) -> f64,
     ) {
         let nodes = 1i64 << self.max_depth;
-        let side = (2.0 * self.root_half_extent) / nodes as f64;
-        let cx = (((focus_xz[0] + self.root_half_extent) / side).floor() as i64).clamp(0, nodes - 1);
-        let cz = (((focus_xz[1] + self.root_half_extent) / side).floor() as i64).clamp(0, nodes - 1);
+        let centre = self.node_containing(self.max_depth, focus_xz);
+        let (cx, cz) = (centre.x as i64, centre.z as i64);
         for dz in -1..=1i64 {
             for dx in -1..=1i64 {
                 let (nx, nz) = (cx + dx, cz + dz);

@@ -106,7 +106,11 @@ pub fn wire_terrain_materials(
     >,
     // Hysteresis state for the cache↔march handoff, per terrain (see below).
     mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
+    mut removed_terrains: RemovedComponents<HorizonMap>,
 ) {
+    for e in removed_terrains.read() {
+        cache_engaged.remove(&e);
+    }
     let Some(mut shader_mats) = shader_mats else { return };
     let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
     // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
@@ -205,18 +209,25 @@ pub fn wire_terrain_materials(
             // asset every frame. Sun direction + heightfield identity + csm
             // bound + cache handle/flag cover everything that changes.
             //
-            // `sun_dir` compares the stored `ParamValue`, NOT `get_vec4`. It is
-            // written as a `Vec3` (see `write_engine`) and `get_vec4` matches only
+            // `sun_dir` compares via `get_vec3`, NOT `get_vec4`. It is written as a
+            // `Vec3` (see `write_engine`) and `get_vec4` matches only
             // `ParamValue::Vec4` — so it answered `None` for a value that was
             // present and correct, `needs` was permanently true, and EVERY terrain
-            // material was re-uploaded every frame. That is the precise cost this
-            // comment says the compare exists to avoid. Same input GT each frame ⇒
-            // bit-identical value, so an exact compare settles.
+            // material was re-uploaded every frame.
+            //
+            // EPSILON, not exact equality, for the same reason the scalars beside it
+            // use one. An exact compare is only quiet while the sun is BIT-identical
+            // frame to frame — true for a parked sun, false the moment the celestial
+            // clock runs, and then every terrain material repacks every frame again:
+            // the original cost, re-entered through a different door. At the lunar
+            // rate (360° / 29.5 d) `SUN_DIR_EPSILON` coalesces the write to roughly
+            // once every ten seconds, and the direction error it tolerates (~0.006°)
+            // is far below anything a shadow direction can show.
             let needs = shader_mats.get(&handle.0).is_some_and(|m| {
                 m.height_map.as_ref() != Some(&map.image)
                     || m.shadow_cache != cache_image
                     || m.get_scalar("shadow_cache_on").is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
-                    || m.get("sun_dir") != Some(sun_dir)
+                    || m.get_vec3("sun_dir").is_none_or(|v| (v - sun_local).length() > SUN_DIR_EPSILON)
                     || m.get_scalar("csm_far").is_none_or(|c| (c - csm_far).abs() > 1e-3)
             });
             if needs {
@@ -286,14 +297,17 @@ pub fn wire_sun_for_non_terrain_materials(
     for handle in &meshes {
         // Compare before `get_mut`, or every frame re-uploads the asset (MAT-3).
         //
-        // Compare the STORED `ParamValue`, not `get_vec4`. `sun_dir_world` is
-        // written as a `Vec3`, and `get_vec4` matches only `ParamValue::Vec4` — so
-        // it answers `None` for a value that is present and correct, `needs` is
-        // always true, and the asset is re-uploaded every frame. Same input GT each
-        // frame ⇒ bit-identical value, so an exact compare settles.
-        let needs = shader_mats
-            .get(&handle.0)
-            .is_some_and(|m| m.get("sun_dir_world") != Some(sun_dir_world));
+        // Compare via `get_vec3`, not `get_vec4`. `sun_dir_world` is written as a
+        // `Vec3`, and `get_vec4` matches only `ParamValue::Vec4` — so it answers
+        // `None` for a value that is present and correct, `needs` is always true,
+        // and the asset is re-uploaded every frame. `SUN_DIR_EPSILON` for the same
+        // reason as the terrain path above: an exact compare only stays quiet while
+        // the sun is parked, and re-enters the per-frame repack as soon as the
+        // celestial clock moves it.
+        let needs = shader_mats.get(&handle.0).is_some_and(|m| {
+            m.get_vec3("sun_dir_world")
+                .is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)
+        });
         if needs {
             if let Some(mut m) = shader_mats.get_mut(&handle.0) {
                 m.set_many([
@@ -312,6 +326,14 @@ pub fn wire_sun_for_non_terrain_materials(
 /// Minimum sun movement (cosine of angle) before objects are re-evaluated
 /// — ~0.1°.
 const SUN_EPSILON_COS: f32 = 0.999_998_5;
+
+/// Minimum change in a stored sun DIRECTION before the material carrying it is
+/// repacked. On a unit vector this is ~0.006° — three orders of magnitude finer
+/// than [`SUN_EPSILON_COS`]'s visibility re-evaluation, because this one only
+/// has to be below "a shadow direction anyone can see", not below "the horizon
+/// answer changed". Its job is to keep a *continuously* moving sun from
+/// repacking every terrain material every frame.
+const SUN_DIR_EPSILON: f32 = 1e-4;
 
 /// Scales a colour's linear RGB by `q`, keeping alpha.
 fn scale_color(c: Color, q: f32) -> Color {
@@ -628,6 +650,66 @@ mod tests {
             1,
             "expected a single write over {FRAMES} frames; an unmoved sun is \
              re-uploading the material — the change guard is not holding"
+        );
+    }
+
+    /// A sun in CONTINUOUS MOTION must not repack the material every frame.
+    ///
+    /// The companion to `an_unmoved_sun_does_not_rewrite_the_material`, and the
+    /// case that one cannot see. A parked sun is bit-identical frame to frame, so
+    /// an exact compare looks correct against it — while the moment the celestial
+    /// clock runs, every frame's direction differs in the last few bits and the
+    /// guard fails open again, repacking every terrain material forever. That is
+    /// the real deployment: the sun always moves. Only an epsilon closes it, and
+    /// only a moving-sun test can tell the two apart.
+    ///
+    /// Rotates by ~0.0002° per frame — far below `SUN_DIR_EPSILON` but nonzero, so
+    /// an exact compare would fire on every one of these frames.
+    #[test]
+    fn a_slowly_moving_sun_does_not_repack_every_frame() {
+        let mut app = test_app();
+        let sun = app
+            .world_mut()
+            .spawn((
+                GlobalTransform::IDENTITY,
+                DirectionalLight { illuminance: 10_000.0, ..Default::default() },
+            ))
+            .id();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn(MeshMaterial3d(handle.clone()));
+
+        #[derive(Resource, Default)]
+        struct Modified(usize);
+        app.init_resource::<Modified>();
+        app.add_systems(
+            Update,
+            (|mut ev: MessageReader<AssetEvent<ShaderMaterial>>, mut n: ResMut<Modified>| {
+                n.0 += ev
+                    .read()
+                    .filter(|e| matches!(e, AssetEvent::Modified { .. }))
+                    .count();
+            })
+            .after(wire_sun_for_non_terrain_materials),
+        );
+
+        const FRAMES: usize = 8;
+        const STEP_RAD: f32 = 3e-6; // ~0.0002° per frame, well under the epsilon
+        for i in 0..FRAMES {
+            let rot = Quat::from_rotation_x(STEP_RAD * i as f32);
+            *app.world_mut().entity_mut(sun).get_mut::<GlobalTransform>().unwrap() =
+                GlobalTransform::from(Transform::from_rotation(rot));
+            app.update();
+        }
+
+        assert_eq!(
+            app.world().resource::<Modified>().0,
+            1,
+            "expected a single write over {FRAMES} frames of a slowly moving sun; \
+             the direction guard is comparing exactly and failing open on sub-\
+             threshold motion — every terrain material is repacking every frame"
         );
     }
 

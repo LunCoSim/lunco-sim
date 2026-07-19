@@ -149,6 +149,16 @@ pub fn wire_scripting_journal_handle(
     registry.set_journal(journal.clone());
 }
 
+/// Drop a script doc's host on explicit close. Script documents follow the
+/// document-lifecycle doctrine: despawning a `ScriptedModel` entity (scene
+/// clear/reload) leaves the document open; only `CloseDocument` ends it.
+pub fn on_close_script_document(
+    trigger: On<lunco_doc_bevy::CloseDocument>,
+    mut registry: ResMut<ScriptRegistry>,
+) {
+    registry.documents.remove(&trigger.event().doc);
+}
+
 pub struct LunCoScriptingPlugin;
 
 /// Register the built-in `policy→rhai` hooks from `assets/scripting/policy/*.rhai`.
@@ -210,6 +220,7 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.init_resource::<ScriptRegistry>();
+        app.add_observer(on_close_script_document);
         // A3 auto-bridge: when the Twin journal appears, fit a recorder onto every
         // ScriptDocument host so live script edits (rover behaviour changes) record
         // into the canonical journal like Modelica/USD — "scripts sync by design".
@@ -226,7 +237,6 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.register_type::<ScriptedModel>()
-           .add_observer(doc::on_remove_scripted)
            .register_type::<doc::ScriptLanguage>();
 
         let python_status = python::get_python_status();

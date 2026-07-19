@@ -218,6 +218,11 @@ usvg = { version = "0.47", default-features = false }
 # encode + MSL icons), jpeg (MSL icons), tiff. Add a feature here if a build
 # surfaces a missing codec rather than re-enabling `default`.
 image = { version = "0.25", default-features = false, features = ["tiff", "png", "jpeg"] }
+# Pure-Rust TIFF container I/O (weezl/flate2 — wasm-safe). The asset processor
+# ENCODES float32 heightmaps that the terrain baker and the geotiff tag layer
+# DECODE; one workspace pin is what keeps writer and readers on the same wire
+# format (previously three separate `"0.11"` pins policed by comments).
+tiff = "0.11"
 smallvec = "1.13"
 # openusd 0.5.0: real PCP composition engine (variantSets + relationship target
 # translation) + typed usd::Stage API. Replaces our hand-rolled lunco-usd-composer.

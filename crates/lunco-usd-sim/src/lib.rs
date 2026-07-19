@@ -591,7 +591,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             commands.entity(entity).try_insert(lunco_core::ArticulatedLink);
         }
         let net_replicate = reader.scalar::<bool>(&sdf_path, "lunco:net:replicate");
-        let net_authority = reader.scalar::<String>(&sdf_path, "lunco:net:authority");
+        let net_authority = reader.text(&sdf_path, "lunco:net:authority");
         let (net_excluded, net_opaque) =
             net_override_markers(net_replicate, net_authority.as_deref());
         if net_excluded {
@@ -1041,7 +1041,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // wire/rhai/Modelica mix drives — arbitrary topology authored in USD,
             // not hardcoded here. Deduped against the canonical set.
             if let Some(extra) =
-                reader.scalar::<String>(&sdf_path, "lunco:drivePorts")
+                reader.text(&sdf_path, "lunco:drivePorts")
             {
                 for name in extra.split_whitespace() {
                     if !port_names.iter().any(|n| n == name) {
@@ -1084,7 +1084,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             info!("Successfully initialized FSW for {}", prim_path.path);
 
             if let Some(xml) = reader
-                .scalar::<String>(&sdf_path, "lunco:behavior")
+                .text(&sdf_path, "lunco:behavior")
                 .filter(|s| s.trim_start().starts_with('<'))
             {
                 commands
@@ -1137,7 +1137,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         // explicit `lunco:driveMix` linear table. There is NO per-arch Rust
         // component/branch — `apply_drive_mix` looks the named kernel up and runs it.
         let drive_mix = if let Some(hook_id) =
-            reader.scalar::<String>(&sdf_path, "lunco:driveKernel")
+            reader.text(&sdf_path, "lunco:driveKernel")
         {
             // Scripted (rhai) kernel: the hook computes the per-port outputs, so it
             // takes precedence over the built-in skid/linear schemas. `apply_drive_mix`
@@ -1145,7 +1145,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             info!("Scripted drive kernel '{}' for {}", hook_id, prim_path.path);
             Some(DriveMix::scripted(&hook_id))
         } else if let Some(spec) =
-            reader.scalar::<String>(&sdf_path, "lunco:driveMix")
+            reader.text(&sdf_path, "lunco:driveMix")
         {
             info!("Explicit linear driveMix for {}", prim_path.path);
             Some(DriveMix::parse_linear(&spec))
@@ -1295,9 +1295,9 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // wiring topology from `try_wire_wheel`'s hardcoded index parity
             // into USD, enabling per-wheel drive and non-2×N layouts.
             let drive_port_name =
-                reader.scalar::<String>(&sdf_path, "lunco:drivePort");
+                reader.text(&sdf_path, "lunco:drivePort");
             let steer_port_name =
-                reader.scalar::<String>(&sdf_path, "lunco:steerPort");
+                reader.text(&sdf_path, "lunco:steerPort");
 
             // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
             commands.entity(entity).try_insert(PendingWheelWiring {

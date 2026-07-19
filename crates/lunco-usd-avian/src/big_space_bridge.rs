@@ -26,7 +26,9 @@
 //! i.e. when an EXTERNAL writer (spawn, teleport command, gizmo, USD
 //! animation, anchor system, big_space recentring) touched it. A fired body
 //! also re-reads every descendant body, so teleporting a chassis carries its
-//! jointed wheels. Static bodies at rest are never touched — the previous
+//! jointed wheels. Plain chain nodes (no body, no collider) carry no shadow;
+//! their motion is probed via `Changed<Transform>`/`Changed<CellCoord>`
+//! instead, so moving a group Xform re-reads the bodies beneath it too. Static bodies at rest are never touched — the previous
 //! bridge dirtied every static's `Position` each tick, and the resulting
 //! whole-world contact churn is what corrupted avian's island bookkeeping
 //! (`islands/mod.rs:547` unwrap on a stale contact edge, reached from
@@ -211,6 +213,17 @@ fn pose_to_position(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
+    // Plain chain nodes (no RigidBody, no Collider) carry no `BridgeShadow`,
+    // so their motion is probed via change detection instead: a gizmo-dragged
+    // or USD-animated group Xform must still re-read every descendant body.
+    q_moved_plain: Query<
+        Entity,
+        (
+            Or<(Changed<Transform>, Changed<CellCoord>)>,
+            Without<RigidBody>,
+            Without<Collider>,
+        ),
+    >,
     mut q_bodies: Query<
         (
             Entity,
@@ -230,6 +243,7 @@ fn pose_to_position(
             moved.insert(e);
         }
     }
+    moved.extend(q_moved_plain.iter());
     if moved.is_empty() {
         return;
     }

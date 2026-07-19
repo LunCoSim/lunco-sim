@@ -134,6 +134,10 @@ pub fn reference_closure(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
             continue;
         };
         let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
+        // for ease of debugging. Relative arcs are followed out of the twin root
+        // with no confinement. Revisit before multiplayer hardening
+        // (REVIEW-2026-07-19.md finding #5).
         for arc in discover_arcs(&data, ArcFilter::All) {
             if lunco_assets::asset_path::is_anchored(&arc) {
                 continue;

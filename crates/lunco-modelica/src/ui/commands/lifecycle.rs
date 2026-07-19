@@ -12,7 +12,6 @@ use crate::document::duplicate::{
     build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
 use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
-use lunco_doc_bevy::DocumentDiagnostics;
 use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
 use crate::package_tree::PackageTreeCache;
 
@@ -1044,7 +1043,6 @@ pub fn on_document_closed_cleanup(
     trigger: On<CloseDocument>,
     mut model_tabs: ResMut<ModelTabs>,
     mut cache: ResMut<PackageTreeCache>,
-    mut compile_states: ResMut<DocumentDiagnostics>,
     mut workbench: ResMut<WorkbenchState>,
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut doc_pins: Option<ResMut<crate::ui::doc_pin::DocPinState>>,
@@ -1056,7 +1054,6 @@ pub fn on_document_closed_cleanup(
     let doc = trigger.event().doc;
     model_tabs.close(doc);
     cache.in_memory_models.retain(|e| e.doc != doc);
-    compile_states.remove(doc);
     // Drop the per-doc canvas entry (viewport, selection, in-flight
     // projection task) so a later tab reusing the id starts fresh.
     if let Some(canvas) = canvas_state.as_mut() {
@@ -1067,6 +1064,13 @@ pub fn on_document_closed_cleanup(
     if let Some(b) = bus.as_mut() {
         b.clear_outcomes_for(lunco_workbench::status_bus::BusyScope::Document(doc.0));
     }
+    // TODO(backlog): this active_document reset is generic workspace behavior that
+    // belongs in a lunco-workspace CloseDocument observer (the StatusBus and
+    // DocumentDiagnostics halves were already re-homed). Trap for the split:
+    // `editor_buffer.clear()` is conditioned on `active_document == Some(doc)`, so
+    // a naive observer split races on observer ordering — the workspace observer
+    // clearing active_document first would make this condition never fire. See the
+    // engineering-backlog doc in docs/architecture (CloseDocument observer re-homing).
     if workspace.active_document == Some(doc) {
         workspace.active_document = None;
         workbench.editor_buffer.clear();

@@ -86,6 +86,17 @@ impl OpfsStorage {
         Ok(array.to_vec())
     }
 
+    /// Delete the OPFS file addressed by `handle`. [`StorageError::NotFound`]
+    /// when the file (or any directory on its path) doesn't exist.
+    pub async fn delete(&self, handle: &StorageHandle) -> StorageResult<()> {
+        let (dirs, file) = split_handle(handle)?;
+        let dir = resolve_dir(&segments_root().await?, &dirs, false).await?;
+        JsFuture::from(dir.remove_entry(&file))
+            .await
+            .map_err(|_| StorageError::NotFound)?;
+        Ok(())
+    }
+
     /// Whether the OPFS file addressed by `handle` exists.
     pub async fn exists(&self, handle: &StorageHandle) -> bool {
         let Ok((dirs, file)) = split_handle(handle) else {

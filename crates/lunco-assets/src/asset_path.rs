@@ -61,6 +61,15 @@ pub fn normalize(p: &Path) -> PathBuf {
     out
 }
 
+/// A path's string form with `\` normalized to `/`.
+///
+/// Asset identities and URIs are forward-slash strings on every peer; a
+/// Windows-built `Path` renders with `\`, so any path that becomes an identity
+/// must pass through here.
+pub fn slashed(p: impl AsRef<Path>) -> String {
+    p.as_ref().to_string_lossy().replace('\\', "/")
+}
+
 /// Resolve `asset_path`, as named inside the document at `anchor`, to a stable
 /// asset-source-relative identifier.
 ///
@@ -158,7 +167,7 @@ pub fn is_anchored(reference: &str) -> bool {
 /// recognised no scheme but `http` — a `lunco://` DEM silently became
 /// `assets/lunco://…` and 404'd, web-only, invisible from the native path.
 pub fn web_url(reference: &str) -> String {
-    let raw = reference.replace('\\', "/");
+    let raw = slashed(reference);
     // Absolute — server-rooted or a full URL. Nothing to anchor.
     if raw.starts_with('/') || raw.starts_with("http://") || raw.starts_with("https://") {
         return raw;

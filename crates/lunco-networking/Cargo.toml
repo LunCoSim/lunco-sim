@@ -145,6 +145,10 @@ lightyear_aeronet = { version = "0.28.0", default-features = false }
 
 
 # Native (desktop / dedicated server): full client+server WebTransport.
+# TODO(backlog): the lightyear version + shared feature list is duplicated across
+# this block and the wasm block below — hoist the version to [workspace.dependencies]
+# when this manifest is next restructured; see the engineering-backlog doc in
+# docs/architecture (lightyear dep dedup).
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # Native byte-GET for the HTTP asset plane (`http_fetch`). Already in the workspace
 # tree (lunco-assets/celestial use it), so this pulls no new transitive deps. Web

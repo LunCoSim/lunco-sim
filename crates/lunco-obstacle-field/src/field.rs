@@ -167,14 +167,15 @@ impl HeightGrid {
     /// and a fine probe reports a genuinely different normal at each vertex. The
     /// cure is in the interpolant, where the discontinuity actually lives, rather
     /// than in the probe that merely revealed it.
-    pub fn height_at(&self, x: f32, z: f32) -> f32 {
-        let s = self.spacing();
-        let fx = ((x + self.half_extent) / s).clamp(0.0, self.res as f32 - 1.0);
-        let fz = ((z + self.half_extent) / s).clamp(0.0, self.res as f32 - 1.0);
+    pub fn height_at(&self, x: f64, z: f64) -> f64 {
+        let s = self.spacing() as f64;
+        let half = self.half_extent as f64;
+        let fx = ((x + half) / s).clamp(0.0, self.res as f64 - 1.0);
+        let fz = ((z + half) / s).clamp(0.0, self.res as f64 - 1.0);
         let x0 = fx.floor() as isize;
         let z0 = fz.floor() as isize;
-        let tx = (fx - x0 as f32) as f64;
-        let tz = (fz - z0 as f32) as f64;
+        let tx = fx - x0 as f64;
+        let tz = fz - z0 as f64;
 
         // Four rows through z-1..z+2, each collapsed along x, then across in z.
         let mut rows = [0.0f64; 4];
@@ -188,7 +189,7 @@ impl HeightGrid {
                 tx,
             );
         }
-        Self::catmull_rom(rows[0], rows[1], rows[2], rows[3], tz) as f32
+        Self::catmull_rom(rows[0], rows[1], rows[2], rows[3], tz)
     }
 
     /// Convert to Avian's heightfield layout: `Vec<Vec<f64>>` indexed `[x][z]`,
@@ -276,14 +277,15 @@ pub fn grid_normals(positions: &[[f32; 3]], res: usize) -> Vec<[f32; 3]> {
     normals
 }
 
-/// A `HeightGrid` is a [`HeightSource`]: reuse its bilinear sampler, widening to
-/// the trait's `f64` interface. The impl lives here (with the type) so the
-/// foreign trait `lunco_terrain_core::HeightSource` is implemented for the local
-/// `HeightGrid` — satisfying the orphan rule — and the planar streamer + any
-/// other consumer can treat a loaded DEM as a generic height source.
+/// A `HeightGrid` is a [`HeightSource`]: reuse its bicubic (Catmull-Rom)
+/// sampler, which already speaks the trait's `f64` interface. The impl lives
+/// here (with the type) so the foreign trait `lunco_terrain_core::HeightSource`
+/// is implemented for the local `HeightGrid` — satisfying the orphan rule — and
+/// the planar streamer + any other consumer can treat a loaded DEM as a generic
+/// height source.
 impl HeightSource for HeightGrid {
     fn height_at(&self, x: f64, z: f64) -> f64 {
-        HeightGrid::height_at(self, x as f32, z as f32) as f64
+        HeightGrid::height_at(self, x, z)
     }
 }
 
@@ -366,8 +368,8 @@ mod tests {
             for ix in 0..g.res {
                 let x = -g.half_extent + ix as f32 * s;
                 let z = -g.half_extent + iz as f32 * s;
-                let want = g.heights[g.idx(ix, iz)] as f32;
-                let got = g.height_at(x, z);
+                let want = g.heights[g.idx(ix, iz)];
+                let got = g.height_at(x as f64, z as f64);
                 assert!(
                     (got - want).abs() < 1e-3,
                     "post ({ix},{iz}): interpolant {got} != sample {want}"
@@ -384,7 +386,7 @@ mod tests {
         for k in 0..40 {
             let x = -12.0 + k as f32 * 0.6;
             assert!(
-                (g.height_at(x, 1.7) as f64 - x as f64 * 0.25).abs() < 1e-4,
+                (g.height_at(x as f64, 1.7) - x as f64 * 0.25).abs() < 1e-4,
                 "ramp not reproduced at x={x}"
             );
         }
@@ -402,7 +404,7 @@ mod tests {
         let g = ramp(3, 10.0, 0.1);
         for k in 0..21 {
             let x = -10.0 + k as f32; // includes both extreme edges
-            let got = g.height_at(x, 0.0) as f64;
+            let got = g.height_at(x as f64, 0.0);
             assert!(
                 (got - x as f64 * 0.1).abs() < 1e-5,
                 "boundary bends the plane at x={x}: {got} != {}",
@@ -433,7 +435,8 @@ mod tests {
         let base = (30.0f32 / s).floor() * s;
         let eps = 0.5f32;
         let grad_at = |x: f32| {
-            (g.height_at(x + eps, 0.0) - g.height_at(x - eps, 0.0)) as f64 / (2.0 * eps) as f64
+            (g.height_at((x + eps) as f64, 0.0) - g.height_at((x - eps) as f64, 0.0))
+                / (2.0 * eps) as f64
         };
         let _ = cell_x;
         let g1 = grad_at(base + 0.25 * s);

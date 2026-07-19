@@ -117,6 +117,11 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
                 .route("/api/health", axum::routing::get(http::handle_health))
                 .with_state(bridge);
 
+            // TODO(multiplayer): deferred — singleplayer focus for now, RBAC
+            // disabled for ease of debugging. Loopback-only bind, but the command
+            // API has zero local auth — any local process/user can drive the full
+            // command surface. Revisit before multiplayer hardening
+            // (REVIEW-2026-07-19.md API-1).
             let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
                 Ok(l) => l,
                 Err(e) => {

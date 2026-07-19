@@ -21,6 +21,7 @@
 //! `docs/architecture/telemetry-subsystem.md`.
 
 use bevy::prelude::*;
+use lunco_core::GlobalEntityId;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
@@ -28,11 +29,17 @@ use std::collections::{HashMap, VecDeque};
 /// Mirrors `WorkbenchState.max_history`.
 pub const DEFAULT_CAPACITY: usize = 2000;
 
-/// Stable identity for a signal across frames / save-load cycles.
+/// Stable identity for a signal across frames **within one session**.
 ///
 /// The `entity` half is not decoration: signal *names collide*. Two rovers both report
 /// `"motor_current"`, and only the owning entity tells them apart. [`Entity::PLACEHOLDER`]
 /// means "global / no entity" (the simulation clock, top-level events).
+///
+/// The serde form carries raw `Entity` bits, which are **session-local** — the
+/// generation counter resets every run, so bits written in one session point at a
+/// phantom entity in the next. It exists only for in-memory round-trips (viz style
+/// blobs travel as `serde_json::Value`). Anything that outlives the session must go
+/// through [`PersistedSignalRef`], which swaps the entity for its [`GlobalEntityId`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SignalRef {
     #[serde(with = "entity_as_u64")]
@@ -49,9 +56,58 @@ impl SignalRef {
     pub fn global(path: impl Into<String>) -> Self {
         Self { entity: Entity::PLACEHOLDER, path: path.into() }
     }
+
+    /// Cross-session form: swap the session-local `Entity` for its stable
+    /// [`GlobalEntityId`]. `gid_of` is the caller's lookup (typically a closure over a
+    /// `Query<&GlobalEntityId>`); `None` means the entity has no stable id, and a ref
+    /// that cannot name its owner stably cannot be persisted.
+    pub fn to_persisted(
+        &self,
+        gid_of: impl FnOnce(Entity) -> Option<GlobalEntityId>,
+    ) -> Option<PersistedSignalRef> {
+        let entity = if self.entity == Entity::PLACEHOLDER {
+            None
+        } else {
+            Some(gid_of(self.entity)?)
+        };
+        Some(PersistedSignalRef { entity, path: self.path.clone() })
+    }
 }
 
-// Minimal serde glue for `Entity` — plain JSON/TOML friendliness for workspace files.
+// TODO(backlog): the save/load boundary wiring is still pending — nothing routes
+// `SignalBinding`/`LinePlotStyle` through `to_persisted`/`resolve` yet; that lands
+// with plot-layout persistence. Producers must also tag [`SignalSource`] on owning
+// entities so registry slots auto-clean on despawn. See the engineering-backlog doc
+// in docs/architecture (signal persistence wiring).
+/// What a [`SignalRef`] looks like at rest (saved plot layouts, workspace files).
+///
+/// The entity half is the stable [`GlobalEntityId`] — never raw `Entity` bits, which
+/// are session-local and would orphan the ref on reload. `None` is the persisted
+/// spelling of [`Entity::PLACEHOLDER`] (a global signal).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PersistedSignalRef {
+    pub entity: Option<GlobalEntityId>,
+    pub path: String,
+}
+
+impl PersistedSignalRef {
+    /// Resolve back to a live [`SignalRef`]. `entity_of` is the caller's reverse
+    /// lookup (gid → live entity, wherever the load path already resolves entities);
+    /// `None` means the owning entity does not exist in this session.
+    pub fn resolve(
+        &self,
+        entity_of: impl FnOnce(GlobalEntityId) -> Option<Entity>,
+    ) -> Option<SignalRef> {
+        let entity = match self.entity {
+            None => Entity::PLACEHOLDER,
+            Some(gid) => entity_of(gid)?,
+        };
+        Some(SignalRef { entity, path: self.path.clone() })
+    }
+}
+
+// Minimal serde glue for `Entity` — plain JSON friendliness for the in-memory style
+// blobs. Session-local by construction; see the [`SignalRef`] docs.
 mod entity_as_u64 {
     use bevy::prelude::Entity;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -251,6 +307,25 @@ impl SignalRegistry {
     }
 }
 
+/// Marker for an entity that owns [`SignalRegistry`] entries. Producers tag the
+/// owning entity when they start pushing entity-scoped signals for it;
+/// [`drop_signals_of_removed_source`] then frees the registry slots when the entity
+/// dies, so no despawn path has to remember to call
+/// [`SignalRegistry::drop_entity`] by hand.
+#[derive(Component, Debug, Default, Clone, Copy)]
+pub struct SignalSource;
+
+/// Observer: a [`SignalSource`] entity despawned (or lost the marker) — drop every
+/// signal it owned so dead entities' history and metadata don't accumulate.
+/// Registered once by `LunCoTelemetryPlugin`, which owns the registry resource in
+/// both headless and GUI builds.
+pub fn drop_signals_of_removed_source(
+    trigger: On<Remove, SignalSource>,
+    mut signals: ResMut<SignalRegistry>,
+) {
+    signals.drop_entity(trigger.entity);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +375,39 @@ mod tests {
         assert_eq!(reg.scalar_history(&a).unwrap().len(), 1);
         assert_eq!(reg.scalar_history(&b).unwrap().len(), 1);
         assert_eq!(reg.scalar_history(&b).unwrap().iter().next().unwrap().value, 2.0);
+    }
+
+    /// Persistence must carry the stable id, never `Entity` bits: resolving in a
+    /// "new session" (different bits, same gid) must find the signal again.
+    #[test]
+    fn a_persisted_ref_survives_new_entity_bits() {
+        let gid = GlobalEntityId::from_raw(42);
+        let old = SignalRef::new(Entity::from_raw_u32(7).unwrap(), "motor_current");
+        let persisted = old.to_persisted(|_| Some(gid)).unwrap();
+        assert_eq!(persisted.entity, Some(gid));
+
+        let reborn = Entity::from_raw_u32(99).unwrap();
+        let resolved = persisted.resolve(|g| (g == gid).then_some(reborn)).unwrap();
+        assert_eq!(resolved, SignalRef::new(reborn, "motor_current"));
+    }
+
+    /// A global signal has no entity to stabilise — it round-trips as `None` and
+    /// resolves without consulting the lookup.
+    #[test]
+    fn a_global_ref_persists_without_an_id() {
+        let sig = SignalRef::global("sim_time");
+        let persisted = sig.to_persisted(|_| unreachable!()).unwrap();
+        assert_eq!(persisted.entity, None);
+        let resolved = persisted.resolve(|_| unreachable!()).unwrap();
+        assert_eq!(resolved, sig);
+    }
+
+    /// An entity with no stable id cannot be persisted — better no ref than a
+    /// phantom one.
+    #[test]
+    fn a_ref_without_a_stable_id_refuses_to_persist() {
+        let sig = SignalRef::new(Entity::from_raw_u32(3).unwrap(), "x");
+        assert!(sig.to_persisted(|_| None).is_none());
     }
 
     #[test]

@@ -1944,22 +1944,60 @@ fn material_pbr_section(
     }
 }
 
+/// Reflected schemas keyed by shader asset, so each loaded WGSL source is
+/// parsed once — not once per frame while the shader section is open. The
+/// `(ptr, len)` pair fingerprints the source `Cow`; a hot-reload swaps the
+/// allocation, so the entry re-parses. This crate cannot name the render
+/// side's `ShaderSchemas` cache (the Cargo.toml render gate), so it keeps
+/// its own.
+#[derive(Resource, Default)]
+struct ShaderSchemaCache {
+    #[allow(clippy::type_complexity)]
+    map: std::collections::HashMap<
+        bevy::asset::AssetId<bevy::shader::Shader>,
+        ((usize, usize), Option<std::sync::Arc<lunco_materials::ParamSchema>>),
+    >,
+}
+
 /// The reflected [`ParamSchema`](lunco_materials::ParamSchema) of a shader asset
 /// path — parsed from the loaded WGSL source, so the editor derives its widgets from
 /// the *shader* rather than from a material (or a hardcoded table).
 ///
 /// `None` while the shader is still loading, or if it declares no `Material` struct.
-fn shader_schema_of(ctx: &PanelCtx, path: &str) -> Option<lunco_materials::ParamSchema> {
+fn shader_schema_of(
+    ctx: &mut PanelCtx,
+    path: &str,
+) -> Option<std::sync::Arc<lunco_materials::ParamSchema>> {
     if path.is_empty() {
         return None;
     }
     let handle = ctx.resource::<AssetServer>()?.load::<bevy::shader::Shader>(path.to_string());
-    let shaders = ctx.resource::<Assets<bevy::shader::Shader>>()?;
-    let src = match &shaders.get(&handle)?.source {
-        bevy::shader::Source::Wgsl(s) => s.as_ref().to_string(),
-        _ => return None,
-    };
-    lunco_materials::ParamSchema::parse(&src)
+    let id = handle.id();
+    let cached = ctx.resource_scope(|ctx, cache: &mut ShaderSchemaCache| {
+        let shaders = ctx.resource::<Assets<bevy::shader::Shader>>()?;
+        let src = match &shaders.get(id)?.source {
+            bevy::shader::Source::Wgsl(s) => s.as_ref(),
+            _ => return None,
+        };
+        let key = (src.as_ptr() as usize, src.len());
+        if let Some((k, schema)) = cache.map.get(&id) {
+            if *k == key {
+                return schema.clone();
+            }
+        }
+        let schema = lunco_materials::ParamSchema::parse(src).map(std::sync::Arc::new);
+        cache.map.insert(id, (key, schema.clone()));
+        schema
+    });
+    match cached {
+        Some(schema) => schema,
+        None => {
+            ctx.defer(|world| {
+                world.init_resource::<ShaderSchemaCache>();
+            });
+            None
+        }
+    }
 }
 
 /// Render named, range-bounded controls for the selected entity's [`ShaderLook`]

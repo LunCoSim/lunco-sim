@@ -164,7 +164,7 @@ pub fn scene_document_for(
     // split only on the FIRST one. (Same idiom as `cache_terrain_document`.)
     let asset_path = asset_server.get_path(scene)?;
     let rel_path = asset_path.path().to_string_lossy();
-    let (name, rel) = rel_path.split_once('/')?;
+    let (name, rel) = lunco_assets::split_twin_rel(&rel_path)?;
     backed.doc_for(name, rel)
 }
 
@@ -255,7 +255,11 @@ pub(crate) fn drain_pending_twin_docs(
         // twin on disk, so it keeps the replicated asset text.
         let authoritative = role.as_deref().is_none_or(|r| r.is_authoritative());
         let from_disk = authoritative
-            .then(|| std::fs::read_to_string(&item.abs_path).ok())
+            .then(|| {
+                lunco_storage::read_file_sync(&item.abs_path)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+            })
             .flatten();
         let source = from_disk.as_deref().unwrap_or(source.as_str());
 
@@ -352,7 +356,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     let active_doc: Option<DocumentId> = mounted.and_then(|id| {
         let path = world.resource::<AssetServer>().get_path(id)?;
         let rel = path.path().to_string_lossy().into_owned();
-        let (name, rel) = rel.split_once('/')?;
+        let (name, rel) = lunco_assets::split_twin_rel(&rel)?;
         world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
     });
 

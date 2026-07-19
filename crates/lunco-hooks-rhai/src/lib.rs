@@ -33,6 +33,10 @@ impl RhaiHook {
     /// helper functions and top-level `const`s; `entry` is the function invoked
     /// per hook call, receiving the marshalled args positionally.
     pub fn compile(source: &str, entry: impl Into<String>) -> Result<Self, String> {
+        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
+        // for ease of debugging. All rhai resource limits (max operations, call
+        // depth, string/array/map sizes) are unset on this engine. Revisit before
+        // multiplayer hardening (REVIEW-2026-07-19.md finding #4 / FUZZ-8).
         let engine = Engine::new();
         let ast = engine.compile(source).map_err(|e| e.to_string())?;
         // Run top-level statements once to populate consts into the base scope.

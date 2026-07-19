@@ -73,23 +73,39 @@ Apps (luncosim, lunco-sandbox, lunica)
    │     lunco-modelica   lunco-usd   lunco-cosim   lunco-celestial
    │     lunco-environment   lunco-avatar   lunco-controller   ...
    │     lunco-scripting   ← rhai world-bridge + op-graph generators
-   │          │                     │                        │
-   │          ▼                     ▼                        ▼
+   │          │
+   │          ▼
+   ├── UI adapter
+   │     lunco-ui         ← thin adapter on top of lunco-workbench: mission-control
+   │                        widgets, telemetry, diagrams; also depends on Domain
+   │                        crates (lunco-avatar, lunco-celestial, lunco-fsw)
+   │          │
+   │          ▼
+   ├── Framework layer
+   │     lunco-workbench  ← canonical UI scaffold, docking, perspectives, File menu
+   │     lunco-doc        ← Authority, diagnostics substrate, CRUD foundation
+   │     lunco-doc-bevy   ← Bevy bridge: DocumentDiagnostics, open/new document
+   │          │
+   │          ▼
    ├── Session / Twin layer
    │     lunco-workspace  ← editor session (open Twins + active doc/perspective)
    │     lunco-twin       ← Twin filesystem container + document-kind registry
    │     lunco-storage    ← I/O backend (read/write only)
    │          │
    │          ▼
-   ├── Framework layer
-   │     lunco-workbench  ← canonical UI scaffold, docking, perspectives, File menu
-   │     lunco-ui         ← Widget toolkit + Document traits
-   │     lunco-doc        ← Authority, diagnostics substrate, CRUD foundation
-   │     lunco-doc-bevy   ← Bevy bridge: DocumentDiagnostics, open/new document
-   │          │                     │
-   │          ▼                     ▼
    └── lunco-core         ← f64 math foundation, Mutation<P> command substrate, fundamentals
 ```
+
+Arrows point at dependencies, and two edges deserve calling out explicitly:
+
+- **The Framework layer sits above the Session layer**, not below it —
+  `lunco-workbench` depends on `lunco-twin` and `lunco-workspace` (it wraps the
+  session as `WorkspaceResource`, and mounts Twins from the File menu).
+- **`lunco-ui` is a deliberate cross-layer adapter.** It is not a widget
+  toolkit under the workbench; it sits *on top of* `lunco-workbench` and also
+  reaches sideways into Domain crates (`lunco-avatar`, `lunco-celestial`,
+  `lunco-fsw`) to render their state. It is the one place UI and domain state
+  are allowed to meet below the Apps.
 
 ## 6. Strategic Roadmap Orientation
 

@@ -117,6 +117,7 @@
     forward_io::VertexOutput,
     mesh_view_bindings::view,
 }
+#import lunco::noise::vnoise_quintic
 
 const PI: f32 = 3.14159265359;
 /// One arcminute in radians — the natural unit for a star's rendered size.
@@ -194,63 +195,13 @@ var<uniform> mat: Material;
 
 /// Three decorrelated values in [0,1) from an integer lattice cell.
 ///
-/// Cell coordinates stay small here (|p| ≈ `star_density`, i.e. tens), which is
-/// the regime where the classic `sin`-based hash is well behaved — it degrades
-/// only once the argument is large enough that `sin`'s period aliases against
-/// float precision.
+/// Arithmetic (sin-free) hash: call sites add `mat.seed` (0–999) to the cell
+/// coords, and at that magnitude a `sin`-based hash aliases against f32
+/// precision differently per driver's polynomial — this one stays exact.
 fn hash33(p: vec3<f32>) -> vec3<f32> {
-    let q = vec3<f32>(
-        dot(p, vec3(127.1, 311.7, 74.7)),
-        dot(p, vec3(269.5, 183.3, 246.1)),
-        dot(p, vec3(113.5, 271.9, 124.6)),
-    );
-    return fract(sin(q) * 43758.5453123);
-}
-
-fn hash13(p: vec3<f32>) -> f32 {
-    var p3 = fract(p * 0.1031);
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-/// 3D value noise. Sampled on the **direction vector**, so it is a function on
-/// the sphere with no parameterisation — hence no seam, at any meridian, ever.
-fn vnoise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    // QUINTIC interpolant (6t^5 - 15t^4 + 10t^3), not the cubic smoothstep.
-    //
-    // This matters far more here than it does in a surface shader. Cubic
-    // smoothstep has a discontinuous SECOND derivative at the lattice planes, and
-    // on a large, smooth, low-frequency gradient — exactly what a diffuse Milky
-    // Way band is — the eye reads those planes as straight axis-aligned edges:
-    // the sky visibly breaks into rectangular brightness terraces.
-    //
-    // This is almost certainly what the earlier baked starfield was seeing. That
-    // artifact was blamed on the equirect→cubemap projection, and a test
-    // (`dome_projection_continuity.rs`) then proved the projection was essentially
-    // exact (worst error 2.7e-5) — which left the cause unidentified. It was the
-    // NOISE, not the projection: the generator's `fbm` used the same cubic
-    // interpolant, and value noise's lattice cells are axis-aligned boxes. Nothing
-    // about a cubemap was required to produce it, and indeed it reappeared here in
-    // a pure per-direction shader with no cubemap anywhere.
-    //
-    // The quintic is C2-continuous at the lattice, so there is no second-derivative
-    // step for the eye to latch onto and the terraces do not form.
-    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    let n000 = hash13(i);
-    let n100 = hash13(i + vec3(1.0, 0.0, 0.0));
-    let n010 = hash13(i + vec3(0.0, 1.0, 0.0));
-    let n110 = hash13(i + vec3(1.0, 1.0, 0.0));
-    let n001 = hash13(i + vec3(0.0, 0.0, 1.0));
-    let n101 = hash13(i + vec3(1.0, 0.0, 1.0));
-    let n011 = hash13(i + vec3(0.0, 1.0, 1.0));
-    let n111 = hash13(i + vec3(1.0, 1.0, 1.0));
-    return mix(
-        mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-        mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
-        u.z,
-    );
+    var p3 = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yxx) * p3.zyx);
 }
 
 /// Three octaves, returning the coarse sum in `.x` and the finest octave in `.y`.
@@ -258,10 +209,17 @@ fn vnoise(p: vec3<f32>) -> f32 {
 /// Two-for-one deliberately: the dust lanes want the coarse field and the
 /// unresolved-star granularity wants the fine one, and taking a second FBM to
 /// get the second would double the cost of the most expensive thing on screen.
+/// That specialisation is why this stays here rather than folding into
+/// `lunco::noise::fbm`, which returns a scalar and would need a second pass.
+///
+/// `vnoise_quintic`, not `vnoise`: the dust band is a large smooth low-frequency
+/// gradient, and the cubic interpolant's second-derivative break at the lattice
+/// planes reads as rectangular brightness terraces across the sky. See the note
+/// on `vnoise_quintic` in `lunco::noise`.
 fn fbm3(p: vec3<f32>) -> vec2<f32> {
-    let n0 = vnoise(p);
-    let n1 = vnoise(p * 2.0);
-    let n2 = vnoise(p * 4.0);
+    let n0 = vnoise_quintic(p);
+    let n1 = vnoise_quintic(p * 2.0);
+    let n2 = vnoise_quintic(p * 4.0);
     return vec2((n0 + 0.5 * n1 + 0.25 * n2) / 1.75, n2);
 }
 

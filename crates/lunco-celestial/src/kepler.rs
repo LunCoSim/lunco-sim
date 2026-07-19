@@ -64,8 +64,17 @@ pub struct KeplerOrbit {
     pub elements: KeplerianElements,
 }
 
+// TODO(backlog): migrate this hand-rolled Newton solve to lox-space's vetted
+// Keplerian propagation (already in the workspace dependency family) — see the
+// engineering-backlog doc in docs/architecture (lox-space Kepler propagation).
 /// Solve Kepler's equation M = E − e·sinE for the eccentric anomaly (Newton).
+///
+/// Elliptic only: `e` is clamped below 1 (parabolic/hyperbolic orbits are not
+/// modeled, and `e ≥ 1` would drive the Newton derivative to zero). A solve
+/// that exits the iteration budget with a residual above tolerance logs the
+/// degraded result rather than returning it silently.
 pub fn solve_kepler(mean_anomaly_rad: f64, e: f64) -> f64 {
+    let e = e.clamp(0.0, 0.999_999);
     let m = mean_anomaly_rad.rem_euclid(TAU);
     // High-eccentricity orbits converge better seeded at π.
     let mut ecc_anom = if e > 0.8 { std::f64::consts::PI } else { m };
@@ -77,6 +86,10 @@ pub fn solve_kepler(mean_anomaly_rad: f64, e: f64) -> f64 {
         if step.abs() < 1e-13 {
             break;
         }
+    }
+    let residual = ecc_anom - e * ecc_anom.sin() - m;
+    if residual.abs() > 1e-9 {
+        warn!("[kepler] Newton solve did not converge (M={m}, e={e}, residual={residual:e})");
     }
     ecc_anom
 }

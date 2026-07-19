@@ -71,7 +71,7 @@ pub use lunco_source::{
     id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
 };
 pub use scheme_registry::SchemeRegistry;
-pub use twin_source::{parse_twin_uri, twin_uri, TwinRoots, TWIN_SCHEME};
+pub use twin_source::{parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TWIN_SCHEME};
 
 // ============================================================================
 // User Config Directory Resolution
@@ -521,7 +521,7 @@ pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
 pub fn library_rel(path: &Path) -> Option<String> {
     path.strip_prefix(assets_dir_abs())
         .ok()
-        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .map(asset_path::slashed)
 }
 
 

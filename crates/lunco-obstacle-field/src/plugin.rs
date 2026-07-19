@@ -444,7 +444,7 @@ fn regenerate_obstacle_field(
         });
 
         for p in &placements {
-            let y = grid.height_at(p.pos.x, p.pos.y);
+            let y = grid.height_at(p.pos.x as f64, p.pos.y as f64) as f32;
 
             // Phase 1: every rock is static collidable decoration. The `dynamic`
             // flag is carried for phase 2 (PredictedDynamic pushables). The
@@ -554,9 +554,9 @@ fn reseat_bodies(
         if x.abs() > h || z.abs() > h {
             return None;
         }
-        let new_g = current.height_at(x, z);
-        let old_g = previous.map(|g| g.height_at(x, z)).unwrap_or(0.0);
-        let d = (new_g - old_g) as f64;
+        let new_g = current.height_at(x as f64, z as f64);
+        let old_g = previous.map(|g| g.height_at(x as f64, z as f64)).unwrap_or(0.0);
+        let d = new_g - old_g;
         if d.abs() < 1.0e-3 || d.abs() > MAX_RESEAT_SHIFT {
             None
         } else {

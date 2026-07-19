@@ -37,6 +37,10 @@ lunco-controller = { path = "../lunco-controller" }
 # lunco-autopilot stays USD-free and just compiles what it is handed.
 lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-cosim = { path = "../lunco-cosim" }
+# TODO(backlog): even with default-features off, lunco-modelica drags its heavy
+# closure (doc-bevy, web, worker-transport, workspace, twin) into sim builds —
+# split a modelica compile-core crate and depend on that instead; see the
+# engineering-backlog doc in docs/architecture (modelica compile-core split).
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 rumoca-phase-parse = { workspace = true }
 lunco-scripting = { path = "../lunco-scripting" }

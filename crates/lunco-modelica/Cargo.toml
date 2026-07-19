@@ -96,8 +96,8 @@ lunco-settings = { path = "../lunco-settings" }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-web = { workspace = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
-lunco-viz = { path = "../lunco-viz", optional = true }
-lunco-canvas = { path = "../lunco-canvas", optional = true }
+lunco-viz = { path = "../lunco-viz", features = ["ui"], optional = true }
+lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-storage = { path = "../lunco-storage" }

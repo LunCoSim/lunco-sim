@@ -82,7 +82,6 @@ impl Plugin for ScreenshotPlugin {
         // holds the HTTP response open for the PNG instead of answering `command_accepted`
         // and making the caller poll).
         app.register_deferred_command::<CaptureScreenshot>()
-            .init_resource::<PendingCapture>()
             .add_observer(deliver_screenshot);
 
         // Offline Frame-by-Frame Recording Mode
@@ -118,9 +117,11 @@ impl Plugin for ScreenshotPlugin {
     }
 }
 
-/// What the in-flight capture should do when it lands. Set by the handler, read by the
-/// `ScreenshotCaptured` observer.
-#[derive(Resource, Default, Debug, Clone)]
+/// What an in-flight capture should do when it lands. A component ON the `Screenshot`
+/// entity it belongs to, so the correlation travels with the entity — concurrent captures
+/// (a second HTTP request, a `take_photo`, an offline-recording frame) each deliver on
+/// their own frame instead of consuming each other's.
+#[derive(Component, Debug, Clone)]
 struct PendingCapture {
     /// Answer the HTTP request on this id (raw-PNG mode). `None` ⇒ `save_to_file`, whose
     /// response was already sent.
@@ -135,7 +136,6 @@ struct PendingCapture {
 fn on_capture_screenshot(
     trigger: On<CaptureScreenshot>,
     pending_request: Res<PendingApiRequest>,
-    mut pending: ResMut<PendingCapture>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -147,10 +147,11 @@ fn on_capture_screenshot(
         _ => None,
     };
 
-    *pending = if cmd.save_to_file {
+    let request = if cmd.save_to_file {
         // Empty ⇒ we pick a timestamped name. Reaching for a wall clock is not something the
         // render-free substrate should do, so that default lives here.
-        let path = if cmd.path.is_empty() { timestamped_name() } else { cmd.path.clone() };
+        let path =
+            if cmd.path.is_empty() { timestamped_name("screenshot") } else { cmd.path.clone() };
 
         // ANSWER NOW. A deferred command owes the caller EXACTLY ONE response on its
         // correlation id — the executor no longer sends one on its behalf. In save-to-file
@@ -174,7 +175,7 @@ fn on_capture_screenshot(
     // Spawned HERE, not by a domain-side observer. It used to be the latter, and that
     // observer only shipped in `lunco-avatar` — so binaries that didn't pull it in (lunica,
     // hello_workbench) never produced a screenshot at all: curl simply hung.
-    commands.spawn(Screenshot::primary_window());
+    commands.spawn((Screenshot::primary_window(), request));
 }
 
 register_commands!(
@@ -187,13 +188,18 @@ register_commands!(
 /// The picture landed — crop, encode, and either save it or answer the deferred request.
 fn deliver_screenshot(
     trigger: On<ScreenshotCaptured>,
-    mut pending: ResMut<PendingCapture>,
+    requests: Query<&PendingCapture>,
     mut commands: Commands,
 ) {
     let event = trigger.event();
-    let correlation_id = pending.correlation_id.take();
-    let save_path = pending.save_path.take();
-    let region = pending.region.take();
+    // Not one of ours (an offline-recording frame) — bail out BEFORE the full-frame
+    // clone+convert below, which costs ~8 MB per 1080p frame.
+    let Ok(pending) = requests.get(event.entity) else {
+        return;
+    };
+    let correlation_id = pending.correlation_id;
+    let save_path = pending.save_path.clone();
+    let region = pending.region;
 
     let Ok(mut dyn_img) = event.image.clone().try_into_dynamic() else {
         error!("[screenshot] failed to convert the captured image");
@@ -267,6 +273,14 @@ fn on_capture_from_camera(
     mut commands: Commands,
 ) {
     let target = trigger.event().target;
+    // The delivery, armed on whichever `Screenshot` entity is spawned below. Without it the
+    // frame lands in `deliver_screenshot` with nothing pending and is silently dropped —
+    // the instrument believes it photographed and recorded nothing.
+    let request = PendingCapture {
+        correlation_id: None,
+        save_path: Some(timestamped_name("photo")),
+        region: None,
+    };
     let camera_entity = match target {
         // A specific vessel → find a `Camera3d` among its descendants (its USD `def Camera`
         // mount).
@@ -287,13 +301,13 @@ fn on_capture_from_camera(
             );
             return;
         }
-        commands.spawn(Screenshot::primary_window());
+        commands.spawn((Screenshot::primary_window(), request));
         return;
     };
 
     // Bevy's `Screenshot` captures a render TARGET (window/image), not a camera directly.
     let Ok((cam, _, rt)) = cameras.get(camera_entity) else {
-        commands.spawn(Screenshot::primary_window());
+        commands.spawn((Screenshot::primary_window(), request));
         return;
     };
 
@@ -324,7 +338,7 @@ fn on_capture_from_camera(
         // double-render); fall back to the primary window.
         _ => Screenshot::primary_window(),
     };
-    commands.spawn(screenshot);
+    commands.spawn((screenshot, request));
 }
 
 /// Walk `root`'s descendants (BFS) and return the first `Camera3d` — a vessel's mounted camera.
@@ -366,12 +380,12 @@ fn register_science_tools() {
 
 /// `web_time`, not `std::time`: `std::time::SystemTime::now()` panics on wasm32 and trips the
 /// `disallowed_methods` lint.
-fn timestamped_name() -> String {
+fn timestamped_name(prefix: &str) -> String {
     let secs = web_time::SystemTime::now()
         .duration_since(web_time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    format!("screenshot_{secs}.png")
+    format!("{prefix}_{secs}.png")
 }
 
 use bevy::time::TimeUpdateStrategy;
@@ -541,6 +555,30 @@ fn activate_recording(
     );
 }
 
+/// Wind an active recording down: release the wake token, restore the present
+/// mode, and hand the clock back to `Automatic`. EVERY path that ends a recording
+/// — the stop command and the failed-write abort alike — must run this; skipping
+/// it leaves the last-written `ManualDuration(ZERO)` in place with nothing to
+/// replace it, freezing virtual time until the process restarts.
+fn teardown_recording(
+    state: &mut OfflineRecordingState,
+    keep_awake: &mut lunco_core::KeepAwake,
+    windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    commands: &mut Commands,
+) {
+    state.active = false;
+    state.is_waiting_for_frame = false;
+    state.frame_just_captured = false;
+
+    // Drop the wake request; the pacer restores the binary's idle policy.
+    keep_awake.release();
+    if let (Ok(mut window), Some(prev)) = (windows.single_mut(), state.prev_present_mode.take()) {
+        window.present_mode = prev;
+    }
+    // Restore automatic realtime ticking
+    commands.insert_resource(TimeUpdateStrategy::Automatic);
+}
+
 #[on_command(StopOfflineRecording)]
 fn on_stop_offline_recording(
     _trigger: On<StopOfflineRecording>,
@@ -555,18 +593,7 @@ fn on_stop_offline_recording(
     commands.remove_resource::<PendingShotStart>();
 
     if state.active {
-        state.active = false;
-        state.is_waiting_for_frame = false;
-        state.frame_just_captured = false;
-
-        // Drop the wake request; the pacer restores the binary's idle policy.
-        keep_awake.release();
-        if let (Ok(mut window), Some(prev)) = (windows.single_mut(), state.prev_present_mode.take())
-        {
-            window.present_mode = prev;
-        }
-        // Restore automatic realtime ticking
-        commands.insert_resource(TimeUpdateStrategy::Automatic);
+        teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut commands);
         info!("[offline-record] stopped recording");
     }
 }
@@ -885,13 +912,22 @@ fn drive_offline_clock(
 /// Observer for Bevy's ScreenshotCaptured event.
 fn deliver_offline_frame(
     trigger: On<ScreenshotCaptured>,
+    requests: Query<&PendingCapture>,
     mut state: ResMut<OfflineRecordingState>,
+    mut keep_awake: ResMut<lunco_core::KeepAwake>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut commands: Commands,
 ) {
     if !state.active || !state.is_waiting_for_frame {
         return;
     }
 
     let event = trigger.event();
+    // A frame with a `PendingCapture` belongs to `deliver_screenshot` — an HTTP
+    // screenshot or a `take_photo` taken mid-recording, not the sequence's frame.
+    if requests.get(event.entity).is_ok() {
+        return;
+    }
     let Ok(dyn_img) = event.image.clone().try_into_dynamic() else {
         error!("[offline-record] failed to convert image for frame {}", state.frame_index);
         state.is_waiting_for_frame = false;
@@ -913,9 +949,7 @@ fn deliver_offline_frame(
              avoid a sequence with holes in it",
             state.frame_index
         );
-        state.active = false;
-        state.is_waiting_for_frame = false;
-        state.frame_just_captured = false;
+        teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut commands);
         return;
     }
     trace!("[offline-record] saved frame {}", state.frame_index);

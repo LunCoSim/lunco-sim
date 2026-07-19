@@ -4,9 +4,16 @@ version = "0.1.0"
 edition = "2021"
 description = "LunCoSim's generic canvas — stateful Scene + Viewport + pluggable Tools/Layers/Overlays. Domain-agnostic; drives Modelica diagrams, node-graphs, annotations, and anything else that needs a 2D scene editor."
 
+[features]
+# A default (no-feature) dependency on this crate is egui-free: the data
+# model (Scene / Viewport / Selection / Tool / events) compiles on its own.
+# `ui` turns on the egui render stack — Canvas, layers, overlays, visuals.
+default = []
+ui = ["dep:bevy_egui", "dep:lunco-theme"]
+
 [dependencies]
-bevy_egui = { workspace = true }
-lunco-theme = { path = "../lunco-theme" }
+bevy_egui = { workspace = true, optional = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
 indexmap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

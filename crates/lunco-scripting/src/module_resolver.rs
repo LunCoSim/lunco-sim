@@ -24,7 +24,7 @@
 //! See that type's docs — `LuncoUsdResolver` solves the same problem the same way
 //! for USD layers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use lunco_assets::script_source::ScriptSources;
@@ -48,11 +48,19 @@ pub struct AssetModuleResolver {
     /// time someone forgets, and staleness in a scenario module is very hard to
     /// recognise from the symptom.
     cache: Arc<RwLock<HashMap<String, (String, Shared<Module>)>>>,
+    /// Ids currently being evaluated, so an import cycle (A → B → A) fails with
+    /// an error instead of recursing until the stack dies — the in-progress set
+    /// rhai's stock `FileModuleResolver` keeps for exactly this.
+    resolving: Arc<RwLock<HashSet<String>>>,
 }
 
 impl AssetModuleResolver {
     pub fn new(sources: ScriptSources) -> Self {
-        Self { sources, cache: Arc::new(RwLock::new(HashMap::new())) }
+        Self {
+            sources,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            resolving: Arc::new(RwLock::new(HashSet::new())),
+        }
     }
 }
 
@@ -99,16 +107,40 @@ impl ModuleResolver for AssetModuleResolver {
             }
         }
 
+        // Mark the id in-progress BEFORE evaluating: `eval_ast_as_new` re-enters
+        // this resolver for the module's own imports, so a cycle would otherwise
+        // recurse here until the stack dies.
+        if let Ok(mut resolving) = self.resolving.write() {
+            if !resolving.insert(id.clone()) {
+                return Err(Box::new(EvalAltResult::ErrorInModule(
+                    id.clone(),
+                    Box::new(EvalAltResult::ErrorRuntime(
+                        format!("import cycle detected while resolving {id}").into(),
+                        pos,
+                    )),
+                    pos,
+                )));
+            }
+        }
+
         // Compile and evaluate the module body. `eval_ast_as_new` RUNS the module's
         // top level, and resolution happens mid-tick inside another script — so a
         // module whose top level calls world verbs fires them at import time. Module
         // top levels are therefore expected to be definitions only; that is a rhai
         // convention, not something we can enforce here.
-        let ast = engine.compile(&text).map_err(|e| {
-            Box::new(EvalAltResult::ErrorInModule(id.clone(), Box::new(e.into()), pos))
-        })?;
-        let module = Module::eval_ast_as_new(Scope::new(), &ast, engine)
-            .map_err(|e| Box::new(EvalAltResult::ErrorInModule(id.clone(), e, pos)))?;
+        let evaluated = engine
+            .compile(&text)
+            .map_err(|e| {
+                Box::new(EvalAltResult::ErrorInModule(id.clone(), Box::new(e.into()), pos))
+            })
+            .and_then(|ast| {
+                Module::eval_ast_as_new(Scope::new(), &ast, engine)
+                    .map_err(|e| Box::new(EvalAltResult::ErrorInModule(id.clone(), e, pos)))
+            });
+        if let Ok(mut resolving) = self.resolving.write() {
+            resolving.remove(&id);
+        }
+        let module = evaluated?;
 
         let shared: Shared<Module> = module.into();
         if let Ok(mut c) = self.cache.write() {

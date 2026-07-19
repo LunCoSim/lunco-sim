@@ -278,8 +278,12 @@ fn resolve_driven(
     let mut contact_y = f64::MAX;
     let mut wheels = 0usize;
     for (wheel, w, t) in q_wheels.iter() {
+        // Wheel pose in CHASSIS space: the wheel's own `Transform` is local to
+        // its PARENT, which for a suspension-linked wheel is the link, not the
+        // chassis — so compose each intermediate link's transform on the way up.
         let mut e = wheel;
         let mut owned = false;
+        let mut p = t.translation;
         for _ in 0..8 {
             let Ok(parent) = q_parents.get(e) else { break };
             e = parent.parent();
@@ -287,14 +291,16 @@ fn resolve_driven(
                 owned = true;
                 break;
             }
+            let Ok((_, link_t)) = q_spatial.get(e) else { break };
+            p = link_t.transform_point(p);
         }
         if !owned {
             continue;
         }
         wheels += 1;
         min_mu = min_mu.min(w.friction_mu);
-        half_track = half_track.max((t.translation.x as f64).abs());
-        contact_y = contact_y.min(t.translation.y as f64 - w.wheel_radius);
+        half_track = half_track.max((p.x as f64).abs());
+        contact_y = contact_y.min(p.y as f64 - w.wheel_radius);
     }
 
     // No wheels ⇒ not a ground vehicle (a lander, a free camera): keep the honest

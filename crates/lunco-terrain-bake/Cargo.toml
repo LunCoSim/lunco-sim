@@ -20,8 +20,8 @@ lunco-terrain-core = { workspace = true }
 # pure geometry, so dead-code elimination keeps the worker wasm lean (the worker
 # never instantiates a Bevy App).
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
-# Pure-Rust GeoTIFF decoder (weezl/flate2) — wasm-safe, same as terrain-surface.
-tiff = "0.11"
+# Pure-Rust GeoTIFF decoder (weezl/flate2) — wasm-safe.
+tiff = { workspace = true }
 # Georeferencing tags — the shared format layer with `lunco-assets`, which writes
 # what this crate reads.
 lunco-geotiff = { path = "../lunco-geotiff" }

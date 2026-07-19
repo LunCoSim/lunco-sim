@@ -66,9 +66,10 @@ pub fn acquire() -> LaunchOutcome {
     if let Some(u) = &url {
         // Is an instance already listening? If so, hand it the link and bow out.
         if let Ok(mut stream) = Stream::connect(connect_name) {
-            let _ = stream.write_all(u.as_bytes());
-            let _ = stream.flush();
-            info!("[net] forwarded deep link to running instance: {u}");
+            match stream.write_all(u.as_bytes()).and_then(|()| stream.flush()) {
+                Ok(()) => info!("[net] forwarded deep link to running instance: {u}"),
+                Err(e) => warn!("[net] deep-link forward to running instance failed ({e})"),
+            }
             return LaunchOutcome::Forwarded;
         }
     }

@@ -75,7 +75,11 @@ impl TerrainLayer for CraterFieldLayer {
         key.write_u64(self.craters.rim_height_ratio.to_bits() as u64);
         let content_key = key.finish();
 
-        if let Some(hit) = CRATER_CACHE.lock().unwrap().get(&content_key).cloned() {
+        // Poison recovery: the cache holds pure content-keyed data, so a panic in
+        // some other bake must not turn every later terrain build into a panic too.
+        if let Some(hit) =
+            CRATER_CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&content_key).cloned()
+        {
             return Some(hit);
         }
 
@@ -210,7 +214,7 @@ impl TerrainLayer for CraterFieldLayer {
             modifier: Arc::new(Craters::new(craters)),
             content_key,
         };
-        let mut cache = CRATER_CACHE.lock().unwrap();
+        let mut cache = CRATER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         // Live slider-drag tuning mints a distinct key per value — cap the cache so
         // it can't grow without bound across a session of tweaking.
         if cache.len() >= 32 {

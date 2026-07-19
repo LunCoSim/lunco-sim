@@ -5,9 +5,9 @@ edition = "2021"
 description = "GeoTIFF georeferencing tags — read and write the 'geo' half of a GeoTIFF"
 
 [dependencies]
-# TIFF container I/O — the same crate (and version) the asset processor encodes
-# with and the terrain baker decodes with. Pure Rust, wasm-safe.
-tiff = "0.11"
+# TIFF container I/O — the same crate the asset processor encodes with and the
+# terrain baker decodes with (one workspace pin). Pure Rust, wasm-safe.
+tiff = { workspace = true }
 # The GeoTIFF spec layer: GeoKey directory build/parse, tag constants, key
 # ordering, value-offset indexing and ASCII terminators.
 #

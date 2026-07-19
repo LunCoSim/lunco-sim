@@ -111,7 +111,7 @@ pub fn peek_or_load_msl_class_blocking(
     // block until the parse completed. Parse first, install second.
     let path = resolve_class_path_indexed(qualified)
         .or_else(|| locate_library_file(qualified))?;
-    let uri = path.to_string_lossy().replace('\\', "/");
+    let uri = lunco_assets::asset_path::slashed(&path);
 
     // Pre-parsed MSL bundle: AST is parsed by the indexer, no rumoca
     // work here. `parsed_msl_bundle` lazily materialises it from

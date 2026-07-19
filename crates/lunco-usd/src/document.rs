@@ -918,6 +918,21 @@ fn prim_in(data: &sdf::Data, sdf: &SdfPath) -> bool {
     matches!(data.spec(sdf), Some(s) if s.ty == SpecType::Prim)
 }
 
+/// The `xformOpOrder` tokens `data` holds for `prim`, flattening any list-op
+/// authoring. Empty when unauthored.
+fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
+    let Ok(attr) = prim.append_property("xformOpOrder") else {
+        return Vec::new();
+    };
+    match data.field(&attr, "default").cloned() {
+        Some(sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
+        Some(sdf::Value::StringVec(v)) => v,
+        Some(sdf::Value::TokenListOp(op)) => op.flatten().into_iter().map(Into::into).collect(),
+        Some(sdf::Value::StringListOp(op)) => op.flatten(),
+        _ => Vec::new(),
+    }
+}
+
 /// The identity contract: one document per file, content refreshed from disk,
 /// unsaved edits never clobbered. Everything here already existed as inherent
 /// methods — this just hands them to the generic
@@ -1071,7 +1086,7 @@ impl Document for UsdDocument {
             UsdOp::SetTranslate { path, value, .. } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
                 // Pre-state is read from the TARGET layer: the inverse restores
-                // that layer's opinion, and `xformOpOrder` we synthesize lands
+                // that layer's opinion, and `xformOpOrder` we author lands
                 // there too.
                 let layer = self.layer(target);
                 let translate_existed = prim_sdf
@@ -1079,12 +1094,13 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let order_existed = prim_sdf
-                    .append_property("xformOpOrder")
-                    .ok()
-                    .and_then(|p| layer.spec(&p).map(|_| ()))
-                    .is_some();
                 let old_translate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:translate");
+                // The op order is checked against the COMPOSED opinion: a weaker
+                // layer may already list ops this edit must not discard. When
+                // the op is missing, materialise that order plus the new op into
+                // the target layer — append, never clobber.
+                let composed_order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
+                let append_op = !composed_order.iter().any(|t| t == "xformOp:translate");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -1092,22 +1108,20 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set(value)
                     .map_err(author_err)?;
-                // Establish the op order only when the prim has none yet in this
-                // layer — never clobber an existing xform stack.
-                if !order_existed {
-                    let order = parse_attribute_value("token[]", "[\"xformOp:translate\"]")
-                        .map_err(author_err)?;
+                if append_op {
+                    let mut order = composed_order;
+                    order.push("xformOp:translate".into());
                     stage
                         .create_attribute(format!("{path}.xformOpOrder"), "token[]")
                         .map_err(author_err)?
-                        .set(order)
+                        .set(sdf::Value::token_vec(order))
                         .map_err(author_err)?;
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
                 // Typed inverse only when this purely overwrote an existing
-                // translate in this layer (no `xformOpOrder` was synthesized).
-                let inverse = if translate_existed && order_existed {
+                // translate in this layer (no `xformOpOrder` was authored).
+                let inverse = if translate_existed && !append_op {
                     old_translate
                         .map(|old| UsdOp::SetTranslate {
                             edit_target: id.clone(),
@@ -1132,7 +1146,7 @@ impl Document for UsdDocument {
             UsdOp::SetRotate { path, value, .. } => {
                 // Direct mirror of `SetTranslate` for `xformOp:rotateXYZ`
                 // (Euler XYZ degrees). Same target-layer pre-state read, same
-                // "synthesize op order only when the prim has none yet" rule.
+                // composed-order append rule.
                 let prim_sdf = self.require_prim_anywhere(&path)?;
                 let layer = self.layer(target);
                 let rotate_existed = prim_sdf
@@ -1140,12 +1154,9 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let order_existed = prim_sdf
-                    .append_property("xformOpOrder")
-                    .ok()
-                    .and_then(|p| layer.spec(&p).map(|_| ()))
-                    .is_some();
                 let old_rotate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
+                let composed_order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
+                let append_op = !composed_order.iter().any(|t| t == "xformOp:rotateXYZ");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -1153,18 +1164,18 @@ impl Document for UsdDocument {
                     .map_err(author_err)?
                     .set(value)
                     .map_err(author_err)?;
-                if !order_existed {
-                    let order = parse_attribute_value("token[]", "[\"xformOp:rotateXYZ\"]")
-                        .map_err(author_err)?;
+                if append_op {
+                    let mut order = composed_order;
+                    order.push("xformOp:rotateXYZ".into());
                     stage
                         .create_attribute(format!("{path}.xformOpOrder"), "token[]")
                         .map_err(author_err)?
-                        .set(order)
+                        .set(sdf::Value::token_vec(order))
                         .map_err(author_err)?;
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
-                let inverse = if rotate_existed && order_existed {
+                let inverse = if rotate_existed && !append_op {
                     old_rotate
                         .map(|old| UsdOp::SetRotate {
                             edit_target: id.clone(),
@@ -2091,6 +2102,174 @@ mod tests {
                 .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/A/B").unwrap(), "xformOp:translate"),
             Some([9.0, 9.0, 9.0]),
             "nested child translate must be untouched (CQ-503)"
+        );
+    }
+
+    /// `xformOpOrder` ACCUMULATES: authoring a second xform op appends to the
+    /// order in author order — it must not replace the list with a one-element
+    /// order, which silently discards the first op at composition time even
+    /// though its value attribute survives.
+    #[test]
+    fn set_translate_then_rotate_lists_both_ops_in_author_order() {
+        let scene = "#usda 1.0\ndef Xform \"Rig\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(60),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_tr.usda"),
+        );
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 90.0, 0.0],
+        })
+        .unwrap();
+
+        let rig = SdfPath::new("/Rig").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &rig),
+            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            "both ops listed, in author order"
+        );
+        // Both value attributes were authored too.
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:translate"),
+            Some([1.0, 2.0, 3.0])
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
+            Some([0.0, 90.0, 0.0])
+        );
+
+        // Re-setting an op already in the order overwrites the value WITHOUT
+        // duplicating its order entry.
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 45.0, 0.0],
+        })
+        .unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &rig),
+            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            "re-set of an existing op must not duplicate its xformOpOrder entry"
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
+            Some([0.0, 45.0, 0.0])
+        );
+    }
+
+    /// The order is the AUTHOR order, not a canonical translate-first order:
+    /// rotate authored first stays first.
+    #[test]
+    fn xform_op_order_is_author_order_not_canonical() {
+        let scene = "#usda 1.0\ndef Xform \"Rig\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(61),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_rt.usda"),
+        );
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 90.0, 0.0],
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &SdfPath::new("/Rig").unwrap()),
+            vec!["xformOp:rotateXYZ".to_string(), "xformOp:translate".to_string()],
+            "rotate-first authoring lists rotate first"
+        );
+    }
+
+    /// The referenced-asset clobber case: the prim's composed `xformOpOrder`
+    /// already lists ops this edit did not author (an asset's own rotate/scale).
+    /// Authoring a translate must APPEND to that composed order — clobbering it
+    /// leaves the rotate/scale value attributes orphaned (authored but no longer
+    /// applied), which is exactly the silent visual regression this pins.
+    #[test]
+    fn set_translate_preserves_preexisting_composed_op_order() {
+        let scene = "#usda 1.0\ndef Xform \"Part\"\n{\n    double3 xformOp:rotateXYZ = (0, 45, 0)\n    double3 xformOp:scale = (2, 2, 2)\n    uniform token[] xformOpOrder = [\"xformOp:rotateXYZ\", \"xformOp:scale\"]\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(62),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_ref.usda"),
+        );
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Part".into(),
+            value: [10.0, 0.0, 0.0],
+        })
+        .unwrap();
+
+        let part = SdfPath::new("/Part").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &part),
+            vec![
+                "xformOp:rotateXYZ".to_string(),
+                "xformOp:scale".to_string(),
+                "xformOp:translate".to_string(),
+            ],
+            "translate appends AFTER the pre-existing ops, none dropped"
+        );
+        // The pre-existing op values are untouched.
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:rotateXYZ"),
+            Some([0.0, 45.0, 0.0])
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:scale"),
+            Some([2.0, 2.0, 2.0])
+        );
+    }
+
+    /// Cross-layer variant of the clobber case: the composed order comes from the
+    /// BASE layer, and the edit targets the (stronger) RUNTIME layer. Since the
+    /// runtime layer's `xformOpOrder` opinion WINS composition wholesale, the op
+    /// must materialise base's order PLUS the new op into the runtime layer — a
+    /// bare `[rotateXYZ]` runtime order would discard the base translate.
+    #[test]
+    fn runtime_layer_rotate_materialises_base_order_plus_new_op() {
+        let scene = "#usda 1.0\ndef Xform \"Part\"\n{\n    double3 xformOp:translate = (1, 2, 3)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(63),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_rt_layer.usda"),
+        );
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::runtime(),
+            path: "/Part".into(),
+            value: [0.0, 30.0, 0.0],
+        })
+        .unwrap();
+
+        let part = SdfPath::new("/Part").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &part),
+            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            "composed order keeps base's translate and appends the runtime rotate"
+        );
+        // The base layer's own opinion is untouched (Save serializes base only).
+        assert_eq!(
+            xform_op_order_tokens(doc.data(), &part),
+            vec!["xformOp:translate".to_string()],
+            "runtime edit must not rewrite the base layer's xformOpOrder"
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:translate"),
+            Some([1.0, 2.0, 3.0])
         );
     }
 

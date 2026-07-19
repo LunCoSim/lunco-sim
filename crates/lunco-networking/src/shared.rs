@@ -10,6 +10,10 @@ use crate::NetworkMode;
 
 /// Dev protocol id + key. Host and client MUST agree. (Localhost MVP; a real
 /// deployment would load a real key.)
+///
+/// TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+/// ease of debugging. Zero `PRIVATE_KEY` / constant `PROTOCOL_ID` compiled in.
+/// Revisit before multiplayer hardening (REVIEW-2026-07-19.md §2 Security, MED).
 pub(crate) const PROTOCOL_ID: u64 = 0x004C_554E_434F_0001; // "LUNCO"
 pub(crate) const PRIVATE_KEY: [u8; 32] = [0u8; 32];
 

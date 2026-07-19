@@ -43,10 +43,10 @@
     pbr_functions,
     mesh_bindings::mesh,
     mesh_view_bindings::view,
-    mesh_view_bindings::lights,
 }
 #import lunco::horizon::{sun_visibility_resolved, shadow_fill}
 #import lunco::lunar::regolith_factor
+#import lunco::noise::fbm
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
@@ -114,49 +114,6 @@ var height_map: texture_2d<f32>;
 var shadow_cache: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(11)
 var shadow_cache_sampler: sampler;
-
-// --- 3D value noise + FBM ------------------------------------------------
-
-fn hash13(p: vec3<f32>) -> f32 {
-    var p3 = fract(p * 0.1031);
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fn vnoise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let n000 = hash13(i);
-    let n100 = hash13(i + vec3(1.0, 0.0, 0.0));
-    let n010 = hash13(i + vec3(0.0, 1.0, 0.0));
-    let n110 = hash13(i + vec3(1.0, 1.0, 0.0));
-    let n001 = hash13(i + vec3(0.0, 0.0, 1.0));
-    let n101 = hash13(i + vec3(1.0, 0.0, 1.0));
-    let n011 = hash13(i + vec3(0.0, 1.0, 1.0));
-    let n111 = hash13(i + vec3(1.0, 1.0, 1.0));
-    return mix(
-        mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-        mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
-        u.z,
-    );
-}
-
-// Normalized to ~0..1 regardless of octave count (matches Blender's 0.5-centred
-// noise output, which the ramps below were authored against).
-fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
-    var sum = 0.0;
-    var amp = 1.0;
-    var total = 0.0;
-    var q = p;
-    for (var o = 0; o < octaves; o++) {
-        sum += amp * vnoise(q);
-        total += amp;
-        amp *= gain;
-        q *= 2.0; // lacunarity 2.0, as authored
-    }
-    return sum / total;
-}
 
 // Blender linear ColorRamp with two stops (black @ lo, white @ hi).
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {

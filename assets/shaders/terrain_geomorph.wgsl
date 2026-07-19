@@ -28,9 +28,9 @@
     view_transformations::position_world_to_clip,
     forward_io::VertexOutput,
     mesh_view_bindings::view,
-    mesh_view_bindings::lights,
 }
-#import lunco::pbr_lit::lit_n
+#import lunco::pbr_lit::{lit_n, sun_to_light}
+#import lunco::noise::vnoise
 #import lunco::lunar::regolith_factor
 #import lunco::horizon::{shadow_fill}
 #import lunco::transfer::{slope_hazard_color, slope_of}
@@ -119,31 +119,6 @@ var shadow_cache_sampler: sampler;
 
 // --- 3D value noise + FBM (ported from regolith.wgsl) --------------------
 
-fn hash13(p: vec3<f32>) -> f32 {
-    var p3 = fract(p * 0.1031);
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fn vnoise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let n000 = hash13(i);
-    let n100 = hash13(i + vec3(1.0, 0.0, 0.0));
-    let n010 = hash13(i + vec3(0.0, 1.0, 0.0));
-    let n110 = hash13(i + vec3(1.0, 1.0, 0.0));
-    let n001 = hash13(i + vec3(0.0, 0.0, 1.0));
-    let n101 = hash13(i + vec3(1.0, 0.0, 1.0));
-    let n011 = hash13(i + vec3(0.0, 1.0, 1.0));
-    let n111 = hash13(i + vec3(1.0, 1.0, 1.0));
-    return mix(
-        mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-        mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
-        u.z,
-    );
-}
-
 fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
     var sum = 0.0;
     var amp = 1.0;
@@ -222,24 +197,6 @@ fn lod_depth_color(d: f32) -> vec3<f32> {
         vec3(0.85, 0.30, 0.80),
     );
     return p[i];
-}
-
-// World-space to-sun, read straight from the scene lights (no per-material uniform
-// wiring needed for streamed tiles). Picks the brightest directional light so the
-// dim earthshine fill can't be mistaken for the sun.
-fn sun_to_light() -> vec3<f32> {
-    var best = vec3(0.0, 1.0, 0.0);
-    var best_lum = -1.0;
-    let n = lights.n_directional_lights;
-    for (var i = 0u; i < n; i = i + 1u) {
-        let dl = lights.directional_lights[i];
-        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > best_lum) {
-            best_lum = lum;
-            best = dl.direction_to_light;
-        }
-    }
-    return best;
 }
 
 fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
@@ -477,8 +434,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
 #endif
     // Display-referred shadow fill, shared with every marched terrain shader
-    // (see `shadow_fill`, lunco::horizon, which gates itself on `csm_far` so it
-    // fires only where the march machinery is actually wired). The emissive-slot hemispheric fill
+    // (see `shadow_fill`, lunco::horizon, which gates on `wired` so it fires only
+    // where the march machinery is actually wired — explicitly NOT on `csm_far`,
+    // which reads 0 under a shadowless sun and would strip the fill from exactly
+    // the polar terrain it exists to rescue). Streamed LOD tiles are always genuine
+    // heightfield terrain, so `wired` is 1.0 here rather than an `hf_res` read.
+    // The emissive-slot hemispheric fill
     // above is scene-referred cd/m2 tuned for the old studio exposure — at the
     // calibrated lunar EV it vanishes and near tiles crushed to black next to
     // the fill-lifted heightfield.

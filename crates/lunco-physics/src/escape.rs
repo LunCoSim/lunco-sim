@@ -130,13 +130,16 @@ pub struct ReportedEscapes(EntityHashSet);
 
 /// Recompute [`WorldBounds`] from the union of every static collider's AABB.
 ///
-/// Change-driven: `Changed<ColliderAabb>` is empty once terrain has settled, so
-/// in steady state this system iterates nothing and returns immediately. The
-/// union itself is recomputed over the full static set when it does fire, which
-/// is correct under REMOVAL as well (a shrinking world must shrink its bounds,
-/// and an incremental union cannot).
+/// Change-driven, filtered to STATIC bodies' colliders: avian rewrites
+/// `ColliderAabb` for every awake body's colliders each step, so a bare
+/// `Changed<ColliderAabb>` probe would fire whenever anything moves — only a
+/// static collider's AABB changing (or any removal) says the world changed.
+/// Once terrain has settled the probe matches nothing and this system returns
+/// immediately. The union itself is recomputed over the full static set when it
+/// does fire, which is correct under REMOVAL as well (a shrinking world must
+/// shrink its bounds, and an incremental union cannot).
 fn update_world_bounds(
-    q_changed: Query<(), (Changed<ColliderAabb>, With<ColliderOf>)>,
+    q_changed: Query<&ColliderOf, Changed<ColliderAabb>>,
     mut q_removed: RemovedComponents<ColliderAabb>,
     q_static: Query<(&ColliderAabb, &ColliderOf)>,
     q_bodies: Query<&RigidBody>,
@@ -144,9 +147,18 @@ fn update_world_bounds(
 ) {
     // DRAIN, don't peek: `is_empty()` leaves the events queued for their whole
     // retention window, so every removal re-fired this full static union for
-    // several extra frames.
+    // several extra frames. Drained FIRST and unconditionally — folding it into
+    // the `||` below would let a static change short-circuit the drain and leak
+    // the events back into the next frames.
     let removed_any = q_removed.read().count() > 0;
-    if q_changed.is_empty() && !removed_any {
+    // Only a STATIC collider can move the union the loop below computes, so a
+    // changed DYNAMIC collider must not re-fire it. Gating on any `ColliderOf`
+    // change instead meant a single rover in motion recomputed the full static
+    // union every frame — a whole pass over every static collider in the scene.
+    let static_changed = q_changed
+        .iter()
+        .any(|collider_of| matches!(q_bodies.get(collider_of.body), Ok(RigidBody::Static)));
+    if !static_changed && !removed_any {
         return;
     }
 

@@ -125,6 +125,15 @@ pub struct ProcessConfig {
     #[serde(default)]
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub site_id: Option<String>,
+    /// Lunar reference frame of the SOURCE product's coordinates —
+    /// `"MOON_ME"` for anything LROC/LOLA-derived, `"MOON_PA"` for
+    /// ephemeris-frame data. Stamped into the heightmap's GeoTIFF tags as
+    /// provenance. Optional: a manifest that does not know its source's frame
+    /// declares nothing, and every reader sees *unknown* — never a guess
+    /// (ME↔PA disagree by ≈ 875 m on the surface).
+    #[serde(default)]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub frame: Option<String>,
 }
 
 fn default_kind() -> String {
@@ -566,13 +575,25 @@ fn process_dem(
         // simulation puts it on, not a more defensible number. Reconcile the three
         // and this follows.
         const BODY_RADIUS_M: f64 = 1737.0e3;
-        let geo = lunco_geotiff::GeoTransform::centred_square(
+        let mut geo = lunco_geotiff::GeoTransform::centred_square(
             win as f64 * scale,
             out_n,
             BODY_RADIUS_M,
             center_lat,
             center_lon,
         );
+        // Frame provenance: only the manifest can know which lunar frame the
+        // source product is in, so a declared `frame` is stamped and an absent
+        // one leaves the raster honestly silent. A typo must fail loudly here —
+        // writing nothing would silently downgrade a known frame to unknown.
+        if let Some(name) = cfg.frame.as_deref() {
+            let frame = lunco_geotiff::LunarFrame::parse(name).ok_or_else(|| {
+                io_err(format!(
+                    "unknown `frame` \"{name}\" (expected \"MOON_ME\" or \"MOON_PA\")"
+                ))
+            })?;
+            geo = geo.with_frame(frame);
+        }
         let mut img = enc
             .new_image::<colortype::Gray32Float>(out_n as u32, out_n as u32)
             .map_err(tiff_io_err)?;
@@ -658,6 +679,7 @@ mod tests {
             src_min_lon: Some(-1.0),
             src_max_lon: Some(1.0),
             site_id: Some("testsite".into()),
+            frame: Some("MOON_ME".into()),
         };
         let out_dir = tmp.join("site");
         process_dem(&src_path, &out_dir, &cfg).expect("dem process should succeed");
@@ -678,6 +700,12 @@ mod tests {
             }
             other => panic!("expected F32 heightmap, got {other:?}"),
         }
+
+        // The manifest's frame declaration lands in the raster's own tags.
+        let mut tag_dec =
+            tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
+        let geo = lunco_geotiff::read_geo_tags(&mut tag_dec).unwrap();
+        assert_eq!(geo.frame, Some(lunco_geotiff::LunarFrame::MoonMe));
 
         // metadata.yaml parses and carries the essentials the loader needs.
         let meta = std::fs::read_to_string(out_dir.join("metadata.yaml")).unwrap();

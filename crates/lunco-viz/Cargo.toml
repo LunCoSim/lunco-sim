@@ -4,25 +4,42 @@ version = "0.1.0"
 edition = "2021"
 description = "LunCoSim's visualization framework — signals, viz kinds, and view targets. Domain-agnostic: Modelica, Avian, USD, SysML all push into one SignalRegistry and share viz kinds."
 
+[features]
+# A default (no-feature) dependency on this crate is egui-free: it exposes
+# only the `signal` re-export of `lunco-signal`. Everything that renders —
+# viz kinds, VizPanel, the registry plumbing, `LuncoVizPlugin` — sits
+# behind `ui`, which is what links bevy_egui/egui_plot/workbench.
+default = []
+ui = [
+    "dep:bevy",
+    "dep:bevy_egui",
+    "dep:egui_plot",
+    "dep:lunco-workbench",
+    "dep:lunco-theme",
+    "dep:lunco-canvas",
+    "dep:serde",
+    "dep:serde_json",
+]
+
 [dependencies]
-bevy = { workspace = true }
-bevy_egui = { workspace = true }
-egui_plot = { workspace = true }
-lunco-workbench = { path = "../lunco-workbench" }
-lunco-theme = { path = "../lunco-theme" }
+bevy = { workspace = true, optional = true }
+bevy_egui = { workspace = true, optional = true }
+egui_plot = { workspace = true, optional = true }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-theme = { path = "../lunco-theme", optional = true }
 # The signal DATA model (SignalRegistry / SignalRef / ScalarHistory). Render-free, and
 # re-exported from `signal.rs` so existing `lunco_viz::SignalRegistry` callers are
 # unaffected. It lives outside this crate so `lunco-telemetry` can push samples into the
-# ring buffer without linking bevy_egui → bevy_render (this crate does).
+# ring buffer without linking bevy_egui → bevy_render (this crate's `ui` feature does).
 lunco-signal = { path = "../lunco-signal" }
 # Used by `kinds::canvas_plot_node` to implement
 # `lunco_canvas::NodeVisual` so plots can live as first-class nodes
 # inside any `lunco_canvas::Scene` (Simulink-style scope blocks,
 # future dashboard widgets, etc.). Domain crates (lunco-modelica
 # today) register the kind with the canvas's `VisualRegistry`.
-lunco-canvas = { path = "../lunco-canvas" }
-serde = { workspace = true }
-serde_json = { workspace = true }
+lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [lints]
 workspace = true

@@ -683,6 +683,18 @@ pub fn drain_busy_drops(
     }
 }
 
+/// Drop a closed document's terminal-outcome cache so `last_outcome`
+/// doesn't accumulate dead entries across long sessions. One shared
+/// observer here instead of per-domain copies: every document type
+/// (Modelica, script, USD) closes through the same `CloseDocument`
+/// command, and the bus is the workbench's own resource.
+pub fn clear_outcomes_on_close_document(
+    trigger: On<lunco_doc_bevy::CloseDocument>,
+    mut bus: ResMut<StatusBus>,
+) {
+    bus.clear_outcomes_for(BusyScope::Document(trigger.event().doc.0));
+}
+
 /// Adds the [`StatusBus`] resource and the per-frame `drain_busy_drops`
 /// system. Renderers and fan-out systems are added by their owning
 /// plugins (each can opt in independently).
@@ -697,7 +709,8 @@ impl Plugin for StatusBusPlugin {
         // reads `is_busy` / `lifecycle`. Keeps the rendered bus
         // state in lock-step with the underlying work.
         app.init_resource::<StatusBus>()
-            .add_systems(PreUpdate, drain_busy_drops);
+            .add_systems(PreUpdate, drain_busy_drops)
+            .add_observer(clear_outcomes_on_close_document);
     }
 }
 

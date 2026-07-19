@@ -91,6 +91,7 @@ these are the reasoning.
 
 | Doc | What it covers |
 |---|---|
+| [**`engineering-backlog-and-standards.md`**](engineering-backlog-and-standards.md) | The engineering backlog: adopted standards (ANISE, FMI 3.0, ROS 2, AOUSD conformance), architecture debt, testing debt, the measure-first list, the watch list, and **validated non-adoptions** — recorded so they don't get re-litigated. The deliberate exception to "describes what IS", and un-numbered because it spans every range rather than sitting in one |
 | [**`render-decoupling.md`**](render-decoupling.md) | **The material is the boundary.** Domain crates state appearance *intent* (`PbrLook`, `ShaderLook`, `SceneCamera`, `WorldLabel`); only `lunco-render-bevy` names `bevy_pbr`. This is why `--no-ui` links no wgpu/`bevy_render`/egui/winit — and why the `cargo tree` CI guard exists |
 | [**`shader-layers-and-params.md`**](shader-layers-and-params.md) | Shader looks: WGSL-reflected `dyn_params` and named texture layers. Parameter names, ranges and defaults come from the shader source — **adding a parameter is editing a shader, not editing Rust** |
 | [`command-journal.md`](command-journal.md) | One op log for identity, undo and sync. **Document-domain ops are journaled; command/session replay is not built** |

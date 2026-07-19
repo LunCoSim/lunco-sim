@@ -88,6 +88,17 @@ impl Storage for WebStorage {
         })
     }
 
+    async fn delete(&self, handle: &StorageHandle) -> StorageResult<()> {
+        let key = Self::key(handle)?;
+        let ls = Self::local_storage()?;
+        if ls.get_item(&key).ok().flatten().is_none() {
+            return Err(StorageError::NotFound);
+        }
+        ls.remove_item(&key).map_err(|_| {
+            StorageError::Io(std::io::Error::other("localStorage remove failed"))
+        })
+    }
+
     async fn exists(&self, handle: &StorageHandle) -> bool {
         let Ok(key) = Self::key(handle) else {
             return false;

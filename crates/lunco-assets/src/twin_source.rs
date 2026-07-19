@@ -50,7 +50,7 @@ pub const TWIN_SCHEME: &str = "twin";
 /// a leading `/`, so a Windows-built relative path still names the same asset on
 /// every peer — the identity has to be byte-identical across the wire.
 pub fn twin_uri(name: impl AsRef<str>, rel: impl AsRef<Path>) -> String {
-    let rel = rel.as_ref().to_string_lossy().replace('\\', "/");
+    let rel = crate::asset_path::slashed(rel);
     crate::asset_path::uri(
         TWIN_SCHEME,
         &format!("{}/{}", name.as_ref(), rel.trim_start_matches('/')),
@@ -61,7 +61,15 @@ pub fn twin_uri(name: impl AsRef<str>, rel: impl AsRef<Path>) -> String {
 /// different scheme (or no scheme at all). The parsing inverse of [`twin_uri`].
 pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
     let (scheme, rest) = crate::asset_path::split_scheme(uri)?;
-    (scheme == TWIN_SCHEME).then_some(rest)?.split_once('/')
+    split_twin_rel((scheme == TWIN_SCHEME).then_some(rest)?)
+}
+
+/// Split the scheme-stripped remainder of a `twin://` address — the
+/// `<name>/<rel>` form an `AssetReader` or scheme handler receives — into the
+/// Twin name and the Twin-relative path. [`parse_twin_uri`] for callers that
+/// hold the full URI.
+pub fn split_twin_rel(rest: &str) -> Option<(&str, &str)> {
+    rest.split_once('/')
 }
 
 /// The key an overlay is stored under — the reader-facing relative path

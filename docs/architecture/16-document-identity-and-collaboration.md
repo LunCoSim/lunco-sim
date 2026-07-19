@@ -343,11 +343,21 @@ the `.glb`, and swapping a DEM must invalidate the scene pointing at it). The BF
   never touches the filesystem, which is what makes wasm work), so it has no
   filesystem knowledge to report a timestamp from. Routing staleness through it
   today would therefore detect nothing.
-  Making the resolver the real seam means giving it **source provenance** —
-  which asset source each id came from and that source's version (mtime
-  natively, etag/cid on a client). That is the change that also makes staleness
-  work for a *client*, which the current filesystem stat cannot. Worth doing;
-  bigger than a bolt-on, and a change to both resolver and loader.
+  Making the resolver the real seam means giving it **source provenance**: a
+  version token per resolved id, recorded at fetch.
+  That token must be a **content id, not an mtime**. The loader fetches through
+  `LoadContext::read_asset_bytes`, which returns *bytes only* — Bevy's asset
+  reader surfaces no mtime and no etag, and reaching for one would mean touching
+  the filesystem, which is exactly what this path avoids so that wasm works. So
+  hash what was fetched (`lunco-hash`, the same content addressing
+  `scenario_sync` already uses for manifests). Content ids are uniform across
+  native and client, and — unlike mtime — a `touch` with no edit does not
+  false-flag.
+  Note this does **not** flow back into `ar::Resolver::get_modification_timestamp`:
+  that returns `SystemTime`, and it exists to drive openusd's *own* layer-reload
+  decisions, which we do not use (no `find_or_open`, no layer cache). Provenance
+  serves *our* staleness, and the resolver is where it belongs because it is the
+  one place that knows what was actually loaded.
   Note the layering constraint: `lunco-doc-bevy`'s watermark serves `.mo`,
   `.rhai`, and `.usda` alike and must never call a USD resolver. The generic
   registry watches paths it is *handed*; the domain decides what they are.

@@ -175,10 +175,7 @@ fn rebind_changed_shader_look(
         // unprepared material every slider tick and makes the terrain flicker.
         if same_material && !look.live.is_empty() && written.insert(handle.id()) {
             if let Some(mut mat) = materials.get_mut(&handle) {
-                for (name, value) in &look.live {
-                    mat.values.insert(name.clone(), *value);
-                }
-                mat.repack();
+                mat.set_many(look.live.iter().map(|(name, value)| (name.as_str(), *value)));
             }
         }
     }

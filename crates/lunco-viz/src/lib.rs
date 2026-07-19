@@ -8,27 +8,48 @@
 //! typed samples into renderers, and nothing about Modelica, Avian, or
 //! any specific producer. Domain crates depend on `lunco-viz`, not the
 //! reverse.
+//!
+//! # Feature `ui`
+//!
+//! Everything that renders — viz kinds, `VizPanel`, the registry
+//! plumbing, [`LuncoVizPlugin`] — sits behind the `ui` feature (off by
+//! default), which is what links bevy_egui/egui_plot/workbench. A plain
+//! dependency gets only the [`signal`] re-export of `lunco-signal`, so
+//! it stays render-free.
 
 pub mod signal;
+#[cfg(feature = "ui")]
 pub mod view;
+#[cfg(feature = "ui")]
 pub mod viz;
+#[cfg(feature = "ui")]
 pub mod registry;
+#[cfg(feature = "ui")]
 pub mod panel;
+#[cfg(feature = "ui")]
 pub mod kinds;
+#[cfg(feature = "ui")]
 pub mod plot_fmt;
 
 pub use signal::{
     ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
 };
+#[cfg(feature = "ui")]
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};
+#[cfg(feature = "ui")]
 pub use viz::{
     RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizId, VizKindId,
 };
+#[cfg(feature = "ui")]
 pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
+#[cfg(feature = "ui")]
 pub use panel::{VizPanel, VIZ_PANEL_KIND};
+#[cfg(feature = "ui")]
 pub use kinds::line_plot::{LinePlot, LINE_PLOT_KIND};
 
+#[cfg(feature = "ui")]
 use bevy::prelude::*;
+#[cfg(feature = "ui")]
 use lunco_workbench::WorkbenchAppExt;
 
 /// Default sample capacity per scalar signal. ~20k samples covers
@@ -51,8 +72,10 @@ pub const DEFAULT_SIGNAL_HISTORY: usize = 20_000;
 /// Domain plugins (`ModelicaPlugin`, future Avian bridge, …) are
 /// expected to be added *after* this plugin so they see the registry
 /// resources on app build.
+#[cfg(feature = "ui")]
 pub struct LuncoVizPlugin;
 
+#[cfg(feature = "ui")]
 impl Plugin for LuncoVizPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(SignalRegistry::with_default_capacity(

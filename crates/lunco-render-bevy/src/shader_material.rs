@@ -260,6 +260,12 @@ impl ShaderMaterial {
             _ => None,
         }
     }
+    pub fn get_vec3(&self, name: &str) -> Option<Vec3> {
+        match self.get(name)? {
+            ParamValue::Vec3(v) => Some(Vec3::from_array(v)),
+            _ => None,
+        }
+    }
 }
 
 /// Pipeline key carrying the per-instance shader handles into `specialize`.
@@ -352,6 +358,12 @@ pub struct PbrLitModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 #[derive(Resource)]
 pub struct LunarBrdfModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 
+/// Keeps the shared `lunco::noise` WGSL module (procedural value noise — the
+/// hash/vnoise/fbm family) loaded so `#import lunco::noise` resolves in the
+/// terrain and starfield shaders.
+#[derive(Resource)]
+pub struct NoiseModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+
 /// Keeps the shared `lunco::transfer` WGSL module (the value→colour plane of
 /// Data → Transfer → Blend) loaded so `#import lunco::transfer` resolves in the
 /// terrain shaders. The GPU twin of `lunco_terrain_core::transfer` — one ramp,
@@ -385,6 +397,11 @@ impl Plugin for ShaderMaterialPlugin {
             .resource::<AssetServer>()
             .load("shaders/lunar_brdf.wgsl");
         app.insert_resource(LunarBrdfModule(lunar));
+        let noise = app
+            .world()
+            .resource::<AssetServer>()
+            .load("shaders/lunco_noise.wgsl");
+        app.insert_resource(NoiseModule(noise));
         let transfer = app
             .world()
             .resource::<AssetServer>()
@@ -426,9 +443,13 @@ pub fn apply_param(m: &mut ShaderMaterial, key: &str, value: &str) -> bool {
     });
     match ty {
         ParamType::Vec3 | ParamType::Vec4 => {
-            // Colours are authored as `r,g,b` (USD displayColor style).
+            // Colours are authored as `r,g,b` (USD displayColor style) or
+            // `r,g,b,a` for vec4 params.
             let n: Vec<f32> = value.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect();
-            if n.len() >= 3 {
+            if ty == ParamType::Vec4 && n.len() >= 4 {
+                m.set(key, ParamValue::Vec4([n[0], n[1], n[2], n[3]]));
+                true
+            } else if n.len() >= 3 {
                 m.set_color(key, [n[0], n[1], n[2]]);
                 true
             } else {

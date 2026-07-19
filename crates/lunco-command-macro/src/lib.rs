@@ -34,6 +34,11 @@
 //! register_commands!(nav::on_set_zoom, doc::on_undo);
 //! ```
 
+// TODO(backlog): this crate is structurally untestable — all logic lives inline in
+// `proc_macro::TokenStream` entry points, which cannot be called from unit tests.
+// Unlock via a `trybuild` dev-dependency (compile-pass/fail fixtures) or by
+// extracting the expansion logic into proc_macro2-typed helpers testable directly.
+// See the engineering-backlog doc in docs/architecture (command-macro testability).
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -93,11 +98,20 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let wants_reflect_default = keywords.contains("reflect_default");
 
     // Reject unknown keywords so typos don't silently no-op.
-    // `serde` was previously opt-in; it's now always on. Accept it as
-    // a no-op for one release to avoid breaking callers that already
-    // wrote `#[Command(default, serde)]`.
+    // `serde` was previously opt-in and then a grace-period no-op; it's
+    // now always on, so a stale `#[Command(serde)]` fails loudly with
+    // the fix spelled out.
+    if keywords.contains("serde") {
+        return syn::Error::new_spanned(
+            &input,
+            "the `serde` keyword is retired: #[Command] always derives \
+             Serialize/Deserialize — remove `serde` from the attribute",
+        )
+        .to_compile_error()
+        .into();
+    }
     for kw in &keywords {
-        if !matches!(*kw, "default" | "serde" | "reflect_default") {
+        if !matches!(*kw, "default" | "reflect_default") {
             return syn::Error::new_spanned(
                 &input,
                 format!(

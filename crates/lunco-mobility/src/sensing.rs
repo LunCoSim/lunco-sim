@@ -104,10 +104,15 @@ impl ApiQueryProvider for GroundHeightProvider {
 
 /// Shared cast → JSON. Maps the hit collider back to its `GlobalEntityId` (null
 /// when the collider has no registered id, e.g. unregistered terrain).
+///
+/// `origin` is in **render space** (the frame API callers see — entity positions,
+/// nav targets); `GridSpatialQuery` shifts it into avian's grid-absolute physics
+/// frame, and the returned `point` is mapped back so callers stay in one frame.
 fn cast_ray_response(world: &mut World, origin: DVec3, dir: Dir3, max: f64) -> ApiResponse {
-    let mut state: SystemState<(SpatialQuery, Res<ApiEntityRegistry>)> = SystemState::new(world);
+    let mut state: SystemState<(lunco_physics::GridSpatialQuery, Res<ApiEntityRegistry>)> =
+        SystemState::new(world);
     let (spatial, registry) = state.get(world).expect("SpatialQuery + registry always validate");
-    match spatial.cast_ray(origin, dir, max, true, &SpatialQueryFilter::default()) {
+    match spatial.cast_ray_render(origin, dir, max, true, &SpatialQueryFilter::default()) {
         Some(hit) => {
             let point = origin + (*dir).as_dvec3() * hit.distance;
             let entity = registry.api_id_for(hit.entity).map(|g| g.get());

@@ -292,7 +292,7 @@ fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
         {
             if let Ok(rel) = p.strip_prefix(base) {
                 if let Some(rel_s) = rel.to_str() {
-                    f(rel_s.replace('\\', "/"));
+                    f(crate::asset_path::slashed(rel_s));
                 }
             }
         }
@@ -312,7 +312,7 @@ fn walk(base: &Path, dir: &Path, ext: &str, f: &mut impl FnMut(String)) {
         } else if p.extension().and_then(|s| s.to_str()) == Some(ext) {
             if let Ok(rel) = p.strip_prefix(base) {
                 if let Some(rel_s) = rel.to_str() {
-                    f(rel_s.replace('\\', "/"));
+                    f(crate::asset_path::slashed(rel_s));
                 }
             }
         }

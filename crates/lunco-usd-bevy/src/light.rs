@@ -196,8 +196,8 @@ pub(crate) fn read_intensity_with_exposure<R: UsdRead>(
     path: &SdfPath,
     default_intensity: f32,
 ) -> f32 {
-    let intensity = get_attribute_as_f32(reader, path, "inputs:intensity").unwrap_or(default_intensity);
-    let exposure = get_attribute_as_f32(reader, path, "inputs:exposure").unwrap_or(0.0);
+    let intensity = reader.real_f32(path, "inputs:intensity").unwrap_or(default_intensity);
+    let exposure = reader.real_f32(path, "inputs:exposure").unwrap_or(0.0);
     intensity * exposure.exp2()
 }
 
@@ -287,15 +287,14 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // environment (materials → usd-bevy forbids the edge), so it carries
             // its own fallback const. Keep it in sync with `LunarSun::default`.
             const DEFAULT_SUN_ANGULAR_DIAMETER_DEG: f32 = 0.53;
-            let angular_diameter_deg = get_attribute_as_f32(reader, sdf_path, "inputs:angle")
+            let angular_diameter_deg = reader.real_f32(sdf_path, "inputs:angle")
                 .unwrap_or(DEFAULT_SUN_ANGULAR_DIAMETER_DEG);
             let sun = LunarSunShadow {
-                maximum_distance: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:maxDistance")
+                maximum_distance: reader.real_f32(sdf_path, "lunco:shadow:maxDistance")
                     .unwrap_or(d.maximum_distance),
-                first_cascade_far_bound: get_attribute_as_f32(
-                    reader, sdf_path, "lunco:shadow:firstCascadeFarBound",
-                )
-                .unwrap_or(d.first_cascade_far_bound),
+                first_cascade_far_bound: reader
+                    .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
+                    .unwrap_or(d.first_cascade_far_bound),
                 // TODO(review #3): clamp narrowed 1..=8 → 1..=4. If this is an
                 // intentional alignment with the canonical 4-cascade default,
                 // `warn!` when a scene authors >4 instead of silently clamping;
@@ -303,12 +302,12 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                 #[cfg(target_arch = "wasm32")]
                 num_cascades: 2,
                 #[cfg(not(target_arch = "wasm32"))]
-                num_cascades: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:numCascades")
+                num_cascades: reader.real_f32(sdf_path, "lunco:shadow:numCascades")
                     .map(|n| (n as usize).clamp(1, 4))
                     .unwrap_or(d.num_cascades),
-                depth_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:depthBias")
+                depth_bias: reader.real_f32(sdf_path, "lunco:shadow:depthBias")
                     .unwrap_or(d.depth_bias),
-                normal_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:normalBias")
+                normal_bias: reader.real_f32(sdf_path, "lunco:shadow:normalBias")
                     .unwrap_or(d.normal_bias),
                 ..d
             };
@@ -345,8 +344,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // both would count the sky twice and wash out every shadow.
             let Some(env) = dome::read_dome_environment(reader, sdf_path, asset_server, stage_id)
             else {
-                let intensity =
-                    get_attribute_as_f32(reader, sdf_path, "inputs:intensity").unwrap_or(0.0);
+                let intensity = read_intensity_with_exposure(reader, sdf_path, 1.0);
                 commands
                     .entity(entity)
                     .try_insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
@@ -446,10 +444,10 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             let shadow_maps_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
             let range = read_light_range(reader, sdf_path);
 
-            if let Some(cone_angle_deg) = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:angle") {
+            if let Some(cone_angle_deg) = reader.real_f32(sdf_path, "inputs:shaping:cone:angle") {
                 // Spotlight path (UsdLuxShapingAPI applied)
-                let outer_angle = (cone_angle_deg.to_radians() / 2.0).clamp(0.0, std::f32::consts::FRAC_PI_2);
-                let softness = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:softness")
+                let outer_angle = cone_angle_deg.to_radians().clamp(0.0, std::f32::consts::FRAC_PI_2);
+                let softness = reader.real_f32(sdf_path, "inputs:shaping:cone:softness")
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0);
                 let inner_angle = outer_angle * (1.0 - softness);

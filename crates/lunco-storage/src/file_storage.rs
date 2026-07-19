@@ -120,6 +120,26 @@ impl Storage for FileStorage {
         }
     }
 
+    async fn delete(&self, handle: &StorageHandle) -> StorageResult<()> {
+        match handle {
+            #[cfg(not(target_arch = "wasm32"))]
+            StorageHandle::File(path) => match std::fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    Err(StorageError::NotFound)
+                }
+                Err(e) => Err(StorageError::Io(e)),
+            },
+            StorageHandle::Memory(key) => {
+                let mut map = self.memory.lock().expect("memory poisoned");
+                map.remove(key).map(|_| ()).ok_or(StorageError::NotFound)
+            }
+            _ => Err(StorageError::Unsupported(
+                "FileStorage does not handle web / remote variants".into(),
+            )),
+        }
+    }
+
     async fn exists(&self, handle: &StorageHandle) -> bool {
         match handle {
             #[cfg(not(target_arch = "wasm32"))]

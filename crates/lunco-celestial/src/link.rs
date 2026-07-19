@@ -512,12 +512,17 @@ pub(crate) fn update_links(
 
     debug!("[link] recompute: {} nodes, {} links up", nodes.len(), up_now.len());
 
-    // AOS/LOS edges vs the previous recompute.
-    for key in up_now.difference(&state.prev_up) {
-        commands.trigger(link_event("link.aos", *key, jd));
+    // AOS/LOS edges vs the previous recompute, in gid-pair order so the event
+    // sequence is deterministic across runs and peers.
+    let mut aos: Vec<(u64, u64)> = up_now.difference(&state.prev_up).copied().collect();
+    aos.sort_unstable();
+    for key in aos {
+        commands.trigger(link_event("link.aos", key, jd));
     }
-    for key in state.prev_up.difference(&up_now) {
-        commands.trigger(link_event("link.los", *key, jd));
+    let mut los: Vec<(u64, u64)> = state.prev_up.difference(&up_now).copied().collect();
+    los.sort_unstable();
+    for key in los {
+        commands.trigger(link_event("link.los", key, jd));
     }
     state.prev_up = up_now;
 

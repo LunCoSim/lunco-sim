@@ -16,6 +16,11 @@ use crate::{
 const TELEMETRY_CORRELATION_FLAG: u64 = 1 << 63;
 
 /// Active telemetry subscription.
+// TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+// ease of debugging. No session/peer field, so a remote client's subscriptions
+// cannot be attributed to (or reaped with) its session on disconnect — see the
+// matching note in `lunco-networking/src/server.rs::on_server_disconnected`.
+// Revisit before multiplayer hardening (report_glm52.md CONC-1 / Tier B7).
 #[derive(Debug)]
 pub struct TelemetrySubscription {
     pub id: u64,

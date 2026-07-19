@@ -1295,9 +1295,10 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Registers the canonical [`JournalResource`] (op log), the [`Presence`]
-/// resource (collaboration seed), and the four lifecycle-event
-/// subscribers that record `Lifecycle` entries into the canonical
-/// journal.
+/// resource (collaboration seed), the lifecycle-event subscribers that
+/// record `Lifecycle` entries into the canonical journal, and the
+/// close-time [`DocumentDiagnostics`] cleanup shared by every document
+/// domain.
 ///
 /// Domain crates (lunco-modelica, lunco-usd, …) add this plugin once
 /// per app. Events from any domain's registry flow into one canonical
@@ -1316,7 +1317,8 @@ impl Plugin for TwinJournalPlugin {
             .init_resource::<Presence>()
             .add_observer(on_document_opened)
             .add_observer(on_document_saved)
-            .add_observer(on_document_closed);
+            .add_observer(on_document_closed)
+            .add_observer(diagnostics::drop_diagnostics_on_close);
         // DocumentChanged is observed by the canonical journal indirectly:
         // structural `Op` entries are recorded by the domain mutation
         // path (e.g. lunco-modelica `apply_ops_public`) before this event

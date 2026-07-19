@@ -714,6 +714,10 @@ struct DemBuild {
     /// The raster base grid BEFORE any layer folded in — retained so a live
     /// layer edit re-composes off it without re-reading the GeoTIFF.
     base_grid: std::sync::Arc<HeightGrid>,
+    /// `grid_key(&base_grid)`, computed where the grid was produced (off-thread
+    /// on native) — assembly must never re-fold the multi-million-point raster
+    /// on the main thread.
+    base_key: u64,
     half_extent: f32,
     /// Tile resolution actually meshed (= native crop res, or the resample target).
     res: usize,
@@ -728,8 +732,8 @@ struct DemBuildTask(Task<Result<DemBuild, String>>);
 /// WEB: marks a terrain whose bake was dispatched to the off-thread DEM worker
 /// (in place of a `DemBuildTask`). Carries the assembly settings the worker's
 /// replies need — the request marker is dropped on the coarse reply (to release
-/// the physics hold), so these can't be read from it later. `id` (the entity
-/// index) correlates a reply back to this entity.
+/// the physics hold), so these can't be read from it later. `id` (from
+/// [`dem_worker_job_id`]) correlates a reply back to this entity.
 #[derive(Component, Clone)]
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub struct DemWorkerJob {
@@ -751,6 +755,26 @@ pub struct DemWorkerJob {
 #[cfg(target_arch = "wasm32")]
 const DEM_GRID_CACHE_NS: &str = "terrain/dem-grid";
 
+/// Wire id for a [`DemWorkerJob`]: the entity's index XOR-folded with its
+/// generation. The bare index is NOT an identity — Bevy reuses indices after a
+/// despawn, and a stale reply for a mid-bake-despawned terrain must never land
+/// on an unrelated entity that inherited its index.
+#[cfg(target_arch = "wasm32")]
+fn dem_worker_job_id(entity: Entity) -> u32 {
+    let bits = entity.to_bits();
+    (bits ^ (bits >> 32)) as u32
+}
+
+/// Retire a despawned terrain's in-flight worker bake. Without this the id stays
+/// in the worker client's in-flight set for the session, and a later
+/// worker-crash sweep emits a spurious error reply for an entity long gone.
+#[cfg(target_arch = "wasm32")]
+fn cancel_worker_job_on_remove(trigger: On<Remove, DemWorkerJob>, jobs: Query<&DemWorkerJob>) {
+    if let Ok(job) = jobs.get(trigger.entity) {
+        lunco_terrain_bake::worker_client::cancel(job.id);
+    }
+}
+
 /// Compose the surface oracle (raster base + the layers' ANALYTIC height modifiers)
 /// and derive the avian collider + Bevy `MeshData` a pure [`BakedGrid`] needs into a
 /// [`DemBuild`], ready for [`assemble_dem_build`]. Used by the web worker path: the
@@ -768,9 +792,14 @@ fn dem_build_from_baked(
 ) -> DemBuild {
     let half_extent = baked.grid.half_extent;
     let base_grid = std::sync::Arc::new(baked.base_grid);
-    let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
+    // The worker's `base_grid` IS the (stamped) working grid, so ONE fold keys
+    // both the retained base and the oracle — this runs on the wasm main
+    // thread, where a second multi-million-point fold is a visible hitch.
+    let base_key = crate::oracle::grid_key(&base_grid);
+    let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new_with_base_key(
         std::sync::Arc::new(baked.grid),
         contributions,
+        base_key,
     ));
     // Static consumers rasterise the composed surface once; streaming consumers
     // sample the oracle directly (so no materialize for the ring/tile path).
@@ -789,6 +818,7 @@ fn dem_build_from_baked(
         mesh,
         oracle: Some(oracle),
         base_grid,
+        base_key,
         half_extent,
         res: baked.res,
         native_res: baked.native_res,
@@ -949,7 +979,7 @@ fn start_dem_builds(
         // `finish_dem_worker`. The heavy CPU never touches the page's main thread.
         #[cfg(target_arch = "wasm32")]
         if lunco_terrain_bake::worker_client::is_available() {
-            let id = entity.index_u32();
+            let id = dem_worker_job_id(entity);
             let download_progress = std::sync::Arc::new(std::sync::Mutex::new(None));
             let cache_key = std::sync::Arc::new(std::sync::Mutex::new(None));
             commands.entity(entity).insert(DemWorkerJob {
@@ -1097,8 +1127,10 @@ fn start_dem_builds(
             let half_extent = tile.half_extent;
             let res = tile.res;
             // Retain the pristine raster base so a live layer edit re-composes off
-            // it without re-reading the GeoTIFF.
+            // it without re-reading the GeoTIFF. Its content key is folded HERE,
+            // off-thread — assembly on the main thread reuses it.
             let base_grid = std::sync::Arc::new(tile.clone());
+            let base_key = crate::oracle::grid_key(&base_grid);
             // Fold any genuinely-rasterising layers into the working grid (most
             // height layers contribute analytically below instead).
             for layer in &layers {
@@ -1145,6 +1177,7 @@ fn start_dem_builds(
                 mesh,
                 oracle: Some(oracle),
                 base_grid,
+                base_key,
                 half_extent,
                 res,
                 native_res,
@@ -1226,9 +1259,8 @@ fn assemble_dem_build(
         }
         // Retain the pristine base grid + source settings so the crater layer can be
         // re-baked live from the Inspector (`RegenerateField`) without disk I/O.
-        let base_key = crate::oracle::grid_key(&built.base_grid);
         e.try_insert((
-            DemBaseGrid(built.base_grid, base_key),
+            DemBaseGrid(built.base_grid, built.base_key),
             DemTerrainSource { collider_ring },
         ));
         // Retain the oracle + mark the streaming mode(s). `lod_viz` streams visual LOD
@@ -1387,6 +1419,12 @@ fn finish_dem_worker(
                     // the retained base stays coarse, so the next brush stroke's
                     // `spawn_restamp_task` re-composes from the coarse grid and the
                     // terrain visibly REVERTS to preview heights after sculpting.
+                    // TODO(backlog): the one remaining main-thread `grid_key` fold —
+                    // the worker reply protocol carries no content key, so the Full
+                    // swap must re-hash the multi-million-point grid here. Removing
+                    // it needs a protocol change (worker folds the key off-thread and
+                    // ships it in the reply). See the engineering-backlog doc in
+                    // docs/architecture (worker reply content key).
                     let base_key = crate::oracle::grid_key(&base);
                     commands
                         .entity(entity)
@@ -2154,6 +2192,7 @@ pub(crate) fn register(app: &mut App) {
     #[cfg(target_arch = "wasm32")]
     {
         lunco_terrain_bake::worker_client::set_worker_url("./dem-worker/dem_worker_bootstrap.js");
+        app.add_observer(cancel_worker_job_on_remove);
         app.add_systems(Update, finish_dem_worker);
     }
     register_all_commands(app);

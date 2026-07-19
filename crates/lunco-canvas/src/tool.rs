@@ -42,9 +42,8 @@
 use std::collections::HashMap;
 
 use crate::event::{InputEvent, MouseButton, SceneEvent};
-use crate::scene::{EdgeId, NodeHitKind, NodeId, PortRef, Pos, Rect, Scene};
+use crate::scene::{EdgeHitKind as EdgeHit, EdgeId, NodeHitKind, NodeId, PortRef, Pos, Rect, Scene};
 use crate::selection::{SelectItem, Selection};
-use crate::visual::EdgeHit;
 use crate::viewport::Viewport;
 
 /// Result of a tool handling one event.
@@ -76,7 +75,18 @@ pub struct CanvasOps<'a> {
     /// world units — user sees icons click into alignment *during*
     /// the drag, not just at commit. Plumbed down from
     /// [`crate::Canvas::snap`].
-    pub snap: Option<crate::canvas::SnapSettings>,
+    pub snap: Option<SnapSettings>,
+}
+
+/// Grid-snap configuration for drag operations. Expressed in the
+/// canvas's world units (not screen pixels) so the visible grid step
+/// stays the same Modelica-coord-system grid regardless of zoom.
+#[derive(Debug, Clone, Copy)]
+pub struct SnapSettings {
+    /// Grid step in world units. Common choices in Modelica tools:
+    /// 2 (fine), 5 (default), 10 (coarse) of the 200-unit standard
+    /// diagram coordinate system.
+    pub step: f32,
 }
 
 /// Hit-test radius for ports, in world units. Chosen so clicking
@@ -1552,7 +1562,7 @@ fn segment_rect_intersects(a: Pos, b: Pos, r: Rect) -> bool {
 /// when snap is `None` or its step is non-positive. Mirrors what the
 /// node-drag path does so waypoint drags land on the same grid as
 /// node placements.
-fn snap_point(x: f32, y: f32, snap: Option<crate::canvas::SnapSettings>) -> (f32, f32) {
+fn snap_point(x: f32, y: f32, snap: Option<SnapSettings>) -> (f32, f32) {
     if let Some(s) = snap {
         if s.step > 0.0 {
             let q = |v: f32| (v / s.step).round() * s.step;
