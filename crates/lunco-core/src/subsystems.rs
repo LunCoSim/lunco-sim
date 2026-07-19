@@ -23,6 +23,10 @@ use std::collections::HashMap;
 
 /// The subsystems a tutorial may toggle. Extend as subsystems opt into gating.
 /// Keep names short, stable, and lower-kebab.
+// TODO(backlog): replace this hardcoded allowlist with dynamic registration
+// (subsystems self-register their toggle name, matching the project's
+// dynamic-registries direction); see the engineering-backlog doc in
+// docs/architecture (dynamic subsystem registry).
 pub const SUBSYSTEMS: &[&str] = &["thermal", "comms-degradation", "obstacle-field"];
 
 /// Runtime enable/disable state per subsystem. Missing key ⇒ enabled (`true`),

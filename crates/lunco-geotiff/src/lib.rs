@@ -21,6 +21,13 @@
 //! The frame we declare is the frame the data is actually in, which is the only
 //! description that cannot be wrong.
 //!
+//! ## The lunar frame is declared, never assumed
+//!
+//! LRO/LOLA/NAC products are MOON_ME; MOON_PA differs by ≈ 875 m on the
+//! surface. A [`LunarFrame`] declared on the transform is written as the bare
+//! token in the `GTCitation` GeoKey and parsed back on read; a raster that
+//! declares nothing reads back `None` — unknown, not a default guess.
+//!
 //! ## Pixel-is-point, not pixel-is-area
 //!
 //! Our sampling is **node-based**: sample 0 sits exactly on `-half_extent` and
@@ -46,7 +53,8 @@ use tiff::tags::Tag;
 // out here against the spec.
 use geotiff_core::geokeys::{
     GEOG_ANGULAR_UNITS as KEY_GEOG_ANGULAR_UNITS, GEOGRAPHIC_TYPE as KEY_GEOG_TYPE,
-    GEOG_CITATION as KEY_GEOG_CITATION, GT_MODEL_TYPE as KEY_GT_MODEL_TYPE,
+    GEOG_CITATION as KEY_GEOG_CITATION, GT_CITATION as KEY_GT_CITATION,
+    GT_MODEL_TYPE as KEY_GT_MODEL_TYPE,
     GT_RASTER_TYPE as KEY_GT_RASTER_TYPE, PROJECTED_CS_TYPE as KEY_PROJECTED_CS_TYPE,
     PROJECTION as KEY_PROJECTION, PROJ_COORD_TRANS as KEY_PROJ_COORD_TRANS,
     PROJ_LINEAR_UNITS as KEY_PROJ_LINEAR_UNITS,
@@ -67,6 +75,41 @@ const LINEAR_UNITS_METRE: u16 = 9001;
 const ANGULAR_UNITS_DEGREE: u16 = 9102;
 /// `CT_Equirectangular`.
 const COORD_TRANS_EQUIRECTANGULAR: u16 = 17;
+
+/// Which lunar reference frame a raster's coordinates are in.
+///
+/// LRO/LOLA/NAC-derived products are MOON_ME (mean-Earth/polar-axis); the
+/// principal-axis frame MOON_PA differs by ≈ 875 m on the surface — larger than
+/// a whole crop's placement tolerance, so the file must say which one it means
+/// rather than leave a consumer to assume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LunarFrame {
+    /// Mean Earth / polar axis — the frame of LRO/LOLA/NAC products.
+    MoonMe,
+    /// Principal axis — the frame ephemerides (DE-series) work in.
+    MoonPa,
+}
+
+impl LunarFrame {
+    /// The token written to (and parsed from) the `GTCitation` GeoKey.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MoonMe => "MOON_ME",
+            Self::MoonPa => "MOON_PA",
+        }
+    }
+
+    /// Exact-token parse. Anything else is `None`: an undeclared frame stays
+    /// *unknown* — a guessed frame is indistinguishable from a correct one
+    /// until something is 875 m off.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "MOON_ME" => Some(Self::MoonMe),
+            "MOON_PA" => Some(Self::MoonPa),
+            _ => None,
+        }
+    }
+}
 
 /// Where a raster sits, in the scene's own metric frame.
 ///
@@ -98,6 +141,9 @@ pub struct GeoTransform {
     /// Geodetic longitude of the crop centre, degrees — the projection's natural
     /// origin longitude (central meridian).
     pub center_lon_deg: f64,
+    /// Lunar reference frame the lat/lon above are in. `None` means the file
+    /// does not say — unknown, never a default guess.
+    pub frame: Option<LunarFrame>,
 }
 
 impl GeoTransform {
@@ -125,7 +171,16 @@ impl GeoTransform {
             body_radius_m,
             center_lat_deg,
             center_lon_deg,
+            frame: None,
         }
+    }
+
+    /// Declare the lunar frame the coordinates are in — `MoonMe` for anything
+    /// LROC/LOLA-derived. Only the source's provenance can know this, so it is
+    /// declared explicitly rather than defaulted by the constructor.
+    pub fn with_frame(mut self, frame: LunarFrame) -> Self {
+        self.frame = Some(frame);
+        self
     }
 
     /// Full ground span, metres — `(res - 1) * pixel_size`, node-based.
@@ -175,6 +230,12 @@ where
         KEY_GT_RASTER_TYPE,
         GeoKeyValue::Short(RASTER_TYPE_PIXEL_IS_POINT),
     );
+    // The lunar frame rides in GTCitation as the bare token ("MOON_ME") — there
+    // is no numeric GeoKey for planetary frames, and the citation is the key
+    // planetary tooling (USGS/ISIS, GDAL) reads frame names from.
+    if let Some(frame) = tf.frame {
+        keys.set(KEY_GT_CITATION, GeoKeyValue::Ascii(frame.as_str().into()));
+    }
     keys.set(KEY_GEOG_TYPE, GeoKeyValue::Short(USER_DEFINED));
     keys.set(KEY_GEOG_CITATION, GeoKeyValue::Ascii(citation.to_string()));
     keys.set(
@@ -331,6 +392,13 @@ pub fn read_geo_tags<R: Read + Seek>(
         body_radius_m: double_key(KEY_GEOG_SEMI_MAJOR).unwrap_or(0.0),
         center_lat_deg: double_key(KEY_PROJ_STD_PARALLEL1).unwrap_or(0.0),
         center_lon_deg: double_key(KEY_PROJ_NAT_ORIGIN_LONG).unwrap_or(0.0),
+        // Exact-token match on GTCitation; absent or anything else → None. An
+        // undeclared frame is UNKNOWN, not MOON_ME by assumption — ME and PA
+        // disagree by ≈ 875 m and only provenance can tell them apart.
+        frame: keys
+            .as_ref()
+            .and_then(|k| k.get_ascii(KEY_GT_CITATION))
+            .and_then(LunarFrame::parse),
     })
 }
 
@@ -380,7 +448,8 @@ mod tests {
         use tiff::encoder::{colortype, TiffEncoder};
 
         let res = 512usize;
-        let want = GeoTransform::centred_square(1002.0, res, 1737.0e3, 26.0371, 3.6584);
+        let want = GeoTransform::centred_square(1002.0, res, 1737.0e3, 26.0371, 3.6584)
+            .with_frame(LunarFrame::MoonMe);
 
         let mut buf = Vec::new();
         {
@@ -408,6 +477,44 @@ mod tests {
         // The extent must survive the trip — this is the number `metadata.yaml`
         // used to carry, and the whole reason the sidecar can go away.
         assert!((got.extent_m(res) - 1002.0).abs() < 1e-6, "extent: {got:?}");
+        // So must the frame declaration — ME vs PA is 875 m of silent offset.
+        assert_eq!(got.frame, Some(LunarFrame::MoonMe), "frame: {got:?}");
+    }
+
+    /// A raster that declares no frame — or a citation that is not a frame
+    /// token — must read back `None`. Unknown stays unknown; MOON_ME is a fact
+    /// about a source product, never a default.
+    #[test]
+    fn undeclared_frame_reads_back_unknown() {
+        use std::io::Cursor;
+        use tiff::encoder::{colortype, TiffEncoder};
+
+        let res = 4usize;
+        let tf = GeoTransform::centred_square(8.0, res, 1737.0e3, 0.0, 0.0);
+        assert_eq!(tf.frame, None);
+
+        let mut buf = Vec::new();
+        {
+            let mut enc = TiffEncoder::new(Cursor::new(&mut buf)).unwrap();
+            let mut img = enc
+                .new_image::<colortype::Gray32Float>(res as u32, res as u32)
+                .unwrap();
+            write_geo_tags(img.encoder(), &tf, "Moon 2000").unwrap();
+            img.write_data(&[0f32; 16]).unwrap();
+        }
+        let mut dec = tiff::decoder::Decoder::new(Cursor::new(&buf)).unwrap();
+        let got = read_geo_tags(&mut dec).expect("tags must read back");
+        assert_eq!(got.frame, None, "{got:?}");
+    }
+
+    /// The token round-trip in isolation: both frames parse back, and any other
+    /// string is rejected rather than coerced.
+    #[test]
+    fn frame_tokens_parse_exactly() {
+        assert_eq!(LunarFrame::parse("MOON_ME"), Some(LunarFrame::MoonMe));
+        assert_eq!(LunarFrame::parse("MOON_PA"), Some(LunarFrame::MoonPa));
+        assert_eq!(LunarFrame::parse("moon_me"), None);
+        assert_eq!(LunarFrame::parse("Moon 2000"), None);
     }
 
     /// A GDAL-default third-party raster: area-registered, tiepoint not at

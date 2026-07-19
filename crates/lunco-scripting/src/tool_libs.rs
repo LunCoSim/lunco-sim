@@ -112,6 +112,9 @@ pub fn save_tool_library_file(
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.rhai"));
     // Atomic replace: a kill mid-write must never leave a truncated library.
+    // TODO(backlog): migrate this hand-rolled temp+rename to the Storage handle once
+    // the crate gains a lunco-storage dependency (writes go through Storage) — see
+    // the engineering-backlog doc in docs/architecture (scripting writes via Storage).
     let tmp = dir.join(format!("{name}.rhai.tmp"));
     std::fs::write(&tmp, source)?;
     std::fs::rename(&tmp, &path)?;

@@ -204,7 +204,7 @@ pub fn read_dome_environment<R: crate::read::UsdRead>(
         tint: crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
             .map(|c| LinearRgba::rgb(c.x, c.y, c.z))
             .unwrap_or(LinearRgba::WHITE),
-        face_size: crate::light::get_attribute_as_f32(reader, sdf_path, "lunco:dome:faceSize")
+        face_size: reader.real_f32(sdf_path, "lunco:dome:faceSize")
             .map(|f| f as u32)
             .unwrap_or(DEFAULT_FACE_SIZE),
         skybox: crate::light::get_attribute_as_bool(reader, sdf_path, "lunco:dome:skybox")

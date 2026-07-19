@@ -53,6 +53,8 @@ heightmap. Writes:
   value-offset indices, and ASCII terminators):
   - `GTModelType` = projected; `GTRasterType` = **`RasterPixelIsPoint`**,
     matching the node-based spacing.
+  - `GTCitation` — the lunar frame token (`MOON_ME` / `MOON_PA`), written only
+    when the manifest declares one (see below).
   - User-defined geographic CS on the body's sphere:
     `GeogSemiMajorAxis` = `GeogSemiMinorAxis` = body radius, angular units
     degrees, `GeogCitation` naming the body for a human (`"Moon 2000"`).
@@ -79,6 +81,8 @@ model:
   convention the pipeline speaks; any other value is rejected.
 - The body radius is read when present; its absence is not an error (a
   third-party raster may carry an EPSG code instead of user-defined axes).
+- `GTCitation` is parsed as the lunar frame when it holds a known token;
+  anything else — including absence — leaves `GeoTransform::frame` as `None`.
 - Failures are `GeoReadError` variants that name what is missing
   (`NoPixelScale`, `NoTiepoint`, `Malformed(…)`) — the caller's job is to tell
   a human how to fix the file, not to fail quietly.
@@ -104,12 +108,23 @@ anchor with no terrain at all. The rule is therefore narrower than "delete it":
 
 Author position once, in whichever artifact actually has it.
 
-## Open: the lunar reference frame is not declared
+## The lunar reference frame is declared, not transformed
 
-The tags say *where on a sphere* the crop sits, but not **which lunar frame**
-the coordinates are in. LRO/LOLA/NAC products are MOON_ME (mean-Earth); the
-principal-axis frame MOON_PA differs by ≈ 875 m on the surface — larger than a
-whole crop's placement tolerance. Nothing in the GeoKeys or the provenance
-records ME vs PA, so a consumer must assume it. The fix is one GeoKey plus a
-`frame: MOON_ME` provenance field alongside the existing source-product
-provenance.
+The tags say *where on a sphere* the crop sits; the **frame** those
+coordinates are in is a separate fact, and it matters: LRO/LOLA/NAC products
+are MOON_ME (mean-Earth); the principal-axis frame MOON_PA differs by ≈ 875 m
+on the surface — larger than a whole crop's placement tolerance.
+
+Only the source product's provenance can know its frame, so it enters the
+pipeline where provenance does — the manifest. `frame = "MOON_ME"` in a
+`[*.process]` block (correct for anything LROC/LOLA-derived; `"MOON_PA"` for
+ephemeris-frame data, any other value rejected at process time) is stamped
+into the raster as the `GTCitation` token and read back as
+`lunco_geotiff::LunarFrame` on `GeoTransform::frame`. A manifest that does not
+know declares nothing, and every reader sees `None` — *unknown*, never a
+default: a guessed frame is indistinguishable from a correct one until
+something is 875 m off.
+
+**Open:** declaration only. If MOON_PA data ever has to coexist with a MOON_ME
+crop, the ME↔PA transformation is new work; nothing in the pipeline performs
+it today.

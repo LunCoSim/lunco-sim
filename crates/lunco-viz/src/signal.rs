@@ -2,10 +2,10 @@
 //! here, so every existing `lunco_viz::SignalRegistry` / `SignalRef` / `ScalarHistory`
 //! caller is unchanged.
 //!
-//! They moved because `lunco-viz` links `bevy_egui → bevy_render → wgpu`, while a ring
-//! buffer of `f64`s is data, not rendering: the telemetry sampler must push into it from
-//! a headless `--no-ui` run, which cannot link a GPU stack. See the `lunco-signal` crate
-//! docs and `docs/architecture/render-decoupling.md`.
+//! They moved because `lunco-viz` (with `ui`) links `bevy_egui → bevy_render → wgpu`,
+//! while a ring buffer of `f64`s is data, not rendering: the telemetry sampler must push
+//! into it from a headless `--no-ui` run, which cannot link a GPU stack. See the
+//! `lunco-signal` crate docs and `docs/architecture/render-decoupling.md`.
 //!
 //! What stayed here is the one genuinely render-bound thing — turning a signal into a
 //! *colour* — and that now comes from the **theme**.
@@ -15,6 +15,7 @@ pub use lunco_signal::{
     DEFAULT_CAPACITY,
 };
 
+#[cfg(feature = "ui")]
 use bevy_egui::egui;
 
 /// Deterministic colour for a signal path, shared across every plot surface (panel
@@ -29,6 +30,7 @@ use bevy_egui::egui;
 /// to re-theme them. Now they are palette-derived like every other colour.
 ///
 /// Pass the theme in (`lunco_theme::active(ui.ctx())` at any egui call site).
+#[cfg(feature = "ui")]
 pub fn color_for_signal(theme: &lunco_theme::Theme, path: &str) -> egui::Color32 {
     theme.plot.color_for_path(path)
 }

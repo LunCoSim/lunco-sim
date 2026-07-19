@@ -100,6 +100,9 @@ pub fn save_timeline_file(
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.json"));
     // Atomic replace: a kill mid-write must never leave a truncated timeline.
+    // TODO(backlog): migrate this hand-rolled temp+rename to the Storage handle once
+    // the crate gains a lunco-storage dependency (writes go through Storage) — see
+    // the engineering-backlog doc in docs/architecture (scripting writes via Storage).
     let tmp = dir.join(format!("{name}.json.tmp"));
     std::fs::write(&tmp, json)?;
     std::fs::rename(&tmp, &path)?;

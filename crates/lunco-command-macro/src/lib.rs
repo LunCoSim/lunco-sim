@@ -34,6 +34,11 @@
 //! register_commands!(nav::on_set_zoom, doc::on_undo);
 //! ```
 
+// TODO(backlog): this crate is structurally untestable — all logic lives inline in
+// `proc_macro::TokenStream` entry points, which cannot be called from unit tests.
+// Unlock via a `trybuild` dev-dependency (compile-pass/fail fixtures) or by
+// extracting the expansion logic into proc_macro2-typed helpers testable directly.
+// See the engineering-backlog doc in docs/architecture (command-macro testability).
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

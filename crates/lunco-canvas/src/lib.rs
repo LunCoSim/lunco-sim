@@ -23,6 +23,14 @@
 //! as a new impl of one of these traits — never as a change to the
 //! canvas's public API.
 //!
+//! # Feature `ui`
+//!
+//! The egui render stack — [`canvas`], [`layer`], [`overlay`],
+//! [`visual`] — sits behind the `ui` feature (off by default). A
+//! plain dependency gets the data model only (`scene` / `viewport` /
+//! `selection` / `tool` / `event`) and links no `bevy_egui`, so
+//! headless builds can consume canvas scenes without a GPU stack.
+//!
 //! # Minimum shipping — B1 scope
 //!
 //! B1 (this change) creates the crate, lands the data model,
@@ -47,29 +55,37 @@
 //!   `lunco-doc`) plugs into when the colony / pure-dataflow / pure-
 //!   annotation use cases need a first-class canvas document type.
 
+#[cfg(feature = "ui")]
 pub mod canvas;
 pub mod event;
+#[cfg(feature = "ui")]
 pub mod layer;
+#[cfg(feature = "ui")]
 pub mod overlay;
 pub mod scene;
 pub mod selection;
 pub mod tool;
 pub mod viewport;
+#[cfg(feature = "ui")]
 pub mod visual;
 
-pub use canvas::{Canvas, SnapSettings};
+#[cfg(feature = "ui")]
+pub use canvas::Canvas;
 pub use event::{ContextTarget, InputEvent, Modifiers, MouseButton, SceneEvent};
+#[cfg(feature = "ui")]
 pub use layer::{
     EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPreviewLayer,
 };
+#[cfg(feature = "ui")]
 pub use overlay::{Anchor, NavBarOverlay, Overlay, OverlayCtx};
 pub use scene::{
     empty_node_data, Edge, EdgeHitKind, EdgeId, Node, NodeData, NodeId, NodeHitKind, Port,
     PortId, PortRef, Pos, Rect, Scene,
 };
 pub use selection::{SelectItem, Selection};
-pub use tool::{CanvasOps, DefaultTool, Tool, ToolOutcome};
+pub use tool::{CanvasOps, DefaultTool, SnapSettings, Tool, ToolOutcome};
 pub use viewport::{Viewport, ViewportConfig};
+#[cfg(feature = "ui")]
 pub use visual::{
     DrawCtx, EdgeVisual, NodeHit, NodeVisual, PlaceholderEdgeVisual, PlaceholderNodeVisual,
     VisualRegistry,

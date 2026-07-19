@@ -362,8 +362,7 @@ pub(crate) fn refresh_domes_live(
                 let env = dome::read_dome_environment(&view, &sp, &asset_server, id);
                 // The fallback if the author dropped the texture: a bare dome is
                 // a scalar ambient.
-                let ambient = lunco_usd_bevy::get_attribute_as_f32(&view, &sp, "inputs:intensity")
-                    .unwrap_or(0.0);
+                let ambient = view.real_f32(&sp, "inputs:intensity").unwrap_or(0.0);
                 Some((p.clone(), env, ambient))
             })
             .collect()

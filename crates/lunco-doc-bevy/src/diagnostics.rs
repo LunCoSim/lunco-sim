@@ -152,3 +152,16 @@ impl DocumentDiagnostics {
             .unwrap_or(&[])
     }
 }
+
+/// Drop a closing document's entry from the shared substrate. Registered by
+/// [`TwinJournalPlugin`](crate::TwinJournalPlugin): every domain reports into
+/// the one resource, so the close-time cleanup lives with the resource — not
+/// inside any single domain's plugin.
+pub fn drop_diagnostics_on_close(
+    trigger: On<crate::CloseDocument>,
+    diagnostics: Option<ResMut<DocumentDiagnostics>>,
+) {
+    if let Some(mut d) = diagnostics {
+        d.remove(trigger.event().doc);
+    }
+}

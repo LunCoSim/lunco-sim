@@ -251,7 +251,7 @@ pub fn update_collider_ring(
         let h = oracle.half_extent() as f64;
         let nodes = 1u32 << ring.depth;
         let side = (2.0 * h) / nodes as f64;
-        // Quadtree only for `region(coord)` (depth/range_factor irrelevant here).
+        // Quadtree only for the coord↔region maps (range_factor irrelevant here).
         let qt = Quadtree::new(h, ring.depth, 1.0, h);
         // Oracle swapped (layer recompose / live edit) → resident tiles baked from the
         // OLD surface are stale. A BOUNDED edit (matching this oracle version) changed
@@ -293,8 +293,8 @@ pub fn update_collider_ring(
             if lx.abs() > h || lz.abs() > h {
                 continue; // body is off the DEM region
             }
-            let cx = (((lx + h) / side).floor() as i64).clamp(0, nodes as i64 - 1);
-            let cz = (((lz + h) / side).floor() as i64).clamp(0, nodes as i64 - 1);
+            let centre = qt.node_containing(ring.depth, [lx, lz]);
+            let (cx, cz) = (centre.x as i64, centre.z as i64);
             for dz in -1..=1 {
                 for dx in -1..=1 {
                     let nx = cx + dx;
@@ -430,18 +430,14 @@ pub fn despawn_orphaned_collider_tiles(
 }
 
 /// The ring node (canonical-depth quadtree coord) covering terrain-local
-/// `(x, z)`, or `None` outside the terrain footprint. Must agree with the
-/// wanted-set derivation in [`update_collider_ring`].
+/// `(x, z)`, or `None` outside the terrain footprint. Agrees with the
+/// wanted-set derivation in [`update_collider_ring`] by construction — both
+/// are [`Quadtree::node_containing`].
 fn ring_node(half: f64, depth: u8, x: f64, z: f64) -> Option<QuadCoord> {
     if x.abs() > half || z.abs() > half {
         return None;
     }
-    let tiles_per_side = 1u32 << depth;
-    let tile_side = (2.0 * half) / tiles_per_side as f64;
-    let idx = |v: f64| -> u32 {
-        (((v + half) / tile_side).floor() as i64).clamp(0, tiles_per_side as i64 - 1) as u32
-    };
-    Some(QuadCoord { depth, x: idx(x), z: idx(z) })
+    Some(Quadtree::new(half, depth, 1.0, half).node_containing(depth, [x, z]))
 }
 
 /// Freeze the sim while a DEM terrain is still building, so physics-driven bodies

@@ -1418,6 +1418,12 @@ fn finish_dem_worker(
                     // the retained base stays coarse, so the next brush stroke's
                     // `spawn_restamp_task` re-composes from the coarse grid and the
                     // terrain visibly REVERTS to preview heights after sculpting.
+                    // TODO(backlog): the one remaining main-thread `grid_key` fold —
+                    // the worker reply protocol carries no content key, so the Full
+                    // swap must re-hash the multi-million-point grid here. Removing
+                    // it needs a protocol change (worker folds the key off-thread and
+                    // ships it in the reply). See the engineering-backlog doc in
+                    // docs/architecture (worker reply content key).
                     let base_key = crate::oracle::grid_key(&base);
                     commands
                         .entity(entity)

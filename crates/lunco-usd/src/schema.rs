@@ -250,6 +250,12 @@ impl SchemaRegistry {
                         },
                         declared_by: prim.to_string(),
                     };
+                    // TODO(backlog): properties are keyed by name alone, so two
+                    // schemas legitimately declaring the same property name with
+                    // different types collide (last one wins, warned below). Full
+                    // (schema, property) keying is deferred — see the
+                    // engineering-backlog doc in docs/architecture (schema property
+                    // keying).
                     if let Some(prev) = reg.properties.get(name) {
                         if prev.type_name != prop.type_name
                             || prev.variability != prop.variability

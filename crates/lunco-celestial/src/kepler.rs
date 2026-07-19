@@ -64,6 +64,9 @@ pub struct KeplerOrbit {
     pub elements: KeplerianElements,
 }
 
+// TODO(backlog): migrate this hand-rolled Newton solve to lox-space's vetted
+// Keplerian propagation (already in the workspace dependency family) — see the
+// engineering-backlog doc in docs/architecture (lox-space Kepler propagation).
 /// Solve Kepler's equation M = E − e·sinE for the eccentric anomaly (Newton).
 ///
 /// Elliptic only: `e` is clamped below 1 (parabolic/hyperbolic orbits are not

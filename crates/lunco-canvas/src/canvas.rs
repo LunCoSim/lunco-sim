@@ -35,6 +35,7 @@ use crate::overlay::Overlay;
 use crate::scene::{Pos, Rect, Scene};
 use crate::selection::Selection;
 use crate::tool::{CanvasOps, DefaultTool, Tool, ToolOutcome};
+pub use crate::tool::SnapSettings;
 use crate::viewport::Viewport;
 use crate::visual::{DrawCtx, VisualRegistry};
 
@@ -80,17 +81,6 @@ pub struct Canvas {
     /// commit. Set per-frame by the embedding app (typically wired
     /// to a Settings toggle).
     pub snap: Option<SnapSettings>,
-}
-
-/// Grid-snap configuration for drag operations. Expressed in the
-/// canvas's world units (not screen pixels) so the visible grid step
-/// stays the same Modelica-coord-system grid regardless of zoom.
-#[derive(Debug, Clone, Copy)]
-pub struct SnapSettings {
-    /// Grid step in world units. Common choices in Modelica tools:
-    /// 2 (fine), 5 (default), 10 (coarse) of the 200-unit standard
-    /// diagram coordinate system.
-    pub step: f32,
 }
 
 impl Canvas {

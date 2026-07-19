@@ -54,10 +54,9 @@ sha2 = { workspace = true }
 which = "6"
 # Pure-Rust GeoTIFF codec for the `process.kind = "dem"` step — decode a raw
 # LROC/NAC DTM, crop a square ROI, re-encode as a square float32 heightmap.
-# Same version the proven `lunco-terrain-bake` decoder uses (`tiff = "0.11"`);
-# the encoder side (`colortype::Gray32Float`) is what writes the heightmap the
-# runtime DEM reader expects. No GDAL / system dependency.
-tiff = "0.11"
+# The encoder side (`colortype::Gray32Float`) is what writes the heightmap the
+# `lunco-terrain-bake` DEM reader expects. No GDAL / system dependency.
+tiff = { workspace = true }
 # The georeferencing tags themselves — shared with `lunco-terrain-bake`, which
 # reads what this crate writes. One leaf crate is what stops the writer and the
 # reader disagreeing about the frame.

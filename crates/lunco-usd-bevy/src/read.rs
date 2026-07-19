@@ -203,10 +203,20 @@ pub trait UsdRead {
 
     /// The [`real`](Self::real) counterpart for `f32` consumers (mesh sizes, shader
     /// params, physics gains). Tolerant of `double` **or** `float` authoring, so a
-    /// `double`-authored value is not dropped by a strict `scalar::<f32>`. Provided.
+    /// `double`-authored value is not dropped by a strict `scalar::<f32>` — and of
+    /// integer authoring (`int`/`int64`), so a bare `rotateZ = 90` or an
+    /// integer-spelled intensity reads as the number it is instead of silently
+    /// `None`. The ONE tolerant scalar read: every float-like attribute goes
+    /// through here (or [`real_f32_at`](Self::real_f32_at) when animated).
+    /// Provided.
     fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32> {
-        self.scalar::<f32>(prim, name)
-            .or_else(|| self.scalar::<f64>(prim, name).map(|v| v as f32))
+        match self.attr_value(prim, name)? {
+            Value::Float(v) => Some(v),
+            Value::Double(v) => Some(v as f32),
+            Value::Int(v) => Some(v as f32),
+            Value::Int64(v) => Some(v as f32),
+            _ => None,
+        }
     }
 
     /// The timeSamples-or-default [`real`](Self::real) — precision-tolerant sibling
@@ -217,10 +227,16 @@ pub trait UsdRead {
     }
 
     /// The `f32` timeSamples-or-default tolerant read — [`real_f32`](Self::real_f32)
-    /// at a time code. Provided.
+    /// at a time code, with the same `float`/`double`/`int`/`int64` tolerance.
+    /// Provided.
     fn real_f32_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f32> {
-        self.scalar_at::<f32>(prim, name, time)
-            .or_else(|| self.scalar_at::<f64>(prim, name, time).map(|v| v as f32))
+        match self.attr_value_at(prim, name, time)? {
+            Value::Float(v) => Some(v),
+            Value::Double(v) => Some(v as f32),
+            Value::Int(v) => Some(v as f32),
+            Value::Int64(v) => Some(v as f32),
+            _ => None,
+        }
     }
 
     /// Whether `prim` applies the named API schema (its composed `apiSchemas`) —

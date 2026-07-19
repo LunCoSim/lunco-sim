@@ -22,6 +22,9 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+// TODO(backlog): `DriveInputs`/`DriveMix` are vehicle-domain types living in core,
+// against the nothing-into-core rule — move them to the mobility domain; see the
+// engineering-backlog doc in docs/architecture (core purity / mobility).
 /// Normalized command inputs a kernel consumes: `throttle`/`steer` in `[-1,1]`,
 /// `brake` in `0..1`. The vessel-agnostic command vector, read from the vessel's
 /// `FlightSoftware` command surface by the driving system.

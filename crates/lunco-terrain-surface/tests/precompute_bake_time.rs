@@ -23,12 +23,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use lunco_terrain_surface::{
-    height_grid_from_geotiff, quadtree::Square, tile_mesh::bake_tile_mesh, DemMetadata, QuadCoord,
+    height_grid_from_geotiff, quadtree::Square, tile_mesh::bake_tile_mesh, QuadCoord,
     HeightSource, SurfaceOracle,
 };
 
 fn dem_dir() -> PathBuf {
-    PathBuf::from("/home/rod/Documents/lunco/moonbase/twin/terrain/connecting_ridge")
+    PathBuf::from("/home/rod/Documents/models/moonbase/twin/terrain/connecting_ridge")
 }
 
 /// Vertices per side of a baked tile (`stream_viz::TILE_RES`).
@@ -42,16 +42,13 @@ const COARSE_N: u8 = 4;
 fn coarse_base_bake_time() {
     let dir = dem_dir();
     let tif = dir.join("materials/textures/heightmap.tif");
-    let meta_path = dir.join("metadata.yaml");
-    if !tif.exists() || !meta_path.exists() {
+    if !tif.exists() {
         eprintln!("SKIP: twin DEM not present at {}", dir.display());
         return;
     }
 
-    let meta = DemMetadata::from_yaml_str(&std::fs::read_to_string(&meta_path).unwrap())
-        .expect("metadata.yaml parses");
     let bytes = std::fs::read(&tif).expect("heightmap.tif reads");
-    let grid = height_grid_from_geotiff(&bytes, &meta).expect("geotiff decodes");
+    let grid = height_grid_from_geotiff(&bytes).expect("geotiff decodes");
     let half = grid.half_extent as f64;
     println!("\nDEM: {}² samples, ±{half:.0} m, {:.2} m posting", grid.res, grid.spacing());
 

@@ -803,7 +803,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         {
             let mut cfg = lunco_core::HorizonShadowTerrain::default();
             if let Some(r) =
-                get_attribute_as_f32(reader, &sdf_path, "lunco:terrain:horizonMapResolution")
+                reader.real_f32(&sdf_path, "lunco:terrain:horizonMapResolution")
             {
                 cfg.resolution = (r as u32).clamp(64, 4096);
             }
@@ -1735,7 +1735,7 @@ fn apply_standard_material<R: UsdRead>(
         // metallic
         let metallic_texture = load_tex("inputs:metallic", false);
         if metallic_texture.is_none() {
-            if let Some(m) = get_attribute_as_f32(reader, &shader_path, "inputs:metallic") {
+            if let Some(m) = reader.real_f32(&shader_path, "inputs:metallic") {
                 metallic = m;
             }
         }
@@ -1745,7 +1745,7 @@ fn apply_standard_material<R: UsdRead>(
         // just taught callers to author a value usdview will never read.
         let roughness_texture = load_tex("inputs:roughness", false);
         if roughness_texture.is_none() {
-            if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:roughness") {
+            if let Some(r) = reader.real_f32(&shader_path, "inputs:roughness") {
                 roughness = r;
             }
         }
@@ -1766,7 +1766,7 @@ fn apply_standard_material<R: UsdRead>(
         // Specular workflow: `useSpecularWorkflow = 1` describes a dielectric by
         // `specularColor` instead of metalness → force metallic 0 (USD's specular
         // workflow has no metalness channel), and carry the tint.
-        if get_attribute_as_f32(reader, &shader_path, "inputs:useSpecularWorkflow").unwrap_or(0.0) >= 0.5 {
+        if reader.real_f32(&shader_path, "inputs:useSpecularWorkflow").unwrap_or(0.0) >= 0.5 {
             metallic = 0.0;
             if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor") {
                 specular_tint = LinearRgba::rgb(c[0] as f32, c[1] as f32, c[2] as f32);
@@ -1774,23 +1774,23 @@ fn apply_standard_material<R: UsdRead>(
         }
 
         // Clearcoat layer (UsdPreviewSurface ↔ StandardMaterial 1:1).
-        if let Some(c) = get_attribute_as_f32(reader, &shader_path, "inputs:clearcoat") {
+        if let Some(c) = reader.real_f32(&shader_path, "inputs:clearcoat") {
             clearcoat = c;
         }
-        if let Some(cr) = get_attribute_as_f32(reader, &shader_path, "inputs:clearcoatRoughness") {
+        if let Some(cr) = reader.real_f32(&shader_path, "inputs:clearcoatRoughness") {
             clearcoat_roughness = cr;
         }
 
         // Transparency: scalar `inputs:opacity` drives base-color alpha; a
         // *connected* opacity (texture) flips to blended even without a scalar.
-        if let Some(o) = get_attribute_as_f32(reader, &shader_path, "inputs:opacity") {
+        if let Some(o) = reader.real_f32(&shader_path, "inputs:opacity") {
             alpha = o;
         }
         opacity_threshold =
-            get_attribute_as_f32(reader, &shader_path, "inputs:opacityThreshold").unwrap_or(0.0);
+            reader.real_f32(&shader_path, "inputs:opacityThreshold").unwrap_or(0.0);
         opacity_connected = reader.connection_source(&shader_path, "inputs:opacity").is_some();
 
-        if let Some(i) = get_attribute_as_f32(reader, &shader_path, "inputs:ior") {
+        if let Some(i) = reader.real_f32(&shader_path, "inputs:ior") {
             ior = i;
         }
     }
@@ -2852,20 +2852,6 @@ fn value_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<V
     reader.field(&ap, "default").cloned()
 }
 
-/// A scalar numeric attribute (`float`/`double`, or integer-authored angles) at
-/// time `time` (timeSamples-or-default). The int fallback avoids the silent-`None`
-/// trap when an angle is authored as a bare integer (`rotateZ = 90`). `None` when
-/// absent or non-numeric.
-fn read_scalar_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
-    reader
-        .real_f32_at(path, attr, time)
-        .or_else(|| match reader.attr_value_at(path, attr, time)? {
-            Value::Int(v) => Some(v as f32),
-            Value::Int64(v) => Some(v as f32),
-            _ => None,
-        })
-}
-
 /// Composed local **rotation** at time code `time` from whatever rotation
 /// xform-op(s) the prim authors: quaternion `orient` (slerped), else an
 /// Euler-order triple (`rotateXYZ`…`rotateZYX`), else single-axis `rotateX/Y/Z`
@@ -2891,7 +2877,7 @@ pub fn local_rotation_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> O
         ("xformOp:rotateY", Vec3::Y),
         ("xformOp:rotateZ", Vec3::Z),
     ] {
-        if let Some(a) = read_scalar_f32_at(reader, path, op, time) {
+        if let Some(a) = reader.real_f32_at(path, op, time) {
             q = Quat::from_axis_angle(axis, a.to_radians()) * q;
             any = true;
         }
@@ -2955,6 +2941,11 @@ impl openusd::usd::SchemaBase for XformablePrim {
 impl openusd::schemas::geom::Imageable for XformablePrim {}
 impl openusd::schemas::geom::Xformable for XformablePrim {}
 
+// TODO(backlog): `!resetXformStack!` now composes correctly *locally* (openusd's
+// Xformable honors the sentinel), but the ECS projection still parents the entity
+// under its prim parent — the world-space detachment the sentinel demands is
+// unwired. See the engineering-backlog doc in docs/architecture (resetXformStack
+// detachment).
 /// Compose the prim's local `Transform` at time `time` from its `xformOpOrder`,
 /// via openusd's spec implementation
 /// ([`Xformable::local_to_parent_transform`](openusd::schemas::geom::Xformable::local_to_parent_transform)):
@@ -3810,18 +3801,6 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
         mesh.compute_flat_normals();
     }
     Some(mesh)
-}
-
-/// Reads a float-like attribute (`float` / `double` / `int`) from a USD prim.
-/// Falls back to the metadata-based "default" key if not found (needed for dome/light attributes).
-pub fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
-    if let Some(v) = reader.real_f32(path, attr) {
-        return Some(v);
-    }
-    if let Some(v) = reader.scalar::<i32>(path, attr) {
-        return Some(v as f32);
-    }
-    light::get_attribute_as_f32(reader, path, attr)
 }
 
 /// Marker inserted on prim entities that own both a primitive Cube

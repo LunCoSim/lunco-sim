@@ -70,16 +70,6 @@ pub struct UsdAuthoredLight;
 #[derive(Component)]
 pub(crate) struct UsdDomeAmbient(pub(crate) f32);
 
-/// Scalar attribute reader tolerant of `float`/`double`/`int` authoring.
-pub(crate) fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
-    match reader.attr_value(path, attr)? {
-        Value::Float(f) => Some(f),
-        Value::Double(d) => Some(d as f32),
-        Value::Int(i) => Some(i as f32),
-        _ => None,
-    }
-}
-
 /// Read a UsdLux light's authored intensity scaled by its exposure stops:
 /// `inputs:intensity` × 2^`inputs:exposure`. Used wherever a UsdLux light is
 /// turned into a Bevy light — the *unit* of the result depends on the target
@@ -90,8 +80,8 @@ pub(crate) fn read_intensity_with_exposure<R: UsdRead>(
     path: &SdfPath,
     default_intensity: f32,
 ) -> f32 {
-    let intensity = get_attribute_as_f32(reader, path, "inputs:intensity").unwrap_or(default_intensity);
-    let exposure = get_attribute_as_f32(reader, path, "inputs:exposure").unwrap_or(0.0);
+    let intensity = reader.real_f32(path, "inputs:intensity").unwrap_or(default_intensity);
+    let exposure = reader.real_f32(path, "inputs:exposure").unwrap_or(0.0);
     intensity * exposure.exp2()
 }
 
@@ -160,15 +150,14 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // environment (materials → usd-bevy forbids the edge), so it carries
             // its own fallback const. Keep it in sync with `LunarSun::default`.
             const DEFAULT_SUN_ANGULAR_DIAMETER_DEG: f32 = 0.53;
-            let angular_diameter_deg = get_attribute_as_f32(reader, sdf_path, "inputs:angle")
+            let angular_diameter_deg = reader.real_f32(sdf_path, "inputs:angle")
                 .unwrap_or(DEFAULT_SUN_ANGULAR_DIAMETER_DEG);
             let sun = LunarSunShadow {
-                maximum_distance: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:maxDistance")
+                maximum_distance: reader.real_f32(sdf_path, "lunco:shadow:maxDistance")
                     .unwrap_or(d.maximum_distance),
-                first_cascade_far_bound: get_attribute_as_f32(
-                    reader, sdf_path, "lunco:shadow:firstCascadeFarBound",
-                )
-                .unwrap_or(d.first_cascade_far_bound),
+                first_cascade_far_bound: reader
+                    .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
+                    .unwrap_or(d.first_cascade_far_bound),
                 // TODO(review #3): clamp narrowed 1..=8 → 1..=4. If this is an
                 // intentional alignment with the canonical 4-cascade default,
                 // `warn!` when a scene authors >4 instead of silently clamping;
@@ -176,12 +165,12 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                 #[cfg(target_arch = "wasm32")]
                 num_cascades: 2,
                 #[cfg(not(target_arch = "wasm32"))]
-                num_cascades: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:numCascades")
+                num_cascades: reader.real_f32(sdf_path, "lunco:shadow:numCascades")
                     .map(|n| (n as usize).clamp(1, 4))
                     .unwrap_or(d.num_cascades),
-                depth_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:depthBias")
+                depth_bias: reader.real_f32(sdf_path, "lunco:shadow:depthBias")
                     .unwrap_or(d.depth_bias),
-                normal_bias: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:normalBias")
+                normal_bias: reader.real_f32(sdf_path, "lunco:shadow:normalBias")
                     .unwrap_or(d.normal_bias),
                 ..d
             };
@@ -269,12 +258,12 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // `inputs:shadow:enable = true`. (Was `unwrap_or(true)` — the
             // TODO(review #2) fix.)
             let shadow_maps_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
-            let range = get_attribute_as_f32(reader, sdf_path, "lunco:light:range").unwrap_or(30.0);
+            let range = reader.real_f32(sdf_path, "lunco:light:range").unwrap_or(30.0);
 
-            if let Some(cone_angle_deg) = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:angle") {
+            if let Some(cone_angle_deg) = reader.real_f32(sdf_path, "inputs:shaping:cone:angle") {
                 // Spotlight path (UsdLuxShapingAPI applied)
                 let outer_angle = cone_angle_deg.to_radians().clamp(0.0, std::f32::consts::FRAC_PI_2);
-                let softness = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:softness")
+                let softness = reader.real_f32(sdf_path, "inputs:shaping:cone:softness")
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0);
                 let inner_angle = outer_angle * (1.0 - softness);
@@ -337,9 +326,9 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                 .unwrap_or(Color::WHITE);
             // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
             // own properties; 1 m square is the schema fallback.
-            let width = get_attribute_as_f32(reader, sdf_path, "inputs:width").unwrap_or(1.0);
-            let height = get_attribute_as_f32(reader, sdf_path, "inputs:height").unwrap_or(1.0);
-            let range = get_attribute_as_f32(reader, sdf_path, "lunco:light:range").unwrap_or(30.0);
+            let width = reader.real_f32(sdf_path, "inputs:width").unwrap_or(1.0);
+            let height = reader.real_f32(sdf_path, "inputs:height").unwrap_or(1.0);
+            let range = reader.real_f32(sdf_path, "lunco:light:range").unwrap_or(30.0);
 
             // No `UsdAuthoredLight`: like SphereLight, a rect is a LOCAL light (a
             // deck-ceiling panel, a softbox fill), not a scene-dominant sun/sky.

@@ -25,13 +25,13 @@ use std::path::PathBuf;
 
 use lunco_terrain_core::error::measure_node_error;
 use lunco_terrain_surface::{
-    height_grid_from_geotiff, quadtree::Square, DemMetadata, QuadCoord, SurfaceOracle,
+    height_grid_from_geotiff, quadtree::Square, QuadCoord, SurfaceOracle,
 };
 
 /// The twin this measures against. Skipped (not failed) when absent, so the suite still runs
 /// on a checkout without the twin.
 fn dem_dir() -> PathBuf {
-    PathBuf::from("/home/rod/Documents/lunco/moonbase/twin/terrain/connecting_ridge")
+    PathBuf::from("/home/rod/Documents/models/moonbase/twin/terrain/connecting_ridge")
 }
 
 /// Mirrors `stream_viz`'s node-error probe resolution so the measurement matches what the
@@ -59,16 +59,13 @@ const ERROR_FLOOR_M: f64 = 0.05;
 fn sparse_set_depth_distribution() {
     let dir = dem_dir();
     let tif = dir.join("materials/textures/heightmap.tif");
-    let meta_path = dir.join("metadata.yaml");
-    if !tif.exists() || !meta_path.exists() {
+    if !tif.exists() {
         eprintln!("SKIP: twin DEM not present at {}", dir.display());
         return;
     }
 
-    let meta = DemMetadata::from_yaml_str(&std::fs::read_to_string(&meta_path).unwrap())
-        .expect("metadata.yaml parses");
     let bytes = std::fs::read(&tif).expect("heightmap.tif reads");
-    let grid = height_grid_from_geotiff(&bytes, &meta).expect("geotiff decodes");
+    let grid = height_grid_from_geotiff(&bytes).expect("geotiff decodes");
 
     let half = grid.half_extent as f64;
     let spacing = grid.spacing() as f64;

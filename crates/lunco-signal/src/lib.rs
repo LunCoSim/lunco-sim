@@ -74,6 +74,11 @@ impl SignalRef {
     }
 }
 
+// TODO(backlog): the save/load boundary wiring is still pending — nothing routes
+// `SignalBinding`/`LinePlotStyle` through `to_persisted`/`resolve` yet; that lands
+// with plot-layout persistence. Producers must also tag [`SignalSource`] on owning
+// entities so registry slots auto-clean on despawn. See the engineering-backlog doc
+// in docs/architecture (signal persistence wiring).
 /// What a [`SignalRef`] looks like at rest (saved plot layouts, workspace files).
 ///
 /// The entity half is the stable [`GlobalEntityId`] — never raw `Entity` bits, which

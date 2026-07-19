@@ -6999,6 +6999,7 @@ dependencies = [
  "celestial-time",
  "lunco-assets",
  "lunco-celestial",
+ "lunco-storage",
  "serde_json",
  "ureq",
 ]
@@ -7480,6 +7481,7 @@ dependencies = [
  "lunco-obstacle-field",
  "lunco-physics",
  "lunco-render",
+ "lunco-storage",
  "lunco-terrain-surface",
  "lunco-twin-journal",
  "lunco-usd",

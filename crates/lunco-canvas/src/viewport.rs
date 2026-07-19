@@ -126,6 +126,7 @@ impl Default for Viewport {
 /// Millimetres per inch. SI definition.
 pub const MM_PER_INCH: f32 = 25.4;
 
+#[cfg(feature = "ui")]
 impl Viewport {
     /// Zoom level that renders 1 world unit as 1 mm on screen, for
     /// the passed egui context. Use when world units mean millimetres

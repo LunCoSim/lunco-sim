@@ -32,8 +32,10 @@ use lunco_obstacle_field::field::HeightGrid;
 #[cfg(test)]
 use lunco_terrain_core::source::HeightSource;
 
-/// Read a heightmap's georeferencing — extent, pixel size, and where on the body
-/// the crop sits.
+/// Read a heightmap's georeferencing — extent, pixel size, where on the body
+/// the crop sits, and which lunar frame those coordinates are in
+/// (`GeoTransform::frame`; `None` when the raster does not declare one —
+/// unknown, never a default guess).
 ///
 /// The raster is the only source: it cannot disagree with the pixels it describes.
 /// See `docs/architecture/57-dem-georeferencing.md`.
@@ -212,6 +214,32 @@ mod tests {
         let bytes = encode_dem(2, &[0.0f32; 4], 1002.0);
         let grid = height_grid_from_geotiff(&bytes).unwrap();
         assert_eq!(grid.half_extent, 501.0);
+    }
+
+    /// A raster stamped MOON_ME reads back MOON_ME; one that declares nothing
+    /// reads back `None`. ME vs PA is ≈ 875 m of silent offset, so an unknown
+    /// frame must stay unknown rather than default to the likely answer.
+    #[test]
+    fn lunar_frame_survives_the_raster_or_stays_unknown() {
+        use lunco_geotiff::LunarFrame;
+
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut enc = TiffEncoder::new(&mut buf).unwrap();
+            let geo = lunco_geotiff::GeoTransform::centred_square(
+                2.0, 2, 1737.0e3, 26.0371, 3.6584,
+            )
+            .with_frame(LunarFrame::MoonMe);
+            let mut img = enc.new_image::<colortype::Gray32Float>(2, 2).unwrap();
+            lunco_geotiff::write_geo_tags(img.encoder(), &geo, "Moon 2000").unwrap();
+            img.write_data(&[0.0f32; 4]).unwrap();
+        }
+        let tf = read_geotiff_transform(buf.get_ref()).unwrap();
+        assert_eq!(tf.frame, Some(LunarFrame::MoonMe));
+
+        // `encode_dem` declares no frame — the fixture for every pre-frame file.
+        let bytes = encode_dem(2, &[0.0f32; 4], 2.0);
+        assert_eq!(read_geotiff_transform(&bytes).unwrap().frame, None);
     }
 
     #[test]
