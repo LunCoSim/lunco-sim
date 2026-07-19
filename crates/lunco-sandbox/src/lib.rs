@@ -1814,6 +1814,10 @@ impl Plugin for SandboxCorePlugin {
                     error!("[offline-record] CLI failed to create output directory {}: {e}", dir_to_create.display());
                 } else {
                     info!("[offline-record] CLI mode armed: recording to {} at {} FPS", path.display(), record_fps);
+                    // Video destination => stream into ffmpeg; the recorder
+                    // demotes to a PNG sequence if ffmpeg is missing (spawn
+                    // failure aborts loudly at the first frame).
+                    let video = lunco_workbench::screenshot::output_is_video(&path);
                     app.insert_resource(lunco_workbench::screenshot::OfflineRecordingState {
                         active: true,
                         frame_index: 0,
@@ -1824,8 +1828,9 @@ impl Plugin for SandboxCorePlugin {
                         frame_just_captured: true,
                         // CLI-armed recording starts before `WinitSettings` exists to
                         // override; `StartOfflineRecording` is what forces Continuous.
- 
+
                         prev_present_mode: None,
+                        video,
                     });
                 }
             }

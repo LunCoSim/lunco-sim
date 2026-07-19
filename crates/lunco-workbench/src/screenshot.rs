@@ -87,6 +87,7 @@ impl Plugin for ScreenshotPlugin {
         // Offline Frame-by-Frame Recording Mode
         app.init_resource::<lunco_core::KeepAwake>()
             .init_resource::<OfflineRecordingState>()
+            .init_resource::<OfflineVideoSink>()
             .add_observer(deliver_offline_frame)
             // The readiness gate. `Update` (not `Last`): it must run before
             // `drive_offline_clock`, which only acts once `state.active` is set —
@@ -430,6 +431,11 @@ pub struct OfflineRecordingState {
     /// Primary window present mode as it was before recording uncapped it,
     /// restored on stop.
     pub prev_present_mode: Option<bevy::window::PresentMode>,
+    /// Encode straight to a video file via a spawned `ffmpeg` instead of a PNG
+    /// sequence (destination named a video file — see [`output_is_video`]).
+    /// Demoted back to a PNG sequence at activation if `ffmpeg` is not
+    /// installed — a missing encoder must degrade, not crash.
+    pub video: bool,
 }
 
 /// Command to start frame-by-frame recording.
@@ -446,9 +452,9 @@ pub struct StartOfflineRecording {
 pub struct StopOfflineRecording {}
 
 /// Does this recording destination mean "encode a video file" rather than
-/// "write a PNG sequence into this directory"? This recorder always writes a
-/// PNG sequence; callers (the `--record-offline` CLI) use this only to decide
-/// whether the path itself or its PARENT is the directory to create.
+/// "write a PNG sequence into this directory"? Container choice is the
+/// caller's; these are the ones ffmpeg infers an H.264-capable muxer for by
+/// extension.
 pub fn output_is_video(path: &std::path::Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
@@ -471,10 +477,111 @@ pub struct OfflineCaptureTarget(pub Handle<bevy::image::Image>);
 pub struct OfflineRecordLimit(pub u64);
 
 /// Marker: exit the app once a recording has finished (recorder inactive with
-/// frames on disk — saves here are synchronous, so inactive IS drained).
+/// frames on disk — the sink is synchronous, so inactive IS drained).
 /// Inserted by one-shot modes (`--offscreen`); a windowed session never wants it.
 #[derive(Resource)]
 pub struct ExitAfterRecording;
+
+/// Is a runnable `ffmpeg` on PATH? Probed once at activation so a machine
+/// without it demotes the recording to a PNG sequence with a loud `warn!`
+/// instead of failing on the first frame.
+#[cfg(not(target_arch = "wasm32"))]
+fn ffmpeg_available() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+/// No child processes on wasm — video mode always demotes there.
+#[cfg(target_arch = "wasm32")]
+fn ffmpeg_available() -> bool {
+    false
+}
+
+/// The live `ffmpeg` a video-mode recording is streaming into. `sink` is `None`
+/// until the first frame delivers (the encoder needs the real capture
+/// dimensions, which are only known then). SYNCHRONOUS by design: frames are
+/// piped to `ffmpeg` inline from [`deliver_offline_frame`], exactly where the
+/// PNG path writes its file — deliveries arrive strictly in order, one at a
+/// time, so there is no writer thread, no channel and no reorder buffer. A slow
+/// encoder back-pressures the pipe write, which holds the lock-step clock the
+/// same way a slow PNG save does.
+#[derive(Resource, Default)]
+pub struct OfflineVideoSink {
+    #[cfg(not(target_arch = "wasm32"))]
+    sink: Option<VideoSink>,
+}
+
+impl OfflineVideoSink {
+    /// Close the encoder's stdin (EOF ends the raw stream) and WAIT for
+    /// `ffmpeg` to write the container trailer — when this returns, the file
+    /// is complete on disk. No-op when no sink is live (PNG mode).
+    fn finalize(&mut self, frames: u64) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(sink) = self.sink.take() {
+            drop(sink.stdin);
+            let mut child = sink.child;
+            match child.wait() {
+                Ok(status) if status.success() => info!(
+                    "[offline-record] video finalized: {frames} frames encoded into {}",
+                    sink.path.display()
+                ),
+                Ok(status) => error!(
+                    "[offline-record] ffmpeg exited with {status} — {} may be incomplete",
+                    sink.path.display()
+                ),
+                Err(e) => error!(
+                    "[offline-record] waiting for ffmpeg failed: {e} — {} may be incomplete",
+                    sink.path.display()
+                ),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = frames;
+    }
+}
+
+/// A spawned `ffmpeg` encoding `rawvideo` piped into its stdin.
+#[cfg(not(target_arch = "wasm32"))]
+struct VideoSink {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    path: std::path::PathBuf,
+    /// Dimensions the encoder was started with — a window resize mid-recording
+    /// would corrupt the raw stream, so a mismatching frame aborts instead.
+    width: u32,
+    height: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl VideoSink {
+    /// Spawn `ffmpeg` encoding raw RGBA frames from stdin into `path`.
+    fn spawn(path: &std::path::Path, width: u32, height: u32, fps: u32) -> std::io::Result<Self> {
+        let mut child = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(["-f", "rawvideo", "-pix_fmt", "rgba"])
+            .arg("-s")
+            .arg(format!("{width}x{height}"))
+            .arg("-r")
+            .arg(fps.to_string())
+            .args(["-i", "-"])
+            .args(["-c:v", "libx264", "-preset", "medium", "-crf", "16"])
+            // yuv420p for player compatibility; the crop keeps odd window
+            // dimensions legal for it (4:2:0 needs even width/height).
+            .args(["-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2"])
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()?;
+        let stdin = child.stdin.take().expect("stdin was piped above");
+        Ok(Self { child, stdin, path: path.to_path_buf(), width, height })
+    }
+}
 
 /// **Arms** the recorder; it does not start it.
 ///
@@ -509,9 +616,21 @@ fn on_start_offline_recording(
 
     // Fail here rather than after the wait: an unwritable destination is the
     // caller's mistake and should be reported at the point of the request.
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        error!("[offline-record] failed to create output directory {}: {e}", dir.display());
-        return;
+    // A video destination (`out.mp4`) needs its PARENT to exist — creating the
+    // path itself would plant a directory where ffmpeg wants a file.
+    let dir_to_create = if output_is_video(&dir) {
+        dir.parent().map(std::path::Path::to_path_buf).unwrap_or_default()
+    } else {
+        dir.clone()
+    };
+    if !dir_to_create.as_os_str().is_empty() {
+        if let Err(e) = std::fs::create_dir_all(&dir_to_create) {
+            error!(
+                "[offline-record] failed to create output directory {}: {e}",
+                dir_to_create.display()
+            );
+            return;
+        }
     }
 
     info!(
@@ -541,12 +660,38 @@ fn activate_recording(
     let dir = pending.output_dir.clone();
     state.active = true;
     state.frame_index = 0;
+    state.video = output_is_video(&dir);
     state.output_dir = dir;
     state.fps = pending.fps;
     state.is_waiting_for_frame = false;
     // Enter the cycle on the "advance" phase so the very first captured frame is
     // rendered from a clock that has taken exactly one step, like every frame after it.
     state.frame_just_captured = true;
+
+    // Video mode needs a runnable `ffmpeg`. Probe NOW, not at the first frame:
+    // a missing encoder must demote the recording to a PNG sequence with a loud
+    // warning — never crash the shot, and never fail after frames were taken.
+    if state.video && !ffmpeg_available() {
+        let fallback = state.output_dir.with_extension("frames");
+        warn!(
+            "[offline-record] {} requested a video but ffmpeg is not installed — \
+             falling back to a PNG sequence in {} (install ffmpeg for direct video \
+             recording)",
+            state.output_dir.display(),
+            fallback.display(),
+        );
+        if let Err(e) = std::fs::create_dir_all(&fallback) {
+            error!(
+                "[offline-record] fallback directory {} could not be created ({e}) — \
+                 aborting the shot",
+                fallback.display()
+            );
+            state.active = false;
+            return;
+        }
+        state.output_dir = fallback;
+        state.video = false;
+    }
 
     // Ask to stay awake for the duration of the recording. An unattended capture
     // has no focused window, so the `reactive_low_power` throttle would otherwise
@@ -598,11 +743,17 @@ fn teardown_recording(
     state: &mut OfflineRecordingState,
     keep_awake: &mut lunco_core::KeepAwake,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    video_sink: &mut OfflineVideoSink,
     commands: &mut Commands,
 ) {
     state.active = false;
     state.is_waiting_for_frame = false;
     state.frame_just_captured = false;
+
+    // Video mode: EOF the encoder and wait for the container trailer. When
+    // this returns the take is a complete, playable file — synchronous, like
+    // every other part of this recorder.
+    video_sink.finalize(state.frame_index);
 
     // Drop the wake request; the pacer restores the binary's idle policy.
     keep_awake.release();
@@ -619,6 +770,7 @@ fn on_stop_offline_recording(
     mut state: ResMut<OfflineRecordingState>,
     mut keep_awake: ResMut<lunco_core::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut video_sink: ResMut<OfflineVideoSink>,
     mut commands: Commands,
 ) {
     // Disarm unconditionally: a scenario that gives up on a shot while the gate is
@@ -627,7 +779,7 @@ fn on_stop_offline_recording(
     commands.remove_resource::<PendingShotStart>();
 
     if state.active {
-        teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut commands);
+        teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
         info!("[offline-record] stopped recording");
     }
 }
@@ -956,6 +1108,7 @@ fn deliver_offline_frame(
     mut state: ResMut<OfflineRecordingState>,
     mut keep_awake: ResMut<lunco_core::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut video_sink: ResMut<OfflineVideoSink>,
     mut commands: Commands,
 ) {
     if !state.active || !state.is_waiting_for_frame {
@@ -974,25 +1127,87 @@ fn deliver_offline_frame(
         return;
     };
 
-    let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
-
-    // Save the image synchronously to disk. A failed write ABORTS the recording:
-    // continuing would advance `frame_index` past a frame that never landed, leaving
-    // a hole in the sequence. Nothing downstream notices — the scenario keeps
-    // sequencing off `frame_index`, and the encoder happily renders the remaining
-    // files as a continuous shot that silently jumps. A disk that fills mid-capture
-    // is the ordinary way to hit this, so fail loudly at the first bad frame rather
-    // than emit a corrupt take.
-    if let Err(e) = dyn_img.save(&path) {
-        error!(
-            "[offline-record] failed to save frame {} ({e}) — aborting recording to \
-             avoid a sequence with holes in it",
-            state.frame_index
-        );
-        teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut commands);
-        return;
+    // Deliver the frame synchronously to its sink. Either sink failing ABORTS
+    // the recording: continuing would advance `frame_index` past a frame that
+    // never landed, leaving a hole in the take. Nothing downstream notices — the
+    // scenario keeps sequencing off `frame_index`, and the output silently
+    // jumps. A disk that fills mid-capture is the ordinary way to hit this, so
+    // fail loudly at the first bad frame rather than emit a corrupt take.
+    #[cfg(not(target_arch = "wasm32"))]
+    if state.video {
+        // VIDEO SINK: pipe the raw RGBA straight into ffmpeg. Strictly inline
+        // and in order — the write blocks if the encoder lags, which holds the
+        // lock-step clock exactly like a slow PNG save.
+        use std::io::Write;
+        let rgba = dyn_img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        if video_sink.sink.is_none() {
+            // First frame: only now are the real capture dimensions known.
+            match VideoSink::spawn(&state.output_dir, width, height, state.fps.max(1)) {
+                Ok(sink) => {
+                    info!(
+                        "[offline-record] streaming {width}x{height} @ {} FPS into {} via ffmpeg",
+                        state.fps.max(1),
+                        state.output_dir.display()
+                    );
+                    video_sink.sink = Some(sink);
+                }
+                Err(e) => {
+                    error!("[offline-record] failed to start ffmpeg ({e}) — aborting recording");
+                    teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+                    return;
+                }
+            }
+        }
+        let sink = video_sink.sink.as_mut().expect("spawned above");
+        if (width, height) != (sink.width, sink.height) {
+            error!(
+                "[offline-record] capture size changed mid-recording ({}x{} -> {width}x{height}) \
+                 — aborting; a raw video stream cannot change dimensions",
+                sink.width, sink.height
+            );
+            teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+            return;
+        }
+        if let Err(e) = sink.stdin.write_all(rgba.as_raw()) {
+            error!(
+                "[offline-record] ffmpeg pipe write failed at frame {} ({e}) — aborting recording",
+                state.frame_index
+            );
+            teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+            return;
+        }
+        trace!("[offline-record] encoded frame {}", state.frame_index);
+    } else {
+        // PNG SINK: one file per frame into the destination directory.
+        let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
+        if let Err(e) = dyn_img.save(&path) {
+            error!(
+                "[offline-record] failed to save frame {} ({e}) — aborting recording to \
+                 avoid a sequence with holes in it",
+                state.frame_index
+            );
+            teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+            return;
+        }
+        trace!("[offline-record] saved frame {}", state.frame_index);
     }
-    trace!("[offline-record] saved frame {}", state.frame_index);
+    // wasm never has a live video sink (`ffmpeg_available` is false there, so
+    // activation always demotes to the PNG sequence).
+    #[cfg(target_arch = "wasm32")]
+    {
+        let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
+        if let Err(e) = dyn_img.save(&path) {
+            error!(
+                "[offline-record] failed to save frame {} ({e}) — aborting recording to \
+                 avoid a sequence with holes in it",
+                state.frame_index
+            );
+            teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+            return;
+        }
+        trace!("[offline-record] saved frame {}", state.frame_index);
+    }
 
     state.frame_index += 1;
     state.is_waiting_for_frame = false;
