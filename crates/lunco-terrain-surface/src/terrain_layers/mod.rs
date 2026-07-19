@@ -291,14 +291,12 @@ pub trait TerrainLayer: Send + Sync + 'static {
     // StageSink projects per-prim by path, so this folds in for free.
     // See docs/architecture/terrain-substrate.md → "Dynamic modification".
     fn id(&self) -> &'static str;
-    /// Runtime fingerprint of this layer's SCATTER-relevant content — the params
-    /// that change what [`scatter`](Self::scatter) spawns. `None` = this layer
-    /// spawns nothing. Compared across recomposes to make the restamp swap
-    /// IDEMPOTENT: a recompose whose height content (oracle `surface_key`) and
-    /// scatter fingerprints both match the live surface is a no-op — no tile
-    /// invalidation, no despawn+respawn scatter flicker. Never persisted
-    /// (within-run comparison only). A layer that overrides `scatter` MUST
-    /// override this too, or edits to its params will be treated as no-ops.
+    /// Runtime fingerprint of the params that change what
+    /// [`scatter`](Self::scatter) spawns; `None` = this layer spawns nothing.
+    /// Compared across recomposes to make the restamp swap idempotent
+    /// (`finish_dem_restamp`). Never persisted — within-run comparison only.
+    /// A layer that overrides `scatter` MUST override this too, or edits to its
+    /// params will be treated as no-ops.
     fn scatter_fingerprint(&self) -> Option<u64> {
         None
     }

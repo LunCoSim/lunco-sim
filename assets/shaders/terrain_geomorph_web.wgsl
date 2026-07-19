@@ -238,7 +238,7 @@ fn sun_to_light() -> vec3<f32> {
 }
 
 // Palette-matched to `lod_rgb` in `stream_viz.rs`. Cycles rather than clamps so
-// adjacent depths always differ (clamping hid the 6/7/8 band entirely).
+// adjacent depths always differ; clamping blinds the top depths.
 fn lod_depth_color(d: f32) -> vec3<f32> {
     let i = i32(max(d, 0.0)) % 7;
     var p = array<vec3<f32>, 7>(

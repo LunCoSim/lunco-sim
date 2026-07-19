@@ -1722,16 +1722,12 @@ pub(crate) fn finish_dem_restamp(
         // Consume the mark so the NEXT change starts clean.
         commands.entity(entity).try_remove::<TerrainDirty>();
 
-        // IDEMPOTENT SWAP (content-addressed): if the recompose produced the very
-        // surface already live — `surface_key` folds the base grid + every height
-        // layer's content key — AND the scatter content is unchanged, this restamp
-        // is a NO-OP: swap nothing, invalidate nothing, re-scatter nothing.
-        // Redundant triggers (the startup Added-as-changed stack observation, USD
-        // recompose echoes, identical re-inserts) become harmless BY DESIGN
-        // instead of each needing bespoke suppression. The visible defect this
-        // kills: rocks and crater tiles despawning ~2 s after startup and
-        // reappearing seconds later, while the horizon/collider/derived-map
-        // pipelines all re-ran for nothing.
+        // Idempotent, content-addressed swap: a recompose whose height content
+        // (`surface_key`) and scatter fingerprint both match the live surface is
+        // a no-op — swap nothing, invalidate nothing, re-scatter nothing. This
+        // is what makes redundant triggers (the startup Added-as-changed stack
+        // observation, USD recompose echoes) harmless by design instead of each
+        // needing bespoke suppression.
         let same_heights = oracle.surface_key() == hf.0.surface_key();
         let same_scatter =
             scattered_content.is_some_and(|c| c.0 == stack.scatter_fingerprint());

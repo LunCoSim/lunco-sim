@@ -155,20 +155,14 @@ pub fn crater_profile(d: f64, depth: f64, rim_height: f64, bowl_power: f64) -> f
 /// [`crater_profile`] with the rim lip widened to at least `rim_sigma_n`
 /// (normalised by the rim radius) at **full height** — the opposite trade from
 /// [`crater_profile_limited`]'s quadratic melt, for the opposite regime:
+/// `crater_profile_limited` serves craters whose whole ring may be unresolvable
+/// (a full-height rim there smears into a broad swell, so it melts); this serves
+/// craters whose bowl IS resolved while only the thin lip (σ = `RIM_SIGMA`·r)
+/// falls between sample points — widening the lip to the sampling width keeps it
+/// a sharp, representable ring instead of aliasing away.
 ///
-/// - `crater_profile_limited` serves craters whose WHOLE ring may be
-///   unresolvable; keeping such a rim at height would smear it into a broad
-///   positive swell ("bump-scapes under raking light"), so it melts.
-/// - This serves the over-zoom craterlets, whose bowls ARE resolved (the
-///   Nyquist fade has already killed anything smaller) while the thin lip
-///   (σ = 0.14·r) falls between vertices and aliases away. That lip is the one
-///   feature that makes a crater read crisp; losing it is the mid-field "dough"
-///   look. Widening it to the sampling width at full height keeps a sharp,
-///   representable lip on a real bowl.
-///
-/// The width is clamped to `[RIM_SIGMA, 0.35]`: below, it is the exact profile
-/// (`rim_sigma_n = 0` == [`crater_profile`]); above, a ring that wide on its own
-/// bowl would BE a swell — and the whole-crater fade has already faded those out.
+/// The width clamps to `[RIM_SIGMA, 0.35]`: at 0 it is exactly
+/// [`crater_profile`]; wider than 0.35 would itself read as a swell.
 #[inline]
 pub fn crater_profile_rim_limited(
     d: f64,

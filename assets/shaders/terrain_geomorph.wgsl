@@ -210,16 +210,11 @@ fn aa_fade(scale: f32, pw: f32) -> f32 {
 //     surge (see lunar_brdf.wgsl). — JPL/arXiv: https://arxiv.org/html/2410.04371v1
 //   * Airless → NO haze: high-contrast, crisp to the horizon.
 
-// World-space to-sun, read straight from the scene lights (no per-material uniform
-// wiring needed for streamed tiles). Picks the brightest directional light so the
-// dim earthshine fill can't be mistaken for the sun.
 // Palette-matched to `lod_rgb` in `stream_viz.rs` so the overlay and the debug
 // shader agree on what a depth looks like.
 fn lod_depth_color(d: f32) -> vec3<f32> {
-    // Cycle rather than clamp: MAX_DEPTH is 8, so clamping at 6 painted depths
-    // 6/7/8 the same colour — blind in exactly the band where detail transitions
-    // happen. Modulo guarantees ADJACENT depths always differ, which is all the
-    // boundary question needs.
+    // Cycle rather than clamp: modulo guarantees ADJACENT depths always differ,
+    // which is all the boundary question needs; clamping blinds the top depths.
     let i = i32(max(d, 0.0)) % 7;
     var p = array<vec3<f32>, 7>(
         vec3(0.20, 0.35, 0.85), vec3(0.20, 0.75, 0.85), vec3(0.25, 0.80, 0.35),
@@ -229,6 +224,9 @@ fn lod_depth_color(d: f32) -> vec3<f32> {
     return p[i];
 }
 
+// World-space to-sun, read straight from the scene lights (no per-material uniform
+// wiring needed for streamed tiles). Picks the brightest directional light so the
+// dim earthshine fill can't be mistaken for the sun.
 fn sun_to_light() -> vec3<f32> {
     var best = vec3(0.0, 1.0, 0.0);
     var best_lum = -1.0;

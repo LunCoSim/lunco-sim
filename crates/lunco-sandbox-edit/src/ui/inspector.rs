@@ -319,10 +319,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             .show(ui, |ui| terrain_overlay_section(ui, ctx));
         ui.separator();
 
-        // ── Terrain LOD (runtime streaming knobs) ────────────────────
-        // Above the (long) Obstacle Field section: this carries the streaming
-        // health readout, which is only useful if it is actually on screen when
-        // someone wonders why an area looks coarse.
+        // ── Terrain LOD (runtime streaming knobs + streaming health) ─
+        // Above the long Obstacle Field section so the health readout is on
+        // screen when an area looks coarse.
         egui::CollapsingHeader::new("Terrain LOD")
             .default_open(true)
             .show(ui, |ui| terrain_lod_section(ui, ctx));
@@ -1112,8 +1111,7 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                  splits are refused and the far field sits on coarser parents.",
             );
     });
-    // Streaming health — the self-diagnosis line for "why is that area coarse?".
-    // Pure derived read of `TerrainStreamStatus` (engine-side, updated per frame).
+    // Streaming health — pure derived read of `TerrainStreamStatus`.
     if let Some(status) = ctx.resource::<lunco_terrain_surface::TerrainStreamStatus>().copied() {
         ui.separator();
         ui.label(format!(
@@ -1125,8 +1123,8 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
              baking = off-thread height bakes in flight (transient fill).",
         );
         if status.budget_refused > 0 {
-            // Semantic status colour from the active Theme (§3.1 — no hex literals
-            // outside `lunco-theme`); egui default text colour when headless.
+            // Semantic status colour from the active Theme (§3.1); egui
+            // placeholder when headless.
             let warning_col = ctx
                 .resource::<lunco_theme::Theme>()
                 .map(|t| t.tokens.warning)
