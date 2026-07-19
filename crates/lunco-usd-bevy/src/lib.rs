@@ -804,10 +804,32 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // `invisible` suppresses mesh creation entirely (used for
         // collider-only Cube prims hidden behind a glTF visual, and
         // raycast wheel cylinders that have no visible representation).
-        let invisible = matches!(
-            reader.text(&sdf_path, "visibility").as_deref(),
-            Some("invisible")
-        )
+        //
+        // `visibility` is INHERITED, exactly like `purpose` below —
+        // `UsdGeomImageable` defines it as such, and the nearest ancestor that
+        // authors `invisible` hides the whole subtree. Reading only the prim's
+        // own path (as this did) means marking one `Xform` invisible leaves every
+        // child drawing, which is both wrong per spec and a surprising way to
+        // lose an afternoon: HAB-1's collider ring stayed on screen because the
+        // `invisible` sat on the group rather than on each box.
+        //
+        // Visibility PRUNES: an `invisible` ancestor hides the subtree outright,
+        // and a descendant cannot re-reveal itself. `inherited` means "take the
+        // parent's answer", NOT "force visible" — so it keeps walking rather
+        // than stopping. Getting that backwards would let a child override a
+        // hidden parent, which USD does not permit.
+        let invisible = {
+            let mut p = sdf_path.clone();
+            loop {
+                if reader.text(&p, "visibility").as_deref() == Some("invisible") {
+                    break true;
+                }
+                match p.parent() {
+                    Some(parent) if parent.as_str() != "/" => p = parent,
+                    _ => break false,
+                }
+            }
+        }
         // `UsdGeomImageable.purpose = "guide"` — geometry that exists for authoring,
         // not for viewing: construction axes, alignment rigs, and (the HAB-1 case)
         // the boolean CUTTERS that define a shell's openings. Keeping them in the
@@ -3591,7 +3613,19 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
 
     if let Some(loops) = trim_loops {
         let grid = (u_count.max(v_count) * 6).clamp(12, 96);
+        bevy::log::info!(
+            "[usd-bevy] {} trimming: {} loop(s), grid {}",
+            path.as_str(),
+            loops.loops.len(),
+            grid
+        );
         if let Some(domain) = crate::trim::triangulate_trimmed(&loops, grid) {
+            bevy::log::info!(
+                "[usd-bevy] {} trimmed domain: {} verts, {} tris",
+                path.as_str(),
+                domain.uvs.len(),
+                domain.indices.len() / 3
+            );
             let samples = crate::nurbs::sample_nurbs_patch_at(
                 &points,
                 &weights,
