@@ -18,7 +18,8 @@
 
 use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, ComputedAngularInertia, ComputedCenterOfMass,
-    ComputedMass, Forces, LinearVelocity, Mass, Position, RigidBody, Rotation, WriteRigidBodyForces,
+    ComputedMass, Forces, LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass,
+    NoAutoMass, Position, RigidBody, Rotation, WriteRigidBodyForces,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -306,13 +307,29 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
 // Avian splits user *overrides* (`Mass`/`AngularInertia`/`CenterOfMass`) from the
 // `Computed*` components the integrator actually reads. **Reads** return the
 // effective `Computed*` value (what the solver uses). **Writes** set the
-// *override* component — avian then recomputes `Computed*` from it (an override
-// takes precedence over collider-derived mass, so no `NoAuto*` marker is needed;
-// writing `Computed*` directly would be clobbered by that recompute, as the
-// authored `physics:mass` override on a USD body demonstrates). Overrides are
-// `f32`; we model the principal (diagonal) inertia only — off-diagonal
-// cross-terms are left to static USD authoring. A body with no `Computed*` yet
-// simply doesn't list the port.
+// *override* component AND its `NoAuto*` marker — writing `Computed*` directly
+// would be clobbered by the next recompute.
+//
+// The marker is NOT optional, which is what this comment used to get wrong: it
+// claimed "an override takes precedence over collider-derived mass, so no
+// `NoAuto*` marker is needed". Avian says otherwise — `MassPropertyHelper`
+// (avian3d `dynamics/rigid_body/mass_properties/system_param.rs:95-120`) only
+// consults the override *inside* `if no_auto_inertia { .. }`, and on the `else`
+// branch ASSIGNS the collider-derived tensor over the top. Without the marker an
+// override survives exactly until the next `update_mass_properties`, which any
+// collider or `RigidBody` add re-triggers.
+//
+// That is precisely the reported symptom: `set inertia_xx 4625` returned `true`
+// (the insert does succeed) yet read back UNCHANGED, because the read returns
+// `ComputedAngularInertia` and avian had already recomputed it from the collider
+// at `ColliderDensity` 1.0. The descent lander measured Ixx=159.3, Iyy=274.3,
+// Izz=229.4 against the ~4625/6250/4625 its hull and 2000 kg imply — and
+// Ixx != Izz on an axisymmetric hull is the giveaway that those numbers are
+// collider geometry rather than anything authored.
+//
+// Overrides are `f32`; we model the principal (diagonal) inertia only —
+// off-diagonal cross-terms are left to static USD authoring. A body with no
+// `Computed*` yet simply doesn't list the port.
 
 fn read_mass(w: &World, e: Entity) -> Option<f64> {
     w.get::<ComputedMass>(e).map(|m| m.value())
@@ -322,7 +339,7 @@ fn write_mass(w: &mut World, e: Entity, v: f64) -> bool {
     if w.get::<RigidBody>(e).is_none() {
         return false;
     }
-    w.entity_mut(e).insert(Mass(v as f32));
+    w.entity_mut(e).insert((Mass(v as f32), NoAutoMass));
     true
 }
 
@@ -348,7 +365,8 @@ fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
         1 => principal.y = v as f32,
         _ => principal.z = v as f32,
     }
-    w.entity_mut(e).insert(AngularInertia { principal, local_frame });
+    w.entity_mut(e)
+        .insert((AngularInertia { principal, local_frame }, NoAutoAngularInertia));
     true
 }
 
@@ -369,7 +387,7 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
         1 => c.y = v as f32,
         _ => c.z = v as f32,
     }
-    w.entity_mut(e).insert(CenterOfMass(c));
+    w.entity_mut(e).insert((CenterOfMass(c), NoAutoCenterOfMass));
     true
 }
 

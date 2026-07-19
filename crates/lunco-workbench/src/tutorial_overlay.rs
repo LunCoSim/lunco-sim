@@ -181,16 +181,27 @@ register_commands!(
 
 // ── Rendering ─────────────────────────────────────────────────────────────
 
+// TODO(theme): migrate to lunco-theme once the token set covers this.
+// The tutorial-chrome accent (HUD keyline, spotlight ring, callout border). A
+// bright blue, whereas `tokens.accent` is mauve — picking between the two is a
+// design decision, not a mechanical substitution.
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(90, 170, 255);
 
 /// Draw the persistent objectives/hint card, top-left, below the menu bar.
 /// Non-interactive (foreground layer) so it never eats clicks.
-fn draw_tutorial_hud(mut egui_ctx: EguiContexts, hud: Res<TutorialHud>) {
+fn draw_tutorial_hud(
+    mut egui_ctx: EguiContexts,
+    hud: Res<TutorialHud>,
+    theme: Option<Res<lunco_theme::Theme>>,
+) {
     if hud.hint.is_empty() && hud.objectives.is_empty() {
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let screen = ctx.content_rect();
+    let theme = theme
+        .map(|t| t.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
 
     egui::Area::new(egui::Id::new("lunco_tutorial_hud"))
         .order(egui::Order::Foreground)
@@ -199,7 +210,7 @@ fn draw_tutorial_hud(mut egui_ctx: EguiContexts, hud: Res<TutorialHud>) {
         .show(ctx, |ui| {
             ui.set_max_width(320.0);
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(18, 24, 38, 235))
+                .fill(theme.tokens.overlay_backdrop)
                 .corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, ACCENT.linear_multiply(0.6)))
                 .inner_margin(egui::Margin::symmetric(12, 10))
@@ -215,10 +226,10 @@ fn draw_tutorial_hud(mut egui_ctx: EguiContexts, hud: Res<TutorialHud>) {
                         for line in hud.objectives.lines() {
                             // Colour done/failed lines by their leading glyph.
                             let color = match line.chars().next() {
-                                Some('✓') => egui::Color32::from_rgb(140, 230, 160),
-                                Some('✗') => egui::Color32::from_rgb(240, 150, 150),
-                                Some('▸') => egui::Color32::from_rgb(230, 235, 245),
-                                _ => egui::Color32::from_rgb(160, 172, 190),
+                                Some('✓') => theme.tokens.success,
+                                Some('✗') => theme.tokens.error,
+                                Some('▸') => theme.tokens.text,
+                                _ => theme.tokens.text_subdued,
                             };
                             ui.label(egui::RichText::new(line).color(color).size(14.0));
                         }
@@ -231,7 +242,7 @@ fn draw_tutorial_hud(mut egui_ctx: EguiContexts, hud: Res<TutorialHud>) {
                         }
                         ui.label(
                             egui::RichText::new(&hud.hint)
-                                .color(egui::Color32::from_rgb(210, 224, 245))
+                                .color(theme.tokens.text)
                                 .size(15.0),
                         );
                     }
@@ -242,7 +253,12 @@ fn draw_tutorial_hud(mut egui_ctx: EguiContexts, hud: Res<TutorialHud>) {
 /// Draw the spotlight: dim the screen except the anchored widget's rect, ring
 /// it with a pulsing accent, and show a caption callout. Falls back to a full
 /// dim + centred caption when the anchor isn't currently painted.
-fn draw_spotlight(mut egui_ctx: EguiContexts, hud: Res<TutorialHud>, anchors: Res<crate::HelpAnchors>) {
+fn draw_spotlight(
+    mut egui_ctx: EguiContexts,
+    hud: Res<TutorialHud>,
+    anchors: Res<crate::HelpAnchors>,
+    theme: Option<Res<lunco_theme::Theme>>,
+) {
     // A guided tour owns the scrim (see `draw_tour`); don't double-dim.
     if hud.tour.is_some() {
         return;
@@ -250,13 +266,18 @@ fn draw_spotlight(mut egui_ctx: EguiContexts, hud: Res<TutorialHud>, anchors: Re
     let Some((key, caption)) = hud.spotlight.clone() else { return };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let screen = ctx.content_rect();
+    let theme = theme
+        .map(|t| t.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
     let target = anchors.get(&key);
 
     egui::Area::new(egui::Id::new("lunco_spotlight_scrim"))
         .order(egui::Order::Foreground)
         .interactable(false)
         .fixed_pos(screen.min)
-        .show(ctx, |ui| paint_scrim(ui.painter(), ctx, screen, target));
+        .show(ctx, |ui| {
+            paint_scrim(ui.painter(), ctx, screen, target, theme.tokens.scrim)
+        });
 
     if caption.is_empty() {
         return;
@@ -279,14 +300,14 @@ fn draw_spotlight(mut egui_ctx: EguiContexts, hud: Res<TutorialHud>, anchors: Re
         .show(ctx, |ui| {
             ui.set_width(card_w);
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(20, 28, 44, 250))
+                .fill(theme.tokens.overlay_backdrop)
                 .corner_radius(12.0)
                 .stroke(egui::Stroke::new(1.5, ACCENT))
                 .inner_margin(egui::Margin::symmetric(14, 12))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(&caption)
-                            .color(egui::Color32::from_rgb(214, 228, 250))
+                            .color(theme.tokens.text)
                             .size(15.0),
                     );
                 });
@@ -300,8 +321,11 @@ fn paint_scrim(
     ctx: &egui::Context,
     screen: egui::Rect,
     target: Option<egui::Rect>,
+    // Passed in rather than read via `lunco_theme::active(ctx)`: that cache is
+    // only published by the Modelica canvas, so everywhere else it silently
+    // returns `Theme::dark()` (see the note in `lib.rs`).
+    scrim: egui::Color32,
 ) {
-    let scrim = egui::Color32::from_black_alpha(170);
     let Some(t) = target else {
         painter.rect_filled(screen, 0.0, scrim);
         return;
@@ -462,7 +486,7 @@ fn draw_tour(
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
             let painter = ui.painter();
-            paint_scrim(painter, ctx, screen, target);
+            paint_scrim(painter, ctx, screen, target, theme.tokens.scrim);
             if let Some(t) = target {
                 let card_rect =
                     egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));

@@ -84,7 +84,7 @@ mod tests {
         let mut spec = ObstacleFieldSpec::default();
         spec.seed = 0xABCD;
         spec.region_half_extent = 123.0;
-        let op = ObstacleFieldOp::SetSpec { spec: spec.clone() };
+        let op = ObstacleFieldOp::SetSpec { spec: spec };
         assert_eq!(op.domain(), DomainKind::ObstacleField);
         let json = serde_json::to_value(&op).unwrap();
         let back = replay_spec(&json).expect("decodes");

@@ -49,7 +49,20 @@ pub struct ApiCommandEvent {
 /// System counter for generating unique IDs.
 #[derive(Resource, Default)]
 pub struct ApiIdCounter { next: u64 }
-impl ApiIdCounter { pub fn next(&mut self) -> u64 { let id = self.next; self.next += 1; id } }
+impl ApiIdCounter {
+    /// Mint the next correlation id.
+    ///
+    /// Named `next_id`, not `next`: a bare `next(&mut self) -> u64` shadows
+    /// `Iterator::next` at every call site. The lint's alternative — actually
+    /// implementing `Iterator` — would be wrong here: this is an unbounded id
+    /// source that never yields `None`, so advertising it as an iterator makes
+    /// it `.collect()`-able into a hang.
+    pub fn next_id(&mut self) -> u64 {
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+}
 
 /// Observer that processes API requests and produces responses.
 pub fn api_request_observer(
@@ -551,7 +564,7 @@ fn execute_request(
                 commands.trigger(ApiCommandEvent {
                     command: command.clone(),
                     params: params.clone(),
-                    id: id_counter.next(),
+                    id: id_counter.next_id(),
                 });
                 return None; // the handler answers on `correlation_id`
             }
@@ -613,7 +626,7 @@ fn execute_request(
             }
 
             // Trigger as ApiCommandEvent — handled by api_command_dispatcher
-            let command_id = id_counter.next();
+            let command_id = id_counter.next_id();
             commands.trigger(ApiCommandEvent {
                 command: command.clone(),
                 params: params.clone(),
@@ -965,9 +978,9 @@ mod tests {
     #[test]
     fn test_command_id_generation() {
         let mut counter = ApiIdCounter::default();
-        assert_eq!(counter.next(), 0);
-        assert_eq!(counter.next(), 1);
-        assert_eq!(counter.next(), 2);
+        assert_eq!(counter.next_id(), 0);
+        assert_eq!(counter.next_id(), 1);
+        assert_eq!(counter.next_id(), 2);
     }
 
     // A result-reporting command fixture: `Ok` → Succeeded, `Err` → Failed. It is a

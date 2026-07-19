@@ -278,7 +278,7 @@ fn drive_from_bindings(
     // bindings` still runs and `resolve` still writes EVERY bound port — now all
     // 0 — so the vessel decelerates to a clean stop rather than latching its last
     // command (as it would if we simply skipped the system).
-    let egui_keyboard = egui_focus.map_or(false, |f| f.wants_keyboard);
+    let egui_keyboard = egui_focus.is_some_and(|f| f.wants_keyboard);
     let sim_intents = sim_intents.as_deref();
     // A simulated intent counts as held regardless of the egui gate (it is not a
     // physical key that a focused text field could be swallowing).
@@ -494,7 +494,7 @@ fn record_control_input(
         // and reconcile can prune. The forward/steer/brake payload is unused by
         // the current positional reconcile (awaits true input-replay).
         let entry = owned_log.0.entry(g).or_default();
-        if entry.frames.back().map_or(true, |f| f.seq != cmd.seq) {
+        if entry.frames.back().is_none_or(|f| f.seq != cmd.seq) {
             // Capture the REAL actuation for deterministic input-replay rollback.
             // `drive_from_bindings` resolves every bound port each tick, so the
             // owned-client stream carries the full set; latch from the prior frame

@@ -610,6 +610,16 @@ fn reseat_bodies(
     }
 }
 
+/// Convenience: a denser/larger preset for stress-testing rover mobility.
+pub fn stress_spec(seed: u64) -> ObstacleFieldSpec {
+    ObstacleFieldSpec {
+        seed,
+        region_half_extent: 150.0,
+        pattern: Pattern::Clustered { clusters: 8, spread: 25.0 },
+        ..default()
+    }
+}
+
 // `EntityWorldMut::add_child` is banned because re-parenting a big_space
 // `GridAnchor` must go through `lunco_core::attach::migrate_to_grid` for an atomic
 // `(ChildOf, CellCoord, Transform)` write. These tests parent a plain wheel body
@@ -715,15 +725,5 @@ mod tests {
 
         // reseat_pending consumed.
         assert!(!world.resource::<ObstacleFieldHeights>().reseat_pending);
-    }
-}
-
-/// Convenience: a denser/larger preset for stress-testing rover mobility.
-pub fn stress_spec(seed: u64) -> ObstacleFieldSpec {
-    ObstacleFieldSpec {
-        seed,
-        region_half_extent: 150.0,
-        pattern: Pattern::Clustered { clusters: 8, spread: 25.0 },
-        ..default()
     }
 }

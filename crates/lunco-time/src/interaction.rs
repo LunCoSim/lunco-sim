@@ -171,7 +171,7 @@ pub fn run_interaction_schedule(world: &mut World) {
 /// (the avatar cameras do). The stepped writer keeps writing `Transform` as before;
 /// [`record_interaction_poses`] snapshots it each step, and [`ease_interaction_poses`]
 /// overwrites `Transform` with the eased value each frame.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[derive(Component, Debug, Clone, Copy, Reflect, Default)]
 #[reflect(Component)]
 pub struct InteractionEased {
     /// Pose at the previous step.
@@ -180,11 +180,6 @@ pub struct InteractionEased {
     curr: Option<Transform>,
 }
 
-impl Default for InteractionEased {
-    fn default() -> Self {
-        Self { prev: None, curr: None }
-    }
-}
 
 /// START of the interaction step: restore each eased entity's authoritative pose
 /// (`curr`) into `Transform`, undoing the previous frame's render interpolation.

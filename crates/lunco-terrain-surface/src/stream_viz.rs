@@ -932,6 +932,64 @@ pub struct TerrainStreamStatus {
     pub pending: usize,
 }
 
+/// **Run tile streaming in LOCKSTEP with the frame instead of against the wall
+/// clock.** Set while an offline recording is capturing; clear otherwise.
+///
+/// # Why this exists
+///
+/// Ordinary streaming is real-time paced on purpose: a frame starts at most
+/// [`TerrainLodConfig::bakes_per_frame`] bakes, caps in-flight work at
+/// [`MAX_INFLIGHT_BAKES`], and *polls* those off-thread tasks with `poll_once` — so
+/// a bake lands on whichever frame it happens to finish on. That is exactly right
+/// for interactive play (the frame never blocks on baking) and exactly wrong for
+/// offline capture, because "whichever frame it happens to finish on" is a function
+/// of thread scheduling, not of the shot.
+///
+/// MEASURED: with the recorder's readiness gate and recorder-owned camera-path
+/// release both in place — frame 0 bit-identical across runs — two full runs of
+/// `episode_02_rover.usda` still differed on the FROZEN shots (01, 02, 03, 06) in
+/// 25-38 separate blocks of frames each, with the final frame matching every time.
+/// A transient, not an accumulation: the readiness gate guarantees the wanted tile
+/// set is fully resident at frame 0, but as the camera moves through the shot the
+/// selection changes, new bakes are queued, and they land a
+/// scheduling-dependent number of frames later. Same shot, same camera, different
+/// tiles drawn on any given frame.
+///
+/// # What setting it does
+///
+/// Two changes in [`update_lod_tiles`], both only while set:
+///
+/// 1. **No pacing budgets.** `bakes_per_frame` and [`MAX_INFLIGHT_BAKES`] are
+///    lifted, so the set of bakes STARTED on a frame is a pure function of that
+///    frame's selection rather than of a budget interacting with the previous
+///    frame's carry-over.
+/// 2. **Drain, don't poll.** Pending bakes are blocked on to completion rather than
+///    `poll_once`d, so every bake started on frame N is resident by frame N+1 —
+///    always, on every machine, instead of "eventually".
+///
+/// The result is that what is drawn on frame N is a pure function of N. Note this
+/// does NOT make streaming instantaneous: finalize runs before selection in the
+/// system body, so a tile is still one frame behind the selection that asked for
+/// it. That is fine — reproducibility needs the latency to be CONSTANT, not zero.
+///
+/// It costs frame time (the frame now blocks on baking), which is the correct
+/// trade for an offline render and unacceptable for interactive play. Hence a flag,
+/// not a change of default.
+///
+/// # Who sets it
+///
+/// `lunco-sandbox`, mirroring `OfflineRecordingState::active` — the same inversion
+/// as `report_terrain_status`/`report_scene_spawn_status`, for the same reason.
+/// `lunco-workbench` (which owns the recorder) is a UI-shell crate and cannot name
+/// terrain; `lunco-terrain-surface` must not know what a recorder is. `lunco-sandbox`
+/// is the assembly point that sees both.
+///
+/// Distinct from [`LodFrozen`], which is an authored per-terrain opt-in that stops
+/// re-selection outright. This one keeps selection live (the shot still refines as
+/// the camera moves) and only makes its timing deterministic.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct TerrainStreamLockstep(pub bool);
+
 /// Per-frame scratch for [`update_lod_tiles`] — the five collections the streaming
 /// pass used to heap-allocate EVERY frame per terrain (material swaps, finished
 /// bakes, the sort keys, the hole-cover set, the wanted set). Hoisted into a
@@ -1004,6 +1062,8 @@ pub fn update_lod_tiles(
     mut mesh_cache: ResMut<LodMeshCache>,
     cfg: Res<TerrainLodConfig>,
     mut stream_status: ResMut<TerrainStreamStatus>,
+    // Set while an offline recording captures — see [`TerrainStreamLockstep`].
+    lockstep: Res<TerrainStreamLockstep>,
     settings: Option<Res<lunco_settings::TerrainSettings>>,
     overlay_params: Res<crate::overlay::TerrainOverlayParams>,
     mut scratch: Local<StreamScratch>,
@@ -1038,7 +1098,14 @@ pub fn update_lod_tiles(
     let Ok((grid_entity, grid)) = grids.single() else { return };
 
     // Per-frame bake budget shared across all terrains (amortise scale changes).
-    let mut bake_budget = cfg.bakes_per_frame.max(1);
+    //
+    // Under lockstep the budgets are LIFTED, not merely raised: a budget makes the
+    // bakes started on a frame depend on what the previous frame could not fit,
+    // which is precisely the frame-to-frame carry-over that has to go for the shot
+    // to be reproducible. See [`TerrainStreamLockstep`].
+    let lockstep = lockstep.0;
+    let mut bake_budget = if lockstep { usize::MAX } else { cfg.bakes_per_frame.max(1) };
+    let max_inflight = if lockstep { usize::MAX } else { MAX_INFLIGHT_BAKES };
     // Live streaming terrains — the mesh cache is GLOBAL (keyed by `(terrain,
     // coord)`), so its cap must scale with them or two terrains would fight over
     // one terrain's worth of entries and thrash each other every frame.
@@ -1360,14 +1427,31 @@ pub fn update_lod_tiles(
         // Poll in-flight tasks; for each finished bake, upload its mesh (cheap, main
         // thread) + spawn the tile. The expensive DEM sampling already ran on a
         // worker thread, so the frame never blocks on baking.
+        //
+        // ...unless we are in LOCKSTEP (offline capture), where the frame blocks on
+        // EVERY in-flight bake instead. `poll_once` returns whatever happens to be
+        // done, which makes the tile set drawn on a given frame a function of thread
+        // scheduling; draining to completion makes it a function of the frame index.
+        // See [`TerrainStreamLockstep`] for the measurement that motivated this.
         done.clear();
-        pending.0.retain(|coord, (gen, task)| match block_on(future::poll_once(&mut *task)) {
-            Some(baked) => {
-                done.push((*coord, *gen, baked));
-                false
+        if lockstep {
+            for (coord, (gen, task)) in pending.0.drain() {
+                done.push((coord, gen, block_on(task)));
             }
-            None => true,
-        });
+            // `drain()` on a `HashMap` yields in an arbitrary (hash-seed-dependent)
+            // order, and downstream `done` handling inserts into `LodTiles`/despawns
+            // — so sort to a deterministic order before consuming it. Coordinates are
+            // unique per terrain, so this is a total order.
+            done.sort_by_key(|(coord, _, _)| (coord.depth, coord.x, coord.z));
+        } else {
+            pending.0.retain(|coord, (gen, task)| match block_on(future::poll_once(&mut *task)) {
+                Some(baked) => {
+                    done.push((*coord, *gen, baked));
+                    false
+                }
+                None => true,
+            });
+        }
         for (coord, gen, baked) in done.drain(..) {
             // A bake from a superseded generation (heights changed while it ran) is
             // discarded — its mesh would show the OLD terrain.
@@ -1468,7 +1552,7 @@ pub fn update_lod_tiles(
             }
             // Cache miss → needs a bake. Respect the per-frame + in-flight budgets
             // (keep scanning for cheap cache hits regardless of the bake budget).
-            if bake_budget == 0 || pending.0.len() >= MAX_INFLIGHT_BAKES {
+            if bake_budget == 0 || pending.0.len() >= max_inflight {
                 continue;
             }
             bake_budget -= 1;

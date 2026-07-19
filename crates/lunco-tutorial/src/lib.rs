@@ -398,6 +398,11 @@ fn draw_advance_prompt(
         .fixed_pos(screen.min)
         .interactable(true)
         .show(ctx, |ui| {
+            // TODO(theme): migrate to lunco-theme once the token set covers this.
+            // Full-screen dim behind the "advance" prompt -> `tokens.scrim`.
+            // BLOCKED: `lunco-tutorial` has no `[features]` section, so there is
+            // nowhere safe to hang an optional `lunco-theme` dep (it pulls
+            // bevy_egui -> bevy_render -> wgpu). See lunco-theme's crate docs.
             ui.painter()
                 .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
             ui.allocate_rect(screen, egui::Sense::click());
@@ -763,6 +768,9 @@ impl Panel for TutorialsPanel {
         if let Some(cur) = &progress.current {
             let title = registry.get(cur).map(|m| m.title.to_string()).unwrap_or_else(|| cur.clone());
             ui.horizontal(|ui| {
+                // TODO(theme): migrate to lunco-theme once the token set covers this.
+                // "Currently running" accent for the launcher row. Blocked on the
+                // dep, as above.
                 ui.label(egui::RichText::new(format!("▶ Running: {title}")).color(egui::Color32::from_rgb(120, 200, 255)));
                 if ui.small_button("Stop").clicked() {
                     ctx.trigger(SkipTutorial {});
@@ -777,6 +785,8 @@ impl Panel for TutorialsPanel {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if done {
+                            // TODO(theme): migrate to lunco-theme once the token set covers this.
+                            // Completed-tutorial tick -> `tokens.success`. Blocked on the dep.
                             ui.label(egui::RichText::new("✓").color(egui::Color32::from_rgb(120, 210, 140)).strong());
                         }
                         ui.label(egui::RichText::new(meta.title.as_str()).strong());

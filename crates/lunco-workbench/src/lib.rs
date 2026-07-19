@@ -501,6 +501,11 @@ impl Plugin for WorkbenchPlugin {
     }
 }
 
+/// Holds the name of the currently loaded USD scene file to display in the status bar.
+#[derive(Resource, Clone, Default, Debug, Reflect)]
+#[reflect(Resource, Default)]
+pub struct CurrentSceneName(pub String);
+
 /// Workbench state: registered panels + the dock tree they live in.
 ///
 /// Holds an `egui_dock::DockState<PanelId>` plus a registry of `Panel`
@@ -509,11 +514,6 @@ impl Plugin for WorkbenchPlugin {
 /// the slot-setter DSL ([`set_side_browser`](Self::set_side_browser),
 /// [`set_center`](Self::set_center), [`set_right_inspector`](Self::set_right_inspector),
 /// [`set_bottom`](Self::set_bottom)).
-/// Holds the name of the currently loaded USD scene file to display in the status bar.
-#[derive(Resource, Clone, Default, Debug, Reflect)]
-#[reflect(Resource, Default)]
-pub struct CurrentSceneName(pub String);
-
 #[derive(Resource)]
 pub struct WorkbenchLayout {
     pub(crate) panels: HashMap<PanelId, Box<dyn Panel>>,
@@ -986,7 +986,7 @@ impl WorkbenchLayout {
         // `main_surface_mut()` returns `&mut Surface<Tab>` which
         // derefs to the underlying `Tree` for indexing.
         let tree = self.dock.main_surface_mut();
-        if tree.len() == 0 {
+        if tree.is_empty() {
             return;
         }
 
@@ -1370,9 +1370,7 @@ impl WorkbenchLayout {
             }
         });
 
-        if new_dock.iter_all_tabs().next().is_none() {
-            return None; // nothing survived reconciliation — keep current
-        }
+        new_dock.iter_all_tabs().next()?;
         // Heal any non-finite split fraction persisted to disk. egui_dock can
         // serialize a NaN fraction (see `sanitize_dock_fractions`), and a NaN
         // reloaded here would panic the dock layout on the very next frame —
@@ -1680,7 +1678,7 @@ impl WorkbenchLayout {
                 let node = NodeIndex(i);
                 if let Some(node_ref) = main.iter().nth(i) {
                     if let egui_dock::Node::Leaf(leaf) = node_ref {
-                        if leaf.tabs.iter().any(|t| *t == target_tab) {
+                        if leaf.tabs.contains(&target_tab) {
                             found = Some(node);
                             break;
                         }
@@ -2379,8 +2377,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                         record_chrome(self.world, ui, body, transparent);
                     }
                 } else {
+                    let error_color = self
+                        .world
+                        .get_resource::<lunco_theme::Theme>()
+                        .map(|t| t.tokens.error)
+                        .unwrap_or(egui::Color32::LIGHT_RED);
                     ui.colored_label(
-                        egui::Color32::LIGHT_RED,
+                        error_color,
                         format!("Panel `{}` not registered", id.as_str()),
                     );
                 }
@@ -2401,8 +2404,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     }
                     record_chrome(self.world, ui, body, transparent);
                 } else {
+                    let error_color = self
+                        .world
+                        .get_resource::<lunco_theme::Theme>()
+                        .map(|t| t.tokens.error)
+                        .unwrap_or(egui::Color32::LIGHT_RED);
                     ui.colored_label(
-                        egui::Color32::LIGHT_RED,
+                        error_color,
                         format!(
                             "InstancePanel kind `{}` not registered",
                             kind.as_str()
@@ -4048,8 +4056,12 @@ fn render_panel_solo(
             f(world);
         }
     } else {
+        let error_color = world
+            .get_resource::<lunco_theme::Theme>()
+            .map(|t| t.tokens.error)
+            .unwrap_or(egui::Color32::LIGHT_RED);
         ui.colored_label(
-            egui::Color32::LIGHT_RED,
+            error_color,
             format!("Panel `{}` not registered", id.as_str()),
         );
     }

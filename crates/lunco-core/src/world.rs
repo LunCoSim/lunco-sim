@@ -294,7 +294,7 @@ fn dbg_cell_drift(
     q: Query<(Entity, &CellCoord, &Transform, Option<&Name>, bevy::prelude::Has<FloatingOrigin>)>,
 ) {
     *n = n.wrapping_add(1);
-    if *n % 120 != 0 {
+    if !(*n).is_multiple_of(120) {
         return;
     }
     let mut worst: Option<(i64, String, CellCoord, bevy::math::Vec3, bool)> = None;

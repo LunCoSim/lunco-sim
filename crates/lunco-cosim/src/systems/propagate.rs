@@ -182,6 +182,11 @@ pub fn propagate_connections(
     world: &mut World,
     mut wiring: Local<RebuildOnChange<SimConnection, CompiledWiring>>,
     mut acc: Local<Vec<f64>>,
+    // Dangling-wire names already reported. Dedup is per PORT NAME, not per
+    // call site: a `warn_once!` here reported only the FIRST dangling wire in
+    // the whole process and silently dropped every other one, which is exactly
+    // how a model that lost ALL of its inputs could look like it had lost one.
+    mut reported: Local<std::collections::HashSet<String>>,
 ) {
     // Registry is a `Vec` of `Copy` backend fn-pointers; clone it out so the
     // write phase can take `&mut World` without holding a resource borrow.
@@ -231,8 +236,8 @@ pub fn propagate_connections(
             }
             None => registry.write_port(world, t.entity, &t.name, acc[i]),
         };
-        if !written {
-            warn_once!(
+        if !written && reported.insert(t.name.clone()) {
+            warn!(
                 "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
                  (declare the port or fix the wire)",
                 t.name,

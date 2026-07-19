@@ -125,6 +125,12 @@ lunco-usd = { path = "../lunco-usd", default-features = false }
 # the USD-reading systems below read the LIVE composed stage first, falling back
 # to the flattened `stage.reader` only for recipe-less legacy assets.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+# `cosim::SceneLoadInFlight` for `report_scene_spawn_status`, which mirrors "scene
+# prims are still spawning" onto the workbench `StatusBus` — where the offline
+# recorder's readiness gate reads it. Adds NOTHING to the dependency graph:
+# `lunco-usd` already pulls this crate in, so naming it here only makes the type
+# reachable from this one.
+lunco-usd-sim = { path = "../lunco-usd-sim" }
 # USD→terrain projection: authored terrain prims → DEM request + layer stack, and
 # hand edits back onto the document's runtime layer. Render-free, so the headless
 # server gets its terrain collider without linking any UI.

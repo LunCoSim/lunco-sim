@@ -7087,6 +7087,7 @@ dependencies = [
  "bevy",
  "lunco-core",
  "lunco-cosim",
+ "lunco-physics",
  "wgpu-types",
 ]
 
@@ -7163,6 +7164,7 @@ dependencies = [
  "lunco-fsw",
  "lunco-hardware",
  "lunco-hooks",
+ "lunco-physics",
  "lunco-time",
  "serde_json",
 ]
@@ -7396,6 +7398,7 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-usd",
  "lunco-usd-bevy",
+ "lunco-usd-sim",
  "lunco-usd-terrain",
  "lunco-web",
  "lunco-workbench",

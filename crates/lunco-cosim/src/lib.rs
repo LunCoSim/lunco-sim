@@ -151,7 +151,21 @@ impl Plugin for CoSimPlugin {
                 // by propagation's `force_*` writes) into avian's `Forces`. Joint
                 // motors are driven inline by the `angle` input port's write
                 // closure during propagation, so no separate joint-drive system.
-                avian::apply_pending_forces.in_set(systems::apply_forces::CosimSet::ApplyForces),
+                // Additionally gated on `physics_is_live`: this is the one system
+                // here that writes into avian's FORCE ACCUMULATOR, which only the
+                // physics step clears. A physics hold (a frozen cinematic beat)
+                // leaves `FixedUpdate` running by design, so ungated this kept
+                // draining thruster force AND TORQUE into the accumulator with
+                // nothing consuming it, then discharged the whole integral on the
+                // single step that released the hold. Torque, unlike gravity,
+                // accumulates about the COM and so discharges as SPIN — the measured
+                // ~25 rad/s transient on episode 1's lander/rover stack. The
+                // `propagate_connections` above is deliberately NOT gated: it moves
+                // VALUES around the cosim graph rather than accumulating one, and a
+                // held beat still wants a live graph.
+                avian::apply_pending_forces
+                    .in_set(systems::apply_forces::CosimSet::ApplyForces)
+                    .run_if(lunco_physics::physics_is_live),
             )
                 .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
                     // Absent role (single-player, headless tests) → run cosim.

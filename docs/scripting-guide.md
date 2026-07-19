@@ -184,6 +184,8 @@ scripts) is all rhai — see the [examples index](#n-examples-index).
 - **Every command** `cmd()` can fire: [`commands-reference.md`](./commands-reference.md).
 - **Deeper topics** (sequencing, tools, policy hooks, vessel controllers, behavior
   trees, determinism): [Part II](#part-ii--reference).
+- **Recording deterministic frames** (the offline clock, `shot_*` verbs, `frozen`,
+  the `shots.rhai` sequencer): [`offline-recording.md`](./offline-recording.md).
 - **Design rationale**: [`rhai-integration-design.md`](./rhai-integration-design.md).
 - **rhai language**: <https://rhai.rs/book/>.
 
@@ -329,6 +331,21 @@ session owns the vessel — `SessionRegistry::owner_of(...).is_some()`), wired i
 model (`piloted:piloted`) and gating `cmd = piloted ? stick : gnc`. No in-model flag,
 no rhai toggle, no per-tick check — possession is the single source of truth. Ride the
 camera along without taking control via `follow(entity)`.
+
+> [!IMPORTANT]
+> **`piloted` selects the setpoint SOURCE — it is not a permission gate on attitude.**
+> An unpossessed vessel still has full attitude authority via its `guidance_*` wires; what
+> it loses is the external stick. So an unpossessed lander does not refuse to fly, it flies
+> *itself* — and every `external_*` port write is **silently discarded** while the vehicle
+> continues on GNC. A vehicle that "ignores your throttle and just falls" is almost always
+> an unclaimed vessel, not a broken command.
+>
+> Claim it before commanding it:
+> ```rhai
+> fn on_start(me) { cmd("PossessVessel", #{ target: me }); }
+> ```
+> The claim keys on `target`, **not on an avatar**, so this works headless — an unattended
+> or server-side run needs no avatar to hold authority.
 
 ## H. Autopilot & Behavior Tree Integration
 

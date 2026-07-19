@@ -200,6 +200,16 @@ impl<'w> PanelCtx<'w> {
     }
 }
 
+/// A dockable workbench panel.
+///
+/// One implementor per panel kind, registered with [`WorkbenchLayout`] under a
+/// [`PanelId`] that doubles as its layout key — so the dock tree stores ids, not
+/// widgets, and a saved layout survives a panel being re-registered.
+///
+/// Implement [`InstancePanel`] instead when one renderer backs many tabs (the
+/// per-tab state then lives in `TabId::Instance`, not in the implementor).
+///
+/// [`WorkbenchLayout`]: crate::WorkbenchLayout
 pub trait Panel: Send + Sync + 'static {
     /// Stable ID for this panel (used as a layout key).
     fn id(&self) -> PanelId;

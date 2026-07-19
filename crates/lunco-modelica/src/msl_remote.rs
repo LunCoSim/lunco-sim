@@ -872,7 +872,7 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
     let cancel_for_task = cancel.clone();
     pool.spawn(async move {
         // Parse the bundled Assets.toml to recover the `[msl]` entry.
-        let manifest = match AssetManifest::from_str(BUNDLED_ASSETS_TOML) {
+        let manifest = match BUNDLED_ASSETS_TOML.parse::<AssetManifest>() {
             Ok(m) => m,
             Err(e) => {
                 set_install_state(

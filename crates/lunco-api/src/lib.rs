@@ -139,8 +139,16 @@ impl LunCoApiPlugin {
         }
     }
 
-    /// Create with default configuration.
-    pub fn default() -> Self {
+}
+
+/// Create with default configuration.
+///
+/// The `Default` TRAIT, not an inherent `default()`: an inherent method of that
+/// name shadows `Default::default` at every call site, so `LunCoApiPlugin::default()`
+/// silently resolved to whichever the compiler picked. Implementing the trait also
+/// makes the plugin usable anywhere a `T: Default` bound applies.
+impl Default for LunCoApiPlugin {
+    fn default() -> Self {
         Self {
             #[cfg(feature = "transport-http")]
             config: LunCoApiConfig::default(),
@@ -237,6 +245,13 @@ impl Plugin for LunCoApiPlugin {
             // `spawn_server` (axum/tokio-net are native-only) — the browser uses
             // the JS bridge below instead, so skip the call there even if
             // `transport-http` happens to be enabled in the feature set.
+            // `redundant_clone` fires on `bridge.clone()` here, and it is wrong:
+            // clippy analyses ONE cfg at a time. In this one (native +
+            // transport-http) the wasm arm below is compiled out, so the clone
+            // looks like the last use — but moving instead would break the wasm
+            // build, where `set_wasm_bridge` needs it too. See the note below on
+            // why the clones exist across the whole feature matrix.
+            #[allow(clippy::redundant_clone)]
             #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
             if let Some(config) = &self.config.http_config {
                 transports::spawn_server(config.clone(), bridge.clone());

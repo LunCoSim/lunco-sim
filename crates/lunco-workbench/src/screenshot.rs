@@ -476,6 +476,7 @@ fn on_start_offline_recording(
         fps: cmd.fps.max(1),
         requested_at: web_time::Instant::now(),
         ready_streak: 0,
+        ready_since: None,
         last_blocker: None,
     });
 }
@@ -581,9 +582,11 @@ struct PendingShotStart {
     fps: u32,
     /// When the request arrived — drives both the settle timing and the timeout.
     requested_at: web_time::Instant,
-    /// Consecutive frames for which [`scene_visuals_ready`] returned `None`.
-    /// See [`SETTLE_FRAMES`].
+    /// Consecutive frames for which every readiness clause held. See
+    /// [`SETTLE_FRAMES`].
     ready_streak: u32,
+    /// When the current ready streak began. See [`SETTLE_PERIOD`].
+    ready_since: Option<web_time::Instant>,
     /// The most recent reason readiness was refused, kept for the start/timeout
     /// log line. Without it a timeout could only say "not ready", which is exactly
     /// the diagnosis a human needs and cannot reconstruct after the fact.
@@ -617,6 +620,20 @@ const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 /// guards: a bad opening frame costs a ~10 minute re-record of the whole episode.
 const SETTLE_FRAMES: u32 = 5;
 
+/// Minimum wall-clock time every clause must hold before the shot starts.
+///
+/// The companion to [`SETTLE_FRAMES`], covering the same pipeline-warm-up hazard on
+/// the other axis. Shader compilation happens off the main thread on a wall-clock
+/// schedule, so a frame COUNT is the wrong unit for it on its own: once recording
+/// is armed the present mode is uncapped and five frames can elapse in ~20 ms,
+/// which is not enough for a compile to retire. This floor makes the window mean
+/// "quiet for a while" rather than "quiet for a few frames on a machine that
+/// happens to render fast".
+///
+/// 500 ms is invisible against a ~10 minute episode (6 shots ⇒ 3 s total), so it is
+/// priced well below the failure it guards.
+const SETTLE_PERIOD: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// [`StatusBus`](crate::status_bus::StatusBus) sources whose in-flight work makes the
 /// scene un-presentable, for clause (3) of [`scene_visuals_ready`].
 ///
@@ -627,9 +644,18 @@ const SETTLE_FRAMES: u32 = 5;
 /// on the whole bus would therefore stall every shot until [`READY_TIMEOUT`], adding
 /// minutes to an episode and burying the timeout `warn!` under false positives.
 ///
-/// The entries are the SAME consts the publishers push under, not copies of their
-/// spelling — see [`TERRAIN_SOURCE`](crate::status_bus::TERRAIN_SOURCE).
-const VISUAL_BUSY_SOURCES: &[&str] = &[crate::status_bus::TERRAIN_SOURCE];
+/// Both entries are published by `lunco-sandbox`, which mirrors state this crate
+/// cannot name onto the bus: terrain by `report_terrain_stream_status` (from
+/// `lunco_terrain_surface::TerrainStreamStatus`) and scene by
+/// `report_scene_spawn_status` (from `lunco_usd_sim::cosim::SceneLoadInFlight` +
+/// `UsdAwaitingStage`). The entries are the SAME consts the publishers push under,
+/// not copies of their spelling — see
+/// [`TERRAIN_SOURCE`](crate::status_bus::TERRAIN_SOURCE) and
+/// [`SCENE_SOURCE`](crate::status_bus::SCENE_SOURCE).
+const VISUAL_BUSY_SOURCES: &[&str] = &[
+    crate::status_bus::TERRAIN_SOURCE,
+    crate::status_bus::SCENE_SOURCE,
+];
 
 /// **The one definition of "this scene is presentable".** Returns `None` when the
 /// scene's visuals have finished loading, or `Some(reason)` naming what is still
@@ -637,26 +663,28 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[crate::status_bus::TERRAIN_SOURCE];
 ///
 /// Three clauses, deliberately composed rather than left as scattered ad-hoc checks:
 ///
-/// 1. **The scene has populated at all.** Between "load requested" and "prims
-///    spawned" there is no geometry, so every other clause is vacuously true and the
-///    gate would fire immediately — the very bug it exists to stop. This mirrors the
-///    guard in `start_camera_paths_when_terrain_ready`
+/// 1. **There is geometry to record at all.** A backstop for a scene that spawns
+///    without ever setting the `SceneLoadInFlight` guard clause (3) reads: with no
+///    meshes, clause (2) is vacuously true and the gate would fire on an empty
+///    viewport. This mirrors the guard in `start_camera_paths_when_terrain_ready`
 ///    (`crates/lunco-sandbox/src/lib.rs:2264`), which likewise refuses to read an
 ///    empty query as "nothing to wait for".
 /// 2. **Every mesh handle is loaded *with its dependencies*.** This is the direct
 ///    read for "meshes and the materials/textures hanging off them have resolved",
 ///    and it is what catches the untextured-placeholder opening frame.
-/// 3. **Nothing is reporting in-flight work on the [`StatusBus`].** This is how the
-///    gate shares — rather than re-implements — the existing definition of ready:
-///    `report_terrain_stream_status` (`crates/lunco-sandbox/src/lib.rs:2311`)
-///    mirrors `lunco_terrain_surface::TerrainStreamStatus` onto exactly this bus, so
-///    "terrain still streaming" is the same read the status bar shows and the same
-///    one `start_camera_paths_when_terrain_ready` gates camera paths on. Using the
-///    bus rather than the resource also keeps `lunco-workbench` a UI-shell crate
-///    with no terrain/USD dependency — it cannot name `TerrainStreamStatus` without
-///    one, and the established pattern is that `lunco-sandbox` mirrors such state
-///    onto the bus. A future visual subsystem joins by publishing progress and being
-///    listed in [`VISUAL_BUSY_SOURCES`].
+/// 3. **No visual subsystem reports in-flight work on the [`StatusBus`]** (see
+///    [`VISUAL_BUSY_SOURCES`]). This carries the weight of the condition, and is how
+///    the gate shares — rather than re-implements — the existing definitions of
+///    ready. `"scene"` is `SceneLoadInFlight`: prims are still spawning, the state
+///    that produced the original half-loaded opening frame. `"terrain"` is
+///    `TerrainStreamStatus`, the same read the status bar shows and the same one
+///    `start_camera_paths_when_terrain_ready` gates camera paths on.
+///
+///    Going through the bus rather than the resources keeps `lunco-workbench` a
+///    UI-shell crate: it cannot name `TerrainStreamStatus` or `SceneLoadInFlight`
+///    without a terrain/USD dependency, and the established pattern is that
+///    `lunco-sandbox` mirrors such state onto the bus. A future visual subsystem
+///    joins by publishing progress and being listed in [`VISUAL_BUSY_SOURCES`].
 fn scene_visuals_ready(
     meshes: &Query<&bevy::mesh::Mesh3d>,
     asset_server: &AssetServer,
@@ -669,9 +697,23 @@ fn scene_visuals_ready(
     }
 
     // (2) Mesh assets and their dependency closure.
+    //
+    // `get_recursive_dependency_load_state` returns `None` for a handle the
+    // AssetServer never issued — one built at runtime and handed to
+    // `Assets<Mesh>::add`. MEASURED: the first cut of this used
+    // `is_loaded_with_dependencies`, which is `false` for such handles, and every
+    // shot of episode_02 reported "27/27 mesh assets still loading" for the full
+    // 20 s timeout — because USD prims build their meshes procedurally, so NONE of
+    // them are server-tracked. An untracked handle is already resident in
+    // `Assets<Mesh>` by the time the component exists, so it is ready by
+    // construction; only server-issued handles can be mid-flight.
     let unloaded = meshes
         .iter()
-        .filter(|m| !asset_server.is_loaded_with_dependencies(m.0.id()))
+        .filter(|m| {
+            asset_server
+                .get_recursive_dependency_load_state(m.0.id())
+                .is_some_and(|s| !s.is_loaded())
+        })
         .count();
     if unloaded > 0 {
         return Some(format!("{unloaded}/{total} mesh assets still loading"));
@@ -718,20 +760,28 @@ fn start_recording_when_scene_ready(
     let blocker = scene_visuals_ready(&meshes, &asset_server, bus.as_deref());
     match &blocker {
         Some(reason) => {
-            // Any refusal restarts the streak: the settle frames must be
+            // Any refusal restarts the streak: the settle window must be
             // CONSECUTIVE, otherwise a texture that pops in late could land inside
-            // the count and still be missing from frame 0.
+            // the window and still be missing from frame 0.
             pending.ready_streak = 0;
+            pending.ready_since = None;
             if pending.last_blocker.as_deref() != Some(reason.as_str()) {
                 pending.last_blocker = Some(reason.clone());
                 debug!("[offline-record] waiting for scene visuals — {reason}");
             }
         }
-        None => pending.ready_streak += 1,
+        None => {
+            pending.ready_streak += 1;
+            pending.ready_since.get_or_insert_with(web_time::Instant::now);
+        }
     }
 
+    // BOTH guards must pass — they cover different hazards (pipeline warm-up vs.
+    // asynchronous spawn lulls). See [`SETTLE_FRAMES`] / [`SETTLE_PERIOD`].
+    let settled = pending.ready_streak >= SETTLE_FRAMES
+        && pending.ready_since.is_some_and(|t| t.elapsed() >= SETTLE_PERIOD);
     let timed_out = pending.requested_at.elapsed() >= READY_TIMEOUT;
-    if pending.ready_streak < SETTLE_FRAMES && !timed_out {
+    if !settled && !timed_out {
         return;
     }
 
@@ -766,12 +816,45 @@ fn start_recording_when_scene_ready(
 /// The cycle alternates two render frames per captured frame:
 ///   1. **advance** — clock steps `1/fps`, sim and `FixedUpdate` run, scene renders.
 ///   2. **capture** — request the screenshot, clock frozen until it lands.
+///
 /// Freezing while a capture is in flight is what keeps a slow (multi-frame)
 /// readback from advancing time more than once per saved frame.
 fn drive_offline_clock(
     mut state: ResMut<OfflineRecordingState>,
+    // Armed-but-not-started is a clock phase like any other, so it is owned HERE.
+    // Freezing from the readiness gate instead would make that gate a SECOND writer
+    // of `TimeUpdateStrategy`, which is the exact failure this system's doc warns
+    // about.
+    pending: Option<Res<PendingShotStart>>,
     mut commands: Commands,
 ) {
+    // PHASE 0 — armed, waiting for the scene. Freeze virtual time.
+    //
+    // MEASURED: without this, two runs of episode_02 differed at EVERY frame of
+    // EVERY shot starting at frame 0 (viewport-crop RMSE 0.019-0.030, well clear of
+    // the perf-HUD text burnt into the frame). The readiness wait is a REAL-TIME
+    // window of variable length — 0.81 s vs 1.69 s for shot_01, 6.48 s vs 0.51 s for
+    // shot_02 across two runs — and `Time<Virtual>` ran throughout it. The camera
+    // path is a curve evaluated on the sim clock, and animated beats release the
+    // physics hold, so a longer wait meant a differently-framed, differently-posed
+    // frame 0 and therefore a different film.
+    //
+    // Freezing here restores the contract: the wait costs real time only, and the
+    // captured sequence starts from the state the scene was in when the shot was
+    // asked for, no matter how long the assets took.
+    //
+    // Safe against deadlock in both directions: the scenario script does not need to
+    // tick during this window (it has already issued `shot_begin` and is polling
+    // `shot_frame()`, which reports `-1` while armed), and [`READY_TIMEOUT`] is
+    // measured on `web_time::Instant` — real time — so a scene that never becomes
+    // ready still starts rather than freezing the app forever.
+    if pending.is_some() && !state.active {
+        commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::ZERO,
+        ));
+        return;
+    }
+
     if !state.active {
         return;
     }

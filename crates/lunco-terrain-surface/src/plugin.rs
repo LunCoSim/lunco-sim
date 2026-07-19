@@ -26,6 +26,11 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_type::<crate::stream_viz::TerrainLodConfig>();
         app.init_resource::<crate::stream_viz::LodMeshCache>();
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
+        // Off by default: interactive play wants real-time-paced streaming. Set by
+        // `lunco-sandbox` for the duration of an offline recording so the captured
+        // tile set is a function of the frame index rather than of thread
+        // scheduling. See `stream_viz::TerrainStreamLockstep`.
+        app.init_resource::<crate::stream_viz::TerrainStreamLockstep>();
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);

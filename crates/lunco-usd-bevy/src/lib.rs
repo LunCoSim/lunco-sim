@@ -75,6 +75,15 @@ pub use read::{AttrUiHint, UsdRead};
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::compose_file_to_stage;
 pub use light::{get_attribute_as_bool, FallbackSceneLight, UsdAuthoredLight};
+// The ambient-fill solve. Uniform ambient is spelled as an untextured `DomeLight`
+// and composed as a SUM, so a command that wants to set the composed TOTAL (the
+// inspector's ambient slider) must solve for the one dome it owns. Exported
+// because the WRITER lives in `lunco-scene-commands`, while the semantics — what
+// counts as an ambient dome, and in what units — live here with the reader.
+pub use light::{
+    ambient_fill_intensity, ambient_fill_saturates, untextured_dome_intensity_sum,
+    DOME_TEXTURE_ATTR,
+};
 
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -296,7 +305,10 @@ impl Plugin for UsdBevyPlugin {
 
 // Generates `register_all_commands(app)` (register_type + add_observer for the
 // listed command handlers). Called from `UsdBevyPlugin::build`.
-lunco_core::register_commands!(camera_switch::on_set_active_camera);
+lunco_core::register_commands!(
+    camera_switch::on_set_active_camera,
+    camera_path::camera_path_transport,
+);
 
 /// A Bevy Asset representing a loaded USD Stage.
 ///

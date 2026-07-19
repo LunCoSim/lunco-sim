@@ -106,10 +106,14 @@ equation
   t_loc_y = cmd_yaw   * inertia_yy * ang_live;   // τ = I·α, yaw   about Y
   t_loc_z = cmd_roll  * inertia_zz * ang_live;   // τ = I·α, roll  about Z
 
-  // Rotate local +Y thrust into world by the body quaternion.
-  f_world_x = 2.0 * (q_x*q_y + q_w*q_z) * f_loc_y;
-  f_world_y = (1.0 - 2.0*(q_x*q_x + q_z*q_z)) * f_loc_y;
-  f_world_z = 2.0 * (q_y*q_z - q_w*q_x) * f_loc_y;
+  // Rotate local +Y thrust into world by the body quaternion. Thrust points along
+  // body +Y BY DEFINITION, so it is `up` (computed once, below) scaled by the
+  // engine force — never a second transcription of the same rotation. The two
+  // used to be written out separately and disagreed with each other, which is
+  // precisely the bug this arrangement makes unrepresentable.
+  f_world_x = up_x * f_loc_y;
+  f_world_y = up_y * f_loc_y;
+  f_world_z = up_z * f_loc_y;
   t_world_x = t_loc_x + 2.0 * (q_y * (q_x * t_loc_y - q_y * t_loc_x + q_w * t_loc_z) - q_z * (q_z * t_loc_x - q_x * t_loc_z + q_w * t_loc_y));
   t_world_y = t_loc_y + 2.0 * (q_z * (q_y * t_loc_z - q_z * t_loc_y + q_w * t_loc_x) - q_x * (q_x * t_loc_y - q_y * t_loc_x + q_w * t_loc_z));
   t_world_z = t_loc_z + 2.0 * (q_x * (q_z * t_loc_x - q_x * t_loc_z + q_w * t_loc_y) - q_y * (q_y * t_loc_z - q_z * t_loc_y + q_w * t_loc_x));
@@ -119,9 +123,20 @@ equation
   // Body +Y in world coordinates — the direction thrust actually points. This is the
   // same rotation the force above uses, so "upright" means "thrust opposes gravity",
   // which is the property that matters for a descent.
-  up_x = 2.0 * (q_x*q_y + q_w*q_z);
+  // R*(0,1,0) for q = (q_w, q_x, q_y, q_z), i.e. the MIDDLE COLUMN of the
+  // body→world rotation matrix. The `q_w` cross terms are +q_w*q_x on Z and
+  // -q_w*q_z on X; they were written with both signs flipped, which is the
+  // TRANSPOSE — the world→body rotation. Two consequences, both fatal and both
+  // invisible while the vehicle is upright (at q = identity the two agree):
+  //   1. thrust was rotated by the inverse, so any tilt steered the vehicle to
+  //      the mirror-image heading;
+  //   2. `up_z` came out with the wrong sign, so the tilt error below fed the
+  //      stabiliser BACKWARDS and it drove the lean it was meant to null. The
+  //      loop was positive feedback, which is why the divergence compounded.
+  // Verified against v' = v + 2*qv x (qv x v + q_w*v) for v = (0,1,0).
+  up_x = 2.0 * (q_x*q_y - q_w*q_z);
   up_y = 1.0 - 2.0*(q_x*q_x + q_z*q_z);
-  up_z = 2.0 * (q_y*q_z - q_w*q_x);
+  up_z = 2.0 * (q_y*q_z + q_w*q_x);
 
   // Tilt error as up × ŷ = (-up_z, 0, up_x): a world-frame axis whose magnitude is
   // sin(tilt) and which vanishes exactly when upright. Yaw has no reference to hold —

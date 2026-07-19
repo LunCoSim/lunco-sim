@@ -118,17 +118,53 @@ fn sun_visibility_resolved(
 // display-referred, shaped by the surface albedo so texture/relief survive.
 // A multiplicative visibility floor CANNOT light a polar scene — at grazing
 // sun even fully LIT flat ground shades to a few percent, so any fraction of
-// it is black. This is the deliberate artistic stand-in for earthshine and
-// scattered light; on sunlit ground it is a negligible +2%.
+// it is black. This is the deliberate artistic stand-in for the scattered
+// light the march cannot model, and it exists ONLY to rescue the marched
+// polar case.
+//
+// It is DISPLAY-REFERRED and EXPOSURE-BLIND: a constant added after
+// `apply_pbr_lighting`, i.e. after the camera exposure has already scaled the
+// physical lighting down. Its "negligible +2% on sunlit ground" claim is
+// therefore true only at the EV the polar moonbase is metered for. Under a
+// studio scene's much higher EV the same constant can exceed the sun term
+// outright, and because it is added EQUALLY to lit and shadowed pixels it
+// sets a floor under the whole image — a uniform contrast crush, which is
+// exactly how it presents: hard shadows turn into flat grey smudges.
 const SHADOW_FILL: f32 = 0.26;
 
-// Weight for SHADOW_FILL: 1 in the DEM interior → 0 at the footprint edge.
-// The celestial globe tiles the terrain merges into carry NO fill, so a
-// uniform fill leaves the patch a visibly lighter square on the unlit globe
-// from altitude. Fading it out over the same outer band the geometry
-// feathers across (BodyCurvature, radial 0.6→1.0) makes the brightness
-// converge with the surface. `uv` is the DEM-global footprint UV.
-fn shadow_fill_weight(uv: vec2<f32>) -> f32 {
+// Additive fill term for a surface the horizon system has WIRED.
+//
+// `wired` is the gate, and the gate is the point: the fill belongs to the
+// ray-march machinery, so it may only fire where that machinery is live.
+// Callers pass the `//!@engine` field that answers "did the horizon system
+// wire me?" — for the heightfield shaders that is `mat.hf_res`, written by
+// `wire_terrain_materials` (lunco-render-bevy/src/horizon_shade.rs) and ONLY
+// for entities carrying a `HorizonMap`. A mesh with no heightfield never gets
+// it and reads the zero default, which is exactly the "not a marched terrain"
+// signal.
+//
+// NOT `csm_far`, which looks like the same question and is not: `pick_sun`
+// returns 0 for it whenever the sun has shadow maps disabled, so gating on it
+// would strip the fill from real polar terrain under a shadowless sun — the
+// very case the fill exists to rescue.
+//
+// Without this gate the fill leaked onto any mesh that merely had UVs.
+// `regolith.wgsl` is a member of this shader family that is ALSO bound as a
+// plain studio surface material (a flat ground plate with no DEM), and there
+// it added a constant to every pixel while the march it belongs to was inert —
+// swamping a correctly-lit sun and flattening the frame.
+//
+// `weight`: 1 in the DEM interior → 0 at the footprint edge. The celestial
+// globe tiles the terrain merges into carry NO fill, so a uniform fill leaves
+// the patch a visibly lighter square on the unlit globe from altitude. Fading
+// it out over the same outer band the geometry feathers across (BodyCurvature,
+// radial 0.6→1.0) makes the brightness converge with the surface. `uv` is the
+// DEM-global footprint UV.
+fn shadow_fill(albedo: vec3<f32>, uv: vec2<f32>, wired: f32) -> vec3<f32> {
+    if (wired <= 0.0) {
+        return vec3(0.0);
+    }
     let m = length(uv - vec2(0.5)) * 2.0; // 0 centre → 1 at inscribed-disc edge
-    return 1.0 - smoothstep(0.6, 1.0, m);
+    let weight = 1.0 - smoothstep(0.6, 1.0, m);
+    return albedo * SHADOW_FILL * weight;
 }

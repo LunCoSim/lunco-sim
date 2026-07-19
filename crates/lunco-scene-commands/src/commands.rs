@@ -1188,10 +1188,14 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
 /// other USD edit. (Live peer-sync then follows the USD projection, exactly as
 /// the move / property persisters do — no bespoke light broadcast.)
 ///
-/// Scope: the fields with an existing loader reader. Sun **direction** (needs a
-/// rotation-authoring op — there is no `SetRotate` yet) and the render-only knobs
-/// (exposure / bloom / earthshine / ambient — no `DistantLight` attribute reads
-/// them back yet) stay live-only for now.
+/// Scope: the fields with an existing loader reader. The render-only knobs have
+/// no `DistantLight` attribute that reads them back, so they persist elsewhere —
+/// exposure / bloom / earthshine onto the `LunCoEnvironment` settings prim, and
+/// **ambient** onto a dedicated untextured `DomeLight` (`Environment/AmbientFill`),
+/// which is the standard USD spelling of uniform environment illumination and the
+/// only thing `GlobalAmbientLight` is composed from. Because that composition is a
+/// SUM over domes, the authored intensity is solved (`requested − other domes`)
+/// rather than assigned; see the ambient block at the end of this function.
 ///
 /// Targets every non-earthshine `DistantLight` the active document owns
 /// (`SetEnvironmentLight` itself is global). Ownership-guarded like the other
@@ -1306,9 +1310,13 @@ pub fn persist_environment_light_to_runtime_layer(
     if let Some(v) = cmd.bloom_intensity {
         env_attrs.push(("lunco:env:bloomIntensity", "float", v.to_string()));
     }
-    if let Some(v) = cmd.ambient_brightness {
-        env_attrs.push(("lunco:env:ambientBrightness", "float", v.to_string()));
-    }
+    // NOTE: ambient is deliberately absent from `env_attrs`. It used to push
+    // `lunco:env:ambientBrightness` here, but the read half of that round trip was
+    // deleted when uniform ambient migrated to standard USD (an untextured
+    // `DomeLight`, summed by `lunco_usd_bevy::light::on_usd_light_added`). The
+    // write outlived its reader: the slider applied live, journalled an attribute
+    // nothing consumed, and the change vanished on reload while the journal
+    // claimed it had persisted. Ambient is authored as a dome below instead.
     if let Some(v) = cmd.earthshine_illuminance {
         env_attrs.push(("lunco:env:earthshineIntensity", "float", v.to_string()));
     }
@@ -1319,49 +1327,113 @@ pub fn persist_environment_light_to_runtime_layer(
             format!("({r}, {g}, {b})"),
         ));
     }
-    if !env_attrs.is_empty() {
-        let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
-            .map(|p| format!("/{p}"))
-            .unwrap_or_else(|| "/".to_string());
-        let env_path = if parent_path == "/" {
-            "/Environment".to_string()
-        } else {
-            format!("{parent_path}/Environment")
-        };
-        // Ensure the settings prim exists, but only author `AddPrim` when it's
-        // actually absent (else every render tweak would journal a redundant
-        // AddPrim). Idempotent thereafter — SetAttribute overwrites in place.
-        let exists = lunco_usd_bevy::SdfPath::new(&env_path)
+    // Ambient shares the `Environment` scope but NOT the custom-attribute
+    // mechanism, so the prim has to be ensured for either reason.
+    if env_attrs.is_empty() && cmd.ambient_brightness.is_none() {
+        return;
+    }
+
+    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| "/".to_string());
+    let env_path = if parent_path == "/" {
+        "/Environment".to_string()
+    } else {
+        format!("{parent_path}/Environment")
+    };
+    // Ensure the settings prim exists, but only author `AddPrim` when it's
+    // actually absent (else every render tweak would journal a redundant
+    // AddPrim). Idempotent thereafter — SetAttribute overwrites in place.
+    let prim_missing = |path: &str| {
+        !lunco_usd_bevy::SdfPath::new(path)
             .ok()
             .map(|sdf| {
                 host.document().data().spec(&sdf).is_some()
                     || host.document().runtime_data().spec(&sdf).is_some()
             })
-            .unwrap_or(false);
-        if !exists {
+            .unwrap_or(false)
+    };
+    if prim_missing(&env_path) {
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::AddPrim {
+                edit_target: LayerId::runtime(),
+                parent_path,
+                name: "Environment".to_string(),
+                type_name: Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE.to_string()),
+                reference: None,
+            },
+        });
+    }
+    for (name, type_name, value) in &env_attrs {
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::SetAttribute {
+                edit_target: LayerId::runtime(),
+                path: env_path.clone(),
+                name: (*name).to_string(),
+                type_name: (*type_name).to_string(),
+                value: value.clone(),
+            },
+        });
+    }
+
+    // ── Ambient → a dedicated untextured `DomeLight`, not a custom attribute ──
+    //
+    // UsdLux has no "ambient light"; an untextured `DomeLight` is the standard
+    // spelling, and `lunco_usd_bevy::light::on_usd_light_added` composes
+    // `GlobalAmbientLight::brightness` as the SUM over every such dome. That sum
+    // is what the inspector's slider reads back.
+    //
+    // Hence the subtraction. The slider reads a TOTAL but writes ONE dome, so
+    // authoring the requested value verbatim onto `AmbientFill` would ADD to
+    // whatever the scene already authors (e.g. a `RegolithBounce` dome at 2600):
+    // ask for 50, compose 2650, and the slider jumps to 2650 on the next frame.
+    // Authoring `requested - others` makes the composed total land exactly on the
+    // request, so the knob is stable under its own feedback.
+    if let Some(requested) = cmd.ambient_brightness {
+        let fill_path = format!("{env_path}/AmbientFill");
+        // Read the composed (base ⊕ runtime) layer data, so a fill dome authored
+        // by an earlier drag — which lives only in the runtime overlay — is seen
+        // and correctly EXCLUDED from "other domes" rather than subtracted from
+        // itself, which would ratchet the value down on every drag.
+        let composed = host.document().composed_arc();
+        let fill_sdf = lunco_usd_bevy::SdfPath::new(&fill_path).ok();
+        let others =
+            lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref());
+        let intensity = lunco_usd_bevy::ambient_fill_intensity(requested, others);
+
+        if lunco_usd_bevy::ambient_fill_saturates(requested, others) {
+            warn!(
+                "[scene-commands] ambient {requested} is below the {others} already \
+                 contributed by other authored DomeLights; `{fill_path}` clamped to 0 \
+                 and the scene will stay brighter than requested. Lower those domes' \
+                 `inputs:intensity` instead."
+            );
+        }
+
+        if prim_missing(&fill_path) {
             commands.trigger(ApplyUsdOp {
                 doc,
                 op: UsdOp::AddPrim {
                     edit_target: LayerId::runtime(),
-                    parent_path,
-                    name: "Environment".to_string(),
-                    type_name: Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE.to_string()),
+                    parent_path: env_path.clone(),
+                    name: "AmbientFill".to_string(),
+                    type_name: Some("DomeLight".to_string()),
                     reference: None,
                 },
             });
         }
-        for (name, type_name, value) in &env_attrs {
-            commands.trigger(ApplyUsdOp {
-                doc,
-                op: UsdOp::SetAttribute {
-                    edit_target: LayerId::runtime(),
-                    path: env_path.clone(),
-                    name: (*name).to_string(),
-                    type_name: (*type_name).to_string(),
-                    value: value.clone(),
-                },
-            });
-        }
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::SetAttribute {
+                edit_target: LayerId::runtime(),
+                path: fill_path,
+                name: "inputs:intensity".to_string(),
+                type_name: "float".to_string(),
+                value: intensity.to_string(),
+            },
+        });
     }
 }
 

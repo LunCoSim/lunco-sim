@@ -70,6 +70,10 @@ impl Default for GridLayer {
     fn default() -> Self {
         Self {
             spacing_world: 20.0,
+            // TODO(theme): migrate to lunco-theme once the token set covers this.
+            // Canvas grid-dot colour. This is a `Default` impl with no theme in
+            // scope, and the value is a serialized field — so it needs a
+            // "resolve at draw time" decision, not just a token swap.
             color: egui::Color32::from_rgba_premultiplied(60, 60, 72, 50),
             enabled: true,
         }

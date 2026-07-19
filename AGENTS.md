@@ -16,43 +16,102 @@ Start here, in order (new to the codebase? the canonical narrative path is **[do
 - **Crate Maintenance**: Whenever a new crate is added to the workspace, the agent MUST update `docs/crates-index.md` to include the new crate in the appropriate category with a concise responsibility summary.
 - **Doc accuracy**: when you rename/remove a crate, type, or binary, grep the docs (`*.md`) for the old name and fix references in the same change — don't leave dangling docs for a later audit.
 
+## Before You Write Code — prior art, layer, no legacy
+
+Most of the worst code in this repo's history was not badly written. It was written at the
+wrong layer, or it reinvented something that already had a standard spelling.
+
+**1. Is there already a standard?** Check USD/OpenUSD before inventing a schema — UsdLux,
+UsdGeom, UsdShade and UsdPhysics already express most of what a simulator needs, and a
+standard spelling composes, round-trips, and opens in other tools. A custom `lunco:*`
+attribute does none of that. Ambient light was a custom `lunco:env:ambientBrightness`; it
+is an untextured `UsdLuxDomeLight`. Camera exposure was a Bevy constant; `UsdGeomCamera`
+declares `exposure:iso`/`:time`/`:fStop`/`:responsivity`.
+
+**2. Which layer?** Ask in order, stop at the first that fits. **Rust is the last resort,
+not the default.**
+
+| Layer | For | You are in the right place when |
+|---|---|---|
+| **USD** | scene description: geometry, lights, materials, cameras, camera *paths*, bodies, joints, composition | a human could see and edit it in usdview |
+| **Modelica** | continuous dynamics — forces, torques, flows, anything with `der()` | you are writing an equation, not a procedure |
+| **Behaviour tree** | sequencing and mission logic | you were about to write a state machine with an index and a pile of flags |
+| **rhai** | scenario glue, per-scene policy | it reads as intentions, not a computation |
+| **Rust** | engine mechanism, hot paths, per-entity per-tick work | it must be fast, or it is what the layers above stand on |
+
+Both campaign fixes followed this: a per-frame trigonometry camera in rhai became a
+`BasisCurves` prim (a curve you can drag beats code you cannot see until you record it);
+a hand-rolled shot state machine duplicated across two episodes became one behaviour tree.
+
+**Prefer a USD feature to scripting it in rhai.** Before writing a script that computes
+something about the scene, check whether USD already expresses it — curves, xform ops,
+composition arcs (`references`/`over`/`payload`/variants), relationships, time samples,
+`UsdSkel`, `UsdPhysics` joints. A prim is inspectable in usdview, editable without a
+rebuild, diffable, and composes with layers; the equivalent rhai is none of those, and it
+only runs when the scenario runs. The camera above is the canonical case: the *same* move
+as 30 authored control points is a thing you can see, drag, and hand to someone else.
+Script the parts USD genuinely cannot express — decisions, timing, vehicle commands.
+
+**3. No legacy, shims, or fallbacks.** Replace a mechanism and delete the old one in the
+*same* change. Two spellings of one fact means two writers, and which wins becomes a
+function of load order — that is exactly how a scene that rendered correctly went dark
+when someone gave it a sky. If a migration truly cannot land at once, say so and leave a
+`TODO` naming the trigger; never a silent half-state. **A write with no reader is worse
+than no write** — it makes the journal claim a setting persisted when it did not.
+
+**4. Reuse, don't reinvent.** Check for a maintained crate (the repo already leans on
+`openusd`, `avian3d`, `big_space`, `rumoca`, `catppuccin`). Check for an existing pattern
+here — `lunco-doc`/`lunco-doc-bevy`, `lunco-usd`/`lunco-usd-bevy`,
+`lunco-render`/`lunco-render-bevy` are one split applied three times; a fourth should look
+like them. Check the actual spec, not your memory of it. Reinventing is sometimes right,
+but it should be a defended decision recorded in a comment, not a default.
+
+**5. No math in rhai.** It is interpreted scenario glue — no per-tick numerics, control
+loops, or vector algebra. Those go in Rust (fast, tested) or Modelica (equations).
+**Prefer events to polling:** `wait_for("cmd:PossessVessel")` costs nothing while idle;
+a per-tick condition check costs the same whether anything happened or not.
+
 ## 1. Project Context
 LunCoSim is a digital twin of the solar system built with the Bevy engine. It follows a modular, hotswappable plugin architecture and mandates Test-Driven Development (TDD).
 
 ## 2. Core Technologies
-- **Bevy Engine**: We are using **Bevy 0.18**. (Bevy 0.18 renamed `Event`→`Message` for buffered events: `MessageReader<AssetEvent<T>>`, `is_loaded_with_dependencies`.)
-- **Physics**: Avian3D (0.6.1) — use its `xpbd_joints` for joints.
-- **Large-scale space**: big_space (0.12.0) — f64 floating-origin.
-- **Input Management**: leafwing-input-manager (0.20.0)
+
+Versions are authoritative in the workspace `Cargo.toml` — **check there, not here**, and
+fix this list if it drifts.
+
+- **Bevy 0.19** — buffered events are `Message` (`MessageReader<AssetEvent<T>>`), not `Event`.
+- **Physics**: Avian3D 0.7 — `xpbd_joints` for joints. `Position`/`Rotation` are *required components* of `RigidBody` and default to zero until derived.
+- **Large-scale space**: big_space (pinned git rev) — f64 floating-origin.
+- **Input Management**: leafwing-input-manager 0.21
 - **Modelica**: `rumoca` (consumed from its `main` branch) compiles `.mo` → DAE; runtime in `lunco-modelica`, Bevy cosim bridge in `lunco-cosim`.
 - **Scripting**: **rhai** is the canonical embedded language (`lunco-scripting`; tool layer `lunco-tools` + `lunco-tools-rhai` for script-binding + `lunco-tools-bevy` for behaviour-tree `run_tool` action dispatch). Python is **one-shot eval only** (`RunPython`); Lua/Luau is a *reserved, unimplemented* language id — do not write docs/code implying it works.
 - **Networking**: **lightyear** (WebTransport) in `lunco-networking` — shipped: server-authoritative sync, client prediction + Hermite smoothing + reconciliation, RBAC relay gating, headless `--no-ui --host` server.
 - **3D/USD**: `openusd` (consumed from `main`); native USD mesh + trimesh colliders via `lunco-usd*` crates.
 
 ## 3. The Tunability Mandate
-As per Article X of the Project Constitution, **hardcoded magic numbers are forbidden**. 
 
-*   **Visuals**: Colors, line widths, fade ranges, and subdivisions must be stored in Bevy `Resources` (for global settings) or `Components` (for entity-specific settings).
-*   **Physics**: Gravity constants, SOI thresholds, and orbital sampling rates must be exposed as configurable parameters.
-*   **UI**: Padding, margins, transition speeds, and every color must come from the `lunco-theme` crate — never hard-coded in a panel.
-*   **Persisted user preferences** must go through `lunco-settings` (one shared `~/.lunco/settings.json`, namespaced keys). Implement `SettingsSection` on a typed resource and call `app.register_settings_section::<MySection>()`. Do **not** invent new per-feature JSON files. The intentional exceptions — each documented in `docs/architecture/11-workbench.md` § 9/§9b — are `layouts.toml`, `recents.json`, and per-project `workspace-state/<hash>.json` (VS Code `workspaceStorage`-style, path-keyed volatile UI state: active perspective + open docs). Global window geometry still goes through `lunco-settings` (the `"window"` section), **not** a new file.
+**Hardcoded magic numbers are forbidden** (Article X of the Project Constitution).
+
+- **Visuals** — colours, line widths, fade ranges, subdivisions live in Bevy `Resources` (global) or `Components` (per-entity).
+- **Physics** — gravity constants, SOI thresholds, sampling rates are configurable parameters.
+- **UI** — padding, margins, transition speeds and **every colour** come from `lunco-theme`, never a panel literal.
+- **Persisted preferences** go through `lunco-settings` (one `~/.lunco/settings.json`, namespaced): implement `SettingsSection` and call `app.register_settings_section::<T>()`. Do **not** invent per-feature JSON files. The documented exceptions (`docs/architecture/11-workbench.md` §9/§9b) are `layouts.toml`, `recents.json`, and per-project `workspace-state/<hash>.json`. Window geometry still goes through `lunco-settings`.
 
 ### 3.1 Theme binding (`lunco-theme`)
 
-All UI colours/spacing/rounding come from the `Theme` resource — **no
-`Color32::from_rgb` / hex literals outside `lunco-theme`**. Pick the **highest
-tier that fits**: (1) `theme.tokens.*` generic semantic; (2) `theme.schematic.*`
-block-diagram; (3) a domain extension trait on `Theme` (e.g. `ModelicaThemeExt`)
-mapping domain names to tier-2 fields — **no palette picks in the trait body**;
-(4) `register_override` for user-pinned values that must not track the palette.
-Palette reads (`theme.colors.*`) are legitimate **only** inside `from_palette`
-builders. Read via `Res<lunco_theme::Theme>` (clone the `Theme` out before
-touching `ui` in `&mut World` widgets); `lunco-workbench`'s layout loop pushes
-visuals (`ctx.set_visuals`) and auto-adds `ThemePlugin` (add it explicitly in
-headless UI tests); dark/light via `theme.toggle_mode()`.
+All UI colour/spacing/rounding comes from the `Theme` resource — **no `Color32::from_rgb`
+or hex literals outside `lunco-theme`**. Use the **highest tier that fits**:
+(1) `theme.tokens.*` semantic; (2) `theme.schematic.*` block-diagram; (3) a domain
+extension trait (e.g. `ModelicaThemeExt`) mapping domain names to tier-2 fields — **no
+palette picks in the trait body**; (4) `register_override` for user-pinned values that must
+not track the palette. Palette reads (`theme.colors.*`) are legitimate **only** inside
+`from_palette` builders.
 
-**Full decision rules + API:** the `lunco-theme` skill and
-[`crates/lunco-theme/README.md`](crates/lunco-theme/README.md).
+Read via `Res<lunco_theme::Theme>` (clone it out before touching `ui` in `&mut World`
+widgets). `lunco-workbench` pushes visuals and auto-adds `ThemePlugin` — add it explicitly
+in headless UI tests. Dark/light via `theme.toggle_mode()`.
+
+**Full rules + API:** the `lunco-theme` skill and [`crates/lunco-theme/README.md`](crates/lunco-theme/README.md).
 
 ## 4. Key Constraints
 - **Hotswappable Plugins**: Everything must be a plugin.
@@ -82,31 +141,10 @@ Layer 1: SimCore (always)         — MinimalPlugins, ScheduleRunner, big_space,
 4. **Headless must work**. Removing Layer 3 and Layer 4 plugins must leave a functioning simulation. Tests use `MinimalPlugins` only.
 5. **Domain plugins are self-contained**. `SandboxEditPlugin` provides logic (spawn, selection, undo). `SandboxEditUiPlugin` provides panels. They are independent.
 
-**Example — correct layering**:
-```rust
-// crates/lunco-sandbox-edit/src/lib.rs     ← Layer 2: Domain logic
-pub struct SandboxEditPlugin;  // spawn, selection, undo — NO UI
-
-// crates/lunco-sandbox-edit/src/ui/mod.rs  ← Layer 4: UI
-pub struct SandboxEditUiPlugin;  // registers panels with lunco-workbench
-```
-
-**Example — correct composition**:
-```rust
-// Full sim: all four layers
-app.add_plugins(DefaultPlugins)           // Layer 1 + 3
-   .add_plugins(LunCoAvatarPlugin)        // Layer 2
-   .add_plugins(SandboxEditPlugin)        // Layer 2
-   .add_plugins(WorkbenchPlugin)          // Layer 4
-   .add_plugins(LuncoUiPlugin)            // Layer 4
-   .add_plugins(SandboxEditUiPlugin)      // Layer 4
-
-// Headless: only layers 1 + 2
-app.add_plugins((MinimalPlugins, ScheduleRunnerPlugin::run_loop(...)))  // Layer 1
-   .add_plugins(LunCoAvatarPlugin)        // Layer 2
-   .add_plugins(SandboxEditPlugin)        // Layer 2
-   // No Layer 3, no Layer 4
-```
+**Example** — `lunco-sandbox-edit` splits `SandboxEditPlugin` (src/lib.rs, Layer 2: spawn,
+selection, undo — no UI) from `SandboxEditUiPlugin` (src/ui/mod.rs, Layer 4: panels).
+A full app adds all four layers; a headless one adds `MinimalPlugins` + Layer 2 only and
+must still simulate correctly.
 
 ## 4.2 Typed Commands — `#[Command]` / `#[on_command]` / `register_commands!()`
 
@@ -156,45 +194,36 @@ Always verify your implementation plan against `docs/principles.md`. If a featur
 
 ## 7. UI Responsiveness & Frame Discipline
 
-The frame budget is shared by the 3D scene, the Avian physics step, the
-Modelica simulator, and a heavyweight egui UI. Core rules:
+The frame budget is shared by the 3D scene, the Avian step, the Modelica simulator and a
+heavyweight egui UI.
 
-- **Per-frame work is the anti-default.** A system that runs every tick
-  for state that changes once a minute is a bug. Prefer, in order: an
-  **observer** on the event; a **change-detection gate**
-  (`Res::is_changed()`, `Changed<T>`); a **fingerprint** `Local<Cursor>`
-  early-return; a **generation counter**. Reserve unconditional
-  every-frame systems for genuinely continuous work (render, physics,
-  animation, input).
-- **Never block the UI thread.** No synchronous I/O or heavy parse/index
-  on `Update` — offload to `AsyncComputeTaskPool` + `future::poll_once`,
-  or cache behind a keyed `OnceLock<Mutex<HashMap>>`. Keep `Update`
-  systems short and allocation-free on the no-op path.
-- **Frame-rate-independent timing** — take `dt` from `Time::delta` or
-  egui `unstable_dt`, never assume 60 Hz.
-- **Profile, don't guess.** When FPS drops, run `scripts/perf/profile.sh`
-  and A/B-disable to confirm before fixing. Two recurring regressions:
-  never `(*arc).clone()` a heavy shared read-only container (borrow
-  `&*arc`); do once-per-entity setup in an `OnAdd<T>` observer, not a
+- **Per-frame work is the anti-default.** A system running every tick for state that
+  changes once a minute is a bug. Prefer, in order: an **observer** on the event; a
+  **change-detection gate** (`Res::is_changed()`, `Changed<T>`); a **fingerprint**
+  `Local<Cursor>` early-return; a **generation counter**. Reserve unconditional per-frame
+  systems for genuinely continuous work — render, physics, animation, input.
+- **Never block the UI thread.** No synchronous I/O or heavy parse/index on `Update` —
+  offload to `AsyncComputeTaskPool` + `future::poll_once`, or cache behind a keyed
+  `OnceLock<Mutex<HashMap>>`. Keep `Update` short and allocation-free on the no-op path.
+- **Frame-rate-independent timing** — take `dt` from `Time::delta` or egui `unstable_dt`.
+- **Profile, don't guess.** Run `scripts/perf/profile.sh` and A/B-disable before fixing.
+  Two recurring regressions: never `(*arc).clone()` a heavy shared read-only container
+  (borrow `&*arc`); do once-per-entity setup in an `OnAdd<T>` observer, not a
   `run_if(Without<Marker>)` poll.
-- **~1 FPS when the window is backgrounded is NORMAL.** When the app is not
-  the foreground / focused window, it throttles to roughly 1 frame per second
-  (winit/OS power-save — the render loop backs off for an unfocused window).
-  This is expected energy-saving, **not a hang, freeze, or regression** — do
-  not "fix" it. It also means a screenshot or an FPS reading taken while the
-  window is backgrounded reflects the throttled rate, not real performance;
-  bring the window to the foreground (or measure the headless `--no-ui` loop)
-  before judging frame rate.
+- **~1 FPS when backgrounded is NORMAL** — winit/OS power-save throttles unfocused
+  windows. Not a hang, do not "fix" it. It also means a screenshot or FPS reading taken
+  while backgrounded reflects the throttle, not real performance: foreground the window
+  (or measure the headless `--no-ui` loop) before judging frame rate.
 
-**Full guide** (the four reactive patterns, off-thread/cache recipes,
-decision checklist, profiling workflow):
-[`docs/architecture/42-ui-frame-discipline.md`](docs/architecture/42-ui-frame-discipline.md).
+**Full guide:** [`docs/architecture/42-ui-frame-discipline.md`](docs/architecture/42-ui-frame-discipline.md).
 
 ## 8. Documentation Standards
-- **MANDATORY Documentation**: All produced code MUST be documented using Rust's built-in doc comments (`///` for functions/structs/enums and `//!` for modules).
-- **Maintenance Focus**: Comments should primarily aid in **system maintenance** for both **human developers and AI agents**.
-- **The "Why" Over "How"**: Prioritize explaining the design intent, dependencies, and "why" a particular approach was chosen, rather than just restating what the code does. 
-- **Conciseness**: Aim for "the right amount" of documentation—clear, helpful, and never redundant.
+
+Document with `///` (items) and `//!` (modules), for maintainers human and agent alike.
+**Explain WHY — design intent, the constraint that forced this shape, the alternative that
+failed — never restate what the code already says.** A comment that survives is one that
+records something the next reader cannot recover from the code. Be concise; redundant
+docs rot fastest.
 
 ## 9. Numeric Experiments & Solver Tuning
 

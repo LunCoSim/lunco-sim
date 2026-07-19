@@ -4,8 +4,8 @@
 //!
 //! # Why DejaVu Sans
 //!
-//! egui's default proportional font (Ubuntu-Light) covers Latin
-//! + basic punctuation but tofus on `∧ ∨ Δ ρ φ ← →` — all of which
+//! egui's default proportional font (Ubuntu-Light) covers Latin and
+//! basic punctuation but tofus on `∧ ∨ Δ ρ φ ← →` — all of which
 //! Modelica icons use heavily (Blocks.MathBoolean's `∧`, Thermal's
 //! Δ, Magnetic's φ, signal-flow arrows).
 //!

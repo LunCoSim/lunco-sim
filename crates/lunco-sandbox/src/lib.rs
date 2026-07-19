@@ -1295,7 +1295,9 @@ fn project_env_settings(
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
     mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
-    ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
+    // Ambient is NOT projected here any more — it is composed from authored
+    // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
+    _ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
     mut q_earthshine: Query<&mut DirectionalLight, With<lunco_environment::Earthshine>>,
     mut last: Local<Option<(usize, u64)>>,
 ) {
@@ -1305,7 +1307,6 @@ fn project_env_settings(
     }
     *last = Some(signal);
 
-    let mut ambient = ambient;
     for (_, cs) in canonical.iter() {
         let view = cs.view();
         for prim in view.prim_paths() {
@@ -1324,11 +1325,22 @@ fn project_env_settings(
                     b.intensity = bi;
                 }
             }
-            if let Some(br) = view.value::<f32>(&prim, "lunco:env:ambientBrightness") {
-                if let Some(a) = ambient.as_mut() {
-                    a.brightness = br;
-                }
-            }
+            // `lunco:env:ambientBrightness` is DELETED, not deprecated. Uniform
+            // environment illumination is already standard USD — an untextured
+            // `UsdLuxDomeLight` — and `light.rs::on_usd_light_added` composes the
+            // scene ambient as the sum over authored domes, which is what UsdLux
+            // semantics require (lights add).
+            //
+            // Keeping both spellings is what caused the bug. This projector
+            // ASSIGNED the custom attribute's value, the dome sum ASSIGNED its own,
+            // and a *textured* dome contributes nothing to that sum — so loading a
+            // starfield dome zeroed the regolith bounce a scene had authored here,
+            // and the memoised `last` guard meant this system never ran again to
+            // put it back. Two writers, one field, order-dependent: a scene that
+            // rendered correctly could go dark on an unrelated change.
+            //
+            // Scenes author the bounce as a `DomeLight` prim now. There is
+            // deliberately no fallback read.
             if let Some(lux) = view.value::<f32>(&prim, "lunco:env:earthshineIntensity") {
                 for mut l in &mut q_earthshine {
                     l.illuminance = lux;
@@ -2118,11 +2130,65 @@ impl Plugin for SandboxCorePlugin {
                 .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
         );
 
-        // Hold each camera path at its first frame until the ground under it is
-        // resident. NOT `ui`-gated: an offscreen render or a headless capture wants
-        // the same shot the viewport gets, and a cinematic that opens over unbaked
-        // holes is exactly as wrong when nobody is watching it live.
-        app.add_systems(Update, start_camera_paths_when_terrain_ready);
+        // Scene-spawn progress → status bar, on the same terms and for the same
+        // reason as the terrain mirror above. This one is also load-bearing for
+        // OFFLINE RECORDING: `lunco-workbench`'s readiness gate
+        // (`screenshot.rs::scene_visuals_ready`) treats an active `"scene"` entry as
+        // "not presentable yet", which is how a shot avoids opening on half-spawned
+        // prims. The workbench cannot read `SceneLoadInFlight` itself — it is a
+        // UI-shell crate with no USD dependency — so the sandbox mirrors it here,
+        // exactly as it mirrors `TerrainStreamStatus`.
+        #[cfg(feature = "ui")]
+        app.add_systems(
+            Update,
+            report_scene_spawn_status
+                .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
+        );
+
+        // Hold each camera path at its first frame until the RECORDER rolls, so the
+        // captured shot starts at the path's own frame 0.
+        //
+        // `ui`-gated, and gated on the resource, for the SAME two reasons as the two
+        // status mirrors above — the previous unconditional registration was wrong on
+        // both counts:
+        //
+        // * COMPILE time: `OfflineRecordingState` lives in `lunco-workbench`, which is
+        //   `optional` + `ui`-only (it is the crate that owns the screenshot backend).
+        //   Naming it unconditionally broke `cargo check -p lunco-sandbox-server`
+        //   outright — the render-free server has no `lunco_workbench` in scope.
+        // * RUN time: `--no-ui` is a runtime choice on a binary that still has the `ui`
+        //   feature compiled in, and there the workbench plugin is never added, so a
+        //   bare `Res<OfflineRecordingState>` fails param validation and panics the app.
+        //
+        // There is no "headless capture" this locks out: the offline recorder IS the
+        // workbench's screenshot backend, so a build without the workbench has nothing
+        // to start a shot from. Interactive (non-recording) playback is the `CameraPath`
+        // transport command instead — see `camera_path_transport`.
+        #[cfg(feature = "ui")]
+        app.add_systems(
+            Update,
+            start_camera_paths_when_recording_starts
+                .run_if(resource_exists::<lunco_workbench::screenshot::OfflineRecordingState>),
+        );
+
+        // Recorder → terrain streaming: put tile streaming in lockstep with the frame
+        // for the duration of a capture. The REVERSE direction of the two status
+        // mirrors above, and here for the same reason — `lunco-workbench` owns the
+        // recorder but cannot name terrain, `lunco-terrain-surface` must not know what
+        // a recorder is, and this crate is the assembly point that sees both.
+        //
+        // Ordered BEFORE `update_lod_tiles` so the flag a frame streams under is the
+        // one that frame's recording state implies, not the previous frame's — an
+        // off-by-one here would leave exactly the first captured frame streaming on
+        // the wall clock, which is the frame everything else was made deterministic
+        // for.
+        #[cfg(feature = "ui")]
+        app.add_systems(
+            Update,
+            mirror_recording_to_terrain_lockstep
+                .before(lunco_terrain_surface::stream_viz::update_lod_tiles)
+                .run_if(resource_exists::<lunco_workbench::screenshot::OfflineRecordingState>),
+        );
 
         // Far-field self-shadow for STREAMED terrains: bake the horizon
         // heightfield from the surface oracle (no static mesh to rasterize) and
@@ -2245,48 +2311,66 @@ fn read_authored_layer_maps<R: UsdRead>(
         .collect()
 }
 
-/// Start each camera path once the ground under it has streamed in.
+/// **Start each camera path when the RECORDER starts.** A shot begins when the
+/// camera rolls.
 ///
-/// A cinematic that opens while tiles are still baking spends its first seconds
-/// over holes and half-resolution terrain, and those seconds do not come back — the
-/// playhead does not rewind. `resolve_camera_paths` therefore births every shot
-/// frozen; this decides when it runs.
+/// This replaced `start_camera_paths_when_terrain_ready`, which released on
+/// "terrain resident" — an asset event on the wall clock. That was wrong twice
+/// over, and the second one was expensive:
 ///
-/// The condition is the SAME read the status bar reports ("streaming terrain N/M"),
-/// not a second opinion about what loaded means. It lives here because readiness is
-/// the sandbox's business: `lunco-usd-bevy` owns the gate mechanism and has no
-/// terrain dependency.
+/// 1. **It made offline recording irreproducible.** MEASURED: two runs of
+///    `episode_02_rover.usda` differed at EVERY frame of EVERY shot, starting at
+///    frame 0 (viewport-crop RMSE 0.019-0.61, far above the perf-HUD text burnt
+///    into each frame). A path released on a wall-clock event has already advanced
+///    by an unknown amount of real time when capture begins, so the domain clock's
+///    value at frame 0 was accumulated real time, not a constant. `camera_path.rs`
+///    samples the curve as a pure function of that clock — pure of a floating
+///    origin is still floating. Pinning the per-frame delta downstream (which the
+///    recorder does) cannot fix an origin that moves.
+/// 2. **It mis-framed shots.** One measured run opened on the camera pitched up at
+///    empty starfield: the path had begun *before* the recorder and the opening
+///    beat was simply gone. The hold existed to prevent exactly that.
 ///
-/// Not `PhysicsHolds::TERRAIN_READY`, though that is the other readiness signal in
-/// reach: it means "the DEM is built and there are ring colliders under the dynamic
-/// bodies", which a body-less cinematic scene satisfies while the visible tiles are
-/// still baking. Right signal for the solver, wrong one for a camera.
-fn start_camera_paths_when_terrain_ready(
-    status: Res<lunco_terrain_surface::TerrainStreamStatus>,
+/// Releasing from the recorder's start edge makes the gate's own time 0 at frame 0
+/// by construction, after which it advances `1/fps` per captured frame — so the
+/// pose at frame N is `f(N/fps)`, identical across runs and machines.
+///
+/// **Continuation across shots is the idempotence.** `release_camera_path_gate` is
+/// a no-op on an already-running gate, and `Playback::head` keeps advancing between
+/// shots, so the campaign's single 58 s curve spanning six shots stays ONE
+/// continuous move — the release fires for real only on the first shot. It is not
+/// rewound per shot, which would give six identical stutters instead.
+///
+/// **Now possible: per-shot camera paths.** Every gate used to release
+/// simultaneously on one global terrain event, which is why the campaign is
+/// authored as a single continuous curve. With release owned by the recorder, a
+/// path could instead be bound to a specific shot and released only when that shot
+/// starts. Nothing here does that yet — noted so whoever authors shots next knows
+/// the constraint has lifted.
+///
+/// **Consequence — live preview.** Terrain-ready was also what started paths in an
+/// ordinary interactive session, where no recorder ever runs; those paths would
+/// otherwise stay held forever. That is now served by an EXPLICIT transport verb,
+/// the `CameraPath` command
+/// ([`camera_path_transport`](lunco_usd_bevy::camera_path::camera_path_transport)),
+/// addressed by the path prim's USD path. Still deliberately not a second
+/// *automatic* release: two things racing to start the same shot is the bug this
+/// replaced. One automatic start (the recorder, for capture) and one manual verb
+/// (the command, for preview and scrubbing), never a fallback chain between them.
+#[cfg(feature = "ui")]
+fn start_camera_paths_when_recording_starts(
+    recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
     resolved: Res<lunco_time::ResolvedDomains>,
-    // A scene may legitimately have no streaming terrain (`wanted` stays 0 forever);
-    // waiting on tiles that will never be wanted would hold the shot for good. But
-    // an EMPTY query is not proof of that — the terrain entity may just not have
-    // spawned yet, and releasing then would defeat the gate on every load. So a
-    // terrain that is still BUILDING counts as present.
-    terrains: Query<
-        (),
-        Or<(
-            With<lunco_terrain_surface::LodTiles>,
-            With<lunco_terrain_surface::DemTerrainRequest>,
-        )>,
-    >,
     mut gates: Query<(&lunco_usd_bevy::camera_path::CameraPathGate, &mut lunco_time::TimeDomain)>,
+    // Edge, not level: release exactly on the false→true transition so the gate's
+    // origin is a single well-defined instant rather than "every frame we happen to
+    // be recording".
+    mut was_active: Local<bool>,
 ) {
-    if gates.is_empty() {
+    let started = recording.active && !*was_active;
+    *was_active = recording.active;
+    if !started || gates.is_empty() {
         return;
-    }
-    if !terrains.is_empty() {
-        let streaming =
-            status.wanted == 0 || status.resident < status.wanted || status.pending > 0;
-        if streaming {
-            return;
-        }
     }
     for (gate, mut domain) in &mut gates {
         let Some(parent_t) = resolved.get(gate.parent) else {
@@ -2297,8 +2381,45 @@ fn start_camera_paths_when_terrain_ready(
         // idempotent, but do not pay for it on a running shot.
         if domain.scale == 0.0 {
             lunco_usd_bevy::camera_path::release_camera_path_gate(&mut domain, parent_t);
-            info!("[camera-path] terrain resident ({}) — starting shot", status.resident);
+            info!("[camera-path] recording started — rolling shot from its first frame");
         }
+    }
+}
+
+/// Mirror the recorder's `active` bit onto
+/// [`TerrainStreamLockstep`](lunco_terrain_surface::TerrainStreamLockstep), so terrain
+/// tile streaming runs in lockstep with the captured frame instead of against the
+/// wall clock for exactly as long as a recording is capturing.
+///
+/// The problem it closes: the readiness gate makes the scene presentable at frame 0,
+/// and recorder-owned camera-path release makes frame 0 bit-identical across runs —
+/// but neither holds streaming steady THROUGH a shot. As the camera moves the LOD
+/// selection changes, bakes are queued, and they land a scheduling-dependent number
+/// of frames later. MEASURED before this: two runs of `episode_02_rover.usda`
+/// differed on the frozen shots (01, 02, 03, 06) in 25-38 separate blocks of frames
+/// each, with the final frame matching every time — a transient, not accumulation,
+/// which is the signature of streaming catching up at a different rate.
+///
+/// See [`TerrainStreamLockstep`](lunco_terrain_surface::TerrainStreamLockstep) for
+/// what the flag changes and why it is a flag rather than the default.
+///
+/// Level-triggered, not edge-triggered (unlike
+/// [`start_camera_paths_when_recording_starts`], which needs an instant): the flag
+/// must be true for the whole capture and false after, including after a recording
+/// that ended by timing out. Writes only on an actual change so the resource's
+/// change-detection tick stays meaningful.
+#[cfg(feature = "ui")]
+fn mirror_recording_to_terrain_lockstep(
+    recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
+    mut lockstep: ResMut<lunco_terrain_surface::TerrainStreamLockstep>,
+) {
+    if lockstep.0 != recording.active {
+        lockstep.0 = recording.active;
+        info!(
+            "[terrain] streaming lockstep {} (offline recording {})",
+            if recording.active { "ON" } else { "OFF" },
+            if recording.active { "started" } else { "ended" },
+        );
     }
 }
 
@@ -2326,6 +2447,46 @@ fn report_terrain_stream_status(
             status.resident as u64,
             status.wanted as u64,
         );
+    } else {
+        bus.clear_progress(SOURCE);
+    }
+}
+
+/// Mirror USD scene-spawn progress into the workbench
+/// [`StatusBus`](lunco_workbench::status_bus::StatusBus) under source `"scene"`,
+/// the twin of [`report_terrain_stream_status`].
+///
+/// Two signals, because they cover different windows and neither subsumes the
+/// other:
+///
+/// * [`SceneLoadInFlight`](lunco_usd_sim::cosim::SceneLoadInFlight) — present from
+///   `LoadScene` until every `UsdAwaitingStage` prim for that stage has been
+///   drained by `sync_usd_visuals`. This covers the gap BEFORE any prim entity
+///   exists, which an entity count alone reads as "nothing to wait for".
+/// * `UsdAwaitingStage` entities — prims queued on a stage that has not resolved.
+///   This covers spawns with no `LoadScene` guard behind them (deferred instance
+///   and reference spawns), which the resource alone would miss.
+///
+/// Consumed by the offline recorder's readiness gate as well as the status bar;
+/// see the registration site for why the mirror lives here rather than in
+/// `lunco-workbench`.
+#[cfg(feature = "ui")]
+fn report_scene_spawn_status(
+    in_flight: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
+    awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
+    // `Option` for the same reason as the terrain mirror: `--no-ui` is a RUNTIME
+    // choice on a binary that still has the `ui` feature compiled in.
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+) {
+    let Some(mut bus) = bus else { return };
+    const SOURCE: &str = "scene";
+    let pending = awaiting.iter().count();
+    if let Some(g) = in_flight {
+        // `total = 0` is the bus's "indeterminate" encoding — the number of prims
+        // a scene will spawn is not known until it has spawned them.
+        bus.push_progress(SOURCE, format!("spawning scene {}", g.path), 0, 0);
+    } else if pending > 0 {
+        bus.push_progress(SOURCE, format!("spawning {pending} prims"), 0, 0);
     } else {
         bus.clear_progress(SOURCE);
     }

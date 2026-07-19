@@ -70,6 +70,112 @@ pub struct UsdAuthoredLight;
 #[derive(Component)]
 pub(crate) struct UsdDomeAmbient(pub(crate) f32);
 
+/// The USD attribute that turns a `DomeLight` from a scalar ambient term into an
+/// HDRI environment. Named once here because two crates now have to agree on the
+/// test: `dome::read_dome_environment` (which resolves it) and
+/// [`untextured_dome_intensity_sum`] (which must exclude the domes it claims).
+pub const DOME_TEXTURE_ATTR: &str = "inputs:texture:file";
+
+/// Sum of `inputs:intensity` over every **untextured** `DomeLight` prim in
+/// `data`, skipping `exclude` — i.e. the ambient brightness the scene would
+/// compose if `exclude` did not exist.
+///
+/// This is the layer-data mirror of what [`on_usd_light_added`] computes from
+/// ECS: that observer sums the [`UsdDomeAmbient`] of every dome entity, and a
+/// dome contributes `inputs:intensity` **1:1** in `GlobalAmbientLight::brightness`
+/// units with no exposure scaling (see the `DomeLight` arm of
+/// [`instantiate_usd_light`]). A *textured* dome contributes nothing — its image
+/// becomes IBL instead — so it is excluded here too, or the two would disagree.
+///
+/// Exists so a command that wants to *set the composed total* can solve for the
+/// one dome it owns instead of blindly authoring the total and double-counting
+/// whatever the scene already authored.
+///
+/// # Limitation
+///
+/// Reads flattened layer data (`UsdDocument::composed_arc()` is an sdf
+/// layer-stack merge, not PCP composition), so a dome that only exists inside a
+/// `references`d asset is **not** counted, while the ECS sum does see it. Scenes
+/// author their ambient fill directly, so this is the rare case; it would show up
+/// as the ambient slider reading back higher than it was set.
+pub fn untextured_dome_intensity_sum(
+    data: &openusd::sdf::Data,
+    exclude: Option<&SdfPath>,
+) -> f32 {
+    use crate::usd_data::UsdDataExt;
+
+    // Collect paths first: `prim_type_name`/`field` re-borrow `data` immutably,
+    // which is fine, but iterating while calling them keeps two borrows alive
+    // across the closure — cloning the handful of dome paths is cheaper to read.
+    let dome_paths: Vec<SdfPath> = data
+        .iter()
+        .map(|(p, _)| p.clone())
+        .filter(|p| data.prim_type_name(p).as_deref() == Some("DomeLight"))
+        .collect();
+
+    dome_paths
+        .iter()
+        .filter(|p| exclude != Some(*p))
+        .filter(|p| !dome_has_texture(data, p))
+        .filter(|p| data.prim_is_active(p))
+        .filter_map(|p| dome_intensity(data, p))
+        .sum()
+}
+
+/// Whether `prim` authors a non-empty `inputs:texture:file` — the exact test
+/// `dome::read_dome_environment` uses to decide "HDRI environment" vs "scalar
+/// ambient". Presence of the `default` field is the signal; the value's asset
+/// path is not inspected here (this reader has no `AssetServer` to resolve it),
+/// so a dome whose texture fails to *resolve* is treated as textured and
+/// contributes nothing — matching the conservative direction (never over-count).
+fn dome_has_texture(data: &openusd::sdf::Data, prim: &SdfPath) -> bool {
+    use crate::usd_data::UsdDataExt;
+    match prim.append_property(DOME_TEXTURE_ATTR) {
+        Ok(attr) => data.field(&attr, "default").is_some(),
+        Err(_) => false,
+    }
+}
+
+/// `inputs:intensity` on `prim`, tolerant of `float`/`double`/`int` authoring —
+/// the layer-data twin of [`get_attribute_as_f32`], which needs a `UsdRead`.
+fn dome_intensity(data: &openusd::sdf::Data, prim: &SdfPath) -> Option<f32> {
+    use crate::usd_data::UsdDataExt;
+    let attr = prim.append_property("inputs:intensity").ok()?;
+    match data.field(&attr, "default")? {
+        Value::Float(f) => Some(*f),
+        Value::Double(d) => Some(*d as f32),
+        Value::Int(i) => Some(*i as f32),
+        _ => None,
+    }
+}
+
+/// The intensity to author on a *dedicated* ambient-fill dome so that the
+/// scene's composed ambient total — the sum over all untextured domes, see
+/// [`untextured_dome_intensity_sum`] — lands exactly on `requested_total`.
+///
+/// # Why subtract rather than author the total
+///
+/// The inspector READS the composed total (`GlobalAmbientLight::brightness`) but
+/// WRITES a single dome. Author the total on that dome and a scene that already
+/// has an untextured dome (say a regolith bounce at 2600) composes
+/// `2600 + requested`; the slider then reads that back and visibly jumps away
+/// from where the user put it, every drag.
+///
+/// Clamps at 0 — a dome cannot emit negatively — which means a request *below*
+/// what other domes already contribute is unsatisfiable. Callers should surface
+/// that rather than silently render the wrong brightness; see
+/// [`ambient_fill_saturates`].
+pub fn ambient_fill_intensity(requested_total: f32, other_domes_total: f32) -> f32 {
+    (requested_total - other_domes_total).max(0.0)
+}
+
+/// Whether [`ambient_fill_intensity`] had to clamp — i.e. the other authored
+/// domes alone already exceed `requested_total`, so the composed ambient will be
+/// brighter than asked no matter what the fill dome does.
+pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> bool {
+    other_domes_total > requested_total
+}
+
 /// Scalar attribute reader tolerant of `float`/`double`/`int` authoring.
 pub(crate) fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
     match reader.attr_value(path, attr)? {
@@ -254,7 +360,55 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             //
             // (`DirectionalLight::illuminance` really is lux, and `RectLight` really
             // is lumens — see below. The three are not interchangeable.)
-            let intensity_lm = read_intensity_with_exposure(reader, sdf_path, 1000.0);
+            let base_lm = read_intensity_with_exposure(reader, sdf_path, 1000.0);
+
+            // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
+            //
+            // Both were previously unread, so authoring a radius had ZERO effect and
+            // USD's area-scaling rule was simply absent.
+            //
+            // The spec (`crates/lunco-usd/schema/core/usdLux.usda`):
+            //   * `LightAPI.inputs:intensity` — "scales the brightness of the light
+            //     linearly"; `inputs:exposure` — "scales ... exponentially" (2^e).
+            //   * `LightAPI.inputs:normalize` (default `0`) — "Controls if the light
+            //     power should be normalized by the surface area of the light. If
+            //     enabled, the light power remains constant if the light's area or
+            //     angular size is changed."
+            //   * `SphereLight.inputs:radius` (default `0.5`) — "the radius of the
+            //     sphere".
+            //
+            // Read the normalize clause in reverse and it defines the DEFAULT case:
+            // if power is only constant-under-area-change when normalize is ON, then
+            // with it OFF `intensity` fixes RADIANCE and total power must scale with
+            // the emitting area. For a sphere, A = 4πr². So:
+            //
+            //     Φ = intensity · 2^exposure · (normalize ? 1 : A(r)/A(r₀))
+            //     A(r)/A(r₀) = (4πr²)/(4πr₀²) = (r/r₀)²
+            //
+            // i.e. the area term is quadratic in radius and the 4π cancels.
+            //
+            // WHY THE RATIO, against the schema-default r₀ = 0.5, rather than a bare
+            // 4πr²: the absolute `intensity`→lumens mapping is a convention this
+            // codebase already chose (see the units comment above), not something the
+            // spec fixes — UsdLux `intensity` is dimensionless. Only the RATIO between
+            // two radii is observable, and expressing it against the schema default
+            // makes an unauthored radius exactly neutral (`(0.5/0.5)² = 1`). Using a
+            // bare 4πr² would instead have silently rescaled every already-calibrated
+            // light in the asset library by π on a change that authored nothing.
+            const DEFAULT_SPHERE_RADIUS: f32 = 0.5; // UsdLux SphereLight schema default
+            let light_radius =
+                get_attribute_as_f32(reader, sdf_path, "inputs:radius").unwrap_or(DEFAULT_SPHERE_RADIUS);
+            let normalize =
+                get_attribute_as_bool(reader, sdf_path, "inputs:normalize").unwrap_or(false);
+            // `max(0)`: a negative radius is meaningless and would still square to a
+            // positive scale, quietly brightening the light.
+            let area_scale = if normalize {
+                1.0
+            } else {
+                (light_radius.max(0.0) / DEFAULT_SPHERE_RADIUS).powi(2)
+            };
+            let intensity_lm = base_lm * area_scale;
+
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))
                 .unwrap_or(Color::WHITE);
@@ -288,15 +442,25 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     color,
                     intensity: intensity_lm,
                     range,
+                    // The same `inputs:radius`, now also as the light's physical
+                    // source size — which is what the attribute geometrically MEANS.
+                    // Bevy uses it for soft shadow penumbra / specular highlight size,
+                    // so an authored radius reads as a bigger, softer source as well
+                    // as a brighter one.
+                    radius: light_radius.max(0.0),
                     shadow_maps_enabled,
                     inner_angle,
                     outer_angle,
                     ..default()
                 });
                 info!(
-                    "[usd-bevy] {} SphereLight (SpotLight) intensity={} lm, range={} m, cone={} deg",
+                    "[usd-bevy] {} SphereLight (SpotLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m, cone={} deg",
                     sdf_path.as_str(),
                     intensity_lm,
+                    base_lm,
+                    area_scale,
+                    light_radius,
+                    normalize,
                     range,
                     cone_angle_deg
                 );
@@ -307,13 +471,19 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     color,
                     intensity: intensity_lm,
                     range,
+                    // See the SpotLight arm: `inputs:radius` is the source size too.
+                    radius: light_radius.max(0.0),
                     shadow_maps_enabled,
                     ..default()
                 });
                 info!(
-                    "[usd-bevy] {} SphereLight (PointLight) intensity={} lm, range={} m",
+                    "[usd-bevy] {} SphereLight (PointLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m",
                     sdf_path.as_str(),
                     intensity_lm,
+                    base_lm,
+                    area_scale,
+                    light_radius,
+                    normalize,
                     range
                 );
             }
@@ -370,6 +540,29 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
 /// lights and recomputes the scene-wide ambient from authored domes (zero
 /// when the scene authors none). Runs again harmlessly if more lights
 /// arrive — the computation is idempotent over current world state.
+///
+/// # Why assigning the SUM is correct, and why it used to be a bug
+///
+/// UsdLux semantics are additive — lights compose, and one light's presence must
+/// never delete another's contribution. Summing the authored domes is exactly
+/// that, and assigning the sum is safe **because authored domes are now the only
+/// contributor to uniform ambient**.
+///
+/// That was not true before. A scene could also author
+/// `lunco:env:ambientBrightness` on a custom environment prim, which a separate
+/// projector (`lunco-sandbox::project_env_settings`) assigned into this same
+/// field. Two writers, one field, and load order decided the winner. Worse, a
+/// *textured* dome deliberately contributes no [`UsdDomeAmbient`] — its texture
+/// becomes IBL instead, which is the strictly better version of the same quantity
+/// — so authoring a starfield sky drove this sum to zero and silently deleted the
+/// scene's regolith-bounce fill. The symptom was a scene that rendered correctly
+/// until someone gave it a sky, and then rendered dark.
+///
+/// The custom attribute is deleted: uniform ambient is spelled as an untextured
+/// `UsdLuxDomeLight`, the standard USD way, with deliberately no fallback read of
+/// the old name. If a second independent ambient contributor is ever introduced,
+/// this must become a composition of tracked contributions rather than an
+/// assignment — that is precisely what would reintroduce the bug above.
 pub(crate) fn on_usd_light_added(
     _trigger: On<Add, UsdAuthoredLight>,
     fallbacks: Query<Entity, With<FallbackSceneLight>>,
@@ -383,5 +576,135 @@ pub(crate) fn on_usd_light_added(
     }
     if let Some(mut ambient) = ambient {
         ambient.brightness = domes.iter().map(|d| d.0).sum();
+    }
+}
+
+#[cfg(test)]
+mod ambient_fill_tests {
+    //! The solve behind the ambient slider: the inspector reads the COMPOSED
+    //! total but writes ONE dome, so that dome's intensity is the requested
+    //! total minus what every other untextured dome already contributes.
+
+    use super::*;
+
+    fn data(usda: &str) -> openusd::sdf::Data {
+        openusd::usda::parse(usda).expect("parse USDA")
+    }
+
+    fn path(s: &str) -> SdfPath {
+        SdfPath::new(s).expect("valid path")
+    }
+
+    const SCENE: &str = r#"#usda 1.0
+
+def Xform "World"
+{
+    def DomeLight "RegolithBounce"
+    {
+        float inputs:intensity = 30
+    }
+
+    def DomeLight "Starfield"
+    {
+        asset inputs:texture:file = @./stars.hdr@
+        float inputs:intensity = 500
+    }
+
+    def "Environment"
+    {
+        def DomeLight "AmbientFill"
+        {
+            float inputs:intensity = 70
+        }
+    }
+}
+"#;
+
+    #[test]
+    fn sum_excludes_the_fill_dome_itself() {
+        let d = data(SCENE);
+        let fill = path("/World/Environment/AmbientFill");
+        // Only `RegolithBounce` counts: the fill is excluded by request and the
+        // starfield by its texture.
+        assert_eq!(untextured_dome_intensity_sum(&d, Some(&fill)), 30.0);
+    }
+
+    #[test]
+    fn textured_domes_never_contribute() {
+        let d = data(SCENE);
+        // Without excluding anything, the 500-intensity starfield must STILL be
+        // absent — its image becomes IBL, not a scalar ambient term.
+        assert_eq!(untextured_dome_intensity_sum(&d, None), 30.0 + 70.0);
+    }
+
+    #[test]
+    fn requested_100_over_an_existing_30_authors_70() {
+        let d = data(SCENE);
+        let fill = path("/World/Environment/AmbientFill");
+        let others = untextured_dome_intensity_sum(&d, Some(&fill));
+        assert_eq!(others, 30.0);
+        assert_eq!(ambient_fill_intensity(100.0, others), 70.0);
+        assert!(!ambient_fill_saturates(100.0, others));
+        // The point of the subtraction: re-composing lands on the request, so
+        // the slider reads back exactly where the user left it.
+        assert_eq!(others + ambient_fill_intensity(100.0, others), 100.0);
+    }
+
+    #[test]
+    fn no_other_domes_means_author_the_total_verbatim() {
+        let d = data("#usda 1.0\n\ndef Xform \"World\"\n{\n}\n");
+        assert_eq!(untextured_dome_intensity_sum(&d, None), 0.0);
+        assert_eq!(ambient_fill_intensity(42.0, 0.0), 42.0);
+    }
+
+    #[test]
+    fn clamps_at_zero_and_reports_saturation() {
+        // Other domes already out-shine the request: a dome cannot emit
+        // negatively, so the composed total will exceed what was asked.
+        assert_eq!(ambient_fill_intensity(10.0, 30.0), 0.0);
+        assert!(ambient_fill_saturates(10.0, 30.0));
+        // Exactly equal is satisfiable (author zero), not saturated.
+        assert_eq!(ambient_fill_intensity(30.0, 30.0), 0.0);
+        assert!(!ambient_fill_saturates(30.0, 30.0));
+    }
+
+    #[test]
+    fn inactive_domes_do_not_contribute() {
+        let d = data(
+            r#"#usda 1.0
+
+def Xform "World"
+{
+    def DomeLight "Off" (active = false)
+    {
+        float inputs:intensity = 999
+    }
+
+    def DomeLight "On"
+    {
+        float inputs:intensity = 5
+    }
+}
+"#,
+        );
+        assert_eq!(untextured_dome_intensity_sum(&d, None), 5.0);
+    }
+
+    #[test]
+    fn intensity_is_read_1_to_1_with_no_exposure_scaling() {
+        // `inputs:exposure` is deliberately NOT applied to the ambient term —
+        // the DomeLight arm of `instantiate_light_prim` reads bare
+        // `inputs:intensity`. If that ever changes, this sum must change with it.
+        let d = data(
+            r#"#usda 1.0
+
+def DomeLight "Fill"
+{
+    float inputs:intensity = 8
+    float inputs:exposure = 3
+}
+"#,
+        );
+        assert_eq!(untextured_dome_intensity_sum(&d, None), 8.0);
     }
 }

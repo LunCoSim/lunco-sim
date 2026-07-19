@@ -289,6 +289,14 @@ fn draw_top_banner(
         .order(egui::Order::Foreground)
         .fixed_pos(screen_rect.min)
         .show(ctx, |ui| {
+            // TODO(theme): migrate to lunco-theme once the token set covers this.
+            // Session banner: full-screen click-blocking scrim, banner fill
+            // (`from_rgb(30, 30, 46)` is Catppuccin Mocha `base` retyped by hand,
+            // so it does NOT follow a light/dark switch) and its accent stroke.
+            // BLOCKED: `lunco-networking` is reachable from `lunco-sandbox-server`
+            // and `lunco-theme` pulls bevy_egui -> bevy_render -> wgpu, so the dep
+            // must be optional behind this crate's existing `ui` feature (which
+            // already gates `bevy_egui`) before any of this can move.
             if scrim {
                 // Block clicks behind by allocating the full screen + a subtle dark tint.
                 let (rect, _response) =
@@ -340,7 +348,10 @@ pub fn draw_collaborator_cursors(
             "tutorial_overlay",
             screen_rect,
             egui::vec2(320.0, 36.0),
-            egui::Stroke::new(1.5, egui::Color32::from_rgb(243, 139, 168)), // Peach/Red accent
+            // TODO(theme): migrate to lunco-theme once the token set covers this.
+            // Exact Catppuccin Mocha `red` (243,139,168) — the "you are connected
+            // as a client" banner accent. Blocked on the dep, see above.
+            egui::Stroke::new(1.5, egui::Color32::from_rgb(243, 139, 168)),
             true,                       // scrim: block input behind the Follow-Mode lock
             egui::vec2(12.0, 4.0),
             |ui| {
@@ -380,7 +391,9 @@ pub fn draw_collaborator_cursors(
             "student_overlay",
             screen_rect,
             egui::vec2(260.0, 32.0),
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(137, 180, 250)), // Blue accent
+            // TODO(theme): migrate to lunco-theme once the token set covers this.
+            // Exact Catppuccin Mocha `blue` (137,180,250). Blocked on the dep.
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(137, 180, 250)),
             false,
             egui::vec2(10.0, 2.0),
             |ui| {
@@ -396,7 +409,9 @@ pub fn draw_collaborator_cursors(
             "tutor_overlay",
             screen_rect,
             egui::vec2(245.0, 32.0),
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(166, 227, 161)), // Green accent
+            // TODO(theme): migrate to lunco-theme once the token set covers this.
+            // Exact Catppuccin Mocha `green` (166,227,161). Blocked on the dep.
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(166, 227, 161)),
             false,
             egui::vec2(10.0, 2.0),
             |ui| {
@@ -426,6 +441,10 @@ pub fn draw_collaborator_cursors(
         }
 
         if let Some(cursor_pos) = info.cursor {
+            // NOT a theme colour: BLACK/WHITE here are picked from the *measured
+            // luminance* of the peer's own colour so the name tag stays readable
+            // on it. Same for the black cursor/tag outlines below — they outline a
+            // data-derived fill, not a themed surface. Leave hardcoded.
             // Determine a high-contrast text color based on relative luminance of the user color
             let luminance = (0.2126 * info.color[0] as f32
                 + 0.7152 * info.color[1] as f32

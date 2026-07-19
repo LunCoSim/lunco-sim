@@ -29,8 +29,12 @@ use bevy_egui::{egui, EguiContexts};
 use lunco_core::session::ControlPathRegistry;
 use lunco_core::GlobalEntityId;
 
-const ALERT: egui::Color32 = egui::Color32::from_rgb(240, 150, 150);
 
+/// Draws the control-blackout badge described in the module docs.
+///
+/// Adds a single `Update` system; holds no state of its own, because the badge
+/// is derived from [`ControlPathRegistry`] each frame rather than cached — that
+/// is what keeps it unable to disagree with the authorization gate.
 pub struct ControlStatusPlugin;
 
 impl Plugin for ControlStatusPlugin {
@@ -45,8 +49,13 @@ fn draw_control_blackout(
     mut egui_ctx: EguiContexts,
     paths: Option<Res<ControlPathRegistry>>,
     q: Query<(&GlobalEntityId, Option<&Name>)>,
+    theme: Option<Res<lunco_theme::Theme>>,
 ) {
     let Some(paths) = paths else { return };
+    let theme = theme
+        .map(|t| t.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
+    let alert = theme.tokens.error;
 
     // Name the affected vessels. Cheap: the query is only walked when something is
     // actually down, and `is_down` is a hash lookup.
@@ -75,15 +84,19 @@ fn draw_control_blackout(
         .show(ctx, |ui| {
             ui.set_max_width(300.0);
             egui::Frame::new()
+                // TODO(theme): migrate to lunco-theme once the token set covers this.
+                // Error-tinted backdrop for a HUD panel that is itself the alarm —
+                // `overlay_backdrop` is neutral and `error_subdued` is a chip fill,
+                // so neither is right; this wants an alert-backdrop token.
                 .fill(egui::Color32::from_rgba_unmultiplied(46, 18, 22, 235))
                 .corner_radius(10.0)
-                .stroke(egui::Stroke::new(1.0, ALERT.linear_multiply(0.7)))
+                .stroke(egui::Stroke::new(1.0, alert.linear_multiply(0.7)))
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.label(
                             egui::RichText::new("⚠  NO LINK")
-                                .color(ALERT)
+                                .color(alert)
                                 .size(16.0)
                                 .strong(),
                         );
@@ -94,7 +107,7 @@ fn draw_control_blackout(
                                 "commands are not reaching {} — autonomy only",
                                 down.join(", ")
                             ))
-                            .color(egui::Color32::from_rgb(230, 200, 200))
+                            .color(theme.tokens.text)
                             .size(13.0),
                         );
                     });

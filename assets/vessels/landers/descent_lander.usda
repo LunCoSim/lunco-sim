@@ -146,6 +146,28 @@ def Xform "DescentLander" (
 
     bool physics:rigidBodyEnabled = true
     float physics:mass = 2000.0
+
+    # Principal inertia, in the body frame, for the 2000 kg vehicle above.
+    #
+    # This MUST be authored whenever `physics:mass` is. Authoring mass alone
+    # overrides the mass and NOTHING else: Avian keeps the angular inertia it
+    # derived from the collider geometry at default density, which for this hull
+    # is a ~69 kg body. The vehicle then had a lander's mass and a toolbox's
+    # rotational inertia — measured `inertia_xx` was 159 kg m^2 against the 4625
+    # the geometry implies, i.e. ~29x too easy to spin. Every disturbance torque
+    # (and the weld to the rover is a large one, acting through a 1.5 m lever)
+    # produced ~29x the angular acceleration it should, which is what threw the
+    # stack to 25 rad/s within half a second of the descent starting. No
+    # stabiliser with sane authority can hold a vehicle whose inertia is a
+    # thirtieth of its geometry.
+    #
+    # Values are the solid cylinder of the `Hull` collider (r = 2.5, h = 3.0):
+    #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 2000*(18.75 + 9)/12 = 4625
+    #   I_yy        = m*r^2/2           = 2000*3.125          = 6250
+    # I_xx = I_zz because the hull is axisymmetric about +Y — the runtime's
+    # 159/229 asymmetry was itself a sign the tensor did not come from this mass.
+    float3 physics:diagonalInertia = (4625.0, 6250.0, 4625.0)
+
     # Vacuum: no aerodynamic drag. Linear damping is a tiny numerical settle only;
     # there is deliberately NO angular damping — angular momentum is conserved, so
     # a spin persists until a torque stops it. Arresting rotation is the job of the

@@ -57,6 +57,8 @@ We are evolving from a high-fidelity sandbox into a complete autonomous mission 
 | [`scripting-guide.md`](scripting-guide.md) | How to write rhai scenarios — beginner tutorial + full reference (verbs, sequencing, tools, persistence) |
 | [`commands-reference.md`](commands-reference.md) | Every `#[Command]` — the full callable surface (HTTP / MCP / rhai `cmd()`), auto-generated from source |
 | [`rhai-integration-design.md`](rhai-integration-design.md) | Rhai scripting design rationale + as-built reference |
+| [`behaviour-trees.md`](behaviour-trees.md) | The tree kernel — the tick contract, node catalogue, autopilot `BehaviorSpec` |
+| [`offline-recording.md`](offline-recording.md) | Deterministic frame-exact capture — the offline clock's three knobs, the recording verbs, `frozen` semantics, the `shots.rhai` sequencer |
 | [**`architecture/README.md`**](architecture/README.md) | **Index of the design narrative** — start here for how LunCoSim is structured |
 | [`architecture/render-decoupling.md`](architecture/render-decoupling.md) | The material is the boundary — domain crates state appearance *intent*; only `lunco-render-bevy` names `bevy_pbr`, so `--no-ui` links no wgpu/`bevy_render`/egui/winit |
 | [`architecture/shader-layers-and-params.md`](architecture/shader-layers-and-params.md) | Shader looks — WGSL-reflected parameters and named texture layers; adding a parameter is editing a shader, not editing Rust |
