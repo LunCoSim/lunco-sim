@@ -114,8 +114,13 @@ pub fn wire_terrain_materials(
     // fades in on the same `csm_far` boundary.) The cost of the fade is
     // that the CSM volume (~1.5 km) cannot contain multi-km ridge
     // occluders, so near terrain reads slightly lighter than the same
-    // ground seen from altitude; the unconditional `SHADOW_FILL` in the
-    // terrain shaders keeps that difference subtle.
+    // ground seen from altitude; the `shadow_fill` term in the terrain
+    // shaders keeps that difference subtle. That fill gates itself on
+    // `hf_res` being non-zero — i.e. on THIS function having wired the surface,
+    // which it does only for entities carrying a `HorizonMap`. So the fill
+    // reaches horizon terrain only and can never leak onto a plain mesh that
+    // merely shares the shader family (`regolith.wgsl` is also bound directly
+    // by scenes as a studio ground material).
     let to_sun_world: Vec3 = sun_gt.back().into();
 
     for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {

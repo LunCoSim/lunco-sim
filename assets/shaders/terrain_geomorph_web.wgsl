@@ -9,7 +9,7 @@
     mesh_view_bindings::lights,
 }
 #import lunco::pbr_lit::lit_n
-#import lunco::horizon::{shadow_fill_weight, SHADOW_FILL}
+#import lunco::horizon::{shadow_fill}
 #import lunco::lunar::regolith_factor
 #import lunco::transfer::{slope_hazard_color, slope_of}
 
@@ -340,7 +340,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // above is scene-referred cd/m2 tuned for the old studio exposure — at the
     // calibrated lunar EV it vanishes and near tiles crushed to black next to
     // the fill-lifted heightfield.
-    color = vec4(color.rgb + base_albedo * SHADOW_FILL * shadow_fill_weight(in.uv), color.a);
+    // `wired` = 1.0: this shader is bound by the engine to globe/terrain tiles
+    // ONLY — it is never reachable from a scene's `material:binding`, so "is this
+    // a horizon surface?" is answered at authoring time rather than by a uniform.
+    // (It carries no `hf_res`: geomorph tiles sample the shadow cache, not a DEM.)
+    color = vec4(color.rgb + shadow_fill(base_albedo, in.uv, 1.0), color.a);
 
     // --- Analysis overlay (see terrain_geomorph.wgsl) -------------------------
     // Blend the Transfer's colour over the lit surface; the ramp itself is the
