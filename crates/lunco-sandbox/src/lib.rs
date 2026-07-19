@@ -2310,6 +2310,44 @@ fn read_authored_layer_maps<R: UsdRead>(
         .collect()
 }
 
+/// Read the terrain's layer maps from its bound **UsdShade Material network**
+/// (doc 18 §3): `rel material:binding` → Material → `outputs:surface.connect`
+/// → Shader, whose `asset inputs:<role>_map` name the rasters and
+/// `float inputs:weight_<role>` their blend weights (default 1.0). This is
+/// the primary authoring path; the flat `lunco:terrain:layer:*` attrs are the
+/// deprecated adapter it supersedes ([`read_authored_layer_maps`]).
+///
+/// CONNECTED map inputs are skipped — a connected port is fed by a producer
+/// node (doc 18 Tier B, bake nodes), not by an authored file.
+#[cfg(feature = "ui")]
+fn read_material_network_layer_maps<R: UsdRead>(
+    reader: &R,
+    sdf: &openusd::sdf::Path,
+    roles: &'static [LayerRole],
+) -> Vec<(&'static LayerRole, String, f32)> {
+    let Some(shader) = lunco_usd_sim::shader::bound_shader_prim(reader, sdf) else {
+        return Vec::new();
+    };
+    roles
+        .iter()
+        .filter_map(|role| {
+            let map_attr = format!("inputs:{}_map", role.name);
+            if !reader.connections(&shader, &map_attr).is_empty() {
+                return None;
+            }
+            let rel = reader.asset(&shader, &map_attr)?;
+            // One authored weight per role, mirroring the flat-attr contract
+            // (surface's two shader weights both receive it).
+            let weight = role
+                .weights
+                .first()
+                .and_then(|w| reader.real_f32(&shader, &format!("inputs:{w}")))
+                .unwrap_or(1.0);
+            Some((role, rel, weight))
+        })
+        .collect()
+}
+
 /// **Start each camera path when the RECORDER starts.** A shot begins when the
 /// camera rolls.
 ///
@@ -2542,8 +2580,22 @@ fn bind_terrain_layers(
         };
         // Collect the authored (role, rel-path, weight) before touching the
         // material, so we can wait for the Twin + material without half-binding.
-        let authored: Vec<(&LayerRole, String, f32)> =
-            read_authored_layer_maps(&cs.view(), &sdf, ROLES);
+        // The bound UsdShade Material network is the primary source (doc 18
+        // §3); the flat `lunco:terrain:layer:*` attrs remain as the adapter it
+        // supersedes.
+        let mut authored: Vec<(&LayerRole, String, f32)> =
+            read_material_network_layer_maps(&cs.view(), &sdf, ROLES);
+        if authored.is_empty() {
+            authored = read_authored_layer_maps(&cs.view(), &sdf, ROLES);
+            if !authored.is_empty() {
+                warn!(
+                    "[usd-dem] terrain {} authors layer maps via the deprecated \
+                     flat `lunco:terrain:layer:*` attrs — author a UsdShade \
+                     Material network instead (doc 18 §3; see traverse.usda)",
+                    prim_path.path
+                );
+            }
+        }
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.

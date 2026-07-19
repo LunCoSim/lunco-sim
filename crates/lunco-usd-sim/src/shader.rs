@@ -36,7 +36,7 @@ use lunco_usd_bevy::{
     get_attribute_as_vec3, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced,
 };
 use openusd::sdf::Path as SdfPath;
-use lunco_materials::{to_snake_case, ParamValue, ShaderLook};
+use lunco_materials::{to_snake_case, ParamValue, ShaderLook, TextureLayer};
 use lunco_render::PbrLook;
 use std::collections::BTreeMap;
 
@@ -59,6 +59,11 @@ pub fn apply_usd_shader_materials(
     mut canonical: NonSendMut<CanonicalStages>,
     mut commands: Commands,
     settings: Option<Res<lunco_settings::TerrainSettings>>,
+    // For `asset`-typed shader inputs (texture layers): root-relative paths
+    // resolve against the SCENE's own source root and load through the asset
+    // server — the same authority rule as the sandbox layer binder (the scene
+    // the material came from decides the root, never a guessed twin).
+    asset_server: Res<AssetServer>,
 ) {
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     for (entity, prim_path) in q.iter() {
@@ -77,6 +82,7 @@ pub fn apply_usd_shader_materials(
         };
         apply_usd_shader_material_read(
             &cs.view(), entity, prim_path, &sdf_path, &mut commands, enable_shaders,
+            &asset_server,
         );
     }
 }
@@ -93,9 +99,21 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     sdf_path: &SdfPath,
     commands: &mut Commands,
     enable_shaders: bool,
+    asset_server: &AssetServer,
 ) {
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
+
+    // TERRAIN prims are excluded: a DEM terrain's material is authored by the
+    // terrain pipeline (engine-filled height/shadow params, derived maps), and
+    // its bound Material network is consumed by the terrain layer binder
+    // (`lunco-sandbox::bind_terrain_layers`) instead. Minting a ShaderLook
+    // here would hand the terrain entity a SECOND material that replaces the
+    // engine-authored one — losing the heightfield binding and every engine
+    // param the moment a scene binds a Material to its Terrain prim.
+    if reader.text(sdf_path, "lunco:assetMode").is_some() {
+        return;
+    }
 
     // A shader is bound the way USD binds shaders: `rel material:binding` → a
     // `Material` → the `Shader` its surface comes from. Nothing here is ours — a WGSL
@@ -142,6 +160,29 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // The shader's parameters are the Shader prim's `inputs:` — typed, declared, and
     // belonging to the shader that consumes them.
     let values = read_shader_inputs(reader, &shader_prim);
+    // `asset`-typed inputs are TEXTURE layers (doc 18 §3.1): `inputs:albedo_map =
+    // @terrain/site/…/ortho.png@` fills the material slot of the same reflected
+    // name. Root-relative paths resolve against the SCENE's source root (the
+    // `twin://<name>` the stage itself was loaded from); already-schemed paths
+    // pass through. A scene from Bevy's default source has no root to resolve
+    // against — those inputs warn and skip rather than guess.
+    let mut textures: BTreeMap<TextureLayer, Handle<Image>> = BTreeMap::new();
+    for (layer, authored) in read_shader_texture_inputs(reader, &shader_prim) {
+        let uri = if authored.contains("://") {
+            authored
+        } else {
+            let Some(base) = scene_base_uri(prim_path, asset_server) else {
+                warn!(
+                    "[shader] prim {}: texture input `{authored}` is root-relative but \
+                     the scene carries no source root to resolve it against — skipped",
+                    prim_path.path
+                );
+                continue;
+            };
+            format!("{base}/{authored}")
+        };
+        textures.insert(layer, asset_server.load(&uri));
+    }
     #[cfg(target_arch = "wasm32")]
     let resolved_shader_path = if shader_path == "shaders/regolith.wgsl" {
         "shaders/regolith_web.wgsl".to_string()
@@ -170,7 +211,7 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     let no_shadow_cast =
         lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "primvars:doNotCastShadows")
             .unwrap_or(false);
-    let look = ShaderLook { shader, values, no_shadow_cast, ..Default::default() };
+    let look = ShaderLook { shader, values, textures, no_shadow_cast, ..Default::default() };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
     commands
@@ -230,7 +271,11 @@ fn shader_has_fragment_entry(_shader_path: &str) -> bool {
 ///
 /// `None` means this prim is not shaded by a material (most prims aren't — they carry
 /// a `displayColor` and get a `PbrLook`).
-fn bound_shader_prim<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<SdfPath> {
+///
+/// `pub`: the terrain layer binder (`lunco-sandbox`) walks the same two hops
+/// to read a terrain's Material network — one definition of "the bound
+/// shader", not two that can drift.
+pub fn bound_shader_prim<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<SdfPath> {
     let material = reader.rel_target(sdf_path, "material:binding")?;
     let material = SdfPath::new(&material).ok()?;
     // `/Scene/Looks/Regolith/Shader.outputs:surface` → `/Scene/Looks/Regolith/Shader`
@@ -268,4 +313,62 @@ fn read_shader_inputs<R: UsdRead>(
         }
     }
     values
+}
+
+/// The texture slot a shader input name addresses — the `asset`-typed half of
+/// the `inputs:` contract. Snake-cased names match the `ShaderMaterial` slot
+/// fields ([`TextureLayer`] is the fixed, binding-limited set); anything else
+/// returns `None` (a value param or a graph-only port, not a slot).
+fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
+    match snake {
+        "albedo_map" => Some(TextureLayer::Albedo),
+        "mineral_map" => Some(TextureLayer::Mineral),
+        "surface_map" => Some(TextureLayer::Surface),
+        "normal_map" => Some(TextureLayer::Normal),
+        // `height_map` and `shadow_cache` are engine-filled (horizon system);
+        // authoring them from USD would fight the engine writer, so they are
+        // deliberately NOT addressable here.
+        _ => None,
+    }
+}
+
+/// Reads the `asset`-typed `inputs:*` of a `Shader` prim: `(slot, authored
+/// path)` pairs. CONNECTED inputs are skipped for the same reason as in
+/// [`read_shader_inputs`] — a connected port is fed by a producer node
+/// (doc 18 Tier B), not by an authored file.
+fn read_shader_texture_inputs<R: UsdRead>(
+    reader: &R,
+    shader_prim: &SdfPath,
+) -> Vec<(TextureLayer, String)> {
+    let mut out = Vec::new();
+    for attr in reader.attr_names(shader_prim) {
+        let Some(name) = attr.strip_prefix("inputs:") else { continue };
+        let Some(layer) = texture_layer_for_input(&to_snake_case(name)) else { continue };
+        if !reader.connections(shader_prim, &attr).is_empty() {
+            continue;
+        }
+        if let Some(path) = reader.asset(shader_prim, &attr) {
+            out.push((layer, path));
+        }
+    }
+    out
+}
+
+/// The `source://root` base URI of the scene a prim was loaded from — the root
+/// its root-relative texture inputs resolve against. Same derivation as the
+/// sandbox layer binder: the stage asset's own path is the only authority
+/// (`twin://<name>/sim/scenes/x.usda` → `twin://<name>`). `None` for a stage
+/// from Bevy's default source (no root to resolve against — caller warns).
+fn scene_base_uri(prim_path: &UsdPrimPath, asset_server: &AssetServer) -> Option<String> {
+    let asset_path = asset_server.get_path(prim_path.stage_handle.id())?;
+    let source = match asset_path.source() {
+        bevy::asset::io::AssetSourceId::Name(n) => n.to_string(),
+        bevy::asset::io::AssetSourceId::Default => return None,
+    };
+    let root = asset_path
+        .path()
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())?;
+    Some(format!("{source}://{root}"))
 }
