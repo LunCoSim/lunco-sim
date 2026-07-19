@@ -240,12 +240,23 @@ impl AppSettingsExt for App {
             self.add_plugins(SettingsPlugin);
         }
         let initial: S = {
-            let settings = self.world().resource::<Settings>();
-            settings
-                .raw
-                .get(S::KEY)
-                .and_then(|v| serde_json::from_value::<S>(v.clone()).ok())
-                .unwrap_or_default()
+            let mut settings = self.world_mut().resource_mut::<Settings>();
+            match settings.raw.get(S::KEY).cloned() {
+                None => S::default(),
+                Some(v) => match serde_json::from_value::<S>(v.clone()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let bad_key = format!("{}.bad", S::KEY);
+                        warn!(
+                            "[Settings:{}] stored section failed to parse ({e}); preserving it as \"{bad_key}\" and using defaults",
+                            S::KEY
+                        );
+                        settings.raw.insert(bad_key, v);
+                        settings.dirty = true;
+                        S::default()
+                    }
+                },
+            }
         };
         self.insert_resource(initial);
         self.add_systems(Last, persist_section::<S>);

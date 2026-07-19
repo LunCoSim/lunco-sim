@@ -102,7 +102,11 @@ pub fn wire_terrain_materials(
     >,
     // Hysteresis state for the cache↔march handoff, per terrain (see below).
     mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
+    mut removed_terrains: RemovedComponents<HorizonMap>,
 ) {
+    for e in removed_terrains.read() {
+        cache_engaged.remove(&e);
+    }
     let Some(mut shader_mats) = shader_mats else { return };
     let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
     // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF

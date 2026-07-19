@@ -42,6 +42,7 @@
 //! `Update` schedule and retries every frame until the asset is available.
 
 use bevy::prelude::*;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::DVec3;
 use bevy::mesh::VertexAttributeValues;
@@ -751,7 +752,7 @@ fn extract_avian_prim<R: UsdRead>(
 
     // ── TRIGGER ZONE ── `lunco:triggerZone` → overlap-only static Sensor.
     if let Some(zone) = reader
-        .scalar::<String>(sdf_path, "lunco:triggerZone")
+        .text(sdf_path, "lunco:triggerZone")
         .filter(|z| !z.trim().is_empty())
     {
         commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
@@ -1119,6 +1120,15 @@ const JOINT_SEAT_ANGLE_EPS: f64 = 1.0e-3;
 /// normal log stream, so it is reported at `error!` instead of `warn!`.
 const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
 
+/// Physics ticks a pending joint may scan the body query at full rate before its
+/// unresolved body path is reported (a typo'd rel never spawns, and a silent
+/// forever-scan is exactly the failure mode this project pays most for).
+const JOINT_RESOLVE_WARN_TICKS: u32 = 600;
+
+/// Retry cadence for a pending joint past its budget. The body may still spawn
+/// late (streamed content), so resolution never stops — it just stops being hot.
+const JOINT_RESOLVE_RETRY_INTERVAL: u32 = 60;
+
 fn build_usd_physics_joints(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingUsdJoint, &UsdPrimPath)>,
@@ -1146,8 +1156,15 @@ fn build_usd_physics_joints(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut q_pose: Query<(&mut Position, &mut Rotation)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
+    mut resolve_ticks: Local<EntityHashMap<u32>>,
 ) {
+    resolve_ticks.retain(|e, _| q_pending.contains(*e));
     for (joint_entity, pending, joint_prim_path) in q_pending.iter() {
+        let ticks = resolve_ticks.get(&joint_entity).copied().unwrap_or(0);
+        if ticks >= JOINT_RESOLVE_WARN_TICKS && ticks % JOINT_RESOLVE_RETRY_INTERVAL != 0 {
+            resolve_ticks.insert(joint_entity, ticks.saturating_add(1));
+            continue;
+        }
         let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
         // Find body0 and body1 entities by matching USD paths and instance roots
         let body0_ent = q_bodies.iter()
@@ -1165,7 +1182,27 @@ fn build_usd_physics_joints(
             })
             .map(|(e, _)| e);
 
-        let (Some(b0), Some(b1)) = (body0_ent, body1_ent) else { continue; };
+        let (Some(b0), Some(b1)) = (body0_ent, body1_ent) else {
+            let ticks = ticks.saturating_add(1);
+            if ticks == JOINT_RESOLVE_WARN_TICKS {
+                let missing = match (body0_ent, body1_ent) {
+                    (None, None) => format!(
+                        "bodies '{}' and '{}'",
+                        pending.body0_path, pending.body1_path
+                    ),
+                    (None, _) => format!("body '{}'", pending.body0_path),
+                    _ => format!("body '{}'", pending.body1_path),
+                };
+                warn!(
+                    "[usd-avian] joint {}: {missing} still unresolved after {} physics ticks \
+                     — check the joint's body rel paths; retrying every {} ticks.",
+                    joint_prim_path.path, JOINT_RESOLVE_WARN_TICKS, JOINT_RESOLVE_RETRY_INTERVAL,
+                );
+            }
+            resolve_ticks.insert(joint_entity, ticks);
+            continue;
+        };
+        resolve_ticks.remove(&joint_entity);
 
         // Is `Position` the authored pose yet, or still `RigidBody`'s required-
         // component default of zero? Scheduling (see `UsdAvianPlugin`) puts this

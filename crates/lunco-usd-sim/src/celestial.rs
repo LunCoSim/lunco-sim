@@ -192,7 +192,7 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
             min_elevation_deg: reader
                 .real(sdf_path, "lunco:link:minElevationDeg")
                 .unwrap_or(d.min_elevation_deg),
-            class: reader.scalar::<String>(sdf_path, "lunco:link:class"),
+            class: reader.text(sdf_path, "lunco:link:class"),
         });
     }
 

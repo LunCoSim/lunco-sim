@@ -676,14 +676,16 @@ impl Default for TerrainLodConfig {
 
 /// Memoized per-node measured geometric error for a terrain's current oracle —
 /// the cache behind error-driven CDLOD selection. Keyed by quadtree node; wiped
-/// whenever the oracle Arc is swapped (live re-compose). Errors are measured
+/// whenever the composed surface changes (live re-compose). Errors are measured
 /// lazily for nodes the selection walk actually visits (O(visited), a few tens of
-/// µs each, then cached for the oracle's lifetime).
+/// µs each, then cached for the surface's lifetime).
 #[derive(Component, Default)]
 pub struct TerrainNodeErrors {
     map: HashMap<QuadCoord, f64>,
-    /// Identity of the oracle the cached errors were measured against.
-    oracle_ptr: usize,
+    /// `surface_key()` of the oracle the cached errors were measured against —
+    /// content identity, never the Arc pointer (allocator address reuse would
+    /// keep a stale map alive).
+    oracle_key: u64,
 }
 
 /// Cache of baked tile meshes keyed by quadtree node and mesh resolution (a 49²
@@ -1145,9 +1147,11 @@ pub fn update_lod_tiles(
             sig.write_u64(q(focus[1]));
             sig.write_u64(q(eye_height));
             sig.write_u64(cur_gen as u64);
-            // Oracle identity — a live re-compose swaps the Arc without always
-            // bumping gen, and would otherwise be missed by the gate.
-            sig.write_u64(Arc::as_ptr(&hf.0) as *const () as usize as u64);
+            // Oracle identity — a live re-compose changes the surface without
+            // always bumping gen, and would otherwise be missed by the gate.
+            // Content key, not the Arc pointer: a reused allocation address
+            // would pass the gate with a stale surface.
+            sig.write_u64(hf.0.surface_key());
             // LOD knobs (Inspector) — a live tweak must re-select.
             sig.write_u64(cfg.pixel_error.to_bits());
             sig.write_u64(cfg.tile_budget as u64);
@@ -1207,10 +1211,10 @@ pub fn update_lod_tiles(
         // there is detail worth refining toward (crater rims, peaks), not on the
         // uniform per-depth schedule. Errors are memoized per node against the
         // current oracle; the cache wipes when the oracle is swapped (live edit).
-        let oracle_ptr = Arc::as_ptr(&hf.0) as usize;
-        if errs.oracle_ptr != oracle_ptr {
+        let oracle_key = hf.0.surface_key();
+        if errs.oracle_key != oracle_key {
             errs.map.clear();
-            errs.oracle_ptr = oracle_ptr;
+            errs.oracle_key = oracle_key;
         }
         let err_map = std::cell::RefCell::new(&mut errs.map);
         let src: &SurfaceOracle = hf.0.as_ref();

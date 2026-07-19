@@ -755,7 +755,9 @@ pub fn write_scenario_index(
     let per_scenario = StorageHandle::File(scenario_index_path(&m.scenario_id));
     let top_index = StorageHandle::File(scenarios_index_path());
     let fut = async move {
-        let _ = do_write(per_scenario, bytes).await;
+        if !do_write(per_scenario, bytes).await {
+            warn!("[net] scenario index write failed for {}", summary.scenario_id);
+        }
         // Merge into the top-level index.json (read → replace this id → write).
         let mut entries: Vec<CachedTwinSummary> = match storage_read(&top_index).await {
             Some(b) => serde_json::from_slice(&b).unwrap_or_default(),
@@ -763,8 +765,13 @@ pub fn write_scenario_index(
         };
         entries.retain(|e| e.scenario_id != summary.scenario_id);
         entries.push(summary);
-        if let Ok(json) = serde_json::to_vec(&entries) {
-            let _ = do_write(top_index, json).await;
+        match serde_json::to_vec(&entries) {
+            Ok(json) => {
+                if !do_write(top_index, json).await {
+                    warn!("[net] top-level scenario index write failed");
+                }
+            }
+            Err(e) => warn!("[net] top-level scenario index serialise failed: {e}"),
         }
     };
     #[cfg(not(target_arch = "wasm32"))]

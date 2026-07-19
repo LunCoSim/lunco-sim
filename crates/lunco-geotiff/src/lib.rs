@@ -59,6 +59,9 @@ const KEY_PROJ_NAT_ORIGIN_LONG: u16 = 3088;
 const MODEL_TYPE_PROJECTED: u16 = 1;
 /// Sample positions ARE the grid nodes — see the module note.
 const RASTER_TYPE_PIXEL_IS_POINT: u16 = 2;
+/// Each sample covers a cell anchored at its outer corner — the GDAL default,
+/// and the spec's default when the key is absent.
+const RASTER_TYPE_PIXEL_IS_AREA: u16 = 1;
 const USER_DEFINED: u16 = 32767;
 const LINEAR_UNITS_METRE: u16 = 9001;
 const ANGULAR_UNITS_DEGREE: u16 = 9102;
@@ -230,7 +233,8 @@ pub enum GeoReadError {
     NoPixelScale,
     /// No `ModelTiepointTag`.
     NoTiepoint,
-    /// A tag was present but malformed (wrong arity).
+    /// A tag was present but malformed (wrong arity, non-square pixels, an
+    /// unsupported raster type).
     Malformed(&'static str),
 }
 
@@ -267,6 +271,14 @@ pub fn read_geo_tags<R: Read + Seek>(
     if tie.len() < 6 {
         return Err(GeoReadError::Malformed("ModelTiepoint needs 6 values"));
     }
+    // Square pixels only — the whole pipeline speaks ONE spacing for both axes,
+    // so an anisotropic raster must be rejected here, not sampled skewed.
+    let (scale_x, scale_y) = (scale[0], scale[1]);
+    if (scale_x - scale_y).abs() > 1e-9 * scale_x.abs().max(scale_y.abs()) {
+        return Err(GeoReadError::Malformed(
+            "non-square pixels (ModelPixelScale X != Y)",
+        ));
+    }
 
     // Resolve keys through the directory, never positionally. A third-party
     // GeoTIFF orders its doubles however it likes, so reading `doubles[2]` by
@@ -287,10 +299,33 @@ pub fn read_geo_tags<R: Read + Seek>(
             .and_then(|v| v.first().copied())
     };
 
+    // The tiepoint maps raster (I,J) → model (X,Y); a third-party raster may
+    // anchor it anywhere, so shift back to the model position of raster (0,0).
+    // +X is east and +Y is north with Y decreasing per row — hence the signs.
+    let mut origin_x_m = tie[3] - tie[0] * scale_x;
+    let mut origin_y_m = tie[4] + tie[1] * scale_y;
+    // Absent means area-registered — that is the spec's (and GDAL's) default.
+    let raster_type = keys
+        .as_ref()
+        .and_then(|k| k.get_short(KEY_GT_RASTER_TYPE))
+        .unwrap_or(RASTER_TYPE_PIXEL_IS_AREA);
+    match raster_type {
+        RASTER_TYPE_PIXEL_IS_POINT => {}
+        RASTER_TYPE_PIXEL_IS_AREA => {
+            // Area-registered: the tiepoint anchors the OUTER corner of the
+            // corner pixel, and the sample itself sits half a pixel inward.
+            // Shift to the node-based convention the pipeline speaks — see the
+            // module note for what half a pixel costs if this is skipped.
+            origin_x_m += 0.5 * scale_x;
+            origin_y_m -= 0.5 * scale_y;
+        }
+        _ => return Err(GeoReadError::Malformed("unsupported GTRasterType")),
+    }
+
     Ok(GeoTransform {
-        pixel_size_m: scale[0],
-        origin_x_m: tie[3],
-        origin_y_m: tie[4],
+        pixel_size_m: scale_x,
+        origin_x_m,
+        origin_y_m,
         // Absent is not an error: a third-party raster may carry a full EPSG code
         // instead of user-defined axes, and the radius is informational for us.
         body_radius_m: double_key(KEY_GEOG_SEMI_MAJOR).unwrap_or(0.0),
@@ -373,6 +408,77 @@ mod tests {
         // The extent must survive the trip — this is the number `metadata.yaml`
         // used to carry, and the whole reason the sidecar can go away.
         assert!((got.extent_m(res) - 1002.0).abs() < 1e-6, "extent: {got:?}");
+    }
+
+    /// A GDAL-default third-party raster: area-registered, tiepoint not at
+    /// raster (0,0). The reader must land the corner SAMPLE at the node-based
+    /// position — half a pixel inward of the tiepoint's outer-corner anchor —
+    /// or every height is off by half a rover width.
+    #[test]
+    fn area_registered_raster_converts_to_node_based() {
+        use std::io::Cursor;
+        use tiff::encoder::{colortype, TiffEncoder};
+
+        let mut buf = Vec::new();
+        {
+            let mut enc = TiffEncoder::new(Cursor::new(&mut buf)).unwrap();
+            let mut img = enc.new_image::<colortype::Gray32Float>(4, 4).unwrap();
+            let dir = img.encoder();
+            dir.write_tag(Tag::Unknown(TAG_MODEL_PIXEL_SCALE), &[2.0, 2.0, 0.0][..])
+                .unwrap();
+            // Tiepoint at raster (1, 2), not the origin.
+            dir.write_tag(
+                Tag::Unknown(TAG_MODEL_TIEPOINT),
+                &[1.0, 2.0, 0.0, 100.0, 200.0, 0.0][..],
+            )
+            .unwrap();
+            let mut keys = GeoKeyDirectory::new();
+            keys.set(KEY_GT_MODEL_TYPE, GeoKeyValue::Short(MODEL_TYPE_PROJECTED));
+            keys.set(
+                KEY_GT_RASTER_TYPE,
+                GeoKeyValue::Short(RASTER_TYPE_PIXEL_IS_AREA),
+            );
+            let (directory, _, _) = keys.serialize().unwrap();
+            dir.write_tag(Tag::Unknown(TAG_GEO_KEY_DIRECTORY), &directory[..])
+                .unwrap();
+            img.write_data(&[0f32; 16]).unwrap();
+        }
+
+        let mut dec = tiff::decoder::Decoder::new(Cursor::new(&buf)).unwrap();
+        let got = read_geo_tags(&mut dec).expect("tags must read");
+        // Raster (0,0)'s outer corner is at (100 - 1*2, 200 + 2*2); the sample
+        // sits (+1, -1) inward of it.
+        assert!((got.origin_x_m - 99.0).abs() < 1e-9, "origin x: {got:?}");
+        assert!((got.origin_y_m - 203.0).abs() < 1e-9, "origin y: {got:?}");
+        assert!((got.pixel_size_m - 2.0).abs() < 1e-9, "pixel size: {got:?}");
+    }
+
+    /// Non-square pixels have no single spacing to hand the pipeline; the file
+    /// must be rejected, not sampled skewed.
+    #[test]
+    fn anisotropic_pixels_are_rejected() {
+        use std::io::Cursor;
+        use tiff::encoder::{colortype, TiffEncoder};
+
+        let mut buf = Vec::new();
+        {
+            let mut enc = TiffEncoder::new(Cursor::new(&mut buf)).unwrap();
+            let mut img = enc.new_image::<colortype::Gray32Float>(4, 4).unwrap();
+            let dir = img.encoder();
+            dir.write_tag(Tag::Unknown(TAG_MODEL_PIXEL_SCALE), &[2.0, 3.0, 0.0][..])
+                .unwrap();
+            dir.write_tag(
+                Tag::Unknown(TAG_MODEL_TIEPOINT),
+                &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0][..],
+            )
+            .unwrap();
+            img.write_data(&[0f32; 16]).unwrap();
+        }
+        let mut dec = tiff::decoder::Decoder::new(Cursor::new(&buf)).unwrap();
+        assert!(matches!(
+            read_geo_tags(&mut dec),
+            Err(GeoReadError::Malformed(_))
+        ));
     }
 
     /// A plain TIFF — what we shipped until 2026-07-19 — must fail with the

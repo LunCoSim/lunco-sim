@@ -432,9 +432,13 @@ pub fn apply_param(m: &mut ShaderMaterial, key: &str, value: &str) -> bool {
     });
     match ty {
         ParamType::Vec3 | ParamType::Vec4 => {
-            // Colours are authored as `r,g,b` (USD displayColor style).
+            // Colours are authored as `r,g,b` (USD displayColor style) or
+            // `r,g,b,a` for vec4 params.
             let n: Vec<f32> = value.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect();
-            if n.len() >= 3 {
+            if ty == ParamType::Vec4 && n.len() >= 4 {
+                m.set(key, ParamValue::Vec4([n[0], n[1], n[2], n[3]]));
+                true
+            } else if n.len() >= 3 {
                 m.set_color(key, [n[0], n[1], n[2]]);
                 true
             } else {

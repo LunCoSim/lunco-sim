@@ -130,19 +130,25 @@ pub struct ReportedEscapes(EntityHashSet);
 
 /// Recompute [`WorldBounds`] from the union of every static collider's AABB.
 ///
-/// Change-driven: `Changed<ColliderAabb>` is empty once terrain has settled, so
-/// in steady state this system iterates nothing and returns immediately. The
-/// union itself is recomputed over the full static set when it does fire, which
-/// is correct under REMOVAL as well (a shrinking world must shrink its bounds,
-/// and an incremental union cannot).
+/// Change-driven, filtered to STATIC bodies' colliders: avian rewrites
+/// `ColliderAabb` for every awake body's colliders each step, so a bare
+/// `Changed<ColliderAabb>` probe would fire whenever anything moves — only a
+/// static collider's AABB changing (or any removal) says the world changed.
+/// Once terrain has settled the probe matches nothing and this system returns
+/// immediately. The union itself is recomputed over the full static set when it
+/// does fire, which is correct under REMOVAL as well (a shrinking world must
+/// shrink its bounds, and an incremental union cannot).
 fn update_world_bounds(
-    q_changed: Query<(), (Changed<ColliderAabb>, With<ColliderOf>)>,
+    q_changed: Query<&ColliderOf, Changed<ColliderAabb>>,
     q_removed: RemovedComponents<ColliderAabb>,
     q_static: Query<(&ColliderAabb, &ColliderOf)>,
     q_bodies: Query<&RigidBody>,
     mut bounds: ResMut<WorldBounds>,
 ) {
-    if q_changed.is_empty() && q_removed.is_empty() {
+    let static_changed = q_changed
+        .iter()
+        .any(|collider_of| matches!(q_bodies.get(collider_of.body), Ok(RigidBody::Static)));
+    if !static_changed && q_removed.is_empty() {
         return;
     }
 

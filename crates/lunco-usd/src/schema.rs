@@ -111,11 +111,12 @@ pub struct PropertySpec {
 pub struct SchemaRegistry {
     /// Keyed by property NAME, not `(schema, name)`.
     ///
-    /// Sound because every property here is namespaced — `lunco:env:exposureEv100`,
-    /// `physics:axis` — so a name identifies a property globally. It is the same
-    /// reason the schema forbids bare names: a terrain layer's bare `size` would
-    /// collide with `UsdGeomCube`'s real `double size` both in this map and in USD
-    /// itself.
+    /// Sound for OUR properties because `luncoSchema` forbids bare names — a
+    /// terrain layer's bare `size` would collide with `UsdGeomCube`'s real
+    /// `double size` both in this map and in USD itself. Core schemas DO declare
+    /// bare names across files (`radius`, `axis`, `basis`, …); a redeclaration
+    /// that disagrees on type or variability is warned at ingest rather than
+    /// silently last-wins.
     properties: HashMap<String, PropertySpec>,
     /// Concrete typed schemas (`LunCoEnvironment`, `LunCoPolicy`).
     prim_types: Vec<String>,
@@ -239,19 +240,33 @@ impl SchemaRegistry {
                     let Some(type_name) = spec.get("typeName").cloned().and_then(token_or_string) else {
                         continue;
                     };
-                    reg.properties.insert(
-                        name.to_string(),
-                        PropertySpec {
-                            type_name,
-                            // Unauthored ⇒ `varying`, USD's default. `uniform` is
-                            // the only variability USDA actually writes out.
-                            variability: match spec.get("variability") {
-                                Some(sdf::Value::Variability(v)) => *v,
-                                _ => sdf::Variability::Varying,
-                            },
-                            declared_by: prim.to_string(),
+                    let prop = PropertySpec {
+                        type_name,
+                        // Unauthored ⇒ `varying`, USD's default. `uniform` is
+                        // the only variability USDA actually writes out.
+                        variability: match spec.get("variability") {
+                            Some(sdf::Value::Variability(v)) => *v,
+                            _ => sdf::Variability::Varying,
                         },
-                    );
+                        declared_by: prim.to_string(),
+                    };
+                    if let Some(prev) = reg.properties.get(name) {
+                        if prev.type_name != prop.type_name
+                            || prev.variability != prop.variability
+                        {
+                            bevy::log::warn!(
+                                "[schema] property '{name}': {} declares {} {:?}, \
+                                 overwriting {}'s {} {:?}",
+                                prop.declared_by,
+                                prop.type_name,
+                                prop.variability,
+                                prev.declared_by,
+                                prev.type_name,
+                                prev.variability,
+                            );
+                        }
+                    }
+                    reg.properties.insert(name.to_string(), prop);
                 }
                 _ => {}
             }

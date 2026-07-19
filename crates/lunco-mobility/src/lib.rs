@@ -115,7 +115,15 @@ impl Plugin for LunCoMobilityPlugin {
                // and the per-chassis `RigidBody::Kinematic` guard inside each wheel
                // system already skips those. So host/standalone simulate every
                // rover (unchanged) and a client simulates only its owned one.
-               |t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0));
+               |t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0)
+           // A `PhysicsHolds` hold pauses `Time<Physics>` while `Time<Virtual>`
+           // keeps running (bakes, cinematics) — forces applied then would
+           // accumulate into a solver that isn't stepping, and the first step
+           // after the hold could apply the sum. Gating on the physics clock
+           // (not the holds resource) keeps stepped cinematics drivable: a
+           // granted `PhysicsStepRequest` frame unpauses the clock for exactly
+           // the ticks that integrate.
+           .run_if(|t: Res<Time<Physics>>| !t.is_paused()));
 
         // Expose every FSW's logical command ports (a rover's throttle/steer/brake,
         // etc.) through the shared port substrate, so the ONE generic `SetPorts`

@@ -76,7 +76,7 @@ use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain};
 /// Which standard basis the curve interpolates with (`uniform token basis`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CurveBasis {
-    /// Passes THROUGH every point — what hand-placed control points want.
+    /// Passes THROUGH its points — what hand-placed control points want.
     CatmullRom,
     /// Cubic Bezier: 4 points per segment, endpoints shared (1 + 3n points).
     Bezier,
@@ -321,11 +321,29 @@ pub fn resolve_camera_paths(
         // `points3` accepts both `point3f[]` and `point3d[]` — a curve authored in
         // double precision is still a curve, and a strict `point3f[]` read reported
         // it as "no points", which is a misleading diagnostic for a type mismatch.
-        let points: Vec<Vec3> = reader
+        let mut points: Vec<Vec3> = reader
             .points3(&path, "points")
             .into_iter()
             .map(Vec3::from)
             .collect();
+        // `curveVertexCounts` partitions `points` into separate curves on one prim.
+        // A camera rides ONE curve — the first — so slice it out rather than
+        // interpolating across curve boundaries as if the batch were one polyline.
+        if let Some(counts) = crate::read_int_array(reader, &path, "curveVertexCounts") {
+            if let Some(&first) = counts.first() {
+                let n = first.max(0) as usize;
+                if n >= 2 && n < points.len() {
+                    if counts.len() > 1 {
+                        warn!(
+                            "[camera-path] {} carries {} curves — driving the first ({n} pts)",
+                            prim.path,
+                            counts.len()
+                        );
+                    }
+                    points.truncate(n);
+                }
+            }
+        }
         if points.is_empty() {
             warn!("[camera-path] {} has no `points`", prim.path);
             continue;
@@ -344,9 +362,11 @@ pub fn resolve_camera_paths(
         let cubic = reader.text(&path, "type").as_deref() != Some("linear");
         let basis = match reader.text(&path, "basis").as_deref() {
             _ if !cubic => CurveBasis::Linear,
-            Some("bezier") => CurveBasis::Bezier,
-            // catmullRom is the USD default that passes through its points.
-            _ => CurveBasis::CatmullRom,
+            // No bspline evaluator here — catmullRom is the closest interpolating
+            // stand-in (the same approximation the tube mesher takes).
+            Some("catmullRom") | Some("bspline") => CurveBasis::CatmullRom,
+            // The UsdGeomBasisCurves schema fallback for `basis` is bezier.
+            _ => CurveBasis::Bezier,
         };
         let periodic = reader.text(&path, "wrap").as_deref() == Some("periodic");
         // `real`, not `scalar::<f64>`: a `float lunco:path:duration = 8` would
@@ -608,18 +628,25 @@ fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     a.lerp(b, f)
 }
 
-/// Catmull-Rom: interpolates every control point, so the curve goes THROUGH the
-/// points you place. Open curves duplicate the end points as phantom neighbours
-/// (USD's own end-point handling), periodic ones wrap.
+/// Catmull-Rom: interpolates its control points, so the curve goes THROUGH the
+/// points you place. Periodic curves wrap. Non-periodic ones follow USD's end
+/// conditions: the first and last CVs are TANGENT PHANTOMS, so the curve spans
+/// p₁…pₙ₋₂ with `n − 3` segments (UsdGeomBasisCurves segment counting). Fewer
+/// than 4 CVs cannot form a cubic segment — degrade to the polygon.
 fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     let n = points.len();
-    let segs = if periodic { n } else { n - 1 };
+    if !periodic && n < 4 {
+        return eval_linear(points, false, u);
+    }
+    let segs = if periodic { n } else { n - 3 };
     let (i, f) = segment(segs, u);
     let idx = |k: isize| -> Vec3 {
         if periodic {
-            points[(((i as isize + k) % n as isize + n as isize) % n as isize) as usize]
+            points[(i as isize + k).rem_euclid(n as isize) as usize]
         } else {
-            points[(i as isize + k).clamp(0, n as isize - 1) as usize]
+            // Segment i starts at p[i+1]; k = −1 reaches back to its tangent
+            // phantom p[i], k = 2 forward to p[i+3] — both in range by `segs`.
+            points[(i as isize + 1 + k) as usize]
         }
     };
     let (p0, p1, p2, p3) = (idx(-1), idx(0), idx(1), idx(2));

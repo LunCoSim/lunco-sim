@@ -964,7 +964,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     // is COMPOSED from child LAYER prims (`lunco:layer = "dem" | "craters" |
     // "rocks" | "shader" | …`) — add a layer by adding a prim. The `dem` (ground)
     // layer supplies the heightmap source + window; the rest stamp/scatter/shade.
-    let asset_mode = reader.scalar::<String>(sdf, "lunco:assetMode");
+    let asset_mode = reader.text(sdf, "lunco:assetMode");
     if !matches!(asset_mode.as_deref(), Some("dem") | Some("layered")) {
         return;
     }
