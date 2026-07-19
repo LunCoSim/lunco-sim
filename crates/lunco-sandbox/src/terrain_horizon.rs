@@ -81,10 +81,22 @@ pub(crate) fn start_streamed_horizon_bakes(
             // the deadline out → exactly one coalesced bake).
             Some(stale) if now - stale.since < REBAKE_DEBOUNCE_SECS => continue,
             Some(_) => {}
-            // No map and nothing armed → this is the terrain's FIRST bake.
             // Map present and nothing armed → it is current; nothing to do.
             None if has_map => continue,
-            None => {}
+            // No map and nothing armed → the terrain's FIRST bake. ARM the same
+            // debounce rather than baking now: composition is not finished when the
+            // entity appears — the DEM builds, then layers regenerate ~1 s later and
+            // swap the oracle. Baking 3 ms after "built" therefore ran a full 4.3 s
+            // bake against a pre-regeneration oracle, installed it, and immediately
+            // re-baked (`mark_streamed_horizon_stale` correctly re-arms on the
+            // mid-flight change) — ~4.3 s of startup spent on a result that was
+            // thrown away. Arming here coalesces build + regenerate into ONE bake,
+            // and any further layer change inside the window just pushes the
+            // deadline out, exactly as it does for edits.
+            None => {
+                commands.entity(entity).try_insert(StreamedHorizonStale { since: now });
+                continue;
+            }
         }
         let oracle = hf.0.clone();
         let res = cfg.resolution.max(2);

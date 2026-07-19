@@ -45,6 +45,8 @@
 //!@default overlay_opacity   0
 //!@default overlay_safe_rad  0
 //!@default overlay_cliff_rad 0
+//!@ui      lod_depth         0 12   "CDLOD tile depth (LOD-depth overlay)"
+//!@default lod_depth         0
 struct Material {
     albedo:            vec3<f32>,
     macro_clump_scale: f32,
@@ -62,10 +64,11 @@ struct Material {
     csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
-    overlay_mode:      f32,  // analysis overlay: 0 = off, 1 = slope hazard
+    overlay_mode:      f32,  // analysis overlay: 0 = off, 1 = slope hazard, 2 = LOD depth
     overlay_opacity:   f32,  // blend weight of the overlay colour over the lit surface
     overlay_safe_rad:  f32,  // slope (rad) at/below which ground is green (safe)
     overlay_cliff_rad: f32,  // slope (rad) at/above which ground is red (cliff)
+    lod_depth:         f32,  // this tile's CDLOD depth, for the depth overlay
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
@@ -234,6 +237,18 @@ fn sun_to_light() -> vec3<f32> {
     return best;
 }
 
+// Palette-matched to `lod_rgb` in `stream_viz.rs`. Cycles rather than clamps so
+// adjacent depths always differ (clamping hid the 6/7/8 band entirely).
+fn lod_depth_color(d: f32) -> vec3<f32> {
+    let i = i32(max(d, 0.0)) % 7;
+    var p = array<vec3<f32>, 7>(
+        vec3(0.20, 0.35, 0.85), vec3(0.20, 0.75, 0.85), vec3(0.25, 0.80, 0.35),
+        vec3(0.90, 0.85, 0.20), vec3(0.95, 0.55, 0.15), vec3(0.90, 0.25, 0.20),
+        vec3(0.85, 0.30, 0.80),
+    );
+    return p[i];
+}
+
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let fine_scale  = mat.fine_scale;
@@ -349,15 +364,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // the coarse tiles), NOT from the LOD mesh normal, which under-reports cliffs at
     // distance. Same rule as the native shader.
     if (mat.overlay_mode > 0.5 && mat.overlay_opacity > 0.0) {
-        var n_haz = n_geo;
+        var tint = vec3(0.0);
+        if (mat.overlay_mode < 1.5) {
+            var n_haz = n_geo;
 #ifdef VERTEX_UVS_A
-        if (mat.weight_normal > 0.0) {
-            n_haz = normalize(map_n.xyz * 2.0 - 1.0);
-        }
+            if (mat.weight_normal > 0.0) {
+                n_haz = normalize(map_n.xyz * 2.0 - 1.0);
+            }
 #endif
-        let haz = slope_hazard_color(
-            slope_of(n_haz), mat.overlay_safe_rad, mat.overlay_cliff_rad);
-        color = vec4(mix(color.rgb, haz, mat.overlay_opacity), color.a);
+            tint = slope_hazard_color(
+                slope_of(n_haz), mat.overlay_safe_rad, mat.overlay_cliff_rad);
+        } else {
+            tint = lod_depth_color(mat.lod_depth);
+        }
+        color = vec4(mix(color.rgb, tint, mat.overlay_opacity), color.a);
     }
     return color;
 }

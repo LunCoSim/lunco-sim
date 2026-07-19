@@ -38,7 +38,7 @@ use crate::stream_viz::{LodTiles, TerrainShaderMode};
 /// flat/debug shader simply doesn't, and the by-name writes are ignored there.
 #[derive(Clone, Copy)]
 pub struct OverlayUniforms {
-    /// `0` = no overlay, `1` = slope hazard.
+    /// `0` = no overlay, `1` = slope hazard, `2` = LOD depth.
     pub mode: f32,
     /// Blend weight of the overlay colour over the lit surface (`0..1`).
     pub opacity: f32,
@@ -48,9 +48,23 @@ pub struct OverlayUniforms {
     pub cliff_rad: f32,
 }
 
+/// `overlay_mode` values, mirrored by the `mat.overlay_mode` branches in
+/// `terrain_geomorph.wgsl` / `_web.wgsl`. Named here so the two languages do not
+/// drift on a bare float: adding a mode means adding a constant and one shader
+/// branch, not hunting literals.
+pub mod overlay_mode {
+    /// No overlay — the lit surface is untouched.
+    pub const OFF: f32 = 0.0;
+    /// Slope-hazard traversability colouring.
+    pub const SLOPE_HAZARD: f32 = 1.0;
+    /// CDLOD tile depth, composited over the production shading.
+    pub const LOD_DEPTH: f32 = 2.0;
+}
+
 impl OverlayUniforms {
     /// The disabled state — every tile builds with this until an overlay is armed.
-    pub const OFF: Self = Self { mode: 0.0, opacity: 0.0, safe_rad: 0.0, cliff_rad: 0.0 };
+    pub const OFF: Self =
+        Self { mode: overlay_mode::OFF, opacity: 0.0, safe_rad: 0.0, cliff_rad: 0.0 };
 
     /// Write the four params onto a tile's [`ShaderLook`] as **live** params — the
     /// overlay is a *uniform*, not a re-bake (`D2`).
@@ -84,13 +98,18 @@ pub struct TerrainOverlayParams {
     pub cliff_deg: f32,
     /// Overlay blend opacity over the lit regolith (`0..1`).
     pub opacity: f32,
+    /// Draw the LOD-depth view instead of slope hazard. Composited over the real
+    /// lit surface (unlike [`TerrainShaderMode::DebugLod`], which swaps in the flat
+    /// shader and so cannot show where a detail boundary sits relative to the
+    /// production look). Still requires `enabled`.
+    pub lod_depth: bool,
 }
 
 impl Default for TerrainOverlayParams {
     fn default() -> Self {
         // Off by default (normal rendering is untouched); the angles match the
         // derived-map hazard bake defaults so arming it looks consistent.
-        Self { enabled: false, safe_deg: 15.0, cliff_deg: 30.0, opacity: 0.6 }
+        Self { enabled: false, safe_deg: 15.0, cliff_deg: 30.0, opacity: 0.6, lod_depth: false }
     }
 }
 
@@ -102,7 +121,11 @@ impl TerrainOverlayParams {
             return OverlayUniforms::OFF;
         }
         OverlayUniforms {
-            mode: 1.0,
+            mode: if self.lod_depth {
+                overlay_mode::LOD_DEPTH
+            } else {
+                overlay_mode::SLOPE_HAZARD
+            },
             opacity: self.opacity.clamp(0.0, 1.0),
             safe_rad: self.safe_deg.to_radians(),
             cliff_rad: self.cliff_deg.to_radians(),
@@ -126,6 +149,8 @@ pub struct SetTerrainOverlay {
     pub safe_deg: Option<f32>,
     pub cliff_deg: Option<f32>,
     pub opacity: Option<f32>,
+    /// Switch the overlay to the LOD-depth view (still needs `enabled`).
+    pub lod_depth: Option<bool>,
 }
 
 #[on_command(SetTerrainOverlay)]
@@ -134,6 +159,9 @@ fn on_set_terrain_overlay(
     mut params: ResMut<TerrainOverlayParams>,
 ) {
     let ev = trigger.event();
+    if let Some(lod_depth) = ev.lod_depth {
+        params.lod_depth = lod_depth;
+    }
     if let Some(enabled) = ev.enabled {
         params.enabled = enabled;
     }

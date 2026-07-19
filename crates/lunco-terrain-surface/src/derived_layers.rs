@@ -57,10 +57,28 @@ use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
 
 /// Texels per side of each baked data layer. 1024² over the moonbase ±4 km
-/// window ≈ 8 m/texel — enough for the ≥15 m crater population that defines the
-/// far-field look; the streamed tiles' geometry + procedural FBM own everything
-/// finer. The bake (`res² · ao_dirs · ao_steps` height samples) stays a few
-/// seconds off-thread and is content-address cached, so it runs once per surface.
+/// window ≈ 8 m/texel.
+///
+/// REJECTED EXPERIMENT (2026-07-18): 2048. The map only blends in where it is
+/// FINER than the tile mesh — `tile_map_weights` needs
+/// `r = LAYER_RES / (2^depth · 48) > 0.75`, i.e. depth ≤ 4.8 at 1024 — while the
+/// over-zoom craterlets fade out going COARSER, reaching ~0 by depth 6. The two
+/// sources are gated by opposite criteria and do not overlap: across depths 5–6
+/// NEITHER contributes. That detail hole has per-tile edges, and a ~260 × 190 m
+/// tile-quantised island of texture is visible from 400 m up on moonbase.
+///
+/// 2048 doubles `r`, covering depth 5 — but the visible boundary is at 6/7, so it
+/// closed nothing observable while doubling bake time and quadrupling texture
+/// memory. Reverted. Covering depth 6 from the map side needs 4096 (~268 MB before
+/// mips); the cheap alternative is to close it from the MESH side by raising the
+/// scene's `lunco:layer:maxFeature` (moonbase authors 6.0; 12.0 puts depth 6 at
+/// amplitude 0.72). NOTE: the hole model itself is still UNPROVEN — a null result
+/// is not confirmation. Verify by rendering in `TerrainShaderMode::DebugLod` and
+/// checking whether the island boundary actually coincides with a depth boundary.
+///
+/// Do NOT close this by giving `w_normal` a floor: the map stores the FULL surface
+/// normal, not a residual, so blending it where the mesh already resolves that
+/// relief double-shades it.
 const LAYER_RES: usize = 1024;
 /// AO ray budget per texel (directions × march steps).
 const AO_DIRS: usize = 8;

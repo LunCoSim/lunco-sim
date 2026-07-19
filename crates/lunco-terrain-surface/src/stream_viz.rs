@@ -71,6 +71,19 @@ const CINEMATIC_TILE_RES: usize = 2049;
 /// Deepest LOD the viz refines to. Bounds the tile count near the camera. With
 /// error-driven selection only feature tiles (rims, peaks) actually reach it, so
 /// 8 (≈0.65 m vertex pitch on a ±4 km DEM) stays cheap while crater rims resolve.
+///
+/// REJECTED EXPERIMENT (2026-07-18): depth 9, to strengthen the over-zoom
+/// craterlet band. Measured −25% FPS (avg 86 → 65) with far worse frame minima
+/// and NO visible change. The premise was wrong: it assumed `Overzoom`'s default
+/// `max_radius = 2 m`, but a scene AUTHORS this (moonbase: `maxFeature = 6.0`),
+/// and [`Overzoom`]'s Nyquist gate is full at `r ≥ 3w` (`w = 2·step`), so on a
+/// ±4 km DEM depth 8 (`w = 1.3 m`, `r/w = 4.6`) is ALREADY at full amplitude.
+/// Depth 9 cannot raise an amplitude of 1.0 — it only buys cost.
+///
+/// The real craterlet cliff is at 7→6 (amplitude 0.72 → 0.02), and it is a
+/// property of the LAYER PARAMETERS, not of `MAX_DEPTH`. Read the authored
+/// `lunco:layer:maxFeature` before reasoning about where detail dies; library
+/// defaults will mislead you.
 const MAX_DEPTH: u8 = 8;
 /// On-screen error (px, at the canonical viewport) at which a node refines —
 /// the ONE detail-vs-cost knob of the error-driven metric. Smaller = finer.
@@ -283,6 +296,58 @@ fn coarse_base_coords() -> impl Iterator<Item = QuadCoord> {
 /// re-deriving hundreds. High enough that a fast camera converges in a few frames.
 const MAX_COVER_EDITS: usize = 64;
 
+/// The up-to-4 same-depth edge-neighbour coords of `c` (clipped at the root square).
+fn edge_neighbours(c: QuadCoord) -> impl Iterator<Item = QuadCoord> {
+    let side = 1i64 << c.depth;
+    [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)].into_iter().filter_map(move |(dx, dz)| {
+        let x = c.x as i64 + dx;
+        let z = c.z as i64 + dz;
+        (x >= 0 && z >= 0 && x < side && z < side)
+            .then(|| QuadCoord { depth: c.depth, x: x as u32, z: z as u32 })
+    })
+}
+
+/// Depth at which the cover covers `q`'s region from ABOVE: `Some(d ≤ q.depth)`
+/// if `q` itself or an ancestor is in the cover, `None` if the region is covered
+/// by strictly deeper nodes. Exactness (every point under exactly one cover node)
+/// is what makes these three cases exhaustive.
+fn covering_depth(cover: &HashSet<QuadCoord>, mut q: QuadCoord) -> Option<u8> {
+    loop {
+        if cover.contains(&q) {
+            return Some(q.depth);
+        }
+        q = q.parent()?;
+    }
+}
+
+/// Would replacing `p`'s four children by `p` break the 2:1 edge restriction?
+/// True iff some region edge-adjacent to `p` is covered at depth ≥ `p.depth + 2`.
+/// Tested on the depth-`p.depth+1` rim coords just outside `p`: by exactness,
+/// "neither the coord nor any ancestor is in the cover" ⟺ covered strictly
+/// deeper than `p.depth + 1`.
+fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool {
+    let d1 = p.depth + 1;
+    let side = 1i64 << d1;
+    let (x0, z0) = (2 * p.x as i64, 2 * p.z as i64);
+    let rim = [
+        (x0 - 1, z0),
+        (x0 - 1, z0 + 1), // left
+        (x0 + 2, z0),
+        (x0 + 2, z0 + 1), // right
+        (x0, z0 - 1),
+        (x0 + 1, z0 - 1), // below
+        (x0, z0 + 2),
+        (x0 + 1, z0 + 2), // above
+    ];
+    rim.into_iter().any(|(x, z)| {
+        x >= 0
+            && z >= 0
+            && x < side
+            && z < side
+            && covering_depth(cover, QuadCoord { depth: d1, x: x as u32, z: z as u32 }).is_none()
+    })
+}
+
 /// Evolve the PERSISTENT cover one bounded step toward what the metric wants.
 ///
 /// This replaces the global budget fit. That fit re-derived `pixel_error` every
@@ -305,6 +370,16 @@ const MAX_COVER_EDITS: usize = 64;
 /// The cover stays an exact, disjoint REPLACE cover throughout: a split swaps one
 /// node for its four children, a merge swaps four siblings for their parent, and
 /// nothing else touches it.
+///
+/// It also stays RESTRICTED (edge-adjacent nodes differ by ≤ 1 depth — the CDLOD
+/// morph contract; a 2-level seam has no band wide enough to blend it). The cover
+/// starts at `{ROOT}`, which is trivially restricted, so the invariant holds by
+/// induction: every merge is guarded ([`merge_violates_restriction`]) and every
+/// split first force-splits any coarser edge-neighbour (which, ON a restricted
+/// cover, is at most one level up — so the cascade is depth-1 per neighbour,
+/// recursing only through the chain it builds). The recursive `select_with_error`
+/// walk never enforced this (verified 2026-07-18: gap-2 pairs at its first step),
+/// which is one of the reasons it was replaced.
 fn evolve_cover(
     qt: &Quadtree,
     cover: &mut HashSet<QuadCoord>,
@@ -356,6 +431,13 @@ fn evolve_cover(
         if s < REFINE_HYSTERESIS {
             break; // sorted: nothing further out remains
         }
+        // Restriction guard — also what makes cascade splits STABLE: a node
+        // force-split for a neighbour's sake drifts past the hysteresis band, but
+        // merging it back would re-violate, so the guard refuses and the cover
+        // keeps its fixed point instead of flip-flopping.
+        if merge_violates_restriction(cover, p) {
+            continue;
+        }
         if merge_one(cover, p) {
             edits += 1;
         }
@@ -369,6 +451,14 @@ fn evolve_cover(
         for &(_, p) in merges.iter().rev() {
             if cover.len() <= budget {
                 break;
+            }
+            // Restricted merges are skipped, so a budget shrink can stay over
+            // budget for a frame or two — the deepest quads always merge freely
+            // (their neighbours can be at most one level deeper than THEM, never
+            // two below the parent), and each pass of bottom-up merging unlocks
+            // the next, so it converges instead of stalling.
+            if merge_violates_restriction(cover, p) {
+                continue;
             }
             merge_one(cover, p);
         }
@@ -384,16 +474,52 @@ fn evolve_cover(
         .collect();
     splits.sort_by(|a, b| a.0.total_cmp(&b.0));
     for &(_, c) in splits.iter() {
-        if edits >= MAX_COVER_EDITS || cover.len() + 3 > budget {
+        if edits >= MAX_COVER_EDITS {
             break;
         }
-        if !cover.remove(&c) {
+        if !cover.contains(&c) {
+            continue; // consumed by an earlier chain's cascade
+        }
+        // Splitting `c` puts depth `c.depth + 1` against every edge-adjacent
+        // region, so any neighbour covered COARSER than `c` must split first —
+        // the classic restricted-quadtree cascade. On a restricted cover each
+        // such neighbour is exactly one level up, and its own cascade needs (the
+        // ancestors the loop pushes transitively), so the chain stays short and
+        // the walk terminates at the root.
+        let mut chain = vec![c];
+        let mut i = 0;
+        while i < chain.len() {
+            let n = chain[i];
+            for nb in edge_neighbours(n) {
+                if let Some(nd) = covering_depth(cover, nb) {
+                    if nd < n.depth {
+                        let shift = nb.depth - nd;
+                        let a = QuadCoord { depth: nd, x: nb.x >> shift, z: nb.z >> shift };
+                        if !chain.contains(&a) {
+                            chain.push(a);
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        // The whole chain lands or none of it does — a partial cascade would leave
+        // the violation it exists to prevent. `continue`, not `break`: a later,
+        // cheaper split (no cascade) may still fit the remaining budget.
+        if edits + chain.len() > MAX_COVER_EDITS || cover.len() + 3 * chain.len() > budget {
             continue;
         }
-        for k in c.children() {
-            cover.insert(k);
+        // Coarsest first, so every forced split lands on an already-conforming rim.
+        chain.sort_by_key(|q| q.depth);
+        for q in chain {
+            if !cover.remove(&q) {
+                continue;
+            }
+            for k in q.children() {
+                cover.insert(k);
+            }
+            edits += 1;
         }
-        edits += 1;
     }
 }
 
@@ -809,6 +935,10 @@ fn tile_map_weights(depth: u32, map_res: usize) -> (f32, f32, f32) {
 /// baked maps correctly get different materials, and every tile of ONE terrain at
 /// one depth still shares a single one.
 pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMaps, depth: u32) {
+    // Depth for the LOD-depth analysis overlay. Keyed, not live: it is genuinely
+    // per-tile, and tiles already share one material PER DEPTH (the map weights
+    // below are the same function of depth), so this adds no material splits.
+    set_param(look, "lod_depth", ParamValue::F32(depth as f32));
     look.textures.insert(TextureLayer::Surface, maps.surface.clone());
     look.textures.insert(TextureLayer::Normal, maps.normal.clone());
     let (w_normal, w_ao, w_tone) = tile_map_weights(depth, maps.res);
@@ -1911,6 +2041,110 @@ mod draw_partition_tests {
             evolve_cover(&qt, &mut cover, [0.0, 0.0], h, &err, budget);
             assert_exact_cover(&cover);
             assert!(cover.len() <= budget);
+        }
+    }
+
+    /// Do two cover nodes share a boundary SEGMENT (not merely a corner)? Normalised
+    /// `[0,1]` extents are exact powers of two, so the touch/overlap tests are exact
+    /// — no epsilon.
+    fn edge_adjacent(a: QuadCoord, b: QuadCoord) -> bool {
+        let ext = |c: QuadCoord| {
+            let s = 0.5f64.powi(c.depth as i32);
+            (c.x as f64 * s, c.x as f64 * s + s, c.z as f64 * s, c.z as f64 * s + s)
+        };
+        let (ax0, ax1, az0, az1) = ext(a);
+        let (bx0, bx1, bz0, bz1) = ext(b);
+        let touch_x = ax1 == bx0 || bx1 == ax0;
+        let touch_z = az1 == bz0 || bz1 == az0;
+        let over_x = ax0 < bx1 && bx0 < ax1;
+        let over_z = az0 < bz1 && bz0 < az1;
+        (touch_x && over_z) || (touch_z && over_x)
+    }
+
+    /// Worst neighbour depth gap in a cover, with the offending pair.
+    fn worst_depth_gap(cover: &HashSet<QuadCoord>) -> (u32, Option<(QuadCoord, QuadCoord)>) {
+        let v: Vec<QuadCoord> = cover.iter().copied().collect();
+        let mut worst = 0u32;
+        let mut pair = None;
+        for i in 0..v.len() {
+            for j in (i + 1)..v.len() {
+                if !edge_adjacent(v[i], v[j]) {
+                    continue;
+                }
+                let gap = (v[i].depth as i32 - v[j].depth as i32).unsigned_abs();
+                if gap > worst {
+                    worst = gap;
+                    pair = Some((v[i], v[j]));
+                }
+            }
+        }
+        (worst, pair)
+    }
+
+    /// CONTROL for [`evolving_cover_stays_restricted`]. The recursive walk is known
+    /// restricted (`quadtree.rs::neighbour_depth_differs_by_at_most_one`), so running
+    /// its output through THIS checker must pass. If both tests fail, the checker is
+    /// wrong; only this one passing while the other fails indicts `evolve_cover`.
+    /// STILL IGNORED — the recursive `select_with_error` walk remains unrestricted
+    /// (gap-2 pairs at its first sweep step, verified 2026-07-18); only
+    /// `evolve_cover`, the live selector, enforces the restriction now. This test
+    /// exists as the CHECKER'S control: if `worst_depth_gap` is ever suspected of
+    /// false positives, run it here — a failure on the recursive walk with a gap
+    /// you can confirm by hand (as we did) validates the checker. Un-ignore only
+    /// if the recursive walk itself gets restriction enforcement.
+    /// (`quadtree.rs`'s `neighbour_depth_differs_by_at_most_one` misses the defect
+    /// because it samples a 64x64 grid at 250 m steps, +x direction only.)
+    #[test]
+    #[ignore]
+    fn the_recursive_walk_passes_the_same_restriction_checker() {
+        let qt = test_qt();
+        // Geometric error HALVES per level — the real shape of `measure_node_error`.
+        // A constant error gives every depth the same refine range, so the whole
+        // disc snaps to max_depth against a coarse outside: a degenerate setup that
+        // manufactures huge depth jumps regardless of the selector.
+        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
+        let prev = HashSet::new();
+        for step in 0..60 {
+            let x = -900.0 + (step as f64) * 30.0;
+            let cover: HashSet<QuadCoord> = qt
+                .select_with_error([x, 0.0], 2.0, &err, &prev)
+                .into_iter()
+                .map(|s| s.coord)
+                .collect();
+            let (gap, pair) = worst_depth_gap(&cover);
+            assert!(gap <= 1, "checker rejects the RECURSIVE walk at step {step}: {gap} at {pair:?}");
+        }
+    }
+
+    /// THE CDLOD RESTRICTION: edge-adjacent selected nodes must differ by at most one
+    /// level, because a single morph band is all that blends them — a 2-level jump has
+    /// no band wide enough and the seam becomes a hard edge (visible as a staircase
+    /// where sub-DEM detail switches on).
+    ///
+    /// `evolve_cover` enforces this by construction — guarded merges + cascade
+    /// splits, from a trivially-restricted `{ROOT}` start (see its docs). This test
+    /// is the proof it stays that way under a camera sweep; it FAILED (gap 2 at
+    /// step 4) before the guards existed.
+    #[test]
+    fn evolving_cover_stays_restricted() {
+        let qt = test_qt();
+        // Depth-decaying error — see the control test for why a constant one is
+        // degenerate here.
+        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
+        let budget = 40;
+        let mut cover = HashSet::new();
+
+        for step in 0..60 {
+            let x = -900.0 + (step as f64) * 30.0;
+            evolve_cover(&qt, &mut cover, [x, 0.0], 2.0, &err, budget);
+            let (gap, pair) = worst_depth_gap(&cover);
+            assert!(gap <= 1, "step {step}: neighbour depth gap {gap} > 1 at {pair:?}");
+        }
+        for step in 0..30 {
+            let h = 100.0 + (step as f64) * 400.0;
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], h, &err, budget);
+            let (gap, pair) = worst_depth_gap(&cover);
+            assert!(gap <= 1, "height step {step}: neighbour depth gap {gap} > 1 at {pair:?}");
         }
     }
 
