@@ -93,11 +93,20 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let wants_reflect_default = keywords.contains("reflect_default");
 
     // Reject unknown keywords so typos don't silently no-op.
-    // `serde` was previously opt-in; it's now always on. Accept it as
-    // a no-op for one release to avoid breaking callers that already
-    // wrote `#[Command(default, serde)]`.
+    // `serde` was previously opt-in and then a grace-period no-op; it's
+    // now always on, so a stale `#[Command(serde)]` fails loudly with
+    // the fix spelled out.
+    if keywords.contains("serde") {
+        return syn::Error::new_spanned(
+            &input,
+            "the `serde` keyword is retired: #[Command] always derives \
+             Serialize/Deserialize — remove `serde` from the attribute",
+        )
+        .to_compile_error()
+        .into();
+    }
     for kw in &keywords {
-        if !matches!(*kw, "default" | "serde" | "reflect_default") {
+        if !matches!(*kw, "default" | "reflect_default") {
             return syn::Error::new_spanned(
                 &input,
                 format!(

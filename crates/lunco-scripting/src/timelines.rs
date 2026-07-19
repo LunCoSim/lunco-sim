@@ -99,7 +99,10 @@ pub fn save_timeline_file(
     let dir = root.join(TIMELINES_DIR);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.json"));
-    std::fs::write(&path, json)?;
+    // Atomic replace: a kill mid-write must never leave a truncated timeline.
+    let tmp = dir.join(format!("{name}.json.tmp"));
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(path)
 }
 

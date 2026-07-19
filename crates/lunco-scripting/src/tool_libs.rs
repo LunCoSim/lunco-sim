@@ -111,7 +111,10 @@ pub fn save_tool_library_file(
     let dir = root.join(TOOLS_DIR);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.rhai"));
-    std::fs::write(&path, source)?;
+    // Atomic replace: a kill mid-write must never leave a truncated library.
+    let tmp = dir.join(format!("{name}.rhai.tmp"));
+    std::fs::write(&tmp, source)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(path)
 }
 

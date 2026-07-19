@@ -847,6 +847,12 @@ fn on_server_disconnected(
     mut serve_tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
     mut replay: ResMut<PendingJournalReplay>,
 ) {
+    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+    // ease of debugging. `TelemetrySubscriptions` is not reaped here: a
+    // disconnecting client's telemetry subscriptions outlive its session
+    // (needs a session/peer field on `TelemetrySubscription`, see
+    // `lunco-api/src/subscription.rs`). Revisit before multiplayer hardening
+    // (report_glm52.md CONC-1 / Tier B7).
     // Resolve the connection key via `RemoteId` when it's still present, else via
     // the entity itself — a despawning client entity may have lost `RemoteId`
     // before this observer runs, and its session must be freed regardless.

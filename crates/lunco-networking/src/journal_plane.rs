@@ -80,6 +80,13 @@ fn persisted_install_id() -> String {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+    // ease of debugging. Raw `std::fs::write` bypasses `lunco-storage`'s atomic
+    // rename: a kill mid-write leaves a zero-byte file, so the next start mints a
+    // new id and all journal entries authored under the old id become
+    // unattributable. Related: the wasm branch below (TODO(web-identity)) mints a
+    // fresh id every page reload — same identity-durability gap. Revisit before
+    // multiplayer hardening (INDEPENDENT-REVIEW-2026-07-19_agy.md NET-1).
     if let Err(e) = std::fs::write(&path, &fresh) {
         warn!("[journal-plane] could not persist install id to {}: {e}", path.display());
     } else {

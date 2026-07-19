@@ -313,6 +313,7 @@ impl Plugin for LunCoTelemetryPlugin {
         app.init_resource::<lunco_signal::SignalRegistry>();
         app.add_observer(retain_sample);
         app.add_observer(drop_signal_of_removed_channel);
+        app.add_observer(lunco_signal::drop_signals_of_removed_source);
         register_all_commands(app);
         // Engine health (FPS, frame time) as real telemetry channels — see
         // `spawn_engine_health_channels`.

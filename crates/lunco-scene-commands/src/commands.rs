@@ -542,6 +542,12 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let pos = job.position;
+        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
+        // for ease of debugging. `NetSpawn` carries no rotation, so replicated
+        // spawns always land at `Quat::IDENTITY`; a host-side non-identity
+        // orientation is wrong on clients until the first transform snapshot
+        // (static props may never be corrected). Revisit before multiplayer
+        // hardening (INDEPENDENT-REVIEW-2026-07-19_agy.md SCENE-1).
         let result = spawn_usd_entry(
             &mut commands,
             &asset_server,
@@ -599,6 +605,11 @@ pub struct MoveEntity {
     /// cell. At the moonbase (cells 2 km wide) a caller that passed
     /// `Transform.translation` was short by `cell × edge`, and the move
     /// teleported the object a whole cell — see `lunco_core::coords::grid_absolute`.
+    // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled for
+    // ease of debugging. `Vec3` here is f32 on the wire, violating the f64
+    // spatial mandate (AGENTS.md §4) — precision is lost before the handler's
+    // `DVec3` cast. Migrate to `[f64; 3]` before multiplayer hardening
+    // (INDEPENDENT-REVIEW-2026-07-19_agy.md SCENE-2).
     pub translation: Vec3,
 }
 
@@ -2393,6 +2404,12 @@ fn install_shader(
         if let Some(parent) = disk_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
+        // for ease of debugging. Raw `std::fs::write` bypasses the Storage API
+        // (no atomic write-to-temp + rename ⇒ kill mid-write truncates the
+        // shader). Deferred pending the Storage-trait delete/mkdir extension;
+        // revisit before multiplayer hardening
+        // (INDEPENDENT-REVIEW-2026-07-19_agy.md NET-2).
         match std::fs::write(&disk_path, source) {
             Ok(()) => info!("INSTALL_SHADER: wrote {}", disk_path.display()),
             Err(e) => warn!("INSTALL_SHADER: write {} failed: {e}", disk_path.display()),

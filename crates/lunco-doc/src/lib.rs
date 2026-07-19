@@ -795,11 +795,14 @@ impl<D: Document> DocumentHost<D> {
     /// Undo the most recent op. Returns `Ok(false)` if the undo stack is
     /// empty (nothing to undo), `Ok(true)` if an op was undone.
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
-        let Some(op) = self.undo_stack.pop() else {
+        // Peek first, pop only on success — a failed apply must leave the op
+        // on the stack so the user can retry.
+        let Some(op) = self.undo_stack.last().cloned() else {
             return Ok(false);
         };
         let forward_for_record = self.recorder.as_ref().map(|_| op.clone());
         let inverse = self.document.apply(op)?;
+        self.undo_stack.pop();
         if let (Some(rec), Some(fwd)) = (&self.recorder, &forward_for_record) {
             rec.record(fwd, &inverse);
         }
@@ -810,11 +813,13 @@ impl<D: Document> DocumentHost<D> {
     /// Redo the most recently undone op. Returns `Ok(false)` if the redo
     /// stack is empty, `Ok(true)` if an op was redone.
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
-        let Some(op) = self.redo_stack.pop() else {
+        // Peek first, pop only on success — mirrors `undo`.
+        let Some(op) = self.redo_stack.last().cloned() else {
             return Ok(false);
         };
         let forward_for_record = self.recorder.as_ref().map(|_| op.clone());
         let inverse = self.document.apply(op)?;
+        self.redo_stack.pop();
         if let (Some(rec), Some(fwd)) = (&self.recorder, &forward_for_record) {
             rec.record(fwd, &inverse);
         }

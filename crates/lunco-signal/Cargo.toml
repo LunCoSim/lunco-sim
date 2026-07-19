@@ -9,6 +9,7 @@ description = "The signal model — what timeseries data looks like BEFORE any v
 # see the crate description. `color_for_signal` (the one genuinely render-bound item in
 # the original module) deliberately stayed behind in `lunco-viz`.
 bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
 serde = { workspace = true }
 
 [lints]

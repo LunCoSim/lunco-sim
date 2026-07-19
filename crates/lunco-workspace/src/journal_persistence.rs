@@ -146,10 +146,23 @@ pub(crate) fn on_twin_added_load_journal(
                 j
             }
             Err(err) => {
+                // A corrupt journal must never be overwritten by the fresh
+                // empty one on the next save — that would destroy the twin's
+                // entire history. Preserve it as `journal.json.bad` (the
+                // `lunco-settings` pattern) before starting fresh.
+                let path = journal_path(&root);
+                let bad = path.with_extension("json.bad");
                 warn!(
-                    "[journal] could not parse {} — starting fresh: {err}",
-                    journal_path(&root).display(),
+                    "[journal] could not parse {} ({err}); preserving as {} and starting fresh",
+                    path.display(),
+                    bad.display(),
                 );
+                if let Err(err) = lunco_storage::write_file_sync(&bad, &bytes) {
+                    warn!(
+                        "[journal] could not preserve corrupt journal to {}: {err}",
+                        bad.display(),
+                    );
+                }
                 CanonicalJournal::new(target_id.clone(), AuthorId::local())
             }
         },
