@@ -381,8 +381,13 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
     }
 
-    # ── Comms mast + spike, centred ON TOP ──
-    def Cylinder "Antenna"
+    # ── Comms mast + spike — OFF for the film (director, 2026-07-20: "still
+    # a f***ing antenna", third ask). The whole comms cluster (mast, spike,
+    # dish) is deactivated; the film ship flies clean-topped. All three stay
+    # authored for the parametric-antenna/Earth-tracking work.
+    def Cylinder "Antenna" (
+        active = false
+    )
     {
         uniform token axis = "Y"
         double radius = 0.06
@@ -395,7 +400,9 @@ def Xform "DescentLander" (
 
     # The SPIKE — a slender pointed antenna standing straight up on the mast.
     # (Bevy renders an axis-Y cone apex-down, so a 180° flip makes it point UP.)
-    def Cone "CommSpike"
+    def Cone "CommSpike" (
+        active = false
+    )
     {
         uniform token axis = "Y"
         double radius = 0.13
@@ -413,7 +420,14 @@ def Xform "DescentLander" (
     # interior knots), v a cubic parabola profile y = r²/4f, f = 0.35 m. This is
     # the "lathe" spelling the engine's NURBS reader exists for; the sampled
     # surface is a true paraboloid, which a scaled Sphere never was.
-    def Xform "HighGainDish"
+    # Deactivated by director's call (2026-07-20): with the yaw spin added to
+    # the exposition beats the dish reads as clutter on camera, and the comms
+    # story is carried by the mast + spike. The NURBS reflector stays authored
+    # — it is the parametric-antenna base for the Earth-tracking gimbal work —
+    # flip active when that lands.
+    def Xform "HighGainDish" (
+        active = false
+    )
     {
         double3 xformOp:translate = (1.35, 2.5, 0.0)
         # Face the dish up-and-outboard, like a parked high-gain waiting for
