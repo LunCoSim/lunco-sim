@@ -553,6 +553,12 @@ fn apply_input_defaults_validated(
 pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
     let mut steppers: HashMap<Entity, (u64, String, SimulationSession)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
+    // Inputs the SOLVER rejected, deduped per (entity, name). `set_input` used to
+    // be `let _ =` on this per-tick path, which made the single most damaging
+    // failure mode in the whole co-sim silent: rumoca demotes a bound `input` to
+    // an algebraic, so an input that never became a runtime slot fails here on
+    // EVERY tick while the model quietly keeps its declared default forever.
+    let mut rejected_inputs: std::collections::HashSet<(Entity, String)> = Default::default();
     // DAE cache per entity — enables instant Reset and fast Step auto-init
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
     // Lock-free publish stream per entity (Phase A of the multi-sim
@@ -911,7 +917,21 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
-                                for (name, val) in inputs { let _ = stepper.set_input(&name, val); }
+                                for (name, val) in inputs {
+                                    if stepper.set_input(&name, val).is_err()
+                                        && rejected_inputs.insert((entity, name.clone()))
+                                    {
+                                        warn!(
+                                            "[modelica] {entity:?} rejected input '{name}' — the \
+                                             compiled model exposes no such runtime slot, so the \
+                                             wired value is DISCARDED and the model keeps its \
+                                             declared default forever. Usual cause: the `.mo` \
+                                             declares `input Real {name} = <default>`, which \
+                                             rumoca demotes to an algebraic (see \
+                                             `strip_input_defaults`)."
+                                        );
+                                    }
+                                }
                                 // Macro step: integrate the requested `dt` — the
                                 // gap between the model's clock and the world's —
                                 // as a fixed ladder of micro-steps (A3/A4).

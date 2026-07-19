@@ -177,6 +177,10 @@ fn update_world_bounds(
     };
 
     if *bounds != next {
+        // The bounds ARE the diagnostic's whole opinion, and `None` silently
+        // disables it. Logging the transition is what distinguishes "nothing
+        // escaped" from "this build had no idea where the world was".
+        info!("[physics] world bounds: {:?} -> {:?}", *bounds, next);
         *bounds = next;
     }
 }

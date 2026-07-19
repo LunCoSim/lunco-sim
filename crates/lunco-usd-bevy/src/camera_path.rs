@@ -71,7 +71,8 @@ use crate::{UsdPrimPath, UsdRead};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain};
+use lunco_core::{on_command, Command};
+use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode};
 
 /// Which standard basis the curve interpolates with (`uniform token basis`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +215,130 @@ pub fn release_camera_path_gate(domain: &mut TimeDomain, parent_t: f64) {
     }
     domain.offset = -parent_t;
     domain.scale = 1.0;
+}
+
+/// What [`CameraPathTransport`] does to the addressed path.
+///
+/// `serde` as well as `Reflect`: `#[Command]` types cross the HTTP/MCP wire, so
+/// every field type has to be (de)serializable — the variant names are the wire
+/// form (`"Play"` / `"Pause"` / `"Rewind"`).
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, lunco_core::serde::Serialize, lunco_core::serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub enum CameraPathAction {
+    /// Roll the shot: release the engine hold (idempotent) **and** clear any user
+    /// pause. The one explicit way to start a path outside a recording.
+    #[default]
+    Play,
+    /// User pause. Leaves the gate alone — a paused shot that has not started yet
+    /// stays held, and `Play` is still what starts it.
+    Pause,
+    /// Scrub the playhead back to the path's range start. Does not change
+    /// play/pause, so rewinding a rolling shot restarts it and rewinding a paused
+    /// one parks it at frame 0 ready to `Play`.
+    Rewind,
+}
+
+/// **Transport verb for an authored camera path** — play / pause / rewind, addressed
+/// by the path prim's USD path (full path or its leaf, like [`SetActiveCamera`]).
+///
+/// Exists because path release is otherwise owned entirely by the offline recorder
+/// (`start_camera_paths_when_recording_starts` in `lunco-sandbox`), and in an
+/// ordinary interactive session no recorder ever runs — so an authored path would
+/// sit held at its first frame forever. This is the deliberate, *explicit* answer to
+/// that: one verb the user (or a script, or the HTTP API) invokes. It is NOT a
+/// second automatic release. Two things racing to start the same shot on their own
+/// initiative is exactly the non-determinism the recorder-owned release was
+/// introduced to kill; adding a fallback here would reintroduce it.
+///
+/// Typed [`Command`], so it is reachable everywhere with no per-language binding:
+/// rhai `cmd("CameraPathTransport", #{ path: "/World/Shot01", action: "Play" })`,
+/// the HTTP API, and MCP.
+///
+/// # Per-shot camera paths are now viable
+///
+/// The campaign is authored as ONE continuous 58 s curve spanning six shots. That
+/// was forced by the *previous* design, where every gate released simultaneously on
+/// a single global terrain-ready event — several short per-shot paths would all have
+/// started at once, so only a curve that was already continuous could survive it.
+///
+/// That constraint is gone. Release is now per-path and demand-driven: the recorder
+/// releases on its own start edge, and this command addresses ONE path by prim path.
+/// A scene can therefore author a separate short `BasisCurves` path per shot and
+/// drive each independently. Nothing in the campaign does that yet — noted so
+/// whoever authors shots next knows they are no longer stuck with one long curve.
+#[Command(default)]
+pub struct CameraPathTransport {
+    /// The path prim's USD path (e.g. `/World/Shots/Shot01`), or just its leaf
+    /// (`Shot01`).
+    pub path: String,
+    /// Play, pause, or rewind.
+    pub action: CameraPathAction,
+}
+
+/// Handler for [`CameraPathTransport`]. See that type for why this verb exists.
+///
+/// Reaching the clock takes two hops, because a path owns *two* domain entities and
+/// they mean different things (see `resolve_camera_paths`):
+/// `CameraPath::domain` is the PLAYBACK domain (carries the playhead), and its
+/// `TimeDomain::parent` is the GATE domain (carries the engine hold, `scale == 0`).
+/// Play has to touch both — the gate to start the clock, the playhead to clear a
+/// user pause — which is why this cannot just be a `release_camera_path_gate` call.
+#[on_command(CameraPathTransport)]
+pub fn camera_path_transport(
+    trigger: On<CameraPathTransport>,
+    resolved: Res<ResolvedDomains>,
+    q_paths: Query<(&UsdPrimPath, &CameraPath)>,
+    q_gate: Query<&CameraPathGate>,
+    // One query for both entities: the playback domain and the gate domain are both
+    // `TimeDomain`s. Borrows are taken one at a time via `get_mut`, so this is fine
+    // even though the two entities are fetched from the same query.
+    mut q_domains: Query<(&mut TimeDomain, Option<&mut Playback>)>,
+) {
+    let want = cmd.path.trim();
+    let hit = q_paths.iter().find(|(p, _)| {
+        let s = p.path.as_str();
+        s == want || s.rsplit('/').next() == Some(want)
+    });
+    let Some((_, path)) = hit else {
+        warn!("[camera-path] CameraPathTransport: no camera path at '{want}'");
+        return;
+    };
+
+    // Hop 1: the playback domain — the playhead and the user's play/pause bit.
+    let Ok((playback_domain, playback)) = q_domains.get_mut(path.domain) else {
+        warn!("[camera-path] CameraPathTransport: path '{want}' has no playback domain");
+        return;
+    };
+    let gate_entity = playback_domain.parent;
+    if let Some(mut pb) = playback {
+        match cmd.action {
+            CameraPathAction::Play => pb.mode = TransportMode::Playing,
+            CameraPathAction::Pause => pb.mode = TransportMode::Paused,
+            // `start` is the authored range start, which `resolve_camera_paths` sets
+            // to 0.0 — go through the field rather than hardcoding it, so a path with
+            // an authored non-zero range rewinds to its own beginning.
+            CameraPathAction::Rewind => pb.head = pb.start,
+        }
+    }
+
+    // Hop 2: the gate domain — the engine hold. Only `Play` touches it, and only to
+    // release. Nothing here ever re-freezes a gate: re-arming would make the shot's
+    // time origin depend on when it was re-armed, which is the reproducibility bug
+    // the recorder-owned release fixed. `Rewind` moves the PLAYHEAD instead, which
+    // is the deterministic way back to frame 0.
+    if cmd.action == CameraPathAction::Play {
+        let Some(gate_entity) = gate_entity else { return };
+        let Ok(parent) = q_gate.get(gate_entity).map(|g| g.parent) else { return };
+        let Some(parent_t) = resolved.get(parent) else {
+            warn!("[camera-path] CameraPathTransport: '{want}' gate parent clock not resolved yet");
+            return;
+        };
+        if let Ok((mut gate_domain, _)) = q_domains.get_mut(gate_entity) {
+            // Idempotent — a no-op on an already-rolling shot.
+            release_camera_path_gate(&mut gate_domain, parent_t);
+        }
+    }
+    info!("[camera-path] {want}: {:?}", cmd.action);
 }
 
 /// Resolve `BasisCurves` prims carrying `lunco:path:camera` into [`CameraPath`]s,

@@ -91,7 +91,10 @@ impl Plugin for LunCoMobilityPlugin {
                FixedUpdate,
                differential_coupling_system
                    .run_if(any_with_component::<DifferentialCoupling>)
-                   .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
+                   // Applies an equal-and-opposite force pair at the two rocker
+                   // anchors, so it accumulates across a physics hold exactly as the
+                   // wheel systems do. Same gate, same reason.
+                   .run_if(lunco_physics::physics_is_live),
            )
            .add_systems(FixedUpdate, (
                 suspension_system,
@@ -115,7 +118,14 @@ impl Plugin for LunCoMobilityPlugin {
                // and the per-chassis `RigidBody::Kinematic` guard inside each wheel
                // system already skips those. So host/standalone simulate every
                // rover (unchanged) and a client simulates only its owned one.
-               |t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0));
+               //
+               // `physics_is_live`, NOT a bare `Time<Virtual>` check. These systems
+               // write into avian's force accumulator, which only the physics step
+               // clears — and a physics HOLD (a frozen cinematic beat) deliberately
+               // leaves virtual time running, so the old virtual-clock gate was open
+               // for exactly the window that must be closed. It still covers the
+               // virtual pause/speed case it was written for; see `physics_is_live`.
+               lunco_physics::physics_is_live));
 
         // Expose every FSW's logical command ports (a rover's throttle/steer/brake,
         // etc.) through the shared port substrate, so the ONE generic `SetPorts`
@@ -474,12 +484,23 @@ fn apply_wheel_suspension(
                         wheel_hub_velocity(lin_vel, ang_vel, world_pos, forces.position().0);
                     let relative_vel = velocity_at_wheel.dot(ray_dir_world);
 
+                    // Clamped to `MAX_SUSPENSION_FORCE_N`, which this path was
+                    // silently missing — the constant existed and was applied only
+                    // by the JOINT suspension (`differential_coupling_system`), so
+                    // the raycast strut, the one every rover actually uses, had no
+                    // ceiling at all. The clamp is what its own doc says it is: a
+                    // bound on a deeply-compressed strut or a numerical velocity
+                    // spike, so neither can inject an explosive impulse. It is a
+                    // backstop, not the fix for the frozen-shot accumulation — that
+                    // is `physics_is_live` on the system — but an unbounded force
+                    // law is worth closing on its own.
                     let total_force_mag = suspension_force_mag(
                         compression,
                         susp.spring_k,
                         relative_vel,
                         susp.damping_c,
-                    );
+                    )
+                    .clamp(0.0, MAX_SUSPENSION_FORCE_N);
 
                     let force_vec = hit.normal * total_force_mag;
                     if apply_force {

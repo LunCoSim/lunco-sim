@@ -254,7 +254,55 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             //
             // (`DirectionalLight::illuminance` really is lux, and `RectLight` really
             // is lumens — see below. The three are not interchangeable.)
-            let intensity_lm = read_intensity_with_exposure(reader, sdf_path, 1000.0);
+            let base_lm = read_intensity_with_exposure(reader, sdf_path, 1000.0);
+
+            // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
+            //
+            // Both were previously unread, so authoring a radius had ZERO effect and
+            // USD's area-scaling rule was simply absent.
+            //
+            // The spec (`crates/lunco-usd/schema/core/usdLux.usda`):
+            //   * `LightAPI.inputs:intensity` — "scales the brightness of the light
+            //     linearly"; `inputs:exposure` — "scales ... exponentially" (2^e).
+            //   * `LightAPI.inputs:normalize` (default `0`) — "Controls if the light
+            //     power should be normalized by the surface area of the light. If
+            //     enabled, the light power remains constant if the light's area or
+            //     angular size is changed."
+            //   * `SphereLight.inputs:radius` (default `0.5`) — "the radius of the
+            //     sphere".
+            //
+            // Read the normalize clause in reverse and it defines the DEFAULT case:
+            // if power is only constant-under-area-change when normalize is ON, then
+            // with it OFF `intensity` fixes RADIANCE and total power must scale with
+            // the emitting area. For a sphere, A = 4πr². So:
+            //
+            //     Φ = intensity · 2^exposure · (normalize ? 1 : A(r)/A(r₀))
+            //     A(r)/A(r₀) = (4πr²)/(4πr₀²) = (r/r₀)²
+            //
+            // i.e. the area term is quadratic in radius and the 4π cancels.
+            //
+            // WHY THE RATIO, against the schema-default r₀ = 0.5, rather than a bare
+            // 4πr²: the absolute `intensity`→lumens mapping is a convention this
+            // codebase already chose (see the units comment above), not something the
+            // spec fixes — UsdLux `intensity` is dimensionless. Only the RATIO between
+            // two radii is observable, and expressing it against the schema default
+            // makes an unauthored radius exactly neutral (`(0.5/0.5)² = 1`). Using a
+            // bare 4πr² would instead have silently rescaled every already-calibrated
+            // light in the asset library by π on a change that authored nothing.
+            const DEFAULT_SPHERE_RADIUS: f32 = 0.5; // UsdLux SphereLight schema default
+            let light_radius =
+                get_attribute_as_f32(reader, sdf_path, "inputs:radius").unwrap_or(DEFAULT_SPHERE_RADIUS);
+            let normalize =
+                get_attribute_as_bool(reader, sdf_path, "inputs:normalize").unwrap_or(false);
+            // `max(0)`: a negative radius is meaningless and would still square to a
+            // positive scale, quietly brightening the light.
+            let area_scale = if normalize {
+                1.0
+            } else {
+                (light_radius.max(0.0) / DEFAULT_SPHERE_RADIUS).powi(2)
+            };
+            let intensity_lm = base_lm * area_scale;
+
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))
                 .unwrap_or(Color::WHITE);
@@ -288,15 +336,25 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     color,
                     intensity: intensity_lm,
                     range,
+                    // The same `inputs:radius`, now also as the light's physical
+                    // source size — which is what the attribute geometrically MEANS.
+                    // Bevy uses it for soft shadow penumbra / specular highlight size,
+                    // so an authored radius reads as a bigger, softer source as well
+                    // as a brighter one.
+                    radius: light_radius.max(0.0),
                     shadow_maps_enabled,
                     inner_angle,
                     outer_angle,
                     ..default()
                 });
                 info!(
-                    "[usd-bevy] {} SphereLight (SpotLight) intensity={} lm, range={} m, cone={} deg",
+                    "[usd-bevy] {} SphereLight (SpotLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m, cone={} deg",
                     sdf_path.as_str(),
                     intensity_lm,
+                    base_lm,
+                    area_scale,
+                    light_radius,
+                    normalize,
                     range,
                     cone_angle_deg
                 );
@@ -307,13 +365,19 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     color,
                     intensity: intensity_lm,
                     range,
+                    // See the SpotLight arm: `inputs:radius` is the source size too.
+                    radius: light_radius.max(0.0),
                     shadow_maps_enabled,
                     ..default()
                 });
                 info!(
-                    "[usd-bevy] {} SphereLight (PointLight) intensity={} lm, range={} m",
+                    "[usd-bevy] {} SphereLight (PointLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m",
                     sdf_path.as_str(),
                     intensity_lm,
+                    base_lm,
+                    area_scale,
+                    light_radius,
+                    normalize,
                     range
                 );
             }
@@ -370,6 +434,29 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
 /// lights and recomputes the scene-wide ambient from authored domes (zero
 /// when the scene authors none). Runs again harmlessly if more lights
 /// arrive — the computation is idempotent over current world state.
+///
+/// # Why assigning the SUM is correct, and why it used to be a bug
+///
+/// UsdLux semantics are additive — lights compose, and one light's presence must
+/// never delete another's contribution. Summing the authored domes is exactly
+/// that, and assigning the sum is safe **because authored domes are now the only
+/// contributor to uniform ambient**.
+///
+/// That was not true before. A scene could also author
+/// `lunco:env:ambientBrightness` on a custom environment prim, which a separate
+/// projector (`lunco-sandbox::project_env_settings`) assigned into this same
+/// field. Two writers, one field, and load order decided the winner. Worse, a
+/// *textured* dome deliberately contributes no [`UsdDomeAmbient`] — its texture
+/// becomes IBL instead, which is the strictly better version of the same quantity
+/// — so authoring a starfield sky drove this sum to zero and silently deleted the
+/// scene's regolith-bounce fill. The symptom was a scene that rendered correctly
+/// until someone gave it a sky, and then rendered dark.
+///
+/// The custom attribute is deleted: uniform ambient is spelled as an untextured
+/// `UsdLuxDomeLight`, the standard USD way, with deliberately no fallback read of
+/// the old name. If a second independent ambient contributor is ever introduced,
+/// this must become a composition of tracked contributions rather than an
+/// assignment — that is precisely what would reintroduce the bug above.
 pub(crate) fn on_usd_light_added(
     _trigger: On<Add, UsdAuthoredLight>,
     fallbacks: Query<Entity, With<FallbackSceneLight>>,

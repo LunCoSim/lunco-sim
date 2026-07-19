@@ -7,6 +7,11 @@ edition = "2021"
 bevy = { workspace = true }
 avian3d = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+# `physics_is_live` — the run condition gating force application on the solver
+# actually stepping. The wheel systems write into avian's force accumulator, which
+# only the physics step clears; the `Time<Virtual>` gate they used to carry is open
+# during a physics hold and let force pile up across a frozen shot.
+lunco-physics = { path = "../lunco-physics" }
 # Language-neutral hook registry — backs the scripted (rhai) drive kernel:
 # `apply_drive_mix` falls back to a hook named by `DriveMix.kernel` when it isn't a
 # built-in `ControlKernelRegistry` entry. Dependency-free (no rhai/bevy).

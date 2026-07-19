@@ -185,10 +185,6 @@ fn on_tick(me) {
         }
     }
 
-    if this.dbg == () || sim_tick() - this.dbg > 200 {
-        this.dbg = sim_tick();
-        print("PLUMEDBG t=" + t + " emis=" + er + "," + eg + "," + eb + " lum=" + lum + " area=" + area + " I=" + intensity);
-    }
     set(light, "PointLight.intensity", intensity);
     // Emitter radius grows with the plume. Bevy treats `PointLight::radius` as a
     // physical source size, so this softens the terminator of the light pool

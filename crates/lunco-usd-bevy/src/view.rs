@@ -177,4 +177,81 @@ mod compose_tests {
             "StageView must read the cross-file inherited composed opinion"
         );
     }
+
+    /// A local `over` must win over the prim it overrides through a `references` arc.
+    ///
+    /// This is the exact composition shape the video campaign's episode scenes use:
+    /// an episode scene `references` a base scene and then re-authors the look of one
+    /// of its prims with a sibling `over`, so the base stays usable on its own (it
+    /// doubles as the interactive driving tutorial) while the episode gets film
+    /// lighting out of the same source.
+    ///
+    /// Asserted because it silently was NOT happening. MEASURED: episode 01 rendered
+    /// its ground at the BASE scene's albedo — mean luma 135/255, a near-white slab —
+    /// while its `over "Ground"` authored `(0.13, 0.125, 0.12)` plus a
+    /// `material:binding` to the regolith shader. Both opinions were dropped. Episode
+    /// 02, which authors the identical look as a plain `def` in its own scene,
+    /// rendered at luma 63/255 under an identical sun and exposure.
+    ///
+    /// An inert `over` is the worst failure mode available here: the scene reads as
+    /// though the look were authored, review passes, and the render quietly uses the
+    /// base.
+    #[test]
+    fn local_over_wins_over_a_referenced_prims_opinion() {
+        let dir = std::env::temp_dir().join("lunco_over_ref_test");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+
+        // The base: the shape of `assets/scenes/sandbox/lander_test.usda`.
+        std::fs::write(
+            dir.join("base.usda"),
+            "#usda 1.0\n\
+             def Xform \"Base\"\n\
+             {\n\
+                 def Cube \"Ground\"\n\
+                 {\n\
+                     float lunco:test:albedo = 0.35\n\
+                 }\n\
+             }\n",
+        )
+        .expect("write base");
+
+        // The episode: reference the base, then override that ground's look.
+        std::fs::write(
+            dir.join("episode.usda"),
+            "#usda 1.0\n\
+             def Xform \"Episode\" (\n\
+                 prepend references = @./base.usda@</Base>\n\
+             )\n\
+             {\n\
+                 over \"Ground\"\n\
+                 {\n\
+                     float lunco:test:albedo = 0.13\n\
+                 }\n\
+             }\n",
+        )
+        .expect("write episode");
+
+        let stage = compose_file_to_stage(&dir.join("episode.usda")).expect("compose episode");
+        let view = StageView::new(&stage);
+        let ground = SdfPath::new("/Episode/Ground").unwrap();
+
+        // First: does the referenced child exist at all under the referencing prim?
+        // If this fails the `over` is moot — the reference arc itself never brought
+        // the child across, which is a different (larger) bug.
+        let children = view.prim_children(&SdfPath::new("/Episode").unwrap());
+        assert!(
+            children.iter().any(|c| c.as_str().ends_with("/Ground")),
+            "the `references` arc must bring the base's `Ground` child across; got {children:?}"
+        );
+
+        let albedo = view
+            .value::<f32>(&ground, "lunco:test:albedo")
+            .expect("composed ground must carry the attribute at all");
+
+        assert!(
+            (albedo - 0.13).abs() < 1e-4,
+            "the local `over` must win over the referenced base opinion, got {albedo} \
+             (0.35 means the `over` was dropped and the base opinion survived)"
+        );
+    }
 }

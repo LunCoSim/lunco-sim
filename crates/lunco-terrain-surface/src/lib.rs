@@ -83,7 +83,7 @@ pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{
     DemHeightField, LodFrozen, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainNodeErrors,
     TerrainShaderMode,
-    TerrainStreamStatus, TileShadowCache,
+    TerrainStreamLockstep, TerrainStreamStatus, TileShadowCache,
 };
 pub use terrain_layers::{
     default_overzoom_layer, edit_attr_writes, make_crater_layer, parse_edit, rock_instance_layer,

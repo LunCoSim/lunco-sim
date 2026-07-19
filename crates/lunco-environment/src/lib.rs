@@ -477,11 +477,24 @@ impl Plugin for EnvironmentPlugin {
 
         // Sim core — render-free. Gravity computation, force application, and
         // the gravity→cosim bridge.
+        //
+        // `apply_gravity_to_rigid_bodies` is gated on `physics_is_live`; nothing
+        // else here is. Gravity is the only system in this set that writes into
+        // avian's FORCE ACCUMULATOR, and that accumulator is cleared by the physics
+        // step — so a tick where the step is skipped leaves the force in place to be
+        // added to again next tick. Ungated, it integrated to ~4 MN across episode
+        // 2's 28 s of frozen shots and fired the rover through the ground at
+        // 224.20 m/s the instant the hold released. The other systems in this set
+        // publish a VALUE (cosim input, IMU field) rather than accumulate one, so
+        // they must keep running while physics is held — a frozen beat still wants a
+        // correct gravity reading.
         app.add_systems(
             FixedUpdate,
             (
                 compute_local_gravity.in_set(EnvironmentSet::Compute),
-                apply_gravity_to_rigid_bodies.in_set(EnvironmentSet::Apply),
+                apply_gravity_to_rigid_bodies
+                    .in_set(EnvironmentSet::Apply)
+                    .run_if(lunco_physics::physics_is_live),
                 // Publish gravity into the cosim graph after it's computed and
                 // before cosim copies outputs→inputs, so models read the real
                 // local value the same tick.

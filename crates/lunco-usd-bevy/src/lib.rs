@@ -296,7 +296,10 @@ impl Plugin for UsdBevyPlugin {
 
 // Generates `register_all_commands(app)` (register_type + add_observer for the
 // listed command handlers). Called from `UsdBevyPlugin::build`.
-lunco_core::register_commands!(camera_switch::on_set_active_camera);
+lunco_core::register_commands!(
+    camera_switch::on_set_active_camera,
+    camera_path::camera_path_transport,
+);
 
 /// A Bevy Asset representing a loaded USD Stage.
 ///

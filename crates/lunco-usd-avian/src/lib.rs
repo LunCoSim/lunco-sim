@@ -766,6 +766,20 @@ fn extract_avian_prim<R: UsdRead>(
     }
 
     if has_rigid_body_api {
+        // Always insert a Mass (default 1000 kg) — gravity filters on `With<Mass>`.
+        //
+        // FIRST, before the `Collider` and `RigidBody` below, and that order is
+        // load-bearing. `Commands` apply in insertion order and observers fire at
+        // apply time, so avian's `On<Add, RigidBody>` mass observer (avian3d
+        // `dynamics/rigid_body/mass_properties/mod.rs:284-289`) runs the instant
+        // `RigidBody` lands. Applied afterwards, as this used to be, the overrides
+        // and their `NoAuto*` markers arrive too late to be seen: that observer has
+        // already derived `ComputedAngularInertia` from collider geometry at
+        // `ColliderDensity` 1.0, which is exactly the lander's measured
+        // 159.3/274.3/229.4. Authoring the overrides first means the observer's very
+        // first pass already sees `NoAuto*` and honours them.
+        apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
+
         // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
         let compound_shapes = collect_child_colliders_from_usd(reader, sdf_path);
         if !compound_shapes.is_empty() {
@@ -785,8 +799,6 @@ fn extract_avian_prim<R: UsdRead>(
         };
         commands.entity(entity).try_insert((body, mobility, lunco_core::SelectableRoot));
 
-        // Always insert a Mass (default 1000 kg) — gravity filters on `With<Mass>`.
-        apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else if has_collision_api {
         // ── COLLIDER PRIM, no body of its own ──
@@ -808,13 +820,18 @@ fn extract_avian_prim<R: UsdRead>(
     } else {
         // ── FALLBACK: legacy `physics:rigidBodyEnabled` ──
         if let Some(true) = reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED) {
+            // Mass props FIRST — see the note in the `has_rigid_body_api` arm. This
+            // arm was the worse of the two: it inserted `RigidBody`, then the mass
+            // props, then the collider, so BOTH of avian's recompute triggers (the
+            // `Add, RigidBody` observer and the `Insert, RigidBodyColliders` one)
+            // fired after the overrides and clobbered them.
+            apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
             commands.entity(entity).try_insert((
                 RigidBody::Kinematic,
                 lunco_core::Mobility::Dynamic,
                 ShouldBeDynamic,
                 lunco_core::SelectableRoot,
             ));
-            apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
             add_collider_from_usd(commands, entity, reader, sdf_path);
         } else if let Some(false) = reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED) {
             commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
@@ -1508,8 +1525,42 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
     reader: &R,
     sdf_path: &SdfPath,
 ) {
-    let mass = reader.real_f32(sdf_path, ptok::A_MASS).unwrap_or(1000.0);
-    commands.entity(entity).try_insert(Mass(mass));
+    // Each of `Mass` / `AngularInertia` / `CenterOfMass` is only an OVERRIDE if the
+    // matching `NoAuto*` marker is present. Without it Avian recomputes the
+    // `Computed*` component from collider geometry and density and throws the
+    // authored value away — see `MassPropertyHelper::update_mass_properties`, where
+    // the authored component is read ONLY inside `if no_auto_*`. These markers were
+    // missing, so `physics:mass`, `physics:diagonalInertia` and `physics:centerOfMass`
+    // were all silently inert, as were the `lunco-cosim` mass-props write ports that
+    // set the same components.
+    //
+    // The angular inertia is what made this expensive: the descent lander carried
+    // `physics:mass = 2000` and ran with the inertia of the ~69 kg body its collider
+    // volume implies at default density — measured `inertia_xx` 159 kg m^2 against
+    // the 4625 its hull geometry gives. ~29x too easy to spin, so every disturbance
+    // torque was amplified ~29x and the vehicle was thrown to 25 rad/s by the weld to
+    // its rover before any stabiliser could answer.
+    //
+    // Note the interaction, which is why `NoAutoMass` alone fixes the common case:
+    // with mass authored and inertia NOT authored, Avian runs
+    // `set_mass(mass, /*update_angular_inertia*/ !no_auto_inertia)` — it RESCALES the
+    // collider-derived inertia to the authored mass. So a body that authors only
+    // `physics:mass` still gets a consistent tensor, which is the UsdPhysics
+    // expectation.
+    // `NoAutoMass` goes on ONLY when the mass was actually authored. The 1000 kg
+    // fallback is a "keep gravity alive" default, not a statement about the body,
+    // and marking it authoritative would pin that number onto every rigid body that
+    // never asked for one — wheels included — overriding the mass Avian derives from
+    // their colliders and collapsing raycast-wheel suspensions. Authored mass wins;
+    // unauthored mass stays automatic, exactly as before.
+    match reader.real_f32(sdf_path, ptok::A_MASS) {
+        Some(mass) => {
+            commands.entity(entity).try_insert((Mass(mass), NoAutoMass));
+        }
+        None => {
+            commands.entity(entity).try_insert(Mass(1000.0));
+        }
+    }
 
     // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
     // of the inertia tensor in the principal frame. `physics:principalAxes` (a
@@ -1518,15 +1569,20 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
     // representable here (Avian stores principal + frame), matching the
     // UsdPhysics schema.
     if let Some(diag) = read_vec3_attribute(reader, sdf_path, ptok::A_DIAGONAL_INERTIA) {
-        commands.entity(entity).try_insert(AngularInertia {
-            principal: diag.as_vec3(),
-            local_frame: Quat::IDENTITY,
-        });
+        commands.entity(entity).try_insert((
+            AngularInertia {
+                principal: diag.as_vec3(),
+                local_frame: Quat::IDENTITY,
+            },
+            NoAutoAngularInertia,
+        ));
     }
 
     // G2 — authored centre of mass (body-frame offset).
     if let Some(com) = read_vec3_attribute(reader, sdf_path, ptok::A_CENTER_OF_MASS) {
-        commands.entity(entity).try_insert(CenterOfMass(com.as_vec3()));
+        commands
+            .entity(entity)
+            .try_insert((CenterOfMass(com.as_vec3()), NoAutoCenterOfMass));
     }
 
     if let Some(d) = reader.real_f32(sdf_path, PHYSX_LINEAR_DAMPING) {
