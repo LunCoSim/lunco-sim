@@ -196,7 +196,7 @@ pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
     let assets_root = lunco_assets::shipped_asset_root(path);
     let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
         Some(rel) => {
-            lunco_assets::engine_asset_uri(&rel.to_string_lossy().replace('\\', "/"))
+            lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(rel))
         }
         // NOT the raw path: every id in the map must be keyed by `canonicalize`,
         // the same function the resolver's `create_identifier` applies, or the

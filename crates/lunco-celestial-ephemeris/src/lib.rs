@@ -621,9 +621,6 @@ fn spawn_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
 /// Update: poll outstanding fetches; on success write the CSV cache and
 /// insert the parsed vectors into the shared map so `position()` sees
 /// them immediately. Cheap no-op once all tasks have drained.
-// Native-only (`cfg` below): the CSV cache write cannot run on wasm, which is the
-// failure mode `disallowed_methods` exists to catch.
-#[allow(clippy::disallowed_methods)]
 #[cfg(not(target_arch = "wasm32"))]
 fn poll_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
     use bevy::tasks::{block_on, futures_lite::future};
@@ -639,14 +636,8 @@ fn poll_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
             Some(Some(clean_csv)) => {
                 // Best-effort cache write: a failure here only means the next
                 // launch re-fetches, so it's non-fatal — but it should not be
-                // invisible. (TODO CQ-701: route through `lunco_storage` once
-                // this crate takes the dep, for atomic write + wasm parity.)
-                if let Some(parent) = csv_path.parent() {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        warn!("[ephemeris] could not create cache dir {}: {e}", parent.display());
-                    }
-                }
-                if let Err(e) = std::fs::write(&csv_path, &clean_csv) {
+                // invisible.
+                if let Err(e) = lunco_storage::write_file_sync(&csv_path, clean_csv.as_bytes()) {
                     warn!("[ephemeris] could not write CSV cache {}: {e}", csv_path.display());
                 }
                 let points = parse_ephemeris_csv(&clean_csv);

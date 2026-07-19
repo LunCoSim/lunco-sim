@@ -65,6 +65,7 @@
     forward_io::VertexOutput,
     mesh_view_bindings::view,
 }
+#import lunco::noise::vnoise
 
 const PI: f32 = 3.14159265359;
 /// One arcminute in radians — the natural unit for a star's rendered size.
@@ -128,34 +129,9 @@ fn hash33(p: vec3<f32>) -> vec3<f32> {
     return fract((p3.xxy + p3.yxx) * p3.zyx);
 }
 
-fn hash13(p: vec3<f32>) -> f32 {
-    var p3 = fract(p * 0.1031);
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-/// 3D value noise. Sampled on the **direction vector**, so it is a function on
-/// the sphere with no parameterisation — hence no seam, at any meridian, ever.
-fn vnoise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let n000 = hash13(i);
-    let n100 = hash13(i + vec3(1.0, 0.0, 0.0));
-    let n010 = hash13(i + vec3(0.0, 1.0, 0.0));
-    let n110 = hash13(i + vec3(1.0, 1.0, 0.0));
-    let n001 = hash13(i + vec3(0.0, 0.0, 1.0));
-    let n101 = hash13(i + vec3(1.0, 0.0, 1.0));
-    let n011 = hash13(i + vec3(0.0, 1.0, 1.0));
-    let n111 = hash13(i + vec3(1.0, 1.0, 1.0));
-    return mix(
-        mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-        mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
-        u.z,
-    );
-}
-
-/// Normalised to ~0..1 regardless of octave count.
+/// Normalised to ~0..1 regardless of octave count. The value noise is sampled
+/// on the **direction vector**, so it is a function on the sphere with no
+/// parameterisation — hence no seam, at any meridian, ever.
 fn fbm(p: vec3<f32>, octaves: i32) -> f32 {
     var sum = 0.0;
     var amp = 1.0;

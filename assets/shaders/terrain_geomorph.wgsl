@@ -28,9 +28,9 @@
     view_transformations::position_world_to_clip,
     forward_io::VertexOutput,
     mesh_view_bindings::view,
-    mesh_view_bindings::lights,
 }
-#import lunco::pbr_lit::lit_n
+#import lunco::pbr_lit::{lit_n, sun_to_light}
+#import lunco::noise::vnoise
 #import lunco::lunar::regolith_factor
 #import lunco::horizon::{shadow_fill_weight, SHADOW_FILL}
 #import lunco::transfer::{slope_hazard_color, slope_of}
@@ -116,31 +116,6 @@ var shadow_cache_sampler: sampler;
 
 // --- 3D value noise + FBM (ported from regolith.wgsl) --------------------
 
-fn hash13(p: vec3<f32>) -> f32 {
-    var p3 = fract(p * 0.1031);
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fn vnoise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let n000 = hash13(i);
-    let n100 = hash13(i + vec3(1.0, 0.0, 0.0));
-    let n010 = hash13(i + vec3(0.0, 1.0, 0.0));
-    let n110 = hash13(i + vec3(1.0, 1.0, 0.0));
-    let n001 = hash13(i + vec3(0.0, 0.0, 1.0));
-    let n101 = hash13(i + vec3(1.0, 0.0, 1.0));
-    let n011 = hash13(i + vec3(0.0, 1.0, 1.0));
-    let n111 = hash13(i + vec3(1.0, 1.0, 1.0));
-    return mix(
-        mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-        mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
-        u.z,
-    );
-}
-
 fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
     var sum = 0.0;
     var amp = 1.0;
@@ -206,24 +181,6 @@ fn aa_fade(scale: f32, pw: f32) -> f32 {
 //   * Photometry: dark albedo (~0.08-0.13) + Hapke / Lommel-Seeliger + opposition
 //     surge (see lunar_brdf.wgsl). — JPL/arXiv: https://arxiv.org/html/2410.04371v1
 //   * Airless → NO haze: high-contrast, crisp to the horizon.
-
-// World-space to-sun, read straight from the scene lights (no per-material uniform
-// wiring needed for streamed tiles). Picks the brightest directional light so the
-// dim earthshine fill can't be mistaken for the sun.
-fn sun_to_light() -> vec3<f32> {
-    var best = vec3(0.0, 1.0, 0.0);
-    var best_lum = -1.0;
-    let n = lights.n_directional_lights;
-    for (var i = 0u; i < n; i = i + 1u) {
-        let dl = lights.directional_lights[i];
-        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > best_lum) {
-            best_lum = lum;
-            best = dl.direction_to_light;
-        }
-    }
-    return best;
-}
 
 fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
     return ramp(fbm(p * scale, octaves, gain), lo, hi);

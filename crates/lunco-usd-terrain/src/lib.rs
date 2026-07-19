@@ -652,7 +652,7 @@ fn cache_terrain_document(
         // scenes now, so this one path covers both.
         let doc = asset_server.get_path(terrain_path.stage_handle.id()).and_then(|asset_path| {
             let rel_path = asset_path.path().to_string_lossy();
-            let (name, rel) = rel_path.split_once('/')?;
+            let (name, rel) = lunco_assets::split_twin_rel(&rel_path)?;
             twin_scenes.doc_for(name, rel)
         });
         let Some(doc) = doc else {
@@ -1025,7 +1025,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     };
     // Native gives an absolute path; the web autoload path keeps it
     // cache/asset-relative, which is what the wasm DEM reader probes against OPFS.
-    let uri = root.join(&rel).to_string_lossy().replace('\\', "/");
+    let uri = lunco_assets::asset_path::slashed(root.join(&rel));
     // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
     // absent/negative = a safe 4 km window (avoid an accidental full-map build).
     let half_window = match attr_f32("windowM") {
@@ -1129,4 +1129,232 @@ fn bridge_dem_prim_read<R: UsdRead>(
          lod_viz {lod_viz}, collider_ring {collider_ring}, {layer_count} composed layer(s))",
         prim_path.path
     );
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod dem_bridge_tests {
+    //! The DEM bridge's authored-attribute contract, exercised through the REAL
+    //! read body ([`bridge_dem_prim_read`]) off a live composed stage — the same
+    //! path `bridge_usd_dem_terrain` runs, minus the asset-server plumbing a
+    //! render-free test cannot (and need not) stand up. Commands are applied to a
+    //! real `World`, and the assertions read back the components the projection
+    //! actually attached — not intermediate parse values.
+
+    use super::bridge_dem_prim_read;
+    use bevy::ecs::world::CommandQueue;
+    use bevy::prelude::*;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use openusd::sdf::Path as SdfPath;
+
+    /// A minimal layered DEM terrain: `lunco:assetMode = "dem"` + a `dem` ground
+    /// child layer carrying the `demSource`. `extra` is spliced into the Terrain
+    /// prim's body; `layer_extra` into the ground layer prim's body.
+    fn dem_scene(extra: &str, layer_extra: &str) -> String {
+        format!(
+            "#usda 1.0\n(\n    defaultPrim = \"Terrain\"\n)\n\
+             def Xform \"Terrain\"\n{{\n\
+             \x20   token lunco:assetMode = \"dem\"\n\
+             {extra}\
+             \x20   def Xform \"ground\"\n    {{\n\
+             \x20       token lunco:layer = \"dem\"\n\
+             \x20       asset lunco:layer:demSource = @site/heightmap.tif@\n\
+             {layer_extra}\
+             \x20   }}\n}}\n"
+        )
+    }
+
+    /// Run the real bridge body for `/Terrain` on a fresh world; returns the
+    /// world + entity so each test reads back exactly the components it pins.
+    fn bridge(scene: &str) -> (World, Entity) {
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", scene))
+            .expect("stage builds");
+        let view = cs.view();
+        let registry = lunco_terrain_surface::TerrainLayerParserRegistry::default();
+        let mut spec = lunco_obstacle_field::spec::ObstacleFieldSpec::default();
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let prim_path = lunco_usd::UsdPrimPath {
+            path: "/Terrain".to_string(),
+            ..Default::default()
+        };
+        let sdf = SdfPath::new("/Terrain").unwrap();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            bridge_dem_prim_read(
+                &view,
+                entity,
+                &prim_path,
+                &sdf,
+                Some(std::path::Path::new("/twin/moonbase")),
+                &registry,
+                &mut spec,
+                &mut commands,
+            );
+        }
+        queue.apply(&mut world);
+        (world, entity)
+    }
+
+    #[test]
+    fn lod_frozen_attr_attaches_lodfrozen_component() {
+        // `lunco:terrain:lodFrozen = true` on the SURFACE prim (the
+        // `lunco:terrain:*` half of the namespace split) must come out as the
+        // `LodFrozen` component alongside the terrain request — that component
+        // is what the streaming selector gates on for a cinematic shot.
+        let scene = dem_scene("    bool lunco:terrain:lodFrozen = true\n", "");
+        let (world, e) = bridge(&scene);
+        assert!(
+            world.get::<lunco_terrain_surface::DemTerrainRequest>(e).is_some(),
+            "dem terrain still projects a DemTerrainRequest"
+        );
+        assert!(
+            world.get::<lunco_terrain_surface::LodFrozen>(e).is_some(),
+            "authored lodFrozen=true must attach LodFrozen"
+        );
+    }
+
+    #[test]
+    fn absent_lod_frozen_attr_leaves_lod_live() {
+        let scene = dem_scene("", "");
+        let (world, e) = bridge(&scene);
+        assert!(
+            world.get::<lunco_terrain_surface::DemTerrainRequest>(e).is_some(),
+            "the bridge ran (request attached)"
+        );
+        assert!(
+            world.get::<lunco_terrain_surface::LodFrozen>(e).is_none(),
+            "no authored lodFrozen ⇒ LOD selection stays live"
+        );
+    }
+
+    #[test]
+    fn lod_frozen_false_is_not_frozen() {
+        // An explicit `= false` is the same as absent — only an authored `true`
+        // freezes.
+        let scene = dem_scene("    bool lunco:terrain:lodFrozen = false\n", "");
+        let (world, e) = bridge(&scene);
+        assert!(world.get::<lunco_terrain_surface::LodFrozen>(e).is_none());
+    }
+
+    #[test]
+    fn dem_layer_attrs_project_into_request() {
+        // `lunco:layer:*` on the ground layer prim: windowM halves into
+        // half_window, targetRes passes through, demSource resolves against the
+        // scene root.
+        let scene = dem_scene(
+            "",
+            "        float lunco:layer:windowM = 512\n\
+             \x20       int lunco:layer:targetRes = 128\n",
+        );
+        let (world, e) = bridge(&scene);
+        let req = world
+            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+            .expect("request attached");
+        assert_eq!(req.half_window, 256.0, "windowM = side length ⇒ half_window = windowM/2");
+        assert_eq!(req.target_res, 128);
+        assert!(
+            req.uri.ends_with("site/heightmap.tif") && req.uri.starts_with("/twin/moonbase"),
+            "demSource resolves against the scene root, got `{}`",
+            req.uri
+        );
+        // Defaults: lodViz unauthored ⇒ streaming ON.
+        assert!(req.lod_viz, "lodViz defaults to true");
+    }
+
+    #[test]
+    fn lod_viz_false_defaults_collider_ring_off() {
+        // `colliderRing` unauthored follows `lodViz` when no forcing applies:
+        // a static-mesh terrain (lodViz=false) keeps the static collider.
+        let scene = dem_scene("", "        bool lunco:layer:lodViz = false\n");
+        let (world, e) = bridge(&scene);
+        let req = world
+            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+            .expect("request attached");
+        assert!(!req.lod_viz);
+        assert!(!req.collider_ring, "unauthored colliderRing follows lodViz=false");
+    }
+
+    #[test]
+    fn explicit_collider_ring_wins_over_lod_viz_default() {
+        let scene = dem_scene(
+            "",
+            "        bool lunco:layer:lodViz = false\n\
+             \x20       bool lunco:layer:colliderRing = true\n",
+        );
+        let (world, e) = bridge(&scene);
+        let req = world
+            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+            .expect("request attached");
+        assert!(req.collider_ring, "authored colliderRing=true overrides the lodViz-follow default");
+    }
+
+    #[test]
+    fn streaming_terrain_with_height_layers_forces_collider_ring() {
+        // The Nyquist rule: lodViz + any analytic height layer (the default
+        // overzoom counts) ⇒ the ring is FORCED even if the author says no —
+        // a static full-DEM collider cannot represent sub-DEM height layers.
+        let scene = dem_scene("", "        bool lunco:layer:colliderRing = false\n");
+        let (world, e) = bridge(&scene);
+        let req = world
+            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+            .expect("request attached");
+        assert!(req.lod_viz, "streaming visuals on (default)");
+        assert!(
+            req.collider_ring,
+            "lodViz + height layers must force the collider ring despite colliderRing=false"
+        );
+    }
+
+    #[test]
+    fn anchor_attrs_attach_terrain_georef() {
+        let scene = dem_scene(
+            "    double lunco:anchor:lat = -26.1332\n\
+             \x20   double lunco:anchor:lon = 3.6335\n\
+             \x20   double lunco:anchor:height = 1946\n",
+            "",
+        );
+        let (world, e) = bridge(&scene);
+        let georef = world
+            .get::<lunco_terrain_surface::TerrainGeoref>(e)
+            .expect("authored anchor attrs attach TerrainGeoref");
+        assert_eq!(georef.center_lat_deg, -26.1332);
+        assert_eq!(georef.center_lon_deg, 3.6335);
+        assert_eq!(georef.anchor_height_m, 1946.0);
+    }
+
+    #[test]
+    fn no_anchor_attrs_no_georef() {
+        let (world, e) = bridge(&dem_scene("", ""));
+        assert!(
+            world.get::<lunco_terrain_surface::TerrainGeoref>(e).is_none(),
+            "no authored anchor ⇒ no TerrainGeoref (the default is absence, not zeros)"
+        );
+    }
+
+    #[test]
+    fn non_dem_prim_is_ignored() {
+        // No `lunco:assetMode` ⇒ the bridge must not attach anything.
+        let scene = "#usda 1.0\n(\n    defaultPrim = \"Terrain\"\n)\n\
+                     def Xform \"Terrain\"\n{\n    bool lunco:terrain:lodFrozen = true\n}\n";
+        let (world, e) = bridge(scene);
+        assert!(world.get::<lunco_terrain_surface::DemTerrainRequest>(e).is_none());
+        assert!(
+            world.get::<lunco_terrain_surface::LodFrozen>(e).is_none(),
+            "lodFrozen on a non-terrain prim must not freeze anything"
+        );
+    }
+
+    #[test]
+    fn dem_terrain_without_dem_source_attaches_nothing() {
+        // A dem-mode prim whose ground layer lacks `demSource` warns and bails —
+        // no half-built request.
+        let scene = "#usda 1.0\n(\n    defaultPrim = \"Terrain\"\n)\n\
+                     def Xform \"Terrain\"\n{\n\
+                     \x20   token lunco:assetMode = \"dem\"\n\
+                     \x20   def Xform \"ground\"\n    {\n\
+                     \x20       token lunco:layer = \"dem\"\n    }\n}\n";
+        let (world, e) = bridge(scene);
+        assert!(world.get::<lunco_terrain_surface::DemTerrainRequest>(e).is_none());
+    }
 }

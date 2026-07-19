@@ -519,7 +519,7 @@ fn spawn_twin_from_scene(
     let root = lunco_twin::root_for_file(&abs);
     let rel = abs
         .strip_prefix(&root)
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .map(lunco_assets::asset_path::slashed)
         .unwrap_or_else(|_| {
             abs.file_name().unwrap_or_default().to_string_lossy().into_owned()
         });

@@ -268,6 +268,23 @@ pub fn read_file_sync(path: &Path) -> StorageResult<Vec<u8>> {
     WebStorage::new().read_sync(&StorageHandle::File(path.to_path_buf()))
 }
 
+/// Delete a file `path` **through the [`Storage`] API** — the delete
+/// counterpart of [`write_file_sync`]. Routes to whichever backend owns
+/// `StorageHandle::File` on this platform (native [`FileStorage`] / wasm
+/// [`WebStorage`]). Returns [`StorageError::NotFound`] when the file /
+/// localStorage key is already absent.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn delete_file_sync(path: &Path) -> StorageResult<()> {
+    FileStorage::new().delete_sync(&StorageHandle::File(path.to_path_buf()))
+}
+
+/// Wasm counterpart of [`delete_file_sync`] — routes the `File` handle through
+/// [`WebStorage`] (`localStorage`).
+#[cfg(target_arch = "wasm32")]
+pub fn delete_file_sync(path: &Path) -> StorageResult<()> {
+    WebStorage::new().delete_sync(&StorageHandle::File(path.to_path_buf()))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The trait
 // ─────────────────────────────────────────────────────────────────────────────
@@ -318,6 +335,18 @@ pub trait Storage: Send + Sync {
     /// caveats as [`Storage::write_sync`].
     fn read_sync(&self, handle: &StorageHandle) -> StorageResult<Vec<u8>> {
         futures_lite::future::block_on(self.read(handle))
+    }
+
+    /// Delete the entry addressed by `handle`. Returns
+    /// [`StorageError::NotFound`] when there is nothing to delete, so a
+    /// caller can distinguish "already gone" from a real failure. For a
+    /// path-based one-liner see [`delete_file_sync`].
+    async fn delete(&self, handle: &StorageHandle) -> StorageResult<()>;
+
+    /// Synchronous convenience wrapper around [`Storage::delete`]. Same
+    /// caveats as [`Storage::write_sync`].
+    fn delete_sync(&self, handle: &StorageHandle) -> StorageResult<()> {
+        futures_lite::future::block_on(self.delete(handle))
     }
 
     /// Cheap "does this exist?" probe. Backends that can't implement

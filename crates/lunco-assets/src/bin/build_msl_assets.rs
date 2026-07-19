@@ -424,10 +424,7 @@ fn pack(entries: &[(PathBuf, PathBuf)], dest: &Path) -> u64 {
 /// forward slashes. This is the tar entry name AND the rumoca URI, and is
 /// what the web resolver matches against (`MslInMemory.files` keys).
 fn rel_key(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .expect("entry under its root")
-        .to_string_lossy()
-        .replace('\\', "/")
+    lunco_assets::asset_path::slashed(path.strip_prefix(root).expect("entry under its root"))
 }
 
 /// Discover third-party library roots under `cache_dir()`, mirroring native's

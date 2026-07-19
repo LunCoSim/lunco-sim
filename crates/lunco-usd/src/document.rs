@@ -2105,6 +2105,174 @@ mod tests {
         );
     }
 
+    /// `xformOpOrder` ACCUMULATES: authoring a second xform op appends to the
+    /// order in author order — it must not replace the list with a one-element
+    /// order, which silently discards the first op at composition time even
+    /// though its value attribute survives.
+    #[test]
+    fn set_translate_then_rotate_lists_both_ops_in_author_order() {
+        let scene = "#usda 1.0\ndef Xform \"Rig\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(60),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_tr.usda"),
+        );
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 90.0, 0.0],
+        })
+        .unwrap();
+
+        let rig = SdfPath::new("/Rig").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &rig),
+            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            "both ops listed, in author order"
+        );
+        // Both value attributes were authored too.
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:translate"),
+            Some([1.0, 2.0, 3.0])
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
+            Some([0.0, 90.0, 0.0])
+        );
+
+        // Re-setting an op already in the order overwrites the value WITHOUT
+        // duplicating its order entry.
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 45.0, 0.0],
+        })
+        .unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &rig),
+            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            "re-set of an existing op must not duplicate its xformOpOrder entry"
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
+            Some([0.0, 45.0, 0.0])
+        );
+    }
+
+    /// The order is the AUTHOR order, not a canonical translate-first order:
+    /// rotate authored first stays first.
+    #[test]
+    fn xform_op_order_is_author_order_not_canonical() {
+        let scene = "#usda 1.0\ndef Xform \"Rig\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(61),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_rt.usda"),
+        );
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 90.0, 0.0],
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &SdfPath::new("/Rig").unwrap()),
+            vec!["xformOp:rotateXYZ".to_string(), "xformOp:translate".to_string()],
+            "rotate-first authoring lists rotate first"
+        );
+    }
+
+    /// The referenced-asset clobber case: the prim's composed `xformOpOrder`
+    /// already lists ops this edit did not author (an asset's own rotate/scale).
+    /// Authoring a translate must APPEND to that composed order — clobbering it
+    /// leaves the rotate/scale value attributes orphaned (authored but no longer
+    /// applied), which is exactly the silent visual regression this pins.
+    #[test]
+    fn set_translate_preserves_preexisting_composed_op_order() {
+        let scene = "#usda 1.0\ndef Xform \"Part\"\n{\n    double3 xformOp:rotateXYZ = (0, 45, 0)\n    double3 xformOp:scale = (2, 2, 2)\n    uniform token[] xformOpOrder = [\"xformOp:rotateXYZ\", \"xformOp:scale\"]\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(62),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_ref.usda"),
+        );
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Part".into(),
+            value: [10.0, 0.0, 0.0],
+        })
+        .unwrap();
+
+        let part = SdfPath::new("/Part").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &part),
+            vec![
+                "xformOp:rotateXYZ".to_string(),
+                "xformOp:scale".to_string(),
+                "xformOp:translate".to_string(),
+            ],
+            "translate appends AFTER the pre-existing ops, none dropped"
+        );
+        // The pre-existing op values are untouched.
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:rotateXYZ"),
+            Some([0.0, 45.0, 0.0])
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:scale"),
+            Some([2.0, 2.0, 2.0])
+        );
+    }
+
+    /// Cross-layer variant of the clobber case: the composed order comes from the
+    /// BASE layer, and the edit targets the (stronger) RUNTIME layer. Since the
+    /// runtime layer's `xformOpOrder` opinion WINS composition wholesale, the op
+    /// must materialise base's order PLUS the new op into the runtime layer — a
+    /// bare `[rotateXYZ]` runtime order would discard the base translate.
+    #[test]
+    fn runtime_layer_rotate_materialises_base_order_plus_new_op() {
+        let scene = "#usda 1.0\ndef Xform \"Part\"\n{\n    double3 xformOp:translate = (1, 2, 3)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(63),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_rt_layer.usda"),
+        );
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::runtime(),
+            path: "/Part".into(),
+            value: [0.0, 30.0, 0.0],
+        })
+        .unwrap();
+
+        let part = SdfPath::new("/Part").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &part),
+            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            "composed order keeps base's translate and appends the runtime rotate"
+        );
+        // The base layer's own opinion is untouched (Save serializes base only).
+        assert_eq!(
+            xform_op_order_tokens(doc.data(), &part),
+            vec!["xformOp:translate".to_string()],
+            "runtime edit must not rewrite the base layer's xformOpOrder"
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:translate"),
+            Some([1.0, 2.0, 3.0])
+        );
+    }
+
     #[test]
     fn remove_prim_drops_block_and_undoes() {
         let with_ball =

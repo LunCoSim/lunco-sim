@@ -256,7 +256,7 @@ pub fn parse_source_bundle_to_docs(
     let mut out = Vec::with_capacity(files.len());
     let mut failed = 0usize;
     for (path, content) in files {
-        let uri = path.to_string_lossy().replace('\\', "/");
+        let uri = lunco_assets::asset_path::slashed(&path);
         if !uri.ends_with(".mo") {
             continue;
         }

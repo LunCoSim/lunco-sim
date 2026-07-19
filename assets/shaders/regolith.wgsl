@@ -43,10 +43,11 @@
     pbr_functions,
     mesh_bindings::mesh,
     mesh_view_bindings::view,
-    mesh_view_bindings::lights,
 }
+#import lunco::pbr_lit::sun_to_light
 #import lunco::horizon::{sun_visibility_resolved, shadow_fill_weight, SHADOW_FILL}
 #import lunco::lunar::regolith_factor
+#import lunco::noise::fbm
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
@@ -115,81 +116,9 @@ var shadow_cache: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(11)
 var shadow_cache_sampler: sampler;
 
-// --- 3D value noise + FBM ------------------------------------------------
-
-fn hash13(p: vec3<f32>) -> f32 {
-    var p3 = fract(p * 0.1031);
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fn vnoise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let n000 = hash13(i);
-    let n100 = hash13(i + vec3(1.0, 0.0, 0.0));
-    let n010 = hash13(i + vec3(0.0, 1.0, 0.0));
-    let n110 = hash13(i + vec3(1.0, 1.0, 0.0));
-    let n001 = hash13(i + vec3(0.0, 0.0, 1.0));
-    let n101 = hash13(i + vec3(1.0, 0.0, 1.0));
-    let n011 = hash13(i + vec3(0.0, 1.0, 1.0));
-    let n111 = hash13(i + vec3(1.0, 1.0, 1.0));
-    return mix(
-        mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-        mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y),
-        u.z,
-    );
-}
-
-// Normalized to ~0..1 regardless of octave count (matches Blender's 0.5-centred
-// noise output, which the ramps below were authored against).
-fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
-    var sum = 0.0;
-    var amp = 1.0;
-    var total = 0.0;
-    var q = p;
-    for (var o = 0; o < octaves; o++) {
-        sum += amp * vnoise(q);
-        total += amp;
-        amp *= gain;
-        q *= 2.0; // lacunarity 2.0, as authored
-    }
-    return sum / total;
-}
-
 // Blender linear ColorRamp with two stops (black @ lo, white @ hi).
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));
-}
-
-// World-space to-sun read straight from the scene lights — the FALLBACK when
-// the engine has not filled `mat.sun_dir_world`.
-//
-// `sun_dir_world` is written by `wire_terrain_materials` (horizon_shade.rs),
-// whose query requires a `HorizonMap` — i.e. only genuine heightfield terrain
-// gets it. This shader is also bound to ordinary meshes with no DEM behind
-// them (the landing pad disc, and the marketing scenes' ground plate), and on
-// those the uniform stays at its zero default. Without a fallback the whole
-// lunar BRDF silently disengaged (`lunar_k = 1.0`) on exactly the surfaces
-// that most need it, leaving flat Lambert grey.
-//
-// Picks the BRIGHTEST directional light rather than `directional_lights[0]`,
-// so the dim earthshine fill (`lunco:env:earthshineIntensity`) can never be
-// mistaken for the sun — same rule as `terrain_geomorph.wgsl::sun_to_light`.
-fn sun_to_light() -> vec3<f32> {
-    var best = vec3(0.0, 1.0, 0.0);
-    var best_lum = -1.0;
-    let n = lights.n_directional_lights;
-    for (var i = 0u; i < n; i = i + 1u) {
-        let dl = lights.directional_lights[i];
-        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > best_lum) {
-            best_lum = lum;
-            best = dl.direction_to_light;
-        }
-    }
-    return best;
 }
 
 // Analytic anti-aliasing weight for a noise layer of `scale` periods/metre
@@ -317,6 +246,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // `sun_to_light`). The BRDF is geometry-only, so the fallback is exact
     // whenever the scene's brightest directional light IS the sun — which is
     // the definition of a lunar scene.
+    //
+    // `sun_dir_world` is written by `wire_terrain_materials` (horizon_shade.rs),
+    // whose query requires a `HorizonMap` — i.e. only genuine heightfield
+    // terrain gets it. This shader is also bound to ordinary meshes with no DEM
+    // behind them (the landing pad disc, and the marketing scenes' ground
+    // plate), and on those the uniform stays at its zero default. Without the
+    // fallback the whole lunar BRDF silently disengaged (`lunar_k = 1.0`) on
+    // exactly the surfaces that most need it, leaving flat Lambert grey.
     var sw = mat.sun_dir_world;
     if (dot(sw, sw) <= 0.25) {
         sw = sun_to_light();

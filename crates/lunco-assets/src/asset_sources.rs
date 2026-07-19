@@ -68,7 +68,7 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     schemes.register(crate::TWIN_SCHEME, move |rest| {
         // `twin://<name>/<rel>` — the name selects the root, so this handler is
         // stateful where `lunco://`'s is constant.
-        let (name, rel) = rest.split_once('/')?;
+        let (name, rel) = crate::split_twin_rel(rest)?;
         Some(roots.root_of(name)?.join(rel))
     });
     app.insert_resource(schemes);

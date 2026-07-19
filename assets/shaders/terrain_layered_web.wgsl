@@ -11,6 +11,7 @@
 }
 #import lunco::horizon::{sun_visibility_resolved, shadow_fill_weight, SHADOW_FILL}
 #import lunco::lunar::regolith_factor
+#import lunco::noise::fbm2d
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -104,42 +105,6 @@ var surface_smp: sampler;
 var normal_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(9)
 var normal_smp: sampler;
-
-// --- 2D value noise + FBM (optimized for WebGL) -------------------------
-
-fn hash12(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fn vnoise2d(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let n00 = hash12(i);
-    let n10 = hash12(i + vec2(1.0, 0.0));
-    let n01 = hash12(i + vec2(0.0, 1.0));
-    let n11 = hash12(i + vec2(1.0, 1.0));
-    return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
-}
-
-fn fbm2d(p: vec2<f32>, octaves: i32, gain: f32) -> f32 {
-    var sum = 0.0;
-    var amp = 1.0;
-    var total = 0.0;
-    var q = p;
-    let rc = cos(2.399963);
-    let rs = sin(2.399963);
-    for (var o = 0; o < octaves; o++) {
-        sum += amp * vnoise2d(q);
-        total += amp;
-        amp *= gain;
-        q *= 2.0;
-        q = vec2(rc * q.x - rs * q.y, rs * q.x + rc * q.y);
-    }
-    return sum / total;
-}
 
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));

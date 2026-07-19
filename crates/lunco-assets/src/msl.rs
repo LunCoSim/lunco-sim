@@ -60,7 +60,7 @@ impl MslInMemory {
     pub fn as_source_pairs(&self) -> Vec<(String, String)> {
         let mut out = Vec::with_capacity(self.files.len());
         for (path, bytes) in &self.files {
-            let uri = path.to_string_lossy().replace('\\', "/");
+            let uri = crate::asset_path::slashed(path);
             match std::str::from_utf8(bytes) {
                 Ok(s) => out.push((uri, s.to_string())),
                 Err(_) => {

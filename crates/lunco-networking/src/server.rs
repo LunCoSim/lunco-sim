@@ -1128,7 +1128,7 @@ fn collect_scenario_input(
             let Ok(rel) = abs_path.strip_prefix(&twin.root) else {
                 continue;
             };
-            let twin_rel = rel.to_string_lossy().replace('\\', "/");
+            let twin_rel = lunco_assets::asset_path::slashed(rel);
             if is_runtime_state(&twin_rel) {
                 continue;
             }
@@ -1194,7 +1194,7 @@ fn collect_scenario_input(
         let Ok(rel) = abs_path.strip_prefix(&manifest_root) else {
             continue;
         };
-        let rel_path = rel.to_string_lossy().replace('\\', "/");
+        let rel_path = lunco_assets::asset_path::slashed(rel);
         descriptors.push(AssetDescriptor { abs_path, rel_path, media_type });
     }
 
@@ -1228,7 +1228,7 @@ fn collect_scenario_input(
             .join(&ds)
             .strip_prefix(&manifest_root)
             .ok()
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .map(lunco_assets::asset_path::slashed)
             .unwrap_or(ds)
     });
 

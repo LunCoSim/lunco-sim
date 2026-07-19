@@ -756,7 +756,7 @@ pub fn write_scenario_index(
     let top_index = StorageHandle::File(scenarios_index_path());
     let fut = async move {
         if !do_write(per_scenario, bytes).await {
-            warn!("[net] scenario index write failed for {}", summary.scenario_id);
+            warn!("[net] scenario index write failed for {:?}", summary.scenario_id);
         }
         // Merge into the top-level index.json (read → replace this id → write).
         let mut entries: Vec<CachedTwinSummary> = match storage_read(&top_index).await {

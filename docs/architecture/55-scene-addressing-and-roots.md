@@ -88,18 +88,21 @@ re-roots and fails to load.
 
 A **root** is a folder that anchors relative references. USD references are
 relative (`@terrain/apollo15@`, `@./wheel.usda@`), so a scene cannot be loaded
-in isolation — it always resolves *through* a root. Three kinds, already modelled
-by `lunco_twin::TwinMode`:
+in isolation — it always resolves *through* a root. User-opened roots are
+modelled by `lunco_twin::TwinMode`:
 
-| Kind | Detected by | Notes |
+| `TwinMode` variant | Detected by | Notes |
 |---|---|---|
-| `Builtin` | the workspace `assets/` dir | pre-registered as `lunco://` |
-| `Twin` | ancestor contains `twin.toml` | manifest, libraries, ref repair |
-| `Folder` | no manifest found | the VS Code "Open Folder" analog |
+| `Twin(Twin)` | folder contains `twin.toml` | manifest, libraries, ref repair — the full experience |
+| `Folder(Twin)` | folder opened, no `twin.toml` | files indexed for browsing; no manifest, no ref repair — the VS Code "Open Folder" analog |
+| `Orphan(PathBuf)` | a single file opened outside any folder context | no sibling files known; the file's parent directory is the root |
 
-`Folder` is a **first-class** kind, not a degraded one. This answers "what if
-there's just one scene and no twin?" — its parent directory is the root. No
-`twin.toml` is required, and its siblings resolve correctly.
+The builtin root — the workspace `assets/` dir — is not a `TwinMode` variant;
+it is pre-registered directly as the `lunco://` root.
+
+`Folder` and `Orphan` are **first-class** kinds, not degraded ones. This
+answers "what if there's just one scene and no twin?" — its parent directory is
+the root. No `twin.toml` is required, and its siblings resolve correctly.
 
 ### 2. One resolver, no World access
 

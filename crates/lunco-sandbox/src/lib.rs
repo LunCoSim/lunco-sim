@@ -2638,7 +2638,7 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
         Ok(lunco_twin::TwinMode::Twin(mut twin)) | Ok(lunco_twin::TwinMode::Folder(mut twin)) => {
             let rel_scene_path = abs_path
                 .strip_prefix(&twin_root)
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .map(lunco_assets::asset_path::slashed)
                 .unwrap_or_else(|_| scene_file.clone());
             twin.set_default_scene(rel_scene_path);
 

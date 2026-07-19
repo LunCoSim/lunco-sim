@@ -2401,16 +2401,7 @@ fn install_shader(
     // below still makes it usable this session.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Some(parent) = disk_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
-        // for ease of debugging. Raw `std::fs::write` bypasses the Storage API
-        // (no atomic write-to-temp + rename ⇒ kill mid-write truncates the
-        // shader). Deferred pending the Storage-trait delete/mkdir extension;
-        // revisit before multiplayer hardening
-        // (INDEPENDENT-REVIEW-2026-07-19_agy.md NET-2).
-        match std::fs::write(&disk_path, source) {
+        match lunco_storage::write_file_sync(&disk_path, source.as_bytes()) {
             Ok(()) => info!("INSTALL_SHADER: wrote {}", disk_path.display()),
             Err(e) => warn!("INSTALL_SHADER: write {} failed: {e}", disk_path.display()),
         }
@@ -2695,7 +2686,7 @@ pub fn on_delete_shader(
     // against the CWD instead of the library path the loader uses).
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(disk) = schemes.as_ref().and_then(|s| s.local_path(&path)) {
-        match std::fs::remove_file(&disk) {
+        match lunco_storage::delete_file_sync(&disk) {
             Ok(()) => info!("DELETE_SHADER: removed {path} ({})", disk.display()),
             Err(e) => warn!("DELETE_SHADER: unregistered {path}, file remove failed: {e}"),
         }

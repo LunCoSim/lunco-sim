@@ -50,6 +50,7 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
+lunco-storage = { path = "../lunco-storage" }
 # The catalogue scan is async (reading a shipped asset on the web is an HTTP
 # fetch), so completed reads come back over a channel and a drain system folds
 # them in. `futures-lite::block_on` backs the native blocking scan used by tests.

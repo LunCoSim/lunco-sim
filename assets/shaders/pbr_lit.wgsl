@@ -27,6 +27,7 @@
     pbr_functions,
     mesh_bindings::mesh,
     mesh_view_bindings::view,
+    mesh_view_bindings::lights,
 }
 
 // Full PBR lighting using the mesh's geometric normal. `base_color`/`emissive`
@@ -70,4 +71,23 @@ fn lit_n(
     pbr_input.material.reflectance = vec3(0.5);
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
     return pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
+}
+
+// World-space to-sun, read straight from the scene lights (no per-material
+// uniform wiring needed). Picks the BRIGHTEST directional light rather than
+// `directional_lights[0]`, so the dim earthshine fill
+// (`lunco:env:earthshineIntensity`) can never be mistaken for the sun.
+fn sun_to_light() -> vec3<f32> {
+    var best = vec3(0.0, 1.0, 0.0);
+    var best_lum = -1.0;
+    let n = lights.n_directional_lights;
+    for (var i = 0u; i < n; i = i + 1u) {
+        let dl = lights.directional_lights[i];
+        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
+        if (lum > best_lum) {
+            best_lum = lum;
+            best = dl.direction_to_light;
+        }
+    }
+    return best;
 }

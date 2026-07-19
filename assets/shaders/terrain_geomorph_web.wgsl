@@ -6,9 +6,9 @@
     view_transformations::position_world_to_clip,
     forward_io::VertexOutput,
     mesh_view_bindings::view,
-    mesh_view_bindings::lights,
 }
-#import lunco::pbr_lit::lit_n
+#import lunco::pbr_lit::{lit_n, sun_to_light}
+#import lunco::noise::fbm2d
 #import lunco::horizon::{shadow_fill_weight, SHADOW_FILL}
 #import lunco::lunar::regolith_factor
 #import lunco::transfer::{slope_hazard_color, slope_of}
@@ -87,42 +87,6 @@ var normal_smp: sampler;
 var shadow_cache: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(11)
 var shadow_cache_sampler: sampler;
-
-// --- 2D value noise + FBM (optimized for WebGL) -------------------------
-
-fn hash12(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fn vnoise2d(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    let n00 = hash12(i);
-    let n10 = hash12(i + vec2(1.0, 0.0));
-    let n01 = hash12(i + vec2(0.0, 1.0));
-    let n11 = hash12(i + vec2(1.0, 1.0));
-    return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
-}
-
-fn fbm2d(p: vec2<f32>, octaves: i32, gain: f32) -> f32 {
-    var sum = 0.0;
-    var amp = 1.0;
-    var total = 0.0;
-    var q = p;
-    let rc = cos(2.399963);
-    let rs = sin(2.399963);
-    for (var o = 0; o < octaves; o++) {
-        sum += amp * vnoise2d(q);
-        total += amp;
-        amp *= gain;
-        q *= 2.0;
-        q = vec2(rc * q.x - rs * q.y, rs * q.x + rc * q.y);
-    }
-    return sum / total;
-}
 
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));
@@ -221,21 +185,6 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
 }
 
 // --- fragment: procedural regolith (optimized) ---------------------------
-
-fn sun_to_light() -> vec3<f32> {
-    var best = vec3(0.0, 1.0, 0.0);
-    var best_lum = -1.0;
-    let n = lights.n_directional_lights;
-    for (var i = 0u; i < n; i = i + 1u) {
-        let dl = lights.directional_lights[i];
-        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > best_lum) {
-            best_lum = lum;
-            best = dl.direction_to_light;
-        }
-    }
-    return best;
-}
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {

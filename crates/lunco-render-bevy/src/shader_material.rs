@@ -358,6 +358,12 @@ pub struct PbrLitModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 #[derive(Resource)]
 pub struct LunarBrdfModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 
+/// Keeps the shared `lunco::noise` WGSL module (procedural value noise — the
+/// hash/vnoise/fbm family) loaded so `#import lunco::noise` resolves in the
+/// terrain and starfield shaders.
+#[derive(Resource)]
+pub struct NoiseModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+
 /// Keeps the shared `lunco::transfer` WGSL module (the value→colour plane of
 /// Data → Transfer → Blend) loaded so `#import lunco::transfer` resolves in the
 /// terrain shaders. The GPU twin of `lunco_terrain_core::transfer` — one ramp,
@@ -391,6 +397,11 @@ impl Plugin for ShaderMaterialPlugin {
             .resource::<AssetServer>()
             .load("shaders/lunar_brdf.wgsl");
         app.insert_resource(LunarBrdfModule(lunar));
+        let noise = app
+            .world()
+            .resource::<AssetServer>()
+            .load("shaders/lunco_noise.wgsl");
+        app.insert_resource(NoiseModule(noise));
         let transfer = app
             .world()
             .resource::<AssetServer>()

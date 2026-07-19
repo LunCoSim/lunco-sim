@@ -1,111 +1,115 @@
-# DEM Georeferencing — the raster should be the source of truth
+# DEM Georeferencing — the raster is the source of truth
 
-**Status:** open problem, written up 2026-07-18. No code changed. Companion to
+**Status:** implemented — [`crates/lunco-geotiff`](../../crates/lunco-geotiff/src/lib.rs)
+is the one place georeferencing is encoded and decoded, shared by the writer
+(`lunco-assets`) and the reader (`lunco-terrain-bake`). Companion to
 [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.md) and
 [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md) — same
 principle (*one source of truth, derive the rest*), applied to spatial reference
 rather than asset identity.
 
-Found while assembling the ДЗЗ handoff pack for the Summer Space School twin,
-where an external GIS team must analyse the same DEM the sim runs on.
-
-## The defect
-
-**We emit a DEM with no georeferencing, then re-state that georeferencing twice
-elsewhere, and validate neither against the other.**
-
-The heightmap this pipeline writes
-(`crates/lunco-assets/src/process.rs:543`, `TiffEncoder`) is a **plain TIFF**.
-Verified on the shipped Apollo 15 crop: 14 TIFF tags, and of the GeoTIFF set —
-`ModelPixelScale` (33550), `ModelTiepoint` (33922), `ModelTransformation`
-(34264), `GeoKeyDirectory` (34735) — **none are present**. The doc comment at
-`crates/lunco-terrain-bake/src/dem.rs:7` calls the output a "float32 GeoTIFF".
-It is not one.
-
-The same facts then live in two other places:
-
-| Fact | GeoTIFF tags | `metadata.yaml` | USD |
-|---|---|---|---|
-| Centre lat/lon | *(absent)* | `coordinates.lat/lon` | `lunco:anchor:lat` / `:lon` |
-| Body | *(absent)* | — | `lunco:anchor:body` |
-| Ground sample | *(absent)* | `size_x_m` / `resolution_x` | — |
-| Elevation range | *(absent)* | `elevation_min_m` / `_max_m` | — |
-
-`metadata.yaml` is parsed at `dem.rs:58-101`; the USD anchor is read in four
-crates (`lunco-usd-terrain/src/lib.rs:1090`, `lunco-terrain-surface/src/georef.rs`,
-`lunco-celestial/src/placement.rs:474`, `lunco-usd-sim/src/celestial.rs:67`).
-
-**Nothing checks that the two agree.** `dem.rs:151` validates `resolution_x`
-against the raster's actual width — good, and precisely the pattern that is
-missing for position. A scene whose `lunco:anchor:lat` disagrees with its DEM's
-`coordinates.lat` loads silently and puts the terrain somewhere the survey says
-it isn't. In the school twin the two agree, by hand, with nothing enforcing it.
-
-## Why it bites
-
-1. **External tools get nothing.** QGIS opens our heightmap as a bare 512×512
-   grid in *pixel* units. Run Slope on it and every angle is wrong by the
-   ground-sample factor — 1.957 for the school DEM — with no warning. A GIS team
-   analysing our terrain silently produces numbers that do not match the sim.
-   The stopgap shipped for the school is a hand-written `.tfw` worldfile, which
-   is exactly the sidecar this document argues against: it lives outside the
-   raster, in a pipeline-managed folder, and is lost on the next re-process.
-2. **Round-tripping is lossy.** A DEM that leaves our pipeline cannot come back
-   without its position being re-supplied out of band.
-3. **Three-way drift.** Three copies, no cross-validation, and the raster — the
-   thing that actually holds the data — is the copy carrying *no* position at all.
-
-## Target
+## Principle
 
 **The raster carries its own georeferencing, and everything else derives from
-it.**
+it.** The raster is the only copy that cannot disagree with the pixels it
+describes. Position is never re-stated in a sidecar: `metadata.yaml` keeps only
+provenance (source product, URL, sha256) — facts the raster cannot carry.
 
-1. **Write real GeoTIFF tags** in the bake step: `ModelPixelScale` +
-   `ModelTiepoint`, and a `GeoKeyDirectory` describing a user-defined geographic
-   CS on the target body's sphere. This is standard practice for planetary data —
-   GDAL and ISIS both round-trip lunar equirectangular this way, with the sphere
-   radius carried in `GeogSemiMajorAxis` / `GeogSemiMinorAxis`. The `tiff` crate
-   we already encode with supports arbitrary tags.
-2. **Read them back** into a `DemGeoref` and let it feed terrain placement.
-3. **Stop authoring what the raster knows.** Where a scene references a
-   georeferenced DEM, its position comes from the raster.
-4. **`metadata.yaml` keeps only what the raster cannot carry** — provenance
-   (source product, URL, sha256), which is `Assets.toml`'s domain anyway. The
-   elevation min/max are a *cache* of a value derivable from the payload; keep
-   them if useful, but they are not truth.
+Without tags, an external GIS opens the heightmap as a bare grid in *pixel*
+units: run Slope on it and every angle is wrong by the ground-sample factor,
+with no warning. With them, QGIS and GDAL open the raster correctly scaled in
+metres, and a DEM that leaves the pipeline can come back without its position
+being re-supplied out of band.
 
-### `lunco:anchor:*` does not simply disappear
+## The frame we write
 
-It is load-bearing beyond the DEM: `lunco-usd-sim/src/celestial.rs:67` uses the
-same anchor to place a **site** for sun/Earth geometry, and a scene may author an
-anchor with no terrain at all. So the rule is narrower than "delete it":
+A **local metric frame centred on the crop**, not a planetary projection. The
+sim works in scene metres with the crop centre at the origin, and the file says
+exactly that: a user-defined equirectangular projection on the target body's
+sphere, with its natural origin *at* the crop centre. Near its own origin,
+projected metres ARE local metres — the file's frame and the sim's frame are the
+same frame, no conversion, no sign to get wrong — while the projection
+parameters record *where on the body* the crop sits, which a bare local grid
+could not express.
 
-> Where a scene references a georeferenced DEM, the DEM is authoritative for that
-> terrain's position. The scene must not re-author it, and a disagreement is a
-> **load error**, not a silent precedence rule.
+Spacing is **node-based**: samples are nodes, so an extent spans `res − 1`
+intervals (the Apollo 15 crop is the live case — 1002 m over 512 samples gives
+1002/511 m spacing; getting this wrong scales the whole terrain by 512/511).
 
-A scene with no DEM keeps authoring its anchor exactly as today. This also
-answers what a *user's* twin does: author position once, in whichever artifact
-actually has it.
+`GeoTransform` is the in-memory form — `pixel_size_m` (one spacing, both axes),
+`origin_x_m`/`origin_y_m` (model position of the upper-left sample; +X east,
++Y north, Y decreasing per row), `body_radius_m`, and the crop-centre
+`center_lat_deg`/`center_lon_deg`. `GeoTransform::centred_square` builds it for
+a centred square crop.
 
-## Open questions
+## Writer contract (`write_geo_tags`)
 
-- **Which CRS do we write?** A true lunar equirectangular (centre lon, sphere
-  1737400 m) is the interoperable answer, but the sim works in a local metric
-  frame centred on the crop, and every conversion is a chance to flip a sign.
-  The school pack deliberately tells the GIS team to stay in the local frame for
-  exactly that reason. Writing *both* — a projected CS plus an explicit local
-  tiepoint — is possible and needs a decision.
-- **Axis convention must be stated in the tags, not in prose.** Our scene frame
-  is north = −Z, east = +X, so a north-up raster's row order and the scene's Z
-  differ in sign. That flip currently lives only in `SURVEY.md`'s method section
-  and in the handoff doc's checklist. It should be implied by the geotransform.
-- **Migration.** Existing baked DEMs have no tags. Re-bake from source, or
-  tolerate untagged rasters with a loud warning and the USD anchor as fallback?
-  The fallback path is how three-way drift got here, so prefer re-baking.
+Called by the bake (`crates/lunco-assets/src/process.rs`) on every emitted
+heightmap. Writes:
 
-## Not blocking the 2026-07-25 school
+- `ModelPixelScale` — one spacing for both axes (square pixels only).
+- `ModelTiepoint` — raster (0,0) ↦ the model's upper-left corner.
+- A `GeoKeyDirectory` (encoded by `geotiff-core`, which owns key ordering,
+  value-offset indices, and ASCII terminators):
+  - `GTModelType` = projected; `GTRasterType` = **`RasterPixelIsPoint`**,
+    matching the node-based spacing.
+  - User-defined geographic CS on the body's sphere:
+    `GeogSemiMajorAxis` = `GeogSemiMinorAxis` = body radius, angular units
+    degrees, `GeogCitation` naming the body for a human (`"Moon 2000"`).
+  - User-defined projected CS: equirectangular, linear units metres,
+    `ProjStdParallel1` = centre latitude, `ProjNatOriginLong` = centre
+    longitude.
 
-The worldfile unblocks the GIS team today. This is the correct fix afterwards,
-and the school is the evidence for why it matters: the first time an external
-team touched our DEM, the missing tags were the first thing they would have hit.
+## Reader contract (`read_geo_tags`)
+
+Reads back our own files, and third-party GeoTIFFs that fit the pipeline's
+model:
+
+- `ModelPixelScale` is required, and X/Y spacing must agree — the whole
+  pipeline speaks ONE spacing for both axes, so an anisotropic raster is
+  rejected here, not sampled skewed.
+- `ModelTiepoint` is required and may anchor **any** raster coordinate — a
+  third-party raster's tiepoint need not sit at (0,0); the reader shifts it
+  back to the model position of raster (0,0).
+- GeoKeys are resolved through the key directory, never positionally — a
+  third-party file orders its doubles however it likes.
+- `GTRasterType`: `PixelIsPoint` is taken as-is; `PixelIsArea` — the spec (and
+  GDAL) default when the key is absent — anchors the *outer corner* of the
+  corner pixel, so the origin is shifted half a pixel inward to the node
+  convention the pipeline speaks; any other value is rejected.
+- The body radius is read when present; its absence is not an error (a
+  third-party raster may carry an EPSG code instead of user-defined axes).
+- Failures are `GeoReadError` variants that name what is missing
+  (`NoPixelScale`, `NoTiepoint`, `Malformed(…)`) — the caller's job is to tell
+  a human how to fix the file, not to fail quietly.
+
+## Consumers: no fallback
+
+`crates/lunco-terrain-bake/src/dem.rs` (`read_geotiff_transform`,
+`height_grid_from_geotiff`) takes the raster's extent from its own tags —
+**no fallback**. A raster without georeferencing fails with
+`DemError::NoGeoreferencing`, because a guessed extent would put terrain
+silently at the wrong scale. This is the load-error-not-silent-precedence rule
+in practice.
+
+## `lunco:anchor:*` does not disappear
+
+The USD anchor is load-bearing beyond the DEM: `lunco-usd-sim/src/celestial.rs`
+uses it to place a **site** for sun/Earth geometry, and a scene may author an
+anchor with no terrain at all. The rule is therefore narrower than "delete it":
+
+> Where a scene references a georeferenced DEM, the DEM is authoritative for
+> that terrain's extent and scale. A scene with no DEM authors its anchor
+> exactly as before.
+
+Author position once, in whichever artifact actually has it.
+
+## Open: the lunar reference frame is not declared
+
+The tags say *where on a sphere* the crop sits, but not **which lunar frame**
+the coordinates are in. LRO/LOLA/NAC products are MOON_ME (mean-Earth); the
+principal-axis frame MOON_PA differs by ≈ 875 m on the surface — larger than a
+whole crop's placement tolerance. Nothing in the GeoKeys or the provenance
+records ME vs PA, so a consumer must assume it. The fix is one GeoKey plus a
+`frame: MOON_ME` provenance field alongside the existing source-product
+provenance.
