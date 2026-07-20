@@ -32,10 +32,12 @@ const ROLE_PRIMARY: &str = "primary";
 /// primary OBC and therefore no command surface at all.
 ///
 /// The vocabulary is **every** `inputs:` attribute on the OBC prim, with the prefix
-/// stripped — `inputs:throttle` ⇒ `"throttle"`. That total rule is why avionics power
-/// draw is authored as `lunco:obc:powerDraw` rather than an input port: one exception
-/// would mean the surface could no longer be read off the prim without a second list
-/// of what does not count, which is the Rust literal this replaces wearing a hat.
+/// stripped — `inputs:throttle` ⇒ `"throttle"`. The rule is TOTAL: one exception would
+/// mean the surface could no longer be read off the prim without a second list of what
+/// does not count, which is the Rust literal this replaces wearing a hat. Anything the
+/// OBC has that is not a command is therefore not an `inputs:` port — power and waste
+/// heat are `outputs:` ports feeding the vessel's power/thermal Modelica program, the
+/// same way `motor.usda` publishes `outputs:heat`.
 ///
 /// Order is sorted so the surface is deterministic across runs — `attr_names` reflects
 /// composition order, and a vocabulary that reshuffles between loads would make port

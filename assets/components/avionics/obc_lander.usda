@@ -66,10 +66,9 @@ over "LanderOBC"
             }
         )
 
-        # Avionics power draw. A plain attribute, NOT an `inputs:` port — on this
-        # prim every `inputs:` name is a command, and that rule is what the command
-        # surface is derived from, so it cannot afford an exception.
-        float lunco:obc:powerDraw = 140.0
+        # NO power draw attribute here — see `obc.usda`. Avionics load is a term in the
+        # vessel's electrical network, modelled in the power program, not a constant
+        # bolted to the part.
 
         # --- The command surface itself ---
         #

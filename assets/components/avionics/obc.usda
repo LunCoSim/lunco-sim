@@ -59,10 +59,11 @@ over "OBC"
             }
         )
 
-        # Avionics power draw. A plain attribute, NOT an `inputs:` port — on this
-        # prim every `inputs:` name is a command, and that rule is what the command
-        # surface is derived from, so it cannot afford an exception.
-        float lunco:obc:powerDraw = 25.0
+        # NO power draw attribute here. Avionics load is not a per-part scalar, it is a
+        # term in the vessel's electrical NETWORK — and a circuit is one Modelica model,
+        # not one constant per part (see `components/mobility/motor.usda`). When this
+        # OBC's draw needs to matter it publishes an `outputs:` port that the power
+        # program consumes, exactly as the motor publishes `outputs:heat`.
 
         # --- The command surface itself ---
         #

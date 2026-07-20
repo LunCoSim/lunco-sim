@@ -1148,19 +1148,6 @@ class "LunCoOnBoardComputerAPI" (
     `references` arc like any other component."""
 )
 {
-    float lunco:obc:powerDraw = 25.0 (
-        doc = """Avionics power draw, watts. A PLAIN attribute and deliberately not an
-        `inputs:` port, because on this prim every `inputs:` name is a command — that is
-        the rule the command surface is derived from, and one exception to it would cost
-        more in ambiguity than a wireable power port is worth here. A vessel that wants
-        avionics on a switchable bus models the bus in its power program and gates the
-        OBC there."""
-        customData = {
-            double min = 0
-            double max = 500
-            string unit = "W"
-        }
-    )
     uniform token lunco:obc:role = "primary" (
         doc = """Which computer this is when a vessel carries more than one. `"primary"`
         supplies the vessel's command surface; `"backup"` is authored, powered and
