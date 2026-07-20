@@ -1606,8 +1606,8 @@ mod tests {
         // Assert on the canonical data (the document is data-canonical now;
         // exact serialized-text formatting is openusd's business, not ours).
         let data = host.document().data();
-        // TODO(usd-read-migration): switch these reads to the generic UsdRead surface
-        // (`type_name`/`scalar`) instead of the legacy `UsdDataExt`, matching production (doc 21).
+        // `UsdDataExt` on purpose: this asserts what the ops AUTHORED into the
+        // document layer, not what a stage composes out of it.
         assert_eq!(data.prim_type_name(&SdfPath::new("/Rover").unwrap()).as_deref(), Some("Xform"));
         assert_eq!(data.prim_type_name(&SdfPath::new("/Rover/Body").unwrap()).as_deref(), Some("Cube"));
         assert_eq!(data.prim_type_name(&SdfPath::new("/Rover/WheelFL").unwrap()).as_deref(), Some("Cube"));

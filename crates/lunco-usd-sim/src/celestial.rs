@@ -40,8 +40,8 @@ use openusd::sdf::Path as SdfPath;
 /// NAIF id of the default anchor body (the Moon).
 const DEFAULT_ANCHOR_BODY: i32 = 301;
 
-pub fn insert_celestial_comms_components<R: UsdRead>(
-    reader: &R,
+pub fn insert_celestial_comms_components(
+    reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
     prim_path_str: &str,
     sdf_path: &SdfPath,
@@ -224,8 +224,8 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
 /// The occluding box from the prim's UsdGeom `extent` (`float3[2]` — min, max),
 /// else the unit-cube default. Both are pre-scale, in the prim's local space; the
 /// kernel applies the `Transform` scale.
-fn read_occluder_box<R: UsdRead>(
-    reader: &R,
+fn read_occluder_box(
+    reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
 ) -> lunco_celestial::link::LinkOccluder {
     use bevy::math::DVec3;

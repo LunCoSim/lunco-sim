@@ -334,8 +334,8 @@ const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 /// reading directly from the USD stage.
 ///
 /// Returns a list of `(Position, Rotation, Collider)` tuples for `Collider::compound()`.
-fn collect_child_colliders_from_usd<R: UsdRead>(
-    reader: &R,
+fn collect_child_colliders_from_usd(
+    reader: &StageView<'_>,
     parent_path: &SdfPath,
 ) -> Vec<(Position, Rotation, Collider)> {
     let mut shapes = Vec::new();
@@ -426,7 +426,7 @@ fn collect_child_colliders_from_usd<R: UsdRead>(
 ///
 /// **Legacy fallback for `Cube`**: `width`/`height`/`depth` still accepted so
 /// unmigrated `.usda` files keep working (those author full dims at scale=1).
-fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<Collider> {
+fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option<Collider> {
     let ty = reader.type_name(sdf_path)?;
 
     // Native UsdGeomMesh → static triangle-mesh collider, decoded from the
@@ -503,7 +503,7 @@ fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option
 /// `set_scale` with the authored count (overriding Avian's `10` only for scaled
 /// round shapes). Blocked on Avian: while it hardcodes `10`, any runtime scale
 /// edit re-clobbers our value, so a clean realtime story needs Avian's knob first.
-fn apply_collider_scale<R: UsdRead>(mut collider: Collider, reader: &R, sdf_path: &SdfPath) -> Collider {
+fn apply_collider_scale(mut collider: Collider, reader: &StageView<'_>, sdf_path: &SdfPath) -> Collider {
     let scale = read_vec3_attribute(reader, sdf_path, "xformOp:scale")
         .map(|v| (v.x, v.y, v.z))
         .unwrap_or((1.0, 1.0, 1.0));
@@ -512,10 +512,10 @@ fn apply_collider_scale<R: UsdRead>(mut collider: Collider, reader: &R, sdf_path
 }
 
 /// Adds a collider component to an entity based on USD prim type and dimensions.
-fn add_collider_from_usd<R: UsdRead>(
+fn add_collider_from_usd(
     commands: &mut Commands,
     entity: Entity,
-    reader: &R,
+    reader: &StageView<'_>,
     sdf_path: &SdfPath,
 ) {
     if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
@@ -534,7 +534,7 @@ fn add_collider_from_usd<R: UsdRead>(
 ///
 /// Walks the composed prim hierarchy, so it answers the same way off the live stage
 /// or the flatten, and independently of where the prim happens to sit in the ECS.
-fn has_rigid_body_ancestor<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> bool {
+fn has_rigid_body_ancestor(reader: &StageView<'_>, sdf_path: &SdfPath) -> bool {
     let mut cur = sdf_path.parent();
     while let Some(p) = cur {
         if p.is_abs_root() {
@@ -714,12 +714,11 @@ fn process_usd_avian_prims(
     extract_avian_prim(&cs.view(), entity, &sdf_path, &mut commands);
 }
 
-/// Map a single composed USD prim to its avian physics components, generic over
-/// the read source ([`UsdRead`]) — so it drives off either the live canonical
-/// [`StageView`](lunco_usd_bevy::StageView) or the flattened `sdf::Data`,
-/// identically. Extracted from the observer for the Ph0′ cutover.
-fn extract_avian_prim<R: UsdRead>(
-    reader: &R,
+/// Map a single composed USD prim to its avian physics components, read off the
+/// live canonical [`StageView`](lunco_usd_bevy::StageView). Split out of the
+/// observer so the read body can be driven directly by tests.
+fn extract_avian_prim(
+    reader: &StageView<'_>,
     entity: Entity,
     sdf_path: &SdfPath,
     commands: &mut Commands,
@@ -846,7 +845,7 @@ fn extract_avian_prim<R: UsdRead>(
 /// (translate + rotate + **scale**) of every prim from the stage root down to it, so
 /// an ancestor's scale is baked into a descendant's world position — exactly how the
 /// renderer places it. Missing xform ops compose as identity.
-fn world_transform<R: UsdRead>(reader: &R, path: &SdfPath) -> Transform {
+fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transform {
     let mut chain = Vec::new();
     let mut cur = Some(path.clone());
     while let Some(p) = cur {
@@ -881,7 +880,7 @@ fn world_transform<R: UsdRead>(reader: &R, path: &SdfPath) -> Transform {
 /// body0's rotation frame (avian applies a body's rotation — not its scale — to a
 /// local anchor). Relative, hence invariant under the reference/path-translation that
 /// drops a shared component onto each rover root.
-fn derive_joint_anchor<R: UsdRead>(reader: &R, body0: &str, body1: &str) -> Option<(DVec3, DVec3)> {
+fn derive_joint_anchor(reader: &StageView<'_>, body0: &str, body1: &str) -> Option<(DVec3, DVec3)> {
     let p0 = SdfPath::new(body0).ok()?;
     let p1 = SdfPath::new(body1).ok()?;
     let w0 = world_transform(reader, &p0);
@@ -930,7 +929,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // here. A DERIVED one must not: `derive_joint_anchor` builds it from
     // `world_transform` → `local_transform_at`, which already converted. Applying
     // the convention to both would double-convert the derived path.
-    fn base<J: JointBase, R: UsdRead>(j: &J, reader: &R) -> Option<(String, String, DVec3, DVec3)> {
+    fn base<J: JointBase>(j: &J, reader: &StageView<'_>) -> Option<(String, String, DVec3, DVec3)> {
         let conv = lunco_usd_bevy::stage_convention(reader);
         let to_dvec =
             move |a: [f32; 3]| conv.point_d(DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64));
@@ -1537,7 +1536,7 @@ pub fn wheel_revolute_joint(
 /// (the 4-branch `[f32;3]→[f64;3]→Vec<f32>→Vec<f64>` ladder). Keeping the
 /// reader f64 end-to-end is what avoids the documented silent-`None`
 /// "bodies launched into orbit" bug for `physics:localPos*` anchors.
-fn read_vec3_attribute<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<DVec3> {
+fn read_vec3_attribute(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<DVec3> {
     lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
 }
 
@@ -1556,10 +1555,10 @@ fn read_vec3_attribute<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Op
 /// otherwise Avian derives them from collider geometry. These are the same
 /// *override* components the runtime mass-props cosim ports write
 /// (`lunco-cosim`), so authored and model-driven values share one path.
-fn apply_rigid_body_mass_props<R: UsdRead>(
+fn apply_rigid_body_mass_props(
     commands: &mut Commands,
     entity: Entity,
-    reader: &R,
+    reader: &StageView<'_>,
     sdf_path: &SdfPath,
 ) {
     // Each of `Mass` / `AngularInertia` / `CenterOfMass` is only an OVERRIDE if the
@@ -1765,7 +1764,7 @@ pub struct PhysicsMaterial {
 /// with the renderer ([`lunco_usd_bevy::resolve_bound_material`]). A physical and
 /// a visual material are the same USD concept bound for different purposes, so
 /// they must resolve through the same code or they will drift.
-pub fn read_physics_material<R: UsdRead>(reader: &R, prim: &SdfPath) -> Option<PhysicsMaterial> {
+pub fn read_physics_material(reader: &StageView<'_>, prim: &SdfPath) -> Option<PhysicsMaterial> {
     use openusd::schemas::physics::tokens as ptok;
 
     let mat = lunco_usd_bevy::resolve_bound_material(
@@ -1809,7 +1808,7 @@ pub struct ShouldBeDynamic;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(clippy::disallowed_methods)]
 mod collider_parity_tests {
-    //! Ph0′ S2c: the collider read path is generic over `UsdRead`, driven off the
+    //! The collider read path, driven off the
     //! live `StageView` over the canonical stage. Exercises the geometry read
     //! (the highest-risk physics read), including the mesh-approximation selector.
 
@@ -1857,19 +1856,22 @@ mod collider_parity_tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `collider_parity_tests`
 mod extract_parity_tests {
-    //! Ph0′ S2e CUTOVER verification: running the REAL `extract_avian_prim` off a
-    //! live `StageView` must produce byte-identical physics components to running
-    //! it off the flattened `sdf::Data` — on a rover chassis with a child collider
-    //! at an authored transform (exercising the whole migrated read layer:
-    //! schema detect → compound collider → `collect_child_colliders` →
-    //! `read_transform_from_usd` → `local_transform_at` → mass props). This is the
-    //! proof that the live canonical stage drives physics with no regression.
+    //! End-to-end physics extraction off the live `StageView`: the REAL
+    //! `extract_avian_prim` on a rover chassis with a child collider at an
+    //! authored transform, exercising the whole read layer (schema detect →
+    //! compound collider → `collect_child_colliders` → `read_transform_from_usd`
+    //! → `local_transform_at` → mass props).
+    //!
+    //! Originally this was a two-reader PARITY test — live stage vs the flattened
+    //! `sdf::Data` — and passing it is what authorized deleting the flattened
+    //! reader. With one reader left there is nothing to compare against, so it
+    //! now stands as a plain characterization test of the surviving path.
 
     use super::extract_avian_prim;
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView, UsdRead};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
 
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
@@ -1878,8 +1880,8 @@ mod extract_parity_tests {
 
     /// Run `extract_avian_prim` on a fresh world and read back the physics the
     /// chassis received: (body type, collider Debug, mass, has ShouldBeDynamic).
-    fn run_extract<R: UsdRead>(
-        reader: &R,
+    fn run_extract(
+        reader: &StageView<'_>,
         path: &SdfPath,
     ) -> (Option<RigidBody>, Option<String>, Option<f32>, bool) {
         let mut world = World::new();
@@ -2217,7 +2219,7 @@ def Xform "Mission"
 "#;
 
     /// Run the extractor on one prim and return its resulting components.
-    fn extract(view: &lunco_usd_bevy::StageView, path: &str) -> (bool, Option<RigidBody>) {
+    fn extract(view: &lunco_usd_bevy::StageView<'_>, path: &str) -> (bool, Option<RigidBody>) {
         let mut world = World::new();
         let entity = world.spawn_empty().id();
         let sdf = SdfPath::new(path).unwrap();

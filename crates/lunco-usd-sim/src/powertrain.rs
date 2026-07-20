@@ -96,8 +96,8 @@ impl PowertrainParams {
 /// reports everything wrong with it rather than the first thing. There are NO Rust
 /// fallbacks: a motor that does not declare its torque is an asset error, not a motor
 /// with a default torque.
-pub fn read_powertrain<R: UsdRead>(
-    reader: &R,
+pub fn read_powertrain(
+    reader: &lunco_usd_bevy::StageView<'_>,
     motor: &SdfPath,
     gearbox: Option<&SdfPath>,
 ) -> Result<PowertrainParams, Vec<&'static str>> {
@@ -150,7 +150,10 @@ pub fn read_powertrain<R: UsdRead>(
 /// than looking at siblings: on a rocker-bogie the motors are children of the ARM
 /// bodies so they swing with the suspension, so a motor and the wheel it turns are not
 /// siblings and need not share a parent.
-pub fn find_for_wheel<R: UsdRead>(reader: &R, wheel: &SdfPath) -> Option<PowertrainParams> {
+pub fn find_for_wheel(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    wheel: &SdfPath,
+) -> Option<PowertrainParams> {
     let root = vessel_root(wheel)?;
     let mut motors = Vec::new();
     collect_by_api(reader, &root, "LunCoMotorAPI", &mut motors);
@@ -197,7 +200,12 @@ fn vessel_root(prim: &SdfPath) -> Option<SdfPath> {
 }
 
 /// Recursively gather prims under `root` applying `api`.
-fn collect_by_api<R: UsdRead>(reader: &R, root: &SdfPath, api: &str, out: &mut Vec<SdfPath>) {
+fn collect_by_api(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    root: &SdfPath,
+    api: &str,
+    out: &mut Vec<SdfPath>,
+) {
     for child in reader.children(root) {
         if reader.has_api_schema(&child, api) {
             out.push(child.clone());
@@ -211,8 +219,8 @@ fn collect_by_api<R: UsdRead>(reader: &R, root: &SdfPath, api: &str, out: &mut V
 /// A motor declares what it turns (`rel lunco:motor:drivenJoint`) rather than a joint
 /// declaring what turns it, because a joint is a physics constraint and should not know
 /// about avionics — the same reason a connection is a property of its consumer.
-pub fn motor_for_joint<'a, R: UsdRead>(
-    reader: &R,
+pub fn motor_for_joint<'a>(
+    reader: &lunco_usd_bevy::StageView<'_>,
     joint: &SdfPath,
     candidates: &'a [SdfPath],
 ) -> Option<&'a SdfPath> {

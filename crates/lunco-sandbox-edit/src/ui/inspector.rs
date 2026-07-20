@@ -1625,10 +1625,10 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
 /// The USD path of the `Shader` prim behind `part`'s bound material, if it has one:
 /// `rel material:binding` → `Material` → `outputs:surface.connect` → `Shader`.
 ///
-/// The same two hops the loader makes (`lunco_usd_sim::shader::bound_shader_prim`), so
+/// The same resolve the loader makes (`lunco_usd_bevy::resolve_bound_shader`), so
 /// the Inspector edits exactly the prim the renderer read.
 fn bound_shader_prim_path(world: &mut World, part: Entity) -> Option<String> {
-    use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdRead};
+    use lunco_usd_bevy::{CanonicalStages, SdfPath};
 
     let prim = world.get::<UsdPrimPath>(part)?.clone();
     let stage_id = prim.stage_handle.id();
@@ -1638,11 +1638,7 @@ fn bound_shader_prim_path(world: &mut World, part: Entity) -> Option<String> {
     let cs = canonical.get(stage_id)?;
     let view = cs.view();
 
-    let material = view.rel_target(&sdf, "material:binding")?;
-    let material = SdfPath::new(material.as_str()).ok()?;
-    let surface = view.connection_source(&material, "outputs:surface")?;
-    let (shader, _) = surface.rsplit_once('.')?;
-    Some(shader.to_string())
+    lunco_usd_bevy::resolve_bound_shader(&view, &sdf).map(|p| p.to_string())
 }
 
 /// The asset path of `part`'s current shader (read via [`PanelCtx`]), or `None` if

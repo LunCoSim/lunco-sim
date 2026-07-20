@@ -100,7 +100,7 @@ fn joint_relationship_targets_survive() {
 }
 
 /// Standalone rover composition (as the Bevy-pipeline tests do): the root's
-/// `prim_children` (what `instantiate_usd_prim` iterates) must include the
+/// `children` (what `instantiate_usd_prim` iterates) must include the
 /// Chassis + 4 wheels, apiSchemas must compose on the root, and the wheel/
 /// chassis physics attributes the avian/sim consumers read must be present.
 #[test]
@@ -108,10 +108,9 @@ fn standalone_rover_reader_is_complete() {
     let cs = compose("vessels/rovers/skid_rover.usda");
     let view = cs.view();
 
-    // Root children — the exact list `prim_children` returns.
-    // TODO(usd-read-migration): switch to the generic UsdRead surface (`children`)
-    // instead of the legacy `prim_children`, matching production (doc 21).
-    let kids = view.prim_children(&SdfPath::new("/SkidRover").unwrap());
+    // Root children — the exact list `children` returns, which is what
+    // `instantiate_usd_prim` iterates in production.
+    let kids = view.children(&SdfPath::new("/SkidRover").unwrap());
     let names: Vec<String> = kids.iter().filter_map(|p| p.name().map(str::to_string)).collect();
     for w in ["Chassis", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
         assert!(names.iter().any(|n| n == w), "SkidRover children missing {w}; got {names:?}");

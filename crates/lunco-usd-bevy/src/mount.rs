@@ -100,7 +100,7 @@ fn compose(a: Transform, b: Transform) -> Transform {
 /// of local transforms from `body_root`'s child down to `mount_prim`, i.e. every
 /// intermediate `Mounts` xform is folded in, but `body_root`'s own placement is
 /// **not** (we want a body-local frame). An unauthored xform reads as identity.
-pub fn frame_in_body<R: UsdRead>(reader: &R, body_root: &str, mount_prim: &SdfPath) -> Transform {
+pub fn frame_in_body(reader: &crate::StageView<'_>, body_root: &str, mount_prim: &SdfPath) -> Transform {
     let body_root = body_root.trim_end_matches('/');
     let mut acc = local_transform_at(reader, mount_prim, 0.0).unwrap_or(Transform::IDENTITY);
     let mut cur = mount_prim.clone();
@@ -120,7 +120,7 @@ pub fn frame_in_body<R: UsdRead>(reader: &R, body_root: &str, mount_prim: &SdfPa
 
 /// Every socket a `host` body advertises under its `Mounts` group. Empty when the
 /// host declares none (the common case today) — the caller shows nothing.
-pub fn read_sockets<R: UsdRead>(reader: &R, host: &str) -> Vec<MountSocket> {
+pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> Vec<MountSocket> {
     let Ok(group) = SdfPath::new(&mounts_group(host)) else {
         return Vec::new();
     };
@@ -166,7 +166,7 @@ pub fn read_sockets<R: UsdRead>(reader: &R, host: &str) -> Vec<MountSocket> {
 /// The plug frame of an attached `part`, in the **part's** local space — follows
 /// the part's `rel lunco:mount:frame` to the plug prim and composes it back to the
 /// part root. `None` when the part advertises no plug frame.
-pub fn read_plug_frame<R: UsdRead>(reader: &R, part: &str) -> Option<Transform> {
+pub fn read_plug_frame(reader: &crate::StageView<'_>, part: &str) -> Option<Transform> {
     let part_path = SdfPath::new(part).ok()?;
     let plug = reader.rel_target(&part_path, "lunco:mount:frame")?;
     let plug_path = SdfPath::new(&plug).ok()?;

@@ -3,8 +3,8 @@
 //! Two stages, split so the interesting half is testable without a live
 //! stage:
 //!
-//! - [`collect_graph`] reads any [`UsdRead`] source (the live `StageView` or a
-//!   flattened `sdf::Data`) into plain [`PrimNode`] / [`Wire`] structs. Thin
+//! - [`collect_graph`] reads the live `StageView` over the canonical stage
+//!   into plain [`PrimNode`] / [`Wire`] structs. Thin
 //!   glue over the same read API + connection-string split the co-sim wiring
 //!   derivation uses (`lunco_usd_sim::cosim::rewire_usd_connections`).
 //! - [`build_scene`] is a **pure function** `(nodes, wires) → Scene`: it filters
@@ -29,7 +29,7 @@ use std::sync::Arc;
 use lunco_canvas::{
     empty_node_data, Edge, Node, Pos, Port, PortId, PortRef, Rect, Scene,
 };
-use lunco_usd_bevy::{SdfPath, UsdRead};
+use lunco_usd_bevy::{SdfPath, StageView, UsdRead};
 
 /// Node kind id registered in the canvas `VisualRegistry`.
 pub(crate) const NODE_KIND: &str = "usd.prim";
@@ -101,8 +101,8 @@ pub(crate) struct Wire {
 /// spawned). `inputs:<c>` attrs are sinks, their `connections()` are the
 /// producers, split at the last `.` into `(prim, connector-leaf)`. A prim
 /// carrying both joint bodies becomes a joint wire and is NOT itself a node.
-pub(crate) fn collect_graph<R: UsdRead>(
-    view: &R,
+pub(crate) fn collect_graph(
+    view: &StageView<'_>,
     prim_paths: &[String],
 ) -> (Vec<PrimNode>, Vec<Wire>) {
     let mut nodes: Vec<PrimNode> = Vec::new();

@@ -465,8 +465,13 @@ impl UsdRead for StageView<'_> {
     }
 
     fn prim_paths(&self) -> Vec<SdfPath> {
-        // Inherent `StageView::prim_paths` (composed traversal).
-        StageView::prim_paths(self)
+        // Every live (active, defined, non-abstract) composed prim path, in
+        // traversal order.
+        let mut paths = Vec::new();
+        let _ = self
+            .stage()
+            .traverse(openusd::usd::PrimPredicate::DEFAULT, |p| paths.push(p.clone()));
+        paths
     }
 
     fn attr_names(&self, prim: &SdfPath) -> Vec<String> {

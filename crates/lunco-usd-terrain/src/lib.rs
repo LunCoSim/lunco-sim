@@ -28,7 +28,7 @@ use bevy::prelude::*;
 // projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
 // document registry hands back for the authoring tier's child walks.
 use lunco_usd_bevy::usd_data::UsdDataExt;
-use lunco_usd_bevy::UsdRead;
+use lunco_usd_bevy::{StageView, UsdRead};
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
 /// edits back onto the backing document's runtime layer.
@@ -73,9 +73,13 @@ pub struct DemBridged;
 
 /// USD-backed [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource): reads a
 /// child layer prim's attributes through the stage reader, so terrain-surface's layer
-/// parsers stay USD-free. Generic over the reader so we needn't name its concrete type.
-struct UsdLayerAttrs<'a, R: UsdRead> {
-    reader: &'a R,
+/// parsers stay USD-free.
+///
+/// One lifetime, not two: `StageView` holds only shared references, so it is
+/// covariant in its own lifetime and a longer-lived `&'a StageView<'b>` coerces
+/// here freely.
+struct UsdLayerAttrs<'a> {
+    reader: &'a StageView<'a>,
     sdf: openusd::sdf::Path,
     /// The USD namespace the logical names bind into: `lunco:layer:` for a layer
     /// prim's parameters (`LunCoTerrainLayerAPI`), `lunco:edit:` for an edit prim's
@@ -119,13 +123,13 @@ fn ns_attr(ns: &str, name: &str) -> String {
     full
 }
 
-impl<R: UsdRead> UsdLayerAttrs<'_, R> {
+impl UsdLayerAttrs<'_> {
     fn attr(&self, name: &str) -> String {
         ns_attr(self.ns, name)
     }
 }
 
-impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R> {
+impl lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_> {
     fn get_f32(&self, name: &str) -> Option<f32> {
         self.reader.real_f32(&self.sdf, &self.attr(name))
     }
@@ -163,8 +167,8 @@ impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R>
 }
 
 /// The `dem` (ground) child layer prim of a layered terrain, if authored.
-fn find_dem_layer<R: UsdRead>(
-    reader: &R,
+fn find_dem_layer(
+    reader: &StageView<'_>,
     terrain: &openusd::sdf::Path,
 ) -> Option<openusd::sdf::Path> {
     reader
@@ -176,8 +180,8 @@ fn find_dem_layer<R: UsdRead>(
 /// Parse the non-ground child layer prims (`craters`/`rocks`/`shader`/…) into the
 /// composable [`TerrainLayerStack`](lunco_terrain_surface::TerrainLayerStack) via the
 /// registry. Shared by the bridge (initial build) and the live-edit refresh.
-fn parse_terrain_layer_stack<R: UsdRead>(
-    reader: &R,
+fn parse_terrain_layer_stack(
+    reader: &StageView<'_>,
     terrain: &openusd::sdf::Path,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
 ) -> lunco_terrain_surface::TerrainLayerStack {
@@ -254,8 +258,8 @@ fn parse_terrain_layer_stack<R: UsdRead>(
 /// no re-stamp — the terrain already built from the same USD stack).
 ///
 /// [`ObstacleFieldSpec`]: lunco_obstacle_field::spec::ObstacleFieldSpec
-fn sync_obstacle_spec_from_usd<R: UsdRead>(
-    reader: &R,
+fn sync_obstacle_spec_from_usd(
+    reader: &StageView<'_>,
     terrain: &openusd::sdf::Path,
     spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
 ) {
@@ -950,8 +954,8 @@ fn bridge_usd_dem_terrain(
 /// composed stack + georef. Split out of `bridge_usd_dem_terrain` so the read
 /// body can be driven directly by tests.
 #[allow(clippy::too_many_arguments)]
-fn bridge_dem_prim_read<R: UsdRead>(
-    reader: &R,
+fn bridge_dem_prim_read(
+    reader: &StageView<'_>,
     entity: Entity,
     prim_path: &lunco_usd::UsdPrimPath,
     sdf: &openusd::sdf::Path,

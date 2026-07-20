@@ -1643,7 +1643,7 @@ lunco_core::register_commands!(on_set_rhai_policy, on_save_scenario);
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {
     use super::extract_usd_policies;
-    use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe};
+    use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe, UsdRead};
 
     /// A `LunCoPolicy` prim authored in the scene USD is read into a `PolicyDef` —
     /// the "settable in USD" half of proper policies. The projector then hands this
@@ -2386,12 +2386,12 @@ struct LayerRole {
 /// CONNECTED map inputs are skipped — a connected port is fed by a producer
 /// node (doc 18 Tier B, bake nodes), not by an authored file.
 #[cfg(feature = "ui")]
-fn read_material_network_layer_maps<R: UsdRead>(
-    reader: &R,
+fn read_material_network_layer_maps(
+    reader: &lunco_usd_bevy::StageView<'_>,
     sdf: &openusd::sdf::Path,
     roles: &'static [LayerRole],
 ) -> Vec<(&'static LayerRole, String, f32)> {
-    let Some(shader) = lunco_usd_sim::shader::bound_shader_prim(reader, sdf) else {
+    let Some(shader) = lunco_usd_bevy::resolve_bound_shader(reader, sdf) else {
         return Vec::new();
     };
     roles

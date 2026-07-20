@@ -190,16 +190,11 @@ fn a_wheel_composes_its_tire() {
     // from, and that `Shader`'s WGSL source is the tread. The Material is authored as a
     // child of the tire's `over`, so the reference arc path-translates the whole chain
     // onto the wheel — binding included.
-    let material = view
-        .rel_target(&fl, "material:binding")
-        .expect("Wheel_FL must compose its tire's material binding");
-    let surface = view
-        .connection_source(&material, "outputs:surface")
-        .expect("the bound Material must connect its surface to a Shader");
-    let (shader, _) = surface
-        .rsplit_once('.')
-        .expect("outputs:surface.connect must name a Shader property");
-    let shader = SdfPath::new(shader).unwrap();
+    // Resolved through the PRODUCTION resolver, not a hand-rolled walk of the two
+    // hops: a test that re-implements the traversal only proves the test's own
+    // traversal works, and would keep passing if the loader's diverged.
+    let shader = lunco_usd_bevy::resolve_bound_shader(&view, &fl)
+        .expect("Wheel_FL must compose its tire's material binding through to its Shader");
     assert_eq!(
         view.asset(&shader, "info:wgsl:sourceAsset").as_deref(),
         Some("lunco://shaders/wheel.wgsl"),

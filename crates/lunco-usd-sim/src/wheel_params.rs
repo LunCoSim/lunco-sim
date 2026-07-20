@@ -146,8 +146,8 @@ impl WheelParams {
     /// quantity ended up authored twice under two names and rovers drove 5× too fast in
     /// one realization. `None` means an undriven wheel (a castor, a trailer wheel):
     /// zero torque, and legitimate to author.
-    pub fn read<R: UsdRead>(
-        reader: &R,
+    pub fn read(
+        reader: &lunco_usd_bevy::StageView<'_>,
         wheel: &SdfPath,
         attachment_suspension: Option<&SdfPath>,
         powertrain: Option<&crate::powertrain::PowertrainParams>,
@@ -322,7 +322,10 @@ pub(crate) fn attachment_suspension_path(
 
 /// Read the three suspension attrs off one prim. `None` unless all three are
 /// authored — partial authoring is treated as missing (no per-field defaults).
-fn read_suspension_attrs<R: UsdRead>(reader: &R, prim: &SdfPath) -> Option<SuspensionParams> {
+fn read_suspension_attrs(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Option<SuspensionParams> {
     Some(SuspensionParams {
         rest_length: reader.real(prim, "lunco:suspension:restLength")?,
         spring_k: reader.real(prim, "physxVehicleSuspension:springStrength")?,
@@ -352,7 +355,7 @@ fn read_suspension_attrs<R: UsdRead>(reader: &R, prim: &SdfPath) -> Option<Suspe
 /// refresh fallback. Prim-scoped where a name is not wheel-specific:
 /// `physics:mass` is claimed only on a wheel prim — on a chassis it must keep
 /// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
-pub fn claims_edit<R: UsdRead>(reader: &R, prim: &SdfPath, attr: &str) -> bool {
+pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr: &str) -> bool {
     const WHEEL_ONLY_PREFIXES: [&str; 7] = [
         "lunco:wheel:",
         "lunco:suspension:",

@@ -105,7 +105,7 @@ impl StageMetrics {
     /// - a *supported but non-canonical* stage (Z-up and/or non-metre) logs a
     ///   one-shot warning naming what is being converted, so an unexpected
     ///   Omniverse/Isaac stage is visible rather than merely handled.
-    pub fn from_reader<R: UsdRead>(reader: &R) -> Self {
+    pub fn from_reader(reader: &crate::StageView<'_>) -> Self {
         let up_axis = match reader.stage_up_axis().as_deref() {
             None | Some("Y") => UpAxis::Y,
             Some("Z") => UpAxis::Z,
@@ -528,7 +528,7 @@ impl ConventionTransform {
 /// The stage → canonical conversion for `reader`'s stage. Cheap (two metadata
 /// field reads); the decoders call it per prim rather than threading a gate
 /// through every signature.
-pub fn stage_convention<R: UsdRead>(reader: &R) -> ConventionTransform {
+pub fn stage_convention(reader: &crate::StageView<'_>) -> ConventionTransform {
     ConventionTransform::from_stage_metrics(&StageMetrics::from_reader(reader))
 }
 

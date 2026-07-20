@@ -709,8 +709,8 @@ fn instantiate_usd_prim(
 /// light, camera, transform, and the authored `lunco:*` markers) off either the
 /// live canonical [`StageView`](crate::StageView) or the flattened `sdf::Data`.
 #[allow(clippy::too_many_arguments)]
-fn instantiate_usd_prim_read<R: UsdRead>(
-    reader: &R,
+fn instantiate_usd_prim_read(
+    reader: &StageView<'_>,
     entity: Entity,
     prim_path: &UsdPrimPath,
     existing_vis: Option<&Visibility>,
@@ -872,18 +872,12 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // parent's answer", NOT "force visible" — so it keeps walking rather
         // than stopping. Getting that backwards would let a child override a
         // hidden parent, which USD does not permit.
-        let invisible = {
-            let mut p = sdf_path.clone();
-            loop {
-                if reader.text(&p, "visibility").as_deref() == Some("invisible") {
-                    break true;
-                }
-                match p.parent() {
-                    Some(parent) if parent.as_str() != "/" => p = parent,
-                    _ => break false,
-                }
-            }
-        }
+        use openusd::schemas::geom::Imageable as _;
+        let imageable = XformablePrim(reader.usd_stage().prim(sdf_path.clone()));
+        let invisible = imageable
+            .compute_visibility()
+            .map(|v| v == openusd::schemas::geom::Visibility::Invisible)
+            .unwrap_or(false)
         // `UsdGeomImageable.purpose = "guide"` — geometry that exists for authoring,
         // not for viewing: construction axes, alignment rigs, and (the HAB-1 case)
         // the boolean CUTTERS that define a shell's openings. Keeping them in the
@@ -891,27 +885,22 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // diameter and a position rather than becoming a hole someone has to
         // reverse-engineer — but a guide must never render.
         //
-        // `purpose` is INHERITED: USD resolves it from the nearest ancestor that
-        // authors it, so marking one `Xform "Cutters"` as guide hides the whole
-        // subtree. That is why this walks up rather than reading the prim alone —
-        // reading only the prim would render every child of a guide group.
+        // `purpose` is INHERITED: USD resolves it from the NEAREST ancestor that
+        // authors an opinion, so marking one `Xform "Cutters"` as guide hides the
+        // whole subtree — but a descendant that authors `purpose = "default"`
+        // opts BACK IN, because its own opinion is nearer than the group's.
+        // `ComputePurpose` implements that precedence; walking up and testing
+        // "is any ancestor guide?" does not, and would wrongly hide the opted-in
+        // child.
         //
         // `proxy` and `render` are deliberately NOT handled here. They are a
         // level-of-detail pair (a cheap stand-in vs the full-detail version), and
         // honouring them means choosing between them per view — a policy decision
         // that belongs with whoever adds the LOD system, not a silent default.
-        || {
-            let mut p = sdf_path.clone();
-            loop {
-                if reader.text(&p, "purpose").as_deref() == Some("guide") {
-                    break true;
-                }
-                match p.parent() {
-                    Some(parent) if parent.as_str() != "/" => p = parent,
-                    _ => break false,
-                }
-            }
-        };
+        || imageable
+            .compute_purpose()
+            .map(|p| p == openusd::schemas::geom::Purpose::Guide)
+            .unwrap_or(false);
 
         // Placeholder for an async-loading glTF payload. Authors set
         // `bool lunco:placeholder = true` on a Cube prim that lives as
@@ -1616,7 +1605,7 @@ pub fn parent_prim_path(target: &str) -> Option<SdfPath> {
 ///
 /// Single source of truth for the bind→shader walk shared by the renderer
 /// ([`apply_standard_material`]) and the inspector's material editor.
-pub fn resolve_bound_shader<R: UsdRead>(reader: &R, mesh_path: &SdfPath) -> Option<SdfPath> {
+pub fn resolve_bound_shader(reader: &StageView<'_>, mesh_path: &SdfPath) -> Option<SdfPath> {
     let mat_path = resolve_bound_material(reader, mesh_path, MaterialPurpose::Render)?;
     // `outputs:surface` is an attribute CONNECTION, not a relationship.
     let surf_conn = reader.connection_source(&mat_path, "outputs:surface")?;
@@ -1668,8 +1657,8 @@ impl MaterialPurpose {
 /// normally authors no binding at all, and so carries no `MaterialBindingAPI` in
 /// its `apiSchemas`. `::get` returns `None` there, which would silently drop
 /// every *inherited* binding: the common case, not the corner case.
-pub fn resolve_bound_material<R: UsdRead>(
-    reader: &R,
+pub fn resolve_bound_material(
+    reader: &StageView<'_>,
     prim: &SdfPath,
     purpose: MaterialPurpose,
 ) -> Option<SdfPath> {
@@ -1707,8 +1696,8 @@ fn usd_wrap_to_address(wrap: Option<&str>) -> bevy::image::ImageAddressMode {
 /// ([`sample_usd_material_animation`]) mutates the `PbrLook` every frame, and a
 /// shared (content-keyed) look would mint a fresh material per frame and free
 /// none. `unshared` gives it a private material the binder mutates in place.
-fn apply_standard_material<R: UsdRead>(
-    reader: &R,
+fn apply_standard_material(
+    reader: &StageView<'_>,
     sdf_path: &SdfPath,
     mesh_handle: &Handle<Mesh>,
     entity_cmd: &mut EntityCommands,
@@ -2023,7 +2012,7 @@ pub fn layer_default_prim(layer: &UsdData) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-pub fn stage_default_prim<R: UsdRead>(reader: &R) -> Option<String> {
+pub fn stage_default_prim(reader: &StageView<'_>) -> Option<String> {
     // `defaultPrim` is authored as `Value::Token` (see compose.rs). The two
     // `UsdRead` impls read it uniformly: the flatten off the pseudo-root spec,
     // the live stage via `Stage::default_prim`.
@@ -2198,7 +2187,7 @@ pub fn read_rel_target(reader: &UsdData, prim_path: &SdfPath, rel_name: &str) ->
 /// documented silent-`None` "bodies launched into orbit" bug, where a
 /// `point3f` anchor (parsed as `[f32;3]`) read through a single-type
 /// path returned `None` and defaulted the joint anchor to zero.
-pub fn read_vec3_f64<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
+pub fn read_vec3_f64(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
     // Fixed-size array forms first (`point3f`/`float3` → `[f32;3]`,
     // `point3d`/`double3` → `[f64;3]`).
     if let Some(v) = reader.scalar::<[f32; 3]>(path, attr) {
@@ -2228,13 +2217,13 @@ pub fn read_vec3_f64<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Opti
 /// xform ops). Two USD types, two readers — a single lenient one that took
 /// either would let `color3f primvars:displayColor` (the wrong type, which every
 /// asset here used to author) keep working, and that is the bug we are removing.
-pub fn read_primvar_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
+pub fn read_primvar_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
     primvar_vec3_from(reader.attr_value(path, attr)?)
 }
 
 /// Time-sampled twin of [`read_primvar_vec3`].
-pub fn read_primvar_vec3_at<R: UsdRead>(
-    reader: &R,
+pub fn read_primvar_vec3_at(
+    reader: &StageView<'_>,
     path: &SdfPath,
     attr: &str,
     time: f64,
@@ -2257,13 +2246,13 @@ fn primvar_vec3_from(value: Value) -> Option<[f64; 3]> {
 /// Read a **`UsdGeomGprim` display primvar** — `primvars:displayOpacity`.
 /// `float[]` by schema, `constant` interpolation → element 0. See
 /// [`read_primvar_vec3`] for why this is not merged with the scalar reader.
-pub fn read_primvar_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
+pub fn read_primvar_f32(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<f32> {
     primvar_f32_from(reader.attr_value(path, attr)?)
 }
 
 /// Time-sampled twin of [`read_primvar_f32`].
-pub fn read_primvar_f32_at<R: UsdRead>(
-    reader: &R,
+pub fn read_primvar_f32_at(
+    reader: &StageView<'_>,
     path: &SdfPath,
     attr: &str,
     time: f64,
@@ -2284,7 +2273,7 @@ fn primvar_f32_from(value: Value) -> Option<f32> {
 /// `timeSamples` at `time` (held/linear via `openusd::usd::evaluate`), falling
 /// back to `default` when there are no samples. Same value-type coverage
 /// (`[f32;3]`/`[f64;3]` and the `Vec<f32>`/`Vec<f64>` forms).
-pub fn read_vec3_f64_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
+pub fn read_vec3_f64_at(reader: &StageView<'_>, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
     if let Some(v) = reader.scalar_at::<[f32; 3]>(path, attr, time) {
         return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
     }
@@ -2303,7 +2292,7 @@ pub fn read_vec3_f64_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time
 /// True iff `attr` on `path` actually carries `timeSamples` (not just a
 /// `default`). The sampler uses this per-channel so it writes **only** animated
 /// channels — a static `xformOp:rotateXYZ` is left exactly as instantiated.
-pub fn attr_has_time_samples<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> bool {
+pub fn attr_has_time_samples(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> bool {
     reader.has_time_samples(path, attr)
 }
 
@@ -2319,7 +2308,7 @@ pub const ANIMATED_SHADER_INPUTS: [&str; 2] = ["inputs:diffuseColor", "inputs:op
 /// is animated and the entity should get the [`UsdAnimated`] marker. Covers
 /// translate / scale, the full matrix `xformOp:transform`, and every rotation
 /// channel ([`ROTATION_OPS`]: Euler orders, `orient`, single-axis).
-pub fn prim_has_xform_time_samples<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
+pub fn prim_has_xform_time_samples(reader: &StageView<'_>, path: &SdfPath) -> bool {
     attr_has_time_samples(reader, path, "xformOp:translate")
         || attr_has_time_samples(reader, path, "xformOp:scale")
         || attr_has_time_samples(reader, path, "xformOp:transform")
@@ -2330,7 +2319,7 @@ pub fn prim_has_xform_time_samples<R: UsdRead>(reader: &R, path: &SdfPath) -> bo
 /// xform op, `visibility`, geom `primvars:displayColor`, or a bound surface
 /// shader's [`ANIMATED_SHADER_INPUTS`]. Drives the [`UsdAnimated`] tag, so a
 /// material-only or visibility-only animation is funnelled the same as xform.
-pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
+pub fn prim_is_animated(reader: &StageView<'_>, path: &SdfPath) -> bool {
     if prim_has_xform_time_samples(reader, path)
         || attr_has_time_samples(reader, path, "visibility")
         || attr_has_time_samples(reader, path, "primvars:displayColor")
@@ -2349,7 +2338,7 @@ pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
 /// so the samplers multiply their resolved time (seconds) by this to get the
 /// time code to evaluate. Defaults to 24.0 (USD spec) when unauthored or
 /// non-positive — the latter guards a malformed stage from freezing animation.
-pub fn stage_time_codes_per_second<R: UsdRead>(reader: &R) -> f64 {
+pub fn stage_time_codes_per_second(reader: &StageView<'_>) -> f64 {
     // `UsdRead::time_codes_per_second` already defaults to 24 when unauthored;
     // guard a malformed non-positive opinion (either source) so it can't freeze
     // animation (division by a zero/negative rate).
@@ -2367,7 +2356,7 @@ pub fn stage_time_codes_per_second<R: UsdRead>(reader: &R) -> f64 {
 /// `timeSamples` or the held sample isn't textual. An `asset`-typed channel is
 /// deliberately NOT read here: an asset reference is a different thing from a
 /// token, and no animated channel we author is one.
-pub(crate) fn read_token_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
+pub(crate) fn read_token_at(reader: &StageView<'_>, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
     // Gate on authored `timeSamples` (never fall back to `default`): a token
     // channel with no samples isn't animated. `attr_value_at` evaluates the
     // samples — for a non-lerpable token type openusd's Linear interpolation
@@ -2386,8 +2375,8 @@ pub(crate) fn read_token_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, 
 /// held value through [`read_token_at`] — so it doesn't depend on the inner
 /// sample value type. `None`/empty when the attribute carries no token samples.
 /// Used to build the [`camera_track::CameraTrackPlan`] key list once.
-pub(crate) fn read_token_timesamples<R: UsdRead>(
-    reader: &R,
+pub(crate) fn read_token_timesamples(
+    reader: &StageView<'_>,
     path: &SdfPath,
     attr: &str,
 ) -> Vec<(f64, String)> {
@@ -2401,7 +2390,7 @@ pub(crate) fn read_token_timesamples<R: UsdRead>(
 /// The authored time-code span `(first, last)` of one attribute's `timeSamples`
 /// (samples are stored ascending, so the ends are the first/last keys). `None`
 /// when the attribute has no samples.
-fn attr_sample_span<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<(f64, f64)> {
+fn attr_sample_span(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<(f64, f64)> {
     reader.time_sample_span(path, attr)
 }
 
@@ -2411,7 +2400,7 @@ fn attr_sample_span<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Optio
 /// stage `timeCodesPerSecond`. `None` when nothing is sampled. The transport
 /// uses this to bound the preview playhead to the real clip length instead of a
 /// guessed range.
-pub fn animated_time_range<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<(f64, f64)> {
+pub fn animated_time_range(reader: &StageView<'_>, path: &SdfPath) -> Option<(f64, f64)> {
     let mut spans: Vec<(f64, f64)> = Vec::new();
     for op in ["xformOp:translate", "xformOp:scale", "xformOp:transform"] {
         spans.extend(attr_sample_span(reader, path, op));
@@ -2438,7 +2427,7 @@ pub fn animated_time_range<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<(f6
 /// Time-sampled scalar float at time code `time`, accepting both `float` and
 /// `double` authored types (`inputs:opacity` is commonly either). `None` for a
 /// static channel so the caller leaves the material untouched.
-fn read_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
+fn read_f32_at(reader: &StageView<'_>, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
     if !attr_has_time_samples(reader, path, attr) {
         return None;
     }
@@ -2448,7 +2437,7 @@ fn read_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) ->
 /// Sample one xform-op channel **only if it is animated** (has `timeSamples`),
 /// evaluated at `time`. Returns `None` for static channels so the caller leaves
 /// the instantiated value untouched.
-fn sample_animated_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
+fn sample_animated_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
     if !attr_has_time_samples(reader, path, attr) {
         return None;
     }
@@ -2789,7 +2778,7 @@ pub fn bind_animated_to_preview(
 /// `Vec3` (f32). Thin wrapper over [`read_vec3_f64`] — reused by
 /// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there
 /// is one canonical vec3 reader. `None` if absent or unconvertible.
-pub fn get_attribute_as_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec3> {
+pub fn get_attribute_as_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<Vec3> {
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
@@ -2810,8 +2799,8 @@ pub fn get_attribute_as_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str)
 ///
 /// A program whose source this engine does not run — a `.mo`, an `.xml` — belongs to
 /// another engine and is skipped: the extension picks the engine.
-fn attach_programs<R: UsdRead>(
-    reader: &R,
+fn attach_programs(
+    reader: &StageView<'_>,
     owner: &SdfPath,
     entity: Entity,
     commands: &mut Commands,
@@ -2958,7 +2947,7 @@ fn quat_from_value(v: &Value) -> Option<Quat> {
 /// time `time` (timeSamples-or-default). The int fallback avoids the silent-`None`
 /// trap when an angle is authored as a bare integer (`rotateZ = 90`). `None` when
 /// absent or non-numeric.
-fn read_scalar_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
+fn read_scalar_f32_at(reader: &StageView<'_>, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
     reader
         .real_f32_at(path, attr, time)
         .or_else(|| match reader.attr_value_at(path, attr, time)? {
@@ -2974,7 +2963,7 @@ fn read_scalar_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: 
 /// composed about X then Y then Z. Each channel reads its `default` when static,
 /// so this serves both load-time decode (any `time`) and the animation sampler.
 /// `None` when the prim authors no rotation op.
-pub fn local_rotation_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Quat> {
+pub fn local_rotation_at(reader: &StageView<'_>, path: &SdfPath, time: f64) -> Option<Quat> {
     // 1. Quaternion orient wins.
     if let Some(q) = reader.attr_value_at(path, "xformOp:orient", time).and_then(|v| quat_from_value(&v)) {
         return Some(q);
@@ -3006,7 +2995,7 @@ pub fn local_rotation_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> O
 /// last row — exactly glam's column-major / column-vector layout transposed, and
 /// the two transposes cancel, so the raw 16 elements feed `Mat4::from_cols_array`
 /// directly. `None` when no `xformOp:transform` is authored.
-pub fn read_matrix_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
+pub fn read_matrix_transform_at(reader: &StageView<'_>, path: &SdfPath, time: f64) -> Option<Transform> {
     match reader.attr_value_at(path, "xformOp:transform", time)? {
         Value::Matrix4d(m) => {
             let cols: [f32; 16] = std::array::from_fn(|i| m.0[i] as f32);
@@ -3018,7 +3007,7 @@ pub fn read_matrix_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f6
 
 /// True iff any rotation xform-op carries `timeSamples` (so the sampler must
 /// recompose the prim's rotation this frame).
-fn prim_rotation_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
+fn prim_rotation_animated(reader: &StageView<'_>, path: &SdfPath) -> bool {
     ROTATION_OPS.iter().any(|op| attr_has_time_samples(reader, path, op))
 }
 
@@ -3026,7 +3015,7 @@ fn prim_rotation_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
 /// when unauthored or empty. When authored it is the **authoritative** op
 /// sequence — [`compose_xform_order_at`] honors it exactly, including non-TRS
 /// orders the piecewise decode can't express.
-fn read_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<String>> {
+fn read_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<String>> {
     let order: Vec<String> = match reader.attr_value(path, "xformOpOrder")? {
         Value::TokenVec(v) => v.iter().map(|t| t.to_string()).collect(),
         Value::StringVec(v) => v,
@@ -3037,7 +3026,7 @@ fn read_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<Str
 
 /// True iff the prim authors a non-empty `xformOpOrder` (so its local transform
 /// is defined by the ordered op stack, not the implicit TRS fallback).
-fn has_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
+fn has_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> bool {
     read_xform_op_order(reader, path).is_some()
 }
 
@@ -3071,7 +3060,7 @@ const MAX_USD_ANCESTRY_DEPTH: usize = 64;
 /// Position matters: UsdGeomXformable gives the sentinel meaning only as the
 /// first entry — anywhere else it is a malformed stack, which
 /// [`compose_xform_order_at`] already rejects by returning `None`.
-fn prim_resets_xform_stack<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
+fn prim_resets_xform_stack(reader: &StageView<'_>, path: &SdfPath) -> bool {
     read_xform_op_order(reader, path)
         .is_some_and(|order| order.first().is_some_and(|op| op == RESET_XFORM_STACK))
 }
@@ -3151,7 +3140,7 @@ pub fn detach_reset_xform_stack_prims(
 /// `Mat4::from_cols_array` directly. `None` when no `xformOpOrder` is authored,
 /// or when the stack is malformed (a misplaced `!resetXformStack!`, a singular
 /// `!invert!` op) — the caller then keeps the entity's existing transform.
-pub fn compose_xform_order_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
+pub fn compose_xform_order_at(reader: &StageView<'_>, path: &SdfPath, time: f64) -> Option<Transform> {
     use openusd::schemas::geom::Xformable as _;
     read_xform_op_order(reader, path)?;
     let m = XformablePrim(reader.usd_stage().prim(path.clone()))
@@ -3175,7 +3164,7 @@ pub fn compose_xform_order_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64)
 /// A canonical stage (all our own assets) takes the identity path — unchanged.
 /// Every downstream consumer (visual sync, avian colliders, mounts, the gizmo)
 /// funnels through here, so none of them sees stage units.
-pub fn local_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
+pub fn local_transform_at(reader: &StageView<'_>, path: &SdfPath, time: f64) -> Option<Transform> {
     let raw = local_transform_at_raw(reader, path, time)?;
     Some(stage_convention(reader).local_transform(raw))
 }
@@ -3183,7 +3172,7 @@ pub fn local_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> 
 /// [`local_transform_at`] **before** the canonical conversion — the transform as
 /// authored, in the stage's own frame and units. Private: no consumer may hold a
 /// raw spatial value (doc 41 — "visibility is the guardrail").
-fn local_transform_at_raw<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
+fn local_transform_at_raw(reader: &StageView<'_>, path: &SdfPath, time: f64) -> Option<Transform> {
     // `xformOpOrder` IS the transform. UsdGeomXformable defines a prim's local
     // transform as the ordered composition of exactly the ops that attribute lists;
     // an `xformOp:*` attribute the order does not name is inert data, and a prim
@@ -3209,7 +3198,7 @@ fn local_transform_at_raw<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> 
 /// `ONE` (callers that need `xformOp:scale` compose it themselves; avian
 /// pre-applies scale onto the collider instead). Avian downcasts the resulting
 /// `Transform` to `DVec3`/`DQuat` at its call site.
-pub fn read_transform_from_usd<R: UsdRead>(reader: &R, path: &SdfPath) -> Transform {
+pub fn read_transform_from_usd(reader: &StageView<'_>, path: &SdfPath) -> Transform {
     match local_transform_at(reader, path, 0.0) {
         Some(tf) => Transform { scale: Vec3::ONE, ..tf },
         None => Transform::IDENTITY,
@@ -3267,7 +3256,7 @@ impl ObjectAabb {
 
 /// Derive the [`ObjectAabb`] of an asset by walking the composed USD stage from
 /// `root_prim` (e.g. `"/DescentLander"`). See [`ObjectAabb`].
-pub fn collision_aabb<R: UsdRead>(reader: &R, root_prim: &str) -> Option<ObjectAabb> {
+pub fn collision_aabb(reader: &StageView<'_>, root_prim: &str) -> Option<ObjectAabb> {
     let root = SdfPath::new(root_prim).ok()?;
     let root_tf = local_transform_at(reader, &root, 0.0).unwrap_or_default();
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
@@ -3279,8 +3268,8 @@ pub fn collision_aabb<R: UsdRead>(reader: &R, root_prim: &str) -> Option<ObjectA
 /// `Transform * Transform` = parent ∘ child-local, scale kept — USD propagates
 /// parent scale to child geometry) and fold each collision-enabled shape's
 /// transformed corners into `acc`.
-fn accumulate_collision_aabb<R: UsdRead>(
-    reader: &R,
+fn accumulate_collision_aabb(
+    reader: &StageView<'_>,
     path: &SdfPath,
     world_tf: Transform,
     acc: &mut Option<(bevy::math::DVec3, bevy::math::DVec3)>,
@@ -3323,8 +3312,8 @@ fn accumulate_collision_aabb<R: UsdRead>(
 /// `None` for a non-shape prim (Xform/Scope/Mesh/…) so the walk skips it. Uses the
 /// shared [`read_shape_dims`], and rotates a round shape's box onto its authored
 /// `axis` token, so the box matches the collider the shape produces.
-fn local_shape_corners<R: UsdRead>(
-    reader: &R,
+fn local_shape_corners(
+    reader: &StageView<'_>,
     path: &SdfPath,
     ty: &str,
 ) -> Option<Vec<bevy::math::DVec3>> {
@@ -3409,7 +3398,7 @@ pub enum ShapeDims {
 /// Every dimension is scaled by the stage's `metersPerUnit`
 /// ([`ConventionTransform::length`]) — a centimetre stage's `radius = 50` reads
 /// back `0.5` m. Identity (and therefore unchanged) for a metre stage.
-pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
+pub fn read_shape_dims(reader: &StageView<'_>, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
     let dims = read_shape_dims_raw(reader, path, type_name)?;
     let conv = stage_convention(reader);
     if conv.is_identity() {
@@ -3432,8 +3421,8 @@ pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) 
 
 /// [`read_shape_dims`] **before** the unit conversion — dimensions in the stage's
 /// own linear unit. Private (doc 41: no public raw spatial accessor).
-fn read_shape_dims_raw<R: UsdRead>(
-    reader: &R,
+fn read_shape_dims_raw(
+    reader: &StageView<'_>,
     path: &SdfPath,
     type_name: &str,
 ) -> Option<ShapeDims> {
@@ -3474,7 +3463,7 @@ fn read_shape_dims_raw<R: UsdRead>(
 /// (see [`units`]). The one place mesh geometry crosses the unit/axis boundary —
 /// both the render mesh ([`build_usd_mesh`]) and the physics trimesh
 /// ([`read_usd_mesh_indexed`]) read through it, so they cannot disagree.
-fn read_mesh_points<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
+fn read_mesh_points(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
     // `points3`, NOT `scalar::<Vec<[f32; 3]>>`: USD's `points` is `point3f[]` by
     // convention but `point3d[]` is legal and exporters do emit it (coordinates feel
     // like they deserve the precision). A strict `point3f[]` read of a `point3d[]`
@@ -3495,7 +3484,7 @@ fn read_mesh_points<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32; 
 /// A `Mesh` prim's `normals`, rotated into the canonical frame (`n' = Q·n`) — a
 /// direction, so never scaled. `None` when unauthored (the caller then computes
 /// flat normals).
-fn read_mesh_normals<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
+fn read_mesh_normals(reader: &StageView<'_>, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
     // `points3` for the same reason as `points` above — `normal3d[]` is legal, and a
     // strict read of it means "unauthored", which here silently swaps authored
     // shading normals for computed flat ones (a faceted look, not an error).
@@ -3526,7 +3515,7 @@ fn read_mesh_normals<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32;
 /// per-vertex. Absent `widths` means an infinitely thin curve, which has no
 /// surface — returns `None` rather than inventing a radius, so a curve authored
 /// as a pure path (a camera rail) does not silently become a visible pipe.
-fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
+fn build_usd_curve_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> {
     use crate::camera_path::CurveBasis;
     use crate::curve_sweep::sweep_tube;
 
@@ -3732,7 +3721,7 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
 /// face value while the code underneath was working, so a missing surface was
 /// blamed on trim support that in fact existed. A doc comment that describes a
 /// capability the code no longer lacks is worse than no comment.)
-fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
+fn build_usd_nurbs_patch_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     use bevy_mesh::PrimitiveTopology;
 
@@ -4014,8 +4003,8 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
 /// Flipping normals alone is not enough — back-face culling keys off winding, so
 /// a flipped normal on unflipped triangles renders lit-but-invisible from the
 /// side you want. Both must move together, which is why they are one function.
-fn apply_patch_orientation<R: UsdRead>(
-    reader: &R,
+fn apply_patch_orientation(
+    reader: &StageView<'_>,
     path: &SdfPath,
     normals: &mut [[f32; 3]],
     indices: &mut [u32],
@@ -4046,7 +4035,7 @@ fn apply_patch_orientation<R: UsdRead>(
     }
 }
 
-fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {
+fn read_int_array(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {
     match reader.attr_value(path, attr)? {
         Value::IntVec(v) => Some(v),
         Value::Int64Vec(v) => Some(v.iter().map(|&x| x as i32).collect()),
@@ -4063,8 +4052,8 @@ fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<
 /// `f64` knot vector to decide where each curve's span starts and ends, so
 /// round-tripping them through `f32` can move a span end just past a knot and drop
 /// or duplicate a segment of a trim loop.
-fn read_double2_array<R: UsdRead>(
-    reader: &R,
+fn read_double2_array(
+    reader: &StageView<'_>,
     path: &SdfPath,
     attr: &str,
 ) -> Option<Vec<[f64; 2]>> {
@@ -4085,8 +4074,8 @@ fn read_double2_array<R: UsdRead>(
 /// shape `Collider::trimesh` consumes. Triangle winding is irrelevant for
 /// collision, so `orientation` is ignored. `None` if the topology attributes
 /// are absent/empty or an index is out of range (malformed mesh).
-pub fn read_usd_mesh_indexed<R: UsdRead>(
-    reader: &R,
+pub fn read_usd_mesh_indexed(
+    reader: &StageView<'_>,
     path: &SdfPath,
 ) -> Option<(Vec<[f32; 3]>, Vec<[u32; 3]>)> {
     // Points are converted to the canonical frame (Y-up, metres) — the trimesh
@@ -4144,7 +4133,7 @@ pub fn read_usd_mesh_indexed<R: UsdRead>(
 /// indices reference out-of-range points (malformed mesh). Rendering only —
 /// native-mesh **colliders** are still the glTF side-channel's job
 /// (see `resolver.rs` `TODO(glb-composability)`).
-pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
+pub fn build_usd_mesh(reader: &StageView<'_>, path: &SdfPath) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     // `bevy_mesh`, NOT `bevy::render::render_resource` — the latter is a
     // re-export through `bevy_render` (wgpu + naga). `bevy_mesh` depends only on

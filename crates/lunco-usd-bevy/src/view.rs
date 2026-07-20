@@ -11,7 +11,7 @@
 //! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::{PrimPredicate, Stage};
+use openusd::usd::Stage;
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from a `NonSend` `CanonicalStage`.
@@ -90,16 +90,6 @@ impl<'a> StageView<'a> {
         }
     }
 
-    /// Immediate composed prim children of `prim`.
-    /// Mirrors [`UsdDataExt::prim_children`](crate::usd_data::UsdDataExt::prim_children).
-    pub fn prim_children(&self, prim: &SdfPath) -> Vec<SdfPath> {
-        self.stage
-            .prim(prim.clone())
-            .children()
-            .map(|cs| cs.iter().map(|c| c.path().clone()).collect())
-            .unwrap_or_default()
-    }
-
     /// Composed, path-translated targets of relationship `name` on `prim` (the
     /// PCP-resolved targets the flattened reader stored under `targetPaths`).
     pub fn rel_targets(&self, prim: &SdfPath, name: &str) -> Vec<SdfPath> {
@@ -110,40 +100,21 @@ impl<'a> StageView<'a> {
             .unwrap_or_default()
     }
 
-    /// First composed target of relationship `name` on `prim` (`None` if
-    /// absent/empty). Mirrors the legacy `read_rel_target` free helper.
-    pub fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<SdfPath> {
-        self.rel_targets(prim, name).into_iter().next()
-    }
-
-    /// Whether `prim` applies the named API schema, by exact token match against
-    /// its composed `apiSchemas`. Mirrors the `has_api_schema` free helper — the
-    /// read `lunco-usd-avian`'s physics extractor uses for body/collider/terrain
-    /// detection (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `LunCoTerrainAPI`).
-    pub fn has_api_schema(&self, prim: &SdfPath, schema_name: &str) -> bool {
-        self.stage
-            .prim(prim.clone())
-            .api_schemas()
-            .map(|v| v.iter().any(|s| s.as_str() == schema_name))
-            .unwrap_or(false)
-    }
-
     /// Attribute `name` on `prim` as a 3-vector (`double3`/`float3`). Mirrors the
     /// legacy `get_attribute_as_vec3` free helper.
     pub fn value_vec3(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]> {
         self.value::<[f64; 3]>(prim, name)
     }
-
-    /// Every live (active, defined, non-abstract) composed prim path, in
-    /// traversal order — the same set the flattened reader contains.
-    pub fn prim_paths(&self) -> Vec<SdfPath> {
-        let mut paths = Vec::new();
-        let _ = self
-            .stage
-            .traverse(PrimPredicate::DEFAULT, |p| paths.push(p.clone()));
-        paths
-    }
 }
+
+// `rel_target`, `has_api_schema`, `prim_paths` and `children` are NOT inherent
+// methods: they live on [`UsdRead`] only. While the reader was generic these
+// names existed in both places, and a Rust inherent method SHADOWS a trait
+// method of the same name — so collapsing the generics silently re-pointed every
+// call to the inherent twin. `rel_target` returned `Option<SdfPath>` inherently
+// vs `Option<String>` on the trait, which is exactly the kind of quiet
+// return-type swap that compiles at some call sites and not others. One name,
+// one definition.
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod compose_tests {
@@ -153,6 +124,7 @@ mod compose_tests {
 
     use super::StageView;
     use crate::compose::compose_file_to_stage;
+    use crate::UsdRead;
     use openusd::sdf::Path as SdfPath;
 
     fn asset(rel: &str) -> std::path::PathBuf {
@@ -236,7 +208,7 @@ mod compose_tests {
         // First: does the referenced child exist at all under the referencing prim?
         // If this fails the `over` is moot — the reference arc itself never brought
         // the child across, which is a different (larger) bug.
-        let children = view.prim_children(&SdfPath::new("/Episode").unwrap());
+        let children = view.children(&SdfPath::new("/Episode").unwrap());
         assert!(
             children.iter().any(|c| c.as_str().ends_with("/Ground")),
             "the `references` arc must bring the base's `Ground` child across; got {children:?}"

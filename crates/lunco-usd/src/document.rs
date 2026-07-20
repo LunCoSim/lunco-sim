@@ -1727,10 +1727,11 @@ mod tests {
     use super::*;
     use lunco_doc::{DocumentHost, Mutation};
 
-    // TODO(usd-read-migration): these assertions read the flattened `sdf::Data`
-    // via the legacy `UsdDataExt` (`prim_attribute_value`/`prim_type_name`). Switch
-    // to the generic `UsdRead` surface (`scalar`/`type_name`) to match production
-    // (doc 21). Time-sampled reads (`prim_attribute_value_at`) → `scalar_at`.
+    // These assertions read the document's AUTHORED layer through `UsdDataExt`,
+    // and that is deliberate — do not "migrate" them to the composed `UsdRead`
+    // surface. A document test asserts what an op authored into which layer;
+    // composition would resolve references/variants on top and hide precisely
+    // the layer-targeting these tests exist to pin.
 
     const TINY_USDA: &str =
         "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n}\n";

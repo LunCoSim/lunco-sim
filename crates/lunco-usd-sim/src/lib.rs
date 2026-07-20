@@ -508,8 +508,8 @@ fn process_usd_sim_prims(
 /// targets (articulation roots) off either the live canonical `StageView` or the
 /// flattened `sdf::Data`, identically. Also collects the canonical
 /// `PhysxVehicleWheelAttachmentAPI` wheel→suspension bindings (doc 53 §3.2).
-fn collect_joint_scan_read<R: UsdRead>(
-    reader: &R,
+fn collect_joint_scan_read(
+    reader: &lunco_usd_bevy::StageView<'_>,
     stage_handle: &Handle<UsdStageAsset>,
     joint_targets: &mut HashMap<(Handle<UsdStageAsset>, String), String>,
     articulation_roots: &mut std::collections::HashSet<(Handle<UsdStageAsset>, String)>,
@@ -557,8 +557,8 @@ fn collect_joint_scan_read<R: UsdRead>(
 /// schemas to its sim/avatar/wheel components off either the live canonical
 /// `StageView` or the flattened `sdf::Data`, identically.
 #[allow(clippy::too_many_arguments)]
-fn process_usd_sim_prim_read<R: UsdRead>(
-    reader: &R,
+fn process_usd_sim_prim_read(
+    reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
     prim_path: &UsdPrimPath,
     sdf_path: SdfPath,
@@ -1460,8 +1460,8 @@ fn net_override_markers(replicate: Option<bool>, authority: Option<&str>) -> (bo
 /// PhysX Vehicle names), an explicit `lunco:driveMix` linear table, or a
 /// scripted `lunco:driveKernel` hook. Shared by the spawn path and the live
 /// wheel-param resync so an edited kernel re-derives identically.
-fn derive_drive_mix<R: UsdRead>(
-    reader: &R,
+fn derive_drive_mix(
+    reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
     prim_path_str: &str,
 ) -> Option<DriveMix> {
@@ -1499,7 +1499,10 @@ fn derive_drive_mix<R: UsdRead>(
 /// Walks ANCESTORS, not the immediate parent: a wheel need not be a direct child of
 /// its vehicle. A rocker-bogie wheel hangs off a rocker link (`/Rover/RockerL/Wheel_FL`),
 /// so a parent-only check silently reports "does not steer" for a rover that does.
-fn steering_vehicle_of<R: UsdRead>(reader: &R, wheel_path: &str) -> Option<SdfPath> {
+fn steering_vehicle_of(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    wheel_path: &str,
+) -> Option<SdfPath> {
     let mut path = wheel_path;
     while let Some(cut) = path.rfind('/') {
         // `cut == 0` ⇒ the next ancestor is the pseudo-root; stop.

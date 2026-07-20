@@ -224,8 +224,8 @@ pub fn process_usd_cosim_prims(
 /// Reads one cosim prim's attributes and dispatches its model + wires + events,
 /// generic over the read source ([`UsdRead`]) — drives off either the live
 /// canonical `StageView` or the flattened `sdf::Data`, identically.
-fn process_usd_cosim_prim_read<R: UsdRead>(
-    reader: &R,
+fn process_usd_cosim_prim_read(
+    reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
     prim_path: &UsdPrimPath,
     sdf_path: &SdfPath,
@@ -368,7 +368,10 @@ fn solver_language(path: &str) -> Option<SolverLanguage> {
 /// One prim per rule, so each part of it — the port, the comparison, the threshold,
 /// the event name — is a typed property that validates, inspects, journals and
 /// replicates like any other. A rule packed into a string is none of those things.
-fn read_port_event_prims<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Vec<PortEventRule> {
+fn read_port_event_prims(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    sdf_path: &SdfPath,
+) -> Vec<PortEventRule> {
     let mut rules = Vec::new();
     for child in reader.children(sdf_path) {
         if reader.type_name(&child).as_deref() != Some("LunCoPortEvent") {
@@ -1494,10 +1497,10 @@ pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
 /// uses, so the observer instantiates its geometry + subtree in place without
 /// disturbing siblings. Returns `None` (no-op) if the parent isn't live yet or
 /// the prim is already spawned.
-pub fn spawn_usd_child<R: lunco_usd_bevy::UsdRead>(
+pub fn spawn_usd_child(
     world: &mut World,
     stage_handle_id: bevy::asset::AssetId<UsdStageAsset>,
-    reader: &R,
+    reader: &lunco_usd_bevy::StageView<'_>,
     path: &str,
 ) -> Option<Entity> {
     // Pre-populate the translate so physics sees the spawn offset before the

@@ -94,8 +94,8 @@ pub fn apply_usd_shader_materials(
 /// off the live canonical `StageView`. Marks the prim [`UsdShaderResolved`] the moment its stage is
 /// readable (whether or not it ends up wanting a shader).
 #[allow(clippy::too_many_arguments)]
-fn apply_usd_shader_material_read<R: UsdRead>(
-    reader: &R,
+fn apply_usd_shader_material_read(
+    reader: &lunco_usd_bevy::StageView<'_>,
     entity: Entity,
     prim_path: &UsdPrimPath,
     sdf_path: &SdfPath,
@@ -124,7 +124,7 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // `info:mdl:sourceAsset`. So usdview, Blender and Omniverse all see a material
     // where a material is, and a prim bound to a `UsdPreviewSurface` instead keeps its
     // `PbrLook` — it has no `wgsl` source, and that is the whole test.
-    let Some(shader_prim) = bound_shader_prim(reader, sdf_path) else {
+    let Some(shader_prim) = lunco_usd_bevy::resolve_bound_shader(reader, sdf_path) else {
         return;
     };
     let Some(raw_shader_path) = reader.asset(&shader_prim, "info:wgsl:sourceAsset") else {
@@ -283,8 +283,8 @@ fn shader_has_fragment_entry(_shader_path: &str) -> bool {
 ///
 /// Names the shader does not declare pack to nothing, so filling
 /// `display_color` for a prim whose shader ignores it is harmless.
-fn fill_prim_engine_params<R: UsdRead>(
-    reader: &R,
+fn fill_prim_engine_params(
+    reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
     values: &mut BTreeMap<String, ParamValue>,
 ) {
@@ -308,29 +308,6 @@ fn fill_prim_engine_params<R: UsdRead>(
     }
 }
 
-/// The `Shader` prim whose surface a gprim's bound `Material` produces — the USD
-/// path from a piece of geometry to the thing that shades it.
-///
-/// `rel material:binding` names the `Material`; the `Material`'s
-/// `outputs:surface.connect` names the `Shader`. Both hops are stock `UsdShade`, and
-/// both are composed reads, so a material bound through a reference arc resolves the
-/// same as one authored in place.
-///
-/// `None` means this prim is not shaded by a material (most prims aren't — they carry
-/// a `displayColor` and get a `PbrLook`).
-///
-/// `pub`: the terrain layer binder (`lunco-sandbox`) walks the same two hops
-/// to read a terrain's Material network — one definition of "the bound
-/// shader", not two that can drift.
-pub fn bound_shader_prim<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<SdfPath> {
-    let material = reader.rel_target(sdf_path, "material:binding")?;
-    let material = SdfPath::new(&material).ok()?;
-    // `/Scene/Looks/Regolith/Shader.outputs:surface` → `/Scene/Looks/Regolith/Shader`
-    let surface = reader.connection_source(&material, "outputs:surface")?;
-    let (shader, _) = surface.rsplit_once('.')?;
-    SdfPath::new(shader).ok()
-}
-
 /// Reads a `Shader` prim's authored `inputs:*` into the look's parameter map, by
 /// name — so a shader is configured by exactly the parameters it declares, and each
 /// one is a typed, schema-visible property of the shader that consumes it.
@@ -342,8 +319,8 @@ pub fn bound_shader_prim<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<S
 /// Inputs that are CONNECTED (fed by another shader node) are skipped: this pipeline
 /// binds a single shader, not a graph, and a connected input has no authored value to
 /// read anyway.
-fn read_shader_inputs<R: UsdRead>(
-    reader: &R,
+fn read_shader_inputs(
+    reader: &lunco_usd_bevy::StageView<'_>,
     shader_prim: &SdfPath,
 ) -> BTreeMap<String, ParamValue> {
     let mut values = BTreeMap::new();
@@ -383,8 +360,8 @@ fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
 /// path)` pairs. CONNECTED inputs are skipped for the same reason as in
 /// [`read_shader_inputs`] — a connected port is fed by a producer node
 /// (doc 18 Tier B), not by an authored file.
-fn read_shader_texture_inputs<R: UsdRead>(
-    reader: &R,
+fn read_shader_texture_inputs(
+    reader: &lunco_usd_bevy::StageView<'_>,
     shader_prim: &SdfPath,
 ) -> Vec<(TextureLayer, String)> {
     let mut out = Vec::new();

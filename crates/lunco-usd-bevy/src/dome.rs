@@ -48,6 +48,8 @@
 //! strictly better version of the same thing, and summing both would
 //! double-count the sky.
 
+use crate::UsdRead;
+
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
@@ -166,8 +168,8 @@ fn load_dome_texture(asset_server: &AssetServer, path: &str) -> Handle<Image> {
 /// load path (`instantiate_light_prim`) and the live-edit path
 /// (`lunco_usd::live_consume`). Two copies would drift, and the symptom would
 /// be a dome that loads one way from disk and another way after an edit.
-pub fn read_dome_environment<R: crate::read::UsdRead>(
-    reader: &R,
+pub fn read_dome_environment(
+    reader: &crate::StageView<'_>,
     sdf_path: &openusd::sdf::Path,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,

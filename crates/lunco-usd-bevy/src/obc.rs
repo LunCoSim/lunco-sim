@@ -40,7 +40,7 @@ const ROLE_PRIMARY: &str = "primary";
 /// Order is sorted so the surface is deterministic across runs — `attr_names` reflects
 /// composition order, and a vocabulary that reshuffles between loads would make port
 /// indices and test expectations quietly unstable.
-pub fn read_command_surface<R: UsdRead>(reader: &R, vessel: &SdfPath) -> Option<Vec<String>> {
+pub fn read_command_surface(reader: &crate::StageView<'_>, vessel: &SdfPath) -> Option<Vec<String>> {
     let obc = find_primary_obc(reader, vessel)?;
     let mut names: Vec<String> = reader
         .attr_names(&obc)
@@ -58,7 +58,7 @@ pub fn read_command_surface<R: UsdRead>(reader: &R, vessel: &SdfPath) -> Option<
 /// stand-in root rebases onto the vessel (`over "OBC" { def Xform "Avionics" }` ⇒
 /// `/Vessel/Avionics`), so the part always lands one level down; searching deeper
 /// would let an unrelated subassembly's computer masquerade as the vessel's.
-pub fn find_primary_obc<R: UsdRead>(reader: &R, vessel: &SdfPath) -> Option<SdfPath> {
+pub fn find_primary_obc(reader: &crate::StageView<'_>, vessel: &SdfPath) -> Option<SdfPath> {
     reader.children(vessel).into_iter().find(|child| {
         reader.has_api_schema(child, OBC_API)
             && reader

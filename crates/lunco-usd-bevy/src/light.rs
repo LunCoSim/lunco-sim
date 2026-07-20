@@ -177,7 +177,7 @@ pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> b
 }
 
 /// Scalar attribute reader tolerant of `float`/`double`/`int` authoring.
-pub(crate) fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
+pub(crate) fn get_attribute_as_f32(reader: &crate::StageView<'_>, path: &SdfPath, attr: &str) -> Option<f32> {
     match reader.attr_value(path, attr)? {
         Value::Float(f) => Some(f),
         Value::Double(d) => Some(d as f32),
@@ -191,8 +191,8 @@ pub(crate) fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr:
 /// turned into a Bevy light — the *unit* of the result depends on the target
 /// component (lux for `DirectionalLight`, lumens for `Point`/`Spot`/`RectLight`),
 /// but the photometric conversion is identical, so it lives here once.
-pub(crate) fn read_intensity_with_exposure<R: UsdRead>(
-    reader: &R,
+pub(crate) fn read_intensity_with_exposure(
+    reader: &crate::StageView<'_>,
     path: &SdfPath,
     default_intensity: f32,
 ) -> f32 {
@@ -206,8 +206,8 @@ pub(crate) fn read_intensity_with_exposure<R: UsdRead>(
 /// Public because the shader-look authoring in `lunco-usd-sim` reads
 /// `primvars:doNotCastShadows` through the same rules the `PbrLook` path uses —
 /// two spellings of one primvar would be a drift bug waiting to happen.
-pub fn get_attribute_as_bool<R: UsdRead>(
-    reader: &R,
+pub fn get_attribute_as_bool(
+    reader: &crate::StageView<'_>,
     path: &SdfPath,
     attr: &str,
 ) -> Option<bool> {
@@ -232,7 +232,7 @@ pub fn get_attribute_as_bool<R: UsdRead>(
 /// local light in the asset library is authored at.
 const DEFAULT_LIGHT_RANGE_M: f32 = 30.0;
 
-fn read_light_range<R: UsdRead>(reader: &R, path: &SdfPath) -> f32 {
+fn read_light_range(reader: &crate::StageView<'_>, path: &SdfPath) -> f32 {
     match get_attribute_as_f32(reader, path, "lunco:light:range") {
         Some(r) if r > 0.0 => r,
         _ => DEFAULT_LIGHT_RANGE_M,
@@ -243,8 +243,8 @@ fn read_light_range<R: UsdRead>(reader: &R, path: &SdfPath) -> f32 {
 /// Bevy light components to `entity` and return `true`. Called from
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
 /// the shared path there.
-pub(crate) fn instantiate_light_prim<R: UsdRead>(
-    reader: &R,
+pub(crate) fn instantiate_light_prim(
+    reader: &crate::StageView<'_>,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,
