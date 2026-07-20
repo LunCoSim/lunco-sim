@@ -143,6 +143,31 @@ through it would mount a base-only stage and silently drop runtime edits.
 `CaptureScreenshot` returns the PNG as the **response body**; write those bytes
 yourself rather than relying on `save_to_file`.
 
+### Validate an asset without loading it
+
+`ValidateAsset` is the parse-only pre-flight ("does this file compile?"):
+no cosim, no scene load, no GPU — safe against any running sandbox, even
+mid-simulation. Unlike the commands below it is a **query provider**, so the
+report comes back in the response body; no `QueryCommandResult` poll.
+
+```bash
+curl -s -X POST http://127.0.0.1:4101/api/commands \
+  -H "Content-Type: application/json" \
+  -d '{"command":"ValidateAsset","params":{"path":"lunco://models/RoverBattery.mo"}}'
+```
+
+**Answered by sandbox binaries only** — it lives in `lunco-scene-commands`,
+which lunica does not link, so lunica returns `CommandNotFound`. With no
+instance (or only lunica) up, the same checks run as a one-shot CLI that builds
+no app at all:
+
+```bash
+cargo run -p lunco-sandbox --bin sandbox -- --validate assets/models/RoverBattery.mo
+```
+
+Full runbook — per-extension checks, exit codes, and the CWD path-resolution
+trap: [`validate-assets`](../validate-assets/SKILL.md).
+
 ## Command catalog
 
 All commands live under `crates/lunco-modelica/src/ui/commands/` as

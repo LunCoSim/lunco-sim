@@ -129,20 +129,80 @@ float   inputs:opacity       = 0.85   # sub-1 ⇒ Blend ⇒ alpha means somethin
 
 The beam is authored, so it takes the USD route. The rule is the `unlit` doc's own.
 
+## Engine-filled shader uniforms — a provider registry, not a branch
+
+A dynamic WGSL shader declares its own parameters, and marks the ones the *author*
+must not set with `//!@engine <name>`. Which names the engine knows how to fill,
+what type each is, and where its value comes from is stated in exactly one place:
+`lunco_materials::engine_params` (`EngineParams::builtin`). Adding an engine input
+is one registry entry — never a new branch in a binder.
+
+There are exactly two provider shapes, kept as separate `EngineSource` variants
+because they differ in *when* the value is known:
+
+| Variant | When | Examples |
+|---|---|---|
+| `PrimAttr` | per-prim, read from USD at look-authoring time and baked into the `ShaderLook`'s parameter map | `display_color` ← `primvars:displayColor[0]` |
+| `Runtime` | written each frame by the engine system that owns the computation | `sun_vis` (horizon ray-march), the terrain heightfield family |
+
+Because `PrimAttr` values ride in the look's parameter map, they follow the look
+wherever it goes — including the wheel physics/visual split, which moves the look
+onto a synthesized `*_visual` child. A live `SetAttribute` re-projects the prim and
+re-authors the look, so the render follows the edit.
+
+**Precedence: an authored `inputs:` always wins.** `//!@engine` marks a parameter
+the engine *can* fill, not one the author is forbidden to set. An explicit
+`inputs:display_color` on the `Shader` prim is already in the parameter map, and the
+engine fill skips the name.
+
+**`prop_fillable` is the registry's answer, not a literal.** A shader is offered in
+the prop picker only if every `//!@engine` field it declares is one a plain prop
+entity actually receives — terrain shaders declare `sun_dir`/`hf_size`, which only
+the terrain binder fills, so they would render black on a prop.
+`is_prop_pickable_source` asks the registry; registering a new prop-fillable
+provider automatically widens the test.
+
+### Colour is authored ONCE, as `primvars:displayColor`
+
+`primvars:displayColor` is **the** place a colour is authored — shader-bound or not.
+There is no parallel `inputs:hull_color`; that form was removed. A shader opts in
+with `//!@engine display_color` and is painted the ordinary USD way, so the same
+attribute drives a `UsdPreviewSurface` part and a procedural-shader part alike.
+Use `inputs:*` only for what a colour cannot express — accents, panel scale, wear.
+
 ## Adding a `lunco:*` schema property — THREE files, or it is inert
 
 `schema.usda` is the authoritative source **and is never read at runtime**.
 
 | File | Role |
 |---|---|
-| `schema/schema.usda` | source for `usdGenSchema`. **Not read at runtime.** |
+| `schema/schema.usda` | the authoritative source. **Not read at runtime.** |
 | `schema/generatedSchema.usda` | what is compiled in (`include_str!`) and ingested by `lunco_usd::schema` |
 | `schema/plugInfo.json` | the `Types` map, so external USD runtimes register the class |
 
-Plus a reader to consume it, plus authoring on the asset. `usdGenSchema` is not installed
-here, so `generatedSchema.usda` is hand-maintained and **nothing tests that it matches the
-source** — add the class to `generated_schema_parses_and_registers_every_type` and assert
-its property type in `schema_declares_property_types`, or the drift is silent.
+Plus a reader to consume it, plus authoring on the asset.
+
+**Pixar's `usdGenSchema` is NOT used here** — it is not installed, and the one-way
+transform it performs is small enough to own. `python3 scripts/gen_schema.py`
+regenerates `generatedSchema.usda` from `schema.usda`; run it after every edit to
+the source. Do not hand-edit the generated file. Also add the class to
+`generated_schema_parses_and_registers_every_type` and assert its property type in
+`schema_declares_property_types`, or drift is silent.
+
+### Slider bounds live in the schema's `customData`
+
+A property's UI hints (`double min`, `double max`, `string unit`, plus
+`string userDocBrief`) ride in the attribute's `customData` dictionary;
+`SchemaRegistry::ui_hint` decodes them through `AttrUiHint::from_dict`, and a
+per-asset authored `customData` still overrides. Core USD annotates nothing this
+way, so the vendored `schema/core/*.usda` files carry ours.
+
+> **ONE `customData` block per attribute.** The USDA parser folds metadata with
+> `SpecData::add`, which **overwrites in place** — a second `customData = { … }`
+> on the same attribute silently *replaces* the first rather than merging. Two
+> blocks (say a min/max/unit block followed by a `userDocBrief` block) means the
+> bounds are gone and every slider for that attribute is inert, with no warning.
+> Put every key in one dictionary.
 
 ## Three ways to write a driver that does nothing
 

@@ -79,11 +79,21 @@ def Cylinder "Wheel" (
     # visible rotation is grounded in authored data:
     #   ω̇ = (τ_drive + τ_brake − τ_traction − dampingRate·ω) / I
     # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). The motor is a
-    # constant-torque source up to maxRotationSpeed; bearing drag is derived so a free
-    # (airborne) wheel terminates there.
+    # constant-torque source up to maxRotationSpeed; bearing drag is its own authored
+    # physical property (dampingRate), never inferred from the drive torque.
     float physxVehicleWheel:radius = 0.4
     float physxVehicleEngine:peakTorque = 300.0           # N·m axle drive torque at full throttle. Joint rovers: applied to the wheel about its axle (see MotorActuator); wheel↔ground friction propels the rover. Kept modest so (a) it doesn't exceed the tyre's friction-limited traction (μ·N·r ≈ 340 N·m on the Moon) and spin the wheels, and (b) its reaction couple can't wheelie the chassis. Raycast rovers reuse it as their traction force.
-    float physxVehicleEngine:maxRotationSpeed = 60.0      # rad/s free-spin (no-load) cap
+    float physxVehicleEngine:maxRotationSpeed = 12.0      # rad/s no-load axle speed — THE top-speed parameter for BOTH wheel realizations. The joint wheel's velocity motor targets it (MotorActuator.max_omega); the raycast wheel rolls its drive force off toward it (drive_force_mag). 12 rad/s × 0.4 m ≈ 4.8 m/s ≈ 17 km/h — a realistic lunar rover, and the value the joint rover's feel was verified at.
+    # Axle bearing + rolling drag, N·m·s (τ_drag = this · ω). Sized from what the
+    # hardware actually loses, not from the drive torque: a sealed, dry-lubricated
+    # lunar wheel bearing plus regolith rolling resistance costs on the order of a
+    # few percent of rated torque at rated speed. At ω_max = 12 rad/s that is
+    # ~5 N·m of drag, i.e. 5/12 ≈ 0.42 N·m·s — and rolling resistance grows with
+    # speed rather than being constant, so a linear coefficient in that band is the
+    # right shape. 0.45 keeps parasitic loss at ~1.8% of the 300 N·m peak at full
+    # speed, which is where a well-built wheel sits; it also lets a lifted wheel
+    # coast down over a few seconds instead of stopping dead.
+    float physxVehicleWheel:dampingRate = 0.45            # N·m·s axle bearing/rolling drag
     float physxVehicleWheel:maxBrakeTorque = 1500.0       # N·m brake authority (locks the wheel → skid)
 
     # --- LunCo wheel dynamics (LunCoWheelAPI) ---
@@ -97,8 +107,9 @@ def Cylinder "Wheel" (
     double lunco:wheel:contactGripStiffness = 50.0  # slope of contact friction vs slip
     double lunco:wheel:driveForcePerNormal = 2.0    # traction authority, ×normal force
     double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
-    # Joint-wheel (rigid-axle) drive tuning — reproduces the verified feel.
-    double lunco:wheel:maxDriveOmega = 12.0         # rad/s axle free-spin cap
+    # Joint-wheel (rigid-axle) drive tuning — reproduces the verified feel. The axle's
+    # free-spin cap is NOT here: it is `physxVehicleEngine:maxRotationSpeed` above, the
+    # one no-load speed both realizations obey.
     double lunco:wheel:driveDamping = 30.0          # axle motor damping
     double lunco:wheel:stallTorqueGain = 6.0        # torque gain approaching stall
 

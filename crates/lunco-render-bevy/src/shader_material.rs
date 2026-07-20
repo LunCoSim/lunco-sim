@@ -533,6 +533,12 @@ pub fn reflect_shader_schemas(
             if let Some(src) = shaders.get(*id).and_then(wgsl_source) {
                 match ParamSchema::parse(src) {
                     Some(s) => {
+                        // Every `//!@engine` field must name a registered
+                        // provider AND agree with its type — otherwise the fill
+                        // writes bytes the shader reinterprets as something
+                        // else. Checked once per (re)load, where the reflected
+                        // types are known, and warned rather than packed.
+                        lunco_materials::engine_params().validate_schema(&s, &format!("{id:?}"));
                         cache.map.insert(*id, Arc::new(s));
                     }
                     None => {

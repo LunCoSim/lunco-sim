@@ -173,3 +173,58 @@ libraries → `<twin>/tools/*.rhai`.
 - ❌ Assuming a scenario runs on clients — it's host-authoritative; clients get replicated state, not the script.
 - ❌ A generic `spawn(...)` — use `cmd("SpawnEntity", #{entry_id, position})` so clients reconstruct from the catalog.
 - ❌ Reading raw `Transform` for position — use `world_pos` (float-origin correct).
+
+## Drivetrain parity test
+
+A scenario can also be a **regression test**. `assets/scenarios/drivetrain_parity.rhai`
++ `assets/scenes/sandbox/drivetrain_parity.usda` are the worked example — copy
+their shape when you need a scenario that ASSERTS rather than merely acts.
+
+**What it guards.** Raycast and joint wheels are two realizations of ONE
+parameter set. They once diverged: the no-load axle speed was authored under two
+names (60 vs 12 rad/s) AND the raycast drive force had no torque–speed term, so
+raycast rovers ran ~5× faster than joint rovers built from the same asset. Both
+now read the single authored `physxVehicleEngine:maxRotationSpeed` (12 rad/s, in
+`components/mobility/wheel.usda`), so both cap at `ω_max·r = 12 × 0.4 = 4.8 m/s`.
+The scene instances `skid_rover.usda` **twice**, differing in exactly one
+opinion — `variants = { string drivetrain = "raycast" | "physical" }` — and the
+scenario drives BOTH from ONE tick loop, so they see identical commands on
+identical frames. Tolerances: **±15 %** terminal/peak speed, **±20 %** distance
+(it integrates the acceleration transient, where the solvers legitimately differ
+most), **±35 %** yaw magnitude with an **intolerant sign check**, plus an
+absolute `[0.5, 1.25] × ω_max·r` band — parity alone is satisfiable by both
+rovers being wrong together.
+
+**How to run.**
+```bash
+cargo run -j2 --bin sandbox -- --scene scenes/sandbox/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
+```
+The `LunCoProgram` prim in the scene auto-runs the script on load; the run takes
+~21 s of sim time (3 s settle → 12 s straight → 6 s steer). Then:
+```bash
+grep -E 'DRIVETRAIN PARITY|PARITY FAIL|TESTS_' /tmp/parity.log
+```
+
+**How to read the verdict.** There is no exit code — a scenario is a tick hook,
+not a process — so it prints the harness verdict contract
+(`assets/scripting/tests/lib/test_assert.rhai`) and one unmistakable last line:
+```
+TESTS_OK 8
+DRIVETRAIN PARITY: PASS
+```
+or
+```
+  PARITY FAIL: terminal speed (m/s): raycast=23.9 physical=4.71 ratio=5.07x diff=80.29% (tol 15%)
+TESTS_FAIL 1/8
+DRIVETRAIN PARITY: FAIL
+```
+It also `emit`s `DRIVETRAIN_PARITY` = `"PASS"`/`"FAIL"` and raises a toast.
+
+**The part worth copying: make silence impossible.** Scenarios fail *silently* —
+a hook that never fires, a `find` that returned `-1`, a phase that never
+advances all look like a clean run. So: print the resolved gids in `on_start`;
+fail loudly on the first tick if a prim is missing instead of ticking forever;
+log a `[parity] …` sample row with real numbers every 0.5 s (**the log is the
+evidence — a run with no sample table proves nothing**); and treat *both values
+≈ 0* as a FAILURE, never a match. A test that cannot fail is the bug one level
+up.

@@ -63,7 +63,11 @@ def Xform "Rover" {
         # now part of the contract this fixture pins.
         float physics:mass = 25.0
         float physxVehicleEngine:peakTorque = 300.0
-        float physxVehicleEngine:maxRotationSpeed = 60.0
+        # The ONE no-load axle speed, obeyed by BOTH wheel realizations (the
+        # joint motor targets it; the raycast drive force rolls off toward it).
+        # There is no `lunco:wheel:maxDriveOmega` any more.
+        float physxVehicleEngine:maxRotationSpeed = 12.0
+        float physxVehicleWheel:dampingRate = 0.45
         float physxVehicleWheel:maxBrakeTorque = 1500.0
         float physxVehicleTire:longitudinalStiffness = 8000.0
 
@@ -76,7 +80,6 @@ def Xform "Rover" {
         double lunco:wheel:contactGripStiffness = 50.0
         double lunco:wheel:driveForcePerNormal = 2.0
         double3 lunco:wheel:steerAxis = (0, 1, 0)
-        double lunco:wheel:maxDriveOmega = 12.0
         double lunco:wheel:driveDamping = 30.0
         double lunco:wheel:stallTorqueGain = 6.0
     }

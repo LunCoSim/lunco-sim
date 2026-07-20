@@ -233,9 +233,14 @@ def Xform "SandboxScene" (
     #     joints + motors + dropped wheels live in the rover asset, not here.
 
     # Instances are `def Xform` (matching the base typeName after
-    # the Xform-root refactor). Per-instance color overrides use
-    # path-targeted `over "Chassis"` opinions — Pixar's standard way
-    # to redirect attribute opinions across a reference.
+    # the Xform-root refactor) and author POSE ONLY.
+    #
+    # No per-instance colour here. A rover's livery belongs to its ASSET
+    # (`primvars:displayColor` on the chassis, which the hull shader consumes),
+    # so colour identifies the KIND of rover — every `skid_rover` looks like a
+    # skid rover. Recolouring each instance made two copies of the same vehicle
+    # read as two different vehicles and hid what the scene is actually
+    # demonstrating: the same asset under different DRIVETRAIN variants.
 
     # === Skid-Steer, Raycast Wheels ===
 
@@ -246,10 +251,15 @@ def Xform "SandboxScene" (
         double3 xformOp:translate = (15.0, 5.0, -10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
+        # Per-instance livery: this scene parks several copies of the
+        # SAME rover asset side by side, so instance colour is what tells
+        # them apart on screen. Colour is `primvars:displayColor` and
+        # nothing else — the hull shader consumes it as the base paint.
         over "Chassis"
         {
-            color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
+            color3f[] primvars:displayColor = [(0.85, 0.15, 0.12)]   # crimson
         }
+
 
         # Onboard rover camera: a plain `def Camera` nested under the rover
         # Xform, realised at load as a grid-direct follower that RIDES the rover
@@ -274,10 +284,15 @@ def Xform "SandboxScene" (
         double3 xformOp:translate = (15.0, 5.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
+        # Per-instance livery: this scene parks several copies of the
+        # SAME rover asset side by side, so instance colour is what tells
+        # them apart on screen. Colour is `primvars:displayColor` and
+        # nothing else — the hull shader consumes it as the base paint.
         over "Chassis"
         {
-            color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
+            color3f[] primvars:displayColor = [(0.15, 0.65, 0.25)]   # green
         }
+
     }
 
     # === Skid-Steer, Physical Wheels ===
@@ -299,10 +314,15 @@ def Xform "SandboxScene" (
         double3 xformOp:translate = (-15.0, 5.0, -10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
+        # Per-instance livery: this scene parks several copies of the
+        # SAME rover asset side by side, so instance colour is what tells
+        # them apart on screen. Colour is `primvars:displayColor` and
+        # nothing else — the hull shader consumes it as the base paint.
         over "Chassis"
         {
-            color3f[] primvars:displayColor = [(0.2, 0.2, 0.8)]
+            color3f[] primvars:displayColor = [(0.15, 0.30, 0.80)]   # blue
         }
+
     }
 
     # === Ackermann, Raycast Wheels ===
@@ -314,10 +334,15 @@ def Xform "SandboxScene" (
         double3 xformOp:translate = (-15.0, 5.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
+        # Per-instance livery: this scene parks several copies of the
+        # SAME rover asset side by side, so instance colour is what tells
+        # them apart on screen. Colour is `primvars:displayColor` and
+        # nothing else — the hull shader consumes it as the base paint.
         over "Chassis"
         {
-            color3f[] primvars:displayColor = [(0.8, 0.8, 0.2)]
+            color3f[] primvars:displayColor = [(0.90, 0.75, 0.10)]   # yellow
         }
+
     }
 
     # === Ackermann, Physical Wheels ===
@@ -332,10 +357,15 @@ def Xform "SandboxScene" (
         double3 xformOp:translate = (-25.0, 5.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
+        # Per-instance livery: this scene parks several copies of the
+        # SAME rover asset side by side, so instance colour is what tells
+        # them apart on screen. Colour is `primvars:displayColor` and
+        # nothing else — the hull shader consumes it as the base paint.
         over "Chassis"
         {
-            color3f[] primvars:displayColor = [(0.8, 0.5, 0.1)]
+            color3f[] primvars:displayColor = [(0.90, 0.45, 0.05)]   # orange
         }
+
     }
 
     # --- glTF rover (NASA Mars 2020 Perseverance) ---

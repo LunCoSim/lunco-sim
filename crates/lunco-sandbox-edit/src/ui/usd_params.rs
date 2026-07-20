@@ -51,8 +51,8 @@ pub fn produce_usd_param_view(
     mut canonical: NonSendMut<CanonicalStages>,
     mut view: ResMut<UsdParamView>,
 ) {
-    // A DRILLED prim-backed subpart wins over the primary: Shift+click a wheel
-    // of the selected rover and the section edits the WHEEL's own attrs
+    // A DRILLED prim-backed subpart wins over the primary: Alt+Shift+click a
+    // wheel of the selected rover and the section edits the WHEEL's own attrs
     // (`lunco:wheel:*`), addressed at its own prim path. A part that carries no
     // `UsdPrimPath` (raw mesh drill for material editing) falls back to the
     // primary's params.

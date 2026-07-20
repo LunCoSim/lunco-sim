@@ -55,6 +55,14 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
 lunco-storage = { path = "../lunco-storage" }
+# `ValidateAsset` (validate.rs) — the parse-only pre-flight. `lunco-modelica`
+# (compiler core only, no UI) for the SAME AST extraction the cosim dispatcher
+# runs; `rumoca-phase-parse` for the parse itself; `rhai` for compile-only
+# script checks. All three are already in this crate's tree via
+# `lunco-usd-sim`/`lunco-scripting` — no new leaves.
+lunco-modelica = { path = "../lunco-modelica", default-features = false }
+rumoca-phase-parse = { workspace = true }
+rhai = { workspace = true }
 # The catalogue scan is async (reading a shipped asset on the web is an HTTP
 # fetch), so completed reads come back over a channel and a drain system folds
 # them in. `futures-lite::block_on` backs the native blocking scan used by tests.

@@ -12,5 +12,25 @@ fn main() -> lunco_sandbox::AppExit {
     if lunco_sandbox::rhai_repl::run_if_requested() {
         return lunco_sandbox::AppExit::Success;
     }
+    // `sandbox --validate <path>…` is a one-shot pre-flight: parse-only asset
+    // checks (`lunco_scene_commands::validate`), report to stdout, exit 0/1.
+    // Like `--help`, it must run BEFORE the app is built — no window, no GPU,
+    // no Bevy `App`. Native-only: the check reads the local filesystem.
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if let Some(pos) = args.iter().position(|a| a == "--validate") {
+            let paths: Vec<String> = args[pos + 1..]
+                .iter()
+                .take_while(|a| !a.starts_with("--"))
+                .cloned()
+                .collect();
+            if paths.is_empty() {
+                eprintln!("--validate needs at least one path (.mo/.usda/.wgsl/.rhai)");
+                std::process::exit(2);
+            }
+            std::process::exit(lunco_scene_commands::validate::run_cli(&paths));
+        }
+    }
     lunco_sandbox::run()
 }

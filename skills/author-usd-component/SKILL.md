@@ -30,7 +30,10 @@ the importer (`crates/lunco-usd-bevy/src/units.rs:172`) — never branch on them
 
 Background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
 [`50-usd-driven-visuals.md`](../../docs/architecture/50-usd-driven-visuals.md).
-Related skills: [`build-usd-scene`](../build-usd-scene/SKILL.md) (assemble),
+Related skills: [`use-asset-library`](../use-asset-library/SKILL.md) (where the
+file goes, how it is discovered, the `lunco://` scheme),
+[`build-usd-scene`](../build-usd-scene/SKILL.md) (assemble),
+[`validate-assets`](../validate-assets/SKILL.md) (pre-flight it),
 [`test-via-api`](../test-via-api/SKILL.md) (verify), [`compose-multidomain-twin`](../compose-multidomain-twin/SKILL.md).
 
 ## Skeleton
@@ -217,6 +220,12 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
   = [(r,g,b)]`. A scalar `color3f` is silently ignored, and the bare
   `displayColor` alias is not read at all. Same for `float[] primvars:displayOpacity`.
   Values are **linear**, not sRGB.
+- **`displayColor` is the ONE place a colour is authored, shader or not.** A WGSL
+  shader opts in with `//!@engine display_color` and the engine fills that uniform
+  from the prim's composed `primvars:displayColor` — so a shader-bound part is
+  still painted the ordinary USD way. Don't author a parallel colour input on the
+  Shader prim; use `inputs:*` only for what displayColor cannot express (accents,
+  panel scale, wear). An explicit `inputs:display_color` overrides the fill.
 - **`inputs:*` authored directly on a gprim is not read** — it must be on a bound
   Shader. This used to work and was removed as invalid USD.
 - `doubleSided` (on the **gprim**, default false) is required for anything you can
@@ -389,7 +398,18 @@ wheels.
 
 ## Verify
 
-Author → load → look. Per [`test-via-api`](../test-via-api/SKILL.md): drive the
+**Pre-flight first — it costs seconds and needs no app:**
+
+```bash
+cargo run -p lunco-sandbox --bin sandbox -- --validate assets/<your file>.usda
+```
+
+It parses the layer, **composes the whole reference closure** (so a dangling
+`@lunco://…@` fails loudly here instead of silently at load), and runs the strict
+wheel reader on any `PhysxVehicleWheelAPI` prim. See
+[`validate-assets`](../validate-assets/SKILL.md).
+
+Then author → load → look. Per [`test-via-api`](../test-via-api/SKILL.md): drive the
 **already-running** workbench, never `pkill`, and always nest arguments under
 `"params"` — with the `{"command":…}` spelling anything top-level is silently
 dropped and the command runs with defaults (a camera command then quietly aims at

@@ -20,6 +20,7 @@ over "SandboxScene"
         <Action ID="drive_to" target="38.907944;0.000000;-78.118199"/>
         <Action ID="drive_to" target="50.044711;12.793973;-25.310144"/>
         <Action ID="drive_to" target="68.569822;0.000000;-37.687716"/>
+        <Action ID="drive_to" target="3.627603;0.000000;-43.911914"/>
       </Sequence>
     </Repeat>
   </BehaviorTree>
@@ -32,6 +33,22 @@ over "SandboxScene"
     <Repeat num_cycles="-1">
       <Sequence>
         <Action ID="drive_to" target="-24.807858;-0.000000;15.017439"/>
+        <Action ID="drive_to" target="-48.337425;0.000000;13.562020"/>
+        <Action ID="drive_to" target="-66.380458;-0.000000;-0.751543"/>
+        <Action ID="drive_to" target="-123.114146;0.000000;-31.244435"/>
+        <Action ID="drive_to" target="-105.178924;0.000000;-30.508309"/>
+        <Action ID="drive_to" target="-94.956281;-0.000000;-29.056279"/>
+        <Action ID="drive_to" target="-121.321806;0.000000;-58.471647"/>
+        <Action ID="drive_to" target="-124.539469;-0.000000;-79.830380"/>
+        <Action ID="drive_to" target="-118.093853;0.000000;-77.827541"/>
+        <Action ID="drive_to" target="-112.853717;0.000000;-61.432221"/>
+        <Action ID="drive_to" target="-110.795460;0.000000;-53.482869"/>
+        <Action ID="drive_to" target="-117.094697;0.000000;-49.036318"/>
+        <Action ID="drive_to" target="-351.897749;0.000000;-178.544499"/>
+        <Action ID="drive_to" target="-178.384011;0.000000;-120.289576"/>
+        <Action ID="drive_to" target="-159.489892;0.000000;-115.867286"/>
+        <Action ID="drive_to" target="-139.746852;-0.000000;-106.133579"/>
+        <Action ID="drive_to" target="-128.020100;0.000000;-73.119555"/>
       </Sequence>
     </Repeat>
   </BehaviorTree>
@@ -45,6 +62,19 @@ over "SandboxScene"
       <Action ID="drive_to" target="5.0;0.0;-15.0"/>
       <Action ID="drive_to" target="-5.0;0.0;-20.0"/>
     </Sequence>
+  </BehaviorTree>
+</root>"""
+    }
+    over "Ackermann_Raycast_1"
+    {
+        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Repeat num_cycles="-1">
+      <Sequence>
+        <Action ID="drive_to" target="-18.008468;-0.000000;-14.460998"/>
+        <Action ID="drive_to" target="-23.644930;0.000000;-29.471166"/>
+      </Sequence>
+    </Repeat>
   </BehaviorTree>
 </root>"""
     }

@@ -4,13 +4,20 @@
 //! a panel grid with seams and rivets, an accent stripe, paint that chips to
 //! bare metal with wear, and a regolith dust gradient that settles on the lower
 //! hull. Everything is procedural in OBJECT space (mesh-fixed — it drives with
-//! the rover), reflected live from the `//!@` annotations below: difficulty
-//! tiers restyle a rover by overriding `inputs:hull_color`/`inputs:accent_color`
-//! instead of `displayColor`.
+//! the rover), reflected live from the `//!@` annotations below.
+//!
+//! **The base paint is the prim's own `primvars:displayColor`.** `display_color`
+//! is engine-filled from the standard USD attribute, so a rover authors its
+//! livery exactly once, in the place every other tool already looks — and the
+//! same authoring works whether the prim renders through plain PBR or through
+//! this shader. Difficulty tiers and per-rover liveries are plain
+//! `over "Chassis" { color3f[] primvars:displayColor = [(r,g,b)] }` overrides.
+//! A `Shader` prim that authors `inputs:display_color` explicitly still wins.
 //!
 //! Prop-safe by construction: own `Material` struct, `lunco::pbr_lit` for full
-//! scene lighting, and no engine-filled inputs beyond `sun_vis` — so it appears
-//! in the prop shader picker and works on any mesh with zero Rust.
+//! scene lighting, and only prop-fillable engine inputs (`display_color`,
+//! `sun_vis`) — so it appears in the prop shader picker and works on any mesh
+//! with zero Rust.
 
 #import bevy_pbr::{
     forward_io::VertexOutput,
@@ -21,8 +28,8 @@
 
 const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 
-//!@ui      hull_color    color "Hull paint"
-//!@default hull_color    0.78,0.78,0.80
+//!@engine  display_color
+//!@default display_color 0.78,0.78,0.80
 //!@ui      accent_color  color "Accent stripe"
 //!@default accent_color  0.85,0.45,0.10
 //!@ui      dust_color    color "Regolith dust"
@@ -34,15 +41,16 @@ const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 //!@ui      rivet_density 0 1 "Rivet/bolt detail"
 //!@default rivet_density 0.5
 //!@ui      wear          0 1 "Paint wear"
-//!@default wear          0.2
+//!@default wear          0.08
 //!@ui      dust_height   0 1 "Dust fade height"
 //!@default dust_height   0.35
 //!@ui      dust_amount   0 1 "Dust coverage"
-//!@default dust_amount   0.4
+//!@default dust_amount   0.15
 //!@engine  sun_vis
 //!@default sun_vis       1
 struct Material {
-    hull_color:    vec3<f32>,
+    // engine-filled: the prim's `primvars:displayColor` (element 0)
+    display_color: vec3<f32>,
     panel_scale:   f32,
     accent_color:  vec3<f32>,
     panel_line:    f32,
@@ -67,6 +75,22 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     let n_local = normalize(transpose(R) * normalize(input.world_normal));
     let p_local = transpose(R) * (input.world_position.xyz - m[3].xyz);
 
+    // NORMALIZED object height, −0.5 … +0.5 regardless of how the hull is scaled.
+    //
+    // `p_local` is in METRES (R is the pure rotation; the scale stays in the
+    // point), so any threshold written against it silently means something
+    // different on every hull. The chassis is 0.3 m tall ⇒ `p_local.y` spans
+    // only ±0.15, and the stripe/dust constants below — authored for a unit
+    // cube — swallowed it whole: the accent band covered the entire TOP HALF
+    // (so every rover's deck rendered the same accent colour no matter its
+    // livery) and the dust gradient never reached its upper edge (so full dust
+    // washed the whole hull grey). Dividing by the model matrix's per-axis
+    // scale puts the height back in unit-cube terms, where those constants mean
+    // what they say. The panel grid deliberately stays in metres — its
+    // parameter is panels PER METRE.
+    let obj_scale = vec3<f32>(length(m[0].xyz), length(m[1].xyz), length(m[2].xyz));
+    let h = p_local.y / max(obj_scale.y, 1e-4);
+
     // Planar panel coordinates: project onto the face plane by dropping the
     // dominant normal axis (box-projection — correct on any box-ish hull,
     // acceptable everywhere else).
@@ -90,10 +114,12 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     // Slight per-panel value variation sells "assembled from parts".
     let panel_tint = 0.92 + 0.08 * fbm(vec3(cell * 0.7, 0.0), 2, 0.5);
 
-    var color = mat.hull_color * panel_tint;
+    var color = mat.display_color * panel_tint;
 
     // --- Accent stripe: a band around the hull at mid-height ---
-    let stripe = smoothstep(0.16, 0.14, abs(p_local.y - 0.06));
+    // Narrow band on the hull SIDES, in normalized height — a stripe, not a
+    // repaint of the upper hull.
+    let stripe = smoothstep(0.10, 0.06, abs(h - 0.10));
     color = mix(color, mat.accent_color, stripe * 0.9);
 
     // --- Rivets: a bolt at each panel corner, inset along both axes ---
@@ -106,8 +132,16 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     }
 
     // --- Paint wear: noise-chipped near seams and edges → bare metal ---
+    //
+    // `wear` scales the chips' OPACITY as well as their extent. Bare metal is a
+    // light neutral, so a chip mask that reaches full strength averages the
+    // paint toward grey and destroys the livery — a red hull rendered pink and
+    // a yellow one tan, with every rover in the scene converging on the same
+    // washed non-colour. The vehicle's IDENTITY is its paint; wear is a detail
+    // on top of it, so it can tint but never replace.
     let chip_n = fbm(p_local * 9.0, 3, 0.55);
-    let chip = smoothstep(1.0 - mat.wear * 0.6, 1.0, chip_n + seam * 0.35);
+    let chip_mask = smoothstep(1.0 - mat.wear * 0.6, 1.0, chip_n + seam * 0.35);
+    let chip = chip_mask * clamp(mat.wear * 1.4, 0.0, 0.65);
     let bare_metal = vec3(0.62, 0.63, 0.66);
     color = mix(color, bare_metal, chip);
 
@@ -115,9 +149,11 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     color = mix(color, color * 0.62, seam * (1.0 - chip));
 
     // --- Regolith dust: settles low on the hull, noise-broken ---
-    let dust_fade = 1.0 - smoothstep(-0.2 + mat.dust_height * 0.7, 0.45, p_local.y);
+    let dust_fade = 1.0 - smoothstep(-0.5 + mat.dust_height * 0.5, 0.45, h);
     let dust_n = smoothstep(0.25, 0.7, fbm(p_local * 5.0, 3, 0.5));
-    let dust = clamp(mat.dust_amount * dust_fade * (0.4 + 0.6 * dust_n), 0.0, 1.0);
+    // Capped for the same reason as the chips: dust settles ON the paint, it is
+    // not a repaint. Above ~0.55 coverage every hull reads as the same grey.
+    let dust = clamp(mat.dust_amount * dust_fade * (0.4 + 0.6 * dust_n), 0.0, 0.55);
     color = mix(color, mat.dust_color, dust);
 
     // Dust is matte; chipped metal is glossy; paint sits between.

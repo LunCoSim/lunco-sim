@@ -29,6 +29,7 @@
 
 pub mod catalog;
 pub mod dyn_params;
+pub mod engine_params;
 pub mod look;
 pub mod naming;
 pub mod vertex;
@@ -37,6 +38,7 @@ pub use catalog::{
     is_prop_pickable_source, shader_template, shader_template_kinds, ShaderCatalog, ShaderEntry,
 };
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
+pub use engine_params::{engine_params, AttrRead, EngineParam, EngineParams, EngineSource};
 pub use look::{ShaderLook, ShaderLookKey, TextureLayer};
 pub use naming::to_snake_case;
 pub use vertex::{ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET};

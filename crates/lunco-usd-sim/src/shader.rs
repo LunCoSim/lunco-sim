@@ -36,7 +36,8 @@ use lunco_usd_bevy::{
     get_attribute_as_vec3, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced,
 };
 use openusd::sdf::Path as SdfPath;
-use lunco_materials::{to_snake_case, ParamValue, ShaderLook};
+use lunco_materials::engine_params::prim_color_value;
+use lunco_materials::{to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook};
 use lunco_render::PbrLook;
 use std::collections::BTreeMap;
 
@@ -141,7 +142,11 @@ fn apply_usd_shader_material_read<R: UsdRead>(
 
     // The shader's parameters are the Shader prim's `inputs:` — typed, declared, and
     // belonging to the shader that consumes them.
-    let values = read_shader_inputs(reader, &shader_prim);
+    let mut values = read_shader_inputs(reader, &shader_prim);
+    // …plus the engine-provided inputs that are read off the GPRIM itself
+    // (`primvars:displayColor` → `display_color`). Authored `inputs:` already in
+    // the map WIN — see `fill_prim_engine_params`.
+    fill_prim_engine_params(reader, sdf_path, &mut values);
     #[cfg(target_arch = "wasm32")]
     let resolved_shader_path = if shader_path == "shaders/regolith.wgsl" {
         "shaders/regolith_web.wgsl".to_string()
@@ -218,6 +223,47 @@ fn shader_has_fragment_entry(shader_path: &str) -> bool {
 #[cfg(target_arch = "wasm32")]
 fn shader_has_fragment_entry(_shader_path: &str) -> bool {
     true
+}
+
+/// Fills the engine-provided parameters (`lunco_materials::engine_params`) whose
+/// source is an attribute on the shaded GPRIM — today `display_color` from
+/// `primvars:displayColor`, so a prim's colour is authored ONCE, in the standard
+/// USD place, and works whether the prim renders through plain PBR (`PbrLook`)
+/// or through a shader that declares `//!@engine display_color`.
+///
+/// Driven off the registry, not off names: the loop walks `prim_sourced()` and
+/// dispatches on the *reading rule* ([`AttrRead`]), so registering another
+/// prim-sourced input needs no code here.
+///
+/// **Precedence — an authored `inputs:` wins.** A name already in `values` came
+/// from the `Shader` prim's own `inputs:` and is the author's explicit override;
+/// the engine fill skips it. That is the same rule every authored param has.
+///
+/// Names the shader does not declare pack to nothing, so filling
+/// `display_color` for a prim whose shader ignores it is harmless.
+fn fill_prim_engine_params<R: UsdRead>(
+    reader: &R,
+    sdf_path: &SdfPath,
+    values: &mut BTreeMap<String, ParamValue>,
+) {
+    for p in lunco_materials::engine_params().prim_sourced() {
+        // An explicit `inputs:` override beats the engine fill.
+        if values.contains_key(p.name) {
+            continue;
+        }
+        let EngineSource::PrimAttr { attr, read } = p.source else { continue };
+        let v = match read {
+            // `color3f[]`, `constant` interpolation → element 0. The dedicated
+            // ARRAY reader, not the scalar one: `color3f primvars:displayColor`
+            // is the wrong type by schema and must not silently work.
+            AttrRead::Color3fArray0 => {
+                lunco_usd_bevy::read_primvar_vec3(reader, sdf_path, attr).map(prim_color_value)
+            }
+        };
+        if let Some(v) = v {
+            values.insert(p.name.to_string(), v);
+        }
+    }
 }
 
 /// The `Shader` prim whose surface a gprim's bound `Material` produces — the USD

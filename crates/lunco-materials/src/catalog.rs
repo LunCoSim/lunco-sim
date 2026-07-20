@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 
-use crate::dyn_params::{self, ParamSchema};
+use crate::dyn_params::ParamSchema;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Shader discovery — the set of dynamic (`Material`-declaring) shaders the
@@ -99,18 +99,18 @@ fn humanize_shader_name(stem: &str) -> String {
 
 /// Whether WGSL `src` is safe to offer as a pickable prop shader: it declares a
 /// `Material` struct (so the engine can reflect its params) and every
-/// engine-filled field (if any) is `sun_vis` — the horizon-shadow visibility
-/// every prop shader receives. Terrain shaders declare engine fields like
-/// `sun_dir`/`hf_size` that only the terrain entity's horizon system fills, so
-/// they would render black on a prop. Shaders with no `Material` struct can't be
-/// driven by the dynamic system at all, so they're rejected too.
+/// engine-filled field it declares is one a plain prop entity actually receives
+/// (`prop_fillable` in the [engine-param registry][crate::engine_params]).
+/// Terrain shaders declare engine fields like `sun_dir`/`hf_size` that only the
+/// terrain entity's binder fills, so they would render black on a prop. Shaders
+/// with no `Material` struct can't be driven by the dynamic system at all, so
+/// they're rejected too.
+///
+/// The list of acceptable engine inputs is the registry's, not a literal here —
+/// registering a new prop-fillable provider automatically widens this test.
 pub fn is_prop_pickable_source(src: &str) -> bool {
     match ParamSchema::parse(src) {
-        Some(schema) => schema
-            .fields
-            .iter()
-            .filter(|f| matches!(f.ui, dyn_params::UiKind::Engine))
-            .all(|f| f.name == "sun_vis"),
+        Some(schema) => crate::engine_params().prop_fillable(&schema),
         None => false,
     }
 }

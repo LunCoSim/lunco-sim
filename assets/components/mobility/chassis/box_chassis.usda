@@ -15,11 +15,15 @@
 #       prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
 #   )
 #   {
-#       double3 xformOp:scale = (2.0, 0.3, 5.0)   # a longer flatbed
+#       double3 xformOp:scale = (2.0, 0.3, 5.0)          # a longer flatbed
+#       color3f[] primvars:displayColor = [(0.8, 0.68, 0.3)]   # its livery
 #   }
 #
-# Difficulty tiers restyle by overriding `HullLook/Shader.inputs:hull_color` /
-# `inputs:accent_color` — never `displayColor`, which the hull shader replaces.
+# Colour is `primvars:displayColor` and nothing else. The hull shader declares
+# `//!@engine display_color` and the engine fills it from that standard
+# attribute, so a rover paints itself the ordinary USD way and every other tool
+# (usdview, Blender, the inspector) sees the same colour we render. Difficulty
+# tiers restyle by overriding the SAME attribute.
 
 def Cube "Chassis" (
     kind = "subcomponent"
@@ -29,6 +33,10 @@ def Cube "Chassis" (
     double size = 1.0
     double3 xformOp:scale = (2.0, 0.3, 3.5)
     uniform token[] xformOpOrder = ["xformOp:scale"]
+
+    # Default hull grey — a rover overrides this one attribute to get its own
+    # livery. The hull shader consumes it as the base paint.
+    color3f[] primvars:displayColor = [(0.78, 0.78, 0.8)]
 
     rel material:binding = </Chassis/HullLook>
 
@@ -40,11 +48,13 @@ def Cube "Chassis" (
         {
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:wgsl:sourceAsset = @lunco://shaders/rover_hull.wgsl@
-            color3f inputs:hull_color = (0.78, 0.78, 0.80)
+            # No `inputs:display_color` here — the base paint is engine-filled
+            # from the Chassis prim's `primvars:displayColor`. Authoring it
+            # would OVERRIDE that fill for every rover referencing this file.
             color3f inputs:accent_color = (0.85, 0.45, 0.10)
             float inputs:panel_scale = 2.0
-            float inputs:wear = 0.2
-            float inputs:dust_amount = 0.4
+            float inputs:wear = 0.08
+            float inputs:dust_amount = 0.15
             token outputs:surface
         }
     }

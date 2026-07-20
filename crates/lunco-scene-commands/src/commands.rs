@@ -2445,12 +2445,15 @@ fn install_shader(
     q_look: &Query<&ShaderLook>,
     commands: &mut Commands,
 ) -> Option<String> {
-    // Gate: must be a self-describing `Material` shader whose only engine field
-    // (if any) is `sun_vis`. Otherwise it would render black / can't be driven.
+    // Gate: must be a self-describing `Material` shader, and every `//!@engine`
+    // field it declares must be one a plain prop entity actually receives —
+    // `prop_fillable` in the engine-param registry. Otherwise it would render
+    // black (e.g. terrain-only inputs) / can't be driven.
     if !lunco_materials::is_prop_pickable_source(source) {
         warn!(
             "INSTALL_SHADER: '{stem}' is not a prop-pickable dynamic shader \
-             (needs a `Material` struct; engine fields limited to `sun_vis`) — skipped"
+             (needs a `Material` struct; every `//!@engine` field must be \
+             prop-fillable per the engine-param registry) — skipped"
         );
         return None;
     }
@@ -2566,7 +2569,8 @@ pub fn on_create_shader(
 /// Import an existing `.wgsl` file from anywhere on disk INTO the open Twin
 /// (copies it to `<twin>/shaders/<name>.wgsl`), registers it in the picker, and
 /// optionally binds it to a target entity. The file must be a prop-pickable
-/// dynamic shader (a `Material` struct; engine fields limited to `sun_vis`).
+/// dynamic shader: a `Material` struct, and every `//!@engine` field it declares
+/// must be prop-fillable per the engine-param registry.
 ///
 /// ```json
 /// {"command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
@@ -2918,6 +2922,9 @@ impl Plugin for SpawnCommandPlugin {
         // The AUTHORED read beside the spawned one: composed USD attributes, so
         // asset invariants are checkable from rhai/Python/HTTP and not just Rust.
         crate::usd_prim_query::register(app);
+        // Parse-only asset pre-flight ("does this file compile?") — pure file
+        // checks, so it answers even while no scene is loaded.
+        crate::validate::register(app);
         // A spawn whose USD stage hasn't composed yet is parked here, not placed
         // blind — see `RestDepth::StagePending`.
         app.init_resource::<DeferredSpawns>();

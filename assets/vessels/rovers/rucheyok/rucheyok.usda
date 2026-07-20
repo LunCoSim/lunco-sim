@@ -48,7 +48,10 @@ def Xform "Rucheyok" (
         double3 xformOp:translate = (0, 2.0, 0)
         double3 xformOp:scale = (15.0, 4.0, 20.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.2, 0.5, 0.8)]
+        # Burnt copper — its own identity, well clear of the ackermann rover's
+        # blue. This chassis binds no material, so the colour renders through
+        # plain PBR; it is the same authored attribute either way.
+        color3f[] primvars:displayColor = [(0.72, 0.38, 0.18)]
     }
 
     # --- Solar Panel (physical part; its output is the Electrical circuit's) ---

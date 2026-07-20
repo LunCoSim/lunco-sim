@@ -638,7 +638,6 @@ mod tests {
     fn wheel_schema_declares_ui_hints() {
         let reg = SchemaRegistry::global().read().unwrap();
         for name in [
-            "lunco:wheel:maxDriveOmega",
             "lunco:wheel:driveDamping",
             "lunco:wheel:stallTorqueGain",
             "lunco:wheel:contactGripStiffness",
@@ -658,6 +657,42 @@ mod tests {
         // invent hints for un-annotated names.
         assert!(reg.ui_hint("lunco:wheel:index").is_none(),
             "lunco:wheel:index should carry no slider hint (wiring identity, not a knob)");
+    }
+
+    /// The physxVehicle attributes the wheel reader requires must ALSO surface
+    /// sliders — they live in our reconstructed `core/physxSchema.usda`, and the
+    /// sibling test above only covers `luncoSchema`.
+    ///
+    /// This exists because they were silently INERT: each attribute carried TWO
+    /// `customData = {…}` blocks (bounds, then `userDocBrief`), and a spec field
+    /// is overwrite-in-place (`sdf::SpecData::add`), so the second erased the
+    /// first and `ui_hint` returned `None` for every one of them. Nothing failed
+    /// — the sliders just never appeared. ONE `customData` block per attribute is
+    /// the rule; this test is what makes breaking it loud.
+    #[test]
+    fn physx_vehicle_schema_declares_ui_hints() {
+        let reg = SchemaRegistry::global().read().unwrap();
+        for name in [
+            "physxVehicleWheel:radius",
+            "physxVehicleWheel:maxBrakeTorque",
+            "physxVehicleWheel:dampingRate",
+            "physxVehicleWheel:moi",
+            "physxVehicleEngine:peakTorque",
+            "physxVehicleEngine:maxRotationSpeed",
+            "physxVehicleTire:longitudinalStiffness",
+            "physxVehicleSuspension:springStrength",
+            "physxVehicleSuspension:springDamperRate",
+            "physxVehicleAckermannSteering:maxSteerAngle",
+        ] {
+            let hint = reg.ui_hint(name).unwrap_or_else(|| {
+                panic!(
+                    "{name} declares no schema-level UI hint — check core/physxSchema.usda \
+                     for a SECOND customData block silently overwriting the bounds one"
+                )
+            });
+            let (min, max) = (hint.min.expect("min"), hint.max.expect("max"));
+            assert!(max > min, "{name}: degenerate hint range {min}..{max}");
+        }
     }
 
     /// Every schema class must be registered in `plugInfo.json`.

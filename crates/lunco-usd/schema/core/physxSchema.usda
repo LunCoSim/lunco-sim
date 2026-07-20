@@ -77,8 +77,6 @@ class "PhysxVehicleAckermannSteeringAPI" (
             double min = 0
             double max = 1.2
             string unit = "rad"
-        }
-        customData = {
             string userDocBrief = """Maximum steer angle at full steer input, RADIANS. Replaces the
     deprecated per-wheel physxVehicleWheel:maxSteerAngle. Drives the steering-knuckle
     motor on the wheels of the steered axle."""
@@ -121,8 +119,6 @@ class "PhysxVehicleWheelAPI" (
             double min = 0.05
             double max = 3
             string unit = "m"
-        }
-        customData = {
             string userDocBrief = "Wheel radius, metres. Required."
         }
         displayName = "Radius"
@@ -144,8 +140,6 @@ class "PhysxVehicleWheelAPI" (
             double min = 0
             double max = 50
             string unit = "kg·m²"
-        }
-        customData = {
             string userDocBrief = "Wheel moment of inertia about its spin axis, kg·m². Required."
         }
         displayName = "MOI"
@@ -155,11 +149,9 @@ class "PhysxVehicleWheelAPI" (
             double min = 0
             double max = 50
             string unit = "N·m·s"
-        }
-        customData = {
-            string userDocBrief = """Bearing / spin damping rate, units mass·distance²/seconds (torque·s).
-    Required. LunCo derives a default from peakTorque / maxRotationSpeed when
-    unauthored so a free (airborne) wheel terminates at the engine's free-spin cap."""
+            string userDocBrief = """Bearing / rolling drag rate, units mass·distance²/seconds (torque·s):
+    the axle loses torque = this · ω. REQUIRED — a physical property of the hub in
+    its own right, never inferred from the drive torque."""
         }
         displayName = "Damping Rate"
     )
@@ -168,22 +160,16 @@ class "PhysxVehicleWheelAPI" (
             double min = 0
             double max = 5000
             string unit = "N·m"
-        }
-        customData = {
-            string userDocBrief = """DEPRECATED. Max brake torque, N·m. Use PhysxVehicleBrakesAPI. Kept for
-    back-compat with assets authored before the BrakesAPI split."""
+            string userDocBrief = """Lock-up authority, N·m. REQUIRED — this is THE brake parameter LunCo
+    reads; when it exceeds the available traction torque the wheel locks and skids."""
         }
         displayName = "Max Brake Torque"
     )
-    float physxVehicleWheel:maxHandBrakeTorque = 0.0 (
-        customData = {
-            string userDocBrief = """DEPRECATED. Max hand-brake torque, N·m. Use PhysxVehicleBrakesAPI."""
-        }
-        displayName = "Max Hand Brake Torque"
-    )
     float physxVehicleWheel:maxSteerAngle = 0.0 (
         customData = {
-            string userDocBrief = """DEPRECATED. Max steer angle, radians. Use PhysxVehicleSteeringAPI."""
+            string userDocBrief = """DEPRECATED and NOT read. The steer lock belongs to the vehicle's
+    steering system: author physxVehicleAckermannSteering:maxSteerAngle on a prim
+    applying PhysxVehicleAckermannSteeringAPI."""
         }
         displayName = "Max Steer Angle"
     )
@@ -208,8 +194,6 @@ class "PhysxVehicleSuspensionAPI" (
             double min = 0
             double max = 100000
             string unit = "N/m"
-        }
-        customData = {
             string userDocBrief = """Spring strength (stiffness), units mass/seconds² (force/distance, N/m).
     Required. NOTE: the canonical name is springStrength, NOT springStiffness."""
         }
@@ -220,8 +204,6 @@ class "PhysxVehicleSuspensionAPI" (
             double min = 0
             double max = 20000
             string unit = "N·s/m"
-        }
-        customData = {
             string userDocBrief = """Spring damper rate, units mass/seconds (force·s/distance, N·s/m).
     Required. NOTE: the canonical name is springDamperRate, NOT springDamping."""
         }
@@ -433,8 +415,6 @@ class "PhysxVehicleTireAPI" (
             double min = 0
             double max = 30000
             string unit = "N/(m/s)"
-        }
-        customData = {
             string userDocBrief = """Longitudinal tire stiffness — the slope of longitudinal force vs slip
     before saturation. Drives the traction model."""
         }
@@ -467,8 +447,6 @@ class "PhysxVehicleEngineAPI" (
             double min = 0
             double max = 2000
             string unit = "N·m"
-        }
-        customData = {
             string userDocBrief = """Peak drive torque at full throttle, N·m. Applied to the axle (joint
     wheel) or as the traction force budget (raycast wheel)."""
         }
@@ -479,11 +457,9 @@ class "PhysxVehicleEngineAPI" (
             double min = 0
             double max = 600
             string unit = "rad/s"
-        }
-        customData = {
-            string userDocBrief = """Maximum (no-load) rotation speed, rad/s. Caps the free-spin. LunCo
-    derives the wheel's bearing damping from peakTorque / maxRotationSpeed when
-    physxVehicleWheel:dampingRate is unauthored."""
+            string userDocBrief = """No-load axle speed, rad/s. THE top-speed parameter, obeyed by BOTH of
+    LunCo's wheel realizations: the joint wheel's velocity motor targets it, and the
+    raycast wheel's drive force rolls off linearly toward it, so both cap at ω·r."""
         }
         displayName = "Max Rotation Speed"
     )

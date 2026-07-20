@@ -183,13 +183,31 @@ joint, so this is a Rust **soft holonomic coupling**.
   `rocker_bogie_test.usda` is the redundant one, kept as a caution).
 
 ### G6 — Finish USD-driven dynamics tuning  **[DONE (tuning); maxForce intentionally not honored]**
-Tuning knobs an author of a dynamic vehicle actually sets are now USD attributes:
-- **Raycast:** `lunco:driveForcePerNormal` (was const 2.0) → per-wheel
-  `WheelRaycast.drive_force_per_normal`.
-- **Joint:** `lunco:maxDriveOmega` (12), `lunco:driveDamping` (30),
-  `lunco:stallTorqueGain` (6), and the joint wheel `physics:mass` (was a hardcoded
-  `Mass(100)`) — all read into a `JointDriveParams` struct in `setup_physical_wheel`.
-  Defaults reproduce the verified feel.
+Every tuning knob of a dynamic vehicle is a USD attribute, read by **one strict
+reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realizations
+(the analytical `WheelRaycast` and the joint-motor physical wheel).
+
+- **Required, not defaulted.** Each attribute the reader wants is mandatory; a
+  missing one is collected and returned as a missing-attribute error, so an
+  under-authored wheel FAILS instead of quietly inheriting a number nobody wrote.
+  There are no wheel defaults in Rust — `WheelRaycast::default()` is all zeros and
+  exists only as the struct-update base the reader immediately overwrites.
+- **One no-load speed for both realizations.** `physxVehicleEngine:maxRotationSpeed`
+  (12 rad/s) is THE top-speed parameter. The joint wheel's velocity motor targets
+  it; the raycast wheel's drive force rolls off linearly toward it
+  (`drive_force_mag`), so **both cap at `ω_max · r`**. The old
+  `lunco:wheel:maxDriveOmega` is deleted — there is one name for this.
+- **`physxVehicleWheel:dampingRate` is required.** Bearing/rolling drag is a
+  physical property of the hub in its own right; the old derivation from the drive
+  torque is deleted.
+- **Also read:** `physxVehicleWheel:radius` / `:moi` / `:maxBrakeTorque`,
+  `physics:mass`, `physxVehicleEngine:peakTorque`,
+  `physxVehicleTire:longitudinalStiffness`, `lunco:tire:frictionCoefficient`,
+  `lunco:wheel:contactGripStiffness` / `:driveForcePerNormal` / `:driveDamping` /
+  `:stallTorqueGain` / `:steerAxis`.
+- **The one non-required number is a derivation, not a default:**
+  `physxVehicleWheel:moi` unauthored (or 0) means "solid cylinder", i.e. `½·m·r²`
+  computed downstream from the authored mass and radius. Nothing is invented.
 - **Left as a const (deliberately):** `MAX_SUSPENSION_FORCE_N` (100 kN) is a
   numerical guard-rail (caps a deeply-compressed strut / velocity-spike impulse),
   not a feel knob — documented as such.

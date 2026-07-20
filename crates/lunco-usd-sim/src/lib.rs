@@ -1803,8 +1803,10 @@ fn setup_physical_wheel(
     // `WheelParams::drive_motor` (raw torque sat in avian's low-slip friction
     // dead-zone; commanding spin rate is stable and self-limits top speed at
     // traction; the high stall torque is what lets a skid turn enforce its
-    // left/right speed split). USD-tunable via `lunco:wheel:maxDriveOmega` /
-    // `:driveDamping` / `:stallTorqueGain`.
+    // left/right speed split). The no-load speed it targets is
+    // `physxVehicleEngine:maxRotationSpeed` — the SAME attribute the raycast
+    // wheel's torque–speed rolloff uses, so both kinds top out at `ω_max · r`.
+    // Further USD-tunable via `lunco:wheel:driveDamping` / `:stallTorqueGain`.
     let drive_motor = params.drive_motor();
 
     // Joint construction lives in `lunco-usd-avian` (the single home for all
@@ -1843,7 +1845,7 @@ fn setup_physical_wheel(
         // and the front frame-steer does the turning.
         MotorActuator {
             port_entity: p_drive,
-            max_omega: params.max_drive_omega,
+            max_omega: params.max_rotation_speed,
             drive_sign: -1.0,
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),

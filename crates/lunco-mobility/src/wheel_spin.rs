@@ -236,6 +236,7 @@ mod tests {
                 mass: 8.0,
                 moment_of_inertia: 1.0, // overrides ½mr² ⇒ inertia = 1.0 (clean)
                 drive_torque_max: 0.0,
+                max_rotation_speed: 12.0,
                 bearing_damping: 0.0,
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,

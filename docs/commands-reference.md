@@ -180,7 +180,8 @@ actually call, with the fields the deserializer actually accepts. See the
  Import an existing `.wgsl` file from anywhere on disk INTO the open Twin
  (copies it to `<twin>/shaders/<name>.wgsl`), registers it in the picker, and
  optionally binds it to a target entity. The file must be a prop-pickable
- dynamic shader (a `Material` struct; engine fields limited to `sun_vis`).
+ dynamic shader: a `Material` struct, and every `//!@engine` field it declares
+ must be prop-fillable per the engine-param registry.
 
  ```json
  {"command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}

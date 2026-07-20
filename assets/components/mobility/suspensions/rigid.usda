@@ -31,4 +31,25 @@ over "Suspension" (
     float lunco:suspension:restLength = 0.0          # m — no travel
     float physxVehicleSuspension:springStrength = 15000.0 # N/m
     float physxVehicleSuspension:springDamperRate = 5000.0    # N·s/m — heavy, to settle contacts
+
+    # Visual mount — a rigid suspension is a bracket, not a shock, so there is
+    # ONE static casing and NO piston/spring roles: with zero travel nothing
+    # moves, and authoring `LunCoSuspensionVisualAPI` prims here would just ask
+    # lunco-mobility to animate a strut that cannot compress. The casing spans
+    # the mount point so the wheel visibly bolts to the body instead of
+    # floating beside it.
+
+    def Cylinder "SuspensionCasing" (
+        doc = "Visual mounting bracket of the rigid wheel mount. Nothing moves; plain geometry only."
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 0.04
+        double height = 0.2
+        # Centred on the mount point, reaching toward the hull above.
+        double3 xformOp:translate = (0.0, 0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.2, 0.2, 0.2)] # Dark grey bracket
+        bool physics:collisionEnabled = false
+    }
 }

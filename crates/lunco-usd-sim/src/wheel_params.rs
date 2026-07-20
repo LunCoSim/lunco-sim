@@ -19,20 +19,30 @@
 //! |---|---|---|
 //! | radius | `physxVehicleWheel:radius` | yes |
 //! | mass | `physics:mass` | yes |
-//! | moment of inertia | `physxVehicleWheel:moi` | no (0 ⇒ ½·m·r²) |
+//! | moment of inertia | `physxVehicleWheel:moi` | no (0 ⇒ derived ½·m·r² from authored mass+radius) |
 //! | peak drive torque | `physxVehicleEngine:peakTorque` | yes |
-//! | max rotation speed | `physxVehicleEngine:maxRotationSpeed` | yes |
-//! | bearing damping | `physxVehicleWheel:dampingRate` | no (⇒ peak/maxRot) |
+//! | no-load axle speed | `physxVehicleEngine:maxRotationSpeed` | yes |
+//! | bearing damping | `physxVehicleWheel:dampingRate` | yes |
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness | `physxVehicleTire:longitudinalStiffness` | yes |
 //! | Coulomb μ | `lunco:tire:frictionCoefficient` | yes |
 //! | grip stiffness | `lunco:wheel:contactGripStiffness` | yes |
 //! | drive force/normal | `lunco:wheel:driveForcePerNormal` | yes |
 //! | steer axis | `lunco:wheel:steerAxis` | yes |
-//! | motor target ω | `lunco:wheel:maxDriveOmega` | yes |
 //! | motor damping | `lunco:wheel:driveDamping` | yes |
 //! | stall torque gain | `lunco:wheel:stallTorqueGain` | yes |
 //! | suspension | `lunco:suspension:restLength` + `physxVehicleSuspension:springStrength`/`:springDamperRate` | raycast only |
+//!
+//! ## One no-load speed for both realizations
+//!
+//! `physxVehicleEngine:maxRotationSpeed` is THE no-load axle speed, and both
+//! kinds obey it: the joint wheel's velocity motor targets it
+//! (`MotorActuator::max_omega`), and the raycast wheel rolls its drive force
+//! off toward it (`lunco_mobility::drive_force_mag`), so both self-limit at
+//! `ω_max · r`. There used to be a second name for the same quantity —
+//! `lunco:wheel:maxDriveOmega`, read only by the joint path — and the two were
+//! authored 60 vs 12, which is why raycast rovers drove ~5× too fast. The
+//! second name is GONE; there is no alias and no fallback.
 //!
 //! ## Strictness
 //!
@@ -84,16 +94,20 @@ pub struct WheelParams {
     /// Wheel mass, kg (`physics:mass`). Same value for both kinds — the old
     /// raycast-25 / physical-100 Rust fork is gone; feel is authored.
     pub mass: f64,
-    /// Explicit axle moment of inertia, kg·m² (`physxVehicleWheel:moi`);
-    /// 0 ⇒ derive ½·m·r².
+    /// Explicit axle moment of inertia, kg·m² (`physxVehicleWheel:moi`).
+    /// 0 ⇒ DERIVED as the solid-cylinder ½·m·r² from the authored `physics:mass`
+    /// and `physxVehicleWheel:radius`. That is a derivation from authored
+    /// physics, not an invented default — no number enters that nothing authored.
     pub moment_of_inertia: f64,
     /// Engine peak drive torque, N·m (`physxVehicleEngine:peakTorque`).
     pub peak_torque: f64,
-    /// Free-spin bound, rad/s (`physxVehicleEngine:maxRotationSpeed`).
+    /// No-load axle speed, rad/s (`physxVehicleEngine:maxRotationSpeed`). THE
+    /// top-speed parameter for BOTH realizations: the joint motor targets it,
+    /// the raycast drive force rolls off toward it, so both cap at `ω·r`.
     pub max_rotation_speed: f64,
-    /// Bearing drag, N·m·s (`physxVehicleWheel:dampingRate` when authored,
-    /// else derived as peakTorque / maxRotationSpeed so airborne spin
-    /// terminates at the engine's max rotation speed).
+    /// Bearing + rolling drag, N·m·s (`physxVehicleWheel:dampingRate`). A
+    /// physical property of the hub in its own right — REQUIRED, never inferred
+    /// from the drive torque.
     pub bearing_damping: f64,
     /// Lock-up authority, N·m (`physxVehicleWheel:maxBrakeTorque`).
     pub brake_torque_max: f64,
@@ -108,8 +122,6 @@ pub struct WheelParams {
     pub drive_force_per_normal: f64,
     /// Raked steering-head axis, wheel-local (`lunco:wheel:steerAxis`).
     pub steer_axis: DVec3,
-    /// Motor target spin at full throttle, rad/s (`lunco:wheel:maxDriveOmega`).
-    pub max_drive_omega: f64,
     /// Velocity-tracking aggressiveness, 1/s (`lunco:wheel:driveDamping`).
     pub drive_damping: f64,
     /// Motor stall torque = peakTorque × this (`lunco:wheel:stallTorqueGain`).
@@ -145,21 +157,19 @@ impl WheelParams {
         let mass = req("physics:mass");
         let peak_torque = req("physxVehicleEngine:peakTorque");
         let max_rotation_speed = req("physxVehicleEngine:maxRotationSpeed").max(1e-3);
+        let bearing_damping = req("physxVehicleWheel:dampingRate");
         let brake_torque_max = req("physxVehicleWheel:maxBrakeTorque");
         let slip_stiffness = req("physxVehicleTire:longitudinalStiffness");
         let friction_mu = req("lunco:tire:frictionCoefficient");
         let contact_grip_stiffness = req("lunco:wheel:contactGripStiffness");
         let drive_force_per_normal = req("lunco:wheel:driveForcePerNormal");
-        let max_drive_omega = req("lunco:wheel:maxDriveOmega");
         let drive_damping = req("lunco:wheel:driveDamping");
         let stall_torque_gain = req("lunco:wheel:stallTorqueGain");
 
-        // Optional, with DERIVED (not invented) defaults.
+        // The ONE non-required number, and it is a DERIVATION, not a default:
+        // 0/unauthored means "solid cylinder", i.e. ½·m·r² computed downstream
+        // from the authored mass and radius. Nothing is invented.
         let moment_of_inertia = reader.real(wheel, "physxVehicleWheel:moi").unwrap_or(0.0);
-        let bearing_damping = reader
-            .real(wheel, "physxVehicleWheel:dampingRate")
-            .filter(|&d| d > 0.0)
-            .unwrap_or(peak_torque / max_rotation_speed);
 
         let steer_axis = match lunco_usd_bevy::read_vec3_f64(reader, wheel, "lunco:wheel:steerAxis")
         {
@@ -193,7 +203,6 @@ impl WheelParams {
             contact_grip_stiffness,
             drive_force_per_normal,
             steer_axis,
-            max_drive_omega,
             drive_damping,
             stall_torque_gain,
             suspension,
@@ -226,6 +235,7 @@ impl WheelParams {
         wheel.mass = self.mass;
         wheel.moment_of_inertia = self.moment_of_inertia;
         wheel.drive_torque_max = self.peak_torque;
+        wheel.max_rotation_speed = self.max_rotation_speed;
         wheel.bearing_damping = self.bearing_damping;
         wheel.friction_mu = self.friction_mu;
         wheel.slip_stiffness = self.slip_stiffness;
@@ -530,7 +540,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             joint.motor = motor;
         }
         if let Some(mut motor) = world.get_mut::<MotorActuator>(je) {
-            motor.max_omega = u.params.max_drive_omega;
+            motor.max_omega = u.params.max_rotation_speed;
         }
         if let (Some(lock), Some(mut steer)) =
             (u.max_steer_angle, world.get_mut::<SteeringActuator>(je))

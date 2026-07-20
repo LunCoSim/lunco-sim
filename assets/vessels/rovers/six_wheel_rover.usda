@@ -28,9 +28,11 @@ def Xform "SixWheelRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
-    prepend variantSets = "driveLaw"
+    prepend variantSets = ["driveLaw", "power", "thermal"]
     variants = {
         string driveLaw = "builtin"
+        string power = "infinite"
+        string thermal = "none"
     }
 )
 {
@@ -60,15 +62,9 @@ def Xform "SixWheelRover" (
     )
     {
         double3 xformOp:scale = (2.0, 0.3, 5.0)
-        # Sand-gold identity via the hull paint, not displayColor (the hull
-        # shader replaces it).
-        over "HullLook"
-        {
-            over "Shader"
-            {
-                color3f inputs:hull_color = (0.80, 0.68, 0.30)
-            }
-        }
+        # Sand-gold identity. Colour is `primvars:displayColor` and nothing
+        # else — the hull shader consumes it as the base paint.
+        color3f[] primvars:displayColor = [(0.8, 0.68, 0.3)]
     }
 
     # --- Left bank (binds to drive_left) ------------------------------------
@@ -169,6 +165,37 @@ def Xform "SixWheelRover" (
 
         "modelica" (
             prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
+        ) {
+        }
+    }
+
+    # --- Power: does driving cost anything ----------------------------------
+    # ORTHOGONAL to `driveLaw`: `infinite` is EMPTY — the absence of a battery
+    # is today's drive-forever behavior. `battery` composes the RoverBattery.mo
+    # energy budget onto the root: drain follows the commanded drive magnitude,
+    # and its `alive` cutoff brownouts the drive ports over the last ~2% of
+    # charge — a variant chooses a component, it never restates one.
+    variantSet "power" = {
+        "infinite" {
+        }
+
+        "battery" (
+            prepend references = @lunco://components/power/rover_battery.usda@</Power>
+        ) {
+        }
+    }
+
+    # --- Thermal: do the motors have temperatures ---------------------------
+    # `none` is EMPTY. `basic` composes the RoverMotorThermal.mo per-side heat
+    # balance onto the root: pure telemetry (`temp_left`/`temp_right`, kelvin,
+    # readable/watchable ports), nothing acts on it — same choose-a-component
+    # shape as `power`.
+    variantSet "thermal" = {
+        "none" {
+        }
+
+        "basic" (
+            prepend references = @lunco://components/thermal/motor_thermal.usda@</Thermal>
         ) {
         }
     }

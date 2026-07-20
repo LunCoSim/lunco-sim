@@ -51,6 +51,9 @@ pub mod entity_query;
 /// `QueryUsdPrim` — the AUTHORED read: composed USD attributes off the live
 /// stage, for asset invariants that scripts (not just Rust) can check.
 pub mod usd_prim_query;
+/// `ValidateAsset` — parse-only pre-flight for asset files (.mo/.usda/.wgsl/
+/// .rhai): no cosim, no scene load, no GPU. Also the `--validate` CLI leg.
+pub mod validate;
 /// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
 /// Shared by `commands` (the authoring tier) and the editor's Inspector panel — it
 /// lived in the panel, which is what broke the `--no-ui` server build (`commands`

@@ -50,15 +50,26 @@ def Xform "RockerBogie" (
     }
 
     # --- CHASSIS GEOMETRY & VISUALS ---
-    # Gold solar foil main body
+    # Main body — the shared box chassis component (collider + panelised hull
+    # material), referenced INTO this prim so the name `Body` and every local
+    # opinion below survive. Its own scale wins over the component default.
     def Cube "Body" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
     {
-        double size = 1.0
         double3 xformOp:scale = (1.2, 0.4, 1.8)
-        uniform token[] xformOpOrder = ["xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.85, 0.75, 0.2)]
+        # NASA-ish white-grey — the science-platform archetype. Colour is
+        # `primvars:displayColor` and nothing else; the hull shader consumes it
+        # as the base paint.
+        color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+        # Gold accent, keeping the solar-foil heritage of the original body.
+        over "HullLook"
+        {
+            over "Shader"
+            {
+                color3f inputs:accent_color = (0.85, 0.7, 0.2)
+            }
+        }
     }
 
     # Slanted Solar panel deck on top of the chassis

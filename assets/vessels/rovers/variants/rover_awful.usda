@@ -43,15 +43,16 @@ def Xform "RoverAwful" (
     over "Wheel_R1" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
     over "Wheel_R2" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
 
-    # Livery — hazard-red hull paint (hard), heavier wear to match.
-    # The hull shader replaces displayColor — tiers restyle via paint inputs.
+    # Livery — hazard-red hull (hard), heavier wear to match. Tiers restyle the
+    # ONE authored colour, `primvars:displayColor`, which the hull shader
+    # consumes as its base paint; `wear` stays a genuine shader-only param.
     over "Chassis"
     {
+        color3f[] primvars:displayColor = [(0.85, 0.2, 0.15)]
         over "HullLook"
         {
             over "Shader"
             {
-                color3f inputs:hull_color = (0.85, 0.20, 0.15)
                 float inputs:wear = 0.45
             }
         }

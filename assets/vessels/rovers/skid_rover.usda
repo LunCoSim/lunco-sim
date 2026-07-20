@@ -34,7 +34,8 @@
 # Instantiate in scenes via reference + variant selection + overrides:
 #   - variants = { string drivetrain = "physical" } → joint drivetrain
 #   - double3 xformOp:translate                     → set position
-#   - over "Chassis" { color3f[] primvars:displayColor = [(...)] } → colour
+#   - over "Chassis" { color3f[] primvars:displayColor = [(...)] } → livery
+#     (the hull shader consumes displayColor — one authored colour, one place)
 
 def Xform "SkidRover" (
     # An ASSEMBLY: a model built out of other models. Its wheels are component models
@@ -48,10 +49,11 @@ def Xform "SkidRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
-    prepend variantSets = ["drivetrain", "driveLaw"]
+    prepend variantSets = ["drivetrain", "driveLaw", "power"]
     variants = {
         string drivetrain = "raycast"
         string driveLaw = "builtin"
+        string power = "infinite"
     }
 )
 {
@@ -92,6 +94,20 @@ def Xform "SkidRover" (
         prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
     {
+        # Silver-white — the baseline workhorse, and the brightest hull in the
+        # fleet so it reads first against regolith. Colour is
+        # `primvars:displayColor` and nothing else; the hull shader consumes it
+        # as the base paint.
+        color3f[] primvars:displayColor = [(0.88, 0.89, 0.9)]
+        # …with a deep-red accent stripe so it can't be mistaken for the
+        # white-grey rocker-bogie at a glance.
+        over "HullLook"
+        {
+            over "Shader"
+            {
+                color3f inputs:accent_color = (0.72, 0.16, 0.12)
+            }
+        }
     }
 
     # Headlights (Spotlights pointing forward and tilted down by 15 deg, with visual geometry and light source)
@@ -220,6 +236,24 @@ def Xform "SkidRover" (
 
         "modelica" (
             prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
+        ) {
+        }
+    }
+
+    # --- Power: does driving cost anything ----------------------------------
+    # ORTHOGONAL to `driveLaw` (which decides how commands become drive) and
+    # `drivetrain` (how wheels are realized): `infinite` is EMPTY — the absence
+    # of a battery is today's drive-forever behavior. `battery` composes the
+    # RoverBattery.mo energy budget onto the root: drain follows the commanded
+    # drive magnitude, and its `alive` cutoff brownouts the drive ports over
+    # the last ~2% of charge — a variant chooses a component, it never
+    # restates one.
+    variantSet "power" = {
+        "infinite" {
+        }
+
+        "battery" (
+            prepend references = @lunco://components/power/rover_battery.usda@</Power>
         ) {
         }
     }

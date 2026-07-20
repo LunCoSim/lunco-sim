@@ -66,16 +66,11 @@ def Xform "RoverEasy" (
     over "Wheel_R1" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
     over "Wheel_R2" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
 
-    # Livery — calm green hull paint (easy=green); accent stays default.
-    # The hull shader replaces displayColor — tiers restyle via paint inputs.
+    # Livery — calm green hull (easy=green); accent stays default. Tiers
+    # restyle the ONE authored colour, `primvars:displayColor`, which the hull
+    # shader consumes as its base paint.
     over "Chassis"
     {
-        over "HullLook"
-        {
-            over "Shader"
-            {
-                color3f inputs:hull_color = (0.30, 0.72, 0.35)
-            }
-        }
+        color3f[] primvars:displayColor = [(0.3, 0.72, 0.35)]
     }
 }

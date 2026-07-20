@@ -64,6 +64,10 @@ def Xform "AckermannRover" (
         prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
     {
+        # Deep blue — the steered-axle archetype. Colour is
+        # `primvars:displayColor` and nothing else; the hull shader consumes it
+        # as the base paint.
+        color3f[] primvars:displayColor = [(0.18, 0.32, 0.62)]
     }
 
     # Headlights (Spotlights pointing forward and tilted down by 15 deg, with visual geometry and light source)

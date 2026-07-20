@@ -59,16 +59,11 @@ def Xform "SixWheelIndependent" (
         prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
     {
-        # Longer flatbed than the component default; teal identity via the hull
-        # paint, not displayColor (the hull shader replaces it).
+        # Longer flatbed than the component default. Teal identity — colour is
+        # `primvars:displayColor` and nothing else; the hull shader consumes it
+        # as the base paint.
         double3 xformOp:scale = (2.0, 0.3, 5.0)
-        over "HullLook"
-        {
-            over "Shader"
-            {
-                color3f inputs:hull_color = (0.30, 0.62, 0.72)
-            }
-        }
+        color3f[] primvars:displayColor = [(0.3, 0.62, 0.72)]
     }
 
     # --- Left bank → drive_w0/w1/w2 -----------------------------------------

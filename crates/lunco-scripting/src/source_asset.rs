@@ -197,7 +197,12 @@ impl Plugin for RhaiSourceAssetPlugin {
                     // web, and Twins open at runtime.
                     preload_importable_scripts.run_if(
                         resource_exists_and_changed::<lunco_assets::discovery::AssetManifest>
-                            .or(resource_changed::<lunco_assets::TwinRoots>),
+                            // `exists_and_changed`, NOT `resource_changed`: a bare
+                            // `resource_changed` PANICS the schedule when the
+                            // resource is absent, and `TwinRoots` only exists once
+                            // a twin-capable app inserts it (lunica crashed at
+                            // startup on exactly this).
+                            .or(resource_exists_and_changed::<lunco_assets::TwinRoots>),
                     ),
                     publish_rhai_sources,
                 )

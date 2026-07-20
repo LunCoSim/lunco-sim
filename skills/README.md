@@ -14,6 +14,7 @@ one directly when doing that kind of task by hand.
 | Skill | Use it when you want to… |
 |---|---|
 | [**repo-map**](repo-map/SKILL.md) | Get your bearings — repo layout, which binary to run, where a feature lives |
+| [**use-asset-library**](use-asset-library/SKILL.md) | Add a component / shader / Modelica model / rhai actuator to `assets/` and have the engine find it — no Rust |
 
 ## Author the world & its behaviour
 
@@ -35,6 +36,7 @@ one directly when doing that kind of task by hand.
 | [**inspect-simulation**](inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
+| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.wgsl`/`.rhai` — does it parse? — in seconds, with no app, window or GPU |
 
 ## Extend the engine
 
@@ -59,6 +61,14 @@ one directly when doing that kind of task by hand.
   doesn't lower to a `UsdOp` escapes save, journal, undo *and* replication —
   silently. See [**usd-projection**](usd-projection/SKILL.md).
 - **Use the API `Exit`**, never `pkill`, to stop a running app.
+- **Validate before you run.** `sandbox -- --validate <files…>` parses assets in
+  seconds with no GPU and catches broken references, missing wheel attrs and
+  `if`/`when` in Modelica. See [**validate-assets**](validate-assets/SKILL.md).
+- **Shipped assets are `@lunco://…@`.** A bare relative path resolves against the
+  anchoring document, so it breaks once a Twin mounts the file — and for
+  `lunco:program:sourceAsset` that failure is **silent**.
+- **Colour is `primvars:displayColor`**, shader or not; WGSL opts in with
+  `//!@engine display_color`.
 
 New to the codebase? Start with [**repo-map**](repo-map/SKILL.md), then the
 [Documentation Hub](../docs/README.md) and the [AI Agent Guide](../AGENTS.md).

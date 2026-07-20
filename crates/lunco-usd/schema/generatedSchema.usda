@@ -771,15 +771,6 @@ class "LunCoWheelAPI" (
         doc = """Steering-head axis, wheel-local. `(0, 1, 0)` is a vertical yaw
         axis (cars); a raked fork authors e.g. `(0, 0.91, 0.42)` for ~25°."""
     )
-    double lunco:wheel:maxDriveOmega (
-        customData = {
-            double min = 0
-            double max = 60
-            string unit = "rad/s"
-        }
-        doc = """Joint-wheel drive tuning (rigid-axle rovers): free-spin cap of the
-        axle motor, rad/s."""
-    )
     double lunco:wheel:driveDamping (
         customData = {
             double min = 0

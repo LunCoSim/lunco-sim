@@ -268,7 +268,8 @@ fn wheel_resync_claims_are_prim_scoped() {
 
     assert!(claims_edit(&view, &wheel, "physics:mass"));
     assert!(!claims_edit(&view, &chassis, "physics:mass"));
-    assert!(claims_edit(&view, &wheel, "lunco:wheel:maxDriveOmega"));
+    assert!(claims_edit(&view, &wheel, "lunco:wheel:driveDamping"));
+    assert!(claims_edit(&view, &wheel, "physxVehicleEngine:maxRotationSpeed"));
     assert!(claims_edit(&view, &wheel, "physxVehicleEngine:peakTorque"));
     assert!(claims_edit(&view, &wheel, "physxVehicleSuspension:springStrength"));
     assert!(claims_edit(&view, &root, "lunco:driveKernel"));

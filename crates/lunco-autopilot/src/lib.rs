@@ -1611,6 +1611,7 @@ pub struct EngageAutopilot {
 fn on_engage_autopilot(
     trigger: On<EngageAutopilot>,
     q: Query<(Entity, &Autopilot)>,
+    q_route: Query<(Has<usd_tree::BehaviorXml>, Has<AutopilotBehaviorSpec>)>,
     mut commands: Commands,
 ) {
     let throttle = if cmd.throttle != 0.0 { cmd.throttle } else { 0.5 };
@@ -1644,6 +1645,26 @@ fn on_engage_autopilot(
                 }
             }
             Err(err) => warn!("[autopilot] EngageAutopilot: bad spec: {err}"),
+        }
+    } else {
+        // NO ROUTE. Engaging still succeeds — the actor claims the vessel and drives a
+        // CONSTANT forward setpoint — but that is almost never what the user meant when
+        // they pressed Engage, and it is indistinguishable from "the autopilot is
+        // broken". A vessel gets a route from its `lunco:behavior` BT.CPP XML (stamped
+        // as `usd_tree::BehaviorXml` by the USD projection, then compiled into
+        // `AutopilotBehaviorSpec` by `usd_tree::compile_behavior_xml`), which the editor
+        // authors when you Alt+LMB the ground with the vessel possessed or selected.
+        // A vessel that has neither has nowhere to go, so say so by name instead of
+        // driving off in a straight line and letting the user guess.
+        let (has_xml, has_spec) = q_route.get(cmd.vessel).unwrap_or((false, false));
+        if !has_xml && !has_spec {
+            warn!(
+                "[autopilot] vessel {:?} has NO ROUTE (no `lunco:behavior` BT.CPP tree and no \
+                 compiled AutopilotBehaviorSpec) — engaging anyway, but it will only hold a \
+                 constant throttle of {throttle} on its current heading. Give it waypoints \
+                 (Alt+LMB the ground with the vessel possessed/selected) or pass `spec_json`.",
+                cmd.vessel
+            );
         }
     }
     info!("[autopilot] engaging on vessel {:?} (index {})", cmd.vessel, cmd.index);
