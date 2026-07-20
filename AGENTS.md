@@ -28,6 +28,23 @@ attribute does none of that. Ambient light was a custom `lunco:env:ambientBright
 is an untextured `UsdLuxDomeLight`. Camera exposure was a Bevy constant; `UsdGeomCamera`
 declares `exposure:iso`/`:time`/`:fStop`/`:responsivity`.
 
+**The test, before you type `lunco:`:** name the standard field this quantity would have
+if USD had thought of it. If you can name one, USD *did* think of it — use it. A vendor
+namespace is only correct when USD has **no concept at all** for the thing, and then it
+should cover only the genuinely new part.
+
+The lathe is the worked example, both ways. `lunco:lathe:profile` / `throatRadius` /
+`contour` are legitimate: USD has no surface-of-revolution schema — the parametric gprims
+are Sphere/Cube/Cylinder/Cone/Capsule/Plane, and `UsdGeomNurbsPatch` is a *result* format
+(points, weights, knots), not a generator. But the same schema also shipped
+`lunco:lathe:rings` and `lunco:lathe:vOrder`, which were simply `vVertexCount` and `vOrder`
+— standard `NurbsPatch` fields — under second names. Sampling density and polynomial degree
+are properties of the patch; only the *shape* was new. Two spellings of one quantity is the
+same defect as rule 3, arrived at from the other side.
+
+Also prefer a widely-adopted external standard to a bespoke blob: the mission ephemeris is
+CCSDS OEM / SPICE SPK, not a hand-rolled JSON schema.
+
 **2. Which layer?** Ask in order, stop at the first that fits. **Rust is the last resort,
 not the default.**
 
@@ -60,7 +77,13 @@ when someone gave it a sky. If a migration truly cannot land at once, say so and
 than no write** — it makes the journal claim a setting persisted when it did not.
 
 **4. Reuse, don't reinvent.** Check for a maintained crate (the repo already leans on
-`openusd`, `avian3d`, `big_space`, `rumoca`, `catppuccin`). Check for an existing pattern
+`openusd`, `avian3d`, `big_space`, `rumoca`, `catppuccin`). **Reach into the crate before
+writing your own** — `openusd` in particular already knows how to resolve composition arcs,
+walk stages, and read typed attributes, so a hand-rolled path parser, a bespoke attribute
+reader, or a private re-implementation of an arc is almost always a sign the crate's API
+was not read. If the crate genuinely lacks something, the honest move is a narrow wrapper
+(or an upstream patch) with a comment saying what was missing — not a parallel
+implementation that drifts from it. Check for an existing pattern
 here — `lunco-doc`/`lunco-doc-bevy`, `lunco-usd`/`lunco-usd-bevy`,
 `lunco-render`/`lunco-render-bevy` are one split applied three times; a fourth should look
 like them. Check the actual spec, not your memory of it. Reinventing is sometimes right,

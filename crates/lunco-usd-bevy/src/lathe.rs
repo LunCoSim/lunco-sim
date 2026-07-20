@@ -294,9 +294,15 @@ impl LatheProfile {
 /// }
 /// ```
 ///
-/// No `points`, no `pointWeights`, no `uKnots`, no vertex counts — those are
+/// No `points`, no `pointWeights`, no `uKnots`, no `uVertexCount` — those are
 /// DERIVED, and authoring them alongside the parameters is the duplication this
 /// component exists to delete.
+///
+/// The two knobs that are NOT derived — how many control rings the profile is
+/// sampled at and the degree between them — are read from the STANDARD
+/// `UsdGeomNurbsPatch` fields `vVertexCount` and `vOrder`, because that is what
+/// those fields already mean. A `lunco:` spelling of them would be a second name
+/// for a quantity USD has a first name for.
 #[derive(Component, Reflect, Clone, Debug, PartialEq)]
 #[reflect(Component)]
 pub struct UsdLathe {
@@ -364,7 +370,10 @@ impl UsdLathe {
     }
 }
 
-/// Read `lunco:lathe:*` off a prim into a [`UsdLathe`].
+/// Read a prim's lathe parameters into a [`UsdLathe`].
+///
+/// The profile comes from `lunco:lathe:*`; its sampling comes from the standard
+/// `UsdGeomNurbsPatch` fields `vVertexCount` and `vOrder`.
 ///
 /// `None` when `lunco:lathe:profile` is absent — that is an ordinary hand-authored
 /// patch, read from its `points` array as before. An UNKNOWN profile token warns
@@ -406,16 +415,19 @@ pub fn read_lathe<R: crate::read::UsdRead>(
         }
     };
 
+    // STANDARD UsdGeomNurbsPatch fields, not `lunco:` ones. How many control rings
+    // the profile is sampled at, and the polynomial degree between them, are
+    // properties of the PATCH — `vVertexCount` and `vOrder` already mean exactly
+    // that, so a vendor namespace has nothing to add and would only give the same
+    // quantity two spellings. Only the profile's SHAPE needs `lunco:`: USD has no
+    // surface-of-revolution schema at all (the parametric gprims are Sphere / Cube /
+    // Cylinder / Cone / Capsule / Plane, and NurbsPatch is a RESULT format — points
+    // and knots — not a generator), so there is no standard field to reuse for
+    // `profile`, `throatRadius`, `contour` and friends.
     Some(UsdLathe {
         profile,
-        rings: reader
-            .scalar::<i32>(path, "lunco:lathe:rings")
-            .unwrap_or(4)
-            .max(2) as u32,
-        v_order: reader
-            .scalar::<i32>(path, "lunco:lathe:vOrder")
-            .unwrap_or(3)
-            .max(2) as u32,
+        rings: reader.scalar::<i32>(path, "vVertexCount").unwrap_or(4).max(2) as u32,
+        v_order: reader.scalar::<i32>(path, "vOrder").unwrap_or(3).max(2) as u32,
         left_handed: reader.text(path, "orientation").as_deref() == Some("leftHanded"),
     })
 }
