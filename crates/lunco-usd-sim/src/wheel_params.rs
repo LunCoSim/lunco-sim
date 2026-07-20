@@ -371,11 +371,22 @@ pub fn claims_edit(reader: &lunco_usd_bevy::StageView<'_>, prim: &SdfPath, attr:
     // Vehicle-root knobs: steering lock and drive-kernel selection re-derive in
     // place; a subtree refresh of the whole rover root would tear down live
     // physics bodies.
-    if attr == "physxVehicleAckermannSteering:maxSteerAngle"
-        || attr == "lunco:driveKernel"
-        || attr == "lunco:driveMix"
-    {
+    if attr == "physxVehicleAckermannSteering:maxSteerAngle" || attr == "lunco:driveKernel" {
         return true;
+    }
+    // A connection transform on a `DriveMix` term prim (`lunco:factor:throttle`
+    // and friends). `resync_wheels_for_stage` re-derives EVERY vehicle root of
+    // the stage, so claiming the edit on the term prim resyncs the mix it
+    // belongs to without the caller resolving the owning vessel. The prefix is
+    // shared with the co-simulation port graph, so the claim is scoped to prims
+    // under a `DriveMix` scope — a factor on a cosim connection is not a wheel
+    // edit and must keep the normal refresh path.
+    if attr.starts_with("lunco:factor:") {
+        return prim
+            .as_str()
+            .rsplit_once('/')
+            .and_then(|(parent, _)| parent.rsplit_once('/'))
+            .is_some_and(|(_, scope)| scope == "DriveMix");
     }
     if attr == "physics:mass" {
         return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");

@@ -102,7 +102,13 @@ fn motor_actuator_system(
 ) {
     for (motor, mut joint) in q_joints.iter_mut() {
         let Ok(port) = q_ports.get(motor.port_entity) else { continue };
-        joint.motor.target_velocity = motor.drive_sign * port.value * motor.max_omega;
+        // Saturate to full scale before scaling by `max_omega`. The raycast path
+        // clamps its throttle identically (`update_wheel_spin`), and it is that
+        // agreement `drivetrain_parity` measures: unclamped, an over-range command
+        // gives the raycast rover full torque but the physical rover proportionally
+        // more, and the two paths diverge.
+        let throttle = port.value.clamp(-1.0, 1.0);
+        joint.motor.target_velocity = motor.drive_sign * throttle * motor.max_omega;
     }
 }
 

@@ -611,8 +611,7 @@ fn apply_incremental_op_to_stage(
             // despawns its synthesized `Port` children and visual child
             // while `UsdSimProcessed` survives, leaving a dead-port
             // `MotorActuator` and a dangling joint. Checked before the `string`
-            // fast-path: `lunco:driveKernel`/`lunco:driveMix` are strings and
-            // must still resync.
+            // fast-path: `lunco:driveKernel` is a string and must still resync.
             if authored {
                 let claimed = world
                     .get_non_send::<CanonicalStages>()

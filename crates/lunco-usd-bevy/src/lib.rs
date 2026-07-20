@@ -1028,39 +1028,15 @@ fn instantiate_usd_prim_read(
         // ours; extension picks the engine, exactly as USD picks a file format.
         attach_programs(reader, &sdf_path, entity, commands);
 
-        // `lunco:vessel` marks this prim as possessable by stamping `FlightSoftware`
-        // — the unified control-surface tag. There is no separate `Vessel` marker:
-        // "possessable/controllable" is exactly "has a control surface", so the avatar
-        // routes plain-clicks to `PossessVessel` for anything carrying
-        // `FlightSoftware` (or a Modelica `SimComponent`). Rovers get it from
-        // `PhysxVehicleContextAPI` instead; a standalone rigid body (lander,
-        // spacecraft) needs this tag. Empty `port_map` is fine — it means
-        // "possessable, no digital actuator ports of its own" (a lander's actuation is
-        // its flight-control program's inputs).
-        //
-        // TWO ORTHOGONAL CLAIMS, deliberately not conflated:
-        //   `lunco:vessel`   ⇒ POSSESSABLE — a human can take this over and look through it.
-        //   a `Controls` scope ⇒ COMMANDABLE — the intents it binds name exactly the
-        //                        command ports accepted.
-        // A relay satellite is the first without the second: you can possess it, it
-        // accepts nothing. A wreck is neither.
-        //
-        // The surface is seeded EMPTY here and filled from the vessel's `ControlBinding`
-        // by `sync_fsw_command_surface`, so the `Controls` scope is the ONE declaration
-        // of what a vessel accepts. The command backend is strict — a write to a port
-        // that was never seeded is refused — so a vessel with no `Controls` accepts
-        // nothing, which is the same guarantee, sourced from one place instead of two.
-        if reader
-            .scalar::<bool>(&sdf_path, "lunco:vessel")
-            .unwrap_or(false)
-        {
-            commands
-                .entity(entity)
-                .try_insert(lunco_fsw::FlightSoftware::new(
-                    std::collections::HashMap::new(),
-                    &[],
-                ));
-        }
+        // NOTE: there is deliberately NO "possessable" tag read here any more (the old
+        // `lunco:vessel` → `FlightSoftware` branch). Possession is not gated by a
+        // marker: an avatar may possess anything, and WHO may hold it is arbitrated by
+        // the authority layer (`SessionRegistry::may_possess` / `PossessionPolicy`,
+        // checked in `on_possess_command`). What a possessed thing can then DO is
+        // decided by its CAPABILITY — the `Controls` scope below — and the command
+        // backend is strict, so possessing something with no `Controls` simply accepts
+        // nothing. A relay satellite is exactly that: possessable, commands rejected.
+        // By composition, not a check.
 
         // Per-vessel intent→port control map (stage 2 of control), authored as a
         // `Controls` child scope: each child prim's NAME is the intent, with
@@ -1085,7 +1061,16 @@ fn instantiate_usd_prim_read(
                 })
                 .collect();
             if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
-                commands.entity(entity).try_insert(binding);
+                // `CommandInputs` rides along with the binding: the binding is what
+                // DECLARES the accepted command ports, and `sync_command_surface`
+                // seeds the surface from it, so the component that holds those values
+                // belongs exactly where the declaration is. Seeded empty here — the
+                // vocabulary is never a Rust literal. (A rover also gets one at its
+                // `PhysxVehicleContextAPI` branch; `try_insert` order is irrelevant
+                // because the seeding is additive and idempotent.)
+                commands
+                    .entity(entity)
+                    .try_insert((binding, lunco_core::CommandInputs::default()));
             }
 
             // Camera-follow mode is a property of how the vehicle moves, so it is

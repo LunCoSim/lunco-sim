@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
-use lunco_fsw::FlightSoftware;
+use lunco_core::CommandInputs;
 
 use crate::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
 use crate::WheelRaycast;
@@ -54,12 +54,12 @@ pub(crate) fn update_wheel_spin(
         &AngularVelocity,
         &Position,
         &Rotation,
-        Option<&FlightSoftware>,
+        Option<&CommandInputs>,
         &RigidBody,
         // Client proxies are Kinematic with avian velocity zeroed; their real
         // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
         Option<&lunco_core::ReplicatedChassisMotion>,
-    ), With<FlightSoftware>>,
+    ), With<crate::kernels::DriveMix>>,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     time: Res<Time>,
 ) {
@@ -89,8 +89,8 @@ pub(crate) fn update_wheel_spin(
         // wheel's forward axis. Pulled from the parent chassis rigid body.
         let mut v_long = 0.0;
         let mut braking = false;
-        if let Ok((lin, ang, pos, rot, fsw, body, motion)) = q_chassis.get(parent.parent()) {
-            braking = fsw.map(|f| f.brake_active).unwrap_or(false);
+        if let Ok((lin, ang, pos, rot, inputs, body, motion)) = q_chassis.get(parent.parent()) {
+            braking = inputs.map(|c| c.brake_active).unwrap_or(false);
             // Source the chassis velocity from wherever this peer's chassis
             // actually gets its motion: live avian velocity on a Dynamic body
             // (host / the owned rover), or the delivered snapshot hint on a
@@ -186,7 +186,8 @@ mod tests {
     use bevy::math::DVec3;
     use bevy::prelude::*;
     use bevy::time::Time;
-    use lunco_fsw::FlightSoftware;
+    use crate::kernels::DriveMix;
+    use lunco_core::CommandInputs;
     use std::time::Duration;
 
     /// Drive `update_wheel_spin` one tick on a single grounded raycast wheel and
@@ -217,7 +218,8 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(ang),
-                FlightSoftware::default(),
+                CommandInputs::default(),
+                DriveMix::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();

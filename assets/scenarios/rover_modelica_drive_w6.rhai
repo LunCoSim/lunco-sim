@@ -7,9 +7,9 @@
 // controller per bank), and fanning one side out to three wheel ports is
 // WIRING, not physics. So this script reads the sibling model's
 // `drive_left`/`drive_right` outputs and writes the rover's six per-wheel FSW
-// ports (`six_wheel_independent.usda` declares them via `lunco:drivePorts`):
+// ports (`six_wheel_independent.usda` declares them as `float outputs:drive_wN`):
 // left bank w0/w1/w2 = left, right bank w3/w4/w5 = right — the same banks the
-// authored `lunco:driveMix` feeds, which stands down via the variant's
+// authored `DriveMix` scope feeds, which stands down via the variant's
 // `lunco:driveKernel = "external"` sentinel, so this bridge is the ONLY
 // writer of those ports.
 //

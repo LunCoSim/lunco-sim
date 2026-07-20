@@ -1,7 +1,7 @@
 //! # Control-allocation kernels
 //!
 //! A **kernel** is the per-tick, deterministic map from a vessel's logical command
-//! inputs (its `FlightSoftware` command surface) to its **actuator-port setpoints**.
+//! inputs (its `CommandInputs` command surface) to its **actuator-port setpoints**.
 //! Rover skid/ackermann mixing is the first case; flight attitude/RCS allocation is
 //! the same shape (see the TODO on [`ControlKernelRegistry`]).
 //!
@@ -27,7 +27,7 @@ use std::collections::HashMap;
 // engineering-backlog doc in docs/architecture (core purity / mobility).
 /// Normalized command inputs a kernel consumes: `throttle`/`steer` in `[-1,1]`,
 /// `brake` in `0..1`. The vessel-agnostic command vector, read from the vessel's
-/// `FlightSoftware` command surface by the driving system.
+/// `CommandInputs` command surface by the driving system.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DriveInputs {
     pub throttle: f64,
@@ -35,23 +35,30 @@ pub struct DriveInputs {
     pub brake: f64,
 }
 
-/// One linear mix term: `value = throttle·forward + steer·steer + brake·brake`,
-/// clamped to `±1`. Covers ackermann-style drive (`forward=1,steer=0` on drive
-/// ports + a dedicated `steer=1` steering port) and arbitrary per-wheel routing.
+/// One linear mix term — the per-connection transform onto ONE actuator port:
+/// `value = throttle·forward + steer·steer + brake·brake`, clamped to `±1`.
+/// Covers ackermann-style drive (throttle on the drive ports + a dedicated
+/// steer-only steering port) and arbitrary per-wheel routing.
+///
+/// The three coefficients are the factors on the three command sources the
+/// vessel's OBC publishes (`inputs:throttle`/`steer`/`brake`), which is why USD
+/// authors them as `lunco:factor:<source>` on a prim named for the SINK port.
 #[derive(Debug, Clone, Reflect, Default)]
 pub struct MixEntry {
-    /// FSW actuator-port name this term writes.
+    /// FSW actuator-port name this term writes — the connection SINK.
     pub port: String,
+    /// Factor on the `throttle` command source.
     pub forward: f64,
+    /// Factor on the `steer` command source.
     pub steer: f64,
-    /// Applied as a `0/1` gate while braking (a brake port gets `brake=1`).
+    /// Factor on the `brake` command source (a brake port gets `brake=1`).
     pub brake: f64,
 }
 
 /// A vessel's actuator-allocation spec: which kernel maps its command inputs to
 /// actuator ports, plus that kernel's parameters. Authored from USD — the reader
 /// selects the kernel from the Omniverse differential/steering schema the asset
-/// declares (or an explicit `lunco:driveMix`). Replaces the per-arch component
+/// declares (or an explicit authored `DriveMix` scope). Replaces the per-arch component
 /// types (`DifferentialDrive`/`AckermannSteer`/`GenericDriveMix`).
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
@@ -75,29 +82,10 @@ impl DriveMix {
         }
     }
 
-    /// A `linear` mix built from the compact `lunco:driveMix` string:
-    /// whitespace-separated `port=forward,steer[,brake]` terms (brake defaults 0).
-    /// Example: `"drive_left=1,0 drive_right=1,0 steering=0,1"`. Malformed terms
-    /// are skipped with a warning.
-    pub fn parse_linear(spec: &str) -> Self {
-        let mut entries = Vec::new();
-        for term in spec.split_whitespace() {
-            let Some((port, coeffs)) = term.split_once('=') else {
-                warn!("driveMix term '{term}' missing '=port=f,s[,b]'; skipped");
-                continue;
-            };
-            let nums: Vec<f64> = coeffs.split(',').filter_map(|c| c.trim().parse().ok()).collect();
-            if port.is_empty() || nums.len() < 2 {
-                warn!("driveMix term '{term}' needs port=forward,steer[,brake]; skipped");
-                continue;
-            }
-            entries.push(MixEntry {
-                port: port.to_string(),
-                forward: nums[0],
-                steer: nums[1],
-                brake: nums.get(2).copied().unwrap_or(0.0),
-            });
-        }
+    /// A `linear` mix over explicit terms. Authored as a `DriveMix` child scope
+    /// on the vessel (one prim per term, named by its actuator port); the USD
+    /// reader walks that scope and hands the terms here already sorted by port.
+    pub fn linear(entries: Vec<MixEntry>) -> Self {
         Self { kernel: "linear".to_string(), ports: Vec::new(), entries }
     }
 

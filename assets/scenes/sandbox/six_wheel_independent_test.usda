@@ -7,11 +7,11 @@
 
 # Loads the G4b independent-drive 6-wheel rover over ground. Verifies the full
 # authored-topology stack: six custom ports spawn, each wheel wires to its own
-# `drive_wN`, and DriveRover routes through the USD `lunco:driveMix`.
+# `drive_wN`, and DriveRover routes through the USD `DriveMix` scope.
 #
 #   sandbox --scene scenes/sandbox/six_wheel_independent_test.usda
 #
-# Verify (server log): "Detected custom driveMix for /.../Rover (6 ports)";
+# Verify (server log): "Authored linear DriveMix for /.../Rover (6 ports)";
 # six "Wired wheel .../Wheel_LN drive to FSW port drive_wM" lines.
 
 def Xform "SixWheelIndependentTest" (

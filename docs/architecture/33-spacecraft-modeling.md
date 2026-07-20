@@ -145,9 +145,16 @@ now USD-authorable:
   6-wheel skid rover whose three-per-side wheels bind explicitly via
   `inputs:drive.connect`; also authors G2 inertia/COM.
 
-**G4b — authored mix  [DONE]:** `lunco:driveMix` on the rover root declares a
-**linear per-port mix** — whitespace-separated `port=forward,steer[,brake]` terms
-→ a data-driven `DriveMix` component (`lunco-mobility`; allocated by the `linear`
+**G4b — authored mix  [DONE]:** a `DriveMix` child scope on the rover root
+declares a **linear per-port mix** — one prim per sink port, named for the
+actuator port it writes, carrying a `double lunco:factor:<source>` per command
+source (`throttle`/`steer`/`brake`, the ports the OBC publishes). Each term prim
+IS a connection, so the linear transform is per CONNECTION — SSP's
+`<Connection><LinearTransformation/></Connection>` in USD form, and the reason
+a factor keyed only by sink port cannot express it (`drive_w0` takes throttle at
++1 AND steer at +1). An absent factor is 0; every coefficient is individually
+overridable through an `over` and survives reference and variant arcs. Read into
+a data-driven `DriveMix` component (`lunco-mobility`; allocated by the `linear`
 kernel in `ControlKernelRegistry`). The kernel projects the drive inputs onto
 every named port (`value = fwd·f + steer·s + brake·b`,
 clamped, scaled to i16), taking precedence over the built-in skid/Ackermann

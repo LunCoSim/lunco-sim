@@ -629,7 +629,11 @@ fn test_valentine_color_override() {
     let display_color = lunco_usd_bevy::read_primvar_vec3(&view, &chassis, "primvars:displayColor")
         .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
         .expect("Skid_Raycast_1/Chassis must have the composed displayColor override");
-    assert!((display_color[0] - 0.8).abs() < 0.01, "Red should be 0.8, got {}", display_color[0]);
-    assert!((display_color[1] - 0.2).abs() < 0.01, "Green should be 0.2, got {}", display_color[1]);
-    assert!((display_color[2] - 0.2).abs() < 0.01, "Blue should be 0.2, got {}", display_color[2]);
+    // Expected = the scene's crimson livery override, which must BEAT both
+    // weaker opinions in the chain: skid_rover.usda's Chassis (0.88, 0.89, 0.9)
+    // and box_chassis.usda's referenced base (0.78, 0.78, 0.8). Reading 0.88
+    // here would mean the `over` lost and the asset colour showed through.
+    assert!((display_color[0] - 0.85).abs() < 0.01, "Red should be 0.85, got {}", display_color[0]);
+    assert!((display_color[1] - 0.15).abs() < 0.01, "Green should be 0.15, got {}", display_color[1]);
+    assert!((display_color[2] - 0.12).abs() < 0.01, "Blue should be 0.12, got {}", display_color[2]);
 }

@@ -44,7 +44,7 @@ To maintain `f64` precision across solar-system distances, transforms are calcul
 2.  **Body-Fixed Frame (f64 Global)**: Centered on and rotating with a celestial body (e.g., Moon-Fixed).
 3.  **Model Root (Link)**: The `base_link` of a Space System (e.g., the Rover chassis).
 4.  **Child Link**: A sub-part connected via a **Joint** (e.g., a robotic arm segment or a wheel).
-5.  **Port Offset**: The fixed point on a Link where a `Wire` connects.
+5.  **Port Offset**: The fixed point on a Link where a `Port` is mounted (the attachment point a `SimConnection` endpoint refers to).
 
 ### 2. Links and Joints (The TF Tree)
 - **Link**: A Bevy entity representing a rigid coordinate frame. It carries a `HighPrecisionTransform` (f64).

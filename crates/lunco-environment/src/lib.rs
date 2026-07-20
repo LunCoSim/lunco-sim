@@ -506,8 +506,19 @@ impl Plugin for EnvironmentPlugin {
             FixedUpdate,
             (
                 compute_local_gravity.in_set(EnvironmentSet::Compute),
+                // Pinned BEFORE `ControlDacSet` (and therefore before the wheel
+                // actuators, which all order `.after` it). Not a data edge —
+                // gravity reads no port — but a SUMMATION-ORDER edge: this and
+                // the suspension/drive systems all `apply_force` into the same
+                // f64 accumulator, and f64 addition is not associative. The
+                // `RollbackReplay` mirror below pins the same edge, so the
+                // replayed tick accumulates its forces in the same order the
+                // live tick did. Left implicit, the two schedules would each
+                // pick their own topological order and the replay would differ
+                // from the host in the last bit of every body's force.
                 apply_gravity_to_rigid_bodies
                     .in_set(EnvironmentSet::Apply)
+                    .before(lunco_core::ControlDacSet)
                     .run_if(lunco_physics::physics_is_live),
                 // Publish gravity into the cosim graph after it's computed and
                 // before cosim copies outputs→inputs, so models read the real
@@ -521,6 +532,36 @@ impl Plugin for EnvironmentPlugin {
                     .in_set(EnvironmentSet::Apply)
                     .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
             ),
+        );
+
+        // ── Rollback replay ──────────────────────────────────────────────────
+        // WEIGHT IS PART OF THE REPLAYED TICK. The shipped app sets avian's own
+        // `Gravity::ZERO` (`lunco-sandbox`) — gravity reaches a rigid body ONLY
+        // through this force write. `replay_one_tick` runs `RollbackReplay` and
+        // then steps `PhysicsSchedule`, and the physics step CLEARS the force
+        // accumulator; so without this system in the schedule every replayed
+        // tick solved a WEIGHTLESS rover. Normal force, and with it wheel
+        // traction, then differ from the host's on the one body rollback exists
+        // to keep in sync — the replay diverges hardest exactly when the rover
+        // is doing something (accelerating, cresting, braking).
+        //
+        // No `physics_is_live` gate here, unlike the `FixedUpdate` copy. That
+        // gate exists because a held physics step leaves the accumulator
+        // unconsumed, so an ungated live tick would integrate weight across the
+        // hold and discharge it in one step. Replay has no such hazard: it
+        // ALWAYS pairs this write with its own `PhysicsSchedule` step. Gating it
+        // would instead drop gravity from a replay that still solves — turning
+        // the hold into the divergence.
+        //
+        // `compute_local_gravity` is deliberately NOT mirrored: it is a
+        // change-driven `Commands` writer, and re-deriving `LocalGravity` mid-
+        // replay would move archetypes inside the schedule. The cached value is
+        // the one the host used for these ticks (constant under `Gravity::Flat`,
+        // and varying by well under an ULP across one tick's motion under
+        // `Gravity::Surface`).
+        app.add_systems(
+            lunco_core::RollbackReplay,
+            apply_gravity_to_rigid_bodies.before(lunco_core::ControlDacSet),
         );
 
         // Lighting half — RENDER-FREE. `DirectionalLight` is `bevy_light` and

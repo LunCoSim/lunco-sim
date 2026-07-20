@@ -26,13 +26,18 @@
 // This rover is the only asset in the fleet whose drive allocation is fully
 // AUTHORED rather than inferred from an Omniverse schema:
 //
-//     string lunco:drivePorts = "drive_w0 drive_w1 drive_w2 drive_w3 drive_w4 drive_w5"
-//     string lunco:driveMix    = "drive_w0=1,1 drive_w1=1,1 drive_w2=1,1
-//                                 drive_w3=1,-1 drive_w4=1,-1 drive_w5=1,-1"
+//     float outputs:drive_w0 = 0.0   # ... through outputs:drive_w5
+//
+//     def "DriveMix"
+//     {
+//         def "drive_w0" { double lunco:factor:throttle = 1.0
+//                          double lunco:factor:steer    = 1.0 }
+//         # ... w1, w2 the same; w3..w5 with lunco:factor:steer = -1.0
+//     }
 //
 // That is the `linear` kernel over six independent channels, each term being
 // `value = throttle*forward + steer*steer`. Left bank (`w0..w2`) gets
-// `forward + steer`; right bank (`w3..w5`) gets `forward - steer`. Four
+// `throttle + steer`; right bank (`w3..w5`) gets `throttle - steer`. Four
 // consequences follow DIRECTLY from those coefficients, and this file asserts
 // each one as motion:
 //
@@ -221,8 +226,9 @@ fn yaw_change_deg(f0, f1) {
 /// `get(rover, "DriveMix.entries")` reflects the live allocation table out of the
 /// ECS as an array of maps (`#{ port, forward, steer, brake }`) — the authored
 /// mix as the ENGINE actually parsed it, not as the USD text reads. That
-/// distinction is the point: these checks fail if `parse_linear` stops producing
-/// the table, or drops terms, even while the USD still describes them.
+/// distinction is the point: these checks fail if the `DriveMix` scope reader
+/// stops producing the table, or drops terms, even while the USD still
+/// describes them.
 fn mix_entry(entries, port) {
     if type_of(entries) != "array" { return (); }
     for e in entries {
@@ -633,7 +639,7 @@ fn verdict(s) {
 
     // ── The authored allocation itself, read back out of the engine ────────
     f.push(t_true(s.kernel == "linear",
-                  "drive kernel is '" + s.kernel + "', expected 'linear' (the authored lunco:driveMix)"));
+                  "drive kernel is '" + s.kernel + "', expected 'linear' (the authored DriveMix scope)"));
 
     if type_of(s.entries) != "array" {
         f.push("DriveMix.entries is not an array - the authored six-channel mix never parsed");

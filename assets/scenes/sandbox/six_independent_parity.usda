@@ -32,12 +32,17 @@
 # allocation is fully AUTHORED rather than inferred from an Omniverse schema:
 #
 #     float outputs:drive_w0 = 0.0   # ... through outputs:drive_w5
-#     string lunco:driveMix    = "drive_w0=1,1 drive_w1=1,1 drive_w2=1,1
-#                                 drive_w3=1,-1 drive_w4=1,-1 drive_w5=1,-1"
+#
+#     def "DriveMix"
+#     {
+#         def "drive_w0" { double lunco:factor:throttle = 1.0
+#                          double lunco:factor:steer    = 1.0 }
+#         # ... w1, w2 the same; w3..w5 with lunco:factor:steer = -1.0
+#     }
 #
 # That is the `linear` kernel over six independent channels: left bank
-# (`w0..w2`) gets `forward + steer`, right bank (`w3..w5`) gets
-# `forward - steer`. Three consequences follow directly from those coefficients,
+# (`w0..w2`) gets `throttle + steer`, right bank (`w3..w5`) gets
+# `throttle - steer`. Three consequences follow directly from those coefficients,
 # and the scenario asserts all three:
 #
 #   1. pure throttle drives all six equally  -> the rover runs STRAIGHT;
@@ -134,7 +139,7 @@ def Xform "SixIndependentParity" (
     # ── The rover ────────────────────────────────────────────────────────────
     # NO variant selection, because the asset declares no variantSet. NO
     # per-instance overrides: the whole point is that the rover's own authored
-    # `lunco:driveMix` is what gets measured. If you find yourself wanting to
+    # `DriveMix` scope is what gets measured. If you find yourself wanting to
     # `over` a wheel or a mass here, you are about to invalidate the test.
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/six_wheel_independent.usda@</SixWheelIndependent>

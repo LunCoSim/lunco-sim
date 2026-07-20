@@ -11,7 +11,7 @@
 # one. Everything below composes onto the rover; `</DriveLaw.…>` paths
 # translate to the HOST rover root through the reference arc.
 #
-# What it does: replaces the authored `lunco:driveMix` (the instant six-channel
+# What it does: replaces the authored `DriveMix` scope (the instant six-channel
 # skid mix) with a physical command→torque law. The MODEL is the same
 # `models/RoverDrivetrain.mo` the skid law uses — deliberately: the law is
 # per-SIDE (one motor controller per bank), and fanning a side out to three

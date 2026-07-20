@@ -30,4 +30,4 @@ As a systems troubleshooter, I want to trace the "Path of a Signal" from a human
 **Acceptance Criteria:**
 - The engine uses `tracing` spans to correlate a single `Command` as it traverses the 5-layer model.
 - Logs include the `EntityID` of the `OBC.Port` and `Plant.Port` involved in the transaction.
-- **Trace Context**: Developers can enable "Signal Debug" mode to log every `i16` -> `f32` conversion event across `Wire` entities for a specific space system.
+- **Trace Context**: Developers can enable "Signal Debug" mode for a *specific* space system, logging each `SimConnection` as it propagates: both endpoint ports, the SSP `scale`/`offset` applied, and the resulting target value. The mode must surface the two ways a signal disappears without an error — a connection whose endpoint connector does not resolve to a port, and a connection skipped because the peer does not simulate the target entity.

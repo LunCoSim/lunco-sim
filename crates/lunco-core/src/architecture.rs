@@ -279,6 +279,85 @@ pub struct Port {
     pub value: f64,
 }
 
+// ── Control surface ───────────────────────────────────────────────────────────
+
+/// A controllable's **command surface**: the logical input ports it accepts, with
+/// their current commanded values.
+///
+/// The command *vocabulary is data* — the keys present here declare exactly which
+/// command ports this vehicle accepts, so the port backend stays strict (an
+/// undeclared name is rejected → still reported as a dangling wire). A rover seeds
+/// `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up`, a lander
+/// `throttle`/`pitch`/`roll`/`yaw`. The keys are seeded from the vessel's
+/// [`ControlBinding`] (i.e. from its authored `Controls` scope), never from a Rust
+/// literal.
+///
+/// Written through the shared port substrate (`SetPorts` → the command backend)
+/// and consumed by the vehicle's actuator (`apply_drive_mix`, `apply_fly`, a
+/// Modelica bridge, …).
+///
+/// NOTE: the command port named `"brake"` here is NOT the actuator port named
+/// `"brake"` in [`ActuatorPorts`]. They carry different values — an analog command
+/// in `[-1,1]` here, a discretized `1.0`/`0.0` gate there — and are deliberately
+/// kept in two components so the two `"brake"`s can never be conflated.
+#[derive(Component, Debug, Clone, Default)]
+pub struct CommandInputs {
+    /// Commanded value per accepted command-port name. Only seeded keys are
+    /// writable; see the type docs.
+    pub values: std::collections::HashMap<String, f64>,
+    /// Derived brake state, cached from `values["brake"] > 0.5` by the actuator so
+    /// the per-tick physics systems read a bool without a map lookup.
+    pub brake_active: bool,
+}
+
+impl CommandInputs {
+    /// Build with a seeded command vocabulary: the input-port names this vehicle
+    /// accepts, each initialised to `0.0`. The seeded keys ARE the command surface.
+    pub fn new(command_ports: &[&str]) -> Self {
+        Self {
+            values: command_ports.iter().map(|n| (n.to_string(), 0.0)).collect(),
+            brake_active: false,
+        }
+    }
+
+    /// Current value of command input `name` (`0.0` if this vehicle doesn't accept
+    /// it). The read side of the command surface for actuators.
+    #[inline]
+    pub fn cmd(&self, name: &str) -> f64 {
+        self.values.get(name).copied().unwrap_or(0.0)
+    }
+}
+
+/// A vessel's index from **actuator** name to the [`Port`] entity carrying that
+/// actuator's setpoint.
+///
+/// This is the hardware/output half of a vessel's control surface, and is a
+/// different thing from [`CommandInputs`]: those are the logical commands a human
+/// or script issues, these are the per-actuator registers a drive kernel allocates
+/// them onto (`drive_left`, `drive_right`, `steering`, `brake`, plus whatever the
+/// vessel declares as `outputs:` attributes).
+///
+/// The port entities are spawned as children of the vessel so the recursive
+/// scene-clear reclaims them with it.
+#[derive(Component, Debug, Clone, Default)]
+pub struct ActuatorPorts {
+    /// Maps actuator mnemonics (e.g. `"drive_left"`) to their `Port` entity.
+    pub ports: std::collections::HashMap<String, Entity>,
+}
+
+impl ActuatorPorts {
+    /// Build from a prebuilt actuator-name → `Port` entity index.
+    pub fn new(ports: std::collections::HashMap<String, Entity>) -> Self {
+        Self { ports }
+    }
+
+    /// The `Port` entity for actuator `name`, if this vessel has one.
+    #[inline]
+    pub fn get(&self, name: &str) -> Option<Entity> {
+        self.ports.get(name).copied()
+    }
+}
+
 // ── Action Status ─────────────────────────────────────────────────────────────
 
 /// Status of a long-running simulation action.

@@ -22,11 +22,20 @@ use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, CelestialBody, Spacecraft, register_commands, on_command, SessionProfiles, LocalSession, NetworkRole, LocalAvatar};
-/// Topology test for "possessable/controllable": has a control surface
-/// (`FlightSoftware`) or a Modelica actuation backend (`SimComponent`). Replaces
-/// the removed `Vessel` marker — a click possesses anything matching this.
+/// Capability test for "**accepts commands**": carries an authored intent→port
+/// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
+/// backend (`SimComponent`).
+///
+/// This is NOT a possess gate — there is none. An avatar may possess anything; WHO
+/// may hold a given target is arbitrated by the authority layer
+/// (`SessionRegistry::may_possess` / `PossessionPolicy`, checked in
+/// `on_possess_command`), and what a possessed thing can DO is decided by whether it
+/// accepts commands at all. This alias answers only that second question, and is used
+/// for two presentation decisions: whether a plain click should POSSESS the target or
+/// merely FOLLOW it, and whether a heading-follow camera should track the target's
+/// yaw (a thing that steers has a meaningful heading; a prop tumbles).
 type Controllable = bevy::prelude::Or<(
-    bevy::prelude::With<lunco_fsw::FlightSoftware>,
+    bevy::prelude::With<lunco_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim::SimComponent>,
 )>;
 use lunco_core::attach::migrate_to_grid;
@@ -854,9 +863,10 @@ pub fn spawn_avatar_camera(
     )).id()
 }
 
-/// The local avatar is a **controllable described like a rover**: it carries an FSW
-/// command surface (`forward`/`side`/`up` input ports) + a `ControlBinding` mapping
-/// move intents to those ports. The SAME `lunco_controller::drive_from_bindings`
+/// The local avatar is a **controllable described like a rover**: it carries a
+/// `CommandInputs` command surface (`forward`/`side`/`up` input ports) + a
+/// `ControlBinding` mapping move intents to those ports. The SAME
+/// `lunco_controller::drive_from_bindings`
 /// path then drives it — its *self-drive* branch fires for an entity that holds its
 /// own `ActionState` + `ControlBinding` and, when free, no `ControllerLink`
 /// (possession adds a `ControllerLink→vessel`, which excludes the avatar from
@@ -864,7 +874,7 @@ pub fn spawn_avatar_camera(
 /// `apply_fly` reads the resulting `forward`/`side`/`up` ports back.
 ///
 /// The command *vocabulary* is seeded from the binding by
-/// `lunco_mobility::sync_fsw_command_surface`, exactly like a rover. Authored in
+/// `lunco_mobility::sync_command_surface`, exactly like a rover. Authored in
 /// code for now; P3 will move it to an `_AvatarControl` USD profile so the avatar
 /// is spawned identically via code or USD.
 fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) {
@@ -877,9 +887,11 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
         ("MoveDown".to_string(), "up".to_string(), -1.0),
     ]);
     let mut ec = commands.entity(trigger.entity);
-    // Empty port_map (no hardware actuators — `apply_fly` reads the command inputs
-    // directly); the `forward`/`side`/`up` surface is filled from the binding.
-    ec.try_insert(lunco_fsw::FlightSoftware::new(std::collections::HashMap::new(), &[]));
+    // No `ActuatorPorts` (no hardware actuators — `apply_fly` reads the command
+    // inputs directly) and no `DriveMix` (an avatar is not a wheeled chassis; it is
+    // not a drive-allocation target and must stay out of the chassis queries). The
+    // `forward`/`side`/`up` surface is seeded empty and filled from the binding.
+    ec.try_insert(lunco_core::CommandInputs::default());
     if let Some(b) = binding {
         ec.try_insert(b);
     }
@@ -2171,7 +2183,7 @@ fn apply_fly(
         &mut Transform,
         &mut CellCoord,
         &ChildOf,
-        &lunco_fsw::FlightSoftware,
+        &lunco_core::CommandInputs,
         Has<FreeFlightCamera>,
         Has<SurfaceCamera>,
         Option<&SurfaceRelativeMode>,
@@ -2191,19 +2203,20 @@ fn apply_fly(
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let boost = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { 10.0 } else { 1.0 };
 
-    for (entity, mut tf, mut cell, child_of, fsw, has_freeflight, has_surface_camera, surface_mode) in q_avatar.iter_mut() {
+    for (entity, mut tf, mut cell, child_of, inputs, has_freeflight, has_surface_camera, surface_mode) in q_avatar.iter_mut() {
         let Ok(grid) = q_grids.get(child_of.0) else { continue };
         let current_pos = grid.grid_position_double(&cell, &tf);
 
         // Only move if we have a camera mode or CTRL-overlay.
         if !has_freeflight && !has_surface_camera && !ctrl_pressed { continue; }
 
-        // Command inputs off the FSW surface (each −1..=1 from the ControlBinding),
-        // then boosted. When free (no ControllerLink) `drive_from_bindings` writes
-        // these; while possessing they stay 0 (control is redirected to the vessel).
-        let forward = (fsw.cmd("forward") * boost) as f32;
-        let side = (fsw.cmd("side") * boost) as f32;
-        let elevation = (fsw.cmd("up") * boost) as f32;
+        // Command inputs off the command surface (each −1..=1 from the
+        // `ControlBinding`), then boosted. When free (no ControllerLink)
+        // `drive_from_bindings` writes these; while possessing they stay 0 (control is
+        // redirected to the vessel).
+        let forward = (inputs.cmd("forward") * boost) as f32;
+        let side = (inputs.cmd("side") * boost) as f32;
+        let elevation = (inputs.cmd("up") * boost) as f32;
         if forward.abs() < 0.01 && side.abs() < 0.01 && elevation.abs() < 0.01 { continue; }
 
         // Actively moving → cancel any idle auto-action.
@@ -2757,7 +2770,10 @@ fn on_possess_command(
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_vessel: Query<&lunco_fsw::FlightSoftware>,
+    // Used ONLY for the heading-follow camera decision below — this is not, and never
+    // was, a possession gate: `on_possess_command` has no "not a vessel" refusal. The
+    // only refusal here is the authority check (`may_control`) a few lines down.
+    q_vessel: Query<Entity, Controllable>,
     q_vessel_gravity: Query<&GravityBody>,
     q_follow: Query<&lunco_core::CameraFollow>,
     guard: Res<lunco_core::SyncApplyGuard>,
@@ -3720,7 +3736,7 @@ fn sync_profile(
 
 // ── Command Registration ────────────────────────────────────────────────────────
 
-/// Diagnostic read-out of every possessable vessel's *control authority* state —
+/// Diagnostic read-out of every **commandable** vessel's *control authority* state —
 /// the chain that decides whether the stick actually flies it:
 /// `GlobalEntityId` (needed for ownership + the model's `piloted` sensor),
 /// `ControlBinding` (intent→port map from the USD `Controls` scope), and whether
@@ -3735,15 +3751,15 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
         // Collect first so the &mut World query borrow ends before the immutable
         // per-entity component reads below.
         let mut q = world.query_filtered::<Entity, bevy::prelude::Or<(
-            bevy::prelude::With<lunco_fsw::FlightSoftware>,
+            bevy::prelude::With<lunco_core::ControlBinding>,
             bevy::prelude::With<lunco_cosim::SimComponent>,
         )>>();
         let ents: Vec<Entity> = q.iter(world).collect();
-        info!("[inspect] {} possessable vessel(s)", ents.len());
+        info!("[inspect] {} commandable vessel(s)", ents.len());
         for e in ents {
             let name = world.get::<Name>(e).map(|n| n.as_str().to_string()).unwrap_or_default();
             let gid = world.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get());
-            let has_fsw = world.get::<lunco_fsw::FlightSoftware>(e).is_some();
+            let has_cmd = world.get::<lunco_core::CommandInputs>(e).is_some();
             let has_sim = world.get::<lunco_cosim::SimComponent>(e).is_some();
             let has_sel = world.get::<lunco_core::SelectableRoot>(e).is_some();
             let binding = world.get::<lunco_core::ControlBinding>(e).map(|b| {
@@ -3754,7 +3770,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
                 world.get_resource::<lunco_core::SessionRegistry>().and_then(|r| r.owner_of(g))
             });
             info!(
-                "[inspect] {e:?} name={name:?} gid={gid:?} fsw={has_fsw} sim={has_sim} \
+                "[inspect] {e:?} name={name:?} gid={gid:?} cmd_surface={has_cmd} sim={has_sim} \
                  selectable={has_sel} binding={binding:?} owner={owner:?} piloted={}",
                 owner.is_some() as u8
             );

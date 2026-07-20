@@ -30,7 +30,7 @@ use avian3d::prelude::*;
 use lunco_core::architecture::Port;
 use lunco_core::ports::{PortBackend, PortDirection, PortRef};
 use kernels::{ControlKernelRegistry, DriveMix};
-use lunco_fsw::FlightSoftware;
+use lunco_core::{ActuatorPorts, CommandInputs};
 
 /// Drive kernels and the command/mix types they consume. Vehicle-domain, so
 /// they live here rather than in core (see the nothing-into-core rule).
@@ -143,7 +143,7 @@ impl Plugin for LunCoMobilityPlugin {
             let mut reg = app
                 .world_mut()
                 .resource_mut::<lunco_core::ports::PortRegistry>();
-            reg.register(FSW_COMMAND_BACKEND);
+            reg.register(COMMAND_INPUT_BACKEND);
         }
 
         // Own the control-allocation kernel registry here (the plugin that runs
@@ -159,11 +159,11 @@ impl Plugin for LunCoMobilityPlugin {
         // wires (and before the wheel systems, which run
         // `.after(ControlDacSet)`). The
         // command surface is derived from USD `Controls` bindings (never a Rust
-        // literal) by `sync_fsw_command_surface`, ordered before the mix so a
+        // literal) by `sync_command_surface`, ordered before the mix so a
         // freshly-loaded vessel is drivable the same tick its binding lands.
         app.add_systems(
             FixedUpdate,
-            (sync_fsw_command_surface, apply_drive_mix)
+            (sync_command_surface, apply_drive_mix)
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
@@ -188,7 +188,7 @@ impl Plugin for LunCoMobilityPlugin {
         // it must run regardless of the pause/speed state of the virtual clock.
         app.add_systems(
             lunco_core::RollbackReplay,
-            (sync_fsw_command_surface, apply_drive_mix)
+            (sync_command_surface, apply_drive_mix)
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
@@ -516,8 +516,8 @@ fn apply_wheel_suspension(
         &Transform,
         &ChildOf,
     )>,
-    mut q_chassis: Query<(Forces, &RigidBody), With<FlightSoftware>>,
-    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<FlightSoftware>)>,
+    mut q_chassis: Query<(Forces, &RigidBody), With<DriveMix>>,
+    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<DriveMix>)>,
 ) {
     for (mut wheel, susp, hits, wheel_tf, parent) in q_wheels.iter_mut() {
         let parent_entity = parent.parent();
@@ -625,7 +625,7 @@ fn apply_wheel_suspension(
 /// spatial query (which reads `Position`), so the cast sees this tick's pose.
 fn sync_raycast_wheel_physics_pose(
     mut q_wheels: Query<(&mut Position, &mut Rotation, &Transform, &ChildOf), With<WheelRaycast>>,
-    q_chassis: Query<(&Position, &Rotation), (With<FlightSoftware>, Without<WheelRaycast>)>,
+    q_chassis: Query<(&Position, &Rotation), (With<DriveMix>, Without<WheelRaycast>)>,
 ) {
     for (mut wpos, mut wrot, wtf, parent) in q_wheels.iter_mut() {
         if let Ok((cpos, crot)) = q_chassis.get(parent.parent()) {
@@ -657,11 +657,11 @@ fn apply_wheel_drive(
         &ChildOf,
     )>,
     q_ports: Query<&Port>,
-    mut q_chassis: Query<(Forces, &RigidBody, Option<&FlightSoftware>), With<FlightSoftware>>,
+    mut q_chassis: Query<(Forces, &RigidBody, Option<&CommandInputs>), With<DriveMix>>,
 ) {
     for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
-        if let Ok((mut forces, body, fsw)) = q_chassis.get_mut(parent_entity) {
+        if let Ok((mut forces, body, inputs)) = q_chassis.get_mut(parent_entity) {
             // drive-diag: the drive port the wheel reads, the body kind (Dynamic
             // vs Kinematic — the snap-back tell), and ground contact. Throttle-
             // gated so it only fires while driving. Whole block compiles out
@@ -679,7 +679,7 @@ fn apply_wheel_drive(
             // Braking: the wheel-spin model locks the spin, but the chassis only
             // stops if the contact grips. We make friction saturate (full cone)
             // while braking so a locked wheel actually decelerates the rover.
-            let braking = fsw.is_some_and(|f| f.brake_active);
+            let braking = inputs.is_some_and(|c| c.brake_active);
 
             if let Ok(port) = q_ports.get(wheel.drive_port) {
                 // Traction only exists when the ray is hitting the ground. Bind
@@ -772,7 +772,7 @@ fn apply_wheel_drive(
 /// rotation (steer + roll spin) is composed in `update_wheel_spin`.
 fn apply_wheel_steering(
     mut q_wheels: Query<(&mut Transform, &ChildOf, &lunco_hardware::SteeringActuator, &WheelRaycast)>,
-    q_chassis: Query<&RigidBody, With<FlightSoftware>>,
+    q_chassis: Query<&RigidBody, With<DriveMix>>,
 ) {
     for (mut transform, parent, steer, wheel) in q_wheels.iter_mut() {
         // Predict-own: this chain runs on a client too. Skip wheels of a
@@ -1038,21 +1038,21 @@ fn suspension_system(
 
 // ── Drive command ports ─────────────────────────────────────────────────────────
 
-/// Port backend exposing a [`FlightSoftware`]'s `inputs` map as writable **input**
+/// Port backend exposing a [`CommandInputs`]'s `values` map as writable **input**
 /// ports on any entity carrying the component — the single command sink for every
 /// controllable (rover `throttle`/`steer`/`brake`, avatar `forward`/`side`/`up`, a
 /// lander's `throttle`/`pitch`/`roll`/`yaw`, …). Reachable by `SetPorts`/wires/API/
 /// scripts; the vehicle's actuator ([`apply_drive_mix`], `apply_fly`, a Modelica
 /// bridge) reads its own vocabulary back out.
 ///
-/// Strict: only keys the vehicle *seeded* into `inputs` (its declared command
-/// surface — see [`FlightSoftware::new`]) are writable, so an undeclared command
+/// Strict: only keys the vehicle *seeded* into `values` (its declared command
+/// surface — see [`CommandInputs::new`]) are writable, so an undeclared command
 /// name is rejected and still surfaces as a dangling wire. Replaces the old
-/// per-class `DriveCommand` component — command state now has one home on the FSW.
-const FSW_COMMAND_BACKEND: PortBackend = PortBackend {
+/// per-class `DriveCommand` component — command state has one home, this component.
+const COMMAND_INPUT_BACKEND: PortBackend = PortBackend {
     list: |w, e, out| {
-        if let Some(fsw) = w.get::<FlightSoftware>(e) {
-            for (name, value) in &fsw.inputs {
+        if let Some(inputs) = w.get::<CommandInputs>(e) {
+            for (name, value) in &inputs.values {
                 out.push(PortRef {
                     name: name.clone(),
                     direction: PortDirection::In,
@@ -1062,17 +1062,17 @@ const FSW_COMMAND_BACKEND: PortBackend = PortBackend {
         }
     },
     read_output: |_w, _e, _n| None,
-    read_input: |w, e, n| w.get::<FlightSoftware>(e).and_then(|f| f.inputs.get(n).copied()),
+    read_input: |w, e, n| w.get::<CommandInputs>(e).and_then(|c| c.values.get(n).copied()),
     write_input: |w, e, n, v| {
-        if let Some(mut f) = w.get_mut::<FlightSoftware>(e) {
-            if let Some(slot) = f.inputs.get_mut(n) {
+        if let Some(mut c) = w.get_mut::<CommandInputs>(e) {
+            if let Some(slot) = c.values.get_mut(n) {
                 *slot = v;
                 return true;
             }
         }
         false
     },
-    // Map-backed: name-based write is one `get::<FlightSoftware>` + a map lookup.
+    // Map-backed: name-based write is one `get::<CommandInputs>` + a map lookup.
     // A resolve→slot fast path here would need a name interner (the slot can't
     // carry the string) — a documented follow-up if the drive-command write fold
     // shows up in profiling, not needed for correctness.
@@ -1082,23 +1082,23 @@ const FSW_COMMAND_BACKEND: PortBackend = PortBackend {
     write_slot: None,
 };
 
-/// Derive each controllable's FSW command surface from USD: for any entity that has
-/// both a [`FlightSoftware`] and a [`lunco_core::ControlBinding`], ensure every port
-/// the binding targets exists in `FlightSoftware.inputs` (seeded `0.0`).
+/// Derive each controllable's command surface from USD: for any entity that has
+/// both a [`CommandInputs`] and a [`lunco_core::ControlBinding`], ensure every port
+/// the binding targets exists in `CommandInputs.values` (seeded `0.0`).
 ///
 /// This is what lets the command vocabulary be **data, not a Rust literal**: a
 /// vessel's `Controls` profile (→ its `ControlBinding`) declares exactly which
-/// command ports it accepts, and the strict FSW backend then admits writes to those
-/// and no others. Additive (never removes keys) and idempotent, so it's safe to run
-/// on `Changed<ControlBinding>` regardless of which reader stamped the binding or
-/// the FSW, and regardless of spawn order.
-fn sync_fsw_command_surface(
-    mut q: Query<(&lunco_core::ControlBinding, &mut FlightSoftware), Changed<lunco_core::ControlBinding>>,
+/// command ports it accepts, and the strict command backend then admits writes to
+/// those and no others. Additive (never removes keys) and idempotent, so it's safe to
+/// run on `Changed<ControlBinding>` regardless of which reader stamped the binding or
+/// the surface, and regardless of spawn order.
+fn sync_command_surface(
+    mut q: Query<(&lunco_core::ControlBinding, &mut CommandInputs), Changed<lunco_core::ControlBinding>>,
 ) {
-    for (binding, mut fsw) in q.iter_mut() {
+    for (binding, mut inputs) in q.iter_mut() {
         for port in binding.ports() {
-            if !fsw.inputs.contains_key(port) {
-                fsw.inputs.insert(port.to_string(), 0.0);
+            if !inputs.values.contains_key(port) {
+                inputs.values.insert(port.to_string(), 0.0);
             }
         }
     }
@@ -1106,37 +1106,45 @@ fn sync_fsw_command_surface(
 
 // ── Drive mix ─────────────────────────────────────────────────────────────────
 
-/// System allocating each rover's FSW command inputs (`throttle`/`steer`/`brake`,
-/// read from [`FlightSoftware::inputs`]) to its actuator [`Port`]s, via the
+/// System allocating each rover's command inputs (`throttle`/`steer`/`brake`, read
+/// from [`CommandInputs::values`]) to its actuator [`Port`]s (indexed by
+/// [`ActuatorPorts`]), via the
 /// vessel's data-selected [`DriveMix`] kernel (`skid`/`linear`/…, looked up in the
 /// [`ControlKernelRegistry`]). No per-architecture branch: the kernel is chosen by
 /// USD, and its outputs are saturated to `[-1, 1]` — ±100% actuator authority —
 /// before being written to the port. Runs every fixed tick before wire propagation.
 fn apply_drive_mix(
-    mut q: Query<(Entity, &mut FlightSoftware, &DriveMix)>,
+    mut q: Query<(Entity, &mut CommandInputs, &ActuatorPorts, &DriveMix)>,
     registry: Res<ControlKernelRegistry>,
     mut q_ports: Query<&mut Port>,
     mut unknown: Local<std::collections::HashSet<String>>,
 ) {
-    for (entity, mut fsw, mix) in q.iter_mut() {
-        // Read this vehicle's logical command inputs off the FSW command surface.
-        let throttle = fsw.cmd("throttle");
-        let steer = fsw.cmd("steer");
-        let brake = fsw.cmd("brake");
+    for (entity, mut inputs, actuators, mix) in q.iter_mut() {
+        // Read this vehicle's logical command inputs off the command surface.
+        let throttle = inputs.cmd("throttle");
+        let steer = inputs.cmd("steer");
+        let brake = inputs.cmd("brake");
+        // TWO DIFFERENT `"brake"`s meet here, deliberately in two components:
+        //   - the COMMAND `brake` (`inputs.cmd("brake")`) is analog, in [-1,1];
+        //   - the ACTUATOR `brake` (`actuators.get("brake")`) is a discretized
+        //     1.0/0.0 gate the brake-coefficient ports consume.
+        // Merging them into one map would silently feed the analog command straight
+        // into the actuator register. Keeping them apart is what makes that impossible.
+        //
         // Brake state (old `on_brake_rover`): engaged above half-scale. Locks the
-        // wheel-spin/friction cone in the physics systems via `fsw.brake_active`.
-        fsw.brake_active = brake > 0.5;
-        let brake_port_val = if fsw.brake_active { 1.0 } else { 0.0 };
-        if let Some(&port_b) = fsw.port_map.get("brake") {
+        // wheel-spin/friction cone in the physics systems via `brake_active`.
+        inputs.brake_active = brake > 0.5;
+        let brake_port_val = if inputs.brake_active { 1.0 } else { 0.0 };
+        if let Some(port_b) = actuators.get("brake") {
             if let Ok(mut p) = q_ports.get_mut(port_b) { p.value = brake_port_val; }
         }
 
-        drive_diag!("[drive-diag] apply_drive_mix: target {:?} kernel={} throttle={} steer={} brake={} ports={:?}", entity, mix.kernel, throttle, steer, fsw.brake_active, fsw.port_map);
+        drive_diag!("[drive-diag] apply_drive_mix: target {:?} kernel={} throttle={} steer={} brake={} ports={:?}", entity, mix.kernel, throttle, steer, inputs.brake_active, actuators.ports);
 
         // While braking, force throttle/steer to 0 and drive the brake gate (1.0)
         // so brake-coefficient ports engage and drive ports zero out — matching the
         // old per-branch behaviour, now uniform across kernels.
-        let inputs = if fsw.brake_active {
+        let drive_inputs = if inputs.brake_active {
             kernels::DriveInputs { throttle: 0.0, steer: 0.0, brake: 1.0 }
         } else {
             kernels::DriveInputs { throttle, steer, brake: 0.0 }
@@ -1148,12 +1156,12 @@ fn apply_drive_mix(
         // itself ("control policy in rhai", `lunco:driveKernel`). An unknown name
         // with no matching hook leaves the vessel un-actuated (fail-safe coast).
         let outputs = match registry.get(&mix.kernel) {
-            Some(kernel) => kernel(inputs, mix),
+            Some(kernel) => kernel(drive_inputs, mix),
             None => {
                 // Scripted kernel: hand the hook the vessel's real command surface
-                // (`fsw.inputs`, un-gated — the script owns its brake policy), not the
+                // (`inputs.values`, un-gated — the script owns its brake policy), not the
                 // built-in kernels' fixed throttle/steer/brake projection.
-                let scripted = scripted_drive_mix(&mix.kernel, &fsw.inputs);
+                let scripted = scripted_drive_mix(&mix.kernel, &inputs.values);
                 if scripted.is_empty() && unknown.insert(mix.kernel.clone()) {
                     warn!("[apply_drive_mix] unknown drive kernel '{}' on {:?} — no built-in and no rhai hook; vessel not actuated", mix.kernel, entity);
                 }
@@ -1162,7 +1170,7 @@ fn apply_drive_mix(
         };
 
         for (port, value) in outputs {
-            if let Some(&port_id) = fsw.port_map.get(&port) {
+            if let Some(port_id) = actuators.get(&port) {
                 if let Ok(mut p) = q_ports.get_mut(port_id) {
                     p.value = value.clamp(-1.0, 1.0);
                 }
@@ -1172,7 +1180,7 @@ fn apply_drive_mix(
 }
 
 /// Invoke a **scripted (rhai) drive kernel** by hook id. Hands the hook the vessel's
-/// **actual command surface** — its declared [`FlightSoftware::inputs`] map, keyed by
+/// **actual command surface** — its declared [`CommandInputs::values`] map, keyed by
 /// whatever ports that vehicle accepts (a rover's `throttle`/`steer`/`brake`, a
 /// lander's `throttle`/`pitch`/`roll`/`yaw`, …) — NOT a fixed Rust key set. The
 /// command vocabulary is data, so a scripted kernel reads exactly the ports the
@@ -1888,7 +1896,8 @@ mod suspension_visuals_tests {
             ComputedCenterOfMass::default(),
             VelocityIntegrationData::default(),
             AccumulatedLocalAcceleration::default(),
-            FlightSoftware::default(),
+            CommandInputs::default(),
+            DriveMix::default(),
         )).id();
 
         let visual = app.world_mut().spawn(Transform::default()).id();

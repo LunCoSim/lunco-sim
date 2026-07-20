@@ -83,9 +83,10 @@ def Xform "MyRover" (
 - `TankDifferentialAPI` ⇒ skid mixing; `AckermannSteeringAPI` (+ root
   `physxVehicleAckermannSteering:maxSteerAngle`, radians) ⇒ steer, front wheels
   = `lunco:wheel:index < 2`.
-- Wheel→port wiring defaults to index parity; override per wheel with
-  `string lunco:drivePort` / `lunco:steerPort`; declare extra ports on the root
-  with `lunco:drivePorts` + author the mix with `lunco:driveMix`
+- Wheel→port wiring is a USD connection: each wheel connects
+  `float inputs:drive.connect` to a `float outputs:<port>` declared on the root,
+  and the mix onto those ports is authored as a `DriveMix` child scope — one
+  prim per sink port with a `double lunco:factor:<source>` per command source
   (six_wheel_independent shows the full stack).
 
 ## Wheel physics: one parameter set, two realizations
@@ -154,7 +155,8 @@ The drill also requires the rover to already be the primary selection.
 Edits go `ApplyUsdOp SetAttribute` → document → **in-place resync, never a
 respawn**: `wheel_params::claims_edit` recognises the attribute (any
 `lunco:wheel:` / `lunco:suspension:` / `lunco:tire:` / `physxVehicle*:` prefix,
-plus `lunco:driveKernel`, `lunco:driveMix`, and `physics:mass` on a wheel prim)
+plus `lunco:driveKernel`, `lunco:factor:*` on a `DriveMix` term prim, and
+`physics:mass` on a wheel prim)
 and `resync_wheels_for_stage` updates the live components — same entities, joints
 untouched. Never poke `WheelRaycast`/`RevoluteJoint` components directly; the
 next document change would overwrite you.
@@ -200,7 +202,7 @@ from an exemplar — that is the intended way to extend, not a Rust change.
     right.
   In every case `lunco:driveKernel = "external"` stands the built-in mixing
   down: it is read first in `derive_drive_mix`
-  (`crates/lunco-usd-sim/src/lib.rs:1409`), pre-empting `lunco:driveMix`,
+  (`crates/lunco-usd-sim/src/lib.rs`), pre-empting the `DriveMix` scope,
   `TankDifferentialAPI` and `AckermannSteeringAPI`. Note `"external"` is **not a
   Rust sentinel** — it is simply a hook name nothing registers, so the mixer
   finds no hook, writes no ports (fail-safe coast) and warns once. Any

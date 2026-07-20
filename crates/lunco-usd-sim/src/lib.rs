@@ -11,7 +11,7 @@
 //! | `PhysxVehicleContextAPI` | `FlightSoftware` | Rover root entity (kind is topology-derived, no `RoverVessel` marker) |
 //! | `PhysxVehicleTankDifferentialAPI` | `DriveMix { kernel: "skid" }` | Skid/tank steering |
 //! | `PhysxVehicleAckermannSteeringAPI` | `DriveMix { kernel: "linear" }` + steering port | Ackermann steering |
-//! | `lunco:driveMix` (string) | `DriveMix { kernel: "linear" }` | Arbitrary per-wheel linear mix |
+//! | `DriveMix` child scope | `DriveMix { kernel: "linear" }` | Arbitrary per-wheel linear mix — one prim per sink port, `lunco:factor:<source>` per command source |
 //! | `lunco:driveKernel` (hook id) | `DriveMix { kernel: <hook_id> }` | Scripted (rhai) drive kernel — hook computes per-port outputs |
 //! | `PhysxVehicleWheelAPI` | `WheelRaycast` *or* `MotorActuator` + `RigidBody` | Wheel — kind decided by joint authoring |
 //!
@@ -1051,10 +1051,10 @@ fn process_usd_sim_prim_read(
         }
 
         // 1. Detect PhysxVehicleContextAPI (The Rover Root)
-        // Creates FlightSoftware with 4 digital ports (the control surface =
-        // the possessable/controllable signal; no separate Vessel marker)
+        // Stamps `ActuatorPorts`: the 4 canonical digital actuator ports, plus any the
+        // vessel declares as `outputs:` attributes.
         if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
-            info!("Intercepted PhysxVehicleContextAPI for {}, initializing Flight Software", prim_path.path);
+            info!("Intercepted PhysxVehicleContextAPI for {}, initializing vessel control surface", prim_path.path);
 
             let mut port_map = HashMap::new();
             // Canonical actuator ports the built-in skid/Ackermann mix drives.
@@ -1086,7 +1086,7 @@ fn process_usd_sim_prim_read(
                 }
             }
             for name in &port_names {
-                // `ChildOf(entity)`: the FSW ports are owned by the vehicle so the
+                // `ChildOf(entity)`: the actuator ports are owned by the vehicle so the
                 // recursive scene-clear reclaims them with it — no detached-at-root
                 // survivors across a scene swap (general lifecycle contract).
                 let port_ent = commands.spawn((
@@ -1106,21 +1106,30 @@ fn process_usd_sim_prim_read(
 
             // The command surface is AUTHORED, in the vessel's `Controls` scope: the
             // intents it binds name exactly the ports this vessel accepts.
-            // `sync_fsw_command_surface` seeds them from the `ControlBinding`, so the
+            // `sync_command_surface` seeds them from the `ControlBinding`, so the
             // vocabulary is never decided here — it used to be the literal
             // `&["throttle", "steer", "brake"]`, which meant the engine decided what
             // could command a vehicle by knowing what kind of vehicle it was.
             //
-            // Seeded EMPTY: the command backend is strict, so a vessel whose `Controls`
-            // scope is absent accepts nothing and every write is refused. That is how
-            // you author a wreck or an un-crewed chassis — by composition, not a check.
+            // `CommandInputs` is seeded EMPTY: the command backend is strict, so a
+            // vessel whose `Controls` scope is absent accepts nothing and every write is
+            // refused. That is how you author a wreck or an un-crewed chassis — by
+            // composition, not a check.
             //
-            // `port_map` is a different thing and is NOT the surface: it maps actuator
-            // names to their actuator `Port` entities, built above from the canonical set
-            // plus the vessel prim's authored `outputs:` attributes.
+            // Only `ActuatorPorts` is stamped here. The `CommandInputs` surface is
+            // stamped beside the `ControlBinding` (lunco-usd-bevy, the `Controls`
+            // branch) — ONE site, because `try_insert` OVERWRITES: stamping a fresh
+            // empty surface from two different systems would let a live re-run of
+            // either one wipe the keys `sync_command_surface` had already seeded.
+            //
+            // `ActuatorPorts` is a different thing and is NOT the command surface: it
+            // maps ACTUATOR names to their `Port` entities, built above from the
+            // canonical set plus the vessel prim's authored `outputs:` attributes. The
+            // two stay separate components on purpose — both carry a `"brake"`, and
+            // they are not the same value (analog command vs discretized gate).
             commands
                 .entity(entity)
-                .try_insert(FlightSoftware::new(port_map, &[]));
+                .try_insert(lunco_core::ActuatorPorts::new(port_map));
 
         }
 
@@ -1158,7 +1167,7 @@ fn process_usd_sim_prim_read(
         // 2. Detect the drive allocation → a `DriveMix { kernel, ports, entries }`
         // (`lunco_mobility::kernels`). The kernel is selected by the differential /
         // steering schema the asset declares (Omniverse PhysX Vehicle names) or an
-        // explicit `lunco:driveMix` linear table. There is NO per-arch Rust
+        // authored `DriveMix` child scope. There is NO per-arch Rust
         // component/branch — `apply_drive_mix` looks the named kernel up and runs it.
         let drive_mix = derive_drive_mix(reader, &sdf_path, &prim_path.path);
         if let Some(mix) = drive_mix {
@@ -1433,11 +1442,74 @@ fn net_override_markers(replicate: Option<bool>, authority: Option<&str>) -> (bo
     (excluded, opaque)
 }
 
+/// Read the vessel's authored `DriveMix` child scope into `linear` mix terms.
+///
+/// ONE PRIM PER SINK PORT, named for the actuator port it writes, carrying a
+/// `double lunco:factor:<source>` per command source it responds to:
+///
+/// ```usda
+/// def "DriveMix"
+/// {
+///     def "drive_w0" { double lunco:factor:throttle = 1.0
+///                      double lunco:factor:steer    = 1.0 }
+/// }
+/// ```
+///
+/// This is SSP's `<Connection><LinearTransformation factor/></Connection>` in
+/// USD form: the term prim IS the connection, so the transform is PER
+/// CONNECTION rather than per sink. Keying it any other way would mean encoding
+/// the source inside an attribute name on the sink attribute — and a connection
+/// source is an `SdfPath`, whose `/` and `.` are illegal in USD property names.
+/// (Index-aligning a `double[]` against the sink's `.connect` array is the other
+/// tempting scheme and is worse: `.connect` is a list-op, so a stronger layer
+/// prepending one connection silently shifts every factor.)
+///
+/// `lunco:factor:<source>` reuses the connection-transform vocabulary the
+/// co-simulation port graph already reads (see `cosim.rs`), and the source names
+/// are the command ports the vessel's OBC publishes — `throttle`/`steer`/`brake`
+/// — not a private set of words.
+///
+/// An absent factor is `0`, so a term states only the sources it actually
+/// responds to. A term prim naming NO known source is a typo, not a coast
+/// command, so it is skipped loudly. Terms are sorted by port so the derived
+/// component is independent of USD child order (which is hash-ordered).
+fn read_drive_mix_scope(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    scope: &SdfPath,
+) -> Vec<lunco_mobility::kernels::MixEntry> {
+    let mut entries: Vec<lunco_mobility::kernels::MixEntry> = reader
+        .children(scope)
+        .into_iter()
+        .filter_map(|term| {
+            let port = term.name()?.to_string();
+            let forward = reader.real(&term, "lunco:factor:throttle");
+            let steer = reader.real(&term, "lunco:factor:steer");
+            let brake = reader.real(&term, "lunco:factor:brake");
+            if forward.is_none() && steer.is_none() && brake.is_none() {
+                warn!(
+                    "DriveMix term {} declares no `lunco:factor:<throttle|steer|brake>`; \
+                     skipped — the port would never be driven",
+                    term.as_str()
+                );
+                return None;
+            }
+            Some(lunco_mobility::kernels::MixEntry {
+                port,
+                forward: forward.unwrap_or(0.0),
+                steer: steer.unwrap_or(0.0),
+                brake: brake.unwrap_or(0.0),
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| a.port.cmp(&b.port));
+    entries
+}
+
 /// Derive the vehicle-root `DriveMix` from its authored schema — the kernel is
 /// selected by the differential / steering schema the asset declares (Omniverse
-/// PhysX Vehicle names), an explicit `lunco:driveMix` linear table, or a
-/// scripted `lunco:driveKernel` hook. Shared by the spawn path and the live
-/// wheel-param resync so an edited kernel re-derives identically.
+/// PhysX Vehicle names), an authored `DriveMix` child scope, or a scripted
+/// `lunco:driveKernel` hook. Shared by the spawn path and the live wheel-param
+/// resync so an edited kernel re-derives identically.
 fn derive_drive_mix(
     reader: &lunco_usd_bevy::StageView<'_>,
     sdf_path: &SdfPath,
@@ -1449,9 +1521,18 @@ fn derive_drive_mix(
         // falls back to the `lunco_hooks` hook named by `DriveMix.kernel`.
         info!("Scripted drive kernel '{}' for {}", hook_id, prim_path_str);
         Some(DriveMix::scripted(&hook_id))
-    } else if let Some(spec) = reader.text(sdf_path, "lunco:driveMix") {
-        info!("Explicit linear driveMix for {}", prim_path_str);
-        Some(DriveMix::parse_linear(&spec))
+    } else if let Some(scope) = reader
+        .children(sdf_path)
+        .into_iter()
+        .find(|c| c.name() == Some("DriveMix"))
+    {
+        let entries = read_drive_mix_scope(reader, &scope);
+        info!(
+            "Authored linear DriveMix for {} ({} ports)",
+            prim_path_str,
+            entries.len()
+        );
+        Some(DriveMix::linear(entries))
     } else if reader.has_api_schema(sdf_path, "PhysxVehicleTankDifferentialAPI") {
         info!("Tank differential (skid kernel) for {}", prim_path_str);
         Some(DriveMix::skid("drive_left", "drive_right"))
@@ -1459,7 +1540,26 @@ fn derive_drive_mix(
         // Ackermann: non-differential drive (both sides get throttle) + a
         // dedicated steering port; the front wheels castor (see steering gate).
         info!("Ackermann steering (linear kernel) for {}", prim_path_str);
-        Some(DriveMix::parse_linear("drive_left=1,0 drive_right=1,0 steering=0,1"))
+        Some(DriveMix::linear(vec![
+            lunco_mobility::kernels::MixEntry {
+                port: "drive_left".to_string(),
+                forward: 1.0,
+                steer: 0.0,
+                brake: 0.0,
+            },
+            lunco_mobility::kernels::MixEntry {
+                port: "drive_right".to_string(),
+                forward: 1.0,
+                steer: 0.0,
+                brake: 0.0,
+            },
+            lunco_mobility::kernels::MixEntry {
+                port: "steering".to_string(),
+                forward: 0.0,
+                steer: 1.0,
+                brake: 0.0,
+            },
+        ]))
     } else {
         None
     }
