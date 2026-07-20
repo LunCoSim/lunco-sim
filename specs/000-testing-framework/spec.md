@@ -32,9 +32,9 @@ The 5-layer model (Actions -> Controller -> FSW -> OBC -> Plant) is a **hard bou
 - **Determinism**: All simulation systems must be deterministic (fixed timestep).
 
 ### Tier 2: Integration Testing (The Signal Path)
-- **Signal Integrity (DAC Path)**: Verify that writing an `i16` value (e.g. `32767`) to a `DigitalPort` (L2) correctly scales via the `Wire` to a `PhysicalPort` (L1) (e.g., `32767` -> `Max_Torque`).
-- **Sensor Return Path (ADC Path)**: Verify that physical state changes (L1 `f32`) correctly propagate and scale to the OBC's `DigitalPort` (L2 `i16` / `32767`) and are readable by the FSW (L3).
-- **Resolution & Quantization**: Verify that low-resolution digital signals (e.g., 16-bit `-32768` to `32767`) result in expected "stepped" physical outputs on the Plant.
+- **Signal Integrity (Command Path)**: Verify that writing a normalized command (e.g. `1.0`) to a command `Port` (L2) correctly propagates via its `SimConnection` to the actuator `Port` (L1), applying the SSP transform `source * scale + offset` (e.g., `1.0` -> `Max_Torque`).
+- **Sensor Return Path**: Verify that physical state changes (L1) correctly propagate and scale to the OBC's `Port` (L2) and are readable by the FSW (L3).
+- **Propagation Fidelity**: Verify that a value crossing a `SimConnection` arrives without precision loss beyond `f64` arithmetic — the signal path is `f64` end to end, so a Modelica command in `0.0..1.0` retains its full resolution at the actuator rather than collapsing onto a fixed set of levels.
 
 ### Tier 3: Functional Verifiers (Headless Validation)
 
@@ -63,19 +63,19 @@ Headless tests MUST use `MinimalPlugins` and manually initialize the following s
 
 The following matrix defines the exhaustive set of validation cases for the **Stage 1 Baseline Rover**. A "Pass" is only achieved if ALL listed layers reflect the expected state during the simulation step.
 
-### Stage 1: Functional Case Matrix (i16/f32 Mapping)
+### Stage 1: Functional Case Matrix (Normalized Command Mapping)
 
-| ID | Case | Input (L5) | Logic Result (L4/3) | Hardware (L2 `i16`) | Physical (L1 `f32`) | Requirement |
+| ID | Case | Input (L5) | Logic Result (L4/3) | Hardware (L2 `Port`) | Physical (L1 `Port`) | Requirement |
 |---|---|---|---|---|---|---|
-| **F-01** | Drive Fwd | `W` (Hold) | `DRIVE(1.0)` | `PORT_DRIVE` = `32767` | **`-Z`** Force/Torque | $v > 0$ |
-| **F-02** | Drive Back | `S` (Hold) | `DRIVE(-1.0)`| `PORT_DRIVE` = `-32768`| **`+Z`** Force/Torque | $v < 0$ |
-| **F-03A**| Skid Left | `A` (Hold) | `MIX(-1.0, 1.0)`| `PORT_L` = `-32768` | Diff. Torque | $\theta > 0$ (Yaw Left) |
-| **F-03B**| Steer Left | `A` (Hold) | `STEER(-1.0)`| `PORT_STEER` = `-32768`| **$\theta > 0$** (Left) | Wheel Ang > 0 |
-| **F-04A**| Skid Right | `D` (Hold) | `MIX(1.0, -1.0)`| `PORT_R` = `-32768` | Diff. Torque | $\theta < 0$ (Yaw Right) |
-| **F-04B**| Steer Right | `D` (Hold) | `STEER(1.0)` | `PORT_STEER` = `32767` | **$\theta < 0$** (Right) | Wheel Ang < 0 |
-| **F-05** | Brake | `Space` | `BRAKE` | `PORT_BRAKE` = `32767` | Resistance Force > 0 | $v \to 0$ |
-| **F-06** | Coasting | None | `IDLE` | All `PORT` = `0` | Zero Torque | $\dot{v} \approx 0$ |
-| **F-08** | Persistence| Save/Load | `FSW_STATE` persists| `DigitalPorts` persist | Pos/Vel identical | $\Delta < \epsilon$ |
+| **F-01** | Drive Fwd | `W` (Hold) | `DRIVE(1.0)` | `PORT_DRIVE` = `1.0` | **`-Z`** Force/Torque | $v > 0$ |
+| **F-02** | Drive Back | `S` (Hold) | `DRIVE(-1.0)`| `PORT_DRIVE` = `-1.0` | **`+Z`** Force/Torque | $v < 0$ |
+| **F-03A**| Skid Left | `A` (Hold) | `MIX(-1.0, 1.0)`| `PORT_L` = `-1.0` | Diff. Torque | $\theta > 0$ (Yaw Left) |
+| **F-03B**| Steer Left | `A` (Hold) | `STEER(-1.0)`| `PORT_STEER` = `-1.0` | **$\theta > 0$** (Left) | Wheel Ang > 0 |
+| **F-04A**| Skid Right | `D` (Hold) | `MIX(1.0, -1.0)`| `PORT_R` = `-1.0` | Diff. Torque | $\theta < 0$ (Yaw Right) |
+| **F-04B**| Steer Right | `D` (Hold) | `STEER(1.0)` | `PORT_STEER` = `1.0` | **$\theta < 0$** (Right) | Wheel Ang < 0 |
+| **F-05** | Brake | `Space` | `BRAKE` | `PORT_BRAKE` = `1.0` | Resistance Force > 0 | $v \to 0$ |
+| **F-06** | Coasting | None | `IDLE` | All `PORT` = `0.0` | Zero Torque | $\dot{v} \approx 0$ |
+| **F-08** | Persistence| Save/Load | `FSW_STATE` persists| `Port` values persist | Pos/Vel identical | $\Delta < \epsilon$ |
 
 ---
 
@@ -85,13 +85,13 @@ To satisfy the **Testability Mandate (FR-010)**, the engine provides standard mo
 
 ### Mock OBC (Level 2 Mock)
 Allows testing FSW (L3) logic without a physical plant.
-- Provides a fixed set of `DigitalPort` entities.
-- Records all `i16` writes for assertion: `assert_eq!(obc.get_port("M1"), 255)`.
+- Provides a fixed set of `Port` entities.
+- Records all `f64` writes for assertion: `assert_eq!(obc.get_port("M1"), 1.0)`.
 
 ### Mock Plant (Level 1 Mock)
 Allows testing the full FSW->OBC signal path without the `avian` physics engine.
-- Replaces `PhysicalPort` with a `ValueTracker` component.
-- Asserts that `DAC` scaling is correct: `assert_eq!(plant.get_input("M1"), MaxTorque)`.
+- Replaces the actuator `Port` with a `ValueTracker` component.
+- Asserts that the `SimConnection` transform is correct: `assert_eq!(plant.get_input("M1"), MaxTorque)`.
 
 ---
 

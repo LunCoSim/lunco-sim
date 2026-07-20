@@ -13,7 +13,7 @@ To ensure the simulation is a true digital twin, the engine performs a direct 1:
 | :--- | :--- | :--- |
 | **`part`** | **Link** (Entity with `f64` Transform) | A structural component (e.g., chassis, wheel). |
 | **`port`** | **Port** Component (`Digital` / `Physical`) | An interaction point for signals or physical flows. |
-| **`connection`** | **Wire** (Signal) or **Joint** (Spatial) | The logical or physical link between two ports or parts. |
+| **`connection`** | **`SimConnection`** (Signal) or **Joint** (Spatial) | The logical or physical link between two ports or parts. |
 | **`interface`** | **PortType** & **Unit** Metadata | Defines the "Contract" of what a port can send/receive. |
 | **`attribute`** | **Component Data** (e.g., `Mass`, `MaxTorque`) | Numerical attributes of a part or port. |
 | **`requirement`**| **Verifier Rule** (from Spec `000` / `005`) | Verification logic (e.g., `Rover.Mass < 50kg`). |
@@ -21,13 +21,13 @@ To ensure the simulation is a true digital twin, the engine performs a direct 1:
 
 ### 1. The SysML "Blueprint" Logic
 - **Instantiation**: When a `.sysml` model is loaded, the `SysML_Parser` iterates over all `part` definitions and spawns corresponding **Link** entities.
-- **Wiring**: `connection` definitions in SysML trigger the creation of **Wire** entities in Bevy, establishing the signal flow from the OBC to the Plant.
+- **Wiring**: `connection` definitions in SysML trigger the creation of **`SimConnection`** entities in Bevy, establishing the signal flow from the OBC to the Plant.
 - **Mounting**: `connection` definitions between parts in SysML that imply spatial constraints (e.g., "A is mounted to B") trigger the creation of **Joint** entities in the `f64` frame tree.
 
 ### 2. Semantic Integrity
 The engine uses the **Engineering Ontology** to resolve SysML names. 
 - If SysML defines `part drive_motor`, the engine looks for a Bevy bundle tagged as `drive_motor` in the asset library.
-- If SysML defines a port `out_pwm`, the engine automatically creates a `DigitalPort { port_type: PWM }` on the corresponding entity.
+- If SysML defines a port `out_pwm`, the engine automatically creates a `Port` named `out_pwm` on the corresponding entity.
 
 ## User Stories
 

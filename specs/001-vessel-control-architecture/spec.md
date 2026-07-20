@@ -35,40 +35,44 @@ To serve as a high-fidelity digital twin, LunCoSim treats all simulated entities
 
 ---
 
-## Implementation Patterns: Direct-Reference Port & Wire Architecture
+## Implementation Patterns: Direct-Reference Port & Connection Architecture
 
 To ensure high-performance (1000Hz+) and robustness, the engine uses a direct entity-reference system for hardware signal flow.
 
 ### 1. The Port Component
-Lightweight components attached to both digital and physical interfaces.
+One lightweight component carries every signal value, whatever the interface: a command, an actuator setpoint, a sensor reading, or a value exchanged with a Modelica co-simulation.
 ```rust
-struct DigitalPort {
-    pub raw_value: i16, // -32768 to 32767 mapping to full physical bounds
-}
-
-struct PhysicalPort {
-    pub value: f32, // SI Units (Nm, N, rad/s)
+struct Port {
+    pub value: f64, // normalized command (-1.0..1.0) or SI units (Nm, N, rad/s)
 }
 ```
 
-### 2. The Wire Component (Signal Link)
-The `Wire` component scales signals between digital and physical domains.
+### 2. The SimConnection Component (Signal Link)
+`lunco_cosim::SimConnection` is the single wiring fabric. It names two endpoints by entity + connector and applies the SSP affine transform `source * scale + offset`, which is where a unit conversion or an actuator gain belongs when two ports are authored in different units.
 ```rust
-struct Wire {
-    pub source: Entity, 
-    pub target: Entity, 
-    pub scale: f32, // Signal Gain (e.g., Max_Torque / 128.0)
+struct SimConnection {
+    pub start_element: Entity,
+    pub start_connector: String, // source port name (an output)
+    pub end_element: Entity,
+    pub end_connector: String,   // target port name (an input)
+    pub scale: f64,              // SSP factor  (e.g. Max_Torque)
+    pub offset: f64,             // SSP offset  (e.g. sensor zero-point)
 }
+```
+Connections are authored in USD as attribute connections:
+```usda
+float inputs:force_y.connect = </SandboxScene/Amplifier.outputs:scaled>
 ```
 
 ### 3. Symmetrical Signal Propagation
-- **Forward Path (FSW -> OBC -> Plant)**: FSW writes `-255` for "Full Reverse" into the OBC. `Wire` scales this to `-MaxTorque`.
-- **Reverse Path (Plant -> OBC -> FSW)**: Sensor writes `9.81` into its physical port. `Wire` scales this to its 16-bit digital representation (`i16`) for FSW retrieval.
+Values are `f64` end to end; no quantization step exists on either path.
+- **Forward Path (FSW -> OBC -> Plant)**: FSW writes `-1.0` for "Full Reverse" into the command port. The connection's `scale` carries it to `-MaxTorque`.
+- **Reverse Path (Plant -> OBC -> FSW)**: A sensor writes `9.81` into its port; a connection scales and offsets it into the units the FSW reads.
 
 ### 4. FSW Hardware Map (Level 3 Logic)
 The FSW populates a map of OBC Port Entity IDs during instantiation.
 - **Example**: `RoverFSW.drive_left = Entity(OBC_Port_5)`.
-- **Runtime Drive**: `ports.get_mut(fsw.drive_left).raw_value = -32768; // Full reverse command`
+- **Runtime Drive**: `ports.get_mut(fsw.drive_left).value = -1.0; // Full reverse command`
 
 ---
 

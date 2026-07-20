@@ -50,7 +50,7 @@ As a mission participant, I want to see the real-time positions, orientations, a
 
 **Acceptance Criteria:**
 - `Transform`, `Sensor`, and `Actuator` component data is synchronized from server to all clients.
-- **Port State Sync**: All `DigitalPort` (i16) and `PhysicalPort` (f32) values are synchronized to provide real-time hardware telemetry (e.g., motor torque, battery voltage) across all clients.
+- **Port State Sync**: All `Port` (f64) values are synchronized to provide real-time hardware telemetry (e.g., motor torque, battery voltage) across all clients.
 - Latency in updates is minimized via state interpolation on the client side.
 - Client prediction is reconciled against server state; see FR-003 for what is shipped
   by default and what is opt-in.
