@@ -9,6 +9,12 @@
 //! | revolute  | `angle`        | target angle (rad)       | current twist (rad)     |
 //! | prismatic | `displacement` | target offset (m)        | current slider offset(m)|
 //!
+//! A prismatic joint additionally exposes two `Out`-only measurements: `velocity`
+//! (m/s), the rate it is sliding at, and `force` (N), the axial force its own
+//! motor is developing. A physical part reads the latter to know how hard it is
+//! working — a landing-leg strut's load is that number, and a shader takes its
+//! glow straight off it.
+//!
 //! ## USD / Omniverse mapping
 //!
 //! These ports are the runtime face of the standard UsdPhysics joint-drive and
@@ -16,7 +22,9 @@
 //! - **`In`** ⇔ `UsdPhysicsDriveAPI:{angular,linear}` `physics:targetPosition`
 //!   (and the drive's `physics:maxForce` saturation, read at load — see
 //!   `lunco-usd-avian`).
-//! - **`Out`** ⇔ `PhysxJointStateAPI:{angular,linear}` `physics:position`.
+//! - **`Out`** ⇔ `PhysxJointStateAPI:{angular,linear}` `physics:position` and,
+//!   for the prismatic rate, `physics:velocity`.
+//! - `force` has no standard spelling — see [`JOINT_FORCE_PORT`].
 //!
 //! ## Realization
 //!
@@ -35,7 +43,10 @@
 //! joint (e.g. a rover wheel driven by `lunco_hardware::MotorActuator`'s velocity
 //! motor) is left entirely alone, so the two never fight over `joint.motor`.
 
-use avian3d::prelude::{MotorModel, Position, PrismaticJoint, RevoluteJoint, Rotation};
+use avian3d::prelude::{
+    AngularVelocity, ComputedMass, LinearVelocity, MotorModel, Position, PrismaticJoint,
+    RevoluteJoint, Rotation,
+};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -47,6 +58,21 @@ pub const JOINT_ANGLE_PORT: &str = "angle";
 
 /// The port name a prismatic joint exposes in both directions.
 pub const JOINT_DISPLACEMENT_PORT: &str = "displacement";
+
+/// The port name a prismatic joint exposes for its slide RATE (m/s). `Out` only —
+/// a rate is measured, and the way to command one is the `displacement` setpoint.
+/// Mirrors `PhysxJointStateAPI:linear physics:velocity`.
+pub const JOINT_VELOCITY_PORT: &str = "velocity";
+
+/// The port name a prismatic joint exposes for the axial force (N) its own motor
+/// is developing. `Out` only — the force is a *result* of the motor's law and the
+/// joint's realized state, so there is nothing to command.
+///
+/// Unlike `displacement`/`velocity` this is a LunCo name, not a standard one:
+/// `PhysxJointStateAPI` stops at position and velocity, and no UsdPhysics schema
+/// spells joint-force readback. Ports are not USD schemas, so a plain name is
+/// right here — inventing a `lunco:*` USD attribute to match would not be.
+pub const JOINT_FORCE_PORT: &str = "force";
 
 /// Maximum torque (N·m) the joint motor may apply to reach the commanded angle.
 /// Generous so the joint holds its target against gravity for the structures we
@@ -146,6 +172,18 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
             read: Some(|w, e| w.get::<PrismaticJoint>(e).map(|j| j.motor.target_position)),
             write: Some(write_motor_displacement),
         },
+        AvianPort {
+            name: JOINT_VELOCITY_PORT,
+            dir: PortDirection::Out,
+            read: Some(read_measured_slide_rate),
+            write: None,
+        },
+        AvianPort {
+            name: JOINT_FORCE_PORT,
+            dir: PortDirection::Out,
+            read: Some(joint_motor_force),
+            write: None,
+        },
     ],
 };
 
@@ -158,9 +196,6 @@ fn read_measured_displacement(world: &World, entity: Entity) -> Option<f64> {
     let p2 = world.get::<Position>(j.body2)?;
     let r1 = world.get::<Rotation>(j.body1)?;
     let r2 = world.get::<Rotation>(j.body2)?;
-    // `slider_axis` is body1-local (its joint basis is identity for USD-built
-    // joints); carry it into world by body1's current orientation.
-    let axis_local = j.local_slider_axis1().unwrap_or(j.slider_axis);
     Some(displacement_along_axis(
         p1.0,
         r1.0,
@@ -168,8 +203,93 @@ fn read_measured_displacement(world: &World, entity: Entity) -> Option<f64> {
         p2.0,
         r2.0,
         j.local_anchor2().unwrap_or(DVec3::ZERO),
-        r1.0 * axis_local,
+        slider_axis_world(world, j)?,
     ))
+}
+
+/// The slider axis in world space.
+///
+/// `slider_axis` is body1-local (its joint basis is identity for USD-built
+/// joints); carry it into world by body1's current orientation. Both the
+/// displacement read and the velocity projection derive their axis here so the
+/// two can never disagree about which way the joint slides.
+fn slider_axis_world(world: &World, j: &PrismaticJoint) -> Option<DVec3> {
+    let r1 = world.get::<Rotation>(j.body1)?;
+    let axis_local = j.local_slider_axis1().unwrap_or(j.slider_axis);
+    Some(r1.0 * axis_local)
+}
+
+/// Measured slide rate (m/s): the relative velocity of the two anchor points,
+/// projected onto the world slider axis. Sign convention matches
+/// [`read_measured_displacement`] — positive means the anchors are separating
+/// along the axis.
+fn read_measured_slide_rate(world: &World, entity: Entity) -> Option<f64> {
+    let j = world.get::<PrismaticJoint>(entity)?;
+    let axis = slider_axis_world(world, j)?.normalize_or_zero();
+    if axis == DVec3::ZERO {
+        return Some(0.0);
+    }
+    // Velocity of a point rigidly attached to a body: v + ω × r, with `r` the
+    // anchor offset carried into world by the body's orientation. A static body
+    // carries no velocity components, so a missing one reads as zero rather than
+    // failing the whole port — a strut hung off the world frame still has a rate.
+    let anchor_vel = |body: Entity, local_anchor: DVec3| -> DVec3 {
+        let lin = world.get::<LinearVelocity>(body).map_or(DVec3::ZERO, |v| v.0);
+        let ang = world
+            .get::<AngularVelocity>(body)
+            .map_or(DVec3::ZERO, |v| v.0);
+        let rot = world.get::<Rotation>(body).map_or(DQuat::IDENTITY, |r| r.0);
+        lin + ang.cross(rot * local_anchor)
+    };
+    let v1 = anchor_vel(j.body1, j.local_anchor1().unwrap_or(DVec3::ZERO));
+    let v2 = anchor_vel(j.body2, j.local_anchor2().unwrap_or(DVec3::ZERO));
+    Some((v2 - v1).dot(axis))
+}
+
+/// Axial force (N) the prismatic joint's **own motor** is developing.
+///
+/// This is the physical RESULT the strut publishes — the spring's own reaction,
+/// zero until the joint actually leaves its rest offset — not a driving term
+/// pressed onto it from elsewhere.
+///
+/// The expression evaluated here is the drive law `UsdPhysicsDriveAPI` defines,
+/// `stiffness * (targetPosition - position) + damping * (targetVelocity -
+/// velocity)`, and the two motor models that carry those coefficients are the two
+/// `physics:type` values: [`MotorModel::ForceBased`] yields newtons directly,
+/// [`MotorModel::AccelerationBased`] yields an acceleration, so it is multiplied
+/// by the driven body's mass to reach the newtons this port promises. Without
+/// that mass there is no honest conversion, so a body avian has not yet given a
+/// [`ComputedMass`] reads `None` rather than a number in the wrong unit.
+///
+/// [`MotorModel::SpringDamper`] returns `None`: its parameters are a frequency
+/// and a damping ratio, its force is not this expression, and faking it would put
+/// a plausible-looking wrong number on a wire.
+///
+/// One computation, both consumers: the `force` port and anything else that wants
+/// the strut's load call this, so they cannot drift apart.
+pub fn joint_motor_force(world: &World, entity: Entity) -> Option<f64> {
+    let j = world.get::<PrismaticJoint>(entity)?;
+    let (stiffness, damping, gain) = match j.motor.motor_model {
+        MotorModel::ForceBased { stiffness, damping } => (stiffness, damping, 1.0),
+        MotorModel::AccelerationBased { stiffness, damping } => (
+            stiffness,
+            damping,
+            world.get::<ComputedMass>(j.body2)?.value(),
+        ),
+        MotorModel::SpringDamper { .. } => return None,
+    };
+    let x = read_measured_displacement(world, entity)?;
+    let v = read_measured_slide_rate(world, entity)?;
+    let f = gain
+        * (stiffness * (j.motor.target_position - x) + damping * (j.motor.target_velocity - v));
+    // The motor cannot pull harder than its saturation, so neither may the number
+    // the strut reports about itself.
+    let max = j.motor.max_force;
+    Some(if max.is_finite() && max > 0.0 {
+        f.clamp(-max, max)
+    } else {
+        f
+    })
 }
 
 /// Commanded displacement (`In`): drive the joint's linear motor to `value` (m)
@@ -273,6 +393,159 @@ fn twist_angle(q1: Quat, q2: Quat, axis: Vec3) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use avian3d::prelude::{Gravity, Mass, PhysicsPlugins, RigidBody};
+    use bevy::asset::AssetPlugin;
+    use bevy::MinimalPlugins;
+
+    /// Gravity a landing leg is tuned against (m/s²).
+    const MOON_G: f64 = 1.62;
+    /// Vehicle share one leg carries — a quarter of a 2 t lander.
+    const SPRUNG_MASS: f64 = 500.0;
+    /// The leg spring, as `descent_lander.usda` authors it.
+    const SPRING_K: f64 = 4000.0;
+    const SPRING_C: f64 = 2200.0;
+
+    /// Static deflection the spring must settle to: `m*g/k`.
+    const STATIC_DEFLECTION: f64 = SPRUNG_MASS * MOON_G / SPRING_K;
+
+    /// A leg hung under a fixed hull by a prismatic joint whose drive is the
+    /// authored spring, stepped `steps` fixed ticks under `gravity`.
+    ///
+    /// Anchors are coincident in the start pose, so the joint's `displacement`
+    /// begins at exactly 0 and the spring begins at exactly zero force — the same
+    /// contract the USD legs get from their derived anchors.
+    ///
+    /// The slider axis runs foot→hull, as the USD legs' axis does once their
+    /// `physics:localRot0` is applied to `physics:axis`. Compression therefore
+    /// travels along +axis and `displacement` reads POSITIVE under load, which is
+    /// what makes the `0.0..0.8` limits the compression stroke rather than a
+    /// clamp that pins the leg at zero.
+    ///
+    /// The `AssetPlugin` + `Mesh` asset are not optional decoration: avian's
+    /// collider cache runs a system reading `AssetEvent<Mesh>`, and a headless app
+    /// that never initialised that message panics on the first step with an error
+    /// that reads like a physics failure.
+    fn sprung_leg(gravity: f64, steps: usize) -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            PhysicsPlugins::default(),
+        ));
+        app.init_asset::<Mesh>();
+        app.insert_resource(Gravity(DVec3::new(0.0, -gravity, 0.0)));
+        app.insert_resource(Time::<Fixed>::from_hz(60.0));
+
+        let world = app.world_mut();
+        let hull = world
+            .spawn((RigidBody::Static, Transform::from_xyz(0.0, 0.0, 0.0)))
+            .id();
+        let leg = world
+            .spawn((
+                RigidBody::Dynamic,
+                Mass(SPRUNG_MASS as f32),
+                Transform::from_xyz(0.0, -1.0, 0.0),
+            ))
+            .id();
+        let joint = world
+            .spawn({
+                let mut j = PrismaticJoint::new(hull, leg)
+                    .with_local_anchor1(DVec3::ZERO)
+                    .with_local_anchor2(DVec3::new(0.0, 1.0, 0.0))
+                    .with_slider_axis(DVec3::NEG_Y)
+                    .with_limits(0.0, 0.8);
+                j.motor.enabled = true;
+                j.motor.target_position = 0.0;
+                j.motor.target_velocity = 0.0;
+                j.motor.max_force = 20_000.0;
+                j.motor.motor_model = MotorModel::ForceBased {
+                    stiffness: SPRING_K,
+                    damping: SPRING_C,
+                };
+                j
+            })
+            .id();
+
+        // Driving `update()` by hand still needs the plugins' deferred setup —
+        // avian registers its types and messages in `finish`/`cleanup`.
+        app.finish();
+        app.cleanup();
+        for _ in 0..steps {
+            app.update();
+        }
+        (app, joint)
+    }
+
+    /// Under load the joint must actually travel: a spring that reports a force
+    /// while the geometry never moves is a rigid strut with a decorative number.
+    #[test]
+    fn sprung_leg_compresses_under_load() {
+        let (app, joint) = sprung_leg(MOON_G, 60);
+        let x = read_measured_displacement(app.world(), joint).expect("displacement port");
+        assert!(
+            x.abs() > 0.02,
+            "leg should be travelling after 1 s under load, got {x} m"
+        );
+    }
+
+    /// The spring must SETTLE at `m*g/k` — not diverge (ForceBased with a stiff
+    /// gain and a heavy body is exactly where XPBD blows up) and not ring forever
+    /// (ζ = c/(2√(km)) = 0.78, one overshoot then still).
+    #[test]
+    fn sprung_leg_settles_at_static_deflection() {
+        let (app, joint) = sprung_leg(MOON_G, 600);
+        let x = read_measured_displacement(app.world(), joint).expect("displacement port");
+        let v = read_measured_slide_rate(app.world(), joint).expect("velocity port");
+        assert!(
+            x.is_finite() && v.is_finite(),
+            "solver diverged: x = {x}, v = {v}"
+        );
+        assert!(
+            (x.abs() - STATIC_DEFLECTION).abs() < 0.05,
+            "expected settle near {STATIC_DEFLECTION} m, got {} m",
+            x.abs()
+        );
+        assert!(
+            v.abs() < 0.02,
+            "still oscillating after 10 s: {v} m/s — the damping is not taking"
+        );
+    }
+
+    /// The `force` port is the spring's own reaction: it must read the settled
+    /// load, and it must read zero when the joint sits at its rest offset — the
+    /// property that keeps a strut's glow dark until touchdown.
+    #[test]
+    fn force_port_reads_the_spring_reaction() {
+        let (loaded, joint) = sprung_leg(MOON_G, 600);
+        let f = joint_motor_force(loaded.world(), joint).expect("force port");
+        // At rest under gravity the spring carries the whole hung weight.
+        let expected = SPRUNG_MASS * MOON_G;
+        assert!(
+            (f.abs() - expected).abs() < 0.15 * expected,
+            "expected ~{expected} N of reaction, got {f} N"
+        );
+
+        // Same joint, no gravity: nothing displaces it, so there is nothing to
+        // report. A non-zero reading here is a spring publishing an input.
+        let (unloaded, joint) = sprung_leg(0.0, 60);
+        let f0 = joint_motor_force(unloaded.world(), joint).expect("force port");
+        assert!(f0.abs() < 1.0, "unloaded strut should read ~0 N, got {f0} N");
+    }
+
+    /// A `SpringDamper` motor is parameterised by frequency and damping ratio, so
+    /// the drive-law expression is not its force. The port says so instead of
+    /// reporting a number in the wrong units.
+    #[test]
+    fn force_port_declines_a_spring_damper_motor() {
+        let (mut app, joint) = sprung_leg(MOON_G, 1);
+        app.world_mut()
+            .get_mut::<PrismaticJoint>(joint)
+            .unwrap()
+            .motor
+            .motor_model = JOINT_MOTOR_MODEL;
+        assert!(joint_motor_force(app.world(), joint).is_none());
+    }
 
     #[test]
     fn displacement_projects_onto_slider_axis() {

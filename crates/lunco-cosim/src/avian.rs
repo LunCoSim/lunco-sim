@@ -134,10 +134,11 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
 /// or not anyone authored a sensor to notice, exactly as a body has a velocity
 /// whether or not anyone authored a speedometer.
 ///
-/// This is the layer a PHYSICAL PART reads. A landing-leg strut compresses
-/// because the pad is being pushed on — so `LegStrut.mo` takes the pad's
-/// `contact_force` from here. Gating that behind an authored instrument would
-/// mean a spring that only compresses if someone remembered to install a switch.
+/// This is the layer a PHYSICAL PART reads — a structure, a damper, a mount takes
+/// the load it is actually carrying from here, because it carries that load
+/// whether or not anyone authored an instrument to notice. Gating a part's own
+/// behaviour behind an instrument would mean hardware that responds only if
+/// someone remembered to install a switch.
 ///
 /// Flight software is the other layer and reads [`crate::sensors::ContactSensor`]
 /// instead: an authored touchdown probe, with a mount point and (in time) a

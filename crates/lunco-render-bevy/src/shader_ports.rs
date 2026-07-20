@@ -10,7 +10,7 @@
 //! def Mesh "LegPX_Strut" (prepend apiSchemas = ["MaterialBindingAPI"])
 //! {
 //!     rel material:binding = </Looks/StrutMat>
-//!     float inputs:glow.connect = </DescentLander/LegPX.outputs:load_frac>
+//!     float inputs:glow.connect = </DescentLander/LegPX_Spring.outputs:force>
 //! }
 //! ```
 //!

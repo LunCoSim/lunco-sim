@@ -126,30 +126,30 @@ def Xform "DescentLander" (
             }
         }
 
-        # Landing-strut load glow. The COLOUR of a strut under load is authored
-        # HERE — the actuator (`scenarios/leg_spring.rhai`) reads this emissive
-        # through the standard material:binding chain (exactly as `flame.rhai`
-        # reads its cone's), takes it as the chroma at `load_ref`, and writes
-        # it back scaled by the strut model's live `load` output each tick. So:
-        # Modelica publishes the force, USD declares the shader and the wire,
-        # rhai only plumbs. Retint this material and the landing glow follows;
-        # no script edit.
+        # Landing-strut load glow — a WGSL shader
+        # (`lunco://shaders/strut_glow.wgsl`), named for the `wgsl` render
+        # context exactly as the surfaces above are named for
+        # `UsdPreviewSurface`.
+        #
+        # The ramp's two stops live HERE: `base_color` is the cold, unloaded
+        # metal, `hot_color` the strut at its full rated load. Each leg drives
+        # the shader's `load_frac` from its OWN joint's `force` port through a
+        # connection on the leg gprim, so the four legs colour independently off
+        # one material. Retint either stop and the whole landing reads
+        # differently — no script, no per-leg edit.
         def Material "StrutGlow_Mat"
         {
             token outputs:surface.connect = </DescentLander/Looks/StrutGlow_Mat/Surface.outputs:surface>
 
             def Shader "Surface"
             {
-                uniform token info:id = "UsdPreviewSurface"
-                color3f inputs:diffuseColor = (0.4, 0.42, 0.46)
-                # The COLD stop of the strut ramp — unloaded, in flight: clean
-                # instrument GREEN. The actuator grades this through the amber
-                # `warm_*` params to the red `hot_*` ones as the strut model's
-                # own `load_frac` rises, so the landing reads green → red at
-                # the impact spike → settling back to amber under static
-                # weight. All three stops are authored data; retint any of them
-                # and the landing reads differently with no script edit.
-                color3f inputs:emissiveColor = (0.25, 3.6, 0.6)
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/strut_glow.wgsl@
+                color3f inputs:base_color = (0.55, 0.55, 0.57)
+                color3f inputs:hot_color = (0.95, 0.16, 0.05)
+                float inputs:glow = 3.0
+                float inputs:roughness = 0.45
+                float inputs:metallic = 0.7
                 token outputs:surface
             }
         }
@@ -897,27 +897,45 @@ def Xform "DescentLander" (
     }
 
     # ── Landing legs with footpads ──
-    # Both the struts and the pads carry colliders, so the compound body is
-    # hull + 4 legs + 4 pads: the lander rests on its pads, and a tipped-over
-    # lander catches on its legs instead of the struts clipping through terrain
-    # (and a rover cannot drive through a leg). Lowest point is the pads (y=-5.0).
+    # Each leg is its OWN rigid body, sprung against the hull by a
+    # `PhysicsPrismaticJoint` (`Leg*_Spring` below). The pad rides with its leg
+    # via a `PhysicsFixedJoint` rather than by reparenting: a leg carries a
+    # non-uniform `xformOp:scale` (0.15, 7.05, 0.15) that a child pad would
+    # inherit and be crushed by, so the weld is expressed as physics, where it
+    # belongs, instead of as hierarchy.
+    # Lowest point is the pads (y=-5.0). Both struts and pads carry colliders, so
+    # a tipped-over lander catches on its legs instead of the struts clipping
+    # through terrain (and a rover cannot drive through a leg).
     #
-    # Each strut is SPRUNG, structured across the three authoring layers:
-    #   models/LegStrut.mo      — the physics: contact-gated spring-damper,
-    #                             one instance per leg (`Strut` below), wired
-    #                             to the altimeter and body vertical speed
-    #   scenarios/leg_spring.rhai — the actuator (`Actuator` below): applies
-    #                             the model's `stroke` to the strut geometry,
-    #                             foot pinned, sliding it into its piston
-    #   Piston* cylinders       — the fixed outer tube the strut slides into
-    # Actuator params are the strut's FOOT point and foot→hull unit axis in
-    # the vessel frame; they must agree with the authored translate/rotate/
-    # scale, which the actuator reproduces exactly at zero stroke.
+    # The SPRING is the joint's own linear drive — `drive:linear:physics:stiffness`
+    # and `:damping`, in SI, integrated by avian. Rust owns the dynamics; there is
+    # no equation and no script in the loop. Two layers remain:
+    #   the joint            — the spring: k = 4000 N/m, c = 2200 N·s/m, stroke
+    #                          0..0.8 m. Static settle = 500 kg · 1.62 / 4000
+    #                          = 0.20 m per leg (a quarter of the vehicle each).
+    #   Piston* cylinders    — the fixed outer tube the strut slides into, so the
+    #                          compression reads as a mechanism.
+    #
+    # The GLOW is the joint's `force` port scaled by the strut's RATING, carried on
+    # the wire itself as the SSP linear transformation `lunco:factor:load_frac` —
+    # the rating is one number per sink, and a whole model to hold one number is a
+    # model that will drift from the wire it decorates.
     def Cube "LegPX"
     (
-        prepend apiSchemas = ["LunCoProgramAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        # Mass and inertia of the STRUT ITSELF — the slender 0.15 x 7.05 x 0.15
+        # box below, not the vehicle share it carries. That share arrives through
+        # the joint, which is where a sprung leg's load belongs.
+        #   I_xx = I_zz = m*(b^2 + c^2)/12 = 30*(49.70 + 0.02)/12 = 124.3
+        #   I_yy        = m*(a^2 + c^2)/12 = 30*(0.02 + 0.02)/12  =   0.11
+        # Authored together, always: mass alone overrides the mass and nothing
+        # else, leaving avian the inertia it derived at default density (see the
+        # hull's note above).
+        float physics:mass = 30.0
+        float3 physics:diagonalInertia = (124.3, 0.11, 124.3)
+
         double size = 1.0
         double3 xformOp:translate = (4.009, -1.807, 0)
         double3 xformOp:rotateXYZ = (0, 0, 25.0)
@@ -927,81 +945,33 @@ def Xform "DescentLander" (
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        # The strut's PHYSICS — a Modelica spring-damper, one instance per leg,
-        # wired to the airframe's own sensors.
+        # THE GLOW, wired straight from the physics that causes it.
         #
-        # APPLIED to the leg (`LunCoProgramAPI`), not mounted as a child
-        # `def LunCoProgram` prim. That distinction is load-bearing and cost a
-        # night: a child program binds and solves (the log says `bound`, the
-        # compiler says OK) but its outputs are NOT readable as ports on any
-        # entity a script can reach — `get(strut, "stroke")` returns nothing
-        # from the leg, its children or its ancestors. Applied to the prim, the
-        # ports land on that prim's own entity, which is how the vessel carries
-        # `Lander.mo` and how `flame.rhai` reads `throttle`. Same rule here:
-        # the Actuator child reads `stroke` and `load_frac` off `me` — the leg.
-        uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
-        uniform bool lunco:program:realtimeSafe = true
-        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
-        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
-
-        # The spring, EXPOSED TO USD — a parameter is an input with a
-        # constant instead of a connection (the GNC convention). Re-tune a
-        # leg from any scene with an `over`; wire one later and nothing
-        # about the model changes. The live `stroke` comes back the same
-        # way: it is this prim's `outputs:stroke` port on the composed
-        # stage, which is exactly what the sibling Actuator (and usdview)
-        # reads.
-        # Contact geometry, MEASURED on this airframe: the altimeter sits
-        # at the nozzle bottom and still reads ~5.0 m with the pads on the
-        # ground, so the model's 1.8 m default gate never fired — contact
-        # stayed 0, and with it load, stroke and the glow. The legs looked
-        # welded because the spring was never told it had landed.
-        # Full contact by 5.0 m, first touch at 5.6 m.
-        float inputs:contact_alt = 5.6
-        float inputs:gate_width = 0.6
-        # SOFTENED so the stroke is visible. At k = 4000 the static settle is
-        # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
-        # engineering and invisible on camera: the legs looked welded and the
-        # force story had nothing to show. k = 1400 puts the settle at 0.58 m
-        # (8%) and a hard arrival near the 0.8 m stop, so the springs visibly
-        # take the impact and rebound. `c` follows to hold the same damping
-        # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
-        # ringing.
-        float inputs:k = 1400.0
-        float inputs:c = 1300.0
-        float inputs:m_eff = 500.0
-        float inputs:kv_impact = 900.0
-        float inputs:stroke_max = 0.8
-        def LunCoProgram "Actuator"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
-            # The glow ramp's WARM and HOT stops (the cold stop is the bound
-            # material's emissive). `warm_at` is the load fraction where amber
-            # peaks: the static settle (m_eff*g = 810 N against the model's
-            # 1500 N rating) lands at 0.54, so a parked lander sits amber and
-            # only the impact transient pushes into red. Full-scale itself is
-            # the MODEL's `load_rated` — not repeated here.
-            custom float lunco:param:warm_at = 0.55
-            custom float lunco:param:warm_r = 4.2
-            custom float lunco:param:warm_g = 2.6
-            custom float lunco:param:warm_b = 0.2
-            custom float lunco:param:hot_r = 5.0
-            custom float lunco:param:hot_g = 0.35
-            custom float lunco:param:hot_b = 0.1
-            # Authored length MUST match the leg's xformOp:scale.y — the
-            # actuator rebuilds the strut from this every tick, so a stale
-            # default silently restores the old geometry.
-            custom float lunco:param:len = 7.05
-            custom float lunco:param:bx = 5.5
-            custom float lunco:param:by = -5.0
-            custom float lunco:param:bz = 0.0
-            custom float lunco:param:ux = -0.4226
-            custom float lunco:param:uy = 0.9063
-            custom float lunco:param:uz = 0.0
-        }
+        # `outputs:force` is the SPRING'S OWN REACTION, computed by the solver that
+        # integrates it. A spring cannot push until it is compressed, so this is
+        # exactly zero until the joint leaves its rest offset — the glow cannot
+        # fire before touchdown.
+        #
+        # `lunco:factor:load_frac` is the strut's RATING, the one number the solver
+        # cannot know: 1 / 1500 N of full-scale load. It is NEGATIVE because the
+        # joint's axis runs foot→hull, so a compressive load — the only kind a
+        # landing leg sees — is a reaction along −axis. The shader saturates
+        # `load_frac` to 0..1, which leaves the (physically impossible here)
+        # tension case dark rather than inventing a colour for it.
+        float inputs:load_frac.connect = </DescentLander/LegPX_Spring.outputs:force>
+        float lunco:factor:load_frac = -0.00066667
     }
-    def Cylinder "PadPX"
+    def Cylinder "PadPX" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
     {
+        # The pad rides with its LEG, not with the hull — it is welded to
+        # LegPX by PadPX_Weld below. Cylinder r = 0.4, h = 0.08, m = 10:
+        #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
+        float physics:mass = 10.0
+        float3 physics:diagonalInertia = (0.41, 0.80, 0.41)
+
         uniform token axis = "Y"
         double radius = 0.4
         double height = 0.08
@@ -1013,18 +983,18 @@ def Xform "DescentLander" (
 
     # Shock-absorber PISTON sleeves — one per leg, hung from the strut's HULL
     # anchor and reaching 2.6 m DOWN the strut axis. The sleeve does not move;
-    # on touchdown `leg_spring.rhai` shortens the strut upward from the foot,
-    # so the strut visibly slides INTO its sleeve — the compression reads as a
-    # mechanism, not as a scale trick. Wider than the strut (r 0.12 over the
-    # 0.15 cube) so the overlap hides the strut's sliding end. Visual only.
+    # on touchdown the leg's prismatic joint slides the whole strut up its own
+    # axis into the sleeve — the compression reads as a mechanism, not as a
+    # scale trick. Wider than the strut (r 0.12 over the 0.15 cube) so the
+    # overlap hides the strut's sliding end. Visual only, and part of the HULL,
+    # so it stays put while the strut telescopes through it.
     #
     # A USD `Cylinder` is CENTRED on its origin, so "hangs from the anchor"
     # puts the origin a HALF-LENGTH (1.3 m) DOWN-axis from the anchor, not at
-    # it. Sitting them nearer the anchor pushed each top end up to y = 1.640 —
-    # above the deck's top face (1.625), at radius 2.40, well inside the deck's
-    # 2.6 — so all four surfaced as grey nubs through the gold MLI and read as
-    # "the legs go through the roof". The struts were innocent: their top
-    # corner reaches y = 1.419, clear under the 1.475 underside.
+    # it. The deck's underside is y = 1.475 (top face 1.625, radius 2.6), and
+    # every sleeve top must stay below that underside or it surfaces through
+    # the gold MLI as a grey nub. The struts' own top corner reaches y = 1.419,
+    # clear of it.
     #
     # Anchor is the strut's top-centre, (2.519, 1.388) in the leg's own plane.
     # centre = anchor − 1.3·û, û = (−sin 25°, cos 25°) the foot→hull axis. That
@@ -1075,9 +1045,13 @@ def Xform "DescentLander" (
     }
 
     def Cube "LegNX" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        # Strut's own mass/inertia — see LegPX for the derivation.
+        float physics:mass = 30.0
+        float3 physics:diagonalInertia = (124.3, 0.11, 124.3)
+
         double size = 1.0
         double3 xformOp:translate = (-4.009, -1.807, 0)
         double3 xformOp:rotateXYZ = (0, 0, -25.0)
@@ -1087,75 +1061,22 @@ def Xform "DescentLander" (
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        # The strut's PHYSICS — a Modelica spring-damper, one per leg.
-        # APPLIED to the leg (`LunCoProgramAPI`), not a child `def LunCoProgram`
-        # prim: a child program binds and solves, but its outputs are NOT
-        # readable as ports from any entity a script can reach. Applied, the
-        # ports land on this prim's entity — the same way the vessel carries
-        # `Lander.mo` for `flame.rhai`.
-        uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
-        uniform bool lunco:program:realtimeSafe = true
-        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
-        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
-
-        # The spring, EXPOSED TO USD — a parameter is an input with a
-        # constant instead of a connection (the GNC convention). Re-tune a
-        # leg from any scene with an `over`; wire one later and nothing
-        # about the model changes. The live `stroke` comes back the same
-        # way: it is this prim's `outputs:stroke` port on the composed
-        # stage, which is exactly what the sibling Actuator (and usdview)
-        # reads.
-        # Contact geometry, MEASURED on this airframe: the altimeter sits
-        # at the nozzle bottom and still reads ~5.0 m with the pads on the
-        # ground, so the model's 1.8 m default gate never fired — contact
-        # stayed 0, and with it load, stroke and the glow. The legs looked
-        # welded because the spring was never told it had landed.
-        # Full contact by 5.0 m, first touch at 5.6 m.
-        float inputs:contact_alt = 5.6
-        float inputs:gate_width = 0.6
-        # SOFTENED so the stroke is visible. At k = 4000 the static settle is
-        # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
-        # engineering and invisible on camera: the legs looked welded and the
-        # force story had nothing to show. k = 1400 puts the settle at 0.58 m
-        # (8%) and a hard arrival near the 0.8 m stop, so the springs visibly
-        # take the impact and rebound. `c` follows to hold the same damping
-        # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
-        # ringing.
-        float inputs:k = 1400.0
-        float inputs:c = 1300.0
-        float inputs:m_eff = 500.0
-        float inputs:kv_impact = 900.0
-        float inputs:stroke_max = 0.8
-        def LunCoProgram "Actuator"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
-            # The glow ramp's WARM and HOT stops (the cold stop is the bound
-            # material's emissive). `warm_at` is the load fraction where amber
-            # peaks: the static settle (m_eff*g = 810 N against the model's
-            # 1500 N rating) lands at 0.54, so a parked lander sits amber and
-            # only the impact transient pushes into red. Full-scale itself is
-            # the MODEL's `load_rated` — not repeated here.
-            custom float lunco:param:warm_at = 0.55
-            custom float lunco:param:warm_r = 4.2
-            custom float lunco:param:warm_g = 2.6
-            custom float lunco:param:warm_b = 0.2
-            custom float lunco:param:hot_r = 5.0
-            custom float lunco:param:hot_g = 0.35
-            custom float lunco:param:hot_b = 0.1
-            # Authored length MUST match the leg's xformOp:scale.y — the
-            # actuator rebuilds the strut from this every tick, so a stale
-            # default silently restores the old geometry.
-            custom float lunco:param:len = 7.05
-            custom float lunco:param:bx = -5.5
-            custom float lunco:param:by = -5.0
-            custom float lunco:param:bz = 0.0
-            custom float lunco:param:ux = 0.4226
-            custom float lunco:param:uy = 0.9063
-            custom float lunco:param:uz = 0.0
-        }
+        # Glow from the spring's own reaction, scaled by the strut's rating —
+        # see LegPX for the sign and the rating.
+        float inputs:load_frac.connect = </DescentLander/LegNX_Spring.outputs:force>
+        float lunco:factor:load_frac = -0.00066667
     }
-    def Cylinder "PadNX"
+    def Cylinder "PadNX" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
     {
+        # The pad rides with its LEG, not with the hull — it is welded to
+        # LegNX by PadNX_Weld below. Cylinder r = 0.4, h = 0.08, m = 10:
+        #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
+        float physics:mass = 10.0
+        float3 physics:diagonalInertia = (0.41, 0.80, 0.41)
+
         uniform token axis = "Y"
         double radius = 0.4
         double height = 0.08
@@ -1166,9 +1087,13 @@ def Xform "DescentLander" (
     }
 
     def Cube "LegPZ" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        # Strut's own mass/inertia — see LegPX for the derivation.
+        float physics:mass = 30.0
+        float3 physics:diagonalInertia = (124.3, 0.11, 124.3)
+
         double size = 1.0
         double3 xformOp:translate = (0, -1.807, 4.009)
         double3 xformOp:rotateXYZ = (-25.0, 0, 0)
@@ -1178,75 +1103,22 @@ def Xform "DescentLander" (
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        # The strut's PHYSICS — a Modelica spring-damper, one per leg.
-        # APPLIED to the leg (`LunCoProgramAPI`), not a child `def LunCoProgram`
-        # prim: a child program binds and solves, but its outputs are NOT
-        # readable as ports from any entity a script can reach. Applied, the
-        # ports land on this prim's entity — the same way the vessel carries
-        # `Lander.mo` for `flame.rhai`.
-        uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
-        uniform bool lunco:program:realtimeSafe = true
-        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
-        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
-
-        # The spring, EXPOSED TO USD — a parameter is an input with a
-        # constant instead of a connection (the GNC convention). Re-tune a
-        # leg from any scene with an `over`; wire one later and nothing
-        # about the model changes. The live `stroke` comes back the same
-        # way: it is this prim's `outputs:stroke` port on the composed
-        # stage, which is exactly what the sibling Actuator (and usdview)
-        # reads.
-        # Contact geometry, MEASURED on this airframe: the altimeter sits
-        # at the nozzle bottom and still reads ~5.0 m with the pads on the
-        # ground, so the model's 1.8 m default gate never fired — contact
-        # stayed 0, and with it load, stroke and the glow. The legs looked
-        # welded because the spring was never told it had landed.
-        # Full contact by 5.0 m, first touch at 5.6 m.
-        float inputs:contact_alt = 5.6
-        float inputs:gate_width = 0.6
-        # SOFTENED so the stroke is visible. At k = 4000 the static settle is
-        # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
-        # engineering and invisible on camera: the legs looked welded and the
-        # force story had nothing to show. k = 1400 puts the settle at 0.58 m
-        # (8%) and a hard arrival near the 0.8 m stop, so the springs visibly
-        # take the impact and rebound. `c` follows to hold the same damping
-        # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
-        # ringing.
-        float inputs:k = 1400.0
-        float inputs:c = 1300.0
-        float inputs:m_eff = 500.0
-        float inputs:kv_impact = 900.0
-        float inputs:stroke_max = 0.8
-        def LunCoProgram "Actuator"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
-            # The glow ramp's WARM and HOT stops (the cold stop is the bound
-            # material's emissive). `warm_at` is the load fraction where amber
-            # peaks: the static settle (m_eff*g = 810 N against the model's
-            # 1500 N rating) lands at 0.54, so a parked lander sits amber and
-            # only the impact transient pushes into red. Full-scale itself is
-            # the MODEL's `load_rated` — not repeated here.
-            custom float lunco:param:warm_at = 0.55
-            custom float lunco:param:warm_r = 4.2
-            custom float lunco:param:warm_g = 2.6
-            custom float lunco:param:warm_b = 0.2
-            custom float lunco:param:hot_r = 5.0
-            custom float lunco:param:hot_g = 0.35
-            custom float lunco:param:hot_b = 0.1
-            # Authored length MUST match the leg's xformOp:scale.y — the
-            # actuator rebuilds the strut from this every tick, so a stale
-            # default silently restores the old geometry.
-            custom float lunco:param:len = 7.05
-            custom float lunco:param:bx = 0.0
-            custom float lunco:param:by = -5.0
-            custom float lunco:param:bz = 5.5
-            custom float lunco:param:ux = 0.0
-            custom float lunco:param:uy = 0.9063
-            custom float lunco:param:uz = -0.4226
-        }
+        # Glow from the spring's own reaction, scaled by the strut's rating —
+        # see LegPX for the sign and the rating.
+        float inputs:load_frac.connect = </DescentLander/LegPZ_Spring.outputs:force>
+        float lunco:factor:load_frac = -0.00066667
     }
-    def Cylinder "PadPZ"
+    def Cylinder "PadPZ" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
     {
+        # The pad rides with its LEG, not with the hull — it is welded to
+        # LegPZ by PadPZ_Weld below. Cylinder r = 0.4, h = 0.08, m = 10:
+        #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
+        float physics:mass = 10.0
+        float3 physics:diagonalInertia = (0.41, 0.80, 0.41)
+
         uniform token axis = "Y"
         double radius = 0.4
         double height = 0.08
@@ -1257,9 +1129,13 @@ def Xform "DescentLander" (
     }
 
     def Cube "LegNZ" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        # Strut's own mass/inertia — see LegPX for the derivation.
+        float physics:mass = 30.0
+        float3 physics:diagonalInertia = (124.3, 0.11, 124.3)
+
         double size = 1.0
         double3 xformOp:translate = (0, -1.807, -4.009)
         double3 xformOp:rotateXYZ = (25.0, 0, 0)
@@ -1269,75 +1145,22 @@ def Xform "DescentLander" (
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        # The strut's PHYSICS — a Modelica spring-damper, one per leg.
-        # APPLIED to the leg (`LunCoProgramAPI`), not a child `def LunCoProgram`
-        # prim: a child program binds and solves, but its outputs are NOT
-        # readable as ports from any entity a script can reach. Applied, the
-        # ports land on this prim's entity — the same way the vessel carries
-        # `Lander.mo` for `flame.rhai`.
-        uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
-        uniform bool lunco:program:realtimeSafe = true
-        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
-        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
-
-        # The spring, EXPOSED TO USD — a parameter is an input with a
-        # constant instead of a connection (the GNC convention). Re-tune a
-        # leg from any scene with an `over`; wire one later and nothing
-        # about the model changes. The live `stroke` comes back the same
-        # way: it is this prim's `outputs:stroke` port on the composed
-        # stage, which is exactly what the sibling Actuator (and usdview)
-        # reads.
-        # Contact geometry, MEASURED on this airframe: the altimeter sits
-        # at the nozzle bottom and still reads ~5.0 m with the pads on the
-        # ground, so the model's 1.8 m default gate never fired — contact
-        # stayed 0, and with it load, stroke and the glow. The legs looked
-        # welded because the spring was never told it had landed.
-        # Full contact by 5.0 m, first touch at 5.6 m.
-        float inputs:contact_alt = 5.6
-        float inputs:gate_width = 0.6
-        # SOFTENED so the stroke is visible. At k = 4000 the static settle is
-        # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
-        # engineering and invisible on camera: the legs looked welded and the
-        # force story had nothing to show. k = 1400 puts the settle at 0.58 m
-        # (8%) and a hard arrival near the 0.8 m stop, so the springs visibly
-        # take the impact and rebound. `c` follows to hold the same damping
-        # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
-        # ringing.
-        float inputs:k = 1400.0
-        float inputs:c = 1300.0
-        float inputs:m_eff = 500.0
-        float inputs:kv_impact = 900.0
-        float inputs:stroke_max = 0.8
-        def LunCoProgram "Actuator"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
-            # The glow ramp's WARM and HOT stops (the cold stop is the bound
-            # material's emissive). `warm_at` is the load fraction where amber
-            # peaks: the static settle (m_eff*g = 810 N against the model's
-            # 1500 N rating) lands at 0.54, so a parked lander sits amber and
-            # only the impact transient pushes into red. Full-scale itself is
-            # the MODEL's `load_rated` — not repeated here.
-            custom float lunco:param:warm_at = 0.55
-            custom float lunco:param:warm_r = 4.2
-            custom float lunco:param:warm_g = 2.6
-            custom float lunco:param:warm_b = 0.2
-            custom float lunco:param:hot_r = 5.0
-            custom float lunco:param:hot_g = 0.35
-            custom float lunco:param:hot_b = 0.1
-            # Authored length MUST match the leg's xformOp:scale.y — the
-            # actuator rebuilds the strut from this every tick, so a stale
-            # default silently restores the old geometry.
-            custom float lunco:param:len = 7.05
-            custom float lunco:param:bx = 0.0
-            custom float lunco:param:by = -5.0
-            custom float lunco:param:bz = -5.5
-            custom float lunco:param:ux = 0.0
-            custom float lunco:param:uy = 0.9063
-            custom float lunco:param:uz = 0.4226
-        }
+        # Glow from the spring's own reaction, scaled by the strut's rating —
+        # see LegPX for the sign and the rating.
+        float inputs:load_frac.connect = </DescentLander/LegNZ_Spring.outputs:force>
+        float lunco:factor:load_frac = -0.00066667
     }
-    def Cylinder "PadNZ"
+    def Cylinder "PadNZ" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
     {
+        # The pad rides with its LEG, not with the hull — it is welded to
+        # LegNZ by PadNZ_Weld below. Cylinder r = 0.4, h = 0.08, m = 10:
+        #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
+        float physics:mass = 10.0
+        float3 physics:diagonalInertia = (0.41, 0.80, 0.41)
+
         uniform token axis = "Y"
         double radius = 0.4
         double height = 0.08
@@ -1345,5 +1168,132 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true
+    }
+
+    # ── Landing-gear suspension ──
+    #
+    # THE SPRING IS HERE, and only here. `drive:linear:physics:stiffness` and
+    # `:damping` are the shock absorber, in SI, integrated by avian's solver as
+    # `MotorModel::ForceBased` — the same law UsdPhysicsDriveAPI defines, so the
+    # numbers pass through untouched. No `der()` restates it in Modelica and no
+    # script animates it: a second spelling of one spring would put two writers on
+    # one fact, and which one wins would become a function of load order.
+    #
+    # `physics:type = "force"` is authored rather than left to the schema fallback:
+    # it is what makes 4000 mean 4000 N/m instead of 4000 N/kg/m, and a reader
+    # should not have to know a default to know what the strut is.
+    #
+    # Tuning, per leg (a quarter of the 2000 kg vehicle, so m_eff = 500 kg):
+    #   k = 4000 N/m   → static settle = m_eff*g/k = 500*1.62/4000 = 0.20 m
+    #   c = 2200 N·s/m → zeta = c/(2*sqrt(k*m_eff)) = 0.78: one visible
+    #                    overshoot on a hard arrival, then it stops. Not ringing.
+    # Stroke runs 0 (fully extended, the rest pose the geometry is authored in)
+    # to 0.8 m of compression, well inside the 2.6 m piston sleeve, so the strut
+    # never bottoms out visually.
+    #
+    # AXIS: `physics:axis` can only name a cardinal axis, and these legs are raked
+    # 25° off vertical. `physics:localRot0` is the standard way to say so — it is
+    # each leg's own `xformOp:rotateXYZ` as a quaternion, taking the hull's +Y onto
+    # the leg's axis, so the slider runs along the strut rather than straight up.
+    # Half-angle 12.5°: cos = 0.976296, sin = 0.216440.
+    #
+    # ANCHORS are deliberately unauthored. The loader derives them from the
+    # transform hierarchy, which puts displacement at exactly 0 in the authored
+    # rest pose — so the strut's `force` is exactly 0 until something compresses
+    # it, and the glow cannot fire before touchdown. Typing the anchors by hand
+    # would be restating the geometry a second time, giving it a second place to
+    # drift from the airframe.
+    #
+    # Each pad is a body of its own, welded to its leg, so it rides down with the
+    # strut. Reparenting it under the leg would have been the obvious move and is
+    # wrong: the leg carries a non-uniform `xformOp:scale` (0.15, 7.05, 0.15) that
+    # a child would inherit and be crushed by.
+
+    def PhysicsPrismaticJoint "LegPX_Spring" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </DescentLander>
+        rel physics:body1 = </DescentLander/LegPX>
+        uniform token physics:axis = "Y"
+        quatf physics:localRot0 = (0.976296, 0, 0, 0.216440)
+        float physics:lowerLimit = 0.0
+        float physics:upperLimit = 0.8
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 2200.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 20000.0
+    }
+    def PhysicsFixedJoint "PadPX_Weld"
+    {
+        rel physics:body0 = </DescentLander/LegPX>
+        rel physics:body1 = </DescentLander/PadPX>
+    }
+
+    def PhysicsPrismaticJoint "LegNX_Spring" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </DescentLander>
+        rel physics:body1 = </DescentLander/LegNX>
+        uniform token physics:axis = "Y"
+        quatf physics:localRot0 = (0.976296, 0, 0, -0.216440)
+        float physics:lowerLimit = 0.0
+        float physics:upperLimit = 0.8
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 2200.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 20000.0
+    }
+    def PhysicsFixedJoint "PadNX_Weld"
+    {
+        rel physics:body0 = </DescentLander/LegNX>
+        rel physics:body1 = </DescentLander/PadNX>
+    }
+
+    def PhysicsPrismaticJoint "LegPZ_Spring" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </DescentLander>
+        rel physics:body1 = </DescentLander/LegPZ>
+        uniform token physics:axis = "Y"
+        quatf physics:localRot0 = (0.976296, -0.216440, 0, 0)
+        float physics:lowerLimit = 0.0
+        float physics:upperLimit = 0.8
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 2200.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 20000.0
+    }
+    def PhysicsFixedJoint "PadPZ_Weld"
+    {
+        rel physics:body0 = </DescentLander/LegPZ>
+        rel physics:body1 = </DescentLander/PadPZ>
+    }
+
+    def PhysicsPrismaticJoint "LegNZ_Spring" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </DescentLander>
+        rel physics:body1 = </DescentLander/LegNZ>
+        uniform token physics:axis = "Y"
+        quatf physics:localRot0 = (0.976296, 0.216440, 0, 0)
+        float physics:lowerLimit = 0.0
+        float physics:upperLimit = 0.8
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 2200.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 20000.0
+    }
+    def PhysicsFixedJoint "PadNZ_Weld"
+    {
+        rel physics:body0 = </DescentLander/LegNZ>
+        rel physics:body1 = </DescentLander/PadNZ>
     }
 }

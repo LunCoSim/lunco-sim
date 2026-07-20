@@ -2547,6 +2547,9 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // drawn by their own systems and survive. Scoped to `active`, so the
     // editor comes back the instant the recorder stops — and between shots,
     // where no frame is captured, any flicker is invisible in the footage.
+    // The offline recorder is driven over the command surface, so it — and with it
+    // the question "is a frame being captured?" — exists only under `api`.
+    #[cfg(feature = "api")]
     if world
         .get_resource::<screenshot::OfflineRecordingState>()
         .is_some_and(|r| r.active)

@@ -247,7 +247,7 @@ fn bound_shader_prim<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<SdfPa
 }
 
 /// The shader parameters this prim drives through a connection —
-/// `float inputs:glow.connect = </Lander/LegPX.outputs:load_frac>`.
+/// `float inputs:glow.connect = </Lander/LegPX_Spring.outputs:force>`.
 ///
 /// The connection itself is not resolved here. `rewire_usd_connections` turns every
 /// `inputs:*.connect` on every prim into a `SimConnection` regardless of target, and
@@ -317,12 +317,12 @@ mod tests {
     use super::*;
     use lunco_usd_bevy::{CanonicalStages, StageRecipe};
 
-    /// A landing leg as `descent_lander.usda` actually authors it: a WGSL material
-    /// bound to the same prim that carries the Modelica strut wires.
+    /// A gprim that binds a WGSL material AND carries simulation wires — the shape
+    /// every instrumented part in a scene has.
     ///
-    /// `inputs:altitude` and `inputs:descent_rate` are SIMULATION ports feeding
-    /// `LegStrut.mo` — they touch no uniform. Only `inputs:load_frac` drives the
-    /// shader, and only because `StrutShader` declares it.
+    /// `inputs:altitude` and `inputs:descent_rate` are SIMULATION ports feeding a
+    /// model; they touch no uniform. Only `inputs:load_frac` drives the shader,
+    /// and only because `StrutShader` declares it.
     const LEG: &str = r#"#usda 1.0
 (
     defaultPrim = "World"

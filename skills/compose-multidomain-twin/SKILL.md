@@ -49,9 +49,9 @@ must never become is a second physics engine. rhai stays logic.
 | Adds | nothing — ground truth | mount offset, range limits, out-of-range mode, noise, failure |
 | Wire to | **physical parts** — struts, dampers, structure | **flight software** — GNC, OBC, autopilot |
 
-A physical part reads PHYSICS: `LegStrut.mo` takes `contact_force` off its pad's
-collider, because a leg compresses when the pad is pushed on — not when an
-instrument says so. Flight software reads SENSORS, because a computer knows only
+A physical part reads PHYSICS: a strut's glow takes the `force` port off its own
+prismatic joint, because a leg carries load when the ground pushes on it — not when
+an instrument says so. Flight software reads SENSORS, because a computer knows only
 what its instruments report: `DescentGuidance` reads the altimeter *with* its mount
 offset and `rangeMax`, not the true height.
 

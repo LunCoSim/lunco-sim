@@ -44,7 +44,7 @@
 use bevy::prelude::*;
 use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::schedule::common_conditions::any_with_component;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
@@ -60,6 +60,9 @@ use openusd::sdf::Path as SdfPath;
 // (an attribute UsdPhysics does not define) got invented and lived here for
 // months: a typo in a `&str` compiles.
 use openusd::schemas::physics::tokens as ptok;
+// `physics:type` is a schema token with a schema enum — take openusd's rather than
+// re-spelling `"force"`/`"acceleration"` here.
+pub use openusd::schemas::physics::DriveType;
 use openusd::usd::Stage;
 
 pub mod big_space_bridge;
@@ -311,14 +314,72 @@ pub struct JointDrive {
     /// `drive:{angular,linear}:physics:maxForce` — the motor's torque (N·m) or
     /// force (N) saturation. Replaces the cosim default when authored.
     pub max_force: Option<f64>,
+    /// `drive:{angular,linear}:physics:stiffness` — N/m (linear) or N·m/rad
+    /// (angular).
+    pub stiffness: Option<f64>,
+    /// `drive:{angular,linear}:physics:damping` — N·s/m (linear) or N·m·s/rad
+    /// (angular).
+    pub damping: Option<f64>,
+    /// `drive:{angular,linear}:physics:type` — whether the coefficients above
+    /// produce a force directly or an acceleration the solver scales by mass.
+    /// `None` = unauthored, and the schema's own fallback for that is
+    /// [`DriveType::Force`].
+    pub drive_type: Option<DriveType>,
 }
 
-/// Overdamped spring-damper for load-time joint drives — mirrors
-/// `lunco_cosim::joint`'s motor model so a USD-driven joint and a wire-driven
-/// one track their setpoint identically (≈3 Hz, ζ=2, no overshoot under XPBD
-/// substepping). avian's `MotorModel` reparameterizes stiffness/damping as
-/// frequency/ratio, so USD `physics:stiffness`/`physics:damping` are not mapped
-/// 1:1 yet; `physics:maxForce` and the targets (the load-bearing knobs) are.
+impl JointDrive {
+    /// The avian motor model this drive asks for.
+    ///
+    /// `UsdPhysicsDriveAPI` already defines the drive law —
+    /// `force = stiffness * (targetPosition - position) + damping * (targetVelocity -
+    /// velocity)` — and already defines its one axis of variation, `physics:type`:
+    /// `"force"` applies that as a force, `"acceleration"` applies it mass-normalised
+    /// so the response does not depend on what the joint is carrying. avian spells
+    /// the same pair [`MotorModel::ForceBased`] and [`MotorModel::AccelerationBased`]
+    /// with the same coefficients in the same SI units, so this is a rename, not a
+    /// conversion: a strut authored at 4000 N/m and 2200 N·s/m is that spring in the
+    /// solver, and nothing has to restate it.
+    ///
+    /// An unauthored `physics:type` takes the schema's own fallback, `"force"`
+    /// (`usdPhysics` declares `uniform token physics:type = "force"`), so the
+    /// coefficients mean what their SI units say unless a scene asks otherwise.
+    ///
+    /// A drive with neither coefficient is not a spring but a positioner: it seeks a
+    /// setpoint, and how fast it converges is a tuning choice rather than a property
+    /// of the mechanism. That one gets [`MotorModel::SpringDamper`], which is
+    /// unconditionally stable under XPBD substepping at any mass.
+    fn motor_model(&self) -> MotorModel {
+        if self.stiffness.is_none() && self.damping.is_none() {
+            return JOINT_DRIVE_MOTOR_MODEL;
+        }
+        let stiffness = self.stiffness.unwrap_or(0.0);
+        let damping = self.damping.unwrap_or(0.0);
+        match self.drive_type.unwrap_or(DriveType::Force) {
+            DriveType::Force => MotorModel::ForceBased { stiffness, damping },
+            DriveType::Acceleration => MotorModel::AccelerationBased { stiffness, damping },
+        }
+    }
+
+    /// Whether the motor should start enabled.
+    ///
+    /// A spring IS an active motor whose target is its own rest position, so a
+    /// drive with `targetPosition` left at its default is still live: it must push
+    /// back the moment the joint leaves that rest offset. Activation therefore
+    /// keys on authored stiffness/damping as well as on targets, never on a
+    /// setpoint alone.
+    pub fn is_active(&self) -> bool {
+        self.target_position.is_some()
+            || self.target_velocity.is_some()
+            || self.stiffness.is_some()
+            || self.damping.is_some()
+    }
+}
+
+/// Overdamped spring-damper for a joint drive that authors no stiffness or
+/// damping — mirrors `lunco_cosim::joint`'s motor model so a USD-driven joint and
+/// a wire-driven one track their setpoint identically (≈3 Hz, ζ=2, no overshoot
+/// under XPBD substepping). A drive that DOES author them is a physical spring;
+/// see [`JointDrive::motor_model`].
 const JOINT_DRIVE_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
     frequency: 3.0,
     damping_ratio: 2.0,
@@ -912,13 +973,35 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
     let conv = lunco_usd_bevy::stage_convention(&view);
-    let axis_of = |ax: Option<JointAxis>| {
-        conv.dir_d(match ax.unwrap_or_default() {
+    // `physics:axis` can only name a CARDINAL axis (X/Y/Z) — that is the whole
+    // vocabulary the schema has. `physics:localRot0` is how UsdPhysics orients a
+    // joint frame off-cardinal, and it is what a tilted mechanism needs: a landing
+    // leg raked 25° off vertical slides along neither the hull's Y nor its X.
+    // Ignoring it would silently build the joint on the cardinal axis — geometry
+    // right, kinematics wrong, no diagnostic.
+    let axis_of = |ax: Option<JointAxis>, rot0: DQuat| {
+        let cardinal = match ax.unwrap_or_default() {
             JointAxis::X => DVec3::X,
             JointAxis::Y => DVec3::Y,
             JointAxis::Z => DVec3::Z,
-        })
+        };
+        // Rotate in the STAGE's frame, then convert: `localRot0` is authored
+        // against the same axes as `physics:axis`, so composing before the
+        // convention keeps one conversion at the boundary rather than two.
+        conv.dir_d(rot0 * cardinal)
     };
+    /// The joint frame's orientation in body0's local space, identity when
+    /// unauthored. USD spells a `quatf` `(w, x, y, z)`.
+    fn local_rot0_of<J: JointBase>(j: &J) -> DQuat {
+        j.local_rot0_attr()
+            .get::<openusd::gf::Quatf>()
+            .ok()
+            .flatten()
+            .map(|q| {
+                DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64).normalize()
+            })
+            .unwrap_or(DQuat::IDENTITY)
+    }
     // Shared JointBase reads (both bodies + local anchors). `None` unless BOTH
     // bodies are authored — world-anchored joints aren't mapped to avian here.
     // A missing anchor is DERIVED from the transform hierarchy (see
@@ -954,13 +1037,24 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         let tp = d.target_position_attr().get::<f32>().ok().flatten().map(|v| v as f64);
         let tv = d.target_velocity_attr().get::<f32>().ok().flatten().map(|v| v as f64);
         let mf = d.max_force_attr().get::<f32>().ok().flatten().map(|v| v as f64);
-        (tp.is_some() || tv.is_some() || mf.is_some())
-            .then_some(JointDrive { target_position: tp, target_velocity: tv, max_force: mf })
+        let k = d.stiffness_attr().get::<f32>().ok().flatten().map(|v| v as f64);
+        let c = d.damping_attr().get::<f32>().ok().flatten().map(|v| v as f64);
+        let ty = d.type_attr().get::<DriveType>().ok().flatten();
+        (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
+            JointDrive {
+                target_position: tp,
+                target_velocity: tv,
+                max_force: mf,
+                stiffness: k,
+                damping: c,
+                drive_type: ty,
+            },
+        )
     };
 
     let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone()).ok().flatten() {
         let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten()
             .map(|d| (d as f64).to_radians()).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten()
@@ -972,7 +1066,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         }
     } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone()).ok().flatten() {
         let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
         PendingUsdJoint {
@@ -982,7 +1076,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         }
     } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone()).ok().flatten() {
         let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
         let swing = j.cone_angle0_limit_attr().get::<f32>().ok().flatten()
             .zip(j.cone_angle1_limit_attr().get::<f32>().ok().flatten())
             .map(|(a, b)| (a as f64, b as f64));
@@ -1383,11 +1477,11 @@ fn build_usd_physics_joints(
                     .with_limits(pending.limit_lower, pending.limit_upper);
                 if let Some(d) = pending.drive {
                     joint.motor = LinearMotor {
-                        enabled: d.target_position.is_some() || d.target_velocity.is_some(),
+                        enabled: d.is_active(),
                         target_position: d.target_position.unwrap_or(0.0),
                         target_velocity: d.target_velocity.unwrap_or(0.0),
                         max_force: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
-                        motor_model: JOINT_DRIVE_MOTOR_MODEL,
+                        motor_model: d.motor_model(),
                     };
                 }
                 commands.entity(joint_entity).try_insert(joint_bundle(joint));
@@ -1400,11 +1494,11 @@ fn build_usd_physics_joints(
                     .with_angle_limits(pending.limit_lower, pending.limit_upper);
                 if let Some(d) = pending.drive {
                     joint.motor = AngularMotor {
-                        enabled: d.target_position.is_some() || d.target_velocity.is_some(),
+                        enabled: d.is_active(),
                         target_position: d.target_position.unwrap_or(0.0),
                         target_velocity: d.target_velocity.unwrap_or(0.0),
                         max_torque: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
-                        motor_model: JOINT_DRIVE_MOTOR_MODEL,
+                        motor_model: d.motor_model(),
                     };
                 }
                 commands.entity(joint_entity).try_insert(joint_bundle(joint));

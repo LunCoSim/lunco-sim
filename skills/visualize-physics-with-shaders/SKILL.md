@@ -13,7 +13,7 @@ description: >
   someone is tempted to write in rhai.) Project-specific and non-obvious: a
   visual is a CONSEQUENCE of physics and is wired, never scripted; the parameter
   must be declared in the shader's `Material` struct or the wire is refused;
-  names are snake_case; and normalisation belongs in the MODEL, not the shader.
+  names are snake_case; and normalisation belongs on the WIRE, not in the shader.
   For the physics itself use compose-multidomain-twin; for scene authoring use
   build-usd-scene.
 ---
@@ -66,23 +66,23 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 ```
 
-**2. Publish the value as a model output.** Normalise where the rating lives —
-the spring knows what it is rated for; the shader does not.
+**2. Find the port that already publishes the physical result.** Bodies,
+colliders and joints expose their state as ports because they exist — a
+`PrismaticJoint`'s `force` is the spring's own reaction, in newtons, computed by
+the solver that integrates it. Nothing needs authoring to make it available, and
+a model written to restate it would be a second copy of the same fact.
 
-```modelica
-parameter Real load_rated = 1500.0 "Load (N) the strut is rated for";
-output Real load_frac "load / load_rated, clamped to 0..1";
-equation
-  load_frac = min(1.0, max(0.0, load / load_rated));
-```
-
-**3. Wire it on the BOUND GEOMETRY.**
+**3. Wire it on the BOUND GEOMETRY, and normalise ON THE WIRE.** The sink's SSP
+linear transformation (`lunco:factor:<port>` / `lunco:offset:<port>`) turns the
+raw physical quantity into the shader's 0..1 parameter, so the rating is one
+number sitting next to the wire that uses it. The shader saturates.
 
 ```usda
 def Mesh "LegPX_Strut" (prepend apiSchemas = ["MaterialBindingAPI"])
 {
     rel material:binding = </Looks/StrutMat>
-    float inputs:load_frac.connect = </DescentLander/LegPX.outputs:load_frac>
+    float inputs:load_frac.connect = </DescentLander/LegPX_Spring.outputs:force>
+    float lunco:factor:load_frac = -0.00066667   # 1 / 1500 N rated, sign for compression
 }
 ```
 
@@ -122,15 +122,19 @@ deferral with a known migration path, not the absence of a standard.
 - **Names are snake_case, because the reflection binds WGSL struct fields.**
   `inputs:loadFrac` and `inputs:load_frac` both reach `load_frac`, but a field
   spelled `loadFrac` in the WGSL is unreachable.
-- **Publish the physical quantity, not the driving term.** `LegStrut.mo` once
-  output the proximity-gated force pressed onto the leg, so a strut still 0.6 m
-  in the air already read fully loaded and glowed red *before* touchdown. The
-  honest output is the spring's own reaction (`k*x + c*v`), which is exactly zero
-  until compression starts. **When a visualization "happens too early", suspect
-  the model is publishing an input rather than a result.**
-- **Normalise in the model, not the shader or a script.** `load_rated` lives with
-  the spring that knows its own rating, so re-rating the strut re-scales the whole
-  fleet's glow with no shader edit and no script.
+- **Publish the physical quantity, not the driving term.** A strut fed the
+  proximity-gated force pressed *onto* the leg reads fully loaded while still in
+  the air, and glows red *before* touchdown. The honest number is the spring's
+  own reaction, exactly zero until compression starts — and it comes off the
+  joint that integrates the spring (`PrismaticJoint`'s `force` port), never from
+  a second copy of the spring law. **When a visualization "happens too early",
+  suspect something is publishing an input rather than a result.**
+- **Normalise on the WIRE, not in the shader, a script, or a model.** The affine
+  `lunco:factor:<port>` / `lunco:offset:<port>` on the sink is exactly the SSP
+  `LinearTransformation`, and a rating is one number: re-rating the strut is a
+  single edit next to the connection it scales. Writing a `.mo` to hold one
+  constant buys a whole solver instance and a second place for the number to
+  drift.
 - **Don't collide with an `//!@engine` field.** Fields annotated `@engine` are
   filled by Rust every frame (`sun_vis`, `albedo`, `sun_dir_world`,
   `weight_rough`). A wire pointed at one of those loses the race every frame,
@@ -139,8 +143,8 @@ deferral with a known migration path, not the absence of a standard.
   `ShaderLook::live` is engine-owned and its control is disabled — editing it
   would be a lie, since the next tick overwrites whatever was typed. Seeing the
   value move is the point; editing it is not.
-- **`inputs:` is the spelling for EVERY port, not just shader parameters.** The
-  same leg prim carries `inputs:altitude.connect` feeding its Modelica model. The
+- **`inputs:` is the spelling for EVERY port, not just shader parameters.** A
+  prim commonly carries simulation wires alongside its shader drives. The
   material layer intersects against the shader's declared inputs precisely so
   those simulation wires are not mistaken for shader drives — if you add a
   parameter to the WGSL, check you have not just shadowed a sim port name.

@@ -71,12 +71,13 @@ an equation — but a Modelica model must never become a second physics engine.
 | Adds | nothing — it is ground truth | mount offset, range limits, out-of-range mode, noise, failure |
 | Read by | **physical parts** — a strut, a damper, a structure | **flight software** — GNC, OBC, autopilot |
 
-A physical part reads PHYSICS. A landing-leg strut compresses because its pad is being
-pushed on, so `LegStrut.mo` takes `contact_force` off the pad's collider — gating that
-behind an authored sensor would mean a spring that only compresses if someone remembered
-to install a switch. Flight software reads SENSORS, because a computer only knows what its
-instruments tell it: `DescentGuidance` reads the altimeter, with its mount point, its
-`rangeMax` and its out-of-range behaviour, not the true height.
+A physical part reads PHYSICS. A landing leg carries load because the ground pushes on
+it, so the strut's glow takes the `force` port off the leg's own prismatic joint — the
+number the solver just computed. Gating that behind an authored sensor would mean a
+strut that only reports load if someone remembered to install a switch. Flight software
+reads SENSORS, because a computer only knows what its instruments tell it:
+`DescentGuidance` reads the altimeter, with its mount point, its `rangeMax` and its
+out-of-range behaviour, not the true height.
 
 Getting this backwards caused a real bug: the struts were gated on the ALTIMETER, whose
 datum sits 3.3 m above the pads, so a hand-copied `contact_alt` constant had to restate the
@@ -108,14 +109,16 @@ Script the parts USD genuinely cannot express — decisions, timing, vehicle com
 **A visual is a CONSEQUENCE of physics — wire it, never script it.** A strut reddens
 because it is carrying load, on the same tick and by the number the solver computed.
 Shader parameters are ordinary port sinks: `float inputs:load_frac.connect =
-</Lander/LegPX.outputs:load_frac>` on the bound gprim, and the value lands on the WGSL
-uniform through the same graph a thruster force uses — no new resolver, no per-frame
-script. Normalise where the rating lives (`load_rated` in the `.mo`), not in the shader
-and never in rhai. **Publish the physical RESULT, not the driving term** — a strut's
-load is the spring's own reaction `k*x + c*v`, which is zero until compression starts,
-not the proximity-gated force pressed onto it, which reads fully loaded while the leg
-is still in the air. When a visualization happens too early, the model is publishing an
-input. See [`visualize-physics-with-shaders`](skills/visualize-physics-with-shaders/SKILL.md).
+</Lander/LegPX_Spring.outputs:force>` on the bound gprim, and the value lands on the
+WGSL uniform through the same graph a thruster force uses — no new resolver, no
+per-frame script. Normalise on the WIRE, with the SSP affine `lunco:factor:<port>` /
+`lunco:offset:<port>` the sink already carries — not in the shader, never in rhai, and
+not in a `.mo` written to hold a single rating. **Publish the physical RESULT, not the
+driving term** — a strut's load is the spring's own reaction `k*x + c*v`, which is zero
+until compression starts, not a proximity-gated force pressed onto it, which reads fully
+loaded while the leg is still in the air. When a visualization happens too early, the
+model is publishing an input. See
+[`visualize-physics-with-shaders`](skills/visualize-physics-with-shaders/SKILL.md).
 
 **A port backend must claim only names it KNOWS it owns — never guess and never widen
 to compensate.** Registry precedence is registration order and plugin add-order is not
