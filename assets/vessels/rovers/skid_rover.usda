@@ -49,10 +49,17 @@ def Xform "SkidRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
-    prepend variantSets = ["drivetrain", "driveLaw", "power"]
+    # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
+    # SURFACE. Its `inputs:` ports (`throttle`/`steer`/`brake`) ARE the set of
+    # commands this vessel accepts; the engine has no per-class list. It ships
+    # WITH the chassis because a complete vehicle comes with its computer: a scene
+    # author placing a rover should not have to know to bolt a brain on, and a
+    # rover without one has wheels, motors and power and sits there, unable to be
+    # driven by human, autopilot, script or API.
+    prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend variantSets = ["drivetrain", "power"]
     variants = {
         string drivetrain = "raycast"
-        string driveLaw = "builtin"
         string power = "infinite"
     }
 )
@@ -222,26 +229,27 @@ def Xform "SkidRover" (
         }
     }
 
-    # --- Drive law: how throttle/steer become per-side drive ---------------
-    # ORTHOGONAL to `drivetrain` (which realizes the wheels physically):
-    # `builtin` keeps the instant Rust skid kernel; `modelica` swaps in a
-    # solver-clocked first-order motor lag (RoverDrivetrain.mo) via the
-    # component the variant references — a variant chooses a component, it
-    # never restates one. The wheels here use the index-parity default
-    # (even ⇒ drive_left, odd ⇒ drive_right), which is exactly the port pair
-    # the skid law writes.
-    variantSet "driveLaw" = {
-        "builtin" {
-        }
-
-        "modelica" (
-            prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
-        ) {
-        }
-    }
+    # --- Drive law -----------------------------------------------------------
+    # HOW throttle/steer become per-side drive is COMPOSITION, not an enumeration.
+    # The plain authored state below is the instant built-in skid kernel. To fly a
+    # solver-clocked first-order motor lag instead, compose the drive law on as a
+    # reference arc, exactly like the OBC above:
+    #
+    #   def "Rover" (
+    #       prepend references = [
+    #           @lunco://vessels/rovers/skid_rover.usda@</SkidRover>,
+    #           @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>,
+    #       ]
+    #   ) {}
+    #
+    # A drive law is just a `LunCoProgram` on the vessel and the file extension
+    # picks the engine, so there is nothing for a closed variant list to add — it
+    # could only ever name the laws that existed when this file was written.
+    # The wheels here use the index-parity default (even ⇒ drive_left, odd ⇒
+    # drive_right), which is exactly the port pair the skid law writes.
 
     # --- Power: does driving cost anything ----------------------------------
-    # ORTHOGONAL to `driveLaw` (which decides how commands become drive) and
+    # ORTHOGONAL to the drive law (which decides how commands become drive) and
     # `drivetrain` (how wheels are realized): `infinite` is EMPTY — the absence
     # of a battery is today's drive-forever behavior. `battery` composes the
     # RoverBattery.mo energy budget onto the root: drain follows the commanded

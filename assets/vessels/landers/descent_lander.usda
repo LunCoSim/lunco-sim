@@ -49,6 +49,20 @@ def Xform "DescentLander" (
     # whether a prim is a thing you open up or a thing you place.
     kind = "assembly"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoVesselAPI", "LunCoProgramAPI"]
+    # The ON-BOARD COMPUTER, as a reference arc — the vessel's COMMAND SURFACE.
+    # Its `inputs:` ports (`external_throttle`/`pitch`/`roll`/`yaw`/`release`) ARE
+    # the set of commands this vessel accepts; there is no lander class in engine
+    # code and no per-class list of commands. A LANDER-SPECIFIC OBC, because the
+    # vocabulary is the vehicle's, not the engine's: a rover's computer
+    # (`components/avionics/obc.usda`) publishes throttle/steer/brake instead, and
+    # nothing but the ports differs between them.
+    #
+    # It ships WITH the airframe, unlike the guidance component above: guidance is
+    # a mission choice a scene makes, but a lander with no computer is not an
+    # un-guided lander, it is an inert one — no stick, no script, no API can reach
+    # it. The flight-control PROGRAM (`Lander.mo`, below) is what turns these
+    # commands into force and torque; the OBC only says what may be commanded.
+    prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real

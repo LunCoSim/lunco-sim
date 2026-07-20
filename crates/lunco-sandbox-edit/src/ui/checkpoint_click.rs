@@ -1,4 +1,7 @@
-//! Ctrl+LMB — drop a mission waypoint by **authoring a USD prim**.
+//! Alt+LMB — drop a mission waypoint by **authoring a USD prim**.
+//!
+//! (The gesture moved from Ctrl to Alt; `docs/waypoints-in-usd-design.md` and
+//! `docs/sandbox-control-ui-plan.md` still say Ctrl. The code below is the truth.)
 //!
 //! There is no checkpoint domain. A waypoint is an ordinary prim referencing
 //! `vessels/markers/waypoint.usda`, and the vessel's BT.CPP mission
@@ -240,7 +243,7 @@ fn pick_ground_world(
     Some(frame.render_to_world(hit_render))
 }
 
-/// Global `Pointer<Click>` observer: Ctrl+LMB drops a waypoint prim for the selected
+/// Global `Pointer<Click>` observer: Alt+LMB drops a waypoint prim for the selected
 /// vessel and appends the matching `drive_to` leaf to its mission.
 ///
 /// Stands down when the spawn / terrain-sculpt tool is armed, and when egui owns the

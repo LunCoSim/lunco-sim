@@ -1,0 +1,95 @@
+#usda 1.0
+(
+    defaultPrim = "LanderOBC"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# On-board computer for a 6-DOF FLYER — the same part as `obc.usda`, different ports.
+#
+# It is a SEPARATE FILE rather than a second stand-in prim inside `obc.usda` because
+# a file here is one part with one neutral stand-in root, exactly like each drive law
+# in `components/mobility/drive_laws/` is its own file. Two stand-ins in one file
+# would make `@…/obc.usda@</…>` ambiguous to read and would tempt a shared "base
+# OBC" that neither vehicle actually wants — the ports are the whole difference, and
+# the ports are not shared.
+#
+# Composed onto an airframe exactly like the rover's:
+#
+#   def "Lander" (
+#       prepend references = [
+#           @lunco://vessels/landers/descent_lander.usda@</DescentLander>,
+#           @lunco://components/gnc/descent_guidance.usda@</DescentGuidance>,
+#       ]
+#   )
+#   {
+#   }
+#
+# — except the airframe already carries it, because a lander ships with its computer.
+#
+# `LanderOBC` is a neutral stand-in for the vessel root (the `descent_guidance.usda`
+# idiom): every path below is asset-local and the reference arc path-translates it
+# onto whatever prim composed it.
+#
+#   session (human / autopilot / script / API)
+#            │  writes ports by name
+#            ▼
+#   LanderOBC  inputs:external_throttle ─┐
+#              inputs:pitch  ────────────┼──► Lander.mo ──► body force / torque
+#              inputs:roll   ────────────┤
+#              inputs:yaw    ────────────┘
+#              inputs:release ───────────► dock-release actuator
+#
+# THE VOCABULARY IS THESE PORTS. This set is not "the lander class's commands" as
+# far as the engine is concerned — the engine has no lander class. It is the set of
+# `lunco:port` names the lander control profile
+# (`vessels/control_profiles.usda@</LanderControls>`) writes, and the set of inputs
+# `models/Lander.mo` consumes. Change one of the three and change the others, or the
+# write lands on a name nothing reads.
+
+over "LanderOBC"
+{
+    def Xform "Avionics" (
+        doc = "The flight computer. Real mass and a real power draw, so a mass budget and a power budget both see it."
+        prepend apiSchemas = ["PhysicsMassAPI", "LunCoOnBoardComputerAPI"]
+    )
+    {
+        uniform token lunco:obc:role = "primary"
+
+        # Heavier and hungrier than a rover's: a 6-DOF flyer runs an attitude loop
+        # and an engine controller at solver rate, on redundant hardware.
+        float physics:mass = 18.0 (
+            customData = {
+                double min = 0.5
+                double max = 120
+                string unit = "kg"
+            }
+        )
+
+        # Avionics power draw. A plain attribute, NOT an `inputs:` port — on this
+        # prim every `inputs:` name is a command, and that rule is what the command
+        # surface is derived from, so it cannot afford an exception.
+        float lunco:obc:powerDraw = 140.0
+
+        # --- The command surface itself ---
+        #
+        # EVERY `inputs:` below is a command this vessel accepts, and nothing else is.
+        #
+        # `external_throttle`, not `throttle`: the airframe's root already carries an
+        # `inputs:throttle` wired to its own `outputs:throttle` self-loop, which is the
+        # COMMANDED thrust the model computes after gating and spool. The stick writes
+        # the raw human demand, which `Lander.mo` names `external_throttle` and filters
+        # (`spool_tau`). Naming this port `throttle` would collide the pilot's input
+        # with the model's output on one name.
+        float inputs:external_throttle = 0.0
+        float inputs:pitch = 0.0
+        float inputs:roll = 0.0
+        float inputs:yaw = 0.0
+
+        # Detach from whatever this vessel is docked/welded to. Not a flight axis —
+        # it is still a command a session issues, so it belongs on the surface. The
+        # rover profile has no such intent, which is precisely why this is a lander
+        # OBC and not a shared one.
+        float inputs:release = 0.0
+    }
+}

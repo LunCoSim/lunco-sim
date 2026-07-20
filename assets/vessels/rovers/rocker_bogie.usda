@@ -27,10 +27,10 @@ def Xform "RockerBogie" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
-    prepend variantSets = "driveLaw"
-    variants = {
-        string driveLaw = "builtin"
-    }
+    # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
+    # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
+    # this rover accepts no commands at all. See `skid_rover.usda`.
+    prepend references = @lunco://components/avionics/obc.usda@</OBC>
 )
 {
     uniform bool lunco:spawnable = true
@@ -724,21 +724,20 @@ def Xform "RockerBogie" (
         uniform token drive:angular:physics:type = "force"
     }
 
-    # --- Drive law: how throttle/steer become per-side drive ---------------
-    # `builtin` keeps the instant Rust skid kernel
-    # (PhysxVehicleTankDifferentialAPI above); `modelica` swaps in a
-    # solver-clocked per-side motor lag via the SAME skid component the other
-    # skid rovers reference — a variant chooses a component, it never restates
-    # one. The wheels here carry no `lunco:drivePort`, so they use the
-    # index-parity default (even 0/2/4 = FL/ML/RL ⇒ drive_left, odd 1/3/5 =
-    # FR/MR/RR ⇒ drive_right) — exactly the port pair the skid law writes.
-    variantSet "driveLaw" = {
-        "builtin" {
-        }
-
-        "modelica" (
-            prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
-        ) {
-        }
-    }
+    # --- Drive law -----------------------------------------------------------
+    # HOW throttle/steer become per-side drive is COMPOSITION, not an
+    # enumeration. The plain authored state is the instant built-in skid kernel
+    # (`PhysxVehicleTankDifferentialAPI` above). For a solver-clocked per-side
+    # motor lag, compose on the SAME skid law the other skid rovers use:
+    #
+    #   def "Rover" (
+    #       prepend references = [
+    #           @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>,
+    #           @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>,
+    #       ]
+    #   ) {}
+    #
+    # The wheels here carry no `lunco:drivePort`, so they use the index-parity
+    # default (even 0/2/4 = FL/ML/RL ⇒ drive_left, odd 1/3/5 = FR/MR/RR ⇒
+    # drive_right) — exactly the port pair the skid law writes.
 }

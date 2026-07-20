@@ -5,7 +5,7 @@
 The merged checkpoint feature invented a private domain: `AppendCheckpoint` /
 `DeleteCheckpoint` mutated an ECS component, and pins were drawn with Bevy `Gizmos`.
 Nothing was authored, so nothing was persisted, journaled, undoable, or replicated —
-a Ctrl+LMB patrol evaporated on scene reload. And no `.usda` in the repo could give a
+an Alt+LMB patrol evaporated on scene reload. And no `.usda` in the repo could give a
 vessel a `BehaviorSpec` mission at all.
 
 Three statements settle the design:
@@ -96,7 +96,7 @@ A tree naming a deleted waypoint **refuses to compile** and keeps its last good 
 
 ## Interaction — every edit is an existing `UsdOp`
 
-**No new command verbs.** Ctrl+LMB triggers `ApplyUsdOp` three times: `AddPrim` (the
+**No new command verbs.** Alt+LMB triggers `ApplyUsdOp` three times: `AddPrim` (the
 pin, referencing the marker asset), `SetTranslate` (where it landed), `SetAttribute`
 (`lunco:program:sourceCode` on the mission's `LunCoProgram` prim — the tree that now
 names it).

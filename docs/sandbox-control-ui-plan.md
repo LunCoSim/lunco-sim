@@ -1,7 +1,7 @@
 # Sandbox Control UI — Implementation Plan (light-core)
 
 Adds a meaningful control surface to the sandbox for: possession/selection
-status, autopilot/behaviour-tree authoring, checkpoints (Ctrl+LMB), right-click
+status, autopilot/behaviour-tree authoring, checkpoints (Alt+LMB), right-click
 context menus, and rhai-defined rover activities ("take photo"). Follows the
 four-layer plugin architecture (§4.1), typed commands (§4.2), tunability
 mandate (§3), frame discipline (§7), TDD (§1), headless-first (§4.1-4).
@@ -38,7 +38,7 @@ can read/visualize the tree.
    via `lunco_theme::Theme`. Change-gated (run only when the spec or vessel
    count changes, §7).
 
-4. **Ctrl+LMB + right-click observer** (`lunco-sandbox-edit/src/ui/checkpoint_click.rs`,
+4. **Alt+LMB + right-click observer** (`lunco-sandbox-edit/src/ui/checkpoint_click.rs`,
    ui-gated): raycasts terrain via `spawn::terrain_ray_hit`, resolves the
    primary selection, appends/removes a waypoint, and re-triggers the
    **existing** `SetAutopilotBehavior` command with the new spec JSON. Right-
@@ -86,7 +86,7 @@ can read/visualize the tree.
 1. ✅ `AutopilotBehaviorSpec` component (`lunco-autopilot`) + tests.
 2. ✅ `patrol.rhai` prelude + `to_json` bridge (`lunco-scripting`).
 3. ✅ Checkpoint path-line gizmo (`lunco-sandbox-edit/src/checkpoint_gizmo.rs`).
-4. ✅ Ctrl+LMB + right-click observers (`lunco-sandbox-edit/src/ui/checkpoint_click.rs`).
+4. ✅ Alt+LMB + right-click observers (`lunco-sandbox-edit/src/ui/checkpoint_click.rs`).
 5. ✅ `CommandDeckPanel` (`lunco-sandbox-edit/src/ui/command_deck.rs`) — wired.
 6. ✅ Avatar possession readout (`lunco-avatar/src/ui/mod.rs`) — producer + render.
 7. ✅ `CaptureFromCamera` command + `take_photo` tool handler

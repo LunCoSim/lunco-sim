@@ -20,6 +20,11 @@ def Xform "Rucheyok" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
+    # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
+    # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
+    # this rover has wheels, a solar panel and a battery and accepts no commands
+    # at all. See `../skid_rover.usda` for the rationale.
+    prepend references = @lunco://components/avionics/obc.usda@</OBC>
 )
 {
     uniform bool lunco:spawnable = true

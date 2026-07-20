@@ -26,10 +26,10 @@ def Xform "SixWheelIndependent" (
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI", "LunCoCatalogAPI"
     ]
-    prepend variantSets = "driveLaw"
-    variants = {
-        string driveLaw = "builtin"
-    }
+    # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
+    # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
+    # this rover accepts no commands at all. See `skid_rover.usda`.
+    prepend references = @lunco://components/avionics/obc.usda@</OBC>
 )
 {
     uniform bool lunco:spawnable = true
@@ -146,20 +146,20 @@ def Xform "SixWheelIndependent" (
         string lunco:drivePort = "drive_w5"
     }
 
-    # --- Drive law: how throttle/steer become the six wheel channels --------
-    # `builtin` keeps the authored `lunco:driveMix` above (instant six-channel
-    # skid mix); `modelica` swaps in a solver-clocked per-side motor lag via
-    # the component the variant references — a variant chooses a component, it
-    # never restates one. The component reuses `RoverDrivetrain.mo` (the law
-    # is per-SIDE; fanning a side out to w0/w1/w2 and w3/w4/w5 is wiring, not
-    # physics — the bridge `rover_modelica_drive_w6.rhai` owns the fan-out).
-    variantSet "driveLaw" = {
-        "builtin" {
-        }
-
-        "modelica" (
-            prepend references = @lunco://components/mobility/drive_laws/modelica_six_independent.usda@</DriveLaw>
-        ) {
-        }
-    }
+    # --- Drive law -----------------------------------------------------------
+    # HOW throttle/steer become the six wheel channels is COMPOSITION, not an
+    # enumeration. The plain authored state is the `lunco:driveMix` above (the
+    # instant six-channel skid mix). For a solver-clocked per-side motor lag,
+    # compose the law on as a reference arc alongside the airframe:
+    #
+    #   def "Rover" (
+    #       prepend references = [
+    #           @lunco://vessels/rovers/six_wheel_independent.usda@</SixWheelIndependent>,
+    #           @lunco://components/mobility/drive_laws/modelica_six_independent.usda@</DriveLaw>,
+    #       ]
+    #   ) {}
+    #
+    # That component reuses `RoverDrivetrain.mo` (the law is per-SIDE; fanning a
+    # side out to w0/w1/w2 and w3/w4/w5 is wiring, not physics — the bridge
+    # `rover_modelica_drive_w6.rhai` owns the fan-out).
 }

@@ -183,6 +183,7 @@ impl Plugin for UsdSimPlugin {
 
 pub mod celestial;
 pub mod cosim;
+pub mod obc;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 
 /// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,
@@ -1064,27 +1065,58 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 port_map.insert(name.clone(), port_ent);
             }
 
+            // The command surface is AUTHORED, on the vessel's on-board computer:
+            // every `inputs:` port on the primary OBC prim is a command this vessel
+            // accepts (`obc::read_command_surface`). It used to be the literal
+            // `&["throttle", "steer", "brake"]` right here, which meant the engine
+            // decided what could command a vehicle by knowing what kind of vehicle it
+            // was — a per-class branch that a lander and an avatar each had to be
+            // added to.
+            //
+            // No OBC ⇒ no vocabulary ⇒ NO `FlightSoftware` at all, so the vessel has
+            // no command surface and every write through the port substrate is
+            // rejected. That is the intended way to author a wreck or an un-crewed
+            // chassis, and it is composition doing it, not a check.
+            //
+            // The vessel's USD `Controls` binding still adds any *extra* authored
+            // intents on top via `sync_fsw_command_surface` (additive/idempotent), so
+            // an entity that has not yet composed its `Controls` scope still accepts
+            // `set_input` for everything its OBC declares.
+            let command_surface = obc::read_command_surface(reader, &sdf_path);
+            if command_surface.is_none() {
+                warn!(
+                    "vessel {} composes no primary OBC — it accepts NO commands. \
+                     Reference @lunco://components/avionics/obc.usda@</OBC> to give it a \
+                     command surface.",
+                    prim_path.path
+                );
+            }
+            let surface: Vec<&str> = command_surface
+                .iter()
+                .flatten()
+                .map(String::as_str)
+                .collect();
+
             commands.entity(entity).try_insert((
-                // Seed the CANONICAL rover command surface (throttle/steer/brake) that
-                // `apply_drive_mix` reads and the skid/Ackermann/driveMix kernels all
-                // consume — universal to every `PhysxVehicleContextAPI` rover here, and
-                // topology-derived (this IS the vehicle reader), not a per-arch branch.
-                // The vessel's USD `Controls` binding adds any *extra* authored intents
-                // on top via `sync_fsw_command_surface` (additive/idempotent). Seeding
-                // the surface here — rather than only from the binding — means an
-                // API/rhai caller can `set_input` throttle even on an entity that has
-                // not (yet) authored a `Controls` scope. The binding itself now composes
-                // through a runtime `references=` spawn because `Controls` is delivered
-                // as a child `references` arc (like the wheels), not root `subLayers` +
-                // `inherits` — so keyboard drive works on spawned rovers too.
-                FlightSoftware::new(port_map, &["throttle", "steer", "brake"]),
                 lunco_core::SelectableRoot,
                 // Rovers have a meaningful "upright" — opt into overturn
                 // recovery (see `lunco_terrain_surface::collider_ring`).
                 lunco_core::KeepUpright,
             ));
 
-            info!("Successfully initialized FSW for {}", prim_path.path);
+            // Only a vessel with an OBC gets one. The absence of this component IS
+            // the absence of a command surface — there is no disabled/empty FSW,
+            // because an empty one would still answer writes.
+            if command_surface.is_some() {
+                commands
+                    .entity(entity)
+                    .try_insert(FlightSoftware::new(port_map, &surface));
+                info!(
+                    "OBC command surface for {}: [{}]",
+                    prim_path.path,
+                    surface.join(", ")
+                );
+            }
 
             if let Some(xml) = reader
                 .text(&sdf_path, "lunco:behavior")

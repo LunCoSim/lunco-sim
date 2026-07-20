@@ -28,9 +28,13 @@ def Xform "SixWheelRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
-    prepend variantSets = ["driveLaw", "power", "thermal"]
+    # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
+    # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis, so the three
+    # difficulty variants (`variants/rover_*.usda`) inherit it through this base
+    # and need nothing of their own. See `skid_rover.usda` for the rationale.
+    prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend variantSets = ["power", "thermal"]
     variants = {
-        string driveLaw = "builtin"
         string power = "infinite"
         string thermal = "none"
     }
@@ -153,24 +157,25 @@ def Xform "SixWheelRover" (
         string lunco:drivePort = "drive_right"
     }
 
-    # --- Drive law: how throttle/steer become per-side drive ---------------
-    # ORTHOGONAL to `drivetrain` (which realizes the wheels physically):
-    # `builtin` keeps the instant Rust skid kernel; `modelica` swaps in a
-    # solver-clocked first-order motor lag (RoverDrivetrain.mo) via the
-    # component the variant references — a variant chooses a component, it
-    # never restates one.
-    variantSet "driveLaw" = {
-        "builtin" {
-        }
-
-        "modelica" (
-            prepend references = @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>
-        ) {
-        }
-    }
+    # --- Drive law -----------------------------------------------------------
+    # HOW throttle/steer become per-side drive is COMPOSITION, not an
+    # enumeration. The plain authored state is the instant built-in skid kernel.
+    # For a solver-clocked first-order motor lag, compose the law on as a
+    # reference arc alongside the airframe:
+    #
+    #   def "Rover" (
+    #       prepend references = [
+    #           @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>,
+    #           @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>,
+    #       ]
+    #   ) {}
+    #
+    # A drive law is just a `LunCoProgram` on the vessel, and the file extension
+    # picks the engine — a closed variant list could only ever name the laws that
+    # existed when this file was written.
 
     # --- Power: does driving cost anything ----------------------------------
-    # ORTHOGONAL to `driveLaw`: `infinite` is EMPTY — the absence of a battery
+    # ORTHOGONAL to the drive law: `infinite` is EMPTY — the absence of a battery
     # is today's drive-forever behavior. `battery` composes the RoverBattery.mo
     # energy budget onto the root: drain follows the commanded drive magnitude,
     # and its `alive` cutoff brownouts the drive ports over the last ~2% of

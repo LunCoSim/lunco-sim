@@ -1,0 +1,81 @@
+#usda 1.0
+(
+    defaultPrim = "OBC"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# On-board computer — the vessel's COMMAND SURFACE, as a part.
+#
+# A scene or a vessel composes it as a second reference arc, exactly like the
+# lander composes its guidance:
+#
+#   def "Rover" (
+#       prepend references = [
+#           @lunco://vessels/rovers/skid_rover.usda@</SkidRover>,
+#           @lunco://components/avionics/obc.usda@</OBC>,
+#       ]
+#   )
+#   {
+#   }
+#
+# Leave it off and the rover has wheels, motors, power — and accepts no commands,
+# because there is no surface to write to. That is the whole point of this file
+# existing apart from the chassis.
+#
+# HOW THE WIRING TRAVELS. `OBC` is a neutral stand-in for the vessel root, the same
+# trick `components/gnc/descent_guidance.usda` and `components/mobility/
+# physical_drivetrain.usda` use: every path below is asset-local (`</OBC/...>`) and
+# the reference arc path-translates it onto whatever prim composed it. Opened on its
+# own this file's connections dangle; composed onto a vessel they resolve.
+#
+#   session (human / autopilot / script / API)
+#            │  writes ports by name
+#            ▼
+#   OBC  inputs:throttle ─┐
+#        inputs:steer  ───┼──► apply_drive_mix ──► wheel drive ports
+#        inputs:brake  ───┘
+#
+# THE VOCABULARY IS THESE PORTS. The set of `inputs:` names authored here IS the set
+# of commands this vessel accepts — there is no per-vehicle-class list in engine
+# code. A vehicle that needs a fourth command authors a fourth port. A write to a
+# name that is not here is rejected and reported as a dangling wire, so a typo is
+# loud rather than silently ignored.
+
+over "OBC"
+{
+    def Xform "Avionics" (
+        doc = "The physical box. Real mass and a real power draw, so a mass budget and a power budget both see it."
+        prepend apiSchemas = ["PhysicsMassAPI", "LunCoOnBoardComputerAPI"]
+    )
+    {
+        uniform token lunco:obc:role = "primary"
+
+        float physics:mass = 4.5 (
+            customData = {
+                double min = 0.5
+                double max = 40
+                string unit = "kg"
+            }
+        )
+
+        # Avionics power draw. A plain attribute, NOT an `inputs:` port — on this
+        # prim every `inputs:` name is a command, and that rule is what the command
+        # surface is derived from, so it cannot afford an exception.
+        float lunco:obc:powerDraw = 25.0
+
+        # --- The command surface itself ---
+        #
+        # EVERY `inputs:` below is a command this vessel accepts, and nothing else is.
+        # Rover vocabulary here; a lander's OBC authors `throttle`/`pitch`/`roll`/`yaw`
+        # instead, an avatar's `forward`/`side`/`up`. Same part, different ports, zero
+        # engine branches.
+        #
+        # What TURNS these into wheel torque is a `LunCoProgram` child — the drive law
+        # (`components/mobility/drive_laws/*.usda`, builtin or Modelica). The OBC says
+        # what the vessel accepts; the law says what it does about it.
+        float inputs:throttle = 0.0
+        float inputs:steer = 0.0
+        float inputs:brake = 0.0
+    }
+}

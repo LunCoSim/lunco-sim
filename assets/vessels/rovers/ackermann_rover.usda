@@ -27,10 +27,14 @@ def Xform "AckermannRover" (
         "PhysxVehicleContextAPI",
         "PhysxVehicleAckermannSteeringAPI", "LunCoCatalogAPI"
     ]
-    prepend variantSets = ["drivetrain", "driveLaw"]
+    # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
+    # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis: a complete
+    # vehicle comes with its computer, and without one this rover accepts no
+    # commands at all. See `skid_rover.usda` for the full rationale.
+    prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend variantSets = "drivetrain"
     variants = {
         string drivetrain = "raycast"
-        string driveLaw = "builtin"
     }
 )
 {
@@ -154,22 +158,21 @@ def Xform "AckermannRover" (
         }
     }
 
-    # --- Drive law: how throttle/steer become drive + steering -------------
-    # ORTHOGONAL to `drivetrain` (which realizes the wheels physically):
-    # `builtin` keeps the instant Ackermann linear kernel; `modelica` swaps in
-    # a solver-clocked shared-axle motor lag (RoverAckermannDrivetrain.mo) via
-    # the component the variant references — a variant chooses a component, it
-    # never restates one. NOTE the built-in kernel here writes THREE ports
-    # (drive_left/drive_right/steering), so the ackermann law covers all
-    # three — steering as a model passthrough, since Ackermann steers with the
-    # knuckles, not a torque differential.
-    variantSet "driveLaw" = {
-        "builtin" {
-        }
-
-        "modelica" (
-            prepend references = @lunco://components/mobility/drive_laws/modelica_ackermann.usda@</DriveLaw>
-        ) {
-        }
-    }
+    # --- Drive law -----------------------------------------------------------
+    # HOW throttle/steer become drive + steering is COMPOSITION, not an
+    # enumeration. The plain authored state is the instant built-in Ackermann
+    # linear kernel. For a solver-clocked shared-axle motor lag, compose the law
+    # on as a reference arc alongside the airframe:
+    #
+    #   def "Rover" (
+    #       prepend references = [
+    #           @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>,
+    #           @lunco://components/mobility/drive_laws/modelica_ackermann.usda@</DriveLaw>,
+    #       ]
+    #   ) {}
+    #
+    # NOTE the built-in kernel here writes THREE ports (drive_left/drive_right/
+    # steering), so an Ackermann law must cover all three — steering as a model
+    # passthrough, since Ackermann steers with the knuckles, not a torque
+    # differential.
 }
