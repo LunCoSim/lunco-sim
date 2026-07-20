@@ -18,19 +18,45 @@ model LegStrut "Landing-leg shock strut: contact-gated spring-damper. One instan
   Real x(start = 0.0) "Strut stroke state (m)";
   Real v(start = 0.0) "Stroke rate (m/s)";
   Real contact "0..1 pad-contact gate";
+  Real drive "Vehicle force pressed onto this leg once the pad is down (N)";
 
   output Real stroke "Clamped visible compression (m) for scenarios/leg_spring.rhai";
-  output Real load "Axial load on the strut (N) — drives the strut's glow: the actuator scales the USD-bound material's emissive by load/load_ref, so the light IS the force";
+  output Real load "Axial load on the strut (N)";
+
+  // The strut's own opinion of how hard it is working, 0..1. The colour ramp
+  // the actuator paints is a function of THIS — the normalisation lives with
+  // the spring that knows its own rating, not in the script that draws it.
+  // Change `load_rated` here and the whole fleet's glow re-scales; no script
+  // and no material edit.
+  parameter Real load_rated = 1500.0 "Load (N) the strut is rated for — full-scale for the glow";
+  output Real load_frac "load / load_rated, clamped to 0..1";
 equation
   // Branch-free (rumoca-safe) throughout, like DescentGuidance.mo.
   // Contact fades in over `gate_width` of altimeter range: at 2 m/s of sink
   // that is ~0.2 s of blend, during which `descent_rate` is still negative —
   // so the impact term samples the true arrival speed, then dies with it.
   contact = min(1.0, max(0.0, (contact_alt - altitude) / gate_width));
-  load = contact * (m_eff * g + kv_impact * max(0.0, -descent_rate));
+  // The DRIVING force: what the vehicle presses onto this leg once the pad is
+  // down. Proximity-gated, so it ramps in over the last `gate_width` metres.
+  drive = contact * (m_eff * g + kv_impact * max(0.0, -descent_rate));
   der(x) = v;
   // Explicit solved form — every der() rumoca compiles in this asset tree
   // (Lander.mo) is spelled `der(state) = expr`, so this one is too.
-  der(v) = (load - k * x - c * v) / m_eff;
+  der(v) = (drive - k * x - c * v) / m_eff;
   stroke = min(stroke_max, max(0.0, x));
+
+  // `load` is the force IN THE STRUT — the spring-damper's own reaction,
+  // k*x + c*v — not the driving term above.
+  //
+  // This distinction is the whole difference between honest and decorative.
+  // Publishing `drive` meant the leg reported force from PROXIMITY: the gate
+  // opens 0.6 m above the ground and the impact term samples descent_rate
+  // immediately, so a strut still in the air already read fully loaded and the
+  // glow went red BEFORE touchdown. A spring cannot push until it is
+  // compressed. With the reaction force, `load` is exactly zero until x > 0,
+  // rises as the strut takes the vehicle, peaks at maximum compression, and
+  // settles to the static m_eff*g — so the colour is a consequence of the
+  // landing rather than a prediction of it.
+  load = k * stroke + c * v;
+  load_frac = min(1.0, max(0.0, load / load_rated));
 end LegStrut;
