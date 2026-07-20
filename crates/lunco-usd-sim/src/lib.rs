@@ -8,7 +8,7 @@
 //!
 //! | USD Schema | LunCoSim Components | Description |
 //! |---|---|---|
-//! | `PhysxVehicleContextAPI` | `FlightSoftware` | Rover root entity (kind is topology-derived, no `RoverVessel` marker) |
+//! | `PhysxVehicleContextAPI` | `ActuatorPorts` | Rover root entity (kind is topology-derived, no `RoverVessel` marker) |
 //! | `PhysxVehicleTankDifferentialAPI` | `DriveMix { kernel: "skid" }` | Skid/tank steering |
 //! | `PhysxVehicleAckermannSteeringAPI` | `DriveMix { kernel: "linear" }` + steering port | Ackermann steering |
 //! | `DriveMix` child scope | `DriveMix { kernel: "linear" }` | Arbitrary per-wheel linear mix — one prim per sink port, `lunco:factor:<source>` per command source |
@@ -67,7 +67,6 @@ use openusd::sdf::Path as SdfPath;
 use lunco_mobility::{WheelRaycast, DifferentialCoupling, SuspensionPiston, SuspensionSpring, Suspension};
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
-use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::Port;
 use lunco_cosim::{ports::PORT_NAME, SimConnection};
 use lunco_hardware::{MotorActuator, SteeringActuator};
@@ -282,7 +281,7 @@ pub struct PendingDifferential {
 ///
 /// # What It Does
 ///
-/// 1. **Detects `PhysxVehicleContextAPI`** → Creates `FlightSoftware` with 4 digital ports
+/// 1. **Detects `PhysxVehicleContextAPI`** → Creates `ActuatorPorts` with 4 digital ports
 ///    (`drive_left`, `drive_right`, `steering`, `brake`), plus `Vessel`.
 /// 2. **Detects `PhysxVehicleTankDifferentialAPI`** → `DriveMix { kernel: "skid" }`.
 /// 3. **Detects `PhysxVehicleAckermannSteeringAPI`** → `DriveMix { kernel: "linear" }` + steering.
@@ -476,7 +475,7 @@ fn process_usd_sim_prims(
 
         // Bail when this prim lives under a `UsdPreviewOnly` scene
         // root. Preview viewports render geometry only — they must
-        // not spawn Avatar Camera3d, FlightSoftware, or wheel raycasts
+        // not spawn Avatar Camera3d, actuator ports, or wheel raycasts
         // into the main world. Walking up the `ChildOf` chain catches
         // every prim because `sync_usd_visuals` parents each spawned
         // prim entity to its USD-parent entity, which itself chains
@@ -2081,7 +2080,7 @@ fn reconstruct_proxy_wheels(
             &Rotation,
             Option<&lunco_core::ReplicatedChassisMotion>,
         ),
-        (With<FlightSoftware>, Without<PhysicalWheel>),
+        (With<DriveMix>, Without<PhysicalWheel>),
     >,
     mut q_wheels: Query<
         (
@@ -2152,7 +2151,7 @@ fn animate_proxy_physical_wheels(
     >,
     q_chassis: Query<
         (&RigidBody, &Position, &Rotation, Option<&lunco_core::ReplicatedChassisMotion>),
-        With<FlightSoftware>,
+        With<DriveMix>,
     >,
     mut q_visual: Query<&mut Transform, Without<PhysicalWheel>>,
     time: Res<Time>,
@@ -2304,7 +2303,7 @@ fn on_add_usd_sim_prim(
 /// System that wires wheel drive/steer ports to FSW digital ports.
 ///
 /// Runs every frame, checking for `PendingWheelWiring` markers. Once the FSW root entity
-/// exists (has `FlightSoftware`), it creates [`SimConnection`] entities connecting the
+/// exists (has `ActuatorPorts`), it creates [`SimConnection`] entities connecting the
 /// wheel's physical ports to the appropriate digital ports. Each end addresses a bare
 /// [`Port`] entity through the cosim port backend's `value` connector.
 ///
@@ -2320,11 +2319,13 @@ fn on_add_usd_sim_prim(
 /// - **Even index** → `drive_left`, **odd index** → `drive_right`.
 /// - **Index < 2** (front) → `steering` (only meaningful for Ackermann).
 ///
-/// A named port that is absent from the FSW `port_map` warns and is skipped —
+/// A named port that is absent from the rover's `ActuatorPorts` warns and is skipped —
 /// declare custom ports as `outputs:<name>` attributes on the rover root.
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
-    q_fsw: Query<(Entity, &UsdPrimPath, &FlightSoftware)>,
+    // `ActuatorPorts` does double duty here: it LOCATES the vehicle root (only a rover
+    // root carries one) and it is the actuator index the wiring below looks ports up in.
+    q_fsw: Query<(Entity, &UsdPrimPath, &lunco_core::ActuatorPorts)>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
@@ -2332,18 +2333,18 @@ fn try_wire_wheel(
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
         let wheel_root = instance_key(ent, &q_provenance, &q_gid, &q_instance_root);
-        let fsw_root = q_fsw.iter().find(|(fsw_ent, path, _)| {
+        let vehicle_root = q_fsw.iter().find(|(root_ent, path, _)| {
             path.stage_handle == prim_path.stage_handle
                 && prim_path.path.starts_with(&path.path)
-                && instance_key(*fsw_ent, &q_provenance, &q_gid, &q_instance_root) == wheel_root
+                && instance_key(*root_ent, &q_provenance, &q_gid, &q_instance_root) == wheel_root
         });
 
-        if let Some((_, _, fsw)) = fsw_root {
+        if let Some((_, _, actuators)) = vehicle_root {
             // Drive: authored binding wins, else even/odd index parity.
             let drive_port_name = pending.drive_port_name.clone().unwrap_or_else(|| {
                 if pending.index % 2 == 0 { "drive_left" } else { "drive_right" }.to_string()
             });
-            if let Some(&d_port) = fsw.port_map.get(&drive_port_name) {
+            if let Some(d_port) = actuators.get(&drive_port_name) {
                 // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
                 // on scene swap — the same general lifecycle contract the ports/joint use.
                 commands.spawn((
@@ -2360,7 +2361,7 @@ fn try_wire_wheel(
                 debug!("Wired wheel {} drive to FSW port {}", prim_path.path, drive_port_name);
             } else {
                 warn!(
-                    "Wheel {} drive port '{}' not in FSW port_map; skipping",
+                    "Wheel {} drive port '{}' not in rover ActuatorPorts; skipping",
                     prim_path.path, drive_port_name
                 );
             }
@@ -2372,7 +2373,7 @@ fn try_wire_wheel(
                 .clone()
                 .or_else(|| (pending.index < 2).then(|| "steering".to_string()));
             if let Some(name) = steer_port_name {
-                if let Some(&s_port) = fsw.port_map.get(&name) {
+                if let Some(s_port) = actuators.get(&name) {
                     commands.spawn((
                         SimConnection {
                             start_element: s_port,
@@ -2389,7 +2390,7 @@ fn try_wire_wheel(
                     // Only warn when the author asked for a port that's missing;
                     // a defaulted front wheel on a skid rover legitimately has none.
                     warn!(
-                        "Wheel {} steer port '{}' not in FSW port_map; skipping",
+                        "Wheel {} steer port '{}' not in rover ActuatorPorts; skipping",
                         prim_path.path, name
                     );
                 }
@@ -2586,7 +2587,8 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
                 },
-                FlightSoftware::default(),
+                lunco_core::CommandInputs::default(),
+                DriveMix::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -2661,7 +2663,8 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
                 },
-                FlightSoftware::default(),
+                lunco_core::CommandInputs::default(),
+                DriveMix::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -2720,7 +2723,8 @@ mod proxy_wheel_tests {
                 Position(DVec3::ZERO),
                 Rotation::default(),
                 lunco_core::ReplicatedChassisMotion { lin: DVec3::ZERO, ang },
-                FlightSoftware::default(),
+                lunco_core::CommandInputs::default(),
+                DriveMix::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
