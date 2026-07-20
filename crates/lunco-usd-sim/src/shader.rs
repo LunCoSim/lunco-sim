@@ -170,15 +170,14 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     let no_shadow_cast =
         lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "primvars:doNotCastShadows")
             .unwrap_or(false);
-    // A prim that DRIVES a uniform from a connection needs a material of its OWN.
-    // Read on the gprim for the same reason as `no_shadow_cast` above, and one step
-    // stronger: a driven value is inherently per-instance — four landing legs bound
-    // to one strut material each report their own load — so sharing the cached
-    // material would paint every sibling with whichever leg wrote last.
-    // `unshared` is what makes `rebind_changed_shader_look` overwrite this entity's
-    // private material in place instead of re-keying the shared cache.
-    let unshared = has_connected_inputs(reader, sdf_path, &shader_prim);
-    let look = ShaderLook { shader, values, no_shadow_cast, unshared, ..Default::default() };
+    // Read on the gprim for the same reason as `no_shadow_cast` above: a driven value
+    // is per-instance — four landing legs bound to one strut material each report
+    // their own load — so the material must be private, or the cache paints every
+    // sibling with whichever leg wrote last. `unshared` makes
+    // `rebind_changed_shader_look` mutate this entity's own material in place.
+    let driven = driven_shader_inputs(reader, sdf_path, &shader_prim);
+    let unshared = !driven.is_empty();
+    let look = ShaderLook { shader, values, no_shadow_cast, driven, unshared, ..Default::default() };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
     commands
@@ -247,34 +246,38 @@ fn bound_shader_prim<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<SdfPa
     SdfPath::new(shader).ok()
 }
 
-/// Does this prim author a connected input that the BOUND SHADER actually declares
-/// — `float inputs:glow.connect = </Lander/LegPX.outputs:load_frac>`?
+/// The shader parameters this prim drives through a connection —
+/// `float inputs:glow.connect = </Lander/LegPX.outputs:load_frac>`.
 ///
-/// The connection itself is not resolved here. `rewire_usd_connections` already
-/// turns every `inputs:*.connect` on every prim into a `SimConnection` without
-/// caring what the target is, and `lunco-render-bevy`'s shader-parameter port
-/// backend receives the write. All this pass has to decide is the consequence for
-/// MATERIAL SHARING, which only the material layer knows about.
+/// The connection itself is not resolved here. `rewire_usd_connections` turns every
+/// `inputs:*.connect` on every prim into a `SimConnection` regardless of target, and
+/// `lunco-render-bevy`'s shader-parameter port backend receives the write. This pass
+/// decides only what the render layer cannot: which of those names are SHADER
+/// parameters, and therefore whether the material must be private.
 ///
-/// The intersection with the shader's declared inputs is NOT an optimisation, it is
-/// correctness. `inputs:` is the engine's spelling for EVERY port, not just shader
-/// parameters: each landing leg in `descent_lander.usda` carries
-/// `inputs:altitude.connect` and `inputs:descent_rate.connect` feeding its Modelica
-/// strut model, on the same prim that binds a material. A bare `starts_with(
-/// "inputs:")` test would read those simulation wires as shader drives and mint four
-/// private materials for uniforms nobody writes — the instant that material gained a
-/// `.wgsl`, which is precisely the feature's own use case.
-fn has_connected_inputs<R: UsdRead>(reader: &R, prim: &SdfPath, shader_prim: &SdfPath) -> bool {
-    let declared: std::collections::HashSet<String> = reader
+/// `inputs:` is the engine's spelling for every port, so the prim's connected inputs
+/// must be intersected with the parameters the bound shader actually declares. A
+/// landing leg carries `inputs:altitude` and `inputs:descent_rate` feeding its
+/// Modelica strut model on the same prim that binds a material; those are simulation
+/// wires and touch no uniform.
+fn driven_shader_inputs<R: UsdRead>(
+    reader: &R,
+    prim: &SdfPath,
+    shader_prim: &SdfPath,
+) -> std::collections::BTreeSet<String> {
+    let declared: std::collections::BTreeSet<String> = reader
         .attr_names(shader_prim)
         .iter()
         .filter_map(|a| a.strip_prefix("inputs:").map(to_snake_case))
         .collect();
-    reader.attr_names(prim).iter().any(|attr| {
-        attr.strip_prefix("inputs:")
-            .is_some_and(|n| declared.contains(&to_snake_case(n)))
-            && !reader.connections(prim, attr).is_empty()
-    })
+    reader
+        .attr_names(prim)
+        .iter()
+        .filter_map(|attr| {
+            let name = to_snake_case(attr.strip_prefix("inputs:")?);
+            (declared.contains(&name) && !reader.connections(prim, attr).is_empty()).then_some(name)
+        })
+        .collect()
 }
 
 /// Reads a `Shader` prim's authored `inputs:*` into the look's parameter map, by
@@ -376,13 +379,13 @@ def Xform "World"
 
         let sim_only = SdfPath::new("/World/LegPX").unwrap();
         assert!(
-            !has_connected_inputs(&view, &sim_only, &shader),
+            driven_shader_inputs(&view, &sim_only, &shader).is_empty(),
             "altitude/descent_rate feed Modelica, not the shader — the material must stay shared"
         );
 
         let driven = SdfPath::new("/World/LegPX_Lit").unwrap();
         assert!(
-            has_connected_inputs(&view, &driven, &shader),
+            !driven_shader_inputs(&view, &driven, &shader).is_empty(),
             "load_frac IS declared by the shader, so this prim needs a private material"
         );
     }

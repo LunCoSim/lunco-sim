@@ -63,7 +63,7 @@
 
 use crate::dyn_params::ParamValue;
 use bevy::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The named texture layers a shader may sample.
 ///
@@ -126,6 +126,18 @@ pub struct ShaderLook {
     /// this material carries the same one — i.e. it is driven by a single global
     /// resource. A per-entity value belongs in `values`.
     pub live: BTreeMap<String, ParamValue>,
+    /// Parameter names this prim's USD authoring drives through a connection.
+    ///
+    /// Authored by the USD shader pass, which resolves the bound shader and so knows
+    /// exactly which of the prim's `inputs:*.connect` name parameters that shader
+    /// declares. The port backend accepts a write if and only if the name is here.
+    /// `inputs:` is the engine's spelling for every port, so this set is what
+    /// separates a shader drive from a simulation wire on the same prim — a value
+    /// the authoring layer knows and the render layer cannot infer.
+    ///
+    /// Not part of [`key`](Self::key): it says where values come from, not what the
+    /// material looks like.
+    pub driven: BTreeSet<String>,
     /// Named texture layers. Absent = the shader's fallback.
     pub textures: BTreeMap<TextureLayer, Handle<Image>>,
     /// Opt out of material sharing — this look gets a **private** material that the

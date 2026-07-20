@@ -111,18 +111,21 @@ Shader parameters are ordinary port sinks: `float inputs:load_frac.connect =
 </Lander/LegPX.outputs:load_frac>` on the bound gprim, and the value lands on the WGSL
 uniform through the same graph a thruster force uses — no new resolver, no per-frame
 script. Normalise where the rating lives (`load_rated` in the `.mo`), not in the shader
-and never in rhai. **When a visualization "happens too early", suspect the model is
-publishing an input rather than a result**: `LegStrut.mo` once output the
-proximity-gated force pressed onto the leg, so a strut still 0.6 m in the air already
-glowed red; the honest output is the spring's own reaction, which is zero until
-compression starts. See [`visualize-physics-with-shaders`](skills/visualize-physics-with-shaders/SKILL.md).
+and never in rhai. **Publish the physical RESULT, not the driving term** — a strut's
+load is the spring's own reaction `k*x + c*v`, which is zero until compression starts,
+not the proximity-gated force pressed onto it, which reads fully loaded while the leg
+is still in the air. When a visualization happens too early, the model is publishing an
+input. See [`visualize-physics-with-shaders`](skills/visualize-physics-with-shaders/SKILL.md).
 
-**A backend that GUESSES must never outrank one that KNOWS.** Port-registry precedence
-is registration order, and plugin add-order is not a contract — `LuncoRenderPlugin` is
-added before `CoSimPlugin`, so the shader-parameter backend registered normally sat at
-index 0 and silently swallowed Modelica and avian writes while its WGSL was still
-loading (it returns `true`, so propagation reported nothing). Anything that accepts a
-name provisionally registers with `PortRegistry::register_fallback`.
+**A port backend must claim only names it KNOWS it owns — never guess and never widen
+to compensate.** Registry precedence is registration order and plugin add-order is not
+a contract, so a backend that accepts a name provisionally will silently swallow
+another layer's writes and return `true`, leaving propagation nothing to report. If a
+backend cannot answer from what it has, give it an authoritative set from the layer
+that can: the shader backend claims a parameter only when the USD authoring pass — which
+resolved the bound shader and knows its declared inputs — recorded it in
+`ShaderLook::driven`. A guess plus a precedence workaround is two mechanisms where one
+fact belongs.
 
 **3. No legacy, shims, or fallbacks.** Replace a mechanism and delete the old one in the
 *same* change. Two spellings of one fact means two writers, and which wins becomes a

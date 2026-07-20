@@ -87,25 +87,21 @@ fn schema_of(world: &World, entity: Entity) -> Option<std::sync::Arc<lunco_mater
     Some(mat.schema.clone())
 }
 
-/// Does this entity own a shader parameter called `key`?
+/// Does this entity drive a shader parameter called `key`?
 ///
-/// A prim with no [`ShaderLook`] is not ours at all — return false so the next
-/// backend gets a chance and, failing that, propagation reports the dangling wire.
+/// Answered from [`ShaderLook::driven`], which the USD authoring pass filled by
+/// intersecting the prim's connected `inputs:` with the parameters its bound shader
+/// declares. That set is known at author time and does not depend on whether the
+/// WGSL asset has finished loading, so this never has to guess: a name is a shader
+/// drive or it is not, from the first tick.
 ///
-/// When the schema is not reflected YET we accept the name provisionally. Rejecting
-/// it would be a lie about a shader that simply has not loaded, and the rejection
-/// is sticky: propagation's dangling-wire report is one-shot per port name, so a
-/// first-tick `false` would print a permanent warning about a wire that works.
-/// Once the schema exists it is authoritative — a name the WGSL does not declare is
-/// refused, which is what turns the classic silent dead uniform into a logged one.
+/// Anything else is refused, which is what makes a mistyped parameter surface as
+/// propagation's dangling-wire warning instead of a silently dead uniform, and what
+/// keeps a simulation port sharing the prim from being swallowed here.
 fn declares(world: &World, entity: Entity, key: &str) -> bool {
-    if world.get::<ShaderLook>(entity).is_none() {
-        return false;
-    }
-    match schema_of(world, entity) {
-        Some(schema) => schema.field(key).is_some(),
-        None => true,
-    }
+    world
+        .get::<ShaderLook>(entity)
+        .is_some_and(|look| look.driven.contains(key))
 }
 
 fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
@@ -139,9 +135,9 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         let Some(schema) = schema_of(world, entity) else { return };
         for f in &schema.fields {
             // EVERY declared field is listed, whether or not it currently holds a
-            // value. `write_input` accepts any name the schema declares, so listing
-            // only the ones that read back would report a perfectly good wire as
-            // dangling in `ListPorts` — the two must agree on what exists.
+            // value — the shader's parameters are what the prim HAS, and a field
+            // still at its default is not a missing one. Listing only the fields
+            // that read back would hide half a shader's surface from `ListPorts`.
             out.push(PortRef {
                 name: f.name.clone(),
                 direction: PortDirection::In,
@@ -171,18 +167,6 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         if matches!(look.live.get(&key), Some(ParamValue::F32(p)) if p.to_bits() == v.to_bits()) {
             return true;
         }
-        // A driven value is per-entity, so the material behind it must be private.
-        // Only the USD gprim path pre-computes that (`has_connected_inputs`); a wire
-        // spawned at runtime, or a `SetPort` from the API, arrives here with the look
-        // still shared — and `live` sits OUTSIDE `ShaderLookKey`, so N entities would
-        // write one material. The `written` dedup in `rebind_changed_shader_look`
-        // then lets only the first of them land, and the losers' hold-guard sees
-        // their own stale value and never retries: a permanently wrong uniform, in
-        // silence. Claiming privacy on first write costs one rebind and is not in the
-        // key, so the entity simply moves to its own material.
-        if !look.unshared {
-            look.unshared = true;
-        }
         look.live.insert(key, ParamValue::F32(v));
         true
     },
@@ -192,19 +176,18 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
     write_slot: None,
 };
 
-/// Register the shader-parameter backend as a backend of LAST RESORT.
+/// Register the shader-parameter backend.
 ///
-/// It must never outrank a simulation backend, and plugin order cannot be relied on
-/// to arrange that — `LuncoRenderPlugin` is added BEFORE `CoSimPlugin`, so a plain
-/// `register` here put this backend at index 0. Combined with `declares`
-/// provisionally accepting any name while the WGSL loads, that silently swallowed
-/// Modelica and avian port writes for the whole shader-load window, with
-/// `write_port` returning `true` so propagation never reported them.
+/// Registration order is resolution precedence, and plugin order is not a contract —
+/// `LuncoRenderPlugin` is added before `CoSimPlugin`, so this backend sits ahead of
+/// the simulation ones. That is safe because it claims a name only when
+/// [`ShaderLook::driven`] names it: a prim's simulation wires are never in that set,
+/// so there is nothing for it to shadow.
 pub(crate) fn build(app: &mut App) {
     app.init_resource::<PortRegistry>()
         .world_mut()
         .resource_mut::<PortRegistry>()
-        .register_fallback(SHADER_PARAM_BACKEND);
+        .register(SHADER_PARAM_BACKEND);
 }
 
 #[cfg(test)]
@@ -218,13 +201,22 @@ mod tests {
         app
     }
 
+    /// A look as the USD pass authors it for a prim driving `name`.
+    fn driving(name: &str) -> ShaderLook {
+        ShaderLook {
+            driven: [name.to_string()].into_iter().collect(),
+            unshared: true,
+            ..Default::default()
+        }
+    }
+
     /// The whole point: a value arriving through the ordinary port graph lands on a
     /// WGSL uniform, and the USD spelling (`inputs:loadFrac`) reaches the WGSL
     /// spelling (`load_frac`) without the author having to know the difference.
     #[test]
     fn a_port_write_drives_a_uniform_and_snake_cases_the_name() {
         let mut app = app();
-        let e = app.world_mut().spawn(ShaderLook::default()).id();
+        let e = app.world_mut().spawn(driving("load_frac")).id();
 
         let reg = app.world().resource::<PortRegistry>().clone();
         assert!(reg.write_port(app.world_mut(), e, "loadFrac", 0.5));
@@ -249,13 +241,27 @@ mod tests {
         assert!(!reg.write_port(app.world_mut(), e, "load_frac", 0.5));
     }
 
+    /// `inputs:` is the engine's spelling for every port, and a landing leg carries
+    /// its Modelica wires on the same prim that binds a material. Only names the USD
+    /// pass resolved as shader drives may be claimed here — this backend registers
+    /// ahead of the simulation ones, so claiming a name it does not own would
+    /// swallow that write and report nothing.
+    #[test]
+    fn a_simulation_port_sharing_the_prim_is_not_claimed() {
+        let mut app = app();
+        let e = app.world_mut().spawn(driving("load_frac")).id();
+        let reg = app.world().resource::<PortRegistry>().clone();
+        assert!(!reg.write_port(app.world_mut(), e, "altitude", 12.0));
+        assert!(app.world().get::<ShaderLook>(e).unwrap().live.is_empty());
+    }
+
     /// Holding a value must not mark `ShaderLook` changed: `rebind_changed_shader_look`
     /// re-packs a 256-byte uniform block per change, so a constant wire would cost a
     /// GPU upload every tick for the lifetime of the scene.
     #[test]
     fn rewriting_the_same_value_does_not_dirty_the_look() {
         let mut app = app();
-        let e = app.world_mut().spawn(ShaderLook::default()).id();
+        let e = app.world_mut().spawn(driving("glow")).id();
         let reg = app.world().resource::<PortRegistry>().clone();
 
         assert!(reg.write_port(app.world_mut(), e, "glow", 0.25));
