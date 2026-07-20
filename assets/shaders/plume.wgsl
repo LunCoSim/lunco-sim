@@ -139,9 +139,10 @@ fn plume_density(p: vec3<f32>, len: f32, wid: f32) -> f32 {
 
     // Turbulence advected downstream. `a` enters the noise domain with time so
     // the cells travel WITH the exhaust rather than boiling in place.
-    let n = vnoise(vec3(
-        p.xz * mat.flicker_scale,
-        a * mat.flicker_scale + globals.time * mat.flicker_speed,
+    let n = vnoise(vec3<f32>(
+        p.x * mat.flicker_scale,
+        p.z * mat.flicker_scale,
+        a * mat.flicker_scale + globals.time * mat.flicker_speed
     ));
     d *= 1.0 - clamp(mat.flicker, 0.0, 1.0) * 0.7 * (1.0 - n);
 
