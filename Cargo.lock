@@ -6856,7 +6856,6 @@ dependencies = [
  "base64",
  "bevy",
  "lunco-core",
- "lunco-fsw",
  "serde",
  "serde_json",
  "tokio",
@@ -6934,7 +6933,6 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
- "lunco-fsw",
  "lunco-render",
  "lunco-settings",
  "lunco-theme",
@@ -7104,13 +7102,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-fsw"
-version = "0.6.0-dev"
-dependencies = [
- "bevy",
-]
-
-[[package]]
 name = "lunco-geotiff"
 version = "0.6.0-dev"
 dependencies = [
@@ -7162,7 +7153,6 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-core",
- "lunco-fsw",
  "lunco-hardware",
  "lunco-hooks",
  "lunco-physics",
@@ -7260,7 +7250,6 @@ dependencies = [
  "lunco-cosim",
  "lunco-doc",
  "lunco-doc-bevy",
- "lunco-fsw",
  "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
@@ -7477,7 +7466,6 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
- "lunco-fsw",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
@@ -7516,7 +7504,6 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
- "lunco-fsw",
  "lunco-hash",
  "lunco-hooks-rhai",
  "lunco-time",
@@ -7741,7 +7728,6 @@ dependencies = [
  "lunco-avatar",
  "lunco-celestial",
  "lunco-core",
- "lunco-fsw",
  "lunco-theme",
  "lunco-time",
  "lunco-workbench",
@@ -7763,7 +7749,6 @@ dependencies = [
  "lunco-cosim",
  "lunco-doc",
  "lunco-doc-bevy",
- "lunco-fsw",
  "lunco-materials",
  "lunco-mobility",
  "lunco-render",
@@ -7808,7 +7793,6 @@ dependencies = [
  "half",
  "lunco-assets",
  "lunco-core",
- "lunco-fsw",
  "lunco-render",
  "lunco-time",
  "openusd",
@@ -7836,7 +7820,6 @@ dependencies = [
  "lunco-cosim",
  "lunco-doc",
  "lunco-environment",
- "lunco-fsw",
  "lunco-hardware",
  "lunco-materials",
  "lunco-mobility",
@@ -7966,7 +7949,6 @@ dependencies = [
  "lunco-controller",
  "lunco-core",
  "lunco-environment",
- "lunco-fsw",
  "lunco-hardware",
  "lunco-materials",
  "lunco-mobility",

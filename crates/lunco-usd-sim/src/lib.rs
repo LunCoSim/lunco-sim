@@ -2355,7 +2355,7 @@ fn try_wire_wheel(
                         end_connector: PORT_NAME.to_string(),
                         ..Default::default()
                     },
-                    Name::new(format!("Wire_Drive_{}", drive_port_name)),
+                    Name::new(format!("Conn_Drive_{}", drive_port_name)),
                     ChildOf(ent),
                 ));
                 debug!("Wired wheel {} drive to FSW port {}", prim_path.path, drive_port_name);
@@ -2382,7 +2382,7 @@ fn try_wire_wheel(
                             end_connector: PORT_NAME.to_string(),
                             ..Default::default()
                         },
-                        Name::new(format!("Wire_Steer_{}", name)),
+                        Name::new(format!("Conn_Steer_{}", name)),
                         ChildOf(ent),
                     ));
                     info!("Wired wheel {} steering to FSW port {}", prim_path.path, name);

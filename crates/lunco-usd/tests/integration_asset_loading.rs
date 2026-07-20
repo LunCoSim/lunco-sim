@@ -591,18 +591,19 @@ fn test_full_scene_loads_with_rovers() {
     assert!(rover_paths.iter().any(|p| p.contains("Ackermann_Raycast_1")), "Should have Ackermann_Raycast_1");
     assert!(rover_paths.iter().any(|p| p.contains("Ackermann_Physical_1")), "Should have Ackermann_Physical_1");
 
-    // Verify steering wires exist for front wheels
+    // Verify steering connections exist for front wheels
     use lunco_cosim::SimConnection;
     let mut q_wires = app.world_mut().query::<(&SimConnection, &Name)>();
     let steering_wires: Vec<_> = q_wires.iter(app.world())
-        // Steer wires are named `Wire_Steer_<port>` (the port is lowercase
-        // "steering"), so match the wire prefix — the old `"Steering"` filter never
-        // matched the actual name (a latent bug, unrelated to the drive kernel).
-        .filter(|(_, name)| name.as_str().contains("Wire_Steer"))
+        // Steer connections are named `Conn_Steer_<port>` (the port is lowercase
+        // "steering"), so match that prefix — matching on `"Steering"` would never
+        // hit, and an empty vec still reads as a clean `assert_eq!` diff rather
+        // than an error, so the mismatch would look like a count regression.
+        .filter(|(_, name)| name.as_str().contains("Conn_Steer"))
         .map(|(_, name)| name.as_str().to_string())
         .collect();
-    // 5 rovers × 2 front wheels = 10 steering wires
-    assert_eq!(steering_wires.len(), 10, "5 rovers × 2 front wheels = 10 steering wires, got {}: {:?}",
+    // 5 rovers × 2 front wheels = 10 steering connections
+    assert_eq!(steering_wires.len(), 10, "5 rovers × 2 front wheels = 10 steering connections, got {}: {:?}",
         steering_wires.len(), steering_wires);
 }
 
