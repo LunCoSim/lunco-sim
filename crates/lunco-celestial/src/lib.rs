@@ -349,10 +349,14 @@ impl Plugin for CelestialPlugin {
 ///   entity is covered the moment it carries the marker; the invariant lives in one
 ///   line on the marker's doc.
 /// * **Idempotent re-spawn.** The spawners gate on "does my output exist yet"
-///   (`SolarSystemRoot`/`TrajectoryView`/`MissionRegistry` empty), not a `Local` latch —
-///   so once this clears them, loading a scene *with* bodies rebuilds cleanly.
-/// * **Resource state reset.** `MissionRegistry` and the terrain-curvature coupling are
-///   resources, not entities, so they are reset here explicitly.
+///   (`SolarSystemRoot`/`TrajectoryView` empty), not a `Local` latch — so once this
+///   clears them, loading a scene *with* bodies rebuilds cleanly. Missions gate the
+///   same way but per-declaration: `MissionSpawned` is stamped on the USD prim entity
+///   that declared the mission, so it dies with the prim on teardown and a reload
+///   re-declares and re-spawns without any resource needing to be consulted.
+/// * **Resource state reset.** `MissionRegistry` (a diagnostic list of the ids spawned
+///   into the current scene) and the terrain-curvature coupling are resources, not
+///   entities, so they are reset here explicitly.
 ///
 /// The clock tree is reset separately and universally by `lunco_time::ResetTime`, fired
 /// from the scene-clear choke point — so a detached/fast sky clock is already back on

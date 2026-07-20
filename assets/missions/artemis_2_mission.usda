@@ -1,0 +1,138 @@
+#usda 1.0
+(
+    defaultPrim = "Artemis2Mission"
+    upAxis = "Y"
+    metersPerUnit = 1
+    doc = """Artemis II as SCENE-DECLARED content.
+
+    Mission content is OPT-IN, per scene, and opting in is SEPARATE from opting
+    into a sky. Nothing here spawns unless a scene references this file:
+
+        def "Artemis2" (
+            prepend references = @lunco://missions/artemis_2_mission.usda@</Artemis2Mission>
+        ) { }
+
+    This replaces a filesystem scan. `MissionPlugin` used to run
+    `load_missions_system` for ANY scene that declared a celestial body, loading
+    every `assets/missions/*.json` it found — so a lunar-landing FILM silently got
+    a crewed Orion and its Earth-relative trajectory spawned into it. "This world
+    has a Moon" and "show me Artemis II" are different statements and now have
+    different switches.
+
+    WHAT IS AND IS NOT IN THIS FILE
+    ------------------------------
+    Everything here is VISUALISATION parameters — which body to track, in which
+    reference frame, at what colour and sampling density, over which epoch window.
+    There are NO state vectors, because the engine does not read trajectory points
+    from an authored asset: `trajectory_sampling` walks the epoch window and asks
+    the ephemeris provider where NAIF body `trackedId` was relative to
+    `referenceId` at each step. The curve is COMPUTED, not authored.
+
+    The numbers themselves therefore live outside USD entirely, in the ephemeris
+    layer: a JPL Horizons VECTORS query (see `artemis-2.ephemeris.json`, which is
+    the fetch spec — a query, not an ephemeris) cached as CSV under
+    `.cache/ephemeris/`. That split is deliberate and matches how the rest of this
+    engine treats domain data: USD assembles and parameterises, the domain file
+    holds the domain numbers, exactly as `lunco:program:sourceAsset` points at a
+    `.mo` rather than dissolving Modelica into USD attributes.
+
+    If real mission kernels are ever committed to the repo rather than fetched,
+    the right format for them is CCSDS OEM (502.0-B, KVN text — diffable, carries
+    target/center ids, time bounds, frame, interpolation degree and time system)
+    or SPICE SPK for binary; NAIF ships `spk2oem`/`oem2spk` between them. Today
+    there is no committed ephemeris payload to convert, so inventing an OEM file
+    here would mean inventing trajectory data.
+    """
+)
+
+def Xform "Artemis2Mission" (
+    doc = """The mission prim. Its presence is the whole opt-in — `lunco:mission:id`
+    is what `lunco-usd-sim` keys on to project a `MissionDecl`."""
+)
+{
+    string lunco:mission:id = "artemis-2"
+    string lunco:mission:name = "Artemis II"
+    string lunco:mission:description = "First crewed Artemis mission around the Moon."
+
+    # The mission's own epoch window. Every child re-states its own window rather
+    # than inheriting: a trajectory and its spacecraft marker legitimately differ
+    # (you may want the path drawn past the point the vehicle is shown), so an
+    # inherited window would be a constraint the data does not actually have.
+    double lunco:mission:startEpochJd = 2461132.58
+    double lunco:mission:durationDays = 10.3
+
+    def Xform "EarthRelative" (
+        doc = """The headline trajectory: Orion's path as seen from Earth.
+
+        `Inertial` frame — an Earth-RELATIVE cislunar path must not ride Earth's
+        rotation, or the curve smears into a spiral (the same failure the
+        BodyFixed/Inertial split exists to prevent)."""
+    )
+    {
+        string lunco:trajectory:name = "Artemis 2 Trajectory (Earth-Relative)"
+        int    lunco:trajectory:trackedId = -1024
+        int    lunco:trajectory:referenceId = 399
+        color4f lunco:trajectory:color = (1.0, 0.2, 0.2, 1.0)
+
+        # `samplingDays` is the window walked around the current epoch;
+        # `samplingStep` the step within it. Coarse here because the Earth-relative
+        # path is ~400 000 km long and reads fine at 0.01 d resolution.
+        double lunco:trajectory:samplingDays = 12.0
+        double lunco:trajectory:samplingStep = 0.01
+        token  lunco:trajectory:frame = "Inertial"
+
+        double lunco:trajectory:startEpochJd = 2461132.58
+        double lunco:trajectory:endEpochJd = 2461141.501
+    }
+
+    def Xform "MoonRelative" (
+        doc = """The lunar-flyby detail, in the Moon's BODY-FIXED frame so the
+        close approach reads against lunar surface features rather than against
+        inertial space.
+
+        `userVisible = false`: it is authored ON but hidden by default — 10x finer
+        sampling over a 6x shorter window is a lot of geometry for a view that only
+        makes sense when the camera is already at the Moon. The user turns it on."""
+    )
+    {
+        string lunco:trajectory:name = "Artemis 2 Moon-Relative"
+        int    lunco:trajectory:trackedId = -1024
+        int    lunco:trajectory:referenceId = 301
+        color4f lunco:trajectory:color = (0.2, 1.0, 0.2, 1.0)
+        bool   lunco:trajectory:userVisible = false
+
+        double lunco:trajectory:samplingDays = 2.0
+        double lunco:trajectory:samplingStep = 0.001
+        token  lunco:trajectory:frame = "BodyFixed"
+
+        double lunco:trajectory:startEpochJd = 2461132.58
+        double lunco:trajectory:endEpochJd = 2461141.501
+    }
+
+    def Xform "Orion" (
+        doc = """The spacecraft marker — a schematic body drawn at the ephemeris
+        position, not a vessel model.
+
+        `markerRadiusKm = 500` is a VISIBILITY radius, not Orion's size: at cislunar
+        distances a true-scale 5 m capsule is sub-pixel from any camera that can also
+        see the Earth, so the marker is drawn at a scale you can actually find.
+        `hitRadiusKm` is the separate, larger pick target — clicking a marker you can
+        barely see should not require pixel accuracy."""
+    )
+    {
+        string lunco:spacecraft:name = "Orion"
+        int    lunco:spacecraft:ephemerisId = -1024
+        int    lunco:spacecraft:referenceId = 399
+        float  lunco:spacecraft:scale = 1.0
+
+        float  lunco:spacecraft:markerRadiusKm = 500.0
+        float  lunco:spacecraft:hitRadiusKm = 1000.0
+        color4f lunco:spacecraft:markerColor = (0.0, 1.0, 1.0, 1.0)
+
+        # Outside this window the marker hides itself: before launch and after
+        # splashdown there is no vehicle to draw, and the ephemeris has no data
+        # there either.
+        double lunco:spacecraft:startEpochJd = 2461132.58
+        double lunco:spacecraft:endEpochJd = 2461141.501
+    }
+}

@@ -44,12 +44,13 @@ impl Plugin for EmbeddedAssetsPlugin {
     fn build(&self, app: &mut App) {
         #[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
         {
-            // Register mission data (JSON via the asset-owning crate).
-            let artemis_2 = lunco_assets::missions::mission_source("artemis-2.json")
-                .expect("artemis-2.json must be embedded in assets/missions/")
-                .to_string();
+            // Only the EPHEMERIS payload is embedded now. The mission's own
+            // definition (trajectories, spacecraft, colours, sampling) is USD and
+            // arrives through the ordinary stage-composition path like any other
+            // scene content — a scene that references the mission file gets it on
+            // wasm exactly as on desktop, so there is nothing mission-shaped left
+            // to bake in here.
             app.insert_resource(EmbeddedMissionData {
-                artemis_2,
                 artemis_2_ephemeris_csv: ARTEMIS_2_EPHEMERIS_CSV.to_string(),
             });
 
@@ -63,10 +64,13 @@ impl Plugin for EmbeddedAssetsPlugin {
     }
 }
 
-/// Holds embedded mission JSON data (wasm32 only).
+/// Holds the embedded ephemeris payload (wasm32 only).
+///
+/// This carries EPHEMERIS only — the numbers. The mission *definition* moved to
+/// USD (`assets/missions/artemis_2_mission.usda`) and loads through stage
+/// composition on every platform, so there is no embedded mission JSON.
 #[derive(Resource)]
 pub struct EmbeddedMissionData {
-    pub artemis_2: String,
     /// Embedded ephemeris CSV for Artemis 2 (target ID -1024).
     /// Format: JD, Date, X, Y, Z, VX, VY, VZ, LT, Range, RangeRate
     pub artemis_2_ephemeris_csv: String,

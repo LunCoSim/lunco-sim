@@ -1,0 +1,36 @@
+#usda 1.0
+(
+    defaultPrim = "Artemis2Review"
+    upAxis = "Y"
+    metersPerUnit = 1
+    doc = """The opt-in side of the mission gate: a scene that DOES want Artemis II.
+
+    This is the counterpart to every other scene in the library, which now gets no
+    mission at all. It exists so the gate is testable in both directions — that
+    `episode_01_recording.usda` shows no Orion is only half the claim; the other
+    half is that a scene which asks still gets exactly what it used to.
+
+    Two references, two separate statements:
+      * `solar_system.usda` — this world has a Sun/Earth/Moon (and therefore an
+        ephemeris to sample).
+      * `artemis_2_mission.usda` — and draw Artemis II in it.
+
+    A scene may make the first without the second. That is the whole point: it is
+    what stopped a lunar-landing film from silently acquiring a crewed Orion.
+    """
+)
+
+def Xform "Artemis2Review"
+{
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
+    def "Artemis2" (
+        prepend references = @lunco://missions/artemis_2_mission.usda@</Artemis2Mission>
+    )
+    {
+    }
+}

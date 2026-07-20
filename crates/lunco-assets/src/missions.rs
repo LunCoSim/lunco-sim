@@ -11,7 +11,7 @@ use include_dir::{include_dir, Dir};
 /// under `assets/missions/`.
 static MISSIONS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/missions");
 
-/// One mission file's source by basename (e.g. `"artemis-2.json"`), or `None`.
+/// One mission file's source by basename (e.g. `"artemis_2_mission.usda"`), or `None`.
 /// Case-sensitive; works for any embedded mission file (`.json`, `.usda`, …).
 pub fn mission_source(filename: &str) -> Option<&'static str> {
     MISSIONS_DIR.get_file(filename).and_then(|f| f.contents_utf8())
@@ -23,7 +23,10 @@ mod tests {
 
     #[test]
     fn known_mission_present() {
-        assert!(mission_source("artemis-2.json").is_some());
+        // The mission DEFINITION is USD; the sibling `.json` is only the Horizons
+        // fetch spec. Both are embedded, so assert on both shapes.
+        assert!(mission_source("artemis_2_mission.usda").is_some());
+        assert!(mission_source("artemis-2.ephemeris.json").is_some());
         assert!(mission_source("DoesNotExist.json").is_none());
     }
 }
