@@ -148,7 +148,6 @@ def Xform "SandboxScene" (
         double3 xformOp:scale = (4000.0, 0.2, 4000.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         rel material:binding = </SandboxScene/Looks/Blueprint_Ground>
-        bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
         rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
     }
@@ -166,7 +165,6 @@ def Xform "SandboxScene" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </SandboxScene/Looks/Blueprint_Ramp>
         color3f[] primvars:displayColor = [(0.25, 0.22, 0.18)]
-        bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
         rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
     }
@@ -183,7 +181,6 @@ def Xform "SandboxScene" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </SandboxScene/Looks/Blueprint_Ramp_Green>
         color3f[] primvars:displayColor = [(0.25, 0.22, 0.18)]
-        bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
         rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
     }
@@ -683,7 +680,7 @@ def Xform "SandboxScene" (
         double3 xformOp:translate = (-5.0, 1.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)]
-        bool physics:rigidBodyEnabled = false # Static platform
+        # Static platform: `PhysicsCollisionAPI` with no `PhysicsRigidBodyAPI`.
         bool physics:collisionEnabled = true
     }
 

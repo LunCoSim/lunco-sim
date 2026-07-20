@@ -55,10 +55,10 @@ an instrument says so. Flight software reads SENSORS, because a computer knows o
 what its instruments report: `DescentGuidance` reads the altimeter *with* its mount
 offset and `rangeMax`, not the true height.
 
-Backwards costs real bugs. The struts were once gated on the altimeter, whose datum
-sits 3.3 m above the pads — so a hand-copied `contact_alt` had to restate the
-geometry, got it wrong, and lit the legs 3.9 m before touchdown. **When a constant in
-a `.mo` exists only to translate between two prims' positions, the wire is wrong.**
+Backwards costs real bugs. An altimeter's datum sits above the pads, so gating a strut
+on it forces a hand-copied constant to restate that offset, and the legs light before
+touchdown. **When a constant in a `.mo` exists only to translate between two prims'
+positions, the wire is wrong.**
 
 **A sprung mechanism belongs to the SOLVER, not to a domain model.** A landing
 leg's shock absorber is `UsdPhysicsDriveAPI:linear` — `physics:type = "force"`,

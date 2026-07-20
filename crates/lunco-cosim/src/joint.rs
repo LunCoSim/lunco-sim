@@ -550,6 +550,25 @@ mod tests {
         assert!(joint_motor_force(app.world(), joint).is_none());
     }
 
+    /// An `AccelerationBased` drive's coefficients are mass-normalised, and the
+    /// solver scales them by the EFFECTIVE mass at the joint — a function of both
+    /// bodies' inverse masses and the anchor geometry, not of either body's mass.
+    /// There is no honest newton reading here, so the port declines rather than
+    /// multiplying by a mass it picked.
+    #[test]
+    fn force_port_declines_an_acceleration_based_motor() {
+        let (mut app, joint) = sprung_leg(MOON_G, 1);
+        app.world_mut()
+            .get_mut::<PrismaticJoint>(joint)
+            .unwrap()
+            .motor
+            .motor_model = MotorModel::AccelerationBased {
+            stiffness: SPRING_K,
+            damping: SPRING_C,
+        };
+        assert!(joint_motor_force(app.world(), joint).is_none());
+    }
+
     #[test]
     fn displacement_projects_onto_slider_axis() {
         // body2 sits 0.30 m along +Y from body1; a Y slider reads +0.30 m.

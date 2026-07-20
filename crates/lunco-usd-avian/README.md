@@ -14,7 +14,7 @@ The main Bevy plugin that sets up the physics mapping logic. It registers necess
 
 ### 2. Mapping (observers + deferred resolution)
 When an entity is tagged with a `UsdPrimPath`, the crate looks up the Prim and maps:
-*   **RigidBody** — `PhysicsRigidBodyAPI` / `physics:rigidBodyEnabled` → `RigidBody`, with **mass-properties** `physics:mass` / `physics:diagonalInertia` / `physics:centerOfMass` → the Avian override components (`Mass`/`AngularInertia`/`CenterOfMass`, shared with the runtime mass-props ports).
+*   **RigidBody** — an applied `PhysicsRigidBodyAPI` is the only thing that makes a prim a body; its own `physics:rigidBodyEnabled` (default true) says whether that body is simulated → `RigidBody`, with **mass-properties** `physics:mass` / `physics:diagonalInertia` / `physics:centerOfMass` → the Avian override components (`Mass`/`AngularInertia`/`CenterOfMass`, shared with the runtime mass-props ports).
 *   **Colliders** — every `UsdGeom` shape: `Cube`→cuboid, `Sphere`, `Cylinder`, `Cone`, `Capsule`, `Mesh`→trimesh (DEM grids→heightfield), `Plane`→thin cuboid. Compound bodies via child `PhysicsCollisionAPI`.
 *   **Joints** — see below. Built by a deferred system (matches `physics:body0/1` paths → entities, gated on Avian island-admission) so it survives async USD loads.
 

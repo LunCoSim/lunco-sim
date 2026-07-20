@@ -18,7 +18,7 @@
 # ordinary child gprim that both renders and collides, and the rigid body is the root.
 def Xform "Motor" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

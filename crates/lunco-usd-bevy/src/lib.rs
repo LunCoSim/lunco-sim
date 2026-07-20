@@ -967,9 +967,6 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // Authors compose non-uniform dimensions via `xformOp:scale`
         // — exactly how Pixar USD / Houdini / Blender expect it.
         //
-        // **Legacy fallback**: `width`/`height`/`depth` on Cube prims is
-        // still accepted so older `.usda` files keep working during the
-        // migration. New authoring should use `size` + `xformOp:scale`.
         // Shape dimensions (+ their magic defaults) come from the
         // canonical `read_shape_dims` so the visual mesh and the avian
         // collider can't desync. The mesh-quality params (sphere UV
@@ -3418,11 +3415,10 @@ pub fn usd_axis_to_quat(axis: &str) -> Option<Quat> {
 ///
 /// `Cube::size` is the ONLY form. `UsdGeomCube` declares exactly one dimension
 /// attribute (`double size`, default 2.0) — a non-uniform box is a `size` plus an
-/// `xformOp:scale`. The reader used to also accept `width`/`height`/`depth` on a
-/// Cube; those are not UsdGeomCube attributes, no asset authored them, and
-/// accepting them meant a scene could encode its box dimensions in a form no
-/// other DCC reads. (`Plane::width`/`length` below ARE real UsdGeomPlane
-/// attributes — that is the difference.)
+/// `xformOp:scale`. `width`/`height`/`depth` on a Cube are not UsdGeomCube
+/// attributes and are not read: accepting them would let a scene encode its box
+/// dimensions in a form no other DCC reads. (`Plane::width`/`length` below ARE
+/// real UsdGeomPlane attributes — that is the difference.)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShapeDims {
     Cube { size: f64 },

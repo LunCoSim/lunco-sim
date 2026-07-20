@@ -134,20 +134,19 @@ impl Plugin for UsdAvianPlugin {
             // set, and ordering `.after` it is vacuous — measured: bodies still read
             // (0,0,0). The bridge owns the sync instead, in `pose_to_position`.
             //
-            // The second half: `pose_to_position` lives in `PhysicsSchedule`, whereas
-            // this system used to live in `FixedPostUpdate`. Those are different
-            // schedules — `PhysicsSchedule` is run by avian's `run_physics_schedule`
-            // from inside `FixedPostUpdate`'s `PhysicsSystems::StepSimulation`
+            // The second half: `pose_to_position` lives in `PhysicsSchedule`, so this
+            // system must too. They are different schedules — `PhysicsSchedule` is run
+            // by avian's `run_physics_schedule` from inside `FixedPostUpdate`'s
+            // `PhysicsSystems::StepSimulation`
             // (`avian3d-0.7.0/src/schedule/mod.rs:110-113`). A `FixedPostUpdate`
-            // `Prepare` system is therefore ordered strictly BEFORE the whole physics
-            // schedule, so no amount of `.after(...)` inside `FixedPostUpdate` could
-            // ever have seen a bridge-written `Position`. Cross-schedule ordering is
-            // silently a no-op, which is why the failure looked like a race.
+            // `Prepare` system is ordered strictly BEFORE the whole physics schedule,
+            // so no `.after(...)` inside `FixedPostUpdate` can see a bridge-written
+            // `Position`; cross-schedule ordering is silently a no-op.
             //
-            // Moving into `PhysicsSchedule` fixes both and keeps the original window:
-            // `.before(PhysicsStepSystems::First)` is still ahead of the broad/narrow
-            // phase (stricter than the old placement), and `.after(pose_to_position)`
-            // is now a REAL edge in a REAL shared schedule. When the bridge is absent
+            // Sitting in `PhysicsSchedule` keeps the required window:
+            // `.before(PhysicsStepSystems::First)` is ahead of the broad/narrow
+            // phase, and `.after(pose_to_position)` is a REAL edge in a REAL shared
+            // schedule. When the bridge is absent
             // (plain-avian tests), `.after` degrades to a no-op — but then avian's own
             // `transform_to_position` is enabled and runs in `FixedPostUpdate`, i.e.
             // still before `PhysicsSchedule`. Correct in both configurations.
@@ -485,8 +484,8 @@ fn collect_child_colliders_from_usd<R: UsdRead>(
 ///   entity's Transform rotation (composed in `lunco-usd-bevy`; compound
 ///   children get the axis rotation added in `collect_child_colliders_from_usd`).
 ///
-/// **Legacy fallback for `Cube`**: `width`/`height`/`depth` still accepted so
-/// unmigrated `.usda` files keep working (those author full dims at scale=1).
+/// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
+/// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
 fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<Collider> {
     let ty = reader.type_name(sdf_path)?;
 
@@ -588,10 +587,8 @@ fn add_collider_from_usd<R: UsdRead>(
 /// collider is a piece of that body's compound shape rather than a body (or
 /// standalone static collider) in its own right.
 ///
-/// Recognises both spellings of "this is a body": the standard `PhysicsRigidBodyAPI`
-/// schema and the legacy `physics:rigidBodyEnabled` attribute that
-/// [`extract_avian_prim`]'s fallback arm honours. Missing the legacy one would tear
-/// the colliders off an old-style body and strand them as static geometry.
+/// One spelling of "this is a body": an applied `PhysicsRigidBodyAPI`. Nothing else
+/// makes a prim a body.
 ///
 /// Walks the composed prim hierarchy, so it answers the same way off the live stage
 /// or the flatten, and independently of where the prim happens to sit in the ECS.
@@ -601,9 +598,7 @@ fn has_rigid_body_ancestor<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> bool {
         if p.is_abs_root() {
             return false;
         }
-        if reader.has_api_schema(&p, ptok::API_RIGID_BODY)
-            || reader.scalar::<bool>(&p, ptok::A_RIGID_BODY_ENABLED) == Some(true)
-        {
+        if reader.has_api_schema(&p, ptok::API_RIGID_BODY) {
             return true;
         }
         cur = p.parent();
@@ -742,7 +737,6 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 /// - Become pure visuals — no RigidBody, no Collider
 /// - Their shapes are included in the parent's compound collider
 ///
-/// **Legacy fallback:** `physics:rigidBodyEnabled` attribute for old-style USD files.
 /// Observer: fires once per entity, the moment `sync_usd_visuals` finishes
 /// translating the USD prim (signalled by inserting `UsdVisualSynced`).
 /// By that point the stage is loaded and `Mesh3d`/`Transform` are present —
@@ -834,12 +828,11 @@ fn extract_avian_prim<R: UsdRead>(
         // load-bearing. `Commands` apply in insertion order and observers fire at
         // apply time, so avian's `On<Add, RigidBody>` mass observer (avian3d
         // `dynamics/rigid_body/mass_properties/mod.rs:284-289`) runs the instant
-        // `RigidBody` lands. Applied afterwards, as this used to be, the overrides
-        // and their `NoAuto*` markers arrive too late to be seen: that observer has
-        // already derived `ComputedAngularInertia` from collider geometry at
-        // `ColliderDensity` 1.0, which is exactly the lander's measured
-        // 159.3/274.3/229.4. Authoring the overrides first means the observer's very
-        // first pass already sees `NoAuto*` and honours them.
+        // `RigidBody` lands. The overrides and their `NoAuto*` markers must already
+        // be on the entity by then, or that observer derives
+        // `ComputedAngularInertia` from collider geometry at `ColliderDensity` 1.0
+        // and the authored values never take effect. Authoring the overrides first
+        // means the observer's very first pass sees `NoAuto*` and honours them.
         apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
 
         // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
@@ -850,10 +843,16 @@ fn extract_avian_prim<R: UsdRead>(
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
 
+        // The schema's own `physics:rigidBodyEnabled` (default true) says whether
+        // this body is simulated; a disabled body is unmoving collision geometry.
+        let simulated =
+            reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED).unwrap_or(true);
         // A `Dynamic`-declared body spawns `Kinematic` + `ShouldBeDynamic` and
         // settles to `Dynamic` once joints resolve (no 1-frame separation launch).
         let kinematic = reader.scalar::<bool>(sdf_path, ptok::A_KINEMATIC_ENABLED).unwrap_or(false);
-        let (body, mobility) = if kinematic {
+        let (body, mobility) = if !simulated {
+            (RigidBody::Static, lunco_core::Mobility::Static)
+        } else if kinematic {
             (RigidBody::Kinematic, lunco_core::Mobility::Kinematic)
         } else {
             commands.entity(entity).try_insert(ShouldBeDynamic);
@@ -871,34 +870,14 @@ fn extract_avian_prim<R: UsdRead>(
         //
         // Ancestry, not `is_root`, is the question: a ground plane authored one
         // level down (`/Scene/Ground` under a plain `Xform`) is every bit as
-        // standalone as one at `/Ground`. Keying on root-ness silently gave such a
-        // prim NO collider at all — things fell straight through the floor with no
-        // error, and scenes worked around it by tacking on `LunCoTerrainAPI`.
+        // standalone as one at `/Ground`, and must collide the same way.
         if !has_rigid_body_ancestor(reader, sdf_path) {
             commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else {
-        // ── FALLBACK: legacy `physics:rigidBodyEnabled` ──
-        if let Some(true) = reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED) {
-            // Mass props FIRST — see the note in the `has_rigid_body_api` arm. This
-            // arm was the worse of the two: it inserted `RigidBody`, then the mass
-            // props, then the collider, so BOTH of avian's recompute triggers (the
-            // `Add, RigidBody` observer and the `Insert, RigidBodyColliders` one)
-            // fired after the overrides and clobbered them.
-            apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
-            commands.entity(entity).try_insert((
-                RigidBody::Kinematic,
-                lunco_core::Mobility::Dynamic,
-                ShouldBeDynamic,
-                lunco_core::SelectableRoot,
-            ));
-            add_collider_from_usd(commands, entity, reader, sdf_path);
-        } else if let Some(false) = reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED) {
-            commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
-            add_collider_from_usd(commands, entity, reader, sdf_path);
-        }
+        // Neither a body nor a collider: no physics components, only the marker.
         commands.entity(entity).try_insert(UsdAvianProcessed);
     }
 }
@@ -1638,11 +1617,9 @@ fn read_vec3_attribute<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Op
 /// Read mass, principal inertia, COM, damping, and friction from a rigid-body
 /// prim and insert the corresponding Avian *override* components.
 ///
-/// Centralises the previously-duplicated `physics:mass`/damping/friction reads
-/// (the main `PhysicsRigidBodyAPI` path and the legacy `rigidBodyEnabled`
-/// fallback diverged on mass handling — see the WP-3 DRY audit) and adds the
-/// **G2 load-time** mass-properties (`physics:diagonalInertia` /
-/// `physics:centerOfMass`).
+/// The single place `physics:mass`/damping/friction and the **G2 load-time**
+/// mass-properties (`physics:diagonalInertia` / `physics:centerOfMass`) are read,
+/// so every body gets them the same way.
 ///
 /// Mass defaults to 1000 kg (canonical rover mass) when unauthored — keeping
 /// gravity alive even when openusd-rs's resolver can't compose `physics:mass`
@@ -1772,8 +1749,8 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
 
 /// Damping is **not** a UsdPhysics concept — the core spec has no damping
 /// attribute at all. Omniverse contributes it via `PhysxRigidBodyAPI`, and these
-/// are its names. We used to author `physics:linearDamping`, squatting the
-/// UsdPhysics namespace with an attribute it does not define.
+/// are its names. `physics:*Damping` is not a valid spelling: it would squat the
+/// UsdPhysics namespace with an attribute that spec does not define.
 const PHYSX_LINEAR_DAMPING: &str = "physxRigidBody:linearDamping";
 const PHYSX_ANGULAR_DAMPING: &str = "physxRigidBody:angularDamping";
 
@@ -1849,10 +1826,9 @@ pub struct PhysicsMaterial {
 /// }
 /// ```
 ///
-/// We used to read a bare `physics:friction` off the body prim: an invented
-/// attribute inside a namespace UsdPhysics owns. Omniverse and every other
-/// physics-aware consumer ignored it, and had USD ever defined that name, our
-/// value would have been silently reinterpreted.
+/// Friction comes off the bound `Material`, never off a bare `physics:friction`
+/// on the body prim: that name is not defined by UsdPhysics, so no other
+/// physics-aware consumer reads it, and USD is free to give it another meaning.
 ///
 /// Binding resolution — namespace inheritance, and the purpose→all-purpose
 /// fallback that lets ONE `Material` drive both look and friction — is SHARED
@@ -2281,7 +2257,7 @@ def Xform "Mission"
         bool physics:collisionEnabled = true
     }
 
-    def Xform "LegacyBody"
+    def Xform "XformBody" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
     {
         bool physics:rigidBodyEnabled = true
 
@@ -2361,16 +2337,17 @@ def Xform "Mission"
         assert!(has_collider, "a bare rigid-body root must collide via its own shape");
     }
 
-    /// A body declared the legacy way (`physics:rigidBodyEnabled`, no API schema)
-    /// still owns its collider children — they must not become static geometry.
+    /// A body whose own prim carries no geometry (a plain `Xform` with
+    /// `PhysicsRigidBodyAPI`) still owns its collider children — they are pieces of
+    /// its compound shape, not static geometry.
     #[test]
-    fn legacy_rigid_body_ancestor_still_owns_its_colliders() {
+    fn xform_rigid_body_ancestor_owns_its_colliders() {
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
-        assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/LegacyBody/Shell").unwrap()));
-        let (has_collider, body) = extract(&view, "/Mission/LegacyBody/Shell");
-        assert!(!has_collider, "legacy body's collider child must stay a compound piece");
+        assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/XformBody/Shell").unwrap()));
+        let (has_collider, body) = extract(&view, "/Mission/XformBody/Shell");
+        assert!(!has_collider, "a body's collider child must stay a compound piece");
         assert_eq!(body, None);
     }
 

@@ -426,11 +426,10 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (2.6, 2.6, 2.6)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
 
-        # PARAMETRIC. The 36 control points that used to sit here are gone: the
-        # surface is now LATHED by the engine from the four numbers below, and
-        # `crate::lathe` regenerates it whenever one of them changes. Authoring
-        # both the parameters and the net is what let the engine bell's drawn
-        # contour drift away from the contour its own model declared.
+        # PARAMETRIC. The surface is LATHED by the engine from the four numbers
+        # below, and `crate::lathe` regenerates it whenever one of them changes.
+        # The control-point net is NEVER authored alongside them: two spellings of
+        # one shape let the drawn contour disagree with the declared model.
         #
         # `y = r² / 4f` with f = 0.35 m, walked from a small apex to the rim.
         # `apexRadius` is deliberately non-zero: a ring collapsed exactly onto the
@@ -662,15 +661,14 @@ def Xform "DescentLander" (
 
         # The plume as a LIGHT SOURCE — a CHILD of the cone it is the light of.
         #
-        # Emissive geometry in a forward renderer illuminates nothing. During a
-        # descent burn that left the regolith directly beneath the vehicle — and
-        # the vehicle's own underside — lit only by the sun, so a 60 kN engine
-        # firing metres above the ground made no difference to the ground. On an
-        # airless body, with hard shadows and no atmospheric scatter to hide the
-        # error, that is the most obviously wrong thing in frame.
+        # Emissive geometry in a forward renderer illuminates nothing, so a burn
+        # needs a real light or the regolith beneath the vehicle — and the
+        # vehicle's own underside — stay lit only by the sun. On an airless body,
+        # with hard shadows and no atmospheric scatter, that reads as a 60 kN
+        # engine firing metres above ground it does not touch.
         #
         # WHY IT LIVES HERE, INSIDE THE CONE, WITH NO PROGRAM OF ITS OWN
-        # It used to be a sibling with its own script and its own copy of the
+        # A sibling light would need its own script and its own copy of the
         # throttle walk, flicker state and brightness constant. Parenting it to
         # the cone makes "plume visible <=> light on" structural instead of an
         # invariant two files maintain: it is destroyed with the cone, hidden with
@@ -757,9 +755,9 @@ def Xform "DescentLander" (
     # so a rover cannot drive through a deployed array.
     # Each wing is TWO slabs: a structural backsheet (dark, both faces plain —
     # this is the collider) and a thin CELLS layer riding 0.045 m above it on
-    # the wing's own normal, wearing the photovoltaic shader. Real arrays have
-    # cells on the sun side only; the old single slab shaded cells onto the
-    # underside too. The cells slab is inset (5.45 × 3.25 vs 5.6 × 3.4) so the
+    # the wing's own normal, wearing the photovoltaic shader. Two slabs, because
+    # real arrays have cells on the sun side only — a single slab would shade
+    # cells onto the underside too. The cells slab is inset (5.45 × 3.25 vs 5.6 × 3.4) so the
     # backsheet shows as a frame border around the array.
     def Cube "SolarWingPX"
     {
