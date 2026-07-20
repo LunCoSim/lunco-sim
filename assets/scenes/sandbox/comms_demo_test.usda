@@ -55,7 +55,7 @@ def Xform "CommsDemoScene" (
     double lunco:time:epochJd = 2461395.5
 
     def Cube "Ground" (
-        prepend apiSchemas = ["LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0

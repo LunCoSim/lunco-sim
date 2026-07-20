@@ -50,11 +50,47 @@ not the default.**
 
 | Layer | For | You are in the right place when |
 |---|---|---|
-| **USD** | scene description: geometry, lights, materials, cameras, camera *paths*, bodies, joints, composition | a human could see and edit it in usdview |
-| **Modelica** | continuous dynamics — forces, torques, flows, anything with `der()` | you are writing an equation, not a procedure |
+| **USD** | scene description: geometry, lights, materials, cameras, camera *paths*, bodies, joints, sensors, composition | a human could see and edit it in usdview |
+| **Modelica** | continuous dynamics — thermal, electrical, propulsion, structural; anything with `der()` | you are writing an equation, not a procedure |
 | **Behaviour tree** | sequencing and mission logic | you were about to write a state machine with an index and a pile of flags |
 | **rhai** | scenario glue, per-scene policy | it reads as intentions, not a computation |
-| **Rust** | engine mechanism, hot paths, per-entity per-tick work | it must be fast, or it is what the layers above stand on |
+| **Rust** | kinematics and dynamics (avian), engine mechanism, hot paths | it must be fast, or it is what the layers above stand on |
+
+**Rust owns rigid-body physics; Modelica owns everything else that evolves.** Bodies,
+colliders, contacts and joints are the solver's — do not re-derive them in an equation.
+Thermal, electrical, propulsion and structural dynamics are Modelica's, and reach physics
+through cosim ports. Modelica running GNC or flight-software math is fine — an equation is
+an equation — but a Modelica model must never become a second physics engine.
+
+**Physics ports vs sensors — two layers, and mixing them is a bug.**
+
+| | Physics ports | Sensors |
+|---|---|---|
+| Exposed because | the body/collider EXISTS | someone AUTHORED an instrument in USD |
+| Ports | `position_*`, `velocity_*`, `contact`, `contact_force` | `range`, `accel_*`, `spec_force_*`, `contact` |
+| Adds | nothing — it is ground truth | mount offset, range limits, out-of-range mode, noise, failure |
+| Read by | **physical parts** — a strut, a damper, a structure | **flight software** — GNC, OBC, autopilot |
+
+A physical part reads PHYSICS. A landing-leg strut compresses because its pad is being
+pushed on, so `LegStrut.mo` takes `contact_force` off the pad's collider — gating that
+behind an authored sensor would mean a spring that only compresses if someone remembered
+to install a switch. Flight software reads SENSORS, because a computer only knows what its
+instruments tell it: `DescentGuidance` reads the altimeter, with its mount point, its
+`rangeMax` and its out-of-range behaviour, not the true height.
+
+Getting this backwards caused a real bug: the struts were gated on the ALTIMETER, whose
+datum sits 3.3 m above the pads, so a hand-copied `contact_alt` constant had to restate the
+geometry — and it was wrong, firing the legs 3.9 m before touchdown.
+
+**A sensor READS physics, it never re-derives it.** One computation, two consumers: the
+touchdown switch and the collider contact ports both call `avian::contact_of`. Two copies
+are free to disagree, and nothing in the log says which is right.
+
+**No per-tick computation.** Prefer an on-demand port read to a mirror component kept in
+step by a sync system, and a `Changed<T>`-filtered system to an unfiltered one. The avian
+port groups read straight off avian's components and contact graph when something asks; the
+lathe re-meshes only when a parameter changes. Per-tick work in rhai is forbidden outright
+(see 5). The exception is a rhai *test*, where per-tick stepping is the point.
 
 Both campaign fixes followed this: a per-frame trigonometry camera in rhai became a
 `BasisCurves` prim (a curve you can drag beats code you cannot see until you record it);

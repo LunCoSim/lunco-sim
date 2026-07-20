@@ -303,19 +303,15 @@ pub fn update_contact_sensors(
 ) {
     let dt = time.delta_secs_f64().max(1e-9);
     let substep_dt = dt / (substeps.0.max(1) as f64);
+    // The instrument READS physics; it does not re-derive it. `contact_of` is the
+    // engine's one contact computation, shared with the collider-level ports in
+    // [`crate::avian::COLLIDER_CONTACT_GROUP`]. A second copy here would be free to
+    // drift from the forces the struts actually feel, and nothing in the log would
+    // say which of the two answers was the real one.
+    let graph = collisions.graph();
     for (e, mut s) in &mut q {
-        let mut warm_impulse = 0.0;
-        let mut touching = false;
-        for pair in collisions.collisions_with(e) {
-            for manifold in &pair.manifolds {
-                for point in &manifold.points {
-                    warm_impulse += point.warm_start_normal_impulse;
-                }
-            }
-            touching = true;
-        }
+        let (touching, normal_force) = crate::avian::contact_of(graph, substep_dt, e);
         s.in_contact = touching;
-        // Per-substep impulse / substep duration = the physical normal force.
-        s.normal_force = warm_impulse / substep_dt;
+        s.normal_force = normal_force;
     }
 }

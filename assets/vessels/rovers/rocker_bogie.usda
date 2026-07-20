@@ -261,7 +261,10 @@ def Xform "RockerBogie" (
 
         # Outward X-axis axle to front wheel
         def Cylinder "Axle"
-        {
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
             uniform token axis = "X"
             double radius = 0.04
             double height = 0.25
@@ -273,7 +276,10 @@ def Xform "RockerBogie" (
 
         # Rocker joint cover housing
         def Cylinder "JointCover"
-        {
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
             uniform token axis = "X"
             double radius = 0.12
             double height = 0.12
@@ -354,7 +360,10 @@ def Xform "RockerBogie" (
         }
 
         def Cylinder "Axle"
-        {
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
             uniform token axis = "X"
             double radius = 0.04
             double height = 0.25
@@ -365,7 +374,10 @@ def Xform "RockerBogie" (
         }
 
         def Cylinder "JointCover"
-        {
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
             uniform token axis = "X"
             double radius = 0.12
             double height = 0.12
@@ -462,7 +474,10 @@ def Xform "RockerBogie" (
 
         # Axle to rear wheel
         def Cylinder "RearAxle"
-        {
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
             uniform token axis = "X"
             double radius = 0.035
             double height = 0.25
@@ -474,7 +489,10 @@ def Xform "RockerBogie" (
 
         # Joint cover housing
         def Cylinder "JointCover"
-        {
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
             uniform token axis = "X"
             double radius = 0.1
             double height = 0.1
@@ -582,7 +600,10 @@ def Xform "RockerBogie" (
         }
 
         def Cylinder "RearAxle"
-        {
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
             uniform token axis = "X"
             double radius = 0.035
             double height = 0.25
@@ -593,7 +614,10 @@ def Xform "RockerBogie" (
         }
 
         def Cylinder "JointCover"
-        {
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
             uniform token axis = "X"
             double radius = 0.1
             double height = 0.1

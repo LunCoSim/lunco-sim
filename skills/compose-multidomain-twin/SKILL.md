@@ -34,6 +34,40 @@ A full mission layers cleanly — never blur the layers:
 > rover is a USD file, not a Rust struct — the physics/materials philosophy applied
 > to whole vehicles.
 
+**Who computes what.** Rust owns rigid-body kinematics and dynamics — bodies,
+colliders, contacts, joints. Modelica owns everything else that evolves: thermal,
+electrical, propulsion, structural. Modelica reaches physics through cosim ports,
+and may also carry GNC or flight-software math (an equation is an equation); what it
+must never become is a second physics engine. rhai stays logic.
+
+### Physics ports vs sensors — pick the wrong one and you author a bug
+
+| | Physics ports | Sensors |
+|---|---|---|
+| There because | the body/collider EXISTS | you AUTHORED an instrument in USD |
+| Ports | `position_*`, `velocity_*`, `contact`, `contact_force` | `range`, `accel_*`, `spec_force_*`, `contact` |
+| Adds | nothing — ground truth | mount offset, range limits, out-of-range mode, noise, failure |
+| Wire to | **physical parts** — struts, dampers, structure | **flight software** — GNC, OBC, autopilot |
+
+A physical part reads PHYSICS: `LegStrut.mo` takes `contact_force` off its pad's
+collider, because a leg compresses when the pad is pushed on — not when an
+instrument says so. Flight software reads SENSORS, because a computer knows only
+what its instruments report: `DescentGuidance` reads the altimeter *with* its mount
+offset and `rangeMax`, not the true height.
+
+Backwards costs real bugs. The struts were once gated on the altimeter, whose datum
+sits 3.3 m above the pads — so a hand-copied `contact_alt` had to restate the
+geometry, got it wrong, and lit the legs 3.9 m before touchdown. **When a constant in
+a `.mo` exists only to translate between two prims' positions, the wire is wrong.**
+
+**A sensor reads physics; it never re-derives it.** The touchdown switch and the
+collider contact ports share one computation (`avian::contact_of`). Two copies are
+free to drift, and nothing in the log says which one you are looking at.
+
+**No per-tick computation.** Prefer an on-demand port read over a mirror component
+kept in step by a sync system, and `Changed<T>` over an unfiltered system. Never
+per-tick work in rhai — except in a rhai *test*, where stepping is the point.
+
 This skill is the *assembly* layer over the single-domain skills:
 [`build-usd-scene`](../build-usd-scene/SKILL.md) (author the scene),
 [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md) (a vessel's GNC),
