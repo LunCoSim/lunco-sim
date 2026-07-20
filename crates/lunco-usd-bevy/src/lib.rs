@@ -945,9 +945,9 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // Authors compose non-uniform dimensions via `xformOp:scale`
         // — exactly how Pixar USD / Houdini / Blender expect it.
         //
-        // **Legacy fallback**: `width`/`height`/`depth` on Cube prims is
-        // still accepted so older `.usda` files keep working during the
-        // migration. New authoring should use `size` + `xformOp:scale`.
+        // A Cube reads `size` and NOTHING else — `width`/`height`/`depth`
+        // are not accepted on it (they are UsdGeomPlane's attributes, not
+        // UsdGeomCube's). Non-uniform dimensions go through `xformOp:scale`.
         // Shape dimensions (+ their magic defaults) come from the
         // canonical `read_shape_dims` so the visual mesh and the avian
         // collider can't desync. The mesh-quality params (sphere UV
@@ -1260,9 +1260,9 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             }
         }
         // `xformOp:scale` (UsdGeomXformable) — non-uniform scaling composed with
-        // translate + rotate. Spec-compliant `Cube` prims rely on this to express
-        // width/height/depth without the legacy `width`/`height`/`depth`
-        // attributes. The composed transform (matrix / xformOpOrder) carries scale too.
+        // translate + rotate. `Cube` prims rely on this to express differing
+        // width/height/depth, since UsdGeomCube itself has only `size`. The
+        // composed transform (matrix / xformOpOrder) carries scale too.
         let usd_scale = usd_tf.map(|t| t.scale);
         if let Some(v) = usd_scale {
             let nonzero = v.x.abs() > 1e-6 || v.y.abs() > 1e-6 || v.z.abs() > 1e-6;
@@ -2344,8 +2344,8 @@ pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     })
 }
 
-/// The stage's `timeCodesPerSecond` (flattened onto the pseudo-root by
-/// `flatten_stage`). USD maps a time code `t` to wall-clock `t / tcps` seconds,
+/// The stage's `timeCodesPerSecond`, read as stage metadata off the
+/// pseudo-root. USD maps a time code `t` to wall-clock `t / tcps` seconds,
 /// so the samplers multiply their resolved time (seconds) by this to get the
 /// time code to evaluate. Defaults to 24.0 (USD spec) when unauthored or
 /// non-positive — the latter guards a malformed stage from freezing animation.

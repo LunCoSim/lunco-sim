@@ -2381,8 +2381,7 @@ struct LayerRole {
 /// the prim's `shaderPath` is `terrain_layered.wgsl` (which declares the
 /// bindings); with `regolith.wgsl` the slots are simply ignored.
 ///
-/// Reads via any [`UsdRead`] source — the live `StageView` or the flattened
-/// reader — so the binding is identical whichever plane supplied the stage.
+/// Reads via [`UsdRead`], i.e. the live `StageView` over the canonical stage.
 ///
 /// CONNECTED map inputs are skipped — a connected port is fed by a producer
 /// node (doc 18 Tier B, bake nodes), not by an authored file.

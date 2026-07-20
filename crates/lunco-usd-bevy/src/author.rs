@@ -233,9 +233,9 @@ pub fn value_to_literal(type_name: &str, value: Value) -> Option<String> {
 /// runtime-only specs are added, and `primChildren` lists are unioned so the
 /// merged prim tree lists children authored in either layer.
 ///
-/// This is the sdf-level layer composition openusd does **not** expose. Its
-/// only flatten (`compose::flatten_stage`) runs full PCP — it resolves
-/// references/payloads/variants, which is exactly wrong for an *authored*
+/// This is the sdf-level layer composition openusd does **not** expose. What it
+/// does expose is full PCP composition — which resolves
+/// references/payloads/variants, and that is exactly wrong for an *authored*
 /// composed view: a base `references = @asset.usda@` opinion must survive as an
 /// opinion, not be pulled in. References/payloads ride along untouched here
 /// because they are just fields on the base spec. This is NOT a substitute for

@@ -76,7 +76,7 @@ pub struct CanonicalStage {
     #[allow(dead_code)] // held to keep the sink alive for the stage's lifetime
     sink_id: StageSinkId,
     /// Precomputed binary (glTF) arc sites for `lunco:resolvedAsset` synthesis
-    /// off the live stage (what `flatten_stage` does for the baked path).
+    /// off the live stage, so a read never has to re-walk the arcs.
     binary_sites: crate::compose::BinarySites,
     /// The live resolver's shared byte-map handle, when this stage was built
     /// from a [`StageRecipe`] via [`from_recipe`](Self::from_recipe). `Some`
@@ -560,11 +560,12 @@ impl CanonicalStages {
     }
 }
 
-/// Main-thread system (Ph0′): when a `UsdStageAsset` finishes loading with a
+/// Main-thread system: when a `UsdStageAsset` finishes loading with a
 /// [`StageRecipe`], build its live [`CanonicalStage`] and stash it in
-/// [`CanonicalStages`]. Additive — runs ALONGSIDE the flattened-asset path; the
-/// legacy extractors are untouched until the S2e cutover. `NonSend` because the
-/// built `Stage` is `!Send`, so this system is pinned to the main thread.
+/// [`CanonicalStages`]. This is the only source the domain extractors read
+/// from — a stage that fails to build here reads as absent, it does not fall
+/// back. `NonSend` because the built `Stage` is `!Send`, so this system is
+/// pinned to the main thread.
 pub fn sync_canonical_stages(
     mut events: bevy::prelude::MessageReader<bevy::asset::AssetEvent<crate::UsdStageAsset>>,
     assets: bevy::prelude::Res<bevy::asset::Assets<crate::UsdStageAsset>>,

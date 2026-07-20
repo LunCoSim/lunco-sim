@@ -219,8 +219,8 @@ pub(crate) fn attach_rhai_scenario(
     // live-edited scenario back onto its prim means `ApplyUsdOp` /
     // `SetAttribute(path, "lunco:script", "string", <usd-escaped src>)`, which
     // edits an EDITABLE document in `DocumentRegistry<UsdDocument>`. But a runtime entity's
-    // `UsdPrimPath` references a read-only `Handle<UsdStageAsset>` (a flattened,
-    // composed `Arc<TextReader>`) — there is no mapping from that stage asset to
+    // `UsdPrimPath` references a read-only `Handle<UsdStageAsset>` (a stage
+    // RECIPE, composed on demand) — there is no mapping from that stage asset to
     // a savable source document/layer. That asset↔document bridge must be built
     // in the USD subsystem first. Until then, durable scenarios live as Twin
     // files (see `crate::timelines` for the same pattern applied to timelines) or

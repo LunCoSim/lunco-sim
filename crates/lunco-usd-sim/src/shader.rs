@@ -90,9 +90,8 @@ pub fn apply_usd_shader_materials(
     }
 }
 
-/// Per-prim shader authoring, generic over the read source ([`UsdRead`]) — drives
-/// off either the live canonical `StageView` or the flattened `sdf::Data`,
-/// identically. Marks the prim [`UsdShaderResolved`] the moment its stage is
+/// Per-prim shader authoring over the composed read surface ([`UsdRead`]) — drives
+/// off the live canonical `StageView`. Marks the prim [`UsdShaderResolved`] the moment its stage is
 /// readable (whether or not it ends up wanting a shader).
 #[allow(clippy::too_many_arguments)]
 fn apply_usd_shader_material_read<R: UsdRead>(

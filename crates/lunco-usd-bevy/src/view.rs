@@ -1,16 +1,14 @@
 //! `StageView` — composed reads over a **live** openusd `Stage` (Ph0′ substrate).
 //!
-//! The legacy pipeline flattens a composed `Stage` into a Send-safe [`sdf::Data`]
-//! and reads it through [`UsdDataExt`](crate::usd_data::UsdDataExt). `StageView`
-//! offers the SAME typed reads directly against the live (`!Send`) `Stage`, so the
-//! domain extractors can be re-pointed from flattened data to the canonical stage
-//! with no change in semantics — proven by the parity tests in [`crate::compose`]
-//! / this module.
+//! This is the ONE composed-read source. It offers typed reads directly against
+//! the live (`!Send`) `Stage`; the domain extractors all read through it. The
+//! earlier pipeline — flatten a composed `Stage` into a Send-safe [`sdf::Data`]
+//! and read that — is retired, and the parity tests in [`crate::compose`] /
+//! this module are what proved the cutover byte-identical before it went.
 //!
 //! Reads are default-time composed opinions (LIVRPS): references, sublayers,
-//! variants, and inherits are resolved by the stage, exactly as the flattened
-//! reader saw them post-flatten. (Time-sampled / animation reads migrate with the
-//! animation projector in a later slice — not needed for S1 parity.)
+//! variants, and inherits are resolved by the stage. (Time-sampled / animation
+//! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::{PrimPredicate, Stage};
@@ -22,7 +20,7 @@ use openusd::usd::{PrimPredicate, Stage};
 pub struct StageView<'a> {
     stage: &'a Stage,
     /// Precomputed binary (glTF) arc sites, so `resolved_asset` can synthesize
-    /// `lunco:resolvedAsset` off the LIVE stage the way `flatten_stage` does.
+    /// `lunco:resolvedAsset` off the LIVE stage without re-walking the arcs.
     /// `None` for a bare `StageView::new` (tests / non-canonical reads).
     binary_sites: Option<&'a crate::compose::BinarySites>,
 }

@@ -146,7 +146,7 @@ pub(crate) type BinarySites = HashMap<(String, SdfPath), String>;
 pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
     let mut sites: HashMap<(String, SdfPath), String> = HashMap::new();
     // Force every reachable reference/payload layer to load so `layer_identifiers()`
-    // sees the whole stack. `flatten_stage` gets this for free by traversing first;
+    // sees the whole stack. A caller that already traversed gets this for free;
     // called standalone (canonical build) a binary arc authored in a referenced /
     // payload wrapper would otherwise be missed (its layer isn't loaded yet).
     let _ = stage.traverse(PrimPredicate::DEFAULT, |_| {});

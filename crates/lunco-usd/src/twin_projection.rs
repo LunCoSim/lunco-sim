@@ -364,9 +364,14 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     // walkers bail at it), so the query above never sees it. Without this, an
     // editor viewport doc is tracked but never projected — `ApplyUsdOp` edits
     // author into the document yet the preview keeps the stale visuals.
+    // The viewport is UI; without the `ui` feature there is no second mount to
+    // consider and only the sim-side `UsdSceneRoot` doc projects.
+    #[cfg(feature = "ui")]
     let viewport_doc: Option<DocumentId> = world
         .get_resource::<crate::ui::viewport::UsdViewportState>()
         .and_then(|s| s.active_doc());
+    #[cfg(not(feature = "ui"))]
+    let viewport_doc: Option<DocumentId> = None;
 
     for (doc, name, rel, synced, overlay_synced) in entries {
         if active_doc != Some(doc) && viewport_doc != Some(doc) {

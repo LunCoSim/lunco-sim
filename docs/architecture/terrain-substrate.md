@@ -458,9 +458,11 @@ preview then the full grid (coarse-then-full progressive, applied via the live
 re-stamp swap). Only the avian collider + Bevy mesh derive stays in
 `lunco-terrain-surface`, where those types live.
 
-> **Note on the USD read path:** as-built terrain still reads USD via the *flatten*
-> reader (`UsdStageAsset` / `UsdDataExt`). The canonical-Stage cutover (above) is a
-> forced migration once the networking USD canonical-stage merge lands — see the two couplings.
+> **Note on the USD read path:** terrain projects from the live canonical `Stage`
+> (`CanonicalStages` → `StageView`, read through `UsdRead`) — the cutover is done and
+> the flatten reader is gone. `UsdDataExt` still appears in `lunco-usd-terrain`, but
+> only for the *authoring* plane: a raw authored `sdf::Data` layer, deliberately
+> pre-composition. Two read planes, two traits; don't conflate them.
 
 **Known gaps (in the order they should land):**
 

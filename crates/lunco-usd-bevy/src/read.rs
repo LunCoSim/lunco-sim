@@ -1,11 +1,13 @@
-//! `UsdRead` — the minimal composed-read surface shared by two USD sources: the
-//! live [`StageView`](crate::view::StageView) over the canonical stage, and the
-//! flattened [`sdf::Data`](openusd::sdf::Data) storage layer.
+//! `UsdRead` — the minimal composed-read surface over the canonical stage,
+//! implemented by [`StageView`](crate::view::StageView).
 //!
-//! It is the **decoupling seam**: an extractor written generically over
-//! `UsdRead` reads either source with no change to its body. Both impls route a
-//! typed read through the same `TryFrom<Value>` conversion, so the two sources
-//! are interchangeable for every extractor.
+//! It is the **composed-read plane**: every read goes through PCP composition,
+//! so an extractor sees the same resolved values usdview would. This is the
+//! only read surface — the flattened `sdf::Data` impl is retired (see the note
+//! at the bottom of this module). `sdf::Data` survives solely as the Document's
+//! *authored-layer* storage, read through
+//! [`UsdDataExt`](crate::usd_data::UsdDataExt); that is the authoring plane and
+//! is deliberately pre-composition.
 //!
 //! **Real-valued reads use the [`real`](UsdRead::real) family, never
 //! `scalar::<f64>`/`scalar::<f32>` directly** — a bare typed scalar matches only
@@ -326,8 +328,8 @@ pub trait UsdRead {
 
     /// The glTF/binary asset URI resolved for `prim` (`lunco:resolvedAsset`) —
     /// authored, or synthesized from a binary (glTF) reference/payload in the
-    /// prim's composition stack. On the flattened reader this reads the attr
-    /// `flatten_stage` synthesized; on the live stage it is synthesized here.
+    /// prim's composition stack — synthesized on read from the stage's
+    /// precomputed binary arc sites.
     fn resolved_asset(&self, prim: &SdfPath) -> Option<String>;
 
     /// Whether `prim` is active (`active` metadata; defaults to `true`, matching

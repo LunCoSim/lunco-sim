@@ -944,11 +944,11 @@ fn bridge_usd_dem_terrain(
     }
 }
 
-/// The DEM-bridge read body, generic over the read source ([`UsdRead`]) — reads
-/// the authored `lunco:assetMode` / child-layer / anchor attributes off either the
-/// live [`StageView`](lunco_usd_bevy::StageView) or the flattened `sdf::Data`,
-/// identically, and attaches the terrain request + composed stack + georef.
-/// Extracted from `bridge_usd_dem_terrain` for the dual-source cutover.
+/// The DEM-bridge read body, over the composed read surface ([`UsdRead`]) — reads
+/// the authored `lunco:assetMode` / child-layer / anchor attributes off the live
+/// [`StageView`](lunco_usd_bevy::StageView) and attaches the terrain request +
+/// composed stack + georef. Split out of `bridge_usd_dem_terrain` so the read
+/// body can be driven directly by tests.
 #[allow(clippy::too_many_arguments)]
 fn bridge_dem_prim_read<R: UsdRead>(
     reader: &R,
