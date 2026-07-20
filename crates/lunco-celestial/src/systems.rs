@@ -410,9 +410,29 @@ pub fn celestial_visuals_system(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    q_site: Query<(), With<crate::geo::SiteAnchor>>,
 ) {
     let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else { return; };
     let cam_abs = world_position_seeded(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
+
+    // The blueprint grid is an EDITOR affordance, and a scene with a site anchor is
+    // not being edited from orbit — it is being stood on. Suppress the ramp there and
+    // leave every body fully textured.
+    //
+    // Why this is the root fix and not a special case: the ramp exists so that a
+    // camera diving at a body in the inspector sees STRUCTURE (a lat/long graticule,
+    // then a Cartesian grid) instead of a 4K global mosaic smeared to ~5 km/texel.
+    // That trade is right when there is nothing else to look at. A site-anchored
+    // scene always has something else to look at — its own authored ground — so the
+    // globe's job there is the FAR field and the limb, and for that the LROC albedo
+    // is exactly the right data at exactly the right scale.
+    //
+    // Left on, the trade inverted badly: `blueprint.wgsl` switches to its Cartesian
+    // XZ mode at `transition >= 0.5` and that mode does not sample the albedo at all,
+    // so a lander at 90 m got a black-on-white wireframe where the Moon should be —
+    // and, because the globe sphere is coincident with the site's own ground slab at
+    // the datum, the two z-fought into concentric moiré rings across the whole frame.
+    let site_anchored = !q_site.is_empty();
 
     // Per-body camera altitude → per-body texture↔blueprint transition.
     // Body-local coords (camera relative to body center) prevent thrashing
@@ -433,9 +453,12 @@ pub fn celestial_visuals_system(
     for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
         let body_abs = world_position_seeded(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
         let altitude = ((cam_abs - body_abs).length() - body.radius_m).max(0.0);
-        let transition = ((start_transition_alt - altitude)
-            / (start_transition_alt - end_transition_alt))
-            .clamp(0.0, 1.0) as f32;
+        let transition = if site_anchored {
+            0.0
+        } else {
+            ((start_transition_alt - altitude) / (start_transition_alt - end_transition_alt))
+                .clamp(0.0, 1.0) as f32
+        };
         per_body.insert(body_ent, transition);
     }
 

@@ -468,7 +468,14 @@ pub fn sync_terrain_body_curvature(
             Some(_) => {}
         }
     }
-    let Some(body) = body else { return }; // no DEM yet — nothing to curve
+    // No DEM is NOT "nothing to do". A scene can stand on a plain authored ground
+    // slab (`def Cube "Ground"` with `LunCoTerrainAPI`) and never build a
+    // `DemHeightField` — episode 01 does exactly that — and such a scene still needs
+    // the globe punched out from under it. Falling back to the site anchor's own body
+    // keeps the curvature resource DEM-only (there is genuinely nothing to curve)
+    // while letting the punch below run off the anchor alone.
+    let has_dem = body.is_some();
+    let body = body.unwrap_or(anchor.body);
     if mixed {
         warn_once!(
             "terrains in this scene author different `lunco:anchor:body` values; \
@@ -479,7 +486,7 @@ pub fn sync_terrain_body_curvature(
     let Some(desc) = registry.bodies.iter().find(|b| b.ephemeris_id == body) else {
         return;
     };
-    if current.is_none_or(|c| c.radius_m != desc.radius_m) {
+    if has_dem && current.is_none_or(|c| c.radius_m != desc.radius_m) {
         commands.insert_resource(lunco_terrain_surface::TerrainBodyCurvature {
             radius_m: desc.radius_m,
         });
@@ -488,10 +495,32 @@ pub fn sync_terrain_body_curvature(
             body, desc.radius_m
         );
     }
-    // Globe hole-punch under the DEM footprint (needs the built DEM for its
-    // half extent; until then the globe stays whole — the curved terrain sits
-    // `edge_lift_m` above it, so the brief overlap cannot z-fight).
-    let half_extent = q_dem.iter().map(|(d, _)| d.0.half_extent() as f64).fold(0.0, f64::max);
+    // Globe hole-punch under the local surface.
+    //
+    // With a DEM, the footprint is the DEM's own half extent — punch exactly what the
+    // terrain provably covers.
+    //
+    // WITHOUT one, the footprint has to come from the tile grid instead, and it must
+    // be SITE-SCALE, not slab-scale. `tile_fully_in_punch` drops a tile only when the
+    // whole tile fits inside the cone, and the Moon's finest tiles still subtend
+    // ~90°/2^max_lod ≈ 0.35°; a 200 m slab subtends 0.007°, so a slab-sized cone would
+    // pass the test for exactly zero tiles and punch nothing at all. `SITE_PUNCH_DEG`
+    // is therefore sized in TILES, not in metres of authored ground: big enough that
+    // the fine tiles around the site fall entirely inside it.
+    //
+    // What this buys, and why the near-field globe must go: standing on a site, the
+    // globe's own tiles are coincident with the authored ground at the datum. While
+    // they rendered as blueprint wireframe that only showed up as z-fight moiré; the
+    // moment they carry real albedo (see `celestial_visuals_system`) they also become
+    // opaque, and at 5 m altitude the near tiles wall off the sky as a brown smear of
+    // ~5 km/texel mosaic. The local ground owns the near field; the globe owns the far
+    // field and the limb, and the punch is the seam between them.
+    const SITE_PUNCH_DEG: f64 = 2.0;
+    let half_extent = if has_dem {
+        q_dem.iter().map(|(d, _)| d.0.half_extent() as f64).fold(0.0, f64::max)
+    } else {
+        desc.radius_m * SITE_PUNCH_DEG.to_radians().sin()
+    };
     for (e, globe, punch) in &q_globes {
         if globe.ephemeris_id != body {
             continue;
