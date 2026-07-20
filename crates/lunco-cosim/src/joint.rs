@@ -435,6 +435,14 @@ mod tests {
         app.init_asset::<Mesh>();
         app.insert_resource(Gravity(DVec3::new(0.0, -gravity, 0.0)));
         app.insert_resource(Time::<Fixed>::from_hz(60.0));
+        // `app.update()` advances `Time<Virtual>` from the REAL clock, and a tight
+        // loop of updates takes microseconds — so `FixedPostUpdate`, where avian
+        // steps, would never run and every body would sit exactly where it was
+        // spawned. Pin one fixed tick per update; every other physics test in the
+        // workspace drives the solver the same way.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            core::time::Duration::from_secs_f64(1.0 / 60.0),
+        ));
 
         let world = app.world_mut();
         let hull = world
