@@ -46,11 +46,9 @@ over "OBC"
 {
     def Xform "Avionics" (
         doc = "The physical box. Real mass and a real power draw, so a mass budget and a power budget both see it."
-        prepend apiSchemas = ["PhysicsMassAPI", "LunCoOnBoardComputerAPI"]
+        prepend apiSchemas = ["PhysicsMassAPI"]
     )
     {
-        uniform token lunco:obc:role = "primary"
-
         float physics:mass = 4.5 (
             customData = {
                 double min = 0.5

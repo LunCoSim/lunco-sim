@@ -51,11 +51,9 @@ over "LanderOBC"
 {
     def Xform "Avionics" (
         doc = "The flight computer. Real mass and a real power draw, so a mass budget and a power budget both see it."
-        prepend apiSchemas = ["PhysicsMassAPI", "LunCoOnBoardComputerAPI"]
+        prepend apiSchemas = ["PhysicsMassAPI"]
     )
     {
-        uniform token lunco:obc:role = "primary"
-
         # Heavier and hungrier than a rover's: a 6-DOF flyer runs an attitude loop
         # and an engine controller at solver rate, on redundant hardware.
         float physics:mass = 18.0 (

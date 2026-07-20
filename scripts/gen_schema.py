@@ -6,11 +6,10 @@ Two outputs, both derived — never hand-edited:
   - the `Types` block of `plugInfo.json` — the registry entry that makes each
     class RESOLVABLE by an external runtime (usdview / Omniverse / Pixar USD)
 
-`plugInfo.json` used to be hand-maintained, and drifted: `LunCoMotorAPI`,
-`LunCoGearboxAPI`, `LunCoMobilityAPI` and `LunCoOnBoardComputerAPI` were all
-declared in `schema.usda` yet missing from it, so no external runtime could
-resolve them — which is the entire reason these are codeless schemas rather
-than loose `customData`. Deriving the block removes the drift by construction;
+A class declared in `schema.usda` but absent from the `Types` block is
+unresolvable by an external runtime — which would defeat the entire point of
+codeless schemas over loose `customData`. Deriving the block from the source
+makes that drift impossible by construction;
 `schema::tests::every_schema_class_is_registered_in_pluginfo` is the backstop.
 
 
