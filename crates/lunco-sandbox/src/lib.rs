@@ -2350,12 +2350,12 @@ fn track_ground_collider_pending(
 #[derive(Component)]
 struct TerrainLayersBound;
 
-/// A bindable terrain layer role: the USD `lunco:terrain:layer:<name>:*`
-/// namespace, the `ShaderMaterial` texture slot it fills, and the reflected
-/// blend-weight param(s) it raises.
+/// A bindable terrain layer role: the Shader input pair it reads
+/// (`inputs:<name>_map` / `inputs:weight_<name>`), the `ShaderMaterial` texture
+/// slot it fills, and the reflected blend-weight param(s) it raises.
 #[cfg(feature = "ui")]
 struct LayerRole {
-    /// USD namespace segment + log label, e.g. `"albedo"`.
+    /// Shader-input stem + log label, e.g. `"albedo"`.
     name: &'static str,
     /// Sets the matching `Option<Handle<Image>>` slot on the material.
     set_slot: fn(&mut lunco_render_bevy::ShaderMaterial, Handle<Image>),
@@ -2363,35 +2363,52 @@ struct LayerRole {
     weights: &'static [&'static str],
 }
 
-/// GUI-only: bind authored terrain **layer maps** onto the terrain's
-/// `ShaderMaterial`. For each role below it reads
-/// `lunco:terrain:layer:<role>:map` (a path **relative to the open Twin**, e.g.
-/// `terrain/connecting_ridge/color.png`) + optional `:weight` (default `1.0`) off
-/// the terrain prim, loads the map through the `twin://` asset source (so it
-/// travels with the Twin — no engine-global `lunco://` link), sets the
-/// matching slot, and raises the role's blend weight(s).
+/// GUI-only: read the terrain's **layer maps** from its bound **UsdShade
+/// Material network** (doc 18 §3) — the only authoring path:
+/// `rel material:binding` → Material → `outputs:surface.connect` → Shader,
+/// whose `asset inputs:<role>_map` name the rasters and
+/// `float inputs:weight_<role>` their blend weights (default 1.0).
 ///
-/// Roles: `albedo` (real colour), `mineral` (classification tint), `surface`
-/// (packed rough/AO/hazard — overrides the P3b derived bake), `normal`
-/// (meso normal — overrides the derived bake). Maps only render when the prim's
-/// `shaderPath` is `terrain_layered.wgsl` (which declares the bindings); with
-/// `regolith.wgsl` the slots are simply ignored. One-shot per terrain.
-/// Read the authored `(role, rel-path, weight)` triples off `sdf` via any
-/// [`UsdRead`] source — the live `StageView` or the flattened reader — so the
-/// binding is identical whichever plane supplied the stage.
+/// Map paths are **relative to the scene's own root** (e.g.
+/// `terrain/apollo15/materials/textures/ortho.png`) and load through the
+/// `twin://` asset source, so they travel with the Twin — no engine-global
+/// `lunco://` link. [`bind_terrain_layers`] sets the matching `ShaderMaterial`
+/// slot and raises the role's blend weight(s).
+///
+/// Roles: `albedo` (real colour), `mineral` (unlit classification drape),
+/// `surface` (packed rough/AO/hazard — overrides the P3b derived bake),
+/// `normal` (meso normal — overrides the derived bake). Maps only render when
+/// the prim's `shaderPath` is `terrain_layered.wgsl` (which declares the
+/// bindings); with `regolith.wgsl` the slots are simply ignored.
+///
+/// Reads via any [`UsdRead`] source — the live `StageView` or the flattened
+/// reader — so the binding is identical whichever plane supplied the stage.
+///
+/// CONNECTED map inputs are skipped — a connected port is fed by a producer
+/// node (doc 18 Tier B, bake nodes), not by an authored file.
 #[cfg(feature = "ui")]
-fn read_authored_layer_maps<R: UsdRead>(
+fn read_material_network_layer_maps<R: UsdRead>(
     reader: &R,
     sdf: &openusd::sdf::Path,
     roles: &'static [LayerRole],
 ) -> Vec<(&'static LayerRole, String, f32)> {
+    let Some(shader) = lunco_usd_sim::shader::bound_shader_prim(reader, sdf) else {
+        return Vec::new();
+    };
     roles
         .iter()
         .filter_map(|role| {
-            let map_attr = format!("lunco:terrain:layer:{}:map", role.name);
-            let rel = reader.scalar::<String>(sdf, &map_attr)?;
-            let weight = reader
-                .real_f32(sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
+            let map_attr = format!("inputs:{}_map", role.name);
+            if !reader.connections(&shader, &map_attr).is_empty() {
+                return None;
+            }
+            let rel = reader.asset(&shader, &map_attr)?;
+            // One authored weight per role, mirroring the flat-attr contract
+            // (surface's two shader weights both receive it).
+            let weight = role
+                .weights
+                .first()
+                .and_then(|w| reader.real_f32(&shader, &format!("inputs:{w}")))
                 .unwrap_or(1.0);
             Some((role, rel, weight))
         })
@@ -2587,7 +2604,6 @@ fn bind_terrain_layers(
         (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainLayersBound>),
     >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
-    twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
     // OPTIONAL, because `Assets<ShaderMaterial>` only exists where a renderer does:
     // `LuncoRenderPlugin` registers the store, and `--no-ui` never adds it. A plain
@@ -2617,7 +2633,7 @@ fn bind_terrain_layers(
 
         // Read the LIVE canonical stage (built on demand from the asset's recipe)
         // — the source of truth — through the `UsdRead` read body
-        // (`read_authored_layer_maps`).
+        // (`read_material_network_layer_maps`).
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
@@ -2630,8 +2646,9 @@ fn bind_terrain_layers(
         };
         // Collect the authored (role, rel-path, weight) before touching the
         // material, so we can wait for the Twin + material without half-binding.
+        // The bound UsdShade Material network is the ONLY source (doc 18 §3).
         let authored: Vec<(&LayerRole, String, f32)> =
-            read_authored_layer_maps(&cs.view(), &sdf, ROLES);
+            read_material_network_layer_maps(&cs.view(), &sdf, ROLES);
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.
@@ -2674,14 +2691,37 @@ fn bind_terrain_layers(
         // shader system); retry next frame until it does.
         let Some(mut material) = mats.get_mut(&mat3d.0) else { continue };
 
+        // PUBLISH alongside binding, because the static mesh is only half the
+        // audience: a `lodViz = true` site draws streamed geomorph tiles, whose
+        // materials this system never touches. Handing the same handles to
+        // `TerrainAuthoredMaps` is what lets those tiles show the authored
+        // orthophoto instead of pure procedural regolith (doc 18 step 4).
+        let mut published = lunco_terrain_surface::TerrainAuthoredMaps::default();
+
         for (role, rel, weight) in authored {
             let uri = format!("{base_uri}/{rel}");
-            (role.set_slot)(&mut material, asset_server.load(&uri));
+            let handle: Handle<Image> = asset_server.load(&uri);
+            (role.set_slot)(&mut material, handle.clone());
             for w in role.weights {
                 material.set(w, ParamValue::F32(weight));
             }
+            match role.name {
+                "albedo" => {
+                    published.albedo = Some(handle);
+                    published.weight_albedo = weight;
+                }
+                "mineral" => {
+                    published.mineral = Some(handle);
+                    published.weight_mineral = weight;
+                }
+                // `surface`/`normal` are not forwarded: the streamed path bakes
+                // its own from the DEM at tile resolution (`TerrainDerivedMaps`)
+                // and its per-depth weights are a LOD decision, not the author's.
+                _ => {}
+            }
             info!("[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}", role.name);
         }
+        commands.entity(entity).try_insert(published);
         commands.entity(entity).try_insert(TerrainLayersBound);
     }
 }

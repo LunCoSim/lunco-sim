@@ -52,6 +52,11 @@ pub mod lunco_source;
 pub mod missions;
 pub mod models;
 pub mod msl;
+/// PDS3 `.IMG` raster decode (attached or detached label) — lets the `dem`/
+/// `map` pipelines ingest non-GeoTIFF DEM and ortho products. Native-only:
+/// ingest is an offline build step, never a wasm/page path.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pds_img;
 pub mod process;
 /// Scheme → local filesystem root, as an open registry — the read-side mirror of
 /// [`register_lunco_asset_sources`].
@@ -86,14 +91,12 @@ pub use twin_source::{parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TWIN_
 ///
 /// 1. `LUNCOSIM_CONFIG` environment variable if set (testing, custom
 ///    installs, sandboxed CI).
-/// 2. Legacy `~/.lunco/` if it already exists (backwards compat for
-///    users who started before we adopted OS-conventional dirs).
-/// 3. OS-conventional config dir via [`dirs::config_dir`]:
+/// 2. OS-conventional config dir via [`dirs::config_dir`]:
 ///    - Linux:   `~/.config/lunco/`
 ///    - macOS:   `~/Library/Application Support/lunco/`
 ///    - Windows: `%APPDATA%\lunco\` (i.e. `C:\Users\<user>\AppData\Roaming\lunco\`)
-/// 4. `~/.lunco/` if no OS-conventional dir is available.
-/// 5. `.lunco/` in the CWD as a pathological last resort.
+/// 3. `~/.lunco/` if no OS-conventional dir is available.
+/// 4. `.lunco/` in the CWD as a pathological last resort.
 ///
 /// The directory is **not created** by this function — callers that
 /// write into a subdir use [`user_config_subdir`] which `create_dir_all`s.
@@ -106,15 +109,6 @@ pub use twin_source::{parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TWIN_
 pub fn user_config_dir() -> PathBuf {
     if let Some(val) = std::env::var_os("LUNCOSIM_CONFIG") {
         return PathBuf::from(val);
-    }
-    // Legacy: if the user already has `~/.lunco/` from an earlier
-    // build, keep using it so their settings/recents don't suddenly
-    // vanish from under them. New installs land in the OS dir below.
-    if let Some(home) = dirs::home_dir() {
-        let legacy = home.join(".lunco");
-        if legacy.exists() {
-            return legacy;
-        }
     }
     if let Some(cfg) = dirs::config_dir() {
         return cfg.join("lunco");
@@ -174,11 +168,26 @@ pub fn user_config_subdir(name: &str) -> PathBuf {
 // Cache Directory Resolution
 // ============================================================================
 
-/// Resolves the shared cache directory.
+/// Resolves the shared cache directory — ONE location for every worktree
+/// and every twin, holding only regenerable artifacts (MSL, textures,
+/// ephemeris, downloaded terrain sources). Twin-specific *outputs* (baked
+/// heightmaps and layer maps a scene references) never live here — they
+/// belong inside their twin.
 ///
-/// Reads `LUNCOSIM_CACHE` from the environment, falling back to `.cache/`
-/// in the current working directory. All worktrees should point to the same
-/// location via the env var in `.cargo/config.toml`.
+/// Resolution:
+///
+/// 1. `LUNCOSIM_CACHE` env override (CI, moving GBs to another disk).
+/// 2. OS-conventional cache dir:
+///      Linux:   `~/.cache/lunco/`
+///      macOS:   `~/Library/Caches/lunco/`
+///      Windows: `%LOCALAPPDATA%\lunco\`
+/// 3. CWD-relative `.cache/` as a last resort (no resolvable OS dir).
+///
+/// There is deliberately NO per-worktree cache: an earlier dev-mode walk
+/// preferred a workspace-local `.cache/` when populated, which silently
+/// made each worktree an island re-downloading the same assets. One shared
+/// pool, keyed by content (sha256 in manifests, bake keys on outputs), is
+/// both cheaper and correct.
 ///
 /// This is the primary way to get the cache path — used by texture processors,
 /// ephemeris downloaders, modelica compilers, and any system that reads/writes
@@ -201,40 +210,12 @@ pub fn cache_dir() -> PathBuf {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // 1. Runtime env var overrides everything.
         if let Some(val) = std::env::var_os("LUNCOSIM_CACHE") {
             return PathBuf::from(val);
         }
-        // 2. Dev mode: walk up from this crate's manifest looking for a
-        //    workspace `.cache/msl/Modelica` that's actually populated.
-        //    CARGO_MANIFEST_DIR = .../modelica/crates/lunco-assets.
-        //    Only succeeds inside a worktree; packaged installs skip
-        //    straight to (3).
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let mut current = Some(manifest);
-        for _ in 0..10 {
-            if let Some(dir) = &current {
-                let candidate = dir.join(".cache");
-                let msl_modelica = candidate.join("msl").join("Modelica");
-                if msl_modelica.exists()
-                    && msl_modelica
-                        .read_dir()
-                        .map(|mut d| d.next().is_some())
-                        .unwrap_or(false)
-                {
-                    return candidate;
-                }
-                current = dir.parent().map(PathBuf::from);
-            }
-        }
-        // 3. OS-conventional cache dir for end users:
-        //      Linux:   ~/.cache/lunco/
-        //      macOS:   ~/Library/Caches/lunco/
-        //      Windows: %LOCALAPPDATA%\lunco\
         if let Some(c) = dirs::cache_dir() {
             return c.join("lunco");
         }
-        // 4. Last resort: CWD-relative.
         PathBuf::from(".cache")
     }
 }

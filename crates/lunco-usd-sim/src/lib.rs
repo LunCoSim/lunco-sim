@@ -181,6 +181,9 @@ impl Plugin for UsdSimPlugin {
     }
 }
 
+/// USD-authored screen-facing text labels (`lunco:billboard*`) — a prim
+/// declares its own label content, including live geolocation.
+pub mod billboard;
 pub mod celestial;
 pub mod cosim;
 pub mod powertrain;
@@ -594,6 +597,24 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         if joint_targets.contains_key(&net_key) {
             commands.entity(entity).try_insert(lunco_core::ArticulatedLink);
         }
+        // Screen-facing label the PRIM asked for. Opt-in: only a prim that
+        // authors `lunco:billboard = true` gets one, so adding the schema can
+        // never make an existing scene sprout labels.
+        if reader.scalar::<bool>(&sdf_path, "lunco:billboard") == Some(true) {
+            let default = billboard::UsdBillboard::default();
+            commands.entity(entity).try_insert(billboard::UsdBillboard {
+                template: reader
+                    .text(&sdf_path, "lunco:billboard:text")
+                    .unwrap_or(default.template),
+                offset_y: reader
+                    .real_f32(&sdf_path, "lunco:billboard:offsetY")
+                    .unwrap_or(default.offset_y),
+                fade_end: reader
+                    .real_f32(&sdf_path, "lunco:billboard:fadeEnd")
+                    .unwrap_or(default.fade_end),
+            });
+        }
+
         let net_replicate = reader.scalar::<bool>(&sdf_path, "lunco:net:replicate");
         let net_authority = reader.text(&sdf_path, "lunco:net:authority");
         let (net_excluded, net_opaque) =

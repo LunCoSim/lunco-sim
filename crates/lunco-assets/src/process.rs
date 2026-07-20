@@ -38,7 +38,20 @@ use crate::cache_dir;
 ///   with GeoTIFF tags. Pure-Rust (no GDAL) — the DTM's
 ///   equirectangular projection is just arithmetic once the manifest
 ///   supplies its scale + center (see the `dem_*` fields below).
-#[derive(Debug, Clone, serde::Deserialize)]
+///   The source may be a TIFF **or a PDS3 `.IMG`** (attached or detached
+///   label — see [`crate::pds_img`]); for a PDS source the label's own
+///   extent/scale serve as fallbacks for absent `src_*` fields.
+/// - `kind = "map"`: crop the **same geographic ROI** the `dem` pipeline
+///   uses out of a co-registered raster (ortho `.IMG`, `_SHADE`/`_SLOPE`/
+///   `_CLRGRAD` TIFFs) and write an 8-bit PNG at `output` — the file a
+///   terrain Material network's `asset inputs:<role>_map` points at.
+///   Grayscale sources (NAC orthos are radiance floats) get a 1–99
+///   percentile stretch; RGB sources crop as-is.
+/// - `kind = "normalmap"`: crop + resample like `dem`, then derive a
+///   world-space normal map PNG from the heights (RGB = `n*0.5+0.5`,
+///   the encoding `terrain_layered.wgsl` decodes — same convention as
+///   `lunco-terrain-core`'s derived bake: `normalize(-dh/dx, 1, -dh/dz)`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ProcessConfig {
     /// Pipeline selector. Defaults to `"texture"` for backwards
     /// compatibility with Earth/Moon entries.
@@ -65,7 +78,7 @@ pub struct ProcessConfig {
     ///   resolves them, and so does Blender / usdview / Houdini.
     /// - `"twin"` — writes into a **Twin folder** whose root is supplied
     ///   by the caller (the CLI's `--twin <DIR>` flag, threaded through
-    ///   [`process_texture`]'s `twin_root` arg). This is what makes a
+    ///   [`process_asset`]'s `twin_root` arg). This is what makes a
     ///   standalone Twin (which is not a workspace crate, e.g. a school
     ///   project on disk) able to download + process its own assets
     ///   in place. `output` is interpreted relative to that root.
@@ -154,19 +167,19 @@ fn default_dem_pixel_scale_m() -> f64 {
 ///   save as PNG. Supports JPEG, PNG, TIFF, BMP, WebP, SVG inputs.
 /// - `"gltf"`: clean a `.glb` for Bevy 0.18 — decode Draco geometry,
 ///   re-encode WebP textures as PNG. Shells out to `npx
-///   @gltf-transform/cli`; the function name `process_texture` is a
-///   historical accident at this point but kept to avoid churning the
-///   call site.
+///   @gltf-transform/cli`.
 /// - `"dem"`: crop a square ROI from a raw LROC/NAC DTM and write the
 ///   square, georeferenced float32 `heightmap.tif` the runtime DEM reader
 ///   expects. `output` is a **folder** (the `demSource` target);
 ///   the heightmap lands at `<output>/materials/textures/heightmap.tif`.
+/// - `"map"` / `"normalmap"`: co-registered ROI crops — see the
+///   [`ProcessConfig`] kind list.
 ///
 /// `twin_root` resolves `output_root = "twin"` against a caller-supplied
 /// Twin folder (the CLI's `--twin <DIR>`); `None` falls back to cache for
 /// the `"cache"` / unrecognised roots (see [`ProcessConfig::output_root`]).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn process_texture(
+pub fn process_asset(
     source_path: &Path,
     process: &ProcessConfig,
     twin_root: Option<&Path>,
@@ -214,9 +227,26 @@ pub fn process_texture(
         std::fs::create_dir_all(parent)?;
     }
 
+    // ── Bake-key staleness check ──────────────────────────────────────────
+    // The processed output is a pure function of (source bytes, this config,
+    // pipeline version). Content-address it: a stamp beside the output holds
+    // the key of the bake that produced it, and a matching key skips the
+    // whole decode (the expensive part — a big mosaic decodes to GBs of f64).
+    // Anything that could change the result — new source, edited ROI, a
+    // pipeline fix (bump PIPELINE_VERSION) — changes the key and rebakes.
+    // Never time-based: a cache that can't go stale beats one that expires.
+    let stamp_path = bake_stamp_path(&output_path);
+    let key = bake_key(source_path, process)?;
+    if std::fs::read_to_string(&stamp_path).is_ok_and(|s| s.trim() == key) {
+        println!("  ✓ up-to-date (bake key match) → {}", output_path.display());
+        return Ok(());
+    }
+
     match process.kind.as_str() {
         "gltf" => process_gltf(source_path, &output_path)?,
         "dem" => process_dem(source_path, &output_path, process)?,
+        "map" => process_map(source_path, &output_path, process)?,
+        "normalmap" => process_normalmap(source_path, &output_path, process)?,
         "texture" => {
             let [tw, th] = process.target_resolution.ok_or_else(|| {
                 std::io::Error::new(
@@ -245,15 +275,66 @@ pub fn process_texture(
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "Unknown process kind `{}` (expected \"texture\", \"gltf\", or \"dem\")",
+                    "Unknown process kind `{}` (expected \"texture\", \"gltf\", \"dem\", \
+                     \"map\", or \"normalmap\")",
                     other
                 ),
             ))
         }
     }
 
+    // Stamp only after a fully successful bake, so a failed/interrupted run
+    // never masquerades as fresh.
+    std::fs::write(&stamp_path, &key)?;
+
     println!("  ✓ processed → {}", output_path.display());
     Ok(())
+}
+
+/// Bump when any pipeline's OUTPUT changes for identical inputs (resampling
+/// fix, encoding change, new geo tags) — invalidates every stamped bake.
+const PIPELINE_VERSION: u32 = 1;
+
+/// Where the bake stamp lives: inside the output folder for folder outputs
+/// (`dem`), beside the file for file outputs. Both land under the twin's
+/// gitignored terrain artifacts, never in tracked source.
+#[cfg(not(target_arch = "wasm32"))]
+fn bake_stamp_path(output_path: &Path) -> std::path::PathBuf {
+    if output_path.extension().is_none() {
+        output_path.join(".bakekey")
+    } else {
+        let mut name = output_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        name.push_str(".bakekey");
+        output_path.with_file_name(name)
+    }
+}
+
+/// Content-address of a bake: sha256 over the SOURCE BYTES (streamed — a
+/// 908 MB mosaic hashes in seconds vs decoding to ~2 GB of f64), the full
+/// serialized [`ProcessConfig`], and [`PIPELINE_VERSION`]. Deliberately not
+/// size+mtime: mtimes differ across machines and bundle unpacks, and a bake
+/// key must mean the same thing on every peer.
+#[cfg(not(target_arch = "wasm32"))]
+fn bake_key(source: &Path, cfg: &ProcessConfig) -> Result<String, std::io::Error> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut f = std::fs::File::open(source)?;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = std::io::Read::read(&mut f, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let cfg_json = serde_json::to_string(cfg)
+        .map_err(|e| io_err(format!("serializing ProcessConfig for bake key: {e}")))?;
+    hasher.update(cfg_json.as_bytes());
+    hasher.update(PIPELINE_VERSION.to_le_bytes());
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// glb cleanup pipeline. Runs `gltf-transform` twice in series:
@@ -399,152 +480,11 @@ fn process_dem(
     output_dir: &Path,
     cfg: &ProcessConfig,
 ) -> Result<(), std::io::Error> {
-    use std::io::Cursor;
-
-    // ── Decode the source DTM once (it can be 100+ MB). ───────────────────
-    // LROC mosaics ship as a single giant strip (e.g. the 2 m/px Apollo 15 DTM
-    // is a 2555×14311 float32 raster = ~146 MB in one strip), which blows past
-    // the `tiff` crate's default 128 MB `intermediate_buffer_size`. This is an
-    // offline build-time tool decoding ONE known-large raster into memory, so
-    // `Limits::unlimited()` is appropriate — it is NOT on a wasm/page hot path.
-    let bytes = std::fs::read(source)?;
-    let mut dec = tiff::decoder::Decoder::new(Cursor::new(bytes.as_slice()))
-        .map_err(|e| io_err(format!("decoding DTM TIFF: {e}")))?
-        .with_limits(tiff::decoder::Limits::unlimited());
-    let (src_w, src_h) = dec
-        .dimensions()
-        .map_err(|e| io_err(format!("reading DTM dimensions: {e}")))?;
-    let (src_w, src_h) = (src_w as usize, src_h as usize);
-    use tiff::decoder::DecodingResult as D;
-    let heights_f64: Vec<f64> = match dec.read_image().map_err(|e| io_err(format!("reading DTM pixels: {e}")))? {
-        D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::F64(v) => v,
-        D::U8(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U16(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::I16(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::I32(v) => v.into_iter().map(|x| x as f64).collect(),
-        _ => return Err(io_err("unsupported DTM sample format (need numeric Gray)".into())),
-    };
-
-    // ── Resolve the ROI window (source pixels). ───────────────────────────
-    let center_lat = cfg
-        .center_lat
-        .ok_or_else(|| io_err("dem pipeline requires `center_lat`".into()))?;
-    let center_lon = cfg
-        .center_lon
-        .ok_or_else(|| io_err("dem pipeline requires `center_lon`".into()))?;
-    let window_m = cfg
-        .window_m
-        .ok_or_else(|| io_err("dem pipeline requires `window_m`".into()))?;
-    let scale = cfg.pixel_scale_m.max(1e-6); // metres per source pixel
-    let half_px = (window_m * 0.5 / scale).round() as isize;
-
-    // Map the ROI center to a source pixel via a 2-point affine from the
-    // DTM's geographic extent (its PDS3 MIN/MAX_LAT, EASTERNMOST/WESTERNMOST
-    // LON) to the raster edges. This is self-consistent for any
-    // equirectangular mosaic and sidesteps the unreliable `CENTER_LONGITUDE`
-    // some LROC labels carry. Requires all four extent values.
-    let min_lat = cfg
-        .src_min_lat
-        .ok_or_else(|| io_err("dem pipeline requires `src_min_lat`".into()))?;
-    let max_lat = cfg
-        .src_max_lat
-        .ok_or_else(|| io_err("dem pipeline requires `src_max_lat`".into()))?;
-    let min_lon = cfg
-        .src_min_lon
-        .ok_or_else(|| io_err("dem pipeline requires `src_min_lon`".into()))?;
-    let max_lon = cfg
-        .src_max_lon
-        .ok_or_else(|| io_err("dem pipeline requires `src_max_lon`".into()))?;
-    // North-up: max_lat → row 0, min_lat → row (h-1). Lon grows with column.
-    let lon_span = (max_lon - min_lon).abs().max(1e-9);
-    let lat_span = (max_lat - min_lat).abs().max(1e-9);
-    let center_col =
-        ((center_lon - min_lon) / lon_span) * (src_w as f64 - 1.0);
-    let center_row =
-        ((max_lat - center_lat) / lat_span) * (src_h as f64 - 1.0);
-    let cc = center_col.round() as isize;
-    let cr = center_row.round() as isize;
-
-    // Clamp the square window to the source; if the author's window falls
-    // off the edge, shrink it (still square) rather than emit nodata rows —
-    // a smaller-than-asked real surface beats a half-nodata one.
-    let max_half_w = cc.max(0).min(src_w as isize - 1);
-    let max_half_e = (src_w as isize - 1 - cc).max(0);
-    let max_half_n = cr.max(0).min(src_h as isize - 1);
-    let max_half_s = (src_h as isize - 1 - cr).max(0);
-    let half = half_px
-        .min(max_half_w)
-        .min(max_half_e)
-        .min(max_half_n)
-        .min(max_half_s)
-        .max(1);
-    let win = (2 * half + 1) as usize; // square source window side length
-    let x0 = (cc - half).max(0) as usize;
-    let y0 = (cr - half).max(0) as usize;
-    if (half as f64) < (half_px as f64) * 0.9 {
-        eprintln!(
-            "  ⚠ dem: requested {:.0} m window but only ~{:.0} m fit inside the \
-             source at ({}, {}) — crop shrunk to stay square.",
-            window_m,
-            win as f64 * scale,
-            center_lat,
-            center_lon
-        );
-    }
-
-    // ── Resample the window to the target resolution (forced square). ─────
-    // `target_resolution` may be [n, n] or just [n]; we take the first
-    // component as the square side. Default to the source window's own
-    // resolution if unset (a 1:1 square crop).
-    let out_n = cfg
-        .target_resolution
-        .map(|[w, _]| w.max(1) as usize)
-        .unwrap_or(win);
-    let mut out = vec![0.0f32; out_n * out_n];
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    for oy in 0..out_n {
-        // Source row (nearest at the window's centre; bilinear inside).
-        let sy_f = y0 as f64 + (oy as f64 / (out_n - 1).max(1) as f64) * (win - 1) as f64;
-        let sy0 = sy_f.floor() as usize;
-        let sy1 = (sy0 + 1).min(src_h - 1);
-        let fy = sy_f - sy0 as f64;
-        for ox in 0..out_n {
-            let sx_f = x0 as f64 + (ox as f64 / (out_n - 1).max(1) as f64) * (win - 1) as f64;
-            let sx0 = sx_f.floor() as usize;
-            let sx1 = (sx0 + 1).min(src_w - 1);
-            let fx = sx_f - sx0 as f64;
-            // Bilinear over the four neighbours; nodata/NaN treated as 0.
-            let s = |col: usize, row: usize| -> f64 {
-                heights_f64.get(row * src_w + col).copied().unwrap_or(0.0)
-            };
-            let v00 = s(sx0, sy0);
-            let v10 = s(sx1, sy0);
-            let v01 = s(sx0, sy1);
-            let v11 = s(sx1, sy1);
-            let top = v00 + (v10 - v00) * fx;
-            let bot = v01 + (v11 - v01) * fx;
-            let mut v = top + (bot - top) * fy;
-            if !v.is_finite() {
-                v = 0.0;
-            }
-            if v < min {
-                min = v;
-            }
-            if v > max {
-                max = v;
-            }
-            out[oy * out_n + ox] = v as f32;
-        }
-    }
-    if !min.is_finite() {
-        min = 0.0;
-    }
-    if !max.is_finite() {
-        max = 0.0;
-    }
+    let src = decode_gray_source(source)?;
+    let (roi, scale, center_lat, center_lon) = resolve_roi(cfg, &src, "dem")?;
+    let (out_n, win) = (roi.out_n, roi.win);
+    let heights = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+    let out: Vec<f32> = heights.iter().map(|&v| v as f32).collect();
 
     // ── Write the square float32 heightmap. ───────────────────────────────
     let tex_dir = output_dir.join("materials").join("textures");
@@ -605,8 +545,383 @@ fn process_dem(
     // No sidecar. Extent, resolution, centre lat/lon and body radius live in the
     // raster's geo tags; source URL and checksum in `Assets.toml`; site id in the
     // folder name. See `docs/architecture/57-dem-georeferencing.md`.
-    let _ = (min, max);
 
+    Ok(())
+}
+
+/// A grayscale source raster decoded for the geographic pipelines, plus the
+/// projection facts the container itself supplied. PDS3 labels carry their
+/// own extent/scale; raw LROC TIFFs carry nothing (their `.LBL` values go in
+/// the manifest instead).
+#[cfg(not(target_arch = "wasm32"))]
+struct GraySource {
+    w: usize,
+    h: usize,
+    samples: Vec<f64>,
+    extent: Option<crate::pds_img::PdsExtent>,
+    scale_m: Option<f64>,
+    projection: Option<String>,
+}
+
+/// Decode a DEM-class source raster to grayscale `f64`: TIFF (any numeric
+/// Gray layout) or PDS3 `.IMG` (attached/detached label).
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
+    use std::io::Cursor;
+
+    let ext = source
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "img" {
+        let p = crate::pds_img::PdsImage::decode(source)?;
+        return Ok(GraySource {
+            w: p.width,
+            h: p.height,
+            samples: p.samples,
+            extent: p.extent,
+            scale_m: p.map_scale_m,
+            projection: p.projection,
+        });
+    }
+
+    // ── Decode the source TIFF once (it can be 100+ MB). ──────────────────
+    // LROC mosaics ship as a single giant strip (e.g. the 2 m/px Apollo 15 DTM
+    // is a 2555×14311 float32 raster = ~146 MB in one strip), which blows past
+    // the `tiff` crate's default 128 MB `intermediate_buffer_size`. This is an
+    // offline build-time tool decoding ONE known-large raster into memory, so
+    // `Limits::unlimited()` is appropriate — it is NOT on a wasm/page hot path.
+    let bytes = std::fs::read(source)?;
+    let mut dec = tiff::decoder::Decoder::new(Cursor::new(bytes.as_slice()))
+        .map_err(|e| io_err(format!("decoding DTM TIFF: {e}")))?
+        .with_limits(tiff::decoder::Limits::unlimited());
+    let (src_w, src_h) = dec
+        .dimensions()
+        .map_err(|e| io_err(format!("reading DTM dimensions: {e}")))?;
+    let (src_w, src_h) = (src_w as usize, src_h as usize);
+    use tiff::decoder::DecodingResult as D;
+    let heights_f64: Vec<f64> = match dec.read_image().map_err(|e| io_err(format!("reading DTM pixels: {e}")))? {
+        D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::F64(v) => v,
+        D::U8(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::U16(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::I16(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::U32(v) => v.into_iter().map(|x| x as f64).collect(),
+        D::I32(v) => v.into_iter().map(|x| x as f64).collect(),
+        _ => return Err(io_err("unsupported DTM sample format (need numeric Gray)".into())),
+    };
+    Ok(GraySource {
+        w: src_w,
+        h: src_h,
+        samples: heights_f64,
+        extent: None,
+        scale_m: None,
+        projection: None,
+    })
+}
+
+/// A resolved square crop: source-pixel window + output resolution.
+#[cfg(not(target_arch = "wasm32"))]
+struct RoiCrop {
+    x0: usize,
+    y0: usize,
+    /// Square source window side, in source pixels.
+    win: usize,
+    /// Output raster side, in samples.
+    out_n: usize,
+}
+
+/// Resolve the manifest's geographic ROI (center + window) to a source-pixel
+/// crop via the 2-point extent affine. Extent and pixel scale come from the
+/// manifest's `src_*`/`pixel_scale_m` fields, falling back to what the source
+/// container itself declares (PDS3 labels only): the manifest wins when it
+/// authors all four extent values; `pixel_scale_m` yields to the label's
+/// `MAP_SCALE` when left at its serde default (2.0) — an authored value
+/// identical to the default is indistinguishable, so pin the label's value in
+/// the manifest if it must be exactly 2.0 against a disagreeing label.
+///
+/// Longitude convention: the affine is convention-agnostic, but `center_lon`
+/// must use the SAME convention as the extent it is resolved against (LROC
+/// labels author 0–360 °E).
+///
+/// Fails loudly on a non-equirectangular source (polar stereographic products
+/// need a real projection, not this affine — the known pipeline gate).
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_roi(
+    cfg: &ProcessConfig,
+    src: &GraySource,
+    kind: &str,
+) -> Result<(RoiCrop, f64, f64, f64), std::io::Error> {
+    if let Some(proj) = src.projection.as_deref() {
+        if !proj.contains("EQUIRECTANGULAR") {
+            return Err(io_err(format!(
+                "{kind} pipeline: source declares projection {proj}; only \
+                 EQUIRECTANGULAR sources can be cropped with the extent affine \
+                 (polar-stereographic products are not yet ingestible)"
+            )));
+        }
+    }
+
+    let center_lat = cfg
+        .center_lat
+        .ok_or_else(|| io_err(format!("{kind} pipeline requires `center_lat`")))?;
+    let center_lon = cfg
+        .center_lon
+        .ok_or_else(|| io_err(format!("{kind} pipeline requires `center_lon`")))?;
+    let window_m = cfg
+        .window_m
+        .ok_or_else(|| io_err(format!("{kind} pipeline requires `window_m`")))?;
+    let scale = if (cfg.pixel_scale_m - default_dem_pixel_scale_m()).abs() > 1e-12 {
+        cfg.pixel_scale_m
+    } else {
+        src.scale_m.unwrap_or(cfg.pixel_scale_m)
+    }
+    .max(1e-6); // metres per source pixel
+    let half_px = (window_m * 0.5 / scale).round() as isize;
+
+    // Map the ROI center to a source pixel via a 2-point affine from the
+    // source's geographic extent (its PDS3 MIN/MAX_LAT, EASTERNMOST/
+    // WESTERNMOST LON) to the raster edges. This is self-consistent for any
+    // equirectangular mosaic and sidesteps the unreliable `CENTER_LONGITUDE`
+    // some LROC labels carry.
+    let manifest_extent = match (cfg.src_min_lat, cfg.src_max_lat, cfg.src_min_lon, cfg.src_max_lon)
+    {
+        (Some(a), Some(b), Some(c), Some(d)) => Some((a, b, c, d)),
+        _ => None,
+    };
+    let (min_lat, max_lat, min_lon, max_lon) = manifest_extent
+        .or_else(|| src.extent.map(|e| (e.min_lat, e.max_lat, e.west_lon, e.east_lon)))
+        .ok_or_else(|| {
+            io_err(format!(
+                "{kind} pipeline requires the source extent: set all four \
+                 `src_min_lat`/`src_max_lat`/`src_min_lon`/`src_max_lon` (from \
+                 the product's PDS3 label), or use a PDS3 `.IMG` source that \
+                 declares its own IMAGE_MAP_PROJECTION"
+            ))
+        })?;
+    let (src_w, src_h) = (src.w, src.h);
+    // North-up: max_lat → row 0, min_lat → row (h-1). Lon grows with column.
+    let lon_span = (max_lon - min_lon).abs().max(1e-9);
+    let lat_span = (max_lat - min_lat).abs().max(1e-9);
+    let center_col = ((center_lon - min_lon) / lon_span) * (src_w as f64 - 1.0);
+    let center_row = ((max_lat - center_lat) / lat_span) * (src_h as f64 - 1.0);
+    let cc = center_col.round() as isize;
+    let cr = center_row.round() as isize;
+
+    // Clamp the square window to the source; if the author's window falls
+    // off the edge, shrink it (still square) rather than emit nodata rows —
+    // a smaller-than-asked real surface beats a half-nodata one.
+    let max_half_w = cc.max(0).min(src_w as isize - 1);
+    let max_half_e = (src_w as isize - 1 - cc).max(0);
+    let max_half_n = cr.max(0).min(src_h as isize - 1);
+    let max_half_s = (src_h as isize - 1 - cr).max(0);
+    let half = half_px
+        .min(max_half_w)
+        .min(max_half_e)
+        .min(max_half_n)
+        .min(max_half_s)
+        .max(1);
+    let win = (2 * half + 1) as usize; // square source window side length
+    let x0 = (cc - half).max(0) as usize;
+    let y0 = (cr - half).max(0) as usize;
+    if (half as f64) < (half_px as f64) * 0.9 {
+        eprintln!(
+            "  ⚠ {kind}: requested {:.0} m window but only ~{:.0} m fit inside the \
+             source at ({}, {}) — crop shrunk to stay square.",
+            window_m,
+            win as f64 * scale,
+            center_lat,
+            center_lon
+        );
+    }
+
+    // `target_resolution` may be [n, n] or just [n]; we take the first
+    // component as the square side. Default to the source window's own
+    // resolution if unset (a 1:1 square crop).
+    let out_n = cfg
+        .target_resolution
+        .map(|[w, _]| w.max(1) as usize)
+        .unwrap_or(win);
+    Ok((RoiCrop { x0, y0, win, out_n }, scale, center_lat, center_lon))
+}
+
+/// Resample the crop's source window to `out_n × out_n` (bilinear;
+/// nodata/NaN treated as 0 — same policy the DEM pipeline always had).
+#[cfg(not(target_arch = "wasm32"))]
+fn resample_roi_bilinear(
+    samples: &[f64],
+    src_w: usize,
+    src_h: usize,
+    roi: &RoiCrop,
+) -> Vec<f64> {
+    let (x0, y0, win, out_n) = (roi.x0, roi.y0, roi.win, roi.out_n);
+    let mut out = vec![0.0f64; out_n * out_n];
+    for oy in 0..out_n {
+        // Source row (nearest at the window's centre; bilinear inside).
+        let sy_f = y0 as f64 + (oy as f64 / (out_n - 1).max(1) as f64) * (win - 1) as f64;
+        let sy0 = sy_f.floor() as usize;
+        let sy1 = (sy0 + 1).min(src_h - 1);
+        let fy = sy_f - sy0 as f64;
+        for ox in 0..out_n {
+            let sx_f = x0 as f64 + (ox as f64 / (out_n - 1).max(1) as f64) * (win - 1) as f64;
+            let sx0 = sx_f.floor() as usize;
+            let sx1 = (sx0 + 1).min(src_w - 1);
+            let fx = sx_f - sx0 as f64;
+            // Bilinear over the four neighbours; nodata/NaN treated as 0.
+            let s = |col: usize, row: usize| -> f64 {
+                let v = samples.get(row * src_w + col).copied().unwrap_or(0.0);
+                if v.is_finite() { v } else { 0.0 }
+            };
+            let v00 = s(sx0, sy0);
+            let v10 = s(sx1, sy0);
+            let v01 = s(sx0, sy1);
+            let v11 = s(sx1, sy1);
+            let top = v00 + (v10 - v00) * fx;
+            let bot = v01 + (v11 - v01) * fx;
+            let v = top + (bot - top) * fy;
+            out[oy * out_n + ox] = if v.is_finite() { v } else { 0.0 };
+        }
+    }
+    out
+}
+
+/// `kind = "map"` pipeline — crop a co-registered raster to the same
+/// geographic ROI as the site's DEM and write an 8-bit PNG layer map.
+///
+/// RGB sources (LROC `_SLOPE`/`_CLRGRAD` colour TIFFs) crop as-is. Grayscale
+/// sources (`_SHADE`, ortho `.IMG` radiance) get a 1–99 percentile stretch to
+/// 8 bits — NAC radiance floats would otherwise land in a few gray levels.
+/// Output is always RGB PNG: Bevy tags 8-bit PNGs sRGB, and an R-only gray
+/// would sample red in the layered shader's albedo slot.
+#[cfg(not(target_arch = "wasm32"))]
+fn process_map(
+    source: &Path,
+    output_path: &Path,
+    cfg: &ProcessConfig,
+) -> Result<(), std::io::Error> {
+    let ext = source
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    // RGB path: anything the `image` crate can decode as colour (the LROC
+    // derived-map TIFFs are plain 8-bit RGB strips).
+    if ext != "img" {
+        let mut reader = image::ImageReader::open(source)
+            .map_err(|e| io_err(format!("opening map source: {e}")))?
+            .with_guessed_format()
+            .map_err(|e| io_err(format!("sniffing map source: {e}")))?;
+        // Same reasoning as the DEM TIFF decode: one known-large offline
+        // raster, not a page hot path.
+        reader.no_limits();
+        let img = reader
+            .decode()
+            .map_err(|e| io_err(format!("decoding map source: {e}")))?
+            .to_rgb8();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        // Per-channel planes as f64 so the shared bilinear resampler applies.
+        let mut planes = [
+            Vec::with_capacity(w * h),
+            Vec::with_capacity(w * h),
+            Vec::with_capacity(w * h),
+        ];
+        for p in img.pixels() {
+            planes[0].push(p.0[0] as f64);
+            planes[1].push(p.0[1] as f64);
+            planes[2].push(p.0[2] as f64);
+        }
+        let probe = GraySource {
+            w,
+            h,
+            samples: Vec::new(),
+            extent: None,
+            scale_m: None,
+            projection: None,
+        };
+        let (roi, _scale, _clat, _clon) = resolve_roi(cfg, &probe, "map")?;
+        let out_n = roi.out_n;
+        let rgb: Vec<Vec<f64>> = planes
+            .iter()
+            .map(|pl| resample_roi_bilinear(pl, w, h, &roi))
+            .collect();
+        let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
+        for (i, px) in png.pixels_mut().enumerate() {
+            for c in 0..3 {
+                px.0[c] = rgb[c][i].round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        png.save(output_path)
+            .map_err(|e| io_err(format!("writing map PNG: {e}")))?;
+        return Ok(());
+    }
+
+    // Grayscale path (PDS `.IMG` orthos: single-band radiance).
+    let src = decode_gray_source(source)?;
+    let (roi, _scale, _clat, _clon) = resolve_roi(cfg, &src, "map")?;
+    let out_n = roi.out_n;
+    let gray = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+
+    // 1–99 percentile stretch over the CROP (not the whole mosaic — the crop
+    // is the scene, and mosaic-wide outliers would flatten its contrast).
+    let mut sorted: Vec<f64> = gray.iter().copied().filter(|v| v.is_finite() && *v != 0.0).collect();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let (lo, hi) = if sorted.is_empty() {
+        (0.0, 1.0)
+    } else {
+        let lo = sorted[(sorted.len() - 1) * 1 / 100];
+        let hi = sorted[(sorted.len() - 1) * 99 / 100];
+        if (hi - lo).abs() < f64::EPSILON { (lo, lo + 1.0) } else { (lo, hi) }
+    };
+    let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
+    for (i, px) in png.pixels_mut().enumerate() {
+        let v = (((gray[i] - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8;
+        px.0 = [v, v, v];
+    }
+    png.save(output_path)
+        .map_err(|e| io_err(format!("writing map PNG: {e}")))?;
+    Ok(())
+}
+
+/// `kind = "normalmap"` pipeline — derive a world-space normal map from the
+/// DEM crop and write it as RGB8 PNG (`n * 0.5 + 0.5`).
+///
+/// Convention matches `lunco-terrain-core::derive::normal_map` and the decode
+/// in `terrain_layered.wgsl`: `n = normalize(-dh/dx, 1, -dh/dz)` with `+x` =
+/// increasing column (east) and `+z` = increasing row (south, since PDS
+/// rasters are north-up) — world-space, no tangent basis.
+#[cfg(not(target_arch = "wasm32"))]
+fn process_normalmap(
+    source: &Path,
+    output_path: &Path,
+    cfg: &ProcessConfig,
+) -> Result<(), std::io::Error> {
+    let src = decode_gray_source(source)?;
+    let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "normalmap")?;
+    let out_n = roi.out_n;
+    let h = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+
+    // Metres per output texel — the crop spans `win * scale` metres.
+    let step = (roi.win as f64 * scale) / out_n.max(1) as f64;
+    let at = |x: isize, z: isize| -> f64 {
+        let x = x.clamp(0, out_n as isize - 1) as usize;
+        let z = z.clamp(0, out_n as isize - 1) as usize;
+        h[z * out_n + x]
+    };
+    let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
+    for z in 0..out_n as isize {
+        for x in 0..out_n as isize {
+            let dhdx = (at(x + 1, z) - at(x - 1, z)) / (2.0 * step);
+            let dhdz = (at(x, z + 1) - at(x, z - 1)) / (2.0 * step);
+            let len = (dhdx * dhdx + 1.0 + dhdz * dhdz).sqrt();
+            let n = [-dhdx / len, 1.0 / len, -dhdz / len];
+            let enc = |c: f64| ((c * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+            png.put_pixel(x as u32, z as u32, image::Rgb([enc(n[0]), enc(n[1]), enc(n[2])]));
+        }
+    }
+    png.save(output_path)
+        .map_err(|e| io_err(format!("writing normal-map PNG: {e}")))?;
     Ok(())
 }
 
@@ -702,19 +1017,183 @@ mod tests {
         }
 
         // The manifest's frame declaration lands in the raster's own tags.
+        // (No metadata.yaml sidecar any more — the geo tags ARE the metadata.)
         let mut tag_dec =
             tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
         let geo = lunco_geotiff::read_geo_tags(&mut tag_dec).unwrap();
         assert_eq!(geo.frame, Some(lunco_geotiff::LunarFrame::MoonMe));
 
-        // metadata.yaml parses and carries the essentials the loader needs.
-        let meta = std::fs::read_to_string(out_dir.join("metadata.yaml")).unwrap();
-        assert!(meta.contains("site_id: testsite"));
-        assert!(meta.contains("resolution_x: 4"));
-        assert!(meta.contains("size_x_m:"));
-        // elevation min/max must be present and ordered.
-        assert!(meta.contains("elevation_min_m:"));
-        assert!(meta.contains("elevation_max_m:"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `kind = "dem"` must ingest a PDS3 `.IMG` source using the label's own
+    /// extent + MAP_SCALE (no `src_*` fields in the manifest) — the
+    /// non-GeoTIFF path.
+    #[test]
+    fn dem_process_ingests_pds_img_via_label_extent() {
+        let tmp = std::env::temp_dir().join(format!(
+            "lunco-assets-dem-img-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // 8×8 PC_REAL grid with an attached label declaring extent + scale.
+        let record_bytes: usize = 1024;
+        let mut label = "PDS_VERSION_ID = PDS3\r\n\
+                         RECORD_BYTES  = 1024\r\n\
+                         LABEL_RECORDS = 1\r\n\
+                         ^IMAGE        = 2\r\n\
+                         OBJECT = IMAGE\r\n\
+                           LINES        = 8\r\n\
+                           LINE_SAMPLES = 8\r\n\
+                           SAMPLE_TYPE  = PC_REAL\r\n\
+                           SAMPLE_BITS  = 32\r\n\
+                         END_OBJECT = IMAGE\r\n\
+                         OBJECT = IMAGE_MAP_PROJECTION\r\n\
+                           MAP_PROJECTION_TYPE = \"EQUIRECTANGULAR\"\r\n\
+                           MAP_SCALE = 2.0 <METERS/PIXEL>\r\n\
+                           MAXIMUM_LATITUDE = 1.0 <DEG>\r\n\
+                           MINIMUM_LATITUDE = -1.0 <DEG>\r\n\
+                           EASTERNMOST_LONGITUDE = 1.0 <DEG>\r\n\
+                           WESTERNMOST_LONGITUDE = -1.0 <DEG>\r\n\
+                         END_OBJECT = IMAGE_MAP_PROJECTION\r\n\
+                         END\r\n"
+            .as_bytes()
+            .to_vec();
+        label.resize(record_bytes, b' ');
+        for i in 0..64u32 {
+            label.extend_from_slice(&(i as f32 * 5.0).to_le_bytes());
+        }
+        let src_path = tmp.join("source.IMG");
+        std::fs::write(&src_path, &label).unwrap();
+
+        let cfg = ProcessConfig {
+            kind: "dem".into(),
+            output: "site".into(),
+            output_root: "cache".into(),
+            target_resolution: Some([4, 4]),
+            center_lat: Some(0.0),
+            center_lon: Some(0.0),
+            window_m: Some(8.0),
+            pixel_scale_m: 2.0, // serde default — label's MAP_SCALE governs
+            src_min_lat: None,  // absent on purpose: label extent must serve
+            src_max_lat: None,
+            src_min_lon: None,
+            src_max_lon: None,
+            site_id: None,
+            frame: Some("MOON_ME".into()),
+        };
+        let out_dir = tmp.join("site");
+        process_dem(&src_path, &out_dir, &cfg).expect("PDS IMG dem ingest succeeds");
+
+        let out_bytes = std::fs::read(out_dir.join("materials/textures/heightmap.tif")).unwrap();
+        let mut dec = tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
+        let (w, h) = dec.dimensions().unwrap();
+        assert_eq!((w, h), (4, 4));
+        match dec.read_image().unwrap() {
+            tiff::decoder::DecodingResult::F32(v) => {
+                assert!(v.iter().all(|x| x.is_finite()));
+                assert!(v.iter().any(|x| *x > 0.0), "real samples made it through");
+            }
+            other => panic!("expected F32 heightmap, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `kind = "normalmap"` writes an RGB8 PNG whose flat regions encode the
+    /// up vector (128, 255, 128) and whose slopes tilt away from it.
+    #[test]
+    fn normalmap_process_encodes_world_space_normals() {
+        // 16×16 ramp in +x: constant dh/dx, zero dh/dz.
+        let (sw, sh) = (16u32, 16u32);
+        let src: Vec<f32> = (0..sh)
+            .flat_map(|_r| (0..sw).map(move |c| c as f32 * 2.0))
+            .collect();
+        let tif = encode_tiff_f32(sw, sh, &src);
+
+        let tmp = std::env::temp_dir().join(format!(
+            "lunco-assets-nrm-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let src_path = tmp.join("source.tif");
+        std::fs::write(&src_path, &tif).unwrap();
+
+        let cfg = ProcessConfig {
+            kind: "normalmap".into(),
+            output: "normal.png".into(),
+            output_root: "cache".into(),
+            target_resolution: Some([8, 8]),
+            center_lat: Some(0.0),
+            center_lon: Some(0.0),
+            window_m: Some(16.0),
+            pixel_scale_m: 1.0,
+            src_min_lat: Some(-1.0),
+            src_max_lat: Some(1.0),
+            src_min_lon: Some(-1.0),
+            src_max_lon: Some(1.0),
+            site_id: None,
+            frame: None,
+        };
+        let out_path = tmp.join("normal.png");
+        process_normalmap(&src_path, &out_path, &cfg).expect("normalmap succeeds");
+
+        let png = image::open(&out_path).unwrap().to_rgb8();
+        assert_eq!((png.width(), png.height()), (8, 8));
+        let c = png.get_pixel(4, 4).0;
+        // Up-slope in +x ⇒ normal tilts to -x: R < 128; no z tilt: B ≈ 128;
+        // Y strongly positive.
+        assert!(c[0] < 120, "R tilts negative-x on a +x ramp, got {}", c[0]);
+        assert!(c[1] > 150, "G (up) stays dominant, got {}", c[1]);
+        assert!((c[2] as i32 - 128).abs() <= 6, "B stays neutral, got {}", c[2]);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `kind = "map"` crops an RGB source to the ROI and keeps colour.
+    #[test]
+    fn map_process_crops_rgb_source() {
+        let tmp = std::env::temp_dir().join(format!(
+            "lunco-assets-map-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // 16×16 RGB PNG: left half red, right half green.
+        let mut img = image::RgbImage::new(16, 16);
+        for (x, _y, p) in img.enumerate_pixels_mut() {
+            *p = if x < 8 { image::Rgb([200, 10, 10]) } else { image::Rgb([10, 200, 10]) };
+        }
+        let src_path = tmp.join("source.png");
+        img.save(&src_path).unwrap();
+
+        let cfg = ProcessConfig {
+            kind: "map".into(),
+            output: "map.png".into(),
+            output_root: "cache".into(),
+            target_resolution: Some([8, 8]),
+            center_lat: Some(0.0),
+            center_lon: Some(0.0),
+            window_m: Some(16.0),
+            pixel_scale_m: 1.0,
+            src_min_lat: Some(-1.0),
+            src_max_lat: Some(1.0),
+            src_min_lon: Some(-1.0),
+            src_max_lon: Some(1.0),
+            site_id: None,
+            frame: None,
+        };
+        let out_path = tmp.join("map.png");
+        process_map(&src_path, &out_path, &cfg).expect("map crop succeeds");
+
+        let out = image::open(&out_path).unwrap().to_rgb8();
+        assert_eq!((out.width(), out.height()), (8, 8));
+        assert!(out.get_pixel(1, 4).0[0] > 100, "west side stays red");
+        assert!(out.get_pixel(6, 4).0[1] > 100, "east side stays green");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

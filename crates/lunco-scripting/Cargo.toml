@@ -49,6 +49,12 @@ lunco-api = { path = "../lunco-api", default-features = false, optional = true }
 # rhai World-bridge only: `world_pos()` walks the big_space float-origin
 # hierarchy (Grid / CellCoord) via lunco-core's coords helpers.
 big_space = { workspace = true, optional = true }
+# `geolocation()` — the site anchor (`GeodeticAnchor` / `SiteAnchor`), the body
+# radius (`CelestialBody`) and the local↔geodetic conversion all live here.
+# `default-features = false` drops celestial's `ui` feature: this bridge is
+# headless-capable and must not pull bevy_egui/workbench in behind it.
+# No cycle — lunco-celestial depends on lunco-core, never on lunco-scripting.
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
 # Tool libraries: the runtime-agnostic registry (lunco-tools) + its rhai binding
 # (lunco-tools-rhai). Gated on `rhai` since the binding + scenario runtime are
 # rhai; the registry itself is dependency-light.

@@ -17,7 +17,10 @@ pub mod terrain_tools;
 pub mod connection_canvas;
 pub mod usd_prim_tree;
 pub mod usd_params;
+pub mod usd_variants;
 pub mod usd_mount;
+/// Screen-space labels a prim authored for itself (`lunco:billboard*`).
+pub mod billboard_overlay;
 /// Interactive checkpoint authoring — Ctrl+LMB append + right-click context
 /// menu, routing through the existing `SetAutopilotBehavior`/`EngageAutopilot`
 /// commands (no new journal domain).
@@ -213,6 +216,14 @@ impl Plugin for SandboxEditUiPlugin {
             usd_params::produce_usd_param_view.in_set(ViewModelSet),
         );
 
+        // Variant sets: which configurations the selected prim ships (a rover's
+        // `drivetrain`, a scenario scene's `terrain` site) and which composes
+        // now — the Inspector's ⎇ Variants picker.
+        app.init_resource::<usd_variants::UsdVariantView>().add_systems(
+            Update,
+            usd_variants::produce_usd_variant_view.in_set(ViewModelSet),
+        );
+
         // Mount snap: resolve each socket the selected host advertises + the
         // placement that lands its part's plug on the socket (Inspector 🔩 Mount).
         app.init_resource::<usd_mount::UsdMountView>().add_systems(
@@ -250,6 +261,9 @@ impl Plugin for SandboxEditUiPlugin {
                 bevy_egui::EguiPrimaryContextPass,
                 (
                     checkpoint_click::draw_waypoint_overlay,
+                    // USD-authored labels (`lunco:billboard`). Paint-only, same
+                    // pass for the same reason.
+                    billboard_overlay::draw_billboard_overlay,
                     checkpoint_click::draw_waypoint_context_menu,
                     // Crosshair + Esc-to-cancel while a placement is armed.
                     checkpoint_click::handle_waypoint_placement_mode,

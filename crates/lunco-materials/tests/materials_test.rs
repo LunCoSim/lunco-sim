@@ -85,3 +85,38 @@ fn test_terrain_shaders_reflect_shadow_cache_on() {
         );
     }
 }
+
+/// BOTH terrain render paths must reflect the authored-layer weights under the
+/// SAME names, because one authored scene feeds both: `terrain_layered.wgsl`
+/// draws a static-mesh site and `terrain_geomorph.wgsl` draws a streamed
+/// (`lodViz = true`) one.
+///
+/// This is a silent-failure guard, not a formality. The binder sets these by
+/// name (`set_param(look, "weight_albedo", …)`); a name that does not exist in
+/// the shader's `Material` struct is simply dropped, so a rename or a typo
+/// would not fail to compile, would not warn, and would show up only as a site
+/// rendering procedural grey while its real orthophoto sat loaded in memory —
+/// which is exactly the bug step 4 existed to fix.
+#[test]
+fn both_terrain_paths_reflect_the_authored_layer_weights() {
+    for name in ["terrain_layered.wgsl", "terrain_geomorph.wgsl"] {
+        let wgsl = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shaders").join(name),
+        )
+        .unwrap_or_else(|_| panic!("{name} present"));
+        let schema =
+            ParamSchema::parse(&wgsl).unwrap_or_else(|| panic!("{name} Material struct reflects"));
+        for field in ["weight_albedo", "weight_mineral"] {
+            assert_eq!(
+                schema.field(field).map(|f| f.ty),
+                Some(ParamType::F32),
+                "{name} must reflect {field} as f32 — the layer binder sets it by this name"
+            );
+        }
+        assert!(
+            schema.size <= 256,
+            "{name} params overflow uniform block: {}",
+            schema.size
+        );
+    }
+}

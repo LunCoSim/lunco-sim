@@ -38,8 +38,15 @@ fn main() {
     // workspace membership needed) and each asset's `dest` resolves against
     // the Twin root, so files download *into* the Twin. Lets a standalone
     // project (e.g. a school twin on disk) self-provision its terrain DTM,
-    // models, etc. Mutually exclusive with `-p` / `-a`.
+    // models, etc. Mutually exclusive with `-p`; composes with `-a KEY` to
+    // fetch/process a single Twin asset.
     let mut twin_dir: Option<&str> = None;
+    // `--quality coarse|good` (process only) — quick-start knob. `coarse`
+    // quarters each entry's `target_resolution` (floor 64) for a fast first
+    // bake; `good` (default) bakes as authored. The bake key includes the
+    // effective resolution, so switching quality rebakes exactly the
+    // affected outputs and nothing silently serves the wrong tier.
+    let mut quality: &str = "good";
 
     let mut i = 0;
     while i < args.len() {
@@ -60,6 +67,19 @@ fn main() {
             "--workspace-root" => {
                 i += 1;
                 workspace_root = args.get(i).map(|s| s.as_str());
+            }
+            "--quality" => {
+                i += 1;
+                match args.get(i).map(|s| s.as_str()) {
+                    Some(q @ ("coarse" | "good")) => quality = q,
+                    other => {
+                        eprintln!(
+                            "Error: --quality expects `coarse` or `good`, got {:?}",
+                            other.unwrap_or("<nothing>")
+                        );
+                        return;
+                    }
+                }
             }
             "--help" | "-h" => {
                 print_usage();
@@ -85,12 +105,19 @@ fn main() {
 
     // `--twin` selects the Twin download/process/list path, which reads the
     // folder's own Assets.toml and resolves dests against the Twin root.
+    // `-a KEY` composes with it: a school twin that lists every candidate
+    // territory would otherwise pull multiple GB on each provisioning run.
     if let Some(dir) = twin_dir {
         let twin_root = PathBuf::from(dir);
-        let result = match action {
-            "download" => download::download_all_for_twin(&twin_root).map_err(|e| e.to_string()),
-            "process" => process_all_for_twin(&twin_root),
-            "list" => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
+        let result = match (action, asset_key) {
+            ("download", Some(key)) => {
+                download::download_one_for_twin(&twin_root, key).map_err(|e| e.to_string())
+            }
+            ("download", None) => {
+                download::download_all_for_twin(&twin_root).map_err(|e| e.to_string())
+            }
+            ("process", key) => process_for_twin(&twin_root, key, quality),
+            ("list", _) => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
             _ => unreachable!(),
         };
         if let Err(e) = result {
@@ -146,29 +173,56 @@ fn main() {
 
 /// Process every `[*.process]` entry in a folder's `Assets.toml`.
 ///
-/// `dest_root` is the base the download step resolved each `dest` against
-/// (cache for a crate, the Twin root for a Twin) — the process step's
-/// *source* lives there. `twin_root` is forwarded to `process_texture` so
+/// Each entry's *source* is wherever the download step put it — resolved
+/// through the same `download::entry_dest_path` (authored `dest` inside the
+/// Twin/cache, or the shared source pool), so the two steps can never
+/// disagree. `twin_root` is forwarded to `process_asset` so
 /// `output_root = "twin"` writes land inside the Twin; `None` for crates.
-fn process_all(
+/// Optional `-a KEY` filter — the process-side twin of the download filter,
+/// so a single territory can be re-baked without touching every other
+/// entry's sources — and the `--quality` preset (`coarse` quarters
+/// `target_resolution`, floor 64, for a quick first bake).
+fn process_filtered(
     folder: &std::path::Path,
-    dest_root: &std::path::Path,
     twin_root: Option<&std::path::Path>,
+    only_key: Option<&str>,
+    quality: &str,
 ) -> Result<(), String> {
     let manifest = download::AssetManifest::from_crate_dir(folder)
         .map_err(|e| format!("Failed to read Assets.toml: {}", e))?;
 
+    if let Some(key) = only_key {
+        if !manifest.assets.contains_key(key) {
+            return Err(format!(
+                "no asset `{}` in {}",
+                key,
+                folder.join("Assets.toml").display()
+            ));
+        }
+    }
+
     let mut processed = 0;
     for (key, entry) in &manifest.assets {
+        if only_key.is_some_and(|k| k != key) {
+            continue;
+        }
         if let Some(ref proc_cfg) = entry.process {
-            let source_path = dest_root.join(&entry.dest);
+            let source_path = download::entry_dest_path(entry, twin_root);
             if !source_path.exists() {
                 println!("  ⚠ {} source not found at {}, skipping", key, source_path.display());
                 println!("    Run 'download' first.");
                 continue;
             }
             println!("  processing {}...", key);
-            process::process_texture(&source_path, proc_cfg, twin_root)
+            // `coarse` is a derived config, not an edit: the bake key hashes
+            // the EFFECTIVE config, so coarse and good outputs never alias.
+            let mut cfg = proc_cfg.clone();
+            if quality == "coarse" {
+                if let Some([w, h]) = cfg.target_resolution {
+                    cfg.target_resolution = Some([(w / 4).max(64), (h / 4).max(64)]);
+                }
+            }
+            process::process_asset(&source_path, &cfg, twin_root)
                 .map_err(|e| format!("Failed to process {}: {}", key, e))?;
             processed += 1;
         }
@@ -184,13 +238,19 @@ fn process_all(
 }
 
 fn process_all_for_crate(crate_dir: &std::path::Path) -> Result<(), String> {
-    process_all(crate_dir, &lunco_assets::cache_dir(), None)
+    process_filtered(crate_dir, None, None, "good")
 }
 
 /// Process a Twin folder's `[*.process]` entries: sources + twin-targeted
 /// outputs both resolve against the Twin root (the `--twin <DIR>` path).
-fn process_all_for_twin(twin_root: &std::path::Path) -> Result<(), String> {
-    process_all(twin_root, twin_root, Some(twin_root))
+/// `only_key` narrows to a single entry (`-a KEY`); `quality` is the
+/// `--quality` preset.
+fn process_for_twin(
+    twin_root: &std::path::Path,
+    only_key: Option<&str>,
+    quality: &str,
+) -> Result<(), String> {
+    process_filtered(twin_root, Some(twin_root), only_key, quality)
 }
 
 fn process_all_workspace(ws_root: &PathBuf) -> Result<(), String> {
@@ -274,6 +334,9 @@ fn print_usage() {
     println!("  cargo run -p lunco-assets -- download -p NAME      Download for a specific crate");
     println!("  cargo run -p lunco-assets -- download -a KEY       Download a single asset by key");
     println!("  cargo run -p lunco-assets -- download -t DIR       Download a Twin folder's assets (into the Twin)");
+    println!("  cargo run -p lunco-assets -- download -t DIR -a KEY  Download one Twin asset by key (skips the rest)");
+    println!("  cargo run -p lunco-assets -- process  -t DIR -a KEY  Process one Twin asset by key");
+    println!("  cargo run -p lunco-assets -- process  -t DIR --quality coarse   Quick-start bake (¼ resolution; re-run with `good` for full)");
     println!("  cargo run -p lunco-assets -- process               Process all downloaded assets");
     println!("  cargo run -p lunco-assets -- process -p NAME       Process assets for a crate");
     println!("  cargo run -p lunco-assets -- process  -t DIR       Process a Twin folder's assets");
@@ -284,7 +347,9 @@ fn print_usage() {
     println!("Process kinds (in an Assets.toml [name.process] section):");
     println!("  kind = \"texture\"  resize/re-encode an image (PNG/JPEG/TIFF/...) [default]");
     println!("  kind = \"gltf\"     clean a .glb for Bevy 0.18 (needs Node/npx)");
-    println!("  kind = \"dem\"      crop a square float32 heightmap + metadata.yaml from a raw LROC DTM");
+    println!("  kind = \"dem\"      crop a square georeferenced float32 heightmap from a raw DTM (GeoTIFF or PDS3 .IMG)");
+    println!("  kind = \"map\"      crop a co-registered ortho/shade/slope raster to the same ROI as an 8-bit PNG layer map");
+    println!("  kind = \"normalmap\" derive a world-space normal-map PNG from a DTM crop");
     println!();
     println!("Examples:");
     println!("  cargo run -p lunco-assets -- download -p lunco-modelica");

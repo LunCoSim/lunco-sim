@@ -59,6 +59,10 @@
 //!@default weight_ao         0
 //!@ui      weight_tone       0 1    "Baked tonal (albedo) weight"
 //!@default weight_tone       0
+//!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
+//!@default weight_albedo     0
+//!@ui      weight_mineral    0 1    "Overlay drape weight (unlit)"
+//!@default weight_mineral    0
 //!@engine  shadow_cache_on
 //!@engine  csm_far
 //!@default morph_start  1.0e20
@@ -82,6 +86,8 @@ struct Material {
     weight_normal:     f32,  // baked meso normal (fades IN where geometry is coarser than the map)
     weight_ao:         f32,  // baked ambient occlusion (crater bowls/valleys darken)
     weight_tone:       f32,  // baked relief-correlated albedo scalar (normal_tex alpha)
+    weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
+    weight_mineral:    f32,  // AUTHORED overlay drape, composited UNLIT after lighting
     shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache bound and valid
     csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
@@ -94,6 +100,23 @@ struct Material {
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
+
+// AUTHORED rasters from the terrain's UsdShade Material network (doc 18 §3.1)
+// — `inputs:albedo_map` / `inputs:mineral_map`, same slots and same whole-DEM
+// planar UV as the static-mesh `terrain_layered.wgsl`. Before these existed a
+// streamed site could bake a real NAC orthophoto, wire it through the network,
+// and still render pure procedural regolith: the maps only ever bound on the
+// static-mesh path, so on a `lodViz = true` site the authored colour was
+// invisible. Weight-gated like everything else, so an unbound map (Bevy's
+// fallback white) contributes nothing at weight 0.
+@group(#{MATERIAL_BIND_GROUP}) @binding(2)
+var albedo_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(3)
+var albedo_smp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(4)
+var mineral_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(5)
+var mineral_smp: sampler;
 
 // Baked derived maps (lunco-terrain-surface derived_layers; whole-DEM planar
 // UV). `None` binds Bevy's fallback white — every read is weight-gated so an
@@ -296,9 +319,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // weight gates make an unbound/fallback map a no-op). UVs are DEM-global.
     var map_n = vec4(0.5, 1.0, 0.5, 0.5);
     var map_s = vec4(0.6, 1.0, 0.0, 0.0);
+    // Authored rasters. Neutral defaults so a shader compiled without UVs (or
+    // with the maps unbound) behaves exactly as before these existed.
+    var map_a = vec3(1.0, 1.0, 1.0);
+    var map_m = vec3(0.0, 0.0, 0.0);
 #ifdef VERTEX_UVS_A
     map_n = textureSample(normal_tex, normal_smp, in.uv);
     map_s = textureSample(surface_tex, surface_smp, in.uv);
+    map_a = textureSample(albedo_tex, albedo_smp, in.uv).rgb;
+    map_m = textureSample(mineral_tex, mineral_smp, in.uv).rgb;
 #endif
 
     // All macro/meso SHAPE comes from the mesh (DEM + crater geometry) and from
@@ -383,6 +412,22 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // this weight is raised.
     let map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, mat.weight_ao);
     albedo *= map_ao;
+
+    // AUTHORED albedo (the site's real orthophoto). Applied HERE — after every
+    // procedural tone layer, before photometry — so the mosaic is what the sun
+    // then lights, and so the micro-grain above still modulates it instead of
+    // being erased by it.
+    //
+    // MODULATES rather than replaces, and the formula is character-for-character
+    // the one in `terrain_layered.wgsl`: `mix(albedo, albedo * a * 3.0, w)`.
+    // Both paths must agree on what a given `weight_albedo` MEANS, or the same
+    // authored scene reads differently depending on whether its site streams —
+    // and the ×3 is not arbitrary: the procedural base sits near 0.13 while the
+    // baked ortho is a 1–99 percentile stretch, so a plain multiply would render
+    // the real photograph as near-black mud.
+    if (mat.weight_albedo > 0.0) {
+        albedo = mix(albedo, albedo * map_a * 3.0, mat.weight_albedo);
+    }
 
     // --- Lunar photometry: the actual realism lever -----------------------
     // Lommel-Seeliger + opposition surge (retroreflective backscatter) from the
@@ -483,6 +528,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             tint = lod_depth_color(mat.lod_depth);
         }
         color = vec4(mix(color.rgb, tint, mat.overlay_opacity), color.a);
+    }
+
+    // --- AUTHORED overlay drape (the raster half of the same plane) -----------
+    // A baked classification raster (slope ramp, hillshade, elevation gradient)
+    // from `inputs:mineral_map`, composited at the SAME post-lit point as the
+    // computed overlay above, and after it — so the two stack in a defined
+    // order instead of racing.
+    //
+    // UNLIT, and that is the whole point (doc 18 §4): this is a MAP, not a
+    // material. It must read the same on a shadowed crater floor as on the
+    // sunlit rim, because "where is the ground dangerous" is not a question
+    // about where the light happens to be. Tinting albedo instead would put the
+    // answer behind the very shadow the student is trying to see into.
+    if (mat.weight_mineral > 0.0) {
+        color = vec4(mix(color.rgb, map_m, mat.weight_mineral), color.a);
     }
     return color;
 }

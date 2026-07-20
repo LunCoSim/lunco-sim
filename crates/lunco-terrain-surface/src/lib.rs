@@ -76,7 +76,7 @@ pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBody
 /// type happens to live.
 pub use lunco_obstacle_field::field::HeightGrid;
 pub use plugin::TerrainSurfacePlugin;
-pub use derived_layers::{DerivedLayersBuilt, TerrainDerivedMaps};
+pub use derived_layers::{DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps};
 pub use georef::{TerrainGeoref, DEFAULT_ANCHOR_BODY};
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};

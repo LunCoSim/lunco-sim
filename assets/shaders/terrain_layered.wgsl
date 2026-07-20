@@ -8,7 +8,9 @@
 //!
 //!   * albedo  (binding 2/3) — real colour raster (e.g. the NASA lunar mosaic
 //!     downloaded via `Assets.toml`); `mix`ed over the procedural albedo.
-//!   * mineral (binding 4/5) — classification/composition tint (palette later).
+//!   * mineral (binding 4/5) — classification/analysis OVERLAY (e.g. the LROC
+//!     slope map): composited UNLIT after lighting/shadowing, so it stays
+//!     readable in shadow (doc 18 §4 — overlays are data, not material).
 //!   * surface (binding 6/7) — packed R=roughness G=AO B=rockDens A=hazard.
 //!   * normal  (binding 8/9) — meso-scale normal (DEM-derived Sobel) perturbing
 //!     the procedural bump normal.
@@ -57,7 +59,7 @@
 // --- layer blend weights (0 = layer off → pure procedural) -----------------
 //!@ui      weight_albedo     0 1         "Albedo map weight"
 //!@default weight_albedo     0
-//!@ui      weight_mineral    0 1         "Mineral tint weight"
+//!@ui      weight_mineral    0 1         "Overlay drape weight (unlit)"
 //!@default weight_mineral    0
 //!@ui      weight_rough      0 1         "Surface roughness weight"
 //!@default weight_rough      0
@@ -217,11 +219,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
         albedo = mix(albedo, albedo * a * 3.0, mat.weight_albedo);
     }
-    // Mineral: tint by the classification raster (palette LUT is a later step).
-    if (mat.weight_mineral > 0.0) {
-        let m = textureSample(mineral_tex, mineral_smp, uv).rgb;
-        albedo = mix(albedo, albedo * m, mat.weight_mineral);
-    }
+    // (Mineral/classification is NOT applied here: it is an OVERLAY — data
+    // visualization, not material — and composites after lighting below, so a
+    // slope-class drape stays readable inside the crater's shadow. Tinting the
+    // albedo here would multiply it through sun, CSM and the shadow march —
+    // the exact bug doc 18 §4 removes.)
     // Surface pack: R=roughness, G=AO (B=rockDens, A=hazard consumed elsewhere).
     if (mat.weight_rough > 0.0 || mat.weight_ao > 0.0) {
         let s = textureSample(surface_tex, surface_smp, uv);
@@ -275,6 +277,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Applied outside the march branch so near (CSM) and far (march) pixels get the
     // SAME lift; a branch-local fill painted a bright ring at the handoff.
     color = vec4(color.rgb + shadow_fill(albedo, in.uv, mat.hf_res), color.a);
+
+    // ── Overlay plane (UNLIT, doc 18 §4): the mineral/classification drape
+    // composites over the LIT result — after PBR, after the sun march, after
+    // shadow fill — and is never multiplied by any of them. Same composite
+    // point as terrain_geomorph.wgsl's analysis overlay, so texture overlays
+    // and in-shader analysis overlays stack identically. The drape is the
+    // map's own colour (e.g. the LROC slope classes), not an albedo tint:
+    // its whole job is to stay readable where the light does not reach.
+    if (mat.weight_mineral > 0.0) {
+        let m = textureSample(mineral_tex, mineral_smp, uv).rgb;
+        color = vec4(mix(color.rgb, m, mat.weight_mineral), color.a);
+    }
 #endif
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);

@@ -647,6 +647,44 @@ pub fn world_pos(gid: u64) -> Option<DVec3> {
     .flatten()
 }
 
+/// `geolocation(id)` — where on the body an entity actually is, as
+/// `(lat_deg, lon_deg, height_m)`. `None` when the scene is not site-anchored
+/// (no `SiteAnchor`) or the anchor's body is not present.
+///
+/// Works for ANYTHING with a position — rover, waypoint, mast, marker — because
+/// it reads the same big_space position `world_pos` does. It must: a
+/// grid-direct prim's `Transform.translation` is grid-absolute only on the
+/// first frame and only while it stays in cell 0, so anything reporting a
+/// number to a user has to go through [`coords::world_position`] or it silently
+/// under-reports by `cell × edge` (2 km per cell at the moonbase) the moment
+/// the entity crosses a cell.
+///
+/// The site frame's origin IS the anchor point with up = +Y, so an entity's
+/// world position is directly the local ENU offset the conversion wants.
+pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
+    with_world(|world| {
+        let entity = resolve_entity(world, gid)?;
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+            Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+            Query<&lunco_celestial::CelestialBody>,
+        )> = SystemState::new(world);
+        let (q_parents, q_grids, q_spatial, q_site, q_bodies) =
+            state.get(world).expect("read-only queries always validate");
+
+        let anchor = *q_site.iter().next()?;
+        let radius_m = q_bodies
+            .iter()
+            .find(|b| b.ephemeris_id == anchor.body)
+            .map(|b| b.radius_m)?;
+        let local = coords::world_position(entity, &q_parents, &q_grids, &q_spatial)?;
+        Some(lunco_celestial::geo::local_to_geodetic(&anchor.geodetic, radius_m, local))
+    })
+    .flatten()
+}
+
 /// `world_forward(id)` — unit heading in world space, or `None`.
 pub fn world_forward(gid: u64) -> Option<DVec3> {
     with_world(|world| {

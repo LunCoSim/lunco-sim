@@ -34,7 +34,7 @@
 // --- layer blend weights (0 = layer off → pure procedural) -----------------
 //!@ui      weight_albedo     0 1         "Albedo map weight"
 //!@default weight_albedo     0
-//!@ui      weight_mineral    0 1         "Mineral tint weight"
+//!@ui      weight_mineral    0 1         "Overlay drape weight (unlit)"
 //!@default weight_mineral    0
 //!@ui      weight_rough      0 1         "Surface roughness weight"
 //!@default weight_rough      0
@@ -201,10 +201,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
         albedo = mix(albedo, albedo * a * 3.0, mat.weight_albedo);
     }
-    if (mat.weight_mineral > 0.0) {
-        let m = textureSample(mineral_tex, mineral_smp, uv).rgb;
-        albedo = mix(albedo, albedo * m, mat.weight_mineral);
-    }
+    // (Mineral/classification composites UNLIT after lighting below — see the
+    // native variant and doc 18 §4; tinting albedo here would shadow the drape.)
     if (mat.weight_rough > 0.0 || mat.weight_ao > 0.0) {
         let s = textureSample(surface_tex, surface_smp, uv);
         roughness = clamp(mix(roughness, s.r, mat.weight_rough), 0.05, 1.0);
@@ -257,6 +255,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Applied outside the march branch so near (CSM) and far (march) pixels get the
     // SAME lift; a branch-local fill painted a bright ring at the handoff.
     color = vec4(color.rgb + shadow_fill(albedo, in.uv, mat.hf_res), color.a);
+
+    // Overlay plane (UNLIT, doc 18 §4) — mirrors the native variant exactly.
+    if (mat.weight_mineral > 0.0) {
+        let m = textureSample(mineral_tex, mineral_smp, uv).rgb;
+        color = vec4(mix(color.rgb, m, mat.weight_mineral), color.a);
+    }
 #endif
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);

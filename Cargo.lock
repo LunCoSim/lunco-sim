@@ -7512,6 +7512,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-behavior",
+ "lunco-celestial",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",

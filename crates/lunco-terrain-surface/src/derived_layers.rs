@@ -95,6 +95,34 @@ pub struct TerrainDerivedMaps {
     pub res: usize,
 }
 
+/// The **authored** layer maps for a terrain, read off its bound UsdShade
+/// Material network (`inputs:albedo_map` / `inputs:mineral_map` and their
+/// `inputs:weight_*`) — the counterpart to [`TerrainDerivedMaps`], which the
+/// engine bakes rather than the author supplying.
+///
+/// Published as a component for the same reason the derived maps are: BOTH
+/// terrain render paths need them. Before this existed only the static-mesh
+/// path bound authored rasters, so a site with `lodViz = true` — what every
+/// real DEM site uses — could bake a true NAC orthophoto, wire it correctly
+/// through the network, and still render pure procedural regolith. The map was
+/// authored, resolved, loaded, and never sampled.
+///
+/// The reader (`bind_terrain_layers`) lives in the editor crate because it
+/// needs the composed stage; it publishes here so the streaming path can
+/// consume the result without depending on the editor.
+#[derive(Component, Clone, Default)]
+pub struct TerrainAuthoredMaps {
+    /// `inputs:albedo_map` — the site's real colour mosaic.
+    pub albedo: Option<Handle<Image>>,
+    /// `inputs:mineral_map` — a classification/analysis drape, composited
+    /// UNLIT so it stays readable in shadow (doc 18 §4).
+    pub mineral: Option<Handle<Image>>,
+    /// `inputs:weight_albedo`; 0 = pure procedural.
+    pub weight_albedo: f32,
+    /// `inputs:weight_mineral`; 0 = no drape.
+    pub weight_mineral: f32,
+}
+
 /// The in-flight off-thread bake for a terrain's derived layers, plus the
 /// identity (Arc pointer) of the oracle it was started against — a re-compose
 /// mid-bake makes the result stale, and [`finish_derived_bakes`] discards it.
