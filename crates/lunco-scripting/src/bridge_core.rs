@@ -46,7 +46,6 @@ use lunco_core::{
     coords, CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId,
     Severity, SessionId, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
-use lunco_fsw::FlightSoftware;
 
 // ── Native value construction ──────────────────────────────────────────────
 
@@ -977,14 +976,16 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
             Query<&ChildOf>,
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
-            Query<(Option<&Name>, Has<FlightSoftware>, Option<&CelestialBody>)>,
+            Query<(Option<&Name>, Has<lunco_core::ControlBinding>, Option<&CelestialBody>)>,
         )> = SystemState::new(world);
         let (q_parents, q_grids, q_spatial, q_meta) = state.get(world).expect("read-only queries always validate");
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
-                let (name, is_vehicle, body) = q_meta.get(entity).unwrap_or((None, false, None));
-                let kind = if is_vehicle {
+                let (name, accepts_commands, body) = q_meta.get(entity).unwrap_or((None, false, None));
+                // NOTE: the reported kind string is deliberately unchanged — a lander
+                // accepts commands and has always reported as "rover" here.
+                let kind = if accepts_commands {
                     "rover"
                 } else if body.is_some() {
                     "planet"

@@ -78,7 +78,7 @@ def Xform "MyRover" (
 }
 ```
 
-- `PhysxVehicleContextAPI` on the root ⇒ FlightSoftware + ports
+- `PhysxVehicleContextAPI` on the root ⇒ ActuatorPorts + ports
   (`throttle`/`steer`/`brake` intake; `drive_left`/`drive_right`/`steering`).
 - `TankDifferentialAPI` ⇒ skid mixing; `AckermannSteeringAPI` (+ root
   `physxVehicleAckermannSteering:maxSteerAngle`, radians) ⇒ steer, front wheels

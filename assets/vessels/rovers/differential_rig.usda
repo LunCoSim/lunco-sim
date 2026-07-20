@@ -27,7 +27,7 @@ def Xform "DiffRig" (
     float3 physics:diagonalInertia = (4000.0, 4000.0, 4000.0)
 
     # Isolated G5 differential TEST FIXTURE, not a vehicle (see header): kinematic
-    # base, no PhysxVehicleContextAPI, no wheels, no FlightSoftware — so it can't be
+    # base, no PhysxVehicleContextAPI, no wheels, no actuator ports — so it can't be
     # possessed or driven. Keep it out of the spawn palette's Rovers list, where it
     # otherwise appears as a "rover" that mysteriously won't control. The G5 tests
     # load it by path directly, unaffected by this flag.

@@ -663,8 +663,8 @@ in the code:
 - `lunco-cosim/connection.rs:3,71-77` — "Follows the **FMI/SSP** ontology: `SimPort`=SSP Connector,
   `SimConnection`=SSP Connection"; affine `src*scale+offset` = "SSP **LinearTransformation**."
 - `propagate.rs:3-7` — "FMI-CS 'read outputs → write inputs'… multiple wires into one input **sum** = a
-  deliberate extension beyond FMI's 1:1." (The FSW/OBC `Port` side is SysML-flavored
-  hardware emulation and largely an *aspirational stub* — `lunco-fsw/README.md:5`.)
+  deliberate extension beyond FMI's 1:1." (The OBC `Port` side is SysML-flavored
+  hardware emulation and largely an *aspirational stub*.)
 
 **This is exactly why USD connections fit — they *are* the same lineage:**
 

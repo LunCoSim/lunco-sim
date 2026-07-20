@@ -20,7 +20,7 @@
 #
 # There is NO `PhysxVehicleTankDifferentialAPI` here: the drivetrain is the authored
 # mix, so adding a 7th wheel or re-routing a channel is a one-line USD edit.
-# `PhysxVehicleContextAPI` still provides the FlightSoftware control surface.
+# `PhysxVehicleContextAPI` still provides the actuator-port control surface.
 
 def Xform "SixWheelIndependent" (
     # An ASSEMBLY: a model built out of other models. Its wheels are component models

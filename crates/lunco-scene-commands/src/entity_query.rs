@@ -54,7 +54,7 @@ impl ApiQueryProvider for QueryEntityProvider {
         let mut state: SystemState<(
             Query<(
                 Option<&Name>,
-                Has<lunco_fsw::FlightSoftware>,
+                Has<lunco_core::ControlBinding>,
                 Option<&lunco_core::CelestialBody>,
             )>,
             Query<&GlobalTransform>,
@@ -69,8 +69,10 @@ impl ApiQueryProvider for QueryEntityProvider {
             );
         };
 
-        let (name, is_vehicle, body) = q_meta.get(entity).unwrap_or((None, false, None));
-        let kind = if is_vehicle {
+        let (name, accepts_commands, body) = q_meta.get(entity).unwrap_or((None, false, None));
+        // NOTE: the reported kind string is deliberately unchanged — a lander accepts
+        // commands and has always reported as "rover" here.
+        let kind = if accepts_commands {
             "rover"
         } else if body.is_some() {
             "planet"

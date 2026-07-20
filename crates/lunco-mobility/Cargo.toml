@@ -18,7 +18,6 @@ lunco-physics = { path = "../lunco-physics" }
 # built-in `ControlKernelRegistry` entry. Dependency-free (no rhai/bevy).
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-time = { path = "../lunco-time" }
-lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
 # Expose physics-backed spatial queries (Raycast/GroundHeight) through the
 # API query registry. default-features off keeps the HTTP transport (tokio/mio)

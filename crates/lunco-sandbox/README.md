@@ -48,7 +48,7 @@ Physics test harnesses live in `src/bin/` — run with
 
 - **Level 1 (Foundation)**: `lunco-core`, `lunco-assets`
 - **Level 2 (Domain Logic)**: `lunco-celestial`, `lunco-mobility`, `lunco-usd`
-- **Level 3 (Software)**: `lunco-fsw`, `lunco-obc`, `lunco-controller`
+- **Level 3 (Software)**: `lunco-obc`, `lunco-controller`
 - **Level 4 (Workflow)**: `lunco-ui`, `lunco-workbench`
 - **Level 5 (Application)**: `lunco-sandbox` (this crate), `luncosim`, `lunco-sandbox-server`
 

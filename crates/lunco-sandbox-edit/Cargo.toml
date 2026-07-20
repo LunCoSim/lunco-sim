@@ -37,10 +37,10 @@ big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-# NO `lunco-fsw`: its only use here was `FlightSoftware` as the "is a wheeled
-# vehicle" topology signal in the predict-membership queries, and those moved out
-# with the netcode (→ `lunco-networking::prediction`). Nothing in the editor names
-# it any more, so the edge is gone.
+# NO vehicle-topology dep: the "is a wheeled vehicle" signal was once needed here
+# for the predict-membership queries, but those moved out with the netcode
+# (→ `lunco-networking::prediction`, which now uses `lunco_core::ActuatorPorts`).
+# Nothing in the editor names it any more, so the edge is gone.
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 # `JournalResource` — the run condition that attaches the shader-journal recorder

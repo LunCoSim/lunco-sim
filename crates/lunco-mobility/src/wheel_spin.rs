@@ -187,7 +187,6 @@ mod tests {
     use bevy::prelude::*;
     use bevy::time::Time;
     use crate::kernels::DriveMix;
-    use lunco_core::CommandInputs;
     use std::time::Duration;
 
     /// Drive `update_wheel_spin` one tick on a single grounded raycast wheel and
@@ -218,7 +217,6 @@ mod tests {
                 Rotation::default(),
                 LinearVelocity(DVec3::ZERO),
                 AngularVelocity(ang),
-                CommandInputs::default(),
                 DriveMix::default(),
             ))
             .id();

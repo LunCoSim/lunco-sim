@@ -5,7 +5,7 @@ use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_core::{Avatar, Spacecraft};
-use lunco_fsw::FlightSoftware;
+use lunco_core::ControlBinding;
 use lunco_time::{TimeTransport, TransportMode, WorldTime};
 use lunco_celestial::{CelestialBody, TeleportToSurface, LeaveSurface};
 use lunco_avatar::{PossessVessel, ReleaseVessel, FocusTarget};
@@ -397,9 +397,20 @@ pub fn populate_mission_control_view(
     avatar: Query<Entity, With<Avatar>>,
     bodies: Query<(Entity, &Name, &CelestialBody)>,
     spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
-    // The local avatar now carries a `FlightSoftware` command surface too (it's a
-    // controllable), so exclude it from the *rover* list.
-    rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), (With<FlightSoftware>, Without<Avatar>)>,
+    // The local avatar carries a `ControlBinding` too (it's a controllable), so
+    // exclude it from the *rover* list.
+    //
+    // `ControlBinding` — "accepts commands" — deliberately reproduces the old
+    // `With<FlightSoftware>` roster exactly, `descent_lander` included. That listing is
+    // arguably wrong (a lander is not a rover), but correcting it is a deliberate UI
+    // change, not a side effect of splitting a component.
+    //
+    // It also FIXES a per-tick churn bug: this used to filter on `Changed<FlightSoftware>`,
+    // and `apply_drive_mix` takes `&mut FlightSoftware` and writes `brake_active`
+    // unconditionally every fixed tick — so the roster rebuilt every tick for every
+    // rover. `brake_active` now lives on `CommandInputs`; `ControlBinding` is written
+    // once at projection, so `Changed<ControlBinding>` fires on insert and then stops.
+    rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), (With<ControlBinding>, Without<Avatar>)>,
     surface: Query<(), With<lunco_avatar::SurfaceCamera>>,
     gravity: Option<Res<lunco_celestial::LocalGravityField>>,
     changed: Query<
@@ -407,14 +418,14 @@ pub fn populate_mission_control_view(
         Or<(
             Changed<CelestialBody>,
             Changed<Spacecraft>,
-            Changed<FlightSoftware>,
+            Changed<ControlBinding>,
             Changed<Name>,
             Changed<lunco_core::GlobalEntityId>,
         )>,
     >,
     mut removed_body: RemovedComponents<CelestialBody>,
     mut removed_sc: RemovedComponents<Spacecraft>,
-    mut removed_rover: RemovedComponents<FlightSoftware>,
+    mut removed_rover: RemovedComponents<ControlBinding>,
 ) {
     let avatar_ent = avatar.iter().next();
     let on_surface = !surface.is_empty();

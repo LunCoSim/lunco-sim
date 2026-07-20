@@ -194,7 +194,7 @@ fn spawn_rover(app: &mut App) -> Entity {
     rover
 }
 
-/// Spawn a rover carrying `FlightSoftware` (so `list_entities().type == "rover"` and
+/// Spawn a rover carrying a `ControlBinding` (so `list_entities().type == "rover"` and
 /// the selection toolkit / formation tool library can find it) at world x = `x`.
 fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
     let e = app
@@ -203,7 +203,7 @@ fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
             Transform::from_xyz(x, 0.0, 0.0),
             GlobalTransform::from(Transform::from_xyz(x, 0.0, 0.0)),
             GlobalEntityId::from_raw(gid),
-            lunco_fsw::FlightSoftware::default(),
+            lunco_core::ControlBinding { binds: Vec::new() },
         ))
         .id();
     app.world_mut()

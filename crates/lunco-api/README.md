@@ -92,7 +92,7 @@ Commands triggered via API arrive as `ApiCommandEvent`. Domain observers can han
 ```rust
 fn on_drive_rover_api(
     trigger: On<ApiCommandEvent>,
-    mut q_fsw: Query<&mut FlightSoftware>,
+    mut q_inputs: Query<&mut CommandInputs>,
 ) {
     if trigger.event().command != "DriveRover" { return; }
     let params = &trigger.event().params;

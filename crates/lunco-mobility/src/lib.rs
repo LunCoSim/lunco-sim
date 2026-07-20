@@ -1896,7 +1896,6 @@ mod suspension_visuals_tests {
             ComputedCenterOfMass::default(),
             VelocityIntegrationData::default(),
             AccumulatedLocalAcceleration::default(),
-            CommandInputs::default(),
             DriveMix::default(),
         )).id();
 

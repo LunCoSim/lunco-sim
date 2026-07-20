@@ -23,7 +23,6 @@ lunco-robotics/
 
 This crate is a central hub for robot construction:
 - `lunco-core` (Vessel markers)
-- `lunco-fsw` (Flight Software setup)
 - `lunco-mobility` (Raycast wheel setup)
 - `lunco-hardware` (Actuator/Sensor setup)
 - `lunco-controller` (Input map setup)

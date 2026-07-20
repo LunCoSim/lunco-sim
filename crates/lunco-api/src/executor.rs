@@ -75,7 +75,7 @@ pub fn api_request_observer(
     type_registry: Res<AppTypeRegistry>,
     cmd_results: Res<lunco_core::CommandResults>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
-    q_meta: Query<(Option<&Name>, Has<lunco_fsw::FlightSoftware>, Option<&lunco_core::CelestialBody>)>,
+    q_meta: Query<(Option<&Name>, Has<lunco_core::ControlBinding>, Option<&lunco_core::CelestialBody>)>,
     // Which commands answer later, on the correlation id. Populated by whichever crate owns
     // them (`register_deferred_command`), never by name here.
     deferred_commands: Option<Res<DeferredCommands>>,
@@ -531,7 +531,7 @@ fn execute_request(
     type_registry: &TypeRegistry,
     cmd_results: &lunco_core::CommandResults,
     subscriptions: &mut TelemetrySubscriptions,
-    q_meta: &Query<(Option<&Name>, Has<lunco_fsw::FlightSoftware>, Option<&lunco_core::CelestialBody>)>,
+    q_meta: &Query<(Option<&Name>, Has<lunco_core::ControlBinding>, Option<&lunco_core::CelestialBody>)>,
     deferred_commands: Option<&DeferredCommands>,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
@@ -639,8 +639,12 @@ fn execute_request(
             let entities: Vec<serde_json::Value> = registry.entities()
                 .into_iter()
                 .map(|(api_id, entity)| {
-                    let (name, is_vehicle, body) = q_meta.get(entity).unwrap_or((None, false, None));
-                    let kind = if is_vehicle { "rover" } else if body.is_some() { "planet" } else { "unknown" };
+                    let (name, accepts_commands, body) = q_meta.get(entity).unwrap_or((None, false, None));
+                    // NOTE: the reported `type` string is deliberately unchanged. A lander
+                    // accepts commands and has always been reported as `"rover"` here;
+                    // correcting that is a UI/API change to make deliberately, not a side
+                    // effect of this refactor.
+                    let kind = if accepts_commands { "rover" } else if body.is_some() { "planet" } else { "unknown" };
                     serde_json::json!({
                         "api_id": api_id,
                         "name": name.map(|n| n.as_str()).unwrap_or(""),

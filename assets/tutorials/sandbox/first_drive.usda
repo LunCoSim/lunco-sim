@@ -74,10 +74,8 @@ def Xform "FirstDrive" (
     # The rover the student drives. Skid-steer vehicle; possessable.
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
-        prepend apiSchemas = ["LunCoVesselAPI"]
     )
     {
-        uniform bool lunco:vessel = true
         double3 xformOp:translate = (0, 1.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

@@ -25,7 +25,6 @@ lunco-core = { path = "../lunco-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-time = { path = "../lunco-time" }
 lunco-environment = { path = "../lunco-environment" }
-lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
 # Only the camera components (FreeFlightCamera/OrbitCamera/…) — egui-free.
 # `default-features = false` keeps avatar's egui UI (+ workbench shell) out of a

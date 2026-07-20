@@ -41,7 +41,7 @@ pub struct DriveRover {
 //    synthetic first parameter; bodies can use `cmd.field` (auto-bound
 //    via `let cmd = trigger.event();`) or the explicit `trigger`.
 #[on_command(DriveRover)]
-fn on_drive_rover(trigger: On<DriveRover>, mut q: Query<&mut FlightSoftware>) {
+fn on_drive_rover(trigger: On<DriveRover>, mut q: Query<&mut CommandInputs>) {
     let cmd = trigger.event();
     // cmd.forward, cmd.steer available directly
 }

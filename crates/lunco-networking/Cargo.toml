@@ -43,7 +43,6 @@ transport-http = ["networking", "lunco-api/transport-http"]
 bevy = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-core = { path = "../lunco-core" }
-lunco-fsw = { path = "../lunco-fsw" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
 # Native builds still get transport-http via lunco-sandbox's own default features.

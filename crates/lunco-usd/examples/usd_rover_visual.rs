@@ -90,7 +90,7 @@ fn setup_rover(mut commands: Commands, asset_server: Res<AssetServer>) {
         Visibility::Visible,
         InheritedVisibility::default(),
         ViewVisibility::default(),
-        lunco_fsw::FlightSoftware::default(),
+        lunco_core::ActuatorPorts::default(),
     ));
 }
 

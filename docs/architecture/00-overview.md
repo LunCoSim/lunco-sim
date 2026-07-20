@@ -78,7 +78,7 @@ Apps (luncosim, lunco-sandbox, lunica)
    ├── UI adapter
    │     lunco-ui         ← thin adapter on top of lunco-workbench: mission-control
    │                        widgets, telemetry, diagrams; also depends on Domain
-   │                        crates (lunco-avatar, lunco-celestial, lunco-fsw)
+   │                        crates (lunco-avatar, lunco-celestial, lunco-mobility)
    │          │
    │          ▼
    ├── Framework layer
@@ -104,7 +104,7 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
 - **`lunco-ui` is a deliberate cross-layer adapter.** It is not a widget
   toolkit under the workbench; it sits *on top of* `lunco-workbench` and also
   reaches sideways into Domain crates (`lunco-avatar`, `lunco-celestial`,
-  `lunco-fsw`) to render their state. It is the one place UI and domain state
+  `lunco-mobility`) to render their state. It is the one place UI and domain state
   are allowed to meet below the Apps.
 
 ## 6. Strategic Roadmap Orientation

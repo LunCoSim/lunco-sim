@@ -93,7 +93,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 |---|---|---|
 | **Core foundation** | primitives, docs/journal, time, storage, hashing, cache, settings, theme | `lunco-core`, `lunco-doc`, `lunco-twin-journal`, `lunco-time`, `lunco-storage`, `lunco-hash` |
 | **Simulation engine** | celestial, environment, terrain, experiments, cosim | `lunco-celestial`, `lunco-cosim`, `lunco-experiments`, `lunco-terrain-*` |
-| **Vessel control & hardware** | mobility, robotics, avatar, FSW/OBC/hardware, controller, autopilot | `lunco-mobility`, `lunco-fsw`, `lunco-autopilot`, `lunco-controller` |
+| **Vessel control & hardware** | mobility, robotics, avatar, FSW/OBC/hardware, controller, autopilot | `lunco-mobility`, `lunco-autopilot`, `lunco-controller` |
 | **USD integration** | OpenUSD↔Bevy: visuals, physics, sim schemas, materials | `lunco-usd`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-materials` |
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
 | **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-sandbox-edit` |

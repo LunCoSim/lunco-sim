@@ -35,9 +35,6 @@ serde = { workspace = true }
 # `QueryEntity`'s response payload (entity_query.rs).
 serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api", default-features = false }
-# `QueryEntity` classifies an entity as a rover via `FlightSoftware` — the same
-# rule the API executor applied when this query lived there.
-lunco-fsw = { path = "../lunco-fsw" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-usd = { path = "../lunco-usd", default-features = false }

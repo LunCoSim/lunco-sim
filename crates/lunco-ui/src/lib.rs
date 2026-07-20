@@ -13,8 +13,8 @@
 //! The same panel works in a standalone workbench, a 3D overlay, or a mission dashboard.
 //!
 //! ```text
-//!   Domain crate (lunco-modelica, lunco-fsw, etc.)
-//!     ├── Defines entity component (ModelicaModel, FswConfig, etc.)
+//!   Domain crate (lunco-modelica, lunco-mobility, etc.)
+//!     ├── Defines entity component (ModelicaModel, DriveMix, etc.)
 //!     ├── Defines viewer panel (DiagramPanel, CodeEditor, etc.)
 //!     └── Panel watches WorkbenchState.selected_entity
 //!           │

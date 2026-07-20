@@ -60,10 +60,6 @@ truck-geometry = "0.5.0"
 spade = "2.15.1"
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-# `FlightSoftware` = the unified control-surface tag stamped on any
-# `lunco:vessel="true"` prim, making it possessable/controllable by topology
-# (replaces the removed `Vessel` marker).
-lunco-fsw = { path = "../lunco-fsw" }
 lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
 big_space = { workspace = true }

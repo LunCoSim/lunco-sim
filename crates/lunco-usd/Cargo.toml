@@ -67,7 +67,6 @@ lunco-render = { path = "../lunco-render" }
 # not wire actuators, it authors the USD they are built from.
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-mobility = { path = "../lunco-mobility" }
-lunco-fsw = { path = "../lunco-fsw" }
 # Wheels author `primvars:materialType = "shader"`, so the headless
 # entity-pipeline tests must register `Assets<ShaderMaterial>` or
 # `process_usd_sim_prims` defers every wheel forever (no WheelRaycast).

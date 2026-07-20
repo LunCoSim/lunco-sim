@@ -167,7 +167,7 @@ so there is zero networking footprint.
 **Dependency direction (no reverse deps, no aggregator crate):**
 
 ```
-lunco-mobility / lunco-fsw → lunco-networking (optional, feature: networking)
+lunco-mobility → lunco-networking (optional, feature: networking)
 lunco-networking           → lunco-core (for GlobalEntityId / Provenance types only)
 ```
 
@@ -185,7 +185,7 @@ broader command/op vs state-replication split is in
 > **PLANNED (replicon-era):** the original model registered replication per component in
 > domain `replication.rs` submodules (`app.replicate::<RoverMobilityState>()` with custom
 > quantizing serializers) and split replicated *state* from locally-reconstructed *topology*
-> (`Wire.source/target`, `FlightSoftware.port_map`, etc., stay `Entity` and are rebuilt per
+> (`Wire.source/target`, `ActuatorPorts.ports`, etc., stay `Entity` and are rebuilt per
 > process, never serialized). That state-not-topology principle still holds; the
 > per-component declaration API does not — replication is USD-derived today.
 

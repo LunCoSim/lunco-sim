@@ -669,31 +669,6 @@ class LunCoPortEvent "LunCoPortEvent" (
     )
 }
 
-class "LunCoVesselAPI" (
-    inherits = </APISchemaBase>
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """Marks a prim as a vessel: a thing a session can possess and drive.
-    Possession is what makes its `piloted` port true, which is how a program yields
-    the stick to whoever holds authority."""
-)
-{
-    uniform bool lunco:vessel = false (
-        doc = "Whether this prim is a possessable vessel."
-    )
-    uniform token lunco:cameraFollow = "heading" (
-        doc = """How the possession/follow camera treats this vessel's attitude —
-        i.e. should the camera rotate with the body. 'heading' follows the yaw
-        heading only, surface-normal up (ground vehicles); 'orbit' keeps a stable
-        external frame the vessel rotates inside of (a 6-DOF flyer that pitches and
-        rolls); 'chase' follows the full orientation (a cockpit frame that rolls
-        with the craft). Typically authored on the vessel's control profile
-        (`Controls` scope) so it composes through a spawn like the intent binding."""
-        allowedTokens = ["heading", "orbit", "chase"]
-    )
-}
-
 class "LunCoAvatarAPI" (
     inherits = </APISchemaBase>
     customData = {

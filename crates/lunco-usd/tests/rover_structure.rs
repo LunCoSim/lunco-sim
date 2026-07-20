@@ -10,7 +10,7 @@ use lunco_usd_sim::*;
 use lunco_mobility::{WheelRaycast, Suspension};
 use lunco_mobility::kernels::DriveMix;
 use avian3d::prelude::*;
-use lunco_fsw::FlightSoftware;
+use lunco_core::ActuatorPorts;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
 /// `Collider::compound` from its child colliders (the Chassis cuboid) — a
@@ -166,9 +166,9 @@ fn test_all_rover_files_match_procedural() {
         let mut app = compose_and_load(&Path::new("../../assets/").join(file), prim);
 
         // Find rover
-        let mut q = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
+        let mut q = app.world_mut().query_filtered::<Entity, With<ActuatorPorts>>();
         let rover = q.iter(app.world()).next()
-            .unwrap_or_else(|| panic!("{label}: No FlightSoftware entity"));
+            .unwrap_or_else(|| panic!("{label}: No ActuatorPorts (rover root) entity"));
 
         // Physics
         let rb = app.world().get::<RigidBody>(rover).expect(&format!("{label}: missing RigidBody"));
@@ -210,12 +210,12 @@ fn test_all_rover_files_match_procedural() {
             assert_eq!(mix.ports, vec!["drive_left".to_string(), "drive_right".to_string()], "{label}: wrong skid ports");
         }
 
-        // FlightSoftware
-        let fsw = app.world().get::<FlightSoftware>(rover).expect(&format!("{label}: missing FlightSoftware"));
-        assert!(fsw.port_map.contains_key("drive_left"), "{label}: FSW missing drive_left");
-        assert!(fsw.port_map.contains_key("drive_right"), "{label}: FSW missing drive_right");
-        assert!(fsw.port_map.contains_key("steering"), "{label}: FSW missing steering");
-        assert!(fsw.port_map.contains_key("brake"), "{label}: FSW missing brake");
+        // Actuator ports
+        let actuators = app.world().get::<ActuatorPorts>(rover).expect(&format!("{label}: missing ActuatorPorts"));
+        assert!(actuators.ports.contains_key("drive_left"), "{label}: actuators missing drive_left");
+        assert!(actuators.ports.contains_key("drive_right"), "{label}: actuators missing drive_right");
+        assert!(actuators.ports.contains_key("steering"), "{label}: actuators missing steering");
+        assert!(actuators.ports.contains_key("brake"), "{label}: actuators missing brake");
 
         // Wheels
         let children = app.world().get::<Children>(rover).expect(&format!("{label}: missing Children"));

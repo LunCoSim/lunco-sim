@@ -5,7 +5,6 @@ members = [
     "crates/lunco-geotiff",
     "crates/lunco-precompute",
     "crates/lunco-time",
-    "crates/lunco-fsw",
     "crates/lunco-behavior",
     "crates/lunco-controller",
     "crates/lunco-autopilot",

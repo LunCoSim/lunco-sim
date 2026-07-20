@@ -8,7 +8,7 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::{WheelRaycast, Suspension};
 use lunco_mobility::kernels::DriveMix;
-use lunco_fsw::FlightSoftware;
+use lunco_core::ActuatorPorts;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
 /// `Collider::compound` from its child colliders (the Chassis cuboid) — a
@@ -181,10 +181,10 @@ fn test_rover_components_via_bevy_pipeline() {
 
         let mut app = load_rover_through_bevy(&p, paths[i]);
 
-        // Find rover entity (has FlightSoftware)
-        let mut q_rover = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
+        // Find rover entity (a rover root carries `ActuatorPorts`)
+        let mut q_rover = app.world_mut().query_filtered::<Entity, With<ActuatorPorts>>();
         let rover_ent = q_rover.iter(app.world()).next()
-            .unwrap_or_else(|| panic!("{label}: No entity with FlightSoftware found"));
+            .unwrap_or_else(|| panic!("{label}: No entity with ActuatorPorts found"));
 
         // --- REQUIRED COMPONENTS ---
 
@@ -249,13 +249,13 @@ fn test_rover_components_via_bevy_pipeline() {
             }
         }
 
-        // FlightSoftware (for command routing)
-        let fsw = app.world().get::<FlightSoftware>(rover_ent)
-            .unwrap_or_else(|| panic!("{label}: Missing FlightSoftware"));
-        assert!(fsw.port_map.contains_key("drive_left"), "{label}: FSW missing drive_left");
-        assert!(fsw.port_map.contains_key("drive_right"), "{label}: FSW missing drive_right");
-        assert!(fsw.port_map.contains_key("steering"), "{label}: FSW missing steering");
-        assert!(fsw.port_map.contains_key("brake"), "{label}: FSW missing brake");
+        // Actuator ports (for command routing)
+        let actuators = app.world().get::<ActuatorPorts>(rover_ent)
+            .unwrap_or_else(|| panic!("{label}: Missing ActuatorPorts"));
+        assert!(actuators.ports.contains_key("drive_left"), "{label}: actuators missing drive_left");
+        assert!(actuators.ports.contains_key("drive_right"), "{label}: actuators missing drive_right");
+        assert!(actuators.ports.contains_key("steering"), "{label}: actuators missing steering");
+        assert!(actuators.ports.contains_key("brake"), "{label}: actuators missing brake");
 
         // --- WHEELS ---
         // Find children of rover
@@ -402,11 +402,11 @@ fn test_rover_sim_processing_after_async_load() {
         }
         app.world_mut().flush();
 
-        // MUST have FlightSoftware (from PhysxVehicleContextAPI)
-        let mut q_fsw = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
-        let fsw_count = q_fsw.iter(app.world()).count();
-        assert!(fsw_count > 0,
-            "{label}: FlightSoftware must be present after sim processing. Got {fsw_count} entities with FSW. \
+        // MUST have ActuatorPorts (from PhysxVehicleContextAPI)
+        let mut q_act = app.world_mut().query_filtered::<Entity, With<ActuatorPorts>>();
+        let act_count = q_act.iter(app.world()).count();
+        assert!(act_count > 0,
+            "{label}: ActuatorPorts must be present after sim processing. Got {act_count} entities with actuator ports. \
             This means the sim system didn't process the rover - likely async loading bug.");
 
         // MUST have a DriveMix (the kernel-selected allocation) after sim processing.
@@ -416,11 +416,11 @@ fn test_rover_sim_processing_after_async_load() {
             "{label}: Must have a DriveMix after sim processing. \
             Rover won't be able to steer!");
 
-        // MUST have FlightSoftware
-        let mut q_vessel = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
+        // MUST have ActuatorPorts
+        let mut q_vessel = app.world_mut().query_filtered::<Entity, With<ActuatorPorts>>();
         let vessel_count = q_vessel.iter(app.world()).count();
         assert!(vessel_count > 0,
-            "{label}: FlightSoftware must be present. Got {vessel_count}.");
+            "{label}: ActuatorPorts must be present. Got {vessel_count}.");
 
         // MUST have 4 wheels with WheelRaycast
         let mut q_wheels = app.world_mut().query_filtered::<Entity, With<WheelRaycast>>();
@@ -551,15 +551,15 @@ fn test_full_scene_loads_with_rovers() {
     app.world_mut().flush();
 
     // Count rovers — 5 instances from scene references
-    let mut q_rovers = app.world_mut().query_filtered::<(Entity, &Name, &UsdPrimPath), With<FlightSoftware>>();
+    let mut q_rovers = app.world_mut().query_filtered::<(Entity, &Name, &UsdPrimPath), With<ActuatorPorts>>();
     let rover_info: Vec<_> = q_rovers.iter(app.world())
         .map(|(_, n, p)| (n.as_str().to_string(), p.path.clone()))
         .collect();
     assert_eq!(rover_info.len(), 5, "Must have 5 rovers from scene, got {}: {:?}", rover_info.len(), rover_info);
 
-    // Drivable = carries a `DriveMix` (any kernel) + FSW.
+    // Drivable = carries a `DriveMix` (any kernel) + actuator ports.
     // 3 skid (2 raycast + 1 physical) + 2 ackermann (1 raycast + 1 physical) = 5
-    let mut q_mix = app.world_mut().query_filtered::<Entity, (With<DriveMix>, With<FlightSoftware>)>();
+    let mut q_mix = app.world_mut().query_filtered::<Entity, (With<DriveMix>, With<ActuatorPorts>)>();
     let drivable: usize = q_mix.iter(app.world()).count();
     assert_eq!(drivable, 5, "All 5 rovers must be drivable (carry DriveMix), got {drivable}");
 
@@ -576,7 +576,7 @@ fn test_full_scene_loads_with_rovers() {
 
     // All 5 rovers must show a visible body — the Chassis CHILD carries the
     // Mesh3d (the rover root is an Xform after the Xform-root refactor).
-    let mut q_rovers2 = app.world_mut().query_filtered::<Entity, With<FlightSoftware>>();
+    let mut q_rovers2 = app.world_mut().query_filtered::<Entity, With<ActuatorPorts>>();
     let rover_ents: Vec<Entity> = q_rovers2.iter(app.world()).collect();
     let visible_count = rover_ents.iter()
         .filter(|&&r| app.world().get::<Mesh3d>(chassis_child(&app, r, "scene")).is_some())

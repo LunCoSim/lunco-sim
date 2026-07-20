@@ -35,9 +35,6 @@ lunco-controller = { path = "../lunco-controller" }
 # Read `SimComponent` presence to pick the input map for a possessed vessel by
 # TOPOLOGY (Modelica-flown → lander controls) rather than a vessel-kind marker.
 lunco-cosim = { path = "../lunco-cosim" }
-# `FlightSoftware` = the control-surface signal; possessable = has a control
-# surface (`FlightSoftware`) or Modelica inputs (`SimComponent`) — no `Vessel` tag.
-lunco-fsw = { path = "../lunco-fsw" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }

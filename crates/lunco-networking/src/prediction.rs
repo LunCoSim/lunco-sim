@@ -5,7 +5,7 @@
 //! subsystems in one file: the scene/document command layer (spawn / move / delete
 //! / set-property / focus / shader) and *this* — the client half of the wire. The
 //! netcode half never touched an editor symbol; its dependencies are `lunco-core`
-//! (the session/identity substrate), `lunco-api`, `lunco-fsw`, `big_space` and
+//! (the session/identity substrate), `lunco-api`, `big_space` and
 //! `avian3d`, all of which this crate already had. It belongs next to the wire that
 //! feeds it (`sync.rs` produces the `IncomingSnapshots` this module consumes), not
 //! next to the editor.
@@ -1741,7 +1741,7 @@ pub fn reconcile_owned_prediction(
 /// `SkipContentStamp` guard wouldn't have to be the only thing (see
 /// `NotPredictable`'s doc) — so we no longer restrict to runtime spawns, which
 /// had frozen plain scene-content physics props server-only. Wheeled vehicles
-/// (a `FlightSoftware` control surface) and the possessed rover (`OwnedLocally`)
+/// (a rover root, identified by its `ActuatorPorts`) and the possessed rover (`OwnedLocally`)
 /// are excluded — they have their own paths. A `Static` prop is left alone.
 /// Client-only.
 pub fn maintain_predicted_dynamic(
@@ -1751,11 +1751,16 @@ pub fn maintain_predicted_dynamic(
         (Entity, &RigidBody),
         (
             With<lunco_core::NetReplicate>,
-            // Wheeled vehicles (a `FlightSoftware` control surface) have their
-            // own predict path (`maintain_predicted_vehicles`); a cosim-flown
-            // vessel that also carries `FlightSoftware` is already caught by the
+            // Wheeled vehicles have their own predict path
+            // (`maintain_predicted_vehicles`); a cosim-flown vessel is caught by the
             // `NotPredictable` guard below.
-            Without<lunco_fsw::FlightSoftware>,
+            //
+            // `ActuatorPorts` is the wheeled-vehicle discriminator: only a rover root
+            // (`PhysxVehicleContextAPI`) carries an actuator index. A lander/avatar has
+            // no hardware actuator ports and so is not excluded here. (`DriveMix` would
+            // select the same set, but lives in `lunco-mobility`, which this crate does
+            // not depend on — and should not, for one query filter.)
+            Without<lunco_core::ActuatorPorts>,
             Without<lunco_core::OwnedLocally>,
             // Stamp the eligibility marker at most once (a promoted body carries
             // both `ContactPredictable` and `PredictedDynamic`).
@@ -1801,7 +1806,7 @@ pub fn maintain_predicted_dynamic(
 }
 
 /// Client Step 4 (`PREDICT_AND_SMOOTH` §5): mark every **remote raycast rover**
-/// (a `FlightSoftware` vehicle you don't possess and don't own) as
+/// (a rover you don't possess and don't own) as
 /// [`lunco_core::ContactPredictable`] — *eligible* for the same transient
 /// promotion as a free prop, so it **yields** the moment your owned rover shoves
 /// it, then re-syncs.
@@ -1831,11 +1836,12 @@ pub fn maintain_predicted_vehicles(
         (Entity, &lunco_core::GlobalEntityId, &RigidBody),
         (
             With<lunco_core::NetReplicate>,
-            // A wheeled vehicle = has a `FlightSoftware` control surface. The
-            // `Without<NotPredictable>` guard below excludes cosim-flown vessels
-            // (a lander carries `FlightSoftware` too but is `NotPredictable`),
-            // so this resolves to exactly the locally-simulated rovers.
-            With<lunco_fsw::FlightSoftware>,
+            // A wheeled vehicle = a rover root, which is exactly what carries an
+            // `ActuatorPorts` actuator index. The `Without<NotPredictable>` guard below
+            // additionally excludes cosim-flown vessels, so this resolves to exactly the
+            // locally-simulated rovers. (A lander no longer even reaches this filter: it
+            // has no actuator ports of its own.)
+            With<lunco_core::ActuatorPorts>,
             Without<lunco_core::OwnedLocally>,
             // Stamp eligibility at most once (a promoted rover carries both).
             Without<lunco_core::ContactPredictable>,

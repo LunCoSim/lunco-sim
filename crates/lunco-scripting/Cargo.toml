@@ -25,7 +25,6 @@ lunco-core = { path = "../lunco-core" }
 # `fnv1a64` — content-address a scenario's source to a cache key for the
 # compiled-AST memo (Substrate E fast tier; local/ephemeral, never on wire).
 lunco-hash = { path = "../lunco-hash" }
-lunco-fsw = { path = "../lunco-fsw" }
 lunco-time = { path = "../lunco-time" }
 pyo3 = { version = "0.23", optional = true }
 libloading = { version = "0.8", optional = true }
@@ -93,7 +92,6 @@ crossbeam-channel = { workspace = true }
 getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 
 [dev-dependencies]
-lunco-fsw = { path = "../lunco-fsw" }
 
 [lints]
 workspace = true

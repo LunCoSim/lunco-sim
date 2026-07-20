@@ -8,7 +8,7 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use avian3d::prelude::*;
 use lunco_mobility::{WheelRaycast, Suspension};
-use lunco_fsw::FlightSoftware;
+use lunco_core::ActuatorPorts;
 use std::path::Path;
 use big_space::prelude::CellCoord;
 
@@ -64,9 +64,9 @@ fn test_dump_usd_rover_state() {
     dump_components(&app, rover);
     
     // Check FSW ports
-    if let Some(fsw) = app.world().get::<FlightSoftware>(rover) {
-        println!("\n========== FSW PORTS ==========");
-        for (name, &port_ent) in &fsw.port_map {
+    if let Some(actuators) = app.world().get::<ActuatorPorts>(rover) {
+        println!("\n========== ACTUATOR PORTS ==========");
+        for (name, &port_ent) in &actuators.ports {
             println!("  {} -> {:?}", name, port_ent);
         }
     }
@@ -187,8 +187,8 @@ fn dump_components(app: &App, entity: Entity) {
     } else {
         println!("  Collider: NONE");
     }
-    if app.world().get::<lunco_fsw::FlightSoftware>(entity).is_some() {
-        println!("  FlightSoftware: YES");
+    if app.world().get::<ActuatorPorts>(entity).is_some() {
+        println!("  ActuatorPorts: YES");
     }
     if let Some(wheel) = app.world().get::<WheelRaycast>(entity) {
         println!("  WheelRaycast: radius={}", wheel.wheel_radius);

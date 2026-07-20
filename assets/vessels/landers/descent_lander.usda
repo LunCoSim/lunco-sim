@@ -48,7 +48,7 @@ def Xform "DescentLander" (
     # contain component models, and the kind is what tells a browser (and the UI)
     # whether a prim is a thing you open up or a thing you place.
     kind = "assembly"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoVesselAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI"]
     # The ON-BOARD COMPUTER, as a reference arc — the vessel's COMMAND SURFACE.
     # Its `inputs:` ports (`external_throttle`/`pitch`/`roll`/`yaw`/`release`) ARE
     # the set of commands this vessel accepts; there is no lander class in engine
@@ -156,7 +156,6 @@ def Xform "DescentLander" (
     # A palette item: an airframe with no guidance does nothing surprising when it
     # lands in a scene — it falls, and it waits to be flown.
     uniform bool lunco:spawnable = true
-    uniform bool lunco:vessel = true
 
     bool physics:rigidBodyEnabled = true
     float physics:mass = 2000.0

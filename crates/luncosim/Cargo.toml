@@ -39,7 +39,6 @@ lunco-environment = { path = "../lunco-environment" }
 # and pipelines, and hosts the render-only code moved out of the domain crates
 # (horizon uniform feed, SetEnvironmentLight's bloom arm, CaptureScreenshot).
 lunco-render-bevy = { path = "../lunco-render-bevy" }
-lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-robotics = { path = "../lunco-robotics" }

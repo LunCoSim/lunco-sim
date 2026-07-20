@@ -233,7 +233,7 @@ section.
 
 1. **UsdBevyPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
 2. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`physics:rigidBodyEnabled`/`PhysicsRigidBodyAPI`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
-3. **UsdSimPlugin** — Detects simulation schemas (`PhysxVehicleContextAPI`, `PhysxVehicleWheelAPI`, and the Omniverse differential/steering APIs `PhysxVehicleTankDifferentialAPI` (skid) / `PhysxVehicleAckermannSteeringAPI`) and creates `WheelRaycast`, `FlightSoftware`, a data-driven `DriveMix` (allocated by a named kernel in `lunco-mobility`'s `ControlKernelRegistry` — `skid`/`linear`), `DifferentialCoupling`, sensors, etc. Also wires actuator topology + drive mix and cosim models/wires (see [`22-domain-cosim.md`](22-domain-cosim.md)).
+3. **UsdSimPlugin** — Detects simulation schemas (`PhysxVehicleContextAPI`, `PhysxVehicleWheelAPI`, and the Omniverse differential/steering APIs `PhysxVehicleTankDifferentialAPI` (skid) / `PhysxVehicleAckermannSteeringAPI`) and creates `WheelRaycast`, `ActuatorPorts`, a data-driven `DriveMix` (allocated by a named kernel in `lunco-mobility`'s `ControlKernelRegistry` — `skid`/`linear`), `DifferentialCoupling`, sensors, etc. Also wires actuator topology + drive mix and cosim models/wires (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Rover Definitions
 

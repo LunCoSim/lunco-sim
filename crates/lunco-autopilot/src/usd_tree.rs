@@ -25,7 +25,6 @@
 //!
 //! ```usda
 //! def Xform "Rover" {
-//!     custom string lunco:vessel = "true"
 //!     def LunCoProgram "Mission" {
 //!         uniform asset info:sourceAsset = @behaviors/rover_patrol.xml@   # or inline info:sourceCode
 //!     }

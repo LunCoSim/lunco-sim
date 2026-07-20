@@ -14,7 +14,7 @@
 
 A rover jitters when a script and a human drive it at the same time.
 
-Post-merge, control is the **one generic command** `SetPorts` (`crates/lunco-cosim/src/lib.rs:255`): a batch of named input-port writes on a vessel's `FlightSoftware` command surface (`throttle`/`steer`/`brake`). A static `DriveMix` + kernel then projects that surface onto actuator ports in `apply_drive_mix` (`crates/lunco-mobility/src/lib.rs:1115`, a `FixedUpdate` system). Two emitters write that same command surface every fixed tick:
+Post-merge, control is the **one generic command** `SetPorts` (`crates/lunco-cosim/src/lib.rs:255`): a batch of named input-port writes on a vessel's `CommandInputs` command surface (`throttle`/`steer`/`brake`). A static `DriveMix` + kernel then projects that surface onto actuator ports in `apply_drive_mix` (`crates/lunco-mobility/src/lib.rs:1115`, a `FixedUpdate` system). Two emitters write that same command surface every fixed tick:
 
 - **Human keyboard** — `drive_from_bindings` (`crates/lunco-controller/src/lib.rs:86`) emits one `SetPorts` per fixed tick per `ControllerLink`, writing *every* bound port (0 when idle).
 - **Rhai autopilot** — the prelude `drive()` / `nav_to()` verbs (`assets/scripting/prelude/control.rhai`, `nav.rhai`) emit `SetPorts` every `on_tick`.

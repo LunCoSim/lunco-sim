@@ -2587,7 +2587,6 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
                 },
-                lunco_core::CommandInputs::default(),
                 DriveMix::default(),
             ))
             .id();
@@ -2663,7 +2662,6 @@ mod proxy_wheel_tests {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
                 },
-                lunco_core::CommandInputs::default(),
                 DriveMix::default(),
             ))
             .id();
@@ -2723,7 +2721,6 @@ mod proxy_wheel_tests {
                 Position(DVec3::ZERO),
                 Rotation::default(),
                 lunco_core::ReplicatedChassisMotion { lin: DVec3::ZERO, ang },
-                lunco_core::CommandInputs::default(),
                 DriveMix::default(),
             ))
             .id();

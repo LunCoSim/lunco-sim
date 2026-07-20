@@ -40,7 +40,6 @@ winit = ["bevy/bevy_winit"]
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }
-lunco-fsw = { path = "../lunco-fsw" }
 # SUBSTRATE ONLY — no bevy_render, no way to opt in. The screenshot's GPU half lives in
 # `lunco-workbench::screenshot`; see the note above `default`.
 bevy = { workspace = true }
