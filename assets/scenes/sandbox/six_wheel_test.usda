@@ -7,7 +7,7 @@
 
 # Loads the G4 six-wheel rover over a ground plane. Verifies that a non-2×2
 # wheel layout whose wheel→actuator wiring is authored in USD
-# (`lunco:drivePort`) spawns and wires through the unified path — i.e. a "dynamic
+# (`inputs:drive.connect`) spawns and wires through the unified path — i.e. a "dynamic
 # vehicle" is a USD file, not a Rust struct.
 #
 #   sandbox --scene scenes/sandbox/six_wheel_test.usda

@@ -6,9 +6,12 @@
 )
 
 # Six-wheel rover with INDEPENDENT per-wheel drive — the full G4 + G4b stack:
-#   * G4 extensible port set: `lunco:drivePorts` declares six custom actuator
-#     ports `drive_w0..drive_w5` (beyond the canonical drive_left/right/...).
-#   * G4 per-wheel binding: each wheel names its own port via `lunco:drivePort`.
+#   * G4 extensible port set: six `outputs:drive_w0..outputs:drive_w5` attributes
+#     on the root declare custom actuator ports (beyond the canonical
+#     drive_left/right/...); the reader discovers them by scanning `outputs:`.
+#   * G4 per-wheel binding: each wheel connects `inputs:drive` to its own port —
+#     a real USD connection, so it is path-translated through reference arcs and
+#     binds to its own instance's port rather than to a like-named prim.
 #   * G4b authored mix: `lunco:driveMix` maps the DriveCommand (throttle, steer)
 #     onto all six channels — left bank `+steer`, right bank `−steer`
 #     (skid steering realised through six independent motors, not a 2-port mix).
@@ -48,8 +51,16 @@ def Xform "SixWheelIndependent" (
     {
     }
 
-    # G4 — six custom actuator ports (one per wheel).
-    string lunco:drivePorts = "drive_w0 drive_w1 drive_w2 drive_w3 drive_w4 drive_w5"
+    # G4 — six custom actuator ports (one per wheel). A port IS an attribute: each
+    # wheel binds to one with a USD connection (`inputs:drive.connect`), so the set
+    # is declared once here and the bindings are PCP-resolved rather than matched by
+    # name.
+    float outputs:drive_w0 = 0.0
+    float outputs:drive_w1 = 0.0
+    float outputs:drive_w2 = 0.0
+    float outputs:drive_w3 = 0.0
+    float outputs:drive_w4 = 0.0
+    float outputs:drive_w5 = 0.0
 
     # G4b — the mix. Left bank (w0,w1,w2) = forward+steer; right bank (w3,w4,w5)
     # = forward−steer. Pure forward drives all six equally; pure steer pivots.
@@ -77,7 +88,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-1.0, -0.15, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 0
-        string lunco:drivePort = "drive_w0"
+        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w0>
     }
 
     def Cylinder "Wheel_L1" (
@@ -90,7 +101,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-1.0, -0.15, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 2
-        string lunco:drivePort = "drive_w1"
+        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w1>
     }
 
     def Cylinder "Wheel_L2" (
@@ -103,7 +114,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (-1.0, -0.15, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 4
-        string lunco:drivePort = "drive_w2"
+        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w2>
     }
 
     # --- Right bank → drive_w3/w4/w5 ----------------------------------------
@@ -117,7 +128,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (1.0, -0.15, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 1
-        string lunco:drivePort = "drive_w3"
+        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w3>
     }
 
     def Cylinder "Wheel_R1" (
@@ -130,7 +141,7 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (1.0, -0.15, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 3
-        string lunco:drivePort = "drive_w4"
+        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w4>
     }
 
     def Cylinder "Wheel_R2" (
@@ -143,13 +154,13 @@ def Xform "SixWheelIndependent" (
         double3 xformOp:translate = (1.0, -0.15, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 5
-        string lunco:drivePort = "drive_w5"
+        float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w5>
     }
 
     # --- Motors + reductions -------------------------------------------------
     # SIX motors, SIX channels: this is the rover the independent-drive story is
     # about, and each motor's `inputs:demand` wires to exactly the port its wheel
-    # binds with `lunco:drivePort` — `drive_w0..drive_w5`, in that order. Nothing is
+    # connects `inputs:drive` to — `drive_w0..drive_w5`, in that order. Nothing is
     # renumbered; the `lunco:driveMix` above is still the only place the steer sign
     # per bank is stated.
     #

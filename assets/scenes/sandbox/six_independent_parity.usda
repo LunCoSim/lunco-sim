@@ -31,7 +31,7 @@
 # WHAT IT GUARDS. This rover is the only asset in the fleet whose drive
 # allocation is fully AUTHORED rather than inferred from an Omniverse schema:
 #
-#     string lunco:drivePorts = "drive_w0 drive_w1 drive_w2 drive_w3 drive_w4 drive_w5"
+#     float outputs:drive_w0 = 0.0   # ... through outputs:drive_w5
 #     string lunco:driveMix    = "drive_w0=1,1 drive_w1=1,1 drive_w2=1,1
 #                                 drive_w3=1,-1 drive_w4=1,-1 drive_w5=1,-1"
 #

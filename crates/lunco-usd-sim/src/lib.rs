@@ -237,13 +237,15 @@ pub struct PendingWheelWiring {
     pub index: i32,
     pub p_drive: Entity,
     pub p_steer: Entity,
-    /// G4: USD-authored actuator binding (`lunco:drivePort`). When `Some`, this
-    /// wheel wires to the named FSW port verbatim — overriding the index-parity
-    /// default — so arbitrary topologies (per-wheel drive, 6-wheel, rocker-bogie)
-    /// are declared in USD rather than hardcoded in `try_wire_wheel`.
+    /// G4: USD-authored actuator binding — the port name resolved from the
+    /// wheel's `inputs:drive.connect` connection (the target property minus its
+    /// `outputs:` prefix). When `Some`, this wheel wires to that FSW port
+    /// verbatim — overriding the index-parity default — so arbitrary topologies
+    /// (per-wheel drive, 6-wheel, rocker-bogie) are declared in USD rather than
+    /// hardcoded in `try_wire_wheel`.
     pub drive_port_name: Option<String>,
-    /// G4: USD-authored steer binding (`lunco:steerPort`). `Some` overrides the
-    /// `index < 2` front-steer default.
+    /// G4: USD-authored steer binding, resolved the same way from the wheel's
+    /// `inputs:steer.connect`. `Some` overrides the `index < 2` front-steer default.
     pub steer_port_name: Option<String>,
 }
 
@@ -1060,18 +1062,26 @@ fn process_usd_sim_prim_read(
                     .iter()
                     .map(|s| s.to_string())
                     .collect();
-            // G4: extra USD-declared actuator ports (`lunco:drivePorts`, a
-            // space-separated token list). Lets a dynamic vehicle expose custom
-            // per-wheel actuators that wheels bind to via `lunco:drivePort` and a
-            // wire/rhai/Modelica mix drives — arbitrary topology authored in USD,
-            // not hardcoded here. Deduped against the canonical set.
-            if let Some(extra) =
-                reader.text(&sdf_path, "lunco:drivePorts")
-            {
-                for name in extra.split_whitespace() {
-                    if !port_names.iter().any(|n| n == name) {
-                        port_names.push(name.to_string());
-                    }
+            // Extra actuator ports the vessel DECLARES, as authored `outputs:`
+            // attributes on the vessel prim — a port is an attribute, the same way a
+            // command is an `inputs:` attribute. That lets a dynamic vehicle expose
+            // custom per-wheel actuators (`outputs:drive_w0` …) that wheels bind to
+            // with a USD CONNECTION and a wire/rhai/Modelica mix drives: arbitrary
+            // topology authored in USD, not hardcoded here. Deduped against the
+            // canonical set, so a vessel may re-declare a canonical port harmlessly.
+            for attr in reader.attr_names(&sdf_path) {
+                let Some(name) = attr.strip_prefix("outputs:") else {
+                    continue;
+                };
+                // NUMERIC outputs only. `outputs:` is UsdShade's namespace too, so a
+                // vessel root that also carries a material network would otherwise
+                // mint a phantom actuator port from `token outputs:surface`. An
+                // actuator port carries a number; a shader terminal does not.
+                if reader.real(&sdf_path, &attr).is_none() {
+                    continue;
+                }
+                if !port_names.iter().any(|n| n == name) {
+                    port_names.push(name.to_string());
                 }
             }
             for name in &port_names {
@@ -1086,38 +1096,6 @@ fn process_usd_sim_prim_read(
                 port_map.insert(name.clone(), port_ent);
             }
 
-            // The command surface is AUTHORED, on the vessel's on-board computer:
-            // every `inputs:` port on the primary OBC prim is a command this vessel
-            // accepts (`obc::read_command_surface`). It used to be the literal
-            // `&["throttle", "steer", "brake"]` right here, which meant the engine
-            // decided what could command a vehicle by knowing what kind of vehicle it
-            // was — a per-class branch that a lander and an avatar each had to be
-            // added to.
-            //
-            // No OBC ⇒ no vocabulary ⇒ NO `FlightSoftware` at all, so the vessel has
-            // no command surface and every write through the port substrate is
-            // rejected. That is the intended way to author a wreck or an un-crewed
-            // chassis, and it is composition doing it, not a check.
-            //
-            // The vessel's USD `Controls` binding still adds any *extra* authored
-            // intents on top via `sync_fsw_command_surface` (additive/idempotent), so
-            // an entity that has not yet composed its `Controls` scope still accepts
-            // `set_input` for everything its OBC declares.
-            let command_surface = lunco_usd_bevy::obc::read_command_surface(reader, &sdf_path);
-            if command_surface.is_none() {
-                warn!(
-                    "vessel {} composes no primary OBC — it accepts NO commands. \
-                     Reference @lunco://components/avionics/obc.usda@</OBC> to give it a \
-                     command surface.",
-                    prim_path.path
-                );
-            }
-            let surface: Vec<&str> = command_surface
-                .iter()
-                .flatten()
-                .map(String::as_str)
-                .collect();
-
             commands.entity(entity).try_insert((
                 lunco_core::SelectableRoot,
                 // Rovers have a meaningful "upright" — opt into overturn
@@ -1125,19 +1103,23 @@ fn process_usd_sim_prim_read(
                 lunco_core::KeepUpright,
             ));
 
-            // Only a vessel with an OBC gets one. The absence of this component IS
-            // the absence of a command surface — there is no disabled/empty FSW,
-            // because an empty one would still answer writes.
-            if command_surface.is_some() {
-                commands
-                    .entity(entity)
-                    .try_insert(FlightSoftware::new(port_map, &surface));
-                info!(
-                    "OBC command surface for {}: [{}]",
-                    prim_path.path,
-                    surface.join(", ")
-                );
-            }
+            // The command surface is AUTHORED, in the vessel's `Controls` scope: the
+            // intents it binds name exactly the ports this vessel accepts.
+            // `sync_fsw_command_surface` seeds them from the `ControlBinding`, so the
+            // vocabulary is never decided here — it used to be the literal
+            // `&["throttle", "steer", "brake"]`, which meant the engine decided what
+            // could command a vehicle by knowing what kind of vehicle it was.
+            //
+            // Seeded EMPTY: the command backend is strict, so a vessel whose `Controls`
+            // scope is absent accepts nothing and every write is refused. That is how
+            // you author a wreck or an un-crewed chassis — by composition, not a check.
+            //
+            // `port_map` is a different thing and is NOT the surface: it maps actuator
+            // names to their `DigitalPort` entities, built above from the canonical set
+            // plus the vessel prim's authored `outputs:` attributes.
+            commands
+                .entity(entity)
+                .try_insert(FlightSoftware::new(port_map, &[]));
 
             if let Some(xml) = reader
                 .text(&sdf_path, "lunco:behavior")
@@ -1343,14 +1325,24 @@ fn process_usd_sim_prim_read(
             // than squatting a non-existent `physxVehicleWheel:index` attr.
             let index = reader.scalar::<i32>(&sdf_path, "lunco:wheel:index").unwrap_or(0);
 
-            // G4: optional per-wheel actuator binding. A token naming the FSW
-            // drive/steer port this wheel listens to — extracts the rover's
-            // wiring topology from `try_wire_wheel`'s hardcoded index parity
-            // into USD, enabling per-wheel drive and non-2×N layouts.
-            let drive_port_name =
-                reader.text(&sdf_path, "lunco:drivePort");
-            let steer_port_name =
-                reader.text(&sdf_path, "lunco:steerPort");
+            // Optional per-wheel actuator binding, as a USD CONNECTION:
+            //   float inputs:drive.connect = </Rover.outputs:drive_left>
+            // This extracts the rover's wiring topology out of `try_wire_wheel`'s
+            // hardcoded index parity and into USD, enabling per-wheel drive and
+            // non-2×N layouts.
+            //
+            // A connection, not a name: PCP resolves and PATH-TRANSLATES it through
+            // reference arcs, so a wheel that arrives on a `references` arc points at
+            // its own instance's port rather than at whatever prim happens to share
+            // the name. The port it names is the property, so `outputs:drive_left`
+            // resolves to the FSW port `drive_left`.
+            let connected_port = |attr: &str| -> Option<String> {
+                let source = reader.connection_source(&sdf_path, attr)?;
+                let (_, property) = source.rsplit_once('.')?;
+                property.strip_prefix("outputs:").map(str::to_string)
+            };
+            let drive_port_name = connected_port("inputs:drive");
+            let steer_port_name = connected_port("inputs:steer");
 
             // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
             commands.entity(entity).try_insert(PendingWheelWiring {
@@ -2232,15 +2224,17 @@ fn on_add_usd_sim_prim(
 /// # Wiring Rules
 ///
 /// USD authority first (G4 — topology authored, not hardcoded):
-/// - `lunco:drivePort = "<name>"` on the wheel → wire its drive to that FSW port.
-/// - `lunco:steerPort = "<name>"` on the wheel → wire its steer to that FSW port.
+/// - `inputs:drive.connect = </Rover.outputs:<name>>` on the wheel → wire its
+///   drive to that FSW port. The connection is PCP-resolved and path-translated
+///   through reference arcs, so a referenced wheel binds to its own instance's port.
+/// - `inputs:steer.connect` likewise wires the wheel's steer.
 ///
 /// Default when unauthored (the canonical skid/Ackermann layout):
 /// - **Even index** → `drive_left`, **odd index** → `drive_right`.
 /// - **Index < 2** (front) → `steering` (only meaningful for Ackermann).
 ///
 /// A named port that is absent from the FSW `port_map` warns and is skipped —
-/// declare custom ports with `lunco:drivePorts` on the rover root.
+/// declare custom ports as `outputs:<name>` attributes on the rover root.
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     q_fsw: Query<(Entity, &UsdPrimPath, &FlightSoftware)>,

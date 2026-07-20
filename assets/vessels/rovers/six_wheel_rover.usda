@@ -7,9 +7,10 @@
 
 # Six-wheel skid rover — demonstrates G4 (arbitrary actuator topology authored
 # in USD). Unlike the 4-wheel base rovers, the wheel→actuator wiring is NOT left
-# to `try_wire_wheel`'s index-parity default: each wheel names the FSW drive port
-# it listens to via `lunco:drivePort`. Three wheels per side bind to `drive_left`
-# / `drive_right`, so the built-in skid mix (`PhysxVehicleTankDifferentialAPI`) yaws the
+# to `try_wire_wheel`'s index-parity default: each wheel connects its
+# `inputs:drive` to the FSW drive port it listens to, an `outputs:` attribute on
+# the rover root. Three wheels per side connect to `outputs:drive_left`
+# / `outputs:drive_right`, so the built-in skid mix (`PhysxVehicleTankDifferentialAPI`) yaws the
 # body exactly as it does for the 4-wheel rover — proving a non-2×2 layout is a
 # USD file, not a Rust struct.
 #
@@ -43,6 +44,13 @@ def Xform "SixWheelRover" (
     uniform bool lunco:spawnable = true
     float physics:mass = 1400.0
     float lunco:spawnLift = 1.0
+
+    # The two bank actuator ports, as attributes the wheels CONNECT to. Declaring
+    # them here gives each `inputs:drive.connect` a real property to resolve to,
+    # so the binding is PCP-resolved and path-translated through the wheels'
+    # reference arcs instead of matched by name.
+    float outputs:drive_left = 0.0
+    float outputs:drive_right = 0.0
     float physxRigidBody:linearDamping = 0.5
     float physxRigidBody:angularDamping = 2.0
 
@@ -83,7 +91,7 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 0
-        string lunco:drivePort = "drive_left"
+        float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
     }
 
     def Cylinder "Wheel_L1" (
@@ -97,7 +105,7 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 2
-        string lunco:drivePort = "drive_left"
+        float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
     }
 
     def Cylinder "Wheel_L2" (
@@ -111,7 +119,7 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 4
-        string lunco:drivePort = "drive_left"
+        float inputs:drive.connect = </SixWheelRover.outputs:drive_left>
     }
 
     # --- Right bank (binds to drive_right) ----------------------------------
@@ -126,7 +134,7 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 1
-        string lunco:drivePort = "drive_right"
+        float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
     }
 
     def Cylinder "Wheel_R1" (
@@ -140,7 +148,7 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 3
-        string lunco:drivePort = "drive_right"
+        float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
     }
 
     def Cylinder "Wheel_R2" (
@@ -154,7 +162,7 @@ def Xform "SixWheelRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 5
-        string lunco:drivePort = "drive_right"
+        float inputs:drive.connect = </SixWheelRover.outputs:drive_right>
     }
 
     # --- Motors + reductions -------------------------------------------------
@@ -170,7 +178,7 @@ def Xform "SixWheelRover" (
     # `:maxRotationSpeed`; they belong to the motor and the reduction behind it.
     #
     # Each motor's `inputs:demand` wires to the SAME channel its wheel's
-    # `lunco:drivePort` names, so the bank split above is stated once and the motors
+    # `inputs:drive` connects to, so the bank split above is stated once and the motors
     # follow it. Every motor names the WHEEL it turns with
     # `lunco:motor:drivenWheel` — an explicit relationship, not a name convention.
     # This drivetrain is RAYCAST, so those wheels have no joint and the raycast wheel

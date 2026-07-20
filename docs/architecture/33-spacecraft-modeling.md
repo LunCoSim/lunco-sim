@@ -124,17 +124,26 @@ models.
 The wheel→actuator **wiring topology** was hardcoded in two Rust spots: the port
 *set* (4 fixed names) and `try_wire_wheel`'s `index%2`/`index<2` parity. Both are
 now USD-authorable:
-- **Per-wheel binding** — `lunco:drivePort` / `lunco:steerPort` (token) on a wheel
-  prim name the FSW port it wires to, overriding index parity. So a 6-wheel rover,
-  per-wheel independent drive, or a non-2×N layout is declared in USD, not coded.
-  Unauthored wheels keep the documented parity default (even→`drive_left`,
-  odd→`drive_right`, front→`steering`), so the 4-wheel base rovers are unchanged.
-- **Extensible port set** — `lunco:drivePorts` (space-separated tokens) on the
-  rover root spawns extra named `DigitalPort`s beyond the canonical four, which
-  wheels bind to and a wire/rhai/Modelica mix drives.
+- **Per-wheel binding** — a USD **connection** on the wheel prim,
+  `float inputs:drive.connect = </Rover.outputs:drive_left>` (and
+  `inputs:steer.connect`), names the FSW port it wires to, overriding index
+  parity. The reader resolves the connection and takes the target property name
+  minus its `outputs:` prefix as the port name. Because a connection is
+  PCP-resolved and path-translated through reference arcs, a wheel arriving on a
+  `references` arc binds to its own instance's port rather than to whatever prim
+  shares a name; it is also typed, carries `customData` UI hints, and is visible
+  in usdview. So a 6-wheel rover, per-wheel independent drive, or a non-2×N
+  layout is declared in USD, not coded. Wheels with no connection keep the
+  documented parity default (even→`drive_left`, odd→`drive_right`,
+  front→`steering`), so the 4-wheel base rovers are unchanged.
+- **Extensible port set** — each extra port is a real attribute on the rover
+  root, e.g. `float outputs:drive_w0 = 0.0`. The reader discovers ports by
+  scanning the vessel prim's authored `outputs:` attributes and spawns a named
+  `DigitalPort` per port beyond the canonical four, which wheels connect to and a
+  wire/rhai/Modelica mix drives.
 - **Proof:** `assets/vessels/rovers/six_wheel_rover.usda` — a self-contained
   6-wheel skid rover whose three-per-side wheels bind explicitly via
-  `lunco:drivePort`; also authors G2 inertia/COM.
+  `inputs:drive.connect`; also authors G2 inertia/COM.
 
 **G4b — authored mix  [DONE]:** `lunco:driveMix` on the rover root declares a
 **linear per-port mix** — whitespace-separated `port=forward,steer[,brake]` terms
