@@ -380,15 +380,16 @@ Live sim feeds client prediction + replication; these constraints are hard:
 
 - **Do not reorder or defer port reads.** `ControlDacSet.before(Propagate)`
   (`lunco-cosim/src/lib.rs:118`) exists specifically to kill a 1-tick skew that
-  diverged host vs client (the steering-jitter / DAC-determinism bug). Any cache
+  diverged host vs client (the steering-jitter / propagation-determinism bug). Any cache
   that changes read timing or single-writer semantics (`warn_dual_driven_ports`,
   lib.rs:271) reintroduces it.
 - **Do not skip Modelica steps on unchanged input.** The model is a stateful
   integrator — state advances under constant input. Only valid at proven steady
   state; not generally safe.
-- **Keep sim math f64.** The 1 mm `i32` position quantization (`networking/sync.rs:65`)
-  and i16 DAC round (`ports.rs:245`) are *wire/hardware* formats, not sim
-  precision — do not fold them into the compute path as an approximation.
+- **Keep sim math f64.** The 1 mm `i32` position quantization
+  (`networking/sync.rs:65`) is a *wire* format, not sim precision — do not fold
+  it into the compute path as an approximation. Port values are `f64` end to end
+  and are never rounded to a narrower representation in the sim.
 - Client role already skips cosim entirely (renders host snapshots), so all
   sim-side caching is host/single-player only.
 

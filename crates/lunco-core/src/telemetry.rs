@@ -100,7 +100,7 @@ pub enum ChannelSource {
     /// `f64` only — that is the port currency.
     Port(String),
     /// **Escape hatch.** An arbitrary component field by reflection path
-    /// (`"PhysicalPort.value"`). The only source that can reach a non-port field, and
+    /// (`"Port.value"`). The only source that can reach a non-port field, and
     /// the only one that can carry `Bool`/`String`. Slower: it needs exclusive world
     /// access and a type-registry lookup per sample.
     Reflect(String),

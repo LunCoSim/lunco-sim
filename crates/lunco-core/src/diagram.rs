@@ -2,7 +2,7 @@
 //!
 //! This module provides pure-Rust graph types that represent connected components
 //! with typed ports. No Bevy, no ECS, no rendering — just data that any domain
-//! (Modelica AST, ECS wires, FSW architecture) can build and share.
+//! (Modelica AST, cosim connections, FSW architecture) can build and share.
 //!
 //! ## Architecture
 //!
@@ -14,7 +14,7 @@
 //!   │        │             │
 //!   │   ┌────┴────┐   ┌────┴────┐
 //!   │   │Modelica │   │  ECS    │
-//!   │   │GraphBld │   │WireGraph│
+//!   │   │GraphBld │   │Projector│
 //!   │   └─────────┘   └─────────┘
 //!   │
 //!   ▼ (rendered by)
@@ -28,8 +28,8 @@
 //! | Ontology Concept | ComponentGraph Type | Notes |
 //! |-----------------|---------------------|-------|
 //! | **Port**        | `ComponentPort`       | Named, typed interface point. Maps 1:1 to SysML Proxy Port. |
-//! | **Wire**        | `EdgeKind::Wire`    | Signal/power link between ports. Maps to SysML connection. |
 //! | **Connection**  | `EdgeKind::Connect` | Modelica `connect()` equation. Maps to Modelica connector. |
+//! | **Signal link** | `EdgeKind::Signal`  | Directed port→port dataflow (SSP connection). Maps to SysML connection. |
 //! | **Component**   | `NodeKind::Component` | A functional unit (resistor, motor, sensor). Maps to SysML part. |
 //! | **Subsystem**   | `NodeKind::Subsystem` | A containing unit (package, assembly). Maps to Space System. |
 //! | **Space System**| `NodeKind::Class`   | Top-level container. Maps to Space System / Vehicle. |
@@ -74,7 +74,7 @@ pub struct ComponentPort {
     pub name: String,
     /// Port direction.
     pub direction: PortDirection,
-    /// Optional type tag (e.g., "Real", "Pin", "Flange_a", "i16").
+    /// Optional type tag (e.g., "Real", "Pin", "Flange_a", "f64").
     pub port_type: Option<String>,
     /// Optional description for tooltip display.
     pub description: Option<String>,
@@ -163,10 +163,8 @@ pub enum NodeKind {
     Connector,
     /// A subsystem / package (containment node).
     Subsystem,
-    /// A FSW digital port.
-    DigitalPort,
-    /// A physical port.
-    PhysicalPort,
+    /// A signal port — the one port kind (`Port`).
+    Port,
     /// A wire/signal node (for signal flow diagrams).
     Signal,
     /// A Modelica class (model, block, function).
@@ -177,7 +175,7 @@ pub enum NodeKind {
 ///
 /// Edges represent connections between ports on nodes. The edge kind
 /// distinguishes between different connection types (Modelica equations,
-/// ECS wires, inheritance, containment, etc.).
+/// signal dataflow, inheritance, containment, etc.).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComponentEdge {
     /// Source node ID.
@@ -202,9 +200,8 @@ pub enum EdgeKind {
     /// Modelica `connect(a, b)` equation.
     #[default]
     Connect,
-    /// ECS `Wire` component (digital ↔ physical bridge).
-    Wire,
-    /// FSW signal path.
+    /// Directed port → port dataflow — an FSW signal path, or a cosim
+    /// `SimConnection` (SSP factor/offset applied during propagation).
     Signal,
     /// `extends` inheritance.
     Extends,
@@ -545,87 +542,6 @@ impl ComponentNodeBuilder {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ECS wire-to-graph conversion (lunco-core native domain)
-// ---------------------------------------------------------------------------
-
-/// Trait for wire-like data that can be converted to a diagram.
-///
-/// This allows both real `Wire` components and mock/test data to produce
-/// diagram graphs without depending on Bevy.
-pub trait WireLikeSource {
-    /// Source entity ID.
-    fn source(&self) -> u64;
-    /// Target entity ID.
-    fn target(&self) -> u64;
-    /// Scale factor applied during signal conversion.
-    fn scale(&self) -> f32;
-    /// Whether this wire connects digital ports (true) or physical ports (false).
-    fn is_digital(&self) -> bool;
-}
-
-impl ComponentGraph {
-    /// Convert ECS wire/port configuration into a [`ComponentGraph`].
-    ///
-    /// This function takes the implicit graph formed by `DigitalPort`, `PhysicalPort`,
-    /// and `Wire` components and materializes it as an explicit `ComponentGraph` for
-    /// visualization.
-    ///
-    /// Note: This function operates on raw entity/port data to remain Bevy-independent.
-    /// The Bevy-specific conversion lives in the ECS query system that calls this.
-    pub fn from_wires<W>(wires: impl IntoIterator<Item = W>) -> Self
-    where
-        W: WireLikeSource,
-    {
-        // Collect into Vec so we can iterate multiple times
-        let wires: Vec<W> = wires.into_iter().collect();
-        let mut builder = ComponentBuilder::new("Signal Flow");
-        let mut entity_names: HashMap<u64, String> = HashMap::new();
-        let mut entity_is_digital: HashMap<u64, bool> = HashMap::new();
-
-        // First pass: collect all entities and their digital/physical nature
-        for wire in &wires {
-            entity_names.entry(wire.source()).or_insert_with(|| format!("entity_{}", wire.source()));
-            entity_names.entry(wire.target()).or_insert_with(|| format!("entity_{}", wire.target()));
-            entity_is_digital.entry(wire.source()).or_insert_with(|| wire.is_digital());
-            entity_is_digital.entry(wire.target()).or_insert_with(|| wire.is_digital());
-        }
-
-        // Second pass: create all nodes with both input and output ports
-        let mut nodes_created: HashMap<u64, String> = HashMap::new();
-        for (&entity_id, name) in &entity_names {
-            let digital = entity_is_digital[&entity_id];
-            let type_tag = if digital { "i16" } else { "f32" };
-            let kind = if digital { NodeKind::DigitalPort } else { NodeKind::PhysicalPort };
-            builder = builder
-                .node(name, kind)
-                    .port(ComponentPort::output("out").with_type(type_tag))
-                    .port(ComponentPort::input("in").with_type(type_tag))
-                .end();
-            nodes_created.insert(entity_id, name.clone());
-        }
-
-        // Third pass: create edges
-        for wire in &wires {
-            let src_name = &nodes_created[&wire.source()];
-            let tgt_name = &nodes_created[&wire.target()];
-
-            let scale_label = if (wire.scale() - 1.0).abs() > 1e-6 {
-                Some(format!("×{}", wire.scale()))
-            } else {
-                None
-            };
-
-            builder = match scale_label {
-                Some(label) => builder.connect_labeled(src_name, "out", tgt_name, "in", EdgeKind::Wire, label),
-                None => builder.connect(src_name, "out", tgt_name, "in", EdgeKind::Wire),
-            };
-        }
-
-        builder.build()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,32 +592,6 @@ mod tests {
     }
 
     #[test]
-    fn test_wire_graph_conversion() {
-        struct MockWire {
-            src: u64,
-            tgt: u64,
-            scl: f32,
-            digital: bool,
-        }
-        impl WireLikeSource for MockWire {
-            fn source(&self) -> u64 { self.src }
-            fn target(&self) -> u64 { self.tgt }
-            fn scale(&self) -> f32 { self.scl }
-            fn is_digital(&self) -> bool { self.digital }
-        }
-
-        let wires = vec![
-            MockWire { src: 1, tgt: 2, scl: 1.0, digital: true },
-            MockWire { src: 2, tgt: 3, scl: 2.5, digital: false },
-        ];
-
-        let graph = ComponentGraph::from_wires(wires);
-        assert_eq!(graph.node_count(), 3);
-        assert_eq!(graph.edge_count(), 2);
-        assert_eq!(graph.edges[1].label.as_deref(), Some("×2.5"));
-    }
-
-    #[test]
     fn test_graph_clear() {
         let mut graph = ComponentBuilder::new("Test")
             .node("A", NodeKind::Component)
@@ -748,11 +638,10 @@ mod tests {
         graph.add_node(NodeKind::Component, "c", vec![]);
         graph.add_node(NodeKind::Connector, "cn", vec![]);
         graph.add_node(NodeKind::Subsystem, "s", vec![]);
-        graph.add_node(NodeKind::DigitalPort, "dp", vec![]);
-        graph.add_node(NodeKind::PhysicalPort, "pp", vec![]);
+        graph.add_node(NodeKind::Port, "p", vec![]);
         graph.add_node(NodeKind::Signal, "sig", vec![]);
         graph.add_node(NodeKind::Class, "cls", vec![]);
-        assert_eq!(graph.node_count(), 7);
+        assert_eq!(graph.node_count(), 6);
     }
 
     #[test]
@@ -760,7 +649,6 @@ mod tests {
         // Verify all EdgeKind variants are usable
         let kinds = [
             EdgeKind::Connect,
-            EdgeKind::Wire,
             EdgeKind::Signal,
             EdgeKind::Extends,
             EdgeKind::Import,

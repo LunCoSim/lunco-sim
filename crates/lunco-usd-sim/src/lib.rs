@@ -68,7 +68,8 @@ use lunco_mobility::{WheelRaycast, DifferentialCoupling, SuspensionPiston, Suspe
 use lunco_mobility::kernels::DriveMix;
 use lunco_mobility::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity, wheel_roll_rate};
 use lunco_fsw::FlightSoftware;
-use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
+use lunco_core::architecture::Port;
+use lunco_cosim::{ports::PORT_NAME, SimConnection};
 use lunco_hardware::{MotorActuator, SteeringActuator};
 use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, AdaptiveNearPlane, ProvisionalAvatarCamera};
 use lunco_core::{Avatar, LocalAvatar};
@@ -135,8 +136,8 @@ impl Plugin for UsdSimPlugin {
                .chain()
                .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0))
             .add_observer(on_add_usd_sim_prim)
-           // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
-           // before `wire_system` (Update) propagates values through them.
+           // `try_wire_wheel` runs in PreUpdate so that the `SimConnection` entities
+           // exist before cosim propagation pushes values through them.
            .add_systems(
                PreUpdate,
                (try_wire_wheel, resolve_differential_coupling, resolve_behavior_targets),
@@ -1089,7 +1090,7 @@ fn process_usd_sim_prim_read(
                 // recursive scene-clear reclaims them with it — no detached-at-root
                 // survivors across a scene swap (general lifecycle contract).
                 let port_ent = commands.spawn((
-                    DigitalPort::default(),
+                    Port::default(),
                     Name::new(format!("Port_{}", name)),
                     ChildOf(entity),
                 )).id();
@@ -1115,7 +1116,7 @@ fn process_usd_sim_prim_read(
             // you author a wreck or an un-crewed chassis — by composition, not a check.
             //
             // `port_map` is a different thing and is NOT the surface: it maps actuator
-            // names to their `DigitalPort` entities, built above from the canonical set
+            // names to their actuator `Port` entities, built above from the canonical set
             // plus the vessel prim's authored `outputs:` attributes.
             commands
                 .entity(entity)
@@ -1296,12 +1297,12 @@ fn process_usd_sim_prim_read(
                 }
             };
 
-            // Create physical ports for drive and steering. Owned by the wheel via
+            // Create the actuator-side ports for drive and steering. Owned by the wheel via
             // `ChildOf` so the single recursive scene-clear reclaims them with the
             // wheel — synthesized backing entities are never left detached at the root
             // (the general lifecycle contract; see `setup_physical_wheel`'s joint).
-            let p_drive = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Drive"), ChildOf(entity))).id();
-            let p_steer = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Steer"), ChildOf(entity))).id();
+            let p_drive = commands.spawn((Port::default(), Name::new("Port_Drive"), ChildOf(entity))).id();
+            let p_steer = commands.spawn((Port::default(), Name::new("Port_Steer"), ChildOf(entity))).id();
 
             // `index` is LunCo-specific: NVIDIA's `physxVehicleWheelAttachment:index`
             // lives on the WheelAttachment prim, which our flat composition doesn't
@@ -2203,8 +2204,9 @@ fn on_add_usd_sim_prim(
 /// System that wires wheel drive/steer ports to FSW digital ports.
 ///
 /// Runs every frame, checking for `PendingWheelWiring` markers. Once the FSW root entity
-/// exists (has `FlightSoftware`), it creates `Wire` entities connecting the wheel's
-/// physical ports to the appropriate digital ports.
+/// exists (has `FlightSoftware`), it creates [`SimConnection`] entities connecting the
+/// wheel's physical ports to the appropriate digital ports. Each end addresses a bare
+/// [`Port`] entity through the cosim port backend's `value` connector.
 ///
 /// # Wiring Rules
 ///
@@ -2245,7 +2247,13 @@ fn try_wire_wheel(
                 // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
                 // on scene swap — the same general lifecycle contract the ports/joint use.
                 commands.spawn((
-                    Wire { source: d_port, target: pending.p_drive, scale: 1.0 },
+                    SimConnection {
+                        start_element: d_port,
+                        start_connector: PORT_NAME.to_string(),
+                        end_element: pending.p_drive,
+                        end_connector: PORT_NAME.to_string(),
+                        ..Default::default()
+                    },
                     Name::new(format!("Wire_Drive_{}", drive_port_name)),
                     ChildOf(ent),
                 ));
@@ -2266,7 +2274,13 @@ fn try_wire_wheel(
             if let Some(name) = steer_port_name {
                 if let Some(&s_port) = fsw.port_map.get(&name) {
                     commands.spawn((
-                        Wire { source: s_port, target: pending.p_steer, scale: 1.0 },
+                        SimConnection {
+                            start_element: s_port,
+                            start_connector: PORT_NAME.to_string(),
+                            end_element: pending.p_steer,
+                            end_connector: PORT_NAME.to_string(),
+                            ..Default::default()
+                        },
                         Name::new(format!("Wire_Steer_{}", name)),
                         ChildOf(ent),
                     ));

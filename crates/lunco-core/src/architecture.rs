@@ -5,15 +5,12 @@
 //! intent from low-level physical actuation.
 //!
 //! ## The "Why": Fidelity-Driven Emulation
-//! To support Flight Software (FSW) development, the simulation must
-//! emulate the constraints of real hardware:
-//! 1. **Digital Domain ([DigitalPort])**: Real On-Board Computers (OBCs)
-//!    often communicate using discrete integer registers. We use `i16`
-//!    to simulate bit-depth limits and signal quantization.
-//! 2. **Physical Domain ([PhysicalPort])**: The "Plant" (physics engine)
-//!    requires continuous values (`f32`) for forces and velocities.
-//! 3. **The Bridge ([Wire])**: Acts as an emulated DAC/ADC, handles gains
-//!    and signal conversions between the digital logic and physical reality.
+//! Signals move between subsystems through **[Port]**: one `f64` value — a
+//! command, an actuator setpoint, a sensor reading, or a value exchanged with a
+//! Modelica co-simulation. A directed link between two ports is a
+//! `lunco_cosim::SimConnection` (the SSP connection: element + named connector,
+//! with factor and offset), which is where a unit conversion belongs when two
+//! ports are authored in different units.
 //!
 //! ## Typed Commands
 //!
@@ -266,44 +263,20 @@ impl ControlBinding {
     }
 }
 
-// ── Digital / Physical Ports ──────────────────────────────────────────────────
+// ── Ports ─────────────────────────────────────────────────────────────────────
 
-/// Level 2: Digital Port (OBC Register Emulation)
+/// A named signal value exchanged between subsystems.
 ///
-/// **Why**: Uses `i16` (-32768 to 32767) to emulate hardware bit-depth and
-/// the data-saturated environments typical of 16-bit flight computers.
-/// It forces the developer to handle quantization and range limits.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
-#[reflect(Component)]
-pub struct DigitalPort {
-    /// Raw integer representation of the signal.
-    pub raw_value: i16,
-}
-
-/// Level 1: Physical Port (Plant Actuators/Sensors)
-///
-/// **Why**: Uses `f32` for physical units (Nm, rad/s) representing the "real-world"
-/// state. This is the value actually consumed by physics solvers.
+/// One port type carries every signal in the simulation — commands from the
+/// control surface, actuator setpoints consumed by the physics solvers, sensor
+/// readings, and the values a Modelica co-simulation exchanges. Values are `f64`
+/// in whatever unit the signal is authored in; a `lunco_cosim::SimConnection`
+/// applies factor/offset when two ports are expressed in different units.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
 #[reflect(Component)]
-pub struct PhysicalPort {
-    /// The physical value being applied or sensed.
-    pub value: f32,
-}
-
-/// Link between Digital and Physical domains.
-///
-/// **Why**: Bridges the gap between Flight Software (Digital) and the
-/// Simulation Engine (Physical), acting as a virtual cable with gain.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct Wire {
-    /// The digital port source.
-    pub source: Entity,
-    /// The physical port target.
-    pub target: Entity,
-    /// Signal gain / scaling factor to convert `i16` to `f32` physical units.
-    pub scale: f32,
+pub struct Port {
+    /// The signal value.
+    pub value: f64,
 }
 
 // ── Action Status ─────────────────────────────────────────────────────────────
@@ -353,22 +326,7 @@ mod tests {
 
     #[test]
     fn test_port_defaults() {
-        let physical = PhysicalPort::default();
-        let digital = DigitalPort::default();
-
-        assert_eq!(physical.value, 0.0, "Physical port should initialize to zero precision float");
-        assert_eq!(digital.raw_value, 0, "Digital port should initialize to zero bitwise integer");
-    }
-
-    #[test]
-    fn test_wire_scale_assignment() {
-        let wire = Wire {
-            source: Entity::PLACEHOLDER,
-            target: Entity::PLACEHOLDER,
-            scale: 2.5,
-        };
-
-        assert_eq!(wire.scale, 2.5);
+        assert_eq!(Port::default().value, 0.0, "A port should initialize to zero");
     }
 
     /// `"back"` used to appear in BOTH the `MoveBackward` and the `Cancel` arm;

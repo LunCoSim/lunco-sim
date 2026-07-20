@@ -169,17 +169,28 @@ fn seg(prev, cur) {
 /// turned the WRONG way cannot pass by magnitude alone.
 fn yaw_change_deg(f0, f1) {
     if f0 == () || f1 == () { return (); }
+    // VALIDATE THE INPUTS, not the result. A forward vector is a unit vector, so a
+    // length outside [0.5, 2.0] means the rover's orientation is degenerate — a NaN
+    // or zero quaternion — and there is no heading to measure this tick. Reporting
+    // `()` makes the caller skip the sample rather than sum a poisoned value into an
+    // accumulator it can never recover from.
+    //
+    // Guarding the RESULT cannot work here. `clamp` (prelude/math.rhai) is built out
+    // of `<` and `>`, and NaN compares false against both, so a NaN dot product is
+    // handed to `acos` unclamped and comes back NaN; `vnorm` likewise returns its
+    // argument untouched when the length is NaN, because `l <= 0.0` is false. By the
+    // time there is a `mag` to test, the damage is upstream.
+    let l0 = vlen(f0);
+    let l1 = vlen(f1);
+    // Phrased POSITIVELY on purpose. `l < 0.5 || l > 2.0` looks equivalent and is
+    // not: NaN compares false against EVERYTHING, so both halves are false and a NaN
+    // slips through. `!(in range)` is false for NaN, so it rejects. Every NaN guard
+    // in this file must be written this way.
+    if !(l0 >= 0.5 && l0 <= 2.0) { return (); }
+    if !(l1 >= 0.5 && l1 <= 2.0) { return (); }
     let a = vnorm(f0);
     let b = vnorm(f1);
     let mag = clamp(vdot(a, b), -1.0, 1.0).acos() * 57.29577951308232;
-    // `acos` can still hand back NaN at the domain edge (two identical headings
-    // give a dot of 1±1ulp, and the clamp is applied to a value that may already
-    // have rounded past it). One NaN is unrecoverable once the caller SUMS these
-    // — it poisons the accumulator for the rest of the run and every downstream
-    // comparison reads NaN — so a non-finite result is reported as "no rotation
-    // measured this tick" rather than propagated. NaN is the only value that is
-    // not equal to itself, which is the portable way to ask.
-    if mag != mag { return 0.0; }
     let cy = vcross(a, b)[1];
     if cy > 0.0 { -mag } else { mag }
 }

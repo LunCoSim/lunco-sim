@@ -59,7 +59,7 @@ Undocumented code is considered technical debt. All modules, functions, structs,
 
 ### Data Precision
 - **Physics**: All physical magnitudes, dimensions, and spatial vectors (forces, torques, axes) MUST use `f64` (double precision) to ensure simulation stability and accuracy at planetary scales.
-- **Signals & Control**: Logical control signals, digital-to-analog bridge values (`PhysicalPort`), and command arguments COULD use `f32` (single precision) to optimize for memory and bandwidth in high-frequency messaging.
+- **Signals & Control**: Every exchanged signal value — a control command, an actuator setpoint, a sensor reading — is one `Port` carrying `f64`, matching the FMI/SSP scalar-exchange contract. Command arguments COULD use `f32` (single precision) to optimize for memory and bandwidth in high-frequency messaging.
 
 ## Governance
 These Principles supersede all ad-hoc development decisions. Any change requires a formal amendment and a migration plan for existing models.

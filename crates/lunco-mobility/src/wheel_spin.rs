@@ -48,7 +48,7 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 /// `R = steer · rollₓ(−θ) · cylinder_base`.
 pub(crate) fn update_wheel_spin(
     mut q_wheels: Query<(&mut WheelRaycast, &Transform, &GlobalTransform, &RayHits, &ChildOf)>,
-    q_ports: Query<&lunco_core::architecture::PhysicalPort>,
+    q_ports: Query<&lunco_core::architecture::Port>,
     q_chassis: Query<(
         &LinearVelocity,
         &AngularVelocity,
@@ -81,7 +81,7 @@ pub(crate) fn update_wheel_spin(
         // Signed throttle: positive drives forward, negative reverses.
         let throttle = q_ports
             .get(wheel.drive_port)
-            .map(|p| (p.value as f64).clamp(-1.0, 1.0))
+            .map(|p| p.value.clamp(-1.0, 1.0))
             .unwrap_or(0.0);
         let tau_drive = throttle * wheel.drive_torque_max;
 
@@ -206,7 +206,7 @@ mod tests {
         time.advance_by(Duration::from_secs_f64(0.1));
         app.insert_resource(time);
 
-        // Port with no `PhysicalPort` → throttle reads 0 (free-rolling, so the spin
+        // Entity with no `Port` → throttle reads 0 (free-rolling, so the spin
         // is driven purely by ground speed / the lever arm under test).
         let port = app.world_mut().spawn_empty().id();
         let chassis = app

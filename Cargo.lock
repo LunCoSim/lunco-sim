@@ -7760,6 +7760,7 @@ dependencies = [
  "lunco-autopilot",
  "lunco-celestial",
  "lunco-core",
+ "lunco-cosim",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-fsw",

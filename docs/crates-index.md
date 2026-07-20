@@ -9,7 +9,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Core primitives (`DigitalPort`, `PhysicalPort`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the `SceneViewport` (active-camera binding), and canonical diagram data types. Vehicle vocabulary — the drive kernels, `DriveMix` and `ControlKernelRegistry` — lives in `lunco-mobility`, not here: core carries no domain. |
+| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the `SceneViewport` (active-camera binding), and canonical diagram data types. Vehicle vocabulary — the drive kernels, `DriveMix` and `ControlKernelRegistry` — lives in `lunco-mobility`, not here: core carries no domain. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, and recents. |
 | **`lunco-twin`** | The simulation unit on disk: folder structure, `twin.toml` manifest parsing, and file indexing. |
@@ -56,7 +56,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-robotics`** | High-level assembly logic and rover structural definitions (`assembler`). |
 | **`lunco-avatar`** | Human-interaction layer: composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) and control intents. (Camera *selection* / viewport lives in `lunco-usd-bevy` + `lunco-core::SceneViewport`.) |
 | **`lunco-fsw`** | Decentralized Flight Software architecture for coordinating vessel subsystems (GNC, Power, etc.). |
-| **`lunco-hardware`** | Concrete physical actuators and sensors bridging `PhysicalPort` values to the `avian3d` physics engine. |
+| **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Translation of raw user input (Keyboard/Gamepad) into typed `VesselIntent` actions for FSW. Yields a vessel to its owning session (spec 034), so the human never fights an autopilot. |
 | **`lunco-autopilot`** | Headless autonomous driver as a first-class actor: an `AiAgent` session that possesses + drives a vessel via `SetPorts` (spec 034). Multi-actor (each vessel → one owning session, human or autopilot). Behaviour is a `lunco-behavior` tree authored as DATA (`BehaviorSpec`, rhai/JSON — hot-swappable via `SetAutopilotBehavior`) with Rust nav-math leaves. No avatar/UI dep. |
 
@@ -143,7 +143,7 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 ### Core Foundation
 
 **`lunco-core`**
-The bedrock of the simulation. Defines `DigitalPort`/`PhysicalPort` primitives for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML).
+The bedrock of the simulation. Defines the `Port` primitive for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML).
 
 **`lunco-time`**
 The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/`WorldTime` (the world animation clock that also gates physics via `Time<Virtual>`), the `TimeDomain` clock tree (`Playback`, `TimeBinding`, `ResolvedDomains`) with the `AnimationPreview` domain + `ControlAnimation` transport, and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
@@ -230,7 +230,7 @@ Human-interaction layer. Provides composable camera **rigs** (SpringArm, Orbit, 
 Decentralized Flight Software architecture. Manages vessel subsystems as independent ECS entities communicating via asynchronous typed commands, mapping semantic SysML names to hardware entities.
 
 **`lunco-hardware`**
-Physical actuator and sensor implementations. Bridges `PhysicalPort` values to the `avian3d` physics engine, providing concrete motor, brake, and sensor components that interact with the simulation world.
+Physical actuator and sensor implementations. Bridges `Port` values to the `avian3d` physics engine, providing concrete motor, brake, and sensor components that interact with the simulation world.
 
 **`lunco-controller`**
 Input mapping and translation. Converts raw human-interface device inputs (Keyboard, Gamepad, Mouse) into abstract `VesselIntent` actions and typed command events for consumption by Flight Software.

@@ -1,46 +1,11 @@
-//! # Flight Software (FSW) & Command Fabric
+//! # Flight Software (FSW)
 //!
-//! This crate implements the simulation's "Cerebellum"—the decentralized 
-//! control architecture responsible for coordinating vessel subsystems.
-//!
-//! ## The "Why": Decentralized vs. Monolithic
-//! Traditional simulators often use a single "Vessel Manager" script. 
-//! LunCoSim follows a **Decentralized Subsystem** pattern, mirroring 
-//! real aerospace hardware:
-//! 1. **Autonomous Entities**: Subsystems (e.g., GNC, Power, Mobility) are 
-//!    independent ECS entities. 
-//! 2. **Asynchronous Messages**: Communication occurs via typed commands (e.g., `#[Command]` events)
-//!    broadcast over the ECS event bus, allowing modules to be 
-//!    hotswapped or re-tasked in real-time.
-//! 3. **Hardware Abstraction**: The [FlightSoftware] component uses a 
-//!    [port_map] to decouple semantic software logic (e.g., "DEPLOY_PANEL") 
-//!    from the underlying physical Port entity, facilitating digital twin 
-//!    mirroring where the same code can run against different vehicle manifests.
+//! [`FlightSoftware`] is a vessel's command surface plus the index from actuator
+//! name to the [`Port`](lunco_core::Port) entity that carries the value. The
+//! command vocabulary is data — see [`FlightSoftware::inputs`].
 
 use bevy::prelude::*;
 use std::collections::HashMap;
-
-/// Dummy event type for unrecognized command fallback.
-#[derive(Event)]
-pub struct UnrecognizedCommand;
-
-/// Plugin managing the asynchronous command fabric and FSW lifecycle.
-pub struct LunCoFswPlugin;
-
-impl Plugin for LunCoFswPlugin {
-    fn build(&self, app: &mut App) {
-        // Fallback handler captures orphaned commands for NACK telemetry.
-        app.add_observer(unrecognized_command_handler);
-    }
-}
-
-/// Marker component for an autonomous functional unit.
-///
-/// **Theory**: Represents a distinct piece of flight hardware (or emulated 
-/// process) that registers its own listeners for typed commands.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct VesselSubsystem;
 
 /// The primary Flight Software container for a spacecraft or rover.
 ///
@@ -87,19 +52,6 @@ impl FlightSoftware {
         self.inputs.get(name).copied().unwrap_or(0.0)
     }
 }
-
-/// Fallback observer that manages commands sent to a [FlightSoftware] entity
-/// that were not handled by any other more specific subsystem observers.
-fn unrecognized_command_handler(
-    _trigger: On<UnrecognizedCommand>,
-    _q_fsw: Query<&FlightSoftware>,
-) {
-    // Current design uses decentralized observers. If a command reaches this 
-    // fallback, it signifies a command that was not understood by any 
-    // installed module. 
-    // TODO: Implement centralized NACK logging.
-}
-
 
 #[cfg(test)]
 mod tests {

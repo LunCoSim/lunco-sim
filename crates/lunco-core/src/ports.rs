@@ -21,9 +21,12 @@
 //! ## Value model
 //!
 //! The wire currency is `f64` (continuous Real — what FMI-CS exchanges almost
-//! everywhere). Typed backends convert at their own boundary (a `DigitalPort`
-//! `i16` register saturates on write, like a real DAC/ADC). We deliberately do
-//! **not** model `Bool`/`Enum`/`String` ports until a concrete need appears.
+//! everywhere), and it is the currency end to end: a [`Port`] holds one `f64`,
+//! whatever the signal means. A backend whose own storage is narrower converts at
+//! its boundary. We deliberately do **not** model `Bool`/`Enum`/`String` ports
+//! until a concrete need appears.
+//!
+//! [`Port`]: crate::architecture::Port
 //!
 //! ## One registry, four thin operations
 //!

@@ -127,7 +127,7 @@ pub struct ControlTelemetry {
     /// makes any Modelica variable, Avian body value, joint, FSW signal, or USD sensor
     /// watchable without authoring anything in the scene).
     pub port: Option<String>,
-    /// Source for a created channel: a reflection path (`"PhysicalPort.value"`). The escape
+    /// Source for a created channel: a reflection path (`"Port.value"`). The escape
     /// hatch, for a field no port exposes.
     pub reflect: Option<String>,
     /// Engineering unit for a created channel.
@@ -691,7 +691,7 @@ fn read_reflect(world: &World, entity: Entity, path: &str) -> Option<TelemetryVa
 mod tests {
     use super::*;
     use bevy::time::TimeUpdateStrategy;
-    use lunco_core::architecture::PhysicalPort;
+    use lunco_core::architecture::Port;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -735,7 +735,7 @@ mod tests {
         Parameter {
             name: name.to_string(),
             unit: "A".to_string(),
-            source: ChannelSource::Reflect("PhysicalPort.value".to_string()),
+            source: ChannelSource::Reflect("Port.value".to_string()),
             ..Default::default()
         }
     }
@@ -748,7 +748,7 @@ mod tests {
         let seen = capture(&mut app);
         let e = app
             .world_mut()
-            .spawn((PhysicalPort { value: 42.0 }, Parameter {
+            .spawn((Port { value: 42.0 }, Parameter {
                 rate_hz: Some(lunco_core::FIXED_HZ),
                 ..reflect_channel("motor_current")
             }))
@@ -777,7 +777,7 @@ mod tests {
         let mut app = app();
         let seen = capture(&mut app);
         app.world_mut().spawn((
-            PhysicalPort { value: 1.0 },
+            Port { value: 1.0 },
             Parameter { enabled: false, ..reflect_channel("off") },
         ));
         step_fixed(&mut app, 8);
@@ -789,7 +789,7 @@ mod tests {
     fn a_world_with_no_parameters_never_runs_the_sampler() {
         let mut app = app();
         let seen = capture(&mut app);
-        app.world_mut().spawn(PhysicalPort { value: 42.0 });
+        app.world_mut().spawn(Port { value: 42.0 });
         step_fixed(&mut app, 4);
         assert!(seen.lock().unwrap().is_empty(), "nothing tagged ⇒ nothing sampled");
     }
@@ -803,11 +803,11 @@ mod tests {
         let seen = capture(&mut app);
 
         app.world_mut().spawn((
-            PhysicalPort { value: 1.0 },
+            Port { value: 1.0 },
             Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("fast") },
         ));
         app.world_mut().spawn((
-            PhysicalPort { value: 1.0 },
+            Port { value: 1.0 },
             Parameter { rate_hz: Some(6.0), ..reflect_channel("slow") },
         ));
 
@@ -853,7 +853,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn((
-                PhysicalPort { value: 1.0 },
+                Port { value: 1.0 },
                 Parameter {
                     rate_hz: Some(lunco_core::FIXED_HZ),
                     deadband: Some(0.5),
@@ -867,7 +867,7 @@ mod tests {
         assert_eq!(after_steady, 1, "an unchanging value emits ONCE, then goes quiet");
 
         // Move it past the deadband.
-        app.world_mut().entity_mut(e).get_mut::<PhysicalPort>().unwrap().value = 9.0;
+        app.world_mut().entity_mut(e).get_mut::<Port>().unwrap().value = 9.0;
         step_fixed(&mut app, 2);
         assert!(
             seen.lock().unwrap().len() > after_steady,
@@ -884,7 +884,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn((
-                PhysicalPort { value: 1.0 },
+                Port { value: 1.0 },
                 Parameter {
                     rate_hz: Some(lunco_core::FIXED_HZ),
                     deadband: Some(1.0),
@@ -896,7 +896,7 @@ mod tests {
         step_fixed(&mut app, 4);
         let baseline = seen.lock().unwrap().len();
 
-        app.world_mut().entity_mut(e).get_mut::<PhysicalPort>().unwrap().value = 1.2;
+        app.world_mut().entity_mut(e).get_mut::<Port>().unwrap().value = 1.2;
         step_fixed(&mut app, 4);
         assert_eq!(seen.lock().unwrap().len(), baseline, "a 0.2 move under a 1.0 deadband is noise");
     }
@@ -909,7 +909,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn((
-                PhysicalPort { value: 3.0 },
+                Port { value: 3.0 },
                 Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("retained") },
             ))
             .id();
@@ -933,7 +933,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn((
-                PhysicalPort { value: 1.0 },
+                Port { value: 1.0 },
                 Parameter {
                     rate_hz: Some(lunco_core::FIXED_HZ),
                     retention: Some(3),
@@ -961,7 +961,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn((
-                PhysicalPort { value: 1.0 },
+                Port { value: 1.0 },
                 Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("doomed") },
             ))
             .id();
@@ -983,7 +983,7 @@ mod tests {
     fn control_telemetry_retunes_a_named_channel() {
         let mut app = app();
         app.world_mut().spawn((
-            PhysicalPort { value: 1.0 },
+            Port { value: 1.0 },
             Parameter { rate_hz: Some(60.0), ..reflect_channel("tunable") },
         ));
         app.update();
@@ -1028,7 +1028,7 @@ mod tests {
         let mut app = app();
         let seen = capture(&mut app);
         app.world_mut().spawn((
-            PhysicalPort { value: 1.0 },
+            Port { value: 1.0 },
             Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("live") },
         ));
         step_fixed(&mut app, 3);
@@ -1046,12 +1046,12 @@ mod tests {
     fn control_telemetry_can_create_a_channel_on_an_entity() {
         let mut app = app();
         let seen = capture(&mut app);
-        let e = app.world_mut().spawn(PhysicalPort { value: 7.0 }).id();
+        let e = app.world_mut().spawn(Port { value: 7.0 }).id();
 
         app.world_mut().trigger(ControlTelemetry {
             channel: Some("watched".to_string()),
             entity: Some(e),
-            reflect: Some("PhysicalPort.value".to_string()),
+            reflect: Some("Port.value".to_string()),
             unit: Some("A".to_string()),
             rate_hz: Some(lunco_core::FIXED_HZ),
             ..Default::default()
@@ -1079,11 +1079,11 @@ mod tests {
     #[test]
     fn recreating_a_channel_drops_its_stale_clock_state() {
         let mut app = app();
-        let e = app.world_mut().spawn(PhysicalPort { value: 1.0 }).id();
+        let e = app.world_mut().spawn(Port { value: 1.0 }).id();
         app.world_mut().trigger(ControlTelemetry {
             channel: Some("c".to_string()),
             entity: Some(e),
-            reflect: Some("PhysicalPort.value".to_string()),
+            reflect: Some("Port.value".to_string()),
             rate_hz: Some(lunco_core::FIXED_HZ),
             ..Default::default()
         });
@@ -1127,13 +1127,13 @@ mod tests {
     fn one_entity_can_carry_many_channels() {
         let mut app = app();
         let seen = capture(&mut app);
-        let rover = app.world_mut().spawn(PhysicalPort { value: 5.0 }).id();
+        let rover = app.world_mut().spawn(Port { value: 5.0 }).id();
 
         for name in ["a", "b", "c"] {
             app.world_mut().trigger(ControlTelemetry {
                 channel: Some(name.to_string()),
                 entity: Some(rover),
-                reflect: Some("PhysicalPort.value".to_string()),
+                reflect: Some("Port.value".to_string()),
                 rate_hz: Some(lunco_core::FIXED_HZ),
                 ..Default::default()
             });
@@ -1161,12 +1161,12 @@ mod tests {
     #[test]
     fn removing_one_channel_leaves_its_siblings_alone() {
         let mut app = app();
-        let rover = app.world_mut().spawn(PhysicalPort { value: 2.0 }).id();
+        let rover = app.world_mut().spawn(Port { value: 2.0 }).id();
         for name in ["keep", "drop"] {
             app.world_mut().trigger(ControlTelemetry {
                 channel: Some(name.to_string()),
                 entity: Some(rover),
-                reflect: Some("PhysicalPort.value".to_string()),
+                reflect: Some("Port.value".to_string()),
                 rate_hz: Some(lunco_core::FIXED_HZ),
                 ..Default::default()
             });
@@ -1259,7 +1259,7 @@ mod tests {
         let mut app = app();
         let seen = capture(&mut app);
         app.world_mut().spawn((
-            PhysicalPort { value: 1.0 },
+            Port { value: 1.0 },
             Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("t") },
         ));
 

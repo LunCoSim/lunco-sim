@@ -663,7 +663,7 @@ in the code:
 - `lunco-cosim/connection.rs:3,71-77` — "Follows the **FMI/SSP** ontology: `SimPort`=SSP Connector,
   `SimConnection`=SSP Connection"; affine `src*scale+offset` = "SSP **LinearTransformation**."
 - `propagate.rs:3-7` — "FMI-CS 'read outputs → write inputs'… multiple wires into one input **sum** = a
-  deliberate extension beyond FMI's 1:1." (The FSW/OBC `PhysicalPort`/`DigitalPort` side is SysML-flavored
+  deliberate extension beyond FMI's 1:1." (The FSW/OBC `Port` side is SysML-flavored
   hardware emulation and largely an *aspirational stub* — `lunco-fsw/README.md:5`.)
 
 **This is exactly why USD connections fit — they *are* the same lineage:**
@@ -773,9 +773,8 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 
 > Two duplications to collapse: `lunco:scale`/`offset` exist as *both* USD attrs and `SimConnection`
 > fields — the authored USD connection metadata (`lunco:factor`/`lunco:offset`) is the single truth;
-> `SimConnection.{scale,offset}` is its runtime projection. And `PhysicalPort`/`DigitalPort`/`Wire`
-> (SysML-flavored OBC stub) duplicate the `SimPort`/`SimConnection` concept — under no-legacy, collapse to
-> the one connectable-port model rather than carry two.
+> `SimConnection.{scale,offset}` is its runtime projection. The OBC's `Port` is the one port type,
+> resolved through the same `SimPort`/`SimConnection` model — one connectable-port concept, not two.
 
 ### 14.2 Identity & schemas — adopt standard, keep `LunCo*API` only for our domains
 

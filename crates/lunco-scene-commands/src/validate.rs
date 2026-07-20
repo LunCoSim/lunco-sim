@@ -19,6 +19,11 @@
 //!   (`compose_file_to_stage`), then run the SAME `WheelParams::read` the
 //!   spawner runs on every `PhysxVehicleWheelAPI` prim — a wheel that would
 //!   refuse to spawn fails validation here, with the exact attribute names.
+//!   Control bindings are checked against the same authority the loader uses
+//!   (`lunco_core::parse_user_intent`): `ControlBinding` load is deliberately
+//!   TOLERANT — an unknown intent warns and is skipped — so a typo silently
+//!   costs one control at runtime. This is where that becomes a hard error, on
+//!   purpose: tolerant load, strict pre-flight.
 //! - `.wgsl` — reflect the `Material` param schema (`ParamSchema::parse`).
 //!   Full naga module validation is deliberately absent: naga is not a direct
 //!   dependency of this crate and the light path adds none.
@@ -304,8 +309,112 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
             }
         }
     }
-    report.info = json!({ "wheel_prims": wheel_prims });
+    // Every control binding's intent must be one `parse_user_intent` knows.
+    let mut control_bindings = Vec::new();
+    for prim in view.prim_paths() {
+        if !is_controls_scope(&view, &prim) {
+            continue;
+        }
+        for bind in view.children(&prim) {
+            let Some(name) = bind.name() else { continue };
+            if lunco_core::parse_user_intent(name).is_some() {
+                control_bindings.push(json!({
+                    "prim": bind.as_str(),
+                    "intent": name,
+                    // `text` not `scalar::<String>`: a port may be authored as a
+                    // `string` or a `token` and those are distinct sdf values.
+                    "port": view.text(&bind, "lunco:port"),
+                }));
+                continue;
+            }
+            let hint = match closest_intent(name) {
+                Some(s) => format!(" — did you mean `{s}`?"),
+                None => String::new(),
+            };
+            report.errors.push(format!(
+                "control binding {} names `{name}`, which is not a control intent — \
+                 the loader skips it, so this binding never actuates anything{hint}",
+                bind.as_str()
+            ));
+            control_bindings.push(json!({
+                "prim": bind.as_str(),
+                "intent": name,
+                "ok": false,
+            }));
+        }
+    }
+
+    report.info = json!({
+        "wheel_prims": wheel_prims,
+        "control_bindings": control_bindings,
+    });
     report.finish()
+}
+
+/// A prim whose children carry intent→port bindings. Named `Controls` is the
+/// form a vessel composes (`lunco-usd-bevy` matches exactly that name), but the
+/// shared profiles in `vessels/control_profiles.usda` are `RoverControls` /
+/// `LanderControls` — validating THAT file is the point, since a typo authored
+/// once there reaches every vessel referencing it. So the shape decides, not the
+/// name: a scope is any prim with a child that authors `lunco:port`.
+fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
+    view.children(prim).iter().any(|c| {
+        c.name().is_some() && view.attr_names(c).iter().any(|a| a == "lunco:port")
+    })
+}
+
+/// Spellings [`lunco_core::parse_user_intent`] accepts. Used ONLY to suggest a
+/// correction: the check itself calls `parse_user_intent`, never this list, so a
+/// stale entry can never accept or reject a binding — only make a hint worse.
+/// `intent_spellings_all_parse` pins every entry against the real parser.
+const INTENT_SPELLINGS: &[&str] = &[
+    "forward",
+    "backward",
+    "left",
+    "right",
+    "up",
+    "down",
+    "yaw_left",
+    "yaw_right",
+    "roll_left",
+    "roll_right",
+    "pitch_up",
+    "pitch_down",
+    "action",
+    "brake",
+    "release",
+    "detach",
+    "switch_mode",
+    "pause",
+    "cancel",
+    "unpossess",
+];
+
+/// Nearest accepted spelling, when the name is close enough to be a typo rather
+/// than a different word. `None` suppresses the hint.
+fn closest_intent(name: &str) -> Option<&'static str> {
+    let lower = name.trim().to_ascii_lowercase();
+    let (best, dist) = INTENT_SPELLINGS
+        .iter()
+        .map(|c| (*c, edit_distance(&lower, c)))
+        .min_by_key(|(_, d)| *d)?;
+    (dist <= 2 && dist < lower.len()).then_some(best)
+}
+
+/// Levenshtein distance, two-row DP.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let sub = prev[j] + usize::from(ca != cb);
+            cur[j + 1] = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 // ─── .wgsl ──────────────────────────────────────────────────────────────────
@@ -444,6 +553,76 @@ mod tests {
     fn branch_lint_ignores_comments_and_bindings() {
         let src = "model M\n  // if this then that\n  parameter Real k = 2;\nequation\n  der(x) = max(0.0, k);\nend M;\n";
         assert!(branch_lint(src).is_empty());
+    }
+
+    /// Write a `.usda` under the temp dir and hand back its path — the control
+    /// checks run on a COMPOSED stage, so they can only be exercised through the
+    /// real `validate_asset` entry point.
+    fn temp_usda(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("lunco-validate-controls");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write temp usda");
+        path
+    }
+
+    /// A control scope whose children are named `intent`, one per line.
+    fn controls_usda(intents: &[&str]) -> String {
+        let mut s = String::from("#usda 1.0\n\ndef \"RoverControls\"\n{\n");
+        for i in intents {
+            s.push_str(&format!(
+                "    def \"{i}\"\n    {{\n        uniform string lunco:port = \"throttle\"\n        uniform double lunco:scale = 1\n    }}\n"
+            ));
+        }
+        s.push_str("}\n");
+        s
+    }
+
+    #[test]
+    fn valid_control_profile_produces_no_diagnostics() {
+        let path = temp_usda(
+            "valid_profile.usda",
+            &controls_usda(&["forward", "backward", "left", "right", "action"]),
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(report.ok, "{:?}", report.errors);
+        // NOT vacuous: the scope must actually have been walked. Without this the
+        // test would still pass if `is_controls_scope` never matched anything.
+        let found = report.info["control_bindings"]
+            .as_array()
+            .expect("control_bindings in info")
+            .len();
+        assert_eq!(found, 5, "{:?}", report.info);
+    }
+
+    #[test]
+    fn misspelled_intent_is_reported_once_with_a_suggestion() {
+        let path = temp_usda(
+            "typo_profile.usda",
+            &controls_usda(&["forwrad", "backward", "left", "right", "action"]),
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(!report.ok, "a misspelled intent must fail validation");
+        let hits: Vec<&String> = report
+            .errors
+            .iter()
+            .filter(|e| e.contains("not a control intent"))
+            .collect();
+        assert_eq!(hits.len(), 1, "{:?}", report.errors);
+        assert!(hits[0].contains("forwrad"), "{}", hits[0]);
+        assert!(hits[0].contains("did you mean `forward`"), "{}", hits[0]);
+    }
+
+    /// The suggestion table is a MIRROR of `parse_user_intent`, never an
+    /// authority. If an entry stops parsing, the mirror has drifted.
+    #[test]
+    fn intent_spellings_all_parse() {
+        for s in INTENT_SPELLINGS {
+            assert!(
+                lunco_core::parse_user_intent(s).is_some(),
+                "`{s}` is no longer an accepted intent spelling"
+            );
+        }
     }
 
     #[test]

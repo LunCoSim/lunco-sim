@@ -1,39 +1,20 @@
-// Ports and wires are ECS-structural children, not `GridAnchor`s. The
-// atomic-migration contract enforced by `clippy::disallowed_methods`
-// doesn't apply here.
+// Ports are ECS-structural children, not `GridAnchor`s. The atomic-migration
+// contract enforced by `clippy::disallowed_methods` doesn't apply here.
 #![allow(clippy::disallowed_methods)]
 
 //! Utilities for programmatically assembling robotic systems.
 //!
-//! This module provides helper functions to spawn and connect digital/physical
-//! ports, forming the control backbone of complex robotic entities.
+//! This module provides helper functions to spawn ports, forming the control
+//! backbone of complex robotic entities. Links between ports are
+//! `lunco_cosim::SimConnection` entities, authored in USD as attribute
+//! connections.
 
 use bevy::prelude::*;
-use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
+use lunco_core::architecture::Port;
 
-/// Connects a DigitalPort to a PhysicalPort via a Wire with a specific scale.
-pub fn connect_ports(
-    commands: &mut Commands,
-    parent: Entity,
-    source: Entity,
-    target: Entity,
-    scale: f32,
-) -> Entity {
-    let wire = commands.spawn(Wire { source, target, scale }).id();
-    commands.entity(parent).add_child(wire);
-    wire
-}
-
-/// Spawns a DigitalPort as a child of the parent.
-pub fn spawn_digital_port(commands: &mut Commands, parent: Entity, name: &str) -> Entity {
-    let port = commands.spawn((Name::new(name.to_string()), DigitalPort::default())).id();
-    commands.entity(parent).add_child(port);
-    port
-}
-
-/// Spawns a PhysicalPort as a child of the parent.
-pub fn spawn_physical_port(commands: &mut Commands, parent: Entity, name: &str) -> Entity {
-    let port = commands.spawn((Name::new(name.to_string()), PhysicalPort::default())).id();
+/// Spawns a named [`Port`] as a child of the parent.
+pub fn spawn_port(commands: &mut Commands, parent: Entity, name: &str) -> Entity {
+    let port = commands.spawn((Name::new(name.to_string()), Port::default())).id();
     commands.entity(parent).add_child(port);
     port
 }

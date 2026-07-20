@@ -7,7 +7,7 @@ Reflection-based data extraction and telemetry monitoring for LunCoSim.
 This crate implements the simulation's **"Optical Fibers"**—a generic, "No-Code" telemetry bridge for extracting data out of the simulation world.
 
 - **Automated Sampling** — High-frequency sampling of internal physics and software values.
-- **Reflection-Based Extraction** — Uses Bevy's `Reflect` capabilities to drill into components via string paths (e.g., `"PhysicalPort.value"`).
+- **Reflection-Based Extraction** — Uses Bevy's `Reflect` capabilities to drill into components via string paths (e.g., `"Port.value"`).
 - **Unified Transport Format** — Maps heterogeneous Rust types into a standardized `TelemetryValue` (F64, I64, Bool, String).
 - **Headless Monitoring** — Provides the primary "eyes-and-ears" for simulations running without a GPU.
 - **Mission Control Bridge** — Facilitates broadcasting data to external Mission Control systems (YAMCS, XTCE).
@@ -29,11 +29,11 @@ By tagging a component with a `Parameter`, any field can be monitored without ma
 
 ```rust
 commands.spawn((
-    PhysicalPort { value: 42.0 },
+    Port { value: 42.0 },
     Parameter {
         name: "motor_current".to_string(),
         unit: "Amps".to_string(),
-        path: "PhysicalPort.value".to_string(),
+        path: "Port.value".to_string(),
     }
 ));
 ```

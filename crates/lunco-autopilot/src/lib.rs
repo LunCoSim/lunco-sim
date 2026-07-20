@@ -1905,9 +1905,10 @@ impl Plugin for AutopilotPlugin {
                     .run_if(resource_exists::<avian3d::collider_tree::ColliderTrees>)
                     .before(drive_autopilots),
                 // The autopilot is a control-value producer, so it must land before
-                // the DAC latches `DigitalPort` → `PhysicalPort`; otherwise its
-                // commands are picked up in this tick or the next depending on the
-                // schedule's parallel layout, which desyncs prediction replay.
+                // wire propagation carries a source `Port` to its target;
+                // otherwise its commands are picked up in this tick or the next
+                // depending on the schedule's parallel layout, which desyncs
+                // prediction replay.
                 drive_autopilots.before(lunco_core::ControlDacSet),
             ),
         );

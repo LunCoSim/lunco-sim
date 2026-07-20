@@ -6,7 +6,7 @@ use bevy::prelude::*;
 pub struct MockObcPlugin;
 impl Plugin for MockObcPlugin {
     fn build(&self, _app: &mut App) {
-        // Mock OBC might inject diagnostic systems directly monitoring DigitalPorts, OR simply setup test rigs.
+        // Mock OBC might inject diagnostic systems directly monitoring `Port`s, OR simply setup test rigs.
     }
 }
 

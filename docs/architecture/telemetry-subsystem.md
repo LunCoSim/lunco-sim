@@ -73,7 +73,7 @@ pub enum ChannelSource {
     /// Fast path. Resolved ONCE to a `ResolvedPort`, then read by slot.
     /// Covers Modelica vars, Avian bodies, joints, FSW signals AND USD sensors uniformly.
     Port(String),
-    /// Escape hatch: arbitrary component field by reflection path ("PhysicalPort.value").
+    /// Escape hatch: arbitrary component field by reflection path ("Port.value").
     /// The only source that can carry Bool/String. Slower — exclusive world access.
     Reflect(String),
     /// A bevy `Diagnostic` (FPS, frame time, entity count). f64 only. Free ring buffer.
@@ -223,7 +223,7 @@ Follows the `lunco:sensor:*` convention exactly (`lunco-usd-sim:594`):
 bool   lunco:telemetry           = true
 token  lunco:telemetry:name      = "motor_current"        # defaults to the port/field name
 token  lunco:telemetry:port      = "left_wheel.torque"    # ChannelSource::Port  (preferred)
-token  lunco:telemetry:reflect   = "PhysicalPort.value"   # …or ChannelSource::Reflect
+token  lunco:telemetry:reflect   = "Port.value"   # …or ChannelSource::Reflect
 token  lunco:telemetry:unit      = "A"
 double lunco:telemetry:rateHz    = 10                     # absent ⇒ settings default
 bool   lunco:telemetry:enabled   = true                   # absent ⇒ TRUE (authored = live)

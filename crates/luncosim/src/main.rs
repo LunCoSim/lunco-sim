@@ -127,7 +127,6 @@ fn main() {
         .insert_resource(avian3d::prelude::SubstepCount(12))
         .add_plugins(LuncoUiPlugin)
         .add_plugins(lunco_avatar::ui::AvatarUiPlugin)
-        .add_plugins(lunco_fsw::LunCoFswPlugin)
         .add_plugins(lunco_hardware::LunCoHardwarePlugin)
         .add_plugins(lunco_mobility::LunCoMobilityPlugin)
         .add_plugins(lunco_robotics::LunCoRoboticsPlugin)

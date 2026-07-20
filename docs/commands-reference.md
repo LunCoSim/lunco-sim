@@ -2512,7 +2512,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `channel` | `Option < String >` |  Channel name, or `None` for the whole subsystem. |
 | `entity` | `Option < Entity >` |  **Create** the channel on this entity if it does not exist.   Without this there was NO way to author a telemetry channel through the API at all —  only from rhai or USD. That left an external client (an agent, OpenMCT, a dashboard)  able to *read* channels but never to *ask for* one, so the only way to watch an  arbitrary port was to poll it from the client. `port` (or `reflect`) names what to  sample; both absent ⇒ this is a retune of an existing channel, not a create. |
 | `port` | `Option < String >` |  Source for a created channel: a port name on `entity` (the fast path — this is what  makes any Modelica variable, Avian body value, joint, FSW signal, or USD sensor  watchable without authoring anything in the scene). |
-| `reflect` | `Option < String >` |  Source for a created channel: a reflection path (`"PhysicalPort.value"`). The escape  hatch, for a field no port exposes. |
+| `reflect` | `Option < String >` |  Source for a created channel: a reflection path (`"Port.value"`). The escape  hatch, for a field no port exposes. |
 | `unit` | `Option < String >` |  Engineering unit for a created channel. |
 | `enabled` | `Option < bool >` |   |
 | `rate_hz` | `Option < f64 >` |   |

@@ -592,8 +592,8 @@ fn test_full_scene_loads_with_rovers() {
     assert!(rover_paths.iter().any(|p| p.contains("Ackermann_Physical_1")), "Should have Ackermann_Physical_1");
 
     // Verify steering wires exist for front wheels
-    use lunco_core::architecture::Wire;
-    let mut q_wires = app.world_mut().query::<(&Wire, &Name)>();
+    use lunco_cosim::SimConnection;
+    let mut q_wires = app.world_mut().query::<(&SimConnection, &Name)>();
     let steering_wires: Vec<_> = q_wires.iter(app.world())
         // Steer wires are named `Wire_Steer_<port>` (the port is lowercase
         // "steering"), so match the wire prefix — the old `"Steering"` filter never

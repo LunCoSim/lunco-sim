@@ -45,5 +45,5 @@ twin mirroring across vehicle manifests. Most of this is not yet wired.
 
 ## See Also
 
-- `lunco-obc` — signal processing (DAC/ADC) between FSW and hardware.
+- `lunco-obc` — the `Port` surface the FSW writes commands to and reads telemetry from.
 - `lunco-mobility` — high-level mobility observers (`DriveRover`, `BrakeRover`).

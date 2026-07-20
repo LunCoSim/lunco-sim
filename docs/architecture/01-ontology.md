@@ -85,7 +85,7 @@ LunCoSim uses a layered approach to separate human intent from computer logic an
 | **5** | **Intent** | **Human/AI Intent**: High-level goal (e.g., `MoveForward`). Functionally equivalent to Godot's "Input Actions". | Raw Input (WASD, Mouse) | `IntentState` |
 | **4** | **Controller**| **Pilot Mapping**: Translates `IntentState` into specific commands (e.g., `SetPorts`). | `IntentState` | Typed Commands |
 | **3** | **FSW** | **The Brain**: Stateless/Stateful logic that executes commands. | Typed Commands | `Port` Writes |
-| **2** | **OBC** | **The Interface**: Holds `DigitalPorts` (i16) and registers. | `Port` Writes | `Connection` Signal |
+| **2** | **OBC** | **The Interface**: Holds the command/telemetry `Port`s the FSW writes and reads. | `Port` Writes | `Connection` Signal |
 | **1** | **Plant** | **The Mechanism**: Physical actuators, sensors, and rigidbodies. | `Connection` Signal | Force/Torque/State |
 
 
@@ -169,15 +169,20 @@ travels; authority = who may send it. See `crates/lunco-networking/README.md` an
 
 ### Port
 The universal interface for data and power flow between architectural layers.
-- **Physical Port (Level 1)**: Located on Actuators/Sensors. Uses **`f32`** for high-fidelity physical units (Torque, Force, AngularVelocity).
-- **Digital Port (Level 2)**: Located on the OBC. Uses **`i16`** (-32768 to 32767) to emulate hardware bit-depth (e.g., 8-bit -128 to 127, or 16-bit) and bidirectional signals.
-- **Logic Port (Level 3/Internal)**: Logical endpoints within the FSW hardware map.
+- **One type, every layer**: a `Port` holds a single **`f64`** value, in whatever unit the
+  signal is authored in. The same type carries an FSW command, an actuator setpoint on the
+  Plant, a sensor reading, and a value exchanged with a Modelica co-simulation — the layer a
+  port sits on is a matter of what it is attached to, not of its type.
+- **Unit conversion belongs on the Connection**, not the port: a `SimConnection`'s SSP
+  factor/offset is where a change of units or of scale is expressed.
 - **Compatibility**: Maps 1:1 to SysML `Proxy Ports`, Modelica `Connectors`, and ROS `Hardware Interfaces`.
 
 ### Connection
 The logical and electrical link between two **Ports**. A Connection is a Bevy entity (typically [`SimConnection`](../../crates/lunco-cosim/src/connection.rs)) that facilitates the transfer of `PortState` between ports — for example, between Level 1 (Plant) and Level 2 (OBC), or between two `SimComponent`s in a co-simulation graph.
 
-*Historical note:* earlier drafts of this ontology and early code used the term "Wire" for the same concept. The canonical term is **Connection**, matching SysML v2, FMI/SSP, and Modelica's `connect()` statement. "Wire" may still appear in historical docs or legacy code; treat them as synonyms, prefer `Connection` in new work.
+A Connection addresses its endpoints **by port name**, carries an SSP `factor`/`offset`, and is
+authored in USD as an attribute connection (`inputs:x.connect = </Path>.outputs:y`). The term
+**Connection** matches SysML v2, FMI/SSP, and Modelica's `connect()` statement.
 
 ### Port Mapping (Wiring)
 The configuration defining which OBC Ports are connected to which Physical Plant Ports. 

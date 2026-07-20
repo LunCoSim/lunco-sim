@@ -15,23 +15,20 @@
 //!   exposed by an external spec ([`AvianPort`]/[`AvianGroup`]) rather than
 //!   `#[derive]`. Adding an avian kind is one entry in [`AVIAN`] plus its group
 //!   declaration.
-//! - **SysML/hardware** single-value ports ([`PhysicalPort`]/[`DigitalPort`]) —
-//!   one bidirectional scalar each.
+//! - **SysML/hardware** single-value [`Port`]s — one bidirectional scalar each.
 //!
 //! Registration order *is* resolution precedence (first match wins): Modelica,
 //! avian, then the single-value ports — see [`register_builtin_port_backends`].
 
 use bevy::prelude::*;
 
-use lunco_core::architecture::{DigitalPort, PhysicalPort};
+use lunco_core::architecture::Port;
 use lunco_core::ports::{push_map, PortBackend, PortDirection, PortRef, PortRegistry};
 
 use crate::SimComponent;
 
-/// The fixed port name a [`PhysicalPort`] exposes (its `f32` `value`).
-pub const PHYSICAL_PORT_NAME: &str = "value";
-/// The fixed port name a [`DigitalPort`] exposes (its `i16` `raw_value`).
-pub const DIGITAL_PORT_NAME: &str = "raw";
+/// The fixed port name a [`Port`] exposes (its `f64` `value`).
+pub const PORT_NAME: &str = "value";
 
 /// One avian port: a named scalar on an avian component, with its causality,
 /// physical domain, and read/write realization. Part of an [`AvianGroup`].
@@ -219,83 +216,44 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
     write_slot: Some(avian_write_slot),
 };
 
-/// SysML/hardware [`PhysicalPort`] — one bidirectional `f32` scalar named `value`.
-const PHYSICAL_PORT_BACKEND: PortBackend = PortBackend {
+/// SysML/hardware [`Port`] — one bidirectional `f64` scalar named `value`.
+///
+/// The value crosses this backend unchanged in both directions: a Modelica model
+/// on the far side of a [`crate::SimConnection`] exchanges `f64`, and so does the
+/// port it is wired to.
+const PORT_BACKEND: PortBackend = PortBackend {
     list: |w, e, out| {
-        if let Some(p) = w.get::<PhysicalPort>(e) {
+        if let Some(p) = w.get::<Port>(e) {
             out.push(PortRef {
-                name: PHYSICAL_PORT_NAME.to_string(),
+                name: PORT_NAME.to_string(),
                 direction: PortDirection::InOut,
-                value: p.value as f64,
+                value: p.value,
             });
         }
     },
     read_output: |w, e, n| {
-        if n != PHYSICAL_PORT_NAME {
+        if n != PORT_NAME {
             return None;
         }
-        w.get::<PhysicalPort>(e).map(|p| p.value as f64)
+        w.get::<Port>(e).map(|p| p.value)
     },
     read_input: |w, e, n| {
-        if n != PHYSICAL_PORT_NAME {
+        if n != PORT_NAME {
             return None;
         }
-        w.get::<PhysicalPort>(e).map(|p| p.value as f64)
+        w.get::<Port>(e).map(|p| p.value)
     },
     write_input: |w, e, n, v| {
-        if n != PHYSICAL_PORT_NAME {
+        if n != PORT_NAME {
             return false;
         }
-        if let Some(mut p) = w.get_mut::<PhysicalPort>(e) {
-            p.value = v as f32;
+        if let Some(mut p) = w.get_mut::<Port>(e) {
+            p.value = v;
             return true;
         }
         false
     },
     // Single fixed port on one component — name-based is already a single `get`.
-    resolve_output: None,
-    resolve_input: None,
-    read_slot: None,
-    write_slot: None,
-};
-
-/// SysML/hardware [`DigitalPort`] — one bidirectional `i16` register named `raw`,
-/// with DAC-style saturation on write.
-const DIGITAL_PORT_BACKEND: PortBackend = PortBackend {
-    list: |w, e, out| {
-        if let Some(d) = w.get::<DigitalPort>(e) {
-            out.push(PortRef {
-                name: DIGITAL_PORT_NAME.to_string(),
-                direction: PortDirection::InOut,
-                value: d.raw_value as f64,
-            });
-        }
-    },
-    read_output: |w, e, n| {
-        if n != DIGITAL_PORT_NAME {
-            return None;
-        }
-        w.get::<DigitalPort>(e).map(|d| d.raw_value as f64)
-    },
-    read_input: |w, e, n| {
-        if n != DIGITAL_PORT_NAME {
-            return None;
-        }
-        w.get::<DigitalPort>(e).map(|d| d.raw_value as f64)
-    },
-    write_input: |w, e, n, v| {
-        if n != DIGITAL_PORT_NAME {
-            return false;
-        }
-        if let Some(mut d) = w.get_mut::<DigitalPort>(e) {
-            // DAC quantization: saturate the continuous value into the i16
-            // register, exactly as real hardware clamps out-of-range commands.
-            d.raw_value = v.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16;
-            return true;
-        }
-        false
-    },
-    // Single fixed register on one component — name-based is already a single `get`.
     resolve_output: None,
     resolve_input: None,
     read_slot: None,
@@ -350,13 +308,12 @@ fn piloted_value(w: &World, e: Entity) -> f64 {
 
 /// Register the cosim engine's builtin port backends into `registry`, in
 /// resolution-precedence order: Modelica `SimComponent`, avian state, then the
-/// single-value hardware ports. Called from [`crate::CoSimPlugin`]. Other crates
-/// (a future FMU import, a script-defined component) register their own backends
-/// after these.
+/// single-value hardware [`Port`]. Called from [`crate::CoSimPlugin`]. Other
+/// crates (a future FMU import, a script-defined component) register their own
+/// backends after these.
 pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
     registry.register(SIMCOMPONENT_BACKEND);
     registry.register(AVIAN_BACKEND);
-    registry.register(PHYSICAL_PORT_BACKEND);
-    registry.register(DIGITAL_PORT_BACKEND);
+    registry.register(PORT_BACKEND);
     registry.register(PILOTED_BACKEND);
 }

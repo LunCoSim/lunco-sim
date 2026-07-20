@@ -27,7 +27,7 @@ use bevy::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
-use lunco_core::architecture::DigitalPort;
+use lunco_core::architecture::Port;
 use lunco_core::ports::{PortBackend, PortDirection, PortRef};
 use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_fsw::FlightSoftware;
@@ -109,8 +109,8 @@ impl Plugin for LunCoMobilityPlugin {
                 apply_wheel_steering,
                 update_wheel_spin,
             ).chain()
-           // Read `PhysicalPort` AFTER the DAC has propagated this tick's
-           // `DigitalPort` command into it (same fixed tick), so actuation isn't
+           // Read the actuator `Port` AFTER wire propagation has carried this
+           // tick's command into it (same fixed tick), so actuation isn't
            // delayed an extra tick. See `lunco_core::ControlDacSet`.
            .after(lunco_core::ControlDacSet)
            .run_if(
@@ -155,8 +155,9 @@ impl Plugin for LunCoMobilityPlugin {
         }
 
         // Mix the FSW's logical command inputs (written via the port backend) into
-        // the actuator `DigitalPort`s BEFORE the DAC propagates them to `PhysicalPort`
-        // (and before the wheel systems, which run `.after(ControlDacSet)`). The
+        // the actuator command `Port`s BEFORE propagation carries them across the
+        // wires (and before the wheel systems, which run
+        // `.after(ControlDacSet)`). The
         // command surface is derived from USD `Controls` bindings (never a Rust
         // literal) by `sync_fsw_command_surface`, ordered before the mix so a
         // freshly-loaded vessel is drivable the same tick its binding lands.
@@ -219,11 +220,6 @@ const DEFAULT_DRIVE_FORCE_PER_NORMAL: f64 = 2.0;
 /// Bounds the spring+damping sum so a deeply-compressed strut or a numerical
 /// velocity spike can't inject an explosive impulse that launches the rover.
 const MAX_SUSPENSION_FORCE_N: f64 = 100_000.0;
-
-/// Full-scale magnitude of a [`DigitalPort`] `raw_value` drive command:
-/// `±DIGITAL_PORT_FULL_SCALE` maps to ±100% actuator authority (symmetric i16
-/// range, leaving −32768 unused so + and − have equal span).
-const DIGITAL_PORT_FULL_SCALE: i16 = 32767;
 
 // ── Pure force laws (unit-tested; the numerically-sensitive bits live here) ─────
 
@@ -660,7 +656,7 @@ fn apply_wheel_drive(
         &RayHits,
         &ChildOf,
     )>,
-    q_ports: Query<&lunco_core::architecture::PhysicalPort>,
+    q_ports: Query<&Port>,
     mut q_chassis: Query<(Forces, &RigidBody, Option<&FlightSoftware>), With<FlightSoftware>>,
 ) {
     for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
@@ -672,7 +668,7 @@ fn apply_wheel_drive(
             // (incl. the extra port read) without the `drive-diag` feature.
             drive_diag_block!({
                 if let Ok(dbgport) = q_ports.get(wheel.drive_port) {
-                    if dbgport.value.abs() > f32::EPSILON {
+                    if dbgport.value.abs() > f64::EPSILON {
                         info!("[drive-diag] apply_wheel_drive: chassis {:?} body={:?} port.value={} normal_force={} has_contact={}",
                             parent_entity, body, dbgport.value, wheel.last_normal_force, hits.iter().next().is_some());
                     }
@@ -742,7 +738,7 @@ fn apply_wheel_drive(
                     // at the same `ω_max · r` as its joint-motor counterpart.
                     let drive_force_vec = forward
                         * drive_force_mag(
-                            port.value as f64,
+                            port.value,
                             normal_force,
                             wheel.drive_force_per_normal,
                             long_vel,
@@ -1111,18 +1107,17 @@ fn sync_fsw_command_surface(
 // ── Drive mix ─────────────────────────────────────────────────────────────────
 
 /// System allocating each rover's FSW command inputs (`throttle`/`steer`/`brake`,
-/// read from [`FlightSoftware::inputs`]) to its actuator [`DigitalPort`]s, via the
+/// read from [`FlightSoftware::inputs`]) to its actuator [`Port`]s, via the
 /// vessel's data-selected [`DriveMix`] kernel (`skid`/`linear`/…, looked up in the
 /// [`ControlKernelRegistry`]). No per-architecture branch: the kernel is chosen by
-/// USD, its normalized `[-1,1]` outputs are scaled to the i16 port range here. Runs
-/// every fixed tick before the DAC.
+/// USD, and its outputs are saturated to `[-1, 1]` — ±100% actuator authority —
+/// before being written to the port. Runs every fixed tick before wire propagation.
 fn apply_drive_mix(
     mut q: Query<(Entity, &mut FlightSoftware, &DriveMix)>,
     registry: Res<ControlKernelRegistry>,
-    mut q_ports: Query<&mut DigitalPort>,
+    mut q_ports: Query<&mut Port>,
     mut unknown: Local<std::collections::HashSet<String>>,
 ) {
-    let full = DIGITAL_PORT_FULL_SCALE as f64;
     for (entity, mut fsw, mix) in q.iter_mut() {
         // Read this vehicle's logical command inputs off the FSW command surface.
         let throttle = fsw.cmd("throttle");
@@ -1131,9 +1126,9 @@ fn apply_drive_mix(
         // Brake state (old `on_brake_rover`): engaged above half-scale. Locks the
         // wheel-spin/friction cone in the physics systems via `fsw.brake_active`.
         fsw.brake_active = brake > 0.5;
-        let brake_port_val = if fsw.brake_active { DIGITAL_PORT_FULL_SCALE } else { 0 };
+        let brake_port_val = if fsw.brake_active { 1.0 } else { 0.0 };
         if let Some(&port_b) = fsw.port_map.get("brake") {
-            if let Ok(mut p) = q_ports.get_mut(port_b) { p.raw_value = brake_port_val; }
+            if let Ok(mut p) = q_ports.get_mut(port_b) { p.value = brake_port_val; }
         }
 
         drive_diag!("[drive-diag] apply_drive_mix: target {:?} kernel={} throttle={} steer={} brake={} ports={:?}", entity, mix.kernel, throttle, steer, fsw.brake_active, fsw.port_map);
@@ -1169,7 +1164,7 @@ fn apply_drive_mix(
         for (port, value) in outputs {
             if let Some(&port_id) = fsw.port_map.get(&port) {
                 if let Ok(mut p) = q_ports.get_mut(port_id) {
-                    p.raw_value = (value * full).round().clamp(-full, full) as i16;
+                    p.value = value.clamp(-1.0, 1.0);
                 }
             }
         }

@@ -552,19 +552,23 @@ impl SimTick {
     }
 }
 
-/// Control-signal propagation set (the DAC step): `DigitalPort` → `PhysicalPort`
-/// via [`Wire`]. Runs on the **fixed** clock so the actuation path is
-/// frame-rate-independent and identical on every peer.
+/// Control-signal propagation set: values move along `SimConnection`s from
+/// source [`Port`] to target. Runs on the **fixed** clock so the actuation path
+/// is frame-rate-independent and identical on every peer.
 ///
-/// This is load-bearing for client-prediction determinism. The DAC used to run
-/// in `Update` (render rate) while its producer (flight-software command
-/// observers) and consumers (wheel/hardware actuators) run in `FixedUpdate`. The
-/// latency between "input applied" and "force applied" was therefore coupled to
-/// frame rate, so the same input `seq` landed on the wheels a *different* number
-/// of physics ticks apart on host vs client (which render at independent rates),
-/// and the client's prediction never matched the host — every snapshot ack
-/// corrected, showing up as steering jitter. Keeping the DAC on the sim clock
-/// removes that coupling. Actuators that read `PhysicalPort` order `.after` this.
+/// This is load-bearing for client-prediction determinism. Propagation must not
+/// run in `Update` (render rate) while its producer (flight-software command
+/// observers) and consumers (wheel/hardware actuators) run in `FixedUpdate`: the
+/// latency between "input applied" and "force applied" would be coupled to frame
+/// rate, so the same input `seq` would land on the wheels a *different* number of
+/// physics ticks apart on host vs client (which render at independent rates), the
+/// client's prediction would never match the host, and every snapshot ack would
+/// correct — showing up as steering jitter.
+///
+/// The set is the ordering ANCHOR: actuators that read a [`Port`] order `.after`
+/// it, and `lunco_cosim`'s `CosimSet::Propagate` is nested INSIDE it so those
+/// orderings keep their meaning. Adding a propagation system elsewhere without
+/// putting it in this set silently breaks that contract.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ControlDacSet;
 
@@ -641,9 +645,7 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<SampledParameter>()
            .register_type::<UserIntent>()
            .register_type::<IntentAnalogState>()
-           .register_type::<PhysicalPort>()
-           .register_type::<DigitalPort>()
-           .register_type::<Wire>()
+           .register_type::<Port>()
            .register_type::<PhysicalProperties>()
            .register_type::<CelestialBody>()
            .register_type::<Spacecraft>()
@@ -667,21 +669,19 @@ impl Plugin for LunCoCorePlugin {
         // Runtime subsystem toggles (progressive-fidelity substrate) +
         // `SetSubsystemEnabled` command.
         subsystems::build_subsystems(app);
-        // DAC (DigitalPort → PhysicalPort) on the FIXED clock — see `ControlDacSet`
-        // for why this must not run in `Update` (prediction determinism).
-        app.add_systems(FixedUpdate, wire_system.in_set(ControlDacSet))
-           .add_systems(FixedUpdate, advance_sim_tick)
+        app.add_systems(FixedUpdate, advance_sim_tick)
            .add_systems(PostUpdate, assign_global_entity_ids);
         // Host: keep the per-gid input-ack watermarks keyed to their CURRENT owner.
         // A re-possessed vessel must not keep acking the previous owner's `seq`
         // stream — see `AppliedInputSeq`. Change-detected on the registry, so it
         // costs nothing on a steady frame; always-on substrate (no wire dep).
         app.add_systems(FixedFirst, sync_applied_seq_owners);
-        // Rollback replay mirrors the DAC (and ONLY the DAC from this crate —
-        // `advance_sim_tick` is deliberately excluded: a replayed tick must not
-        // advance the simulation's tick counter).
+        // Port propagation on rollback replay is registered by `lunco_cosim`
+        // (its `CosimSet::Propagate` nests inside `ControlDacSet`). This crate
+        // contributes nothing to the replayed chain — `advance_sim_tick` is
+        // deliberately excluded, since a replayed tick must not advance the
+        // simulation's tick counter.
         app.init_resource::<RollbackInProgress>();
-        app.add_systems(RollbackReplay, wire_system.in_set(ControlDacSet));
     }
 }
 
@@ -844,31 +844,6 @@ fn assign_global_entity_ids(
                 commands
                     .entity(entity)
                     .try_insert(GlobalEntityId::allocate_authoritative());
-            }
-        }
-    }
-}
-
-/// Syncs digital port values to physical actuators/sensors through wires.
-///
-/// This system bridges the gap between discrete digital control (i16) and
-/// continuous physical forces (f32).
-fn wire_system(
-    q_wires: Query<&Wire>,
-    q_digital: Query<&DigitalPort>,
-    mut q_physical: Query<&mut PhysicalPort>,
-) {
-    for wire in q_wires.iter() {
-        if let Ok(digital) = q_digital.get(wire.source) {
-            if let Ok(mut physical) = q_physical.get_mut(wire.target) {
-                // CQ-514: skip a zero/non-finite scale (warn once) so a
-                // misconfigured wire can't push NaN/inf into PhysicalPort.
-                if !wire.scale.is_finite() || wire.scale == 0.0 {
-                    warn_once!("Wire scale is zero or non-finite ({}); skipping", wire.scale);
-                    continue;
-                }
-                // Normalize i16 (-32768..32767) to -1.0..1.0 approximately, then apply scale
-                physical.value = (digital.raw_value as f32 / 32767.0) * wire.scale;
             }
         }
     }

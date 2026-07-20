@@ -20,7 +20,7 @@ registers the built-in backends (`ports::register_builtin_port_backends`):
 | **Avian revolute joint** (`REVOLUTE_JOINT_GROUP`) | `angle` — out (measured twist) + in (drives the `AngularMotor`) |
 | **Avian prismatic joint** (`PRISMATIC_JOINT_GROUP`) | `displacement` — out (slider offset) + in (drives the `LinearMotor`) |
 | **Sensors** (`sensors.rs`, gated on a marker component) | IMU → `accel_{x,y,z}` (world lin. accel) + `spec_force_{x,y,z}` (body-frame, = `a − g`); range → `range`; contact → `contact` (0/1) + `contact_force` (N) |
-| **Hardware** (`PhysicalPort`/`DigitalPort`) | `value` (f32) / `raw` (i16, DAC-saturated) |
+| **Hardware** (`Port`) | `value` (f64) |
 
 Avian's foreign components are exposed declaratively via the `AVIAN` spec table
 (`ports.rs`) — adding a kind (a new joint or sensor) is one `AvianGroup` entry,

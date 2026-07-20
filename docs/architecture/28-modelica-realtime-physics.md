@@ -141,10 +141,10 @@ stepper a full ECS citizen by mapping every part of a model onto ECS:
 | Model concept | ECS representation |
 |---|---|
 | model instance | an **entity** (tagged `ModelicaModel` + `SimComponent`, today) |
-| inputs / outputs | **port components** (`SimComponent.inputs/outputs`, surfaced as `DigitalPort`/`PhysicalPort` where they cross to hardware) |
+| inputs / outputs | **port components** (`SimComponent.inputs/outputs`, surfaced as `Port` where they cross to hardware) |
 | state vector | a **component** on that entity (the compiled stepper's state lives in-world, snapshot-able) |
 | one integration step | a **`FixedUpdate` system** reading inputs, stepping, writing outputs |
-| coupling between models | an **ECS wire** (`SimConnection`) — identical to the gravity Shape A wire |
+| coupling between models | an **ECS connection** (`SimConnection`) — identical to the gravity Shape A coupling |
 | replication | the **existing networking wire layer** — a server-authoritative output wire becomes networkable for free |
 
 The pieces in **bold** that don't fully exist yet (state-as-component,

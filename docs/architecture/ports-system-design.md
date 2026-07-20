@@ -47,7 +47,7 @@ path:
 |---|---|---|
 | `SimComponent` (Modelica map) | no (`None`) | registered first — a name read is already one `get` + map lookup |
 | **avian** (bodies/joints/sensors) | **yes** | slot = `(group_index << 16) \| port_index` into `AVIAN`; collapses the 6-group scan to one component access |
-| `PhysicalPort` / `DigitalPort` | no | single fixed port on one component |
+| `Port` | no | single fixed port on one component |
 | FSW command (map) | no (for now) | map-backed; a fast path needs a name interner (slot can't carry the string) — a documented follow-up |
 
 The name-based avian ops are now **derived** from resolve→slot (the old

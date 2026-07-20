@@ -189,17 +189,29 @@ fn seg(prev, cur) {
 /// in the header.
 fn yaw_change_deg(f0, f1) {
     if f0 == () || f1 == () { return (); }
+    // VALIDATE THE INPUTS, not the result. A forward vector is a unit vector, so a
+    // length outside [0.5, 2.0] means the rover's orientation is degenerate — a NaN
+    // or zero quaternion — and there is no heading to measure this tick. Reporting
+    // `()` makes the caller skip the sample and count it as unmeasured, rather than
+    // summing a poisoned value into an accumulator it can never recover from.
+    //
+    // Guarding the RESULT cannot work here. `clamp` (prelude/math.rhai) is built out
+    // of `<` and `>`, and NaN compares false against both, so a NaN dot product is
+    // handed to `acos` unclamped and comes back NaN; `vnorm` likewise returns its
+    // argument untouched when the length is NaN, because `l <= 0.0` is false. By the
+    // time there is a `mag` to test, the damage is upstream and the only honest
+    // answer is "no heading".
+    let l0 = vlen(f0);
+    let l1 = vlen(f1);
+    // Phrased POSITIVELY on purpose. `l < 0.5 || l > 2.0` looks equivalent and is
+    // not: NaN compares false against EVERYTHING, so both halves are false and a NaN
+    // slips through. `!(in range)` is false for NaN, so it rejects. Every NaN guard
+    // in this file must be written this way.
+    if !(l0 >= 0.5 && l0 <= 2.0) { return (); }
+    if !(l1 >= 0.5 && l1 <= 2.0) { return (); }
     let a = vnorm(f0);
     let b = vnorm(f1);
     let mag = clamp(vdot(a, b), -1.0, 1.0).acos() * 57.29577951308232;
-    // `acos` can hand back NaN at the domain edge (two identical headings give a
-    // dot of 1±1ulp, and the clamp is applied to a value that may already have
-    // rounded past it). One NaN is unrecoverable once the caller SUMS these — it
-    // poisons the accumulator for the rest of the run and every downstream
-    // comparison reads NaN — so a non-finite result is reported as "no rotation
-    // measured this tick" rather than propagated. NaN is the only value that is
-    // not equal to itself, which is the portable way to ask.
-    if mag != mag { return 0.0; }
     let cy = vcross(a, b)[1];
     if cy > 0.0 { -mag } else { mag }
 }
@@ -272,6 +284,16 @@ fn on_start(me) {
     this.pos_prev = ();
     this.fprev = ();
 
+    // Heading-sample coverage across the four MEASURED legs. `yaw_change_deg`
+    // answers `()` when the orientation is degenerate, and the accumulators simply
+    // skip those ticks — which means a rover whose heading was NEVER readable would
+    // finish with every yaw accumulator still at its initial 0.0 and sail through
+    // the checks whose pass condition is "small" (straight drift, pivot travel).
+    // Counting the skips turns that silent free pass into a loud failure: the yaw
+    // measurements are only admissible if the heading was actually observable.
+    this.yaw_ok = 0;
+    this.yaw_bad = 0;
+
     // Straight leg
     this.dist = 0.0;
     this.vmax = 0.0;
@@ -330,6 +352,15 @@ fn on_tick(me) {
     let step = seg(this.pos_prev, pos);
     this.pos_prev = pos;
     this.fprev = fwd;
+
+    // Score heading readability on the MEASURED legs only. The settle and brake
+    // windows legitimately hand back `()` on their first tick (no previous sample
+    // yet) and are not evidence of anything.
+    let measured = this.phase == "straight" || this.phase == "right";
+    let measured2 = this.phase == "left" || this.phase == "pivot";
+    if measured || measured2 {
+        if type_of(dy) == "()" { this.yaw_bad += 1; } else { this.yaw_ok += 1; }
+    }
 
     let since = t - this.phase_start;
 
@@ -497,6 +528,7 @@ fn on_tick(me) {
                 yaw_right: this.yaw_right, dist_right: this.dist_right,
                 yaw_left: this.yaw_left,   dist_left: this.dist_left,
                 yaw_pivot: this.yaw_pivot, dist_pivot: this.dist_pivot,
+                yaw_ok: this.yaw_ok, yaw_bad: this.yaw_bad,
                 kernel: get(this.rover, "DriveMix.kernel"),
                 entries: get(this.rover, "DriveMix.entries"),
                 v_ceiling: this.v_ceiling,
@@ -552,6 +584,18 @@ fn on_stop(me) {
 // test would pass a rover that steers backwards.
 fn verdict(s) {
     let f = [];
+
+    // ── (0) the yaw measurements are admissible at all ─────────────────────
+    // Every yaw check below reads an accumulator that SKIPS ticks whose heading was
+    // degenerate. If most ticks were skipped the accumulators sit near 0 for want of
+    // data, not for want of rotation, and the "must stay small" checks would pass on
+    // an empty measurement. Demand the heading was readable on the overwhelming
+    // majority of measured ticks before believing any of them.
+    let y_tot = s.yaw_ok + s.yaw_bad;
+    let m_cov = "heading unreadable on " + s.yaw_bad + " of " + y_tot;
+    m_cov += " measured ticks - world_forward returned a degenerate orientation, so the";
+    m_cov += " yaw accumulators below measure missing data rather than rotation";
+    f.push(t_true(y_tot > 0 && s.yaw_bad * 20 < y_tot, m_cov));
 
     // ── (1) pure throttle runs straight, at the authored ceiling ───────────
     let lo = s.v_ceiling * 0.5;
@@ -614,6 +658,7 @@ fn verdict(s) {
     print("[six]   yaw @ steer - (deg)   " + r2(s.yaw_left));
     print("[six]   yaw @ pivot   (deg)   " + r2(s.yaw_pivot));
     print("[six]   travel @ pivot (m)    " + r2(s.dist_pivot));
+    print("[six]   heading samples ok    " + s.yaw_ok + " (unreadable " + s.yaw_bad + ")");
     print("[six]   kernel                " + s.kernel);
     print("[six]   authored ceiling omega_max*r = " + s.v_ceiling + " m/s");
 

@@ -74,12 +74,12 @@ fn test_dump_usd_rover_state() {
     // Dump wires
     println!("\n========== ALL WIRES ==========");
     {
-        let mut q_wires = app.world_mut().query_filtered::<(Entity, &lunco_core::architecture::Wire), With<lunco_core::architecture::Wire>>();
+        let mut q_wires = app.world_mut().query_filtered::<(Entity, &lunco_cosim::SimConnection), With<lunco_cosim::SimConnection>>();
         for (wire_ent, wire) in q_wires.iter(app.world()) {
-            let src_name = app.world().get::<Name>(wire.source).map(|n| n.as_str().to_string()).unwrap_or_else(|| "unknown".to_string());
-            let tgt_name = app.world().get::<Name>(wire.target).map(|n| n.as_str().to_string()).unwrap_or_else(|| "unknown".to_string());
+            let src_name = app.world().get::<Name>(wire.start_element).map(|n| n.as_str().to_string()).unwrap_or_else(|| "unknown".to_string());
+            let tgt_name = app.world().get::<Name>(wire.end_element).map(|n| n.as_str().to_string()).unwrap_or_else(|| "unknown".to_string());
             println!("  Wire {:?}: {} ({:?}) -> {} ({:?}) scale={}",
-                wire_ent, src_name, wire.source, tgt_name, wire.target, wire.scale);
+                wire_ent, src_name, wire.start_element, tgt_name, wire.end_element, wire.scale);
         }
     }
 
@@ -116,13 +116,13 @@ fn test_dump_usd_rover_state() {
                 println!("  WheelRaycast wiring: drive_port={:?}, steer_port={:?}, visual={:?}",
                     drive_port, steer_port, visual_ent);
                 // Check what wires connect to this wheel's drive_port
-                let mut q_wires = app.world_mut().query_filtered::<(Entity, &lunco_core::architecture::Wire), With<lunco_core::architecture::Wire>>();
+                let mut q_wires = app.world_mut().query_filtered::<(Entity, &lunco_cosim::SimConnection), With<lunco_cosim::SimConnection>>();
                 for (wire_ent, wire) in q_wires.iter(app.world()) {
-                    if wire.target == drive_port {
-                        println!("    Wire {:?}: source={:?} -> target={:?} (scale={})",
-                            wire_ent, wire.source, wire.target, wire.scale);
+                    if wire.end_element == drive_port {
+                        println!("    Wire {:?}: start_element={:?} -> end_element={:?} (scale={})",
+                            wire_ent, wire.start_element, wire.end_element, wire.scale);
                         // Find what digital port this is
-                        if let Some(name) = app.world().get::<Name>(wire.source) {
+                        if let Some(name) = app.world().get::<Name>(wire.start_element) {
                             println!("      Source name: {}", name.as_str());
                         }
                     }

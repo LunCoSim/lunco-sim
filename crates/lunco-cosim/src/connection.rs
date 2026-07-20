@@ -70,9 +70,9 @@ pub struct SimPorts {
 ///
 /// The propagated value is `source * scale + offset`. `scale` is the SSP
 /// connection *factor* and `offset` the SSP *offset* — together they express
-/// unit conversions (Celsius↔Kelvin), sensor zero-points, and DAC/ADC gains
-/// (e.g. a `DigitalPort` raw register → physical units). `offset` defaults to
-/// `0.0` so existing pure-gain wires are unchanged.
+/// unit conversions (Celsius↔Kelvin), sensor zero-points, and actuator gains
+/// (e.g. a normalized command port → physical units). `offset` defaults to
+/// `0.0` so pure-gain wires need not name it.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct SimConnection {

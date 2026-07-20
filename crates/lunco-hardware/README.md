@@ -4,7 +4,7 @@ Physical actuator and sensor implementations for LunCoSim.
 
 ## What This Crate Does
 
-This crate provides concrete implementations of the hardware described in SysML models, bridging the gap between `PhysicalPort` values and the `avian3d` physics engine.
+This crate provides concrete implementations of the hardware described in SysML models, bridging the gap between `Port` values and the `avian3d` physics engine.
 
 - **Motor Actuators** — Applies torque to rigid bodies along local axes based on port inputs.
 - **Brake Actuators** — Emulates frictional braking by applying velocity damping.
@@ -25,13 +25,13 @@ lunco-hardware/
 
 ### Hardware-to-Port Linkage
 
-Every hardware component holds an `Entity` reference to its corresponding `PhysicalPort`. This creates a clean "wiring" layer in the ECS:
+Every hardware component holds an `Entity` reference to its corresponding `Port`. This creates a clean signal layer in the ECS:
 
 ```rust
 // Software writes to Port -> Hardware reads from Port -> Physics applies Force
 commands.spawn((
     MotorActuator {
-        port_entity: my_physical_port,
+        port_entity: my_torque_port,
         axis: DVec3::Y,
     },
     Forces::default(),
@@ -55,6 +55,6 @@ commands.spawn((
 
 ## See Also
 
-- `lunco-core` — Defines the `PhysicalPort` and `DigitalPort` primitives.
-- `lunco-obc` — Handles the digital-to-physical scaling before hardware consumption.
+- `lunco-core` — Defines the `Port` primitive.
+- `lunco-cosim` — Propagates values between ports along `SimConnection`s, applying the SSP factor/offset.
 - `avian3d` — The underlying physics engine.

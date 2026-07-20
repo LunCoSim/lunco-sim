@@ -286,7 +286,7 @@ Both current paths are one-shot/recompile-every-tick. Layer B needs
 ## 5. Navigation primitives
 
 `SetPorts` is the only actuator (writes `throttle`/`steer` inputs → `DriveMix` →
-DAC → wheel physics); everything goal-shaped builds on it. The native set
+port propagation → wheel physics); everything goal-shaped builds on it. The native set
 (registered as rhai verbs), all deterministic, emitting `SetPorts` each tick:
 
 ```rust
@@ -313,7 +313,7 @@ client prediction (`AppliedInputSeq`, `OwnedInputLog`). This avoids divergence �
 clients don't run scenario logic, they receive its command stream. `rand()` uses
 deterministic per-hook seeding (`(entity, tick, hook)` triple) — a re-run at the
 same tick produces the same sequence. This matches the existing determinism
-discipline (DAC, steering, cosim).
+discipline (port propagation, steering, cosim).
 
 ---
 

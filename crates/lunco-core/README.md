@@ -4,7 +4,7 @@ Core types, plugins, and diagram system for the LunCo simulation.
 
 ## What This Crate Does
 
-- **Architecture primitives** — `DigitalPort`, `PhysicalPort`, `Wire`
+- **Architecture primitives** — `Port`, `Wire`
 - **Plugin system** — base plugins for simulation orchestration
 - **Coordinate systems** — precision handling, spatial transforms
 - **Diagram system** — `ComponentGraph`: canonical graph data for visualization
@@ -17,7 +17,7 @@ All UI panels are **entity viewers** — they watch a selected entity and render
 
 ```
 lunco-core/src
-  ├── architecture.rs    — DigitalPort, PhysicalPort, Wire
+  ├── architecture.rs    — Port, Wire
   ├── diagram.rs         — ComponentGraph (canonical graph data)
   ├── telemetry.rs       — TelemetryEvent capture
   ├── log.rs             — Simulation logging

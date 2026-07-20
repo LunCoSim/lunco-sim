@@ -74,13 +74,13 @@ Layer 1: SimCore              — MinimalPlugins, ScheduleRunner, big_space, Avi
 ```
 
 Domain code speaks only the semantic API (replicated components, typed commands,
-`DigitalPort`/`PhysicalPort`, `DVec3`) — **no networking types anywhere**. Below the
+`Port`, `DVec3`) — **no networking types anywhere**. Below the
 `Peer { SessionId }` boundary, the networking layer translates to/from the internal game
 protocol and (planned) external bridges:
 
 ```
 ┌─── Domain Code (lunco-mobility, lunco-celestial, lunco-obc) ──────┐
-│  DigitalPort(i16), PhysicalPort(f32), DVec3, Typed Commands       │
+│  Port(f64), SimConnection, DVec3, Typed Commands                  │
 └──────────────────────┬────────────────────────────────────────────┘
                        │  lunco-networking (transparent shim)
     ┌──────────────────┼──────────────────┐
@@ -305,11 +305,11 @@ access regardless.
 // lunco-mobility/src/lib.rs — ZERO networking awareness
 #[derive(Component, Clone, Copy, Reflect)]
 #[reflect(Component)]
-struct DriveCommand { digital: DigitalPort, physical: PhysicalPort }
+struct DriveCommand { throttle: Port }
 
 fn apply_drive_commands(mut query: Query<(&DriveCommand, &mut GlobalTransform)>) {
     for (drive, mut transform) in query.iter_mut() {
-        transform.translation += DVec3::Z * drive.physical.value as f64 * dt;
+        transform.translation += DVec3::Z * drive.throttle.value * dt;
     }
 }
 ```
@@ -355,14 +355,16 @@ Summaries:
 
   | LunCoSim type | XTCE concept | CCSDS field |
   |---|---|---|
-  | `DigitalPort` (i16) | `IntegerParameter` | 16-bit raw value |
-  | `PhysicalPort` (f32) | `FloatParameter` | 32-bit engineering value |
-  | `Wire` (scale + source) | `PolynomialCalibrator` | calibration coefficients |
+  | `Port` (f64) | `FloatParameter` | 64-bit engineering value |
+  | `SimConnection` (factor + offset) | `PolynomialCalibrator` | calibration coefficients |
   | Typed Command / type / fields | `MetaCommand` / name / `ArgumentList` | TC packet / APID / data field |
   | `Session` / `AuthRegistry` | PUS User Management | service type 1 |
 
-  `DigitalPort` being `i16` is deliberate — it is exactly a typical spacecraft telemetry
-  register. No code in `src/` yet.
+  A `Port` carries the engineering value in `f64`, and that is what crosses the bridge.
+  Narrowing it to a fixed-width raw register (the `IntegerParameter` an XTCE encoding may
+  call for) is an **encoding concern of the bridge**, described by the calibrator a
+  `SimConnection` maps to — the simulation itself models no register width. No code in
+  `src/` yet.
 
 ---
 

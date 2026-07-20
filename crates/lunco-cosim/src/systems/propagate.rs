@@ -10,7 +10,7 @@
 //!
 //! Every endpoint is addressed through the [`crate::ports`] resolver
 //! ([`read_port`] / [`write_port`]), never through per-type queries. A new
-//! port-bearing backend (Modelica, Avian, joint, `PhysicalPort`, …) joins the
+//! port-bearing backend (Modelica, Avian, joint, hardware `Port`, …) joins the
 //! whole wiring fabric by extending the resolver alone — this system never
 //! changes. That also makes it front-end agnostic: an endpoint is an `Entity`
 //! plus a port name, so USD, the API, and runtime spawns all wire the same way.
@@ -29,6 +29,50 @@ use crate::SimConnection;
 pub enum CosimSet {
     /// Propagate connections: read outputs → write inputs.
     Propagate,
+}
+
+/// Does **this peer simulate** `target`, i.e. may propagation write into it?
+///
+/// The criterion is per-ENTITY, because that is what the rule actually is: a
+/// pure client must not run cosim on a body whose motion the host owns — it
+/// renders that body's snapshots, and locally driving its ports fights the
+/// snapshot stream (drift/jitter whenever the host is briefly static). It must
+/// absolutely still run cosim on everything it simulates itself, or a predicted
+/// rover's command never reaches its actuators and the rover stops driving on
+/// clients while working fine on the host.
+///
+/// Host and standalone simulate every body authoritatively, so the question is
+/// only asked on a client. There, a target is simulated locally when:
+///
+/// * it carries [`lunco_core::OwnedLocally`] — the body this session possesses
+///   and predicts (input-replay reconciled), or a wheel of it
+///   (`propagate_owned_to_wheels` mirrors the marker onto `ArticulatedLink`s), or
+/// * it carries [`lunco_core::PredictedDynamic`] — a free body promoted to local
+///   dynamic prediction (state reconciled), or
+/// * it is **not replicated at all** ([`lunco_core::NetReplicate`] absent). This
+///   clause is the load-bearing one for vessel control: the endpoints of a
+///   rover's actuation graph are bare [`lunco_core::architecture::Port`] entities
+///   (`lunco-usd-sim`'s `try_wire_wheel` targets `p_drive`/`p_steer`), which have
+///   no `RigidBody` and therefore never enter replication membership
+///   (`apply_net_replication` requires one). They are local scaffolding whose
+///   values only ever reach avian through the actuator systems, and those carry
+///   their own per-chassis kinematic guards.
+///
+/// Skipped, therefore, is exactly the intended set: a replicated body this peer
+/// neither owns nor predicts — a pure snapshot proxy.
+///
+/// Note this is the same locally-simulated classifier the netcode's proxy seams
+/// use (`interpolate_proxies` / `drive_kinematic_proxies` both take
+/// `Or<(With<OwnedLocally>, With<PredictedDynamic>)>`), plus the
+/// never-replicated case those seams get for free by only ever iterating
+/// replicated gids.
+fn peer_simulates(world: &World, target: Entity, is_client: bool) -> bool {
+    if !is_client {
+        return true; // host / standalone: authoritative over everything
+    }
+    world.get::<lunco_core::OwnedLocally>(target).is_some()
+        || world.get::<lunco_core::PredictedDynamic>(target).is_some()
+        || world.get::<lunco_core::NetReplicate>(target).is_none()
 }
 
 /// One compiled wire: source endpoint + affine gain + the *index* of its target
@@ -178,6 +222,15 @@ impl CompiledWiring {
 ///    not silently dropped.
 ///
 /// Undriven input ports are never touched, so a manual `SetPort` hold survives.
+///
+/// ## Per-target network gating
+///
+/// Propagation is gated **per target**, not by process role. See
+/// [`peer_simulates`]: a pure client keeps propagating into everything it
+/// actually simulates (its owned/predicted bodies, and every purely-local
+/// entity such as the bare `Port` nodes of a rover's actuation graph) and skips
+/// only targets that are replicated from the host and merely rendered. Host and
+/// standalone propagate into everything.
 pub fn propagate_connections(
     world: &mut World,
     mut wiring: Local<RebuildOnChange<SimConnection, CompiledWiring>>,
@@ -226,7 +279,15 @@ pub fn propagate_connections(
     }
 
     // Phase 4: write each target once, by resolved handle where available.
+    // Gated per target (see `peer_simulates`), never by process role.
+    let is_client = matches!(
+        world.get_resource::<lunco_core::NetworkRole>().copied(),
+        Some(lunco_core::NetworkRole::Client)
+    );
     for (i, t) in compiled.targets.iter().enumerate() {
+        if !peer_simulates(world, t.entity, is_client) {
+            continue;
+        }
         let written = match t.resolved {
             // Fast path; on a stale handle fall back to the name write (short-
             // circuits when the slot write succeeds, so never double-writes).

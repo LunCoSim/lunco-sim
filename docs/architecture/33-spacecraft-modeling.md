@@ -139,8 +139,8 @@ now USD-authorable:
 - **Extensible port set** — each extra port is a real attribute on the rover
   root, e.g. `float outputs:drive_w0 = 0.0`. The reader discovers ports by
   scanning the vessel prim's authored `outputs:` attributes and spawns a named
-  `DigitalPort` per port beyond the canonical four, which wheels connect to and a
-  wire/rhai/Modelica mix drives.
+  `Port` per port beyond the canonical four, which wheels connect to and a
+  connection/rhai/Modelica mix drives.
 - **Proof:** `assets/vessels/rovers/six_wheel_rover.usda` — a self-contained
   6-wheel skid rover whose three-per-side wheels bind explicitly via
   `inputs:drive.connect`; also authors G2 inertia/COM.

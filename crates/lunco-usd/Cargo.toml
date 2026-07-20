@@ -62,6 +62,10 @@ bevy = { workspace = true, features = ["bevy_pbr"] }
 # `MeshMaterial3d` — a headless test adds no `LuncoRenderPlugin`, and the intent is
 # what USD actually authors. See docs/architecture/render-decoupling.md.
 lunco-render = { path = "../lunco-render" }
+# The rover-structure tests inspect the actuator wiring a vessel projects, which
+# is `SimConnection` — owned by `lunco-cosim`. Dev-only: the library itself does
+# not wire actuators, it authors the USD they are built from.
+lunco-cosim = { path = "../lunco-cosim" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-fsw = { path = "../lunco-fsw" }
 # Wheels author `primvars:materialType = "shader"`, so the headless

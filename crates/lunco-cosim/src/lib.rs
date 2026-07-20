@@ -116,33 +116,38 @@ impl Plugin for CoSimPlugin {
                 .chain(),
         );
 
-        // Pin the two wiring fabrics in a deterministic order. The hardware DAC
-        // (`lunco_core::ControlDacSet` → `wire_system`: `DigitalPort` →
-        // `PhysicalPort.value`) writes values the cosim resolver now exposes as
-        // `"value"` ports, so a `SimConnection` can read a `PhysicalPort` the DAC
-        // just drove. Force the DAC to run BEFORE propagate so that read sees
-        // *this* tick's DAC output, not last tick's — otherwise the relative
-        // order is unspecified, giving a 1-tick skew that varies frame-to-frame
-        // and diverges host vs client under prediction (the same class of bug
-        // that `ControlDacSet`-on-the-fixed-clock already fixed once). Vacuous
-        // when `wire_system` isn't registered (the set is simply empty).
+        // `CosimSet::Propagate` IS the control DAC. Nesting it inside
+        // `lunco_core::ControlDacSet` is what gives that anchor its meaning:
+        // every actuator that reads a `Port` orders `.after(ControlDacSet)`
+        // (lunco-controller, lunco-autopilot, lunco-hardware, lunco-mobility) and
+        // those edges must resolve against the system that actually writes the
+        // port — this one. A sibling `.before()` relationship would instead leave
+        // the anchor empty and every such ordering a silent no-op, letting the
+        // actuation slip a whole tick frame-to-frame and diverge host vs client
+        // under prediction.
         app.configure_sets(
             FixedUpdate,
-            lunco_core::ControlDacSet.before(systems::propagate::CosimSet::Propagate),
+            systems::propagate::CosimSet::Propagate.in_set(lunco_core::ControlDacSet),
         );
 
-        // Diagnostic: a `PhysicalPort` must be driven by ONE fabric, not both.
-        // Runs only on frames where new wiring appeared (see `any_new_wiring`).
+        // Rollback replay re-simulates the owned rover's unacked inputs by running
+        // `RollbackReplay` + `PhysicsSchedule` per replayed input. Propagation is
+        // part of the actuation chain that schedule mirrors: without it the
+        // replayed actuators read port values nobody re-derived for the replayed
+        // tick, so the replay's forces differ from the host's and prediction
+        // diverges on exactly the body rollback exists to keep in sync. Same
+        // nesting as `FixedUpdate` so the `.after(ControlDacSet)` mirrors in
+        // lunco-hardware / lunco-mobility keep their relative order.
+        app.configure_sets(
+            lunco_core::RollbackReplay,
+            systems::propagate::CosimSet::Propagate.in_set(lunco_core::ControlDacSet),
+        );
         app.add_systems(
-            Update,
-            warn_dual_driven_ports.run_if(any_new_wiring),
+            lunco_core::RollbackReplay,
+            systems::propagate::propagate_connections
+                .in_set(systems::propagate::CosimSet::Propagate),
         );
 
-        // Server-authoritative networking: a pure client must NOT run cosim on
-        // replicated objects — it renders host snapshots. Running cosim here
-        // would fight the snapshot (objects drift/jitter when the server is
-        // briefly static). Gated off on `NetworkRole::Client`; host + single-
-        // player run it normally.
         app.add_systems(
             FixedUpdate,
             (
@@ -160,18 +165,25 @@ impl Plugin for CoSimPlugin {
                 // single step that released the hold. Torque, unlike gravity,
                 // accumulates about the COM and so discharges as SPIN — the measured
                 // ~25 rad/s transient on episode 1's lander/rover stack. The
-                // `propagate_connections` above is deliberately NOT gated: it moves
-                // VALUES around the cosim graph rather than accumulating one, and a
-                // held beat still wants a live graph.
+                // `propagate_connections` above is deliberately NOT gated here: it
+                // moves VALUES around the cosim graph rather than accumulating one,
+                // a held beat still wants a live graph, and its network gating is
+                // PER TARGET (`peer_simulates`) rather than per process — a client
+                // must keep propagating into the bodies it locally predicts, or the
+                // predicted rover's command never reaches its actuators.
+                //
+                // The role gate rides the force accumulator alone: a pure client
+                // renders host snapshots for replicated bodies, and adding
+                // locally-derived forces to them fights the snapshot stream.
                 avian::apply_pending_forces
                     .in_set(systems::apply_forces::CosimSet::ApplyForces)
-                    .run_if(lunco_physics::physics_is_live),
-            )
-                .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
-                    // Absent role (single-player, headless tests) → run cosim.
-                    // Only a present `Client` role gates it off.
-                    !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
-                }),
+                    .run_if(lunco_physics::physics_is_live)
+                    .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
+                        // Absent role (single-player, headless tests) → run.
+                        // Only a present `Client` role gates it off.
+                        !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
+                    }),
+            ),
         );
 
         // Avian outputs (position/velocity, joint twist) are read on demand
@@ -259,7 +271,7 @@ pub struct SetPorts {
 /// Observer for [`SetPorts`]: applies each `(name, value)` via the
 /// [`PortRegistry`] — the single dispatch that reaches Modelica `SimComponent`
 /// inputs, a `FlightSoftware`'s command inputs (throttle/steer/brake, …),
-/// `PhysicalPort`/`DigitalPort` registers, or any future backend, all by name.
+/// hardware `Port`s, or any future backend, all by name.
 /// `write_port` needs `&mut World`, so we clone the (cheap, `fn`-pointer)
 /// registry and defer the writes through a `Commands` world closure.
 ///
@@ -270,9 +282,9 @@ pub struct SetPorts {
 ///    (`lunco-controller`) and `drive_autopilots` (`lunco-autopilot`) are added
 ///    to `FixedUpdate` with NO ordering relative to
 ///    [`lunco_core::ControlDacSet`]. They must be
-///    `.before(lunco_core::ControlDacSet)` explicitly, so the `SetPorts` they
-///    emit is flushed — and the `DigitalPort` written — before the DAC
-///    propagates it into `PhysicalPort` and the wheel systems read it. Without
+///    `.before(lunco_core::ControlDacSet)` explicitly, so the `SetPorts`
+///    they emit is flushed — and the source `Port` written — before propagation
+///    carries it across the `Wire` and the wheel systems read it. Without
 ///    that edge, adding any unrelated `.after()` anywhere in the fixed graph can
 ///    silently move the actuation a whole tick.
 /// 2. **This write-through.** The observer cannot apply the writes itself:
@@ -302,56 +314,3 @@ fn on_set_ports(
 
 register_commands!(on_set_ports);
 
-/// Run condition: did any wiring (a [`SimConnection`] or a hardware
-/// [`lunco_core::architecture::Wire`]) get added this frame?
-///
-/// [`warn_dual_driven_ports`] only needs to re-scan when the wire set changes,
-/// so this gates it off on the steady-state frames (the overwhelming majority).
-fn any_new_wiring(
-    new_conns: Query<(), Added<SimConnection>>,
-    new_wires: Query<(), Added<lunco_core::architecture::Wire>>,
-) -> bool {
-    !new_conns.is_empty() || !new_wires.is_empty()
-}
-
-/// Diagnostic: warn when a [`lunco_core::architecture::PhysicalPort`] is driven
-/// by **both** wiring fabrics.
-///
-/// The hardware DAC (`wire_system`, [`lunco_core::architecture::Wire`] →
-/// `PhysicalPort.value`) and a cosim [`SimConnection`] targeting that same port
-/// (`end_connector == "value"`) are two writers of one slot, with *different*
-/// scale semantics — the DAC normalizes `i16/32767 * scale`, the connection
-/// applies the affine `src*scale + offset` in raw units. The last writer in
-/// schedule order wins, and on a client the DAC runs while cosim is gated off
-/// (server-authoritative), so the winner differs host vs client. That is a
-/// scene-authoring error, not something to silently resolve — we surface it
-/// loudly, once per offending port.
-fn warn_dual_driven_ports(
-    q_wires: Query<&lunco_core::architecture::Wire>,
-    q_conns: Query<&SimConnection>,
-    mut warned: Local<std::collections::HashSet<Entity>>,
-) {
-    for conn in q_conns.iter() {
-        // Only the `PhysicalPort` "value" slot is a write-write hazard: the DAC
-        // writes it, and so does a connection naming it. (A connection driving a
-        // `DigitalPort` "raw" register that a `Wire` then *reads* is a legal
-        // chain, not a conflict.)
-        if conn.end_connector != PHYSICAL_PORT_NAME {
-            continue;
-        }
-        let target = conn.end_element;
-        if target == Entity::PLACEHOLDER || warned.contains(&target) {
-            continue;
-        }
-        if q_wires.iter().any(|w| w.target == target) {
-            warn!(
-                "[cosim] PhysicalPort on {:?} is driven by BOTH a hardware Wire \
-                 (normalized DAC) and a SimConnection ('{}', affine) — two writers \
-                 of one slot. Last-in-schedule wins and host/client diverge under \
-                 prediction. Drive it from one fabric only.",
-                target, PHYSICAL_PORT_NAME
-            );
-            warned.insert(target);
-        }
-    }
-}

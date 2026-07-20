@@ -608,7 +608,7 @@ fn apply_incremental_op_to_stage(
             // Wheel/vehicle dynamics attrs: re-derive the spawned wheel
             // components IN PLACE from the composed stage instead of the
             // subtree refresh below — `reinstantiate_entity` on a wheel prim
-            // despawns its synthesized `PhysicalPort` children and visual child
+            // despawns its synthesized `Port` children and visual child
             // while `UsdSimProcessed` survives, leaving a dead-port
             // `MotorActuator` and a dangling joint. Checked before the `string`
             // fast-path: `lunco:driveKernel`/`lunco:driveMix` are strings and

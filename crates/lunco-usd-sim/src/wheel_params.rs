@@ -344,7 +344,7 @@ fn read_suspension_attrs(
 // [`claims_edit`] recognises, INSTEAD of their generic
 // `refresh_prim_subtree`/`reinstantiate_entity` fallback. That fallback is
 // actively destructive for wheels: it despawns the wheel's synthesized
-// `PhysicalPort` children and visual child while `UsdSimProcessed` survives, so
+// `Port` children and visual child while `UsdSimProcessed` survives, so
 // the sim params are never re-derived, the `MotorActuator` points at a dead
 // port, and the chassis-owned joint dangles. The resync mutates the spawned
 // components in place — entity ids, joints, `JointCollisionDisabled`, ports and

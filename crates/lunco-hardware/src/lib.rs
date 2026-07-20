@@ -1,13 +1,13 @@
 //! Physical actuator and sensor implementations.
 //!
 //! This crate provides concrete implementations of the hardware described in
-//! the SysML models, bridging the gap between [PhysicalPort] values and 
+//! the SysML models, bridging the gap between [Port] values and
 //! the [avian3d] physics engine.
 
 use bevy::prelude::*;
 use bevy::math::{DVec3, DQuat};
 use avian3d::prelude::*;
-use lunco_core::architecture::PhysicalPort;
+use lunco_core::architecture::Port;
 
 /// Plugin for managing physical hardware components (motors, sensors, etc.).
 pub struct LunCoHardwarePlugin;
@@ -15,7 +15,6 @@ pub struct LunCoHardwarePlugin;
 impl Plugin for LunCoHardwarePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<MotorActuator>()
-           .register_type::<BrakeActuator>()
            .register_type::<SteeringActuator>()
            .register_type::<AngularVelocitySensor>()
            // A wheel joint driven by an actuator owns its own `motor`; mark it
@@ -26,19 +25,17 @@ impl Plugin for LunCoHardwarePlugin {
            .add_systems(FixedUpdate, (
                steering_actuator_system,
                motor_actuator_system,
-               brake_actuator_system,
                sensor_velocity_system,
            ).chain().run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0))
            // Rollback replay: the joint-motor actuators ARE the jointed rover's
            // drive, so re-simulating an input must re-derive them. Ordered
-           // `.after(ControlDacSet)` — they read `PhysicalPort`, which the DAC
-           // writes from this tick's `DigitalPort` command. `sensor_velocity_system`
+           // `.after(ControlDacSet)` — they read the actuator `Port`, which
+           // propagation writes from this tick's command. `sensor_velocity_system`
            // is excluded: it publishes telemetry, not force, and replay must not
            // emit sensor readings for ticks that already happened.
            .add_systems(lunco_core::RollbackReplay, (
                steering_actuator_system,
                motor_actuator_system,
-               brake_actuator_system,
            ).chain().after(lunco_core::ControlDacSet));
     }
 }
@@ -72,7 +69,7 @@ fn mark_actuator_driven_steer(trigger: On<Add, SteeringActuator>, mut commands: 
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct MotorActuator {
-    /// Entity of the [PhysicalPort] providing the throttle command (−1..=1).
+    /// Entity of the [Port] providing the throttle command (−1..=1).
     /// For a skid rover this already carries the per-side differential.
     pub port_entity: Entity,
     /// Wheel spin (rad/s) commanded at full throttle. With wheel radius `r` the
@@ -100,12 +97,12 @@ impl Default for MotorActuator {
 /// and a steered front wheel is driven about its steered axle for free (the
 /// hinge axis yaws with the wheel).
 fn motor_actuator_system(
-    q_ports: Query<&PhysicalPort>,
+    q_ports: Query<&Port>,
     mut q_joints: Query<(&MotorActuator, &mut RevoluteJoint)>,
 ) {
     for (motor, mut joint) in q_joints.iter_mut() {
         let Ok(port) = q_ports.get(motor.port_entity) else { continue };
-        joint.motor.target_velocity = motor.drive_sign * port.value as f64 * motor.max_omega;
+        joint.motor.target_velocity = motor.drive_sign * port.value * motor.max_omega;
     }
 }
 
@@ -119,7 +116,7 @@ fn motor_actuator_system(
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct SteeringActuator {
-    /// Entity of the [PhysicalPort] providing the steering command (−1..=1).
+    /// Entity of the [Port] providing the steering command (−1..=1).
     pub port_entity: Entity,
     /// Steering lock (rad) at the centreline (bicycle-model reference angle)
     /// reached at full steering input.
@@ -179,7 +176,7 @@ const STEER_SLEW_RATE: f64 = 1.25;
 /// transform. Either way the steering math exists only here — DRY.
 fn steering_actuator_system(
     time: Res<Time>,
-    q_ports: Query<&PhysicalPort>,
+    q_ports: Query<&Port>,
     mut q: Query<(&mut SteeringActuator, Option<&mut RevoluteJoint>)>,
 ) {
     let dt = time.delta_secs_f64();
@@ -187,7 +184,7 @@ fn steering_actuator_system(
     for (mut steer, joint) in q.iter_mut() {
         let Ok(port) = q_ports.get(steer.port_entity) else { continue };
         // Rate-limit the SHARED centreline reference (keeps both wheels in sync).
-        let target_ref = (port.value as f64).clamp(-1.0, 1.0) * steer.max_steer_angle;
+        let target_ref = port.value.clamp(-1.0, 1.0) * steer.max_steer_angle;
         let delta = (target_ref - steer.current_ref).clamp(-max_step, max_step);
         steer.current_ref += delta;
         // Per-wheel Ackermann angle from the ramped reference. Near-zero → straight
@@ -207,49 +204,13 @@ fn steering_actuator_system(
     }
 }
 
-/// A braking system that applies damping to reduce velocity.
-///
-/// This emulates a frictional brake by scaling down the entity's 
-/// linear and angular velocity based on a [PhysicalPort] value.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component, Default)]
-pub struct BrakeActuator {
-    /// Entity of the [PhysicalPort] providing the brake command.
-    pub port_entity: Entity,
-    /// Maximum force limit for normalization.
-    pub max_force: f64,
-}
-
-impl Default for BrakeActuator {
-    fn default() -> Self {
-        Self {
-            port_entity: Entity::PLACEHOLDER,
-            max_force: 32767.0,
-        }
-    }
-}
-
-/// System that applies damping from [BrakeActuator] components.
-fn brake_actuator_system(
-    q_ports: Query<&PhysicalPort>,
-    mut q_brakes: Query<(&BrakeActuator, &mut AngularVelocity, &mut LinearVelocity)>,
-) {
-    for (brake, mut ang_vel, mut lin_vel) in q_brakes.iter_mut() {
-        if let Ok(port) = q_ports.get(brake.port_entity) {
-            let brake_factor = (1.0 - (port.value as f64 / brake.max_force).clamp(0.0, 1.0)).powf(2.0);
-            ang_vel.0 *= brake_factor;
-            lin_vel.0 *= brake_factor;
-        }
-    }
-}
-
 /// A sensor that measures angular velocity along a specific axis.
 ///
-/// Writes the sampled velocity into a [PhysicalPort] for software consumption (ADC).
+/// Writes the sampled velocity into a [Port] for software consumption.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct AngularVelocitySensor {
-    /// Entity of the [PhysicalPort] to write the sensor output into.
+    /// Entity of the [Port] to write the sensor output into.
     pub port_entity: Entity,
     /// Local axis to measure rotation about.
     pub axis: DVec3,
@@ -267,7 +228,7 @@ impl Default for AngularVelocitySensor {
 /// System that samples angular velocity for [AngularVelocitySensor] components.
 fn sensor_velocity_system(
     q_sensors: Query<(&AngularVelocitySensor, &AngularVelocity, &Rotation)>,
-    mut q_ports: Query<&mut PhysicalPort>,
+    mut q_ports: Query<&mut Port>,
 ) {
     for (sensor, velocity, rotation) in q_sensors.iter() {
         if let Ok(mut port) = q_ports.get_mut(sensor.port_entity) {
@@ -276,7 +237,7 @@ fn sensor_velocity_system(
             // world before projecting, else a tilted chassis reads the
             // wrong angular-rate component.
             let world_axis = rotation.0 * sensor.axis;
-            port.value = velocity.0.dot(world_axis) as f32;
+            port.value = velocity.0.dot(world_axis);
         }
     }
 }
