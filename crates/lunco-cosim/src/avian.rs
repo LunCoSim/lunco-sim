@@ -17,9 +17,11 @@
 //! That one system is the only per-tick avian system left.
 
 use avian3d::prelude::{
-    AngularInertia, AngularVelocity, CenterOfMass, ComputedAngularInertia, ComputedCenterOfMass,
-    ComputedMass, Forces, LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass,
-    NoAutoMass, Position, RigidBody, Rotation, WriteRigidBodyForces,
+    AngularInertia, AngularVelocity, CenterOfMass, Collider, ComputedAngularInertia,
+    ColliderMassProperties, ComputedCenterOfMass, ComputedMass, ContactGraph, Forces,
+    LinearVelocity, Mass,
+    NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position, RigidBody, Rotation,
+    SubstepCount, WriteRigidBodyForces,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -94,6 +96,115 @@ fn with_pending(world: &mut World, entity: Entity, set: impl FnOnce(&mut Pending
         false
     }
 }
+
+/// Whether a collider is touching anything, and the total contact normal force
+/// (N) on it — computed from avian's own contact graph.
+///
+/// THE one contact computation in the engine. The [`COLLIDER_CONTACT_GROUP`]
+/// ports call it through [`contact_from_world`]; the touchdown-switch instrument
+/// in [`crate::sensors`] calls it from its per-tick system with the graph it
+/// already holds. A sensor reads physics — it does not re-derive it, or the two
+/// answers drift and the one you are looking at is a coin toss.
+///
+/// The force is `Σ warm-start normal impulse / substep_dt`. Warm-start impulses
+/// are what the solver carries between substeps, so the sum is
+/// solver-config-robust — independent of substep count and restitution — rather
+/// than a tuned divisor.
+///
+/// `contact_pairs_with` yields every pair whose AABBs overlap, INCLUDING pairs
+/// that are not yet touching, so `is_touching` is not optional: without it a leg
+/// reads "in contact" while its pad is still approaching, which is the exact
+/// false-early-contact this replaced.
+pub fn contact_of(graph: &ContactGraph, substep_dt: f64, entity: Entity) -> (bool, f64) {
+    let mut warm_impulse = 0.0;
+    let mut touching = false;
+    for pair in graph.contact_pairs_with(entity) {
+        if !pair.is_touching() {
+            continue;
+        }
+        touching = true;
+        for manifold in &pair.manifolds {
+            for point in &manifold.points {
+                warm_impulse += point.warm_start_normal_impulse;
+            }
+        }
+    }
+    (touching, warm_impulse / substep_dt.max(1e-9))
+}
+
+/// [`contact_of`] for a caller holding only a `&World` — the port-read closures.
+///
+/// Physics timing comes from the same resources the solver uses, so a port read
+/// and the solver agree about what a substep is. Missing resources mean physics
+/// has not started; "not touching" is the truthful answer then, not a panic.
+pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
+    let Some(graph) = world.get_resource::<ContactGraph>() else {
+        return (false, 0.0);
+    };
+    let dt = world
+        .get_resource::<Time<Physics>>()
+        .map(|t| t.delta_secs_f64())
+        .unwrap_or(0.0)
+        .max(1e-9);
+    let substeps = world
+        .get_resource::<SubstepCount>()
+        .map(|s| s.0.max(1))
+        .unwrap_or(1);
+    contact_of(graph, dt / substeps as f64, entity)
+}
+
+/// Contact as a PHYSICS fact, on any collider — no instrument required.
+///
+/// Gated on [`Collider`] for the same reason the rigid-body group is gated on
+/// [`RigidBody`]: a collider that is being pushed on has a contact force whether
+/// or not anyone authored a sensor to notice, exactly as a body has a velocity
+/// whether or not anyone authored a speedometer.
+///
+/// This is the layer a PHYSICAL PART reads — a structure, a damper, a mount takes
+/// the load it is actually carrying from here, because it carries that load
+/// whether or not anyone authored an instrument to notice. Gating a part's own
+/// behaviour behind an instrument would mean hardware that responds only if
+/// someone remembered to install a switch.
+///
+/// Flight software is the other layer and reads [`crate::sensors::ContactSensor`]
+/// instead: an authored touchdown probe, with a mount point and (in time) a
+/// threshold and failure modes. Both answers come from [`contact_of`].
+///
+/// Read on demand from the contact graph — no mirror component, no per-tick sync
+/// system, matching every other port in this module.
+pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| w.get::<Collider>(e).is_some(),
+    ports: &[
+        AvianPort {
+            name: "contact",
+            dir: PortDirection::Out,
+            read: Some(|w, e| Some(if contact_from_world(w, e).0 { 1.0 } else { 0.0 })),
+            write: None,
+        },
+        AvianPort {
+            name: "contact_force",
+            dir: PortDirection::Out,
+            read: Some(|w, e| Some(contact_from_world(w, e).1)),
+            write: None,
+        },
+        // This SHAPE's own mass (kg), as physics computes it from the geometry and
+        // its density — `UsdPhysicsMassAPI`'s `physics:mass`, or `physics:density`
+        // times the volume of the shape USD authored.
+        //
+        // Here so a part's model can ASK for its mass instead of restating it. A
+        // strut's spring-damper needs the mass it is accelerating, and that number
+        // was hand-typed into the Modelica input on all four legs — a physical
+        // property duplicated beside the physics that owns it, free to drift the
+        // moment the geometry changed. Wire `inputs:m_strut.connect` to this and
+        // there is one mass, in the one place UsdPhysics puts it.
+        AvianPort {
+            name: "mass",
+            dir: PortDirection::Out,
+            read: Some(|w, e| w.get::<ColliderMassProperties>(e).map(|m| m.mass as f64)),
+            write: None,
+        },
+    ],
+};
 
 /// The rigid-body port group: position/velocity outputs + force inputs.
 ///

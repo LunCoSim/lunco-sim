@@ -39,6 +39,7 @@ use bevy::shader::Shader;
 use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
 use crate::shader_material::{build_shader_material, ShaderMaterial};
 use lunco_materials::{ShaderLook, ShaderLookKey, TextureLayer};
+use lunco_render::SurfaceAlpha;
 
 /// Shared `ShaderMaterial` per distinct [`ShaderLookKey`] — see the module docs.
 /// Sharing, the `unshared` bypass, and eviction all live in
@@ -69,6 +70,14 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
         // `live` params are real shader params — they are merely absent from the
         // sharing key, so a freshly-built material still has to carry them.
         values: look.values.iter().chain(look.live.iter()).map(|(k, v)| (k.clone(), *v)).collect(),
+        // The same mapping `lunco-render-bevy`'s PBR binder applies to a `PbrLook`,
+        // so a prim's authored transparency means the same thing on either path.
+        alpha_mode: match look.alpha {
+            SurfaceAlpha::Opaque => AlphaMode::Opaque,
+            SurfaceAlpha::Mask(t) => AlphaMode::Mask(t),
+            SurfaceAlpha::Blend => AlphaMode::Blend,
+            SurfaceAlpha::Add => AlphaMode::Add,
+        },
         ..Default::default()
     };
     for (layer, image) in &look.textures {
@@ -161,7 +170,43 @@ fn rebind_changed_shader_look(
             // Private material: overwrite the asset it already owns, rather than
             // adding one per change (that would leak a material per frame).
             if let Some(mut existing) = current.and_then(|m| materials.get_mut(&m.0)) {
-                *existing = shader_material(look, &asset_server);
+                // A driven look changes EVERY tick, so this is the hot path, and a
+                // full rebuild here is wrong twice over.
+                //
+                // Correctness: `shader_material` builds from `..Default::default()`,
+                // whose schema is `empty_schema_arc()`, and its trailing `repack()`
+                // then packs against NO fields — every parameter zeroed. Harmless
+                // when a material is being CREATED (`reflect_shader_schemas` fills
+                // the schema in once the WGSL lands), fatal when it recurs: the two
+                // systems are unordered `Update` members contending for
+                // `Assets<ShaderMaterial>`, so if reflection runs first the zeroing
+                // write is the last one each frame and the uniforms stay dead.
+                //
+                // Cost: it also re-collects the parameter map, re-resolves the
+                // texture slots and calls `asset_server.load` twice, per driven prim
+                // per tick, to express what is usually a single moved float.
+                //
+                // So rebuild only when the SHADER ITSELF changed (a hot-reloaded
+                // `shaderPath`, a new texture set) — and carry the reflected schema
+                // across when we do. Otherwise write the values in place, which is
+                // what `set_many` exists for: one repack for N fields, against the
+                // live schema.
+                let want_shader = asset_server.load::<Shader>(look.shader.clone());
+                let structural = existing.shader.id() != want_shader.id()
+                    || existing.vertex_shader.is_some() != look.vertex_shader.is_some()
+                    || !look.textures.is_empty();
+                if structural {
+                    let schema = existing.schema.clone();
+                    *existing = shader_material(look, &asset_server);
+                    existing.set_schema(schema);
+                } else {
+                    existing.set_many(
+                        look.values
+                            .iter()
+                            .chain(look.live.iter())
+                            .map(|(k, v)| (k.as_str(), *v)),
+                    );
+                }
                 continue;
             }
         }
@@ -217,6 +262,10 @@ pub(crate) fn build(app: &mut App) {
             Update,
             (rebind_changed_shader_look, sweep_look_cache::<ShaderLook>),
         );
+    // Shader parameters become connection targets: a USD `.connect` on a bound prim
+    // drives a WGSL uniform through the ordinary port graph. The writes land in
+    // `ShaderLook::live`, which `rebind_changed_shader_look` above already drains.
+    crate::shader_ports::build(app);
 }
 
 #[cfg(test)]

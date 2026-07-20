@@ -32,16 +32,31 @@ plane, not a scratchpad.
 So authored dimensions are **unit**, and the live channel is the transform:
 
 ```usda
-def Cone "Flame" {
+def Cylinder "Beam" {
     uniform token axis = "Y"
     double radius = 1.0          # unit primitive...
     double height = 1.0
-    double3 xformOp:scale = (0.02, 0.02, 0.02)   # ...live size here
+    double3 xformOp:scale = (0.02, 1.0, 0.02)   # ...live size here
 }
 ```
 
 `axis` (`"X"`/`"Y"`/`"Z"`) is folded into the entity `Transform` at projection time, not
 into the mesh — so it costs nothing to author and orients the primitive correctly.
+
+## When the shape belongs in a SHADER instead
+
+The transform is the right live channel when the whole prim moves or stretches as one:
+a range beam is exactly as long as the distance it reports.
+
+It is the wrong one when the shape is a *field* rather than a rigid change of size — an
+exhaust plume that shortens, narrows, thins and shimmers at once. Then the prim is a
+FIXED bounding volume and a WGSL shader draws inside it, taking the live value on a
+`inputs:<name>.connect` wire like any other port sink. `assets/shaders/plume.wgsl` is the
+worked example: the cone never moves, and `throttle` shapes what is drawn in it.
+
+The test is what the number means. If it is a dimension, scale the prim. If it is a
+parameter the appearance is a function of, wire it to a shader —
+[`visualize-physics-with-shaders`](../../skills/visualize-physics-with-shaders/SKILL.md).
 
 ## Binding a name to Rust — `ProgramDriverRegistry`
 
@@ -51,7 +66,7 @@ source):
 
 | Attribute | Resolves to |
 |---|---|
-| `uniform asset info:sourceAsset = @scenarios/flame.rhai@` | the script engine (`.rhai`) or the behaviour-tree engine (`.xml`) |
+| `uniform asset info:sourceAsset = @scenarios/rover_autopilot.rhai@` | the script engine (`.rhai`) or the behaviour-tree engine (`.xml`) |
 | `uniform token info:id = "range_beam"` | a Rust driver, from `ProgramDriverRegistry` |
 
 Same prim type, same discovery, same per-instance params. The registry follows

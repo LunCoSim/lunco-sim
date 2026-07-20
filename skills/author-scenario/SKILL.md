@@ -143,7 +143,7 @@ def Xform "Rover_01"
 {
     def LunCoProgram "Patrol"
     {
-        uniform asset lunco:program:sourceAsset = @scenarios/patrol.rhai@
+        uniform asset info:sourceAsset = @scenarios/patrol.rhai@
         # or author the source in place:
         # uniform string lunco:program:sourceCode = '''fn on_tick(me){ ... }'''
 

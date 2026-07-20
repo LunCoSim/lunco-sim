@@ -10,7 +10,7 @@
 //
 // RUMOCA RULES (same as LegStrut.mo): branch-free equations — `der(x) = expr`
 // with `max`/`min` clamps only, no `if`/`when`. Compiled by rumoca via
-// `lunco:program:sourceAsset`; ports wire natively via `inputs:x.connect`.
+// `info:sourceAsset`; ports wire natively via `inputs:x.connect`.
 //
 // The outputs are NORMALIZED per-side drive commands (−1..1, torque/peak) so
 // the rhai bridge (`assets/scenarios/rover_modelica_drive.rhai`) can write

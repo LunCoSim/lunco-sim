@@ -154,6 +154,10 @@ pub struct PortRegistry {
 impl PortRegistry {
     /// Register a backend. Later registrations have lower precedence on name
     /// collisions. Call from a plugin `build`.
+    ///
+    /// Precedence follows plugin add-order, which no plugin controls, so a backend
+    /// must claim a name only when it genuinely owns it. One that would otherwise
+    /// have to guess needs an authoritative set to answer from instead.
     pub fn register(&mut self, backend: PortBackend) {
         self.backends.push(backend);
     }

@@ -7143,6 +7143,7 @@ name = "lunco-materials"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-render",
 ]
 
 [[package]]

@@ -24,6 +24,7 @@ def Xform "PowerBus" (
     # All components on this EPS bus
     rel lunco:epsBus
 
-    # --- Physics (invisible, no collider) ---
-    bool physics:rigidBodyEnabled = false
+    # No physics: a bus is a wiring node with no geometry and no mass. It applies
+    # neither `PhysicsRigidBodyAPI` nor `PhysicsCollisionAPI`, so it is neither a
+    # body nor a collider — the vessel that references it carries both.
 }

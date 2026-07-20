@@ -44,7 +44,7 @@ The reference is the lander: `assets/models/Lander.mo`,
 The model reads what the vessel **senses** and outputs force/torque. It is a PROGRAM,
 and a program is a prim: the vessel's own flight-control system is inseparable from the
 airframe, so the vessel prim applies `LunCoProgramAPI` and names the model in place —
-`uniform asset lunco:program:sourceAsset = @models/MyController.mo@`. Its `inputs:` ARE
+`uniform asset info:sourceAsset = @models/MyController.mo@`. Its `inputs:` ARE
 the vessel's control surface. A control law that is *bolted on* (a guidance component, a
 supervisory script) is a `def LunCoProgram` CHILD prim instead, so deleting the prim
 removes the behaviour. Ports are wired with native USD connections (§3).
@@ -85,7 +85,7 @@ end MyController;
 ## 2. High-level logic → rhai, event-driven
 
 A `def LunCoProgram` child prim on the vessel, naming a `.rhai` scenario
-(`uniform asset lunco:program:sourceAsset = @scenarios/my_supervisor.rhai@`), does
+(`uniform asset info:sourceAsset = @scenarios/my_supervisor.rhai@`), does
 supervision and sequencing — **never a control loop**. React to events; don't poll or
 step.
 
@@ -191,7 +191,7 @@ def "Controls" (
    Inspector-editable at sim-rate.
 2. Reference the sensors it needs from `assets/vessels/sensors/` and mount them.
 3. On the vessel prim: apply `LunCoProgramAPI`, name the model
-   (`uniform asset lunco:program:sourceAsset = @models/MyController.mo@`), promise
+   (`uniform asset info:sourceAsset = @models/MyController.mo@`), promise
    `uniform bool lunco:program:realtimeSafe = true`, author the connections (sensor +
    body ports → model `inputs:`, incl. `inputs:piloted`, and model force/torque → the
    body), and add a `Controls` child that `references` a profile (`</LanderControls>`)

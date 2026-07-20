@@ -195,7 +195,7 @@ def Xform "SunTrackerTest" (
         # input (same name on both sides — one signal).
         def Xform "Controller"
         {
-            uniform asset info:sourceAsset = @lunco://models/SunTracker.mo@
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
             float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
         }
     }

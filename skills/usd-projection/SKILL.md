@@ -105,7 +105,7 @@ said.
 - `primvars:displayColor` / `displayOpacity` are the *only* Gprim display
   attributes. There is no "display emissive" — **emission requires a material**.
 - Genuinely new concepts get the `lunco:` vendor namespace (`lunco:dome:skybox`,
-  `lunco:vessel`). That is the correct, spec-sanctioned way to extend USD. What
+  `lunco:terrain:*`). That is the correct, spec-sanctioned way to extend USD. What
   is *not* correct is inventing a second spelling for something USD already has.
 
 **Never add an alias to make a file load.** A tolerant reader (`inputs:roughness`

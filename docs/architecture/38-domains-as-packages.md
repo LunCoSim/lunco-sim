@@ -803,7 +803,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 
 ### 14.4 Keep `lunco:` (LunCo-specific — USD has no name), just tidy the namespaces
 
-`lunco:vessel`, `lunco:avatar`, `lunco:scenario`, `lunco:nextScene`, `lunco:triggerZone`, `lunco:waypoint`,
+`lunco:avatar`, `lunco:scenario`, `lunco:nextScene`, `lunco:triggerZone`, `lunco:waypoint`,
 `lunco:net:*`, `lunco:terrain:*`, `lunco:shadow:*`, `lunco:camera*` (behavior; the camera prim itself is
 `UsdGeomCamera`), `lunco:link:*`, `lunco:celestial:*`, `lunco:placeholder`/`spawnable`/`resolvedAsset`.
 These are genuine LunCo glue — keep the `lunco:` prefix, group consistently (`lunco:<domain>:<prop>`), and
@@ -841,7 +841,7 @@ spellings** — chosen per layer, never invented.
   `ui:nodegraph:node:pos`, `inputs:`/`outputs:` + connections.
 - **KEEP (FMI/SSP-correct):** `SimComponent.{inputs,outputs,parameters}`, `SimConnection.{start,end}_connector`,
   `ResolvedPort` (= FMI valueReference), `PortDirection`.
-- **KEEP (LunCo glue):** `lunco:vessel/avatar/scenario/nextScene/triggerZone/net:*/terrain:*/link:*/occluder/celestial:*`.
+- **KEEP (LunCo glue):** `lunco:avatar/scenario/nextScene/triggerZone/net:*/terrain:*/link:*/occluder/celestial:*`.
   (`lunco:comms:*` is **not** on this list — it is the vocabulary §14.3 records as deleted. Connectivity is
   authored as the generic `lunco:linkNode` / `lunco:link:*` (`LunCoLinkAPI`) and `lunco:occluder`
   (`LunCoOccluderAPI`) — see [doc 49](./49-connectivity-link-kernel.md).)
@@ -893,8 +893,7 @@ volume. Nothing to promote to, so it is now declared properly as `LunCoLightAPI`
 
 **`lunco:` glue that *stays* (tiers 2–3 — USD has no schema):** `lunco:light:range`, `lunco:link:*`, `lunco:celestial:*`,
 `lunco:ephemeris_id` (SPICE metadata, §11), `lunco:net:*` (replication), `lunco:scenario`/`nextScene`/
-`triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:vessel`/`avatar` (role — or a `LunCoVesselAPI`
-applied schema), `lunco:sensor:*` (mirror Isaac vendor schemas, §8.5), `lunco:terrain:*`/`shadow:*` (LunCo
+`triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:avatar` (role), `lunco:sensor:*` (mirror Isaac vendor schemas, §8.5), `lunco:terrain:*`/`shadow:*` (LunCo
 render params — a partial `UsdRenderSettings` alignment is possible but not standard), `info:*`
 (the SysML **allocation** / USD+FMI-future binding).
 

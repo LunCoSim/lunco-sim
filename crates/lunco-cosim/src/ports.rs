@@ -61,8 +61,17 @@ pub struct AvianGroup {
 }
 
 /// The avian backend table: every avian kind we expose, in one place.
+///
+/// Ordered by LAYER, because the two layers answer different questions. The first
+/// four are PHYSICS — what the solver knows about a body, a collider or a joint,
+/// exposed because the thing exists and nobody had to author an instrument to
+/// notice. The last three are INSTRUMENTS — authored in USD, mounted at a point,
+/// read by onboard control. Instruments CONSUME the physics layer; they do not
+/// compete with it, which is why the touchdown switch and the collider contact
+/// ports share one computation (`crate::avian::contact_of`).
 pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::avian::RIGID_BODY_GROUP,
+    crate::avian::COLLIDER_CONTACT_GROUP,
     crate::joint::REVOLUTE_JOINT_GROUP,
     crate::joint::PRISMATIC_JOINT_GROUP,
     crate::sensors::IMU_SENSOR_GROUP,

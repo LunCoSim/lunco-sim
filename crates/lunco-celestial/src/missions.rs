@@ -1,41 +1,72 @@
+//! Missions as SCENE-DECLARED content (doc 49), not as "anything found on disk".
+//!
+//! A mission used to be loaded because `assets/missions/*.json` existed and the
+//! scene happened to declare a sky. That made "has a Moon" mean "also gets
+//! Artemis II", so a lunar-landing FILM silently had a crewed Orion trajectory
+//! spawned into it. Declaring a body and requesting a specific mission are
+//! different statements, and only the scene can make the second one.
+//!
+//! So a mission is now opted into exactly the way a sky is: the scene REFERENCES
+//! the mission's USD file, that file's prims carry `lunco:mission:*` /
+//! `lunco:trajectory:*` / `lunco:spacecraft:*`, and `lunco-usd-sim` projects them
+//! onto the declaration components below. No mission prim ⇒ no mission. There is
+//! no filesystem scan and no implicit set.
+
 use bevy::prelude::*;
 use lunco_render::{PbrLook, WorldLabel};
-use serde::Deserialize;
-use std::fs;
 use crate::trajectories::{TrajectoryView, TrajectoryPath, TrajectoryFrame};
 use big_space::prelude::CellCoord;
-use lunco_assets::assets_dir;
 
-#[derive(Debug, Deserialize, Resource, Default)]
+/// Ids of the missions spawned into the current scene. Diagnostic/UI only — the
+/// authority is the declaration components, which live on the USD prim entities
+/// and are torn down with them.
+#[derive(Debug, Resource, Default)]
 pub struct MissionRegistry {
-    pub missions: Vec<MissionData>,
+    pub missions: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct MissionData {
+/// A scene-authored declaration that this mission should be shown — the ECS
+/// projection of USD's `LunCoMissionAPI`.
+///
+/// **This is the switch that turns a mission on**, exactly as
+/// [`CelestialBodyDecl`](crate::CelestialBodyDecl) is the switch for the sky, and
+/// it is deliberately a SEPARATE switch: a scene that wants the Moon has not
+/// thereby asked for Artemis II.
+#[derive(Component, Debug, Clone)]
+pub struct MissionDecl {
+    /// Stable mission id (`"artemis-2"`).
     pub id: String,
+    /// Display name (`"Artemis II"`).
     pub name: String,
+    /// One-line human description.
     pub description: String,
-    pub trajectories: Vec<MissionTrajectory>,
-    pub spacecraft: Option<MissionSpacecraft>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct MissionTrajectory {
+/// One trajectory a mission asks to be drawn — projection of
+/// `LunCoMissionTrajectoryAPI`.
+///
+/// Every field here is VISUALISATION config. The state vectors are not in USD and
+/// never were: the curve is sampled at runtime from the ephemeris provider using
+/// `tracked_id` / `reference_id`, so this prim says *how to draw* a trajectory,
+/// not *where the spacecraft is*.
+#[derive(Component, Debug, Clone)]
+pub struct MissionTrajectoryDecl {
     pub name: String,
     pub tracked_id: i32,
     pub reference_id: i32,
     pub color: [f32; 4],
     pub sampling_days: f64,
     pub sampling_step: f64,
+    /// `"BodyFixed"` or `"Inertial"`.
     pub frame: String,
     pub user_visible: Option<bool>,
     pub start_epoch_jd: Option<f64>,
     pub end_epoch_jd: Option<f64>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct MissionSpacecraft {
+/// The mission's spacecraft marker — projection of `LunCoMissionSpacecraftAPI`.
+#[derive(Component, Debug, Clone)]
+pub struct MissionSpacecraftDecl {
     pub name: String,
     pub ephemeris_id: i32,
     pub reference_id: i32,
@@ -46,6 +77,16 @@ pub struct MissionSpacecraft {
     pub hit_radius_km: Option<f32>,
     pub marker_color: Option<[f32; 4]>,
 }
+
+/// Stamped on a declaring prim entity once its trajectories/spacecraft have been
+/// spawned, so the spawner is idempotent.
+///
+/// Entity-scoped ON THE DECLARATION, not a `Local` bool and not a global "already
+/// ran" flag: a `Local` can never be reset, so a scene reload — which despawns
+/// these prim entities and re-creates them — would never re-spawn the mission.
+/// Because the marker dies with the declaration, teardown-then-reload just works.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct MissionSpawned;
 
 use lunco_core::Spacecraft;
 
@@ -76,20 +117,16 @@ pub struct MissionPlugin;
 impl Plugin for MissionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MissionRegistry>();
-        // Missions belong to the solar-system context: gated on the scene declaring
-        // celestial bodies (`LunCoCelestialBodyAPI`) AND on the registry being empty.
-        // Idempotent-guarded, NOT latched — a `Local` bool could never be reset, so a
-        // scene reload (teardown clears the registry) would never re-load missions.
-        // Gating on "is my output already there" makes teardown-then-reload just work.
-        app.add_systems(
-            Update,
-            load_missions_system.run_if(
-                |q_decl: Query<(), With<crate::CelestialBodyDecl>>,
-                 registry: Res<MissionRegistry>| {
-                    !q_decl.is_empty() && registry.missions.is_empty()
-                },
-            ),
-        );
+        // A mission spawns because THIS SCENE declared it, full stop. The old gate
+        // was `celestial bodies declared && registry empty`, i.e. "has a sky" — so
+        // every lunar scene got every mission in `assets/missions/`, and a landing
+        // film silently acquired Artemis II. Declaring a body and requesting a
+        // mission are different statements; only the second one may spawn a mission.
+        //
+        // No filesystem scan survives here: the query below is empty unless a prim
+        // carries `MissionTrajectoryDecl`/`MissionSpacecraftDecl`, which only the
+        // USD bridge writes and only for an authored `lunco:mission:*` prim.
+        app.add_systems(Update, spawn_declared_missions);
         app.add_systems(Update, (
             update_spacecraft_position_system,
             spacecraft_alignment_system,
@@ -99,55 +136,77 @@ impl Plugin for MissionPlugin {
     }
 }
 
-pub fn load_missions_system(
+/// Spawn the trajectories and spacecraft the loaded scene DECLARED.
+///
+/// Runs every frame and does nothing at all unless a prim carries a declaration
+/// component, which only the USD bridge writes and only for an authored
+/// `lunco:mission:*` prim. There is no `assets/missions` scan: a mission arrives
+/// because a scene referenced its USD file, the same way a sky arrives because a
+/// scene referenced `solar_system.usda`.
+///
+/// The `Without<MissionSpawned>` filter is the idempotency guard, and it is
+/// scoped to the DECLARING ENTITY rather than being a `Local` bool or a global
+/// "already ran" flag — a `Local` can never be reset, so a scene reload (which
+/// despawns these prim entities) would never re-spawn the mission. The marker
+/// dies with the declaration, so teardown-then-reload just works.
+///
+/// A prim may legitimately carry more than one declaration (a spacecraft prim
+/// that is also the mission root). All three loops read the pre-stamp state
+/// because `Commands` are deferred to the end of the system, so such a prim is
+/// handled once by each loop in a single pass and skipped entirely thereafter.
+pub fn spawn_declared_missions(
     mut commands: Commands,
     mut registry: ResMut<MissionRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
-    #[cfg(target_arch = "wasm32")] embedded: Option<Res<crate::embedded_assets::EmbeddedMissionData>>,
+    q_missions: Query<(Entity, &MissionDecl), Without<MissionSpawned>>,
+    q_trajectories: Query<(Entity, &MissionTrajectoryDecl), Without<MissionSpawned>>,
+    q_spacecraft: Query<(Entity, &MissionSpacecraftDecl), Without<MissionSpawned>>,
 ) {
-    // Helper: process a single mission JSON string
-    let spawn_mission = |commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, registry: &mut ResMut<MissionRegistry>, content: &str| {
-        if let Ok(mission) = serde_json::from_str::<MissionData>(content) {
-            info!("Loaded mission: {}", mission.name);
+    for (decl_entity, mission) in q_missions.iter() {
+        info!("[mission] scene declares {} ({})", mission.name, mission.id);
+        registry.missions.push(mission.id.clone());
+        commands.entity(decl_entity).try_insert(MissionSpawned);
+    }
 
-            // Spawn trajectories
-            for traj in &mission.trajectories {
-                let frame = match traj.frame.as_str() {
-                    "BodyFixed" => TrajectoryFrame::BodyFixed,
-                    _ => TrajectoryFrame::Inertial,
-                };
+    for (decl_entity, traj) in q_trajectories.iter() {
+        let frame = match traj.frame.as_str() {
+            "BodyFixed" => TrajectoryFrame::BodyFixed,
+            _ => TrajectoryFrame::Inertial,
+        };
 
-                commands.spawn((
-                    Name::new(traj.name.clone()),
-                    // Owned by the celestial subsystem — torn down on scene reload.
-                    crate::big_space_setup::CelestialDerived,
-                    TrajectoryView {
-                        tracked_id: traj.tracked_id,
-                        reference_id: traj.reference_id,
-                        frame,
-                        color: LinearRgba::from(Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3])),
-                        is_visible: true,
-                        user_visible: traj.user_visible.unwrap_or(true),
-                        sampling_days: traj.sampling_days,
-                        sampling_step: traj.sampling_step,
-                        start_epoch: traj.start_epoch_jd,
-                        end_epoch: traj.end_epoch_jd,
-                    },
-                    TrajectoryPath::default(),
-                    Transform::default(),
-                    GlobalTransform::default(),
-                    Visibility::default(),
-                    // NO eager CellCoord: `trajectory_alignment_system` inserts
-                    // it atomically with the grid parent (doc 45 — a cell-entity
-                    // without a grid parent is class 2; the validator flags the
-                    // pre-parenting window).
-                ));
-            }
+        commands.spawn((
+            Name::new(traj.name.clone()),
+            // Owned by the celestial subsystem — torn down on scene reload.
+            crate::big_space_setup::CelestialDerived,
+            TrajectoryView {
+                tracked_id: traj.tracked_id,
+                reference_id: traj.reference_id,
+                frame,
+                color: LinearRgba::from(Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3])),
+                is_visible: true,
+                user_visible: traj.user_visible.unwrap_or(true),
+                sampling_days: traj.sampling_days,
+                sampling_step: traj.sampling_step,
+                start_epoch: traj.start_epoch_jd,
+                end_epoch: traj.end_epoch_jd,
+            },
+            TrajectoryPath::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            // NO eager CellCoord: `trajectory_alignment_system` inserts
+            // it atomically with the grid parent (doc 45 — a cell-entity
+            // without a grid parent is class 2; the validator flags the
+            // pre-parenting window).
+        ));
+        commands.entity(decl_entity).try_insert(MissionSpawned);
+    }
 
-            // Spawn spacecraft
-            if let Some(sc) = &mission.spacecraft {
-                let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
-                let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
+    for (decl_entity, sc) in q_spacecraft.iter() {
+        commands.entity(decl_entity).try_insert(MissionSpawned);
+
+        let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
+        let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
 
                 let mut sc_ent = commands.spawn((
                     Name::new(sc.name.clone()),
@@ -230,41 +289,6 @@ pub fn load_missions_system(
                         Transform::from_translation(Vec3::Y * radius_m * 5.0),
                     ));
                 });
-            }
-
-            registry.missions.push(mission);
-        }
-    };
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // Desktop: load from filesystem
-        let missions_dir = assets_dir().join("missions");
-        if let Ok(entries) = fs::read_dir(missions_dir) {
-            for entry in entries.flatten() {
-                if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
-                    // Read through lunco-storage (clippy-banned `std::fs::read_to_string`,
-                    // wasm-incompatible). `fs::read_dir` above isn't on the ban list and the
-                    // whole block is `cfg(not(wasm32))` — wasm uses the embedded data path.
-                    use lunco_storage::Storage;
-                    if let Ok(bytes) = lunco_storage::FileStorage::new()
-                        .read_sync(&lunco_storage::StorageHandle::File(entry.path()))
-                    {
-                        if let Ok(content) = String::from_utf8(bytes) {
-                            spawn_mission(&mut commands, &mut meshes, &mut registry, &content);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Web: use embedded mission data
-        if let Some(embedded) = embedded {
-            spawn_mission(&mut commands, &mut meshes, &mut registry, &embedded.artemis_2);
-        }
     }
 }
 

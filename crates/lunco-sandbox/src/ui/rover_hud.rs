@@ -6,10 +6,20 @@
 //! along the BOTTOM edge, flanking the viewport centre — the thing the driver is
 //! actually looking at — rather than boxing it in from three sides:
 //!
-//! - **ATTITUDE** (bottom-left) — tilt, roll, pitch, speed. Tilt is the number
-//!   that matters on a slope: it is what puts a rover on its roof.
-//! - **NAV + COMMS + CONTROLS** (bottom-right) — position and heading in the stable
-//!   root frame, the live link home, plus the drive inputs.
+//! - **ATTITUDE** (bottom-left) — the tilt gauge, SPEED as the hero number, then
+//!   roll/pitch as one line of fine print. Tilt is the number that matters on a
+//!   slope: it is what puts a rover on its roof.
+//! - **NAV + COMMS** (bottom-right) — the vessel's name, ALT as the hero number,
+//!   then E/N/heading as one line, and the live link home.
+//!
+//! ONE hero readout per cluster, centred and large; everything else is a compact
+//! inline row. A HUD of equal-weight rows makes the driver read all of it to find
+//! the one number the moment is about — speed while flying, altitude while
+//! landing — and on camera it reads as a debug dump rather than an instrument.
+//!
+//! The key-press legend deliberately lives NOWHERE here: `lunco-workbench`'s
+//! `input_overlay` already paints it centre-screen, and a second copy in this
+//! panel said the same thing twice while pushing the numbers into the margins.
 //!
 //! COMMS reads the generic link kernel (`lunco_celestial::link`, doc 49) — real
 //! range/elevation/occlusion, never a scripted flag. It is the driver-facing half of
@@ -41,11 +51,10 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use big_space::prelude::{CellCoord, Grid};
-use leafwing_input_manager::prelude::ActionState;
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
 use lunco_mobility::WheelRaycast;
-use lunco_core::{Avatar, GlobalEntityId, UserIntent};
+use lunco_core::{Avatar, GlobalEntityId};
 
 /// Fallback amber threshold, for a vessel whose limits cannot be derived.
 ///
@@ -234,6 +243,7 @@ fn resolve_link(
 fn resolve_driven(
     q_avatar: &Query<&ControllerLink, With<Avatar>>,
     q_name: &Query<&Name>,
+    q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_gid: &Query<&GlobalEntityId>,
     q_vel: &Query<&LinearVelocity>,
     q_parents: &Query<&ChildOf>,
@@ -264,9 +274,13 @@ fn resolve_driven(
     // Compass heading: North is −Z, East is +X.
     let heading_deg = forward.x.atan2(-forward.z).to_degrees().rem_euclid(360.0);
 
-    let label = q_name
+    // The HUD title is the ship's NAME, not its address: prefer the USD
+    // `ui:displayName` (ingested as `Callsign`) over the `Name` component,
+    // which carries the prim path and reads as plumbing on camera.
+    let label = q_callsign
         .get(vessel)
-        .map(|n| n.as_str().to_string())
+        .map(|c| c.0.clone())
+        .or_else(|_| q_name.get(vessel).map(|n| n.as_str().to_string()))
         .or_else(|_| q_gid.get(vessel).map(|g| format!("vessel #{}", g.get())))
         .unwrap_or_else(|_| "vessel".to_string());
 
@@ -436,7 +450,6 @@ struct Palette {
     accent: egui::Color32,
     value: egui::Color32,
     muted: egui::Color32,
-    cap_idle: egui::Color32,
 }
 
 impl Palette {
@@ -449,10 +462,16 @@ impl Palette {
             band_ok: k.success_subdued,
             band_caution: k.warning_subdued,
             band_danger: k.error_subdued,
-            accent: k.accent,
+            // Instrument cyan, NOT the theme's accent. The theme accent is a
+            // saturated violet tuned for editor chrome (buttons, selection);
+            // on a flight HUD over grey regolith it reads as a UI toy and is
+            // tiring to look at for a whole descent. Cyan is the aviation
+            // convention for "live number", holds contrast against both the
+            // dark panel and a blown-out sunlit background, and matches the
+            // campaign's title cards so film and instrument agree.
+            accent: egui::Color32::from_rgb(0x7F, 0xD4, 0xFF),
             value: k.text,
             muted: k.text_subdued,
-            cap_idle: k.surface_sunken,
         }
     }
 
@@ -552,6 +571,76 @@ fn attitude_gauge(ui: &mut egui::Ui, v: &DrivenVessel, pal: &Palette) {
     );
 }
 
+/// The HERO readout: small caps label over a large monospace value with its
+/// unit — for the one or two numbers a beat is ABOUT (speed while flying,
+/// altitude while landing). Everything else stays in [`readout`] fine print.
+fn hero_readout(ui: &mut egui::Ui, label: &str, value: String, unit: &str, color: egui::Color32) {
+    // Value and unit are ONE laid-out text run, not two widgets in a
+    // horizontal strip. `vertical_centered` centres each CHILD it lays out, and
+    // a horizontal strip claims the panel's full width — so its contents stayed
+    // hard left while the caption above them centred, which is exactly the
+    // "numbers aren't centred" misalignment. One galley has a real width, so
+    // centring it centres what you see.
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &value,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::monospace(26.0),
+            color,
+            ..Default::default()
+        },
+    );
+    if !unit.is_empty() {
+        job.append(
+            unit,
+            4.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(11.0),
+                color: color.linear_multiply(0.55),
+                // Sit the unit on the big number's baseline instead of the top
+                // of its line box, where it floated level with the digits' caps.
+                valign: egui::Align::BOTTOM,
+                ..Default::default()
+            },
+        );
+    }
+    ui.vertical_centered(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .weak()
+                .size(9.0)
+                .extra_letter_spacing(1.5),
+        );
+        ui.add_space(1.0);
+        ui.label(job);
+    });
+}
+
+/// Several label/value pairs on ONE centred line — the compact idiom for the
+/// secondary numbers (roll/pitch, E/N/heading). A stack of single-number rows
+/// costs a panel's whole height to say very little; inline pairs keep the same
+/// information under the hero readout without competing with it.
+fn inline_pairs(ui: &mut egui::Ui, pairs: &[(&str, String)], pal: &Palette) {
+    ui.vertical_centered(|ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (i, (label, value)) in pairs.iter().enumerate() {
+                if i > 0 {
+                    ui.label(egui::RichText::new("·").weak().size(10.0));
+                }
+                ui.label(egui::RichText::new(*label).weak().size(9.0));
+                ui.label(
+                    egui::RichText::new(value)
+                        .color(pal.value)
+                        .monospace()
+                        .size(11.0),
+                );
+            }
+        });
+    });
+}
+
 /// A dim label / bright value row — the readout idiom used throughout the HUD.
 fn readout(ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32) {
     ui.horizontal(|ui| {
@@ -562,31 +651,7 @@ fn readout(ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32) 
     });
 }
 
-/// One key cap, lit while its intent is live. The legend doubles as an input
-/// monitor: a student who cannot make the rover move can see at a glance whether
-/// the key is even reaching the sim (vs. the vessel refusing to drive).
-fn key_cap(ui: &mut egui::Ui, label: &str, active: bool, pal: &Palette) {
-    let (bg, fg) = if active {
-        (pal.accent, pal.value)
-    } else {
-        (pal.cap_idle, pal.muted)
-    };
-    let galley = ui.painter().layout_no_wrap(
-        label.to_string(),
-        egui::FontId::monospace(11.0),
-        fg,
-    );
-    let size = egui::vec2(galley.size().x + 10.0, 18.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, 3.0, bg);
-    ui.painter().galley(
-        rect.center() - galley.size() / 2.0,
-        galley,
-        fg,
-    );
-}
-
-/// ATTITUDE cluster (bottom-left) + NAV/CONTROLS cluster (bottom-right).
+/// ATTITUDE cluster (bottom-left) + NAV/COMMS cluster (bottom-right).
 /// Both early-out in free flight.
 // The driver HUD is NOT gated. It paints whenever a vessel is possessed.
 //
@@ -602,8 +667,8 @@ pub(crate) fn draw_rover_hud(
     mut egui_ctx: EguiContexts,
     theme: Option<Res<lunco_theme::Theme>>,
     q_avatar: Query<&ControllerLink, With<Avatar>>,
-    q_intent: Query<&ActionState<UserIntent>, With<Avatar>>,
     q_name: Query<&Name>,
+    q_callsign: Query<&lunco_core::markers::Callsign>,
     q_gid: Query<&GlobalEntityId>,
     q_vel: Query<&LinearVelocity>,
     q_parents: Query<&ChildOf>,
@@ -617,16 +682,12 @@ pub(crate) fn draw_rover_hud(
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
     let Some(v) = resolve_driven(
-        &q_avatar, &q_name, &q_gid, &q_vel, &q_parents, &q_grids, &q_spatial, &q_links,
-        &q_ids, &q_wheels, &q_com,
+        &q_avatar, &q_name, &q_callsign, &q_gid, &q_vel, &q_parents, &q_grids, &q_spatial,
+        &q_links, &q_ids, &q_wheels, &q_com,
     ) else {
         return;
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-
-    // Live intents, straight off the avatar's leafwing state — the same signal the
-    // controller turns into throttle/steer/brake port writes, read one hop earlier.
-    let held = |i: UserIntent| q_intent.iter().next().is_some_and(|s| s.pressed(&i));
 
     egui::Area::new(egui::Id::new("rover_hud_attitude"))
         .order(egui::Order::Foreground)
@@ -639,12 +700,21 @@ pub(crate) fn draw_rover_hud(
                     ui.set_width(150.0);
                     attitude_gauge(ui, &v, &pal);
                     ui.separator();
-                    readout(ui, "roll", format!("{:+.0}°", v.roll_deg), pal.value);
-                    readout(ui, "pitch", format!("{:+.0}°", v.pitch_deg), pal.value);
+                    // SPEED is the number a pilot flies by — hero-sized, not a
+                    // row in the fine print.
                     match v.speed {
-                        Some(s) => readout(ui, "speed", format!("{s:.2} m/s"), pal.accent),
-                        None => readout(ui, "speed", "—".into(), pal.muted),
+                        Some(s) => hero_readout(ui, "SPEED", format!("{s:.1}"), "m/s", pal.accent),
+                        None => hero_readout(ui, "SPEED", "—".into(), "", pal.muted),
                     }
+                    ui.separator();
+                    // Roll and pitch on ONE line. Two full label/value rows for
+                    // two small angles doubled the panel's height for numbers
+                    // nobody reads digit-by-digit — the gauge above already
+                    // shows attitude; these are the fine print under it.
+                    inline_pairs(ui, &[
+                        ("R", format!("{:+.0}°", v.roll_deg)),
+                        ("P", format!("{:+.0}°", v.pitch_deg)),
+                    ], &pal);
                 });
         });
 
@@ -657,13 +727,20 @@ pub(crate) fn draw_rover_hud(
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.set_width(168.0);
-                    ui.label(egui::RichText::new(&v.label).strong().size(12.0));
+                    ui.label(egui::RichText::new(&v.label).strong().size(15.0));
                     ui.label(egui::RichText::new("site frame · metres").weak().size(9.0));
                     ui.separator();
-                    readout(ui, "E", format!("{:+.1}", v.pos.x), pal.value);
-                    readout(ui, "N", format!("{:+.1}", -v.pos.z), pal.value);
-                    readout(ui, "elev", format!("{:.1}", v.pos.y), pal.value);
-                    readout(ui, "hdg", format!("{:.0}°", v.heading_deg), pal.accent);
+                    // ALT is the landing's hero number: what the narration and
+                    // the audience track all the way to touchdown.
+                    hero_readout(ui, "ALT", format!("{:.1}", v.pos.y), "m", pal.accent);
+                    ui.separator();
+                    // Position and heading on ONE line — three stacked rows of
+                    // one number each was most of this panel's height.
+                    inline_pairs(ui, &[
+                        ("E", format!("{:+.0}", v.pos.x)),
+                        ("N", format!("{:+.0}", -v.pos.z)),
+                        ("HDG", format!("{:.0}°", v.heading_deg)),
+                    ], &pal);
 
                     // COMMS — only for a vessel that actually carries a link node.
                     // A rover with no radio shows nothing rather than a permanent
@@ -723,23 +800,11 @@ pub(crate) fn draw_rover_hud(
                         }
                     }
 
-                    ui.separator();
-                    ui.label(egui::RichText::new("CONTROLS").weak().size(9.0));
-                    ui.add_space(2.0);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 3.0;
-                        key_cap(ui, "W", held(UserIntent::MoveForward), &pal);
-                        key_cap(ui, "A", held(UserIntent::MoveLeft), &pal);
-                        key_cap(ui, "S", held(UserIntent::MoveBackward), &pal);
-                        key_cap(ui, "D", held(UserIntent::MoveRight), &pal);
-                        key_cap(ui, "SPC", held(UserIntent::Action), &pal);
-                    });
-                    ui.add_space(2.0);
-                    ui.label(
-                        egui::RichText::new("WASD drive · SPACE brake · G release")
-                            .weak()
-                            .size(9.0),
-                    );
+                    // NO key legend here. The live key-press readout is its
+                    // own centre-screen overlay (`lunco-workbench`'s
+                    // `input_overlay`), so repeating W/A/S/D in this panel
+                    // showed the same information twice and pushed the numbers
+                    // that matter — position, comms — into the fine print.
                 });
         });
 }

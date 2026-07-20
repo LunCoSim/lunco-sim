@@ -43,11 +43,7 @@ constants):
 ```
 
 ```usda
-def Xform "Rover" (
-    prepend apiSchemas = ["LunCoVesselAPI"]
-) {
-    uniform bool lunco:vessel = true
-
+def Xform "Rover" {
     def LunCoProgram "Patrol" {
         uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@
     }

@@ -123,8 +123,8 @@ fn drive_range_hit(
 /// Stretch an authored beam to the distance its sensor reported.
 ///
 /// The beam prim is a child of the sensor, so this walks up one link to find the
-/// `RangeSensor` — the same "ask my owner" shape `flame.rhai` uses when it climbs to
-/// the nearest `throttle`.
+/// `RangeSensor` — a beam belongs to the instrument that reports the range, so
+/// the owner is where the number is.
 fn drive_range_beam(
     mut q_beams: Query<(
         &ProgramDriverId,
@@ -154,7 +154,7 @@ fn drive_range_beam(
 
         // The authored prim is a UNIT cylinder (`radius = 1`, `height = 1`), because
         // `radius`/`height` are baked into the mesh at instantiation and never re-read
-        // — scaling is the only live channel. Same idiom as the flame cone.
+        // — scaling is the only live channel.
         let axis = s.axis.normalize_or_zero();
         *tf = Transform {
             translation: (s.offset + axis * len * 0.5).as_vec3(),

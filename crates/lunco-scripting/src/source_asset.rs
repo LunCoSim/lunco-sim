@@ -165,9 +165,9 @@ fn preload_importable_scripts(
 ) {
     for file in lunco_assets::discovery::list_assets(&manifest, &roots, "rhai") {
         // Load through the ANCHORED uri, not the bare enumerated path. Discovery
-        // reports engine-library files relative (`scenarios/flame.rhai`), which the
+        // reports engine-library files relative (`scenarios/rover_autopilot.rhai`), which the
         // `AssetServer` loads from the default source — a different `AssetPath` than
-        // the `lunco://scenarios/flame.rhai` a scenario reference resolves to. Both
+        // the `lunco://scenarios/rover_autopilot.rhai` a reference resolves to. Both
         // reach the same file, so the same script would register under two ids and
         // an author would have to guess which one `import` wants.
         let id = lunco_assets::asset_path::canonicalize_root(&file.asset_path);

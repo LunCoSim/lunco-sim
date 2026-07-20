@@ -54,14 +54,28 @@ fn on_simulate_input(
     mut simulated: ResMut<SimulatedInputs>,
 ) {
     let cmd = trigger.event();
+    // Every key the vessel control profile actually binds. The old list stopped
+    // at W/A/S/D/Space/Shift, so `SimulateInput` for anything else was accepted
+    // and silently dropped — most visibly `G`, the release-to-autopilot key: a
+    // scripted handback fired the command, changed the flight authority, and
+    // showed the viewer nothing at all.
     let code = match cmd.key.as_str() {
         "W" | "w" => Some(KeyCode::KeyW),
         "A" | "a" => Some(KeyCode::KeyA),
         "S" | "s" => Some(KeyCode::KeyS),
         "D" | "d" => Some(KeyCode::KeyD),
+        "Q" | "q" => Some(KeyCode::KeyQ),
+        "E" | "e" => Some(KeyCode::KeyE),
+        "G" | "g" => Some(KeyCode::KeyG),
+        "R" | "r" => Some(KeyCode::KeyR),
+        "L" | "l" => Some(KeyCode::KeyL),
+        "M" | "m" => Some(KeyCode::KeyM),
         "Space" | "space" => Some(KeyCode::Space),
         "Shift" | "shift" => Some(KeyCode::ShiftLeft),
-        _ => None,
+        _ => {
+            warn!("[input-overlay] SimulateInput: unmapped key {:?} — ignored", cmd.key);
+            None
+        }
     };
     if let Some(c) = code {
         if cmd.pressed {
@@ -81,7 +95,9 @@ pub fn draw_input_overlay(
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     theme: Option<Res<lunco_theme::Theme>>,
+    authority: Option<Res<lunco_core::markers::FlightAuthority>>,
 ) {
+    let authority = authority.map(|a| *a).unwrap_or_default();
     if !settings.enabled {
         return;
     }
@@ -150,6 +166,39 @@ pub fn draw_input_overlay(
                         ui.separator();
                         draw_key(ui, "Space", keys.pressed(KeyCode::Space) || simulated.keys.contains(&KeyCode::Space));
                         draw_key(ui, "Shift", keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) || simulated.keys.contains(&KeyCode::ShiftLeft));
+                        // Q/E yaw and G (release to autopilot) are bound by the
+                        // vessel control profile and were missing from the row —
+                        // so the single most important keystroke in a piloted
+                        // landing, the handback, was invisible.
+                        draw_key(ui, "Q", keys.pressed(KeyCode::KeyQ) || simulated.keys.contains(&KeyCode::KeyQ));
+                        draw_key(ui, "E", keys.pressed(KeyCode::KeyE) || simulated.keys.contains(&KeyCode::KeyE));
+                        draw_key(ui, "G", keys.pressed(KeyCode::KeyG) || simulated.keys.contains(&KeyCode::KeyG));
+                        ui.separator();
+
+                        // WHO IS FLYING. A key row shows inputs arriving; it
+                        // cannot show whether they are being obeyed. `piloted`
+                        // is the vessel's own authority gate (1 = a session has
+                        // the stick, 0 = the guidance law flies), so this badge
+                        // is the state itself rather than a caption about it —
+                        // and it is what makes a handback legible: the keys go
+                        // dark, and MANUAL flips to AUTO in the same frame.
+                        let (mode, mode_color) = if authority.piloted {
+                            ("MANUAL", theme.tokens.warning)
+                        } else {
+                            ("AUTO", theme.tokens.success)
+                        };
+                        egui::Frame::new()
+                            .fill(mode_color)
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 3))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(mode)
+                                        .strong()
+                                        .size(14.0)
+                                        .color(theme.tokens.overlay_backdrop),
+                                );
+                            });
                         ui.separator();
 
                         // Mouse visualizer
@@ -173,6 +222,8 @@ register_commands!(on_toggle_input_overlay, on_simulate_input);
 pub fn build_input_overlay(app: &mut App) {
     app.init_resource::<InputOverlaySettings>();
     app.init_resource::<SimulatedInputs>();
+    // Who is flying — written by possess/release, read by the AUTO/MANUAL badge.
+    app.init_resource::<lunco_core::markers::FlightAuthority>();
     app.add_systems(bevy_egui::EguiPrimaryContextPass, draw_input_overlay);
     
     register_all_commands(app);

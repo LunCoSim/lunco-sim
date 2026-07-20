@@ -40,7 +40,7 @@ use lunco_materials::engine_params::prim_color_value;
 use lunco_materials::{
     to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer,
 };
-use lunco_render::PbrLook;
+use lunco_render::{PbrLook, SurfaceAlpha};
 use std::collections::BTreeMap;
 
 /// Marks a prim whose `ShaderLook` authoring has been evaluated, so the
@@ -217,7 +217,54 @@ fn apply_usd_shader_material_read(
     let no_shadow_cast =
         lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "primvars:doNotCastShadows")
             .unwrap_or(false);
-    let look = ShaderLook { shader, values, textures, no_shadow_cast, ..Default::default() };
+    // Read on the gprim for the same reason as `no_shadow_cast` above: a driven value
+    // is per-instance — four landing legs bound to one strut material each report
+    // their own load — so the material must be private, or the cache paints every
+    // sibling with whichever leg wrote last. `unshared` makes
+    // `rebind_changed_shader_look` mutate this entity's own material in place.
+    let driven = driven_shader_inputs(reader, sdf_path, &shader_prim);
+    let unshared = !driven.is_empty();
+    // `primvars:displayOpacity`, read on the GPRIM for exactly the reason above, and
+    // carried here for the same one: the shader path removes the `PbrLook` that
+    // would otherwise have expressed the author's transparency. Same attribute and
+    // same sub-1-means-blend rule the PBR path applies in `lunco-usd-bevy`. An
+    // emissive VOLUME depends on it outright — an opaque plume is a solid cone.
+    //
+    // `lunco:surface:additive` wins over both, because it is not a competing
+    // spelling of opacity — it selects a different BLEND EQUATION, and
+    // UsdPreviewSurface has no concept of one. `inputs:opacity` and
+    // `opacityThreshold` model how much light a surface TRANSMITS, which covers
+    // opaque, cutout and sorted blending but can never express `dst + src`. So
+    // this is a vendor attribute covering only the genuinely new part (AGENTS.md
+    // rule 1); opacity keeps its standard meaning in the fallback below.
+    //
+    // What it buys: an emissive backdrop that must not OCCLUDE. An additive
+    // surface is binned into the transparent phase, which depth-TESTS but does
+    // not depth-WRITE — so terrain in front still hides it, while anything
+    // farther away still shows through it. That is what lets a finite starfield
+    // dome sit 20 km out without clipping the bodies the ephemeris places at
+    // 10^8 m and beyond; an opaque dome swallows the whole sky.
+    let alpha = if lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "lunco:surface:additive")
+        .unwrap_or(false)
+    {
+        SurfaceAlpha::Add
+    } else {
+        match lunco_usd_bevy::read_primvar_f32(reader, sdf_path, "primvars:displayOpacity") {
+            Some(o) if o < 1.0 => SurfaceAlpha::Blend,
+            _ => SurfaceAlpha::Opaque,
+        }
+    };
+    let look =
+        ShaderLook {
+        shader,
+        values,
+        textures,
+        no_shadow_cast,
+        driven,
+        unshared,
+        alpha,
+        ..Default::default()
+    };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
     commands
@@ -308,6 +355,40 @@ fn fill_prim_engine_params(
     }
 }
 
+/// The shader parameters this prim drives through a connection —
+/// `float inputs:glow.connect = </Lander/LegPX_Spring.outputs:force>`.
+///
+/// The connection itself is not resolved here. `rewire_usd_connections` turns every
+/// `inputs:*.connect` on every prim into a `SimConnection` regardless of target, and
+/// `lunco-render-bevy`'s shader-parameter port backend receives the write. This pass
+/// decides only what the render layer cannot: which of those names are SHADER
+/// parameters, and therefore whether the material must be private.
+///
+/// `inputs:` is the engine's spelling for every port, so the prim's connected inputs
+/// must be intersected with the parameters the bound shader actually declares. A
+/// landing leg carries `inputs:altitude` and `inputs:descent_rate` feeding its
+/// Modelica strut model on the same prim that binds a material; those are simulation
+/// wires and touch no uniform.
+fn driven_shader_inputs(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+    shader_prim: &SdfPath,
+) -> std::collections::BTreeSet<String> {
+    let declared: std::collections::BTreeSet<String> = reader
+        .attr_names(shader_prim)
+        .iter()
+        .filter_map(|a| a.strip_prefix("inputs:").map(to_snake_case))
+        .collect();
+    reader
+        .attr_names(prim)
+        .iter()
+        .filter_map(|attr| {
+            let name = to_snake_case(attr.strip_prefix("inputs:")?);
+            (declared.contains(&name) && !reader.connections(prim, attr).is_empty()).then_some(name)
+        })
+        .collect()
+}
+
 /// Reads a `Shader` prim's authored `inputs:*` into the look's parameter map, by
 /// name — so a shader is configured by exactly the parameters it declares, and each
 /// one is a typed, schema-visible property of the shader that consumes it.
@@ -318,7 +399,8 @@ fn fill_prim_engine_params(
 ///
 /// Inputs that are CONNECTED (fed by another shader node) are skipped: this pipeline
 /// binds a single shader, not a graph, and a connected input has no authored value to
-/// read anyway.
+/// read anyway. A per-instance drive is a different thing entirely and is authored on
+/// the bound GEOMETRY — see [`has_connected_inputs`].
 fn read_shader_inputs(
     reader: &lunco_usd_bevy::StageView<'_>,
     shader_prim: &SdfPath,
@@ -395,4 +477,83 @@ fn scene_base_uri(prim_path: &UsdPrimPath, asset_server: &AssetServer) -> Option
         .next()
         .and_then(|c| c.as_os_str().to_str())?;
     Some(format!("{source}://{root}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+
+    /// A gprim that binds a WGSL material AND carries simulation wires — the shape
+    /// every instrumented part in a scene has.
+    ///
+    /// `inputs:altitude` and `inputs:descent_rate` are SIMULATION ports feeding a
+    /// model; they touch no uniform. Only `inputs:load_frac` drives the shader,
+    /// and only because `StrutShader` declares it.
+    const LEG: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    def Scope "Looks"
+    {
+        def Material "StrutMat"
+        {
+            token outputs:surface.connect = </World/Looks/StrutMat/StrutShader.outputs:surface>
+            def Shader "StrutShader"
+            {
+                uniform asset info:wgsl:sourceAsset = @shaders/strut.wgsl@
+                float inputs:load_frac = 0.0
+                token outputs:surface
+            }
+        }
+    }
+    def Cube "LegPX" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding = </World/Looks/StrutMat>
+        float inputs:altitude.connect = </World/Sensors.outputs:range>
+        float inputs:descent_rate.connect = </World/Body.outputs:velocity_y>
+    }
+    def Cube "LegPX_Lit" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding = </World/Looks/StrutMat>
+        float inputs:altitude.connect = </World/Sensors.outputs:range>
+        float inputs:load_frac.connect = </World/LegPX.outputs:load_frac>
+    }
+}
+"#;
+
+    fn stages() -> (CanonicalStages, AssetId<UsdStageAsset>) {
+        let mut cs = CanonicalStages::default();
+        let recipe = StageRecipe::from_source("leg.usda", LEG);
+        let id: AssetId<UsdStageAsset> = AssetId::invalid();
+        cs.get_or_build(id, &recipe).expect("stage builds");
+        cs.drain_all_changes();
+        (cs, id)
+    }
+
+    /// THE REGRESSION. A bare `starts_with("inputs:")` test read the legs' Modelica
+    /// wires as shader drives and made every leg's material private — four wasted
+    /// materials for uniforms nobody writes. `inputs:` is the engine's spelling for
+    /// every port, so the shader's own declared parameters are the only valid filter.
+    #[test]
+    fn simulation_wires_are_not_mistaken_for_shader_drives() {
+        let (cs, id) = stages();
+        let stage = cs.get(id).expect("canonical stage present");
+        let view = stage.view();
+        let shader = SdfPath::new("/World/Looks/StrutMat/StrutShader").unwrap();
+
+        let sim_only = SdfPath::new("/World/LegPX").unwrap();
+        assert!(
+            driven_shader_inputs(&view, &sim_only, &shader).is_empty(),
+            "altitude/descent_rate feed Modelica, not the shader — the material must stay shared"
+        );
+
+        let driven = SdfPath::new("/World/LegPX_Lit").unwrap();
+        assert!(
+            !driven_shader_inputs(&view, &driven, &shader).is_empty(),
+            "load_frac IS declared by the shader, so this prim needs a private material"
+        );
+    }
 }

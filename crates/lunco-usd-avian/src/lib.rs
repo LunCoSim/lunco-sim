@@ -44,7 +44,7 @@
 use bevy::prelude::*;
 use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::schedule::common_conditions::any_with_component;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
@@ -60,6 +60,9 @@ use openusd::sdf::Path as SdfPath;
 // (an attribute UsdPhysics does not define) got invented and lived here for
 // months: a typo in a `&str` compiles.
 use openusd::schemas::physics::tokens as ptok;
+// `physics:type` is a schema token with a schema enum — take openusd's rather than
+// re-spelling `"force"`/`"acceleration"` here.
+pub use openusd::schemas::physics::DriveType;
 use openusd::usd::Stage;
 
 pub mod big_space_bridge;
@@ -131,20 +134,19 @@ impl Plugin for UsdAvianPlugin {
             // set, and ordering `.after` it is vacuous — measured: bodies still read
             // (0,0,0). The bridge owns the sync instead, in `pose_to_position`.
             //
-            // The second half: `pose_to_position` lives in `PhysicsSchedule`, whereas
-            // this system used to live in `FixedPostUpdate`. Those are different
-            // schedules — `PhysicsSchedule` is run by avian's `run_physics_schedule`
-            // from inside `FixedPostUpdate`'s `PhysicsSystems::StepSimulation`
+            // The second half: `pose_to_position` lives in `PhysicsSchedule`, so this
+            // system must too. They are different schedules — `PhysicsSchedule` is run
+            // by avian's `run_physics_schedule` from inside `FixedPostUpdate`'s
+            // `PhysicsSystems::StepSimulation`
             // (`avian3d-0.7.0/src/schedule/mod.rs:110-113`). A `FixedPostUpdate`
-            // `Prepare` system is therefore ordered strictly BEFORE the whole physics
-            // schedule, so no amount of `.after(...)` inside `FixedPostUpdate` could
-            // ever have seen a bridge-written `Position`. Cross-schedule ordering is
-            // silently a no-op, which is why the failure looked like a race.
+            // `Prepare` system is ordered strictly BEFORE the whole physics schedule,
+            // so no `.after(...)` inside `FixedPostUpdate` can see a bridge-written
+            // `Position`; cross-schedule ordering is silently a no-op.
             //
-            // Moving into `PhysicsSchedule` fixes both and keeps the original window:
-            // `.before(PhysicsStepSystems::First)` is still ahead of the broad/narrow
-            // phase (stricter than the old placement), and `.after(pose_to_position)`
-            // is now a REAL edge in a REAL shared schedule. When the bridge is absent
+            // Sitting in `PhysicsSchedule` keeps the required window:
+            // `.before(PhysicsStepSystems::First)` is ahead of the broad/narrow
+            // phase, and `.after(pose_to_position)` is a REAL edge in a REAL shared
+            // schedule. When the bridge is absent
             // (plain-avian tests), `.after` degrades to a no-op — but then avian's own
             // `transform_to_position` is enabled and runs in `FixedPostUpdate`, i.e.
             // still before `PhysicsSchedule`. Correct in both configurations.
@@ -311,14 +313,72 @@ pub struct JointDrive {
     /// `drive:{angular,linear}:physics:maxForce` — the motor's torque (N·m) or
     /// force (N) saturation. Replaces the cosim default when authored.
     pub max_force: Option<f64>,
+    /// `drive:{angular,linear}:physics:stiffness` — N/m (linear) or N·m/rad
+    /// (angular).
+    pub stiffness: Option<f64>,
+    /// `drive:{angular,linear}:physics:damping` — N·s/m (linear) or N·m·s/rad
+    /// (angular).
+    pub damping: Option<f64>,
+    /// `drive:{angular,linear}:physics:type` — whether the coefficients above
+    /// produce a force directly or an acceleration the solver scales by mass.
+    /// `None` = unauthored, and the schema's own fallback for that is
+    /// [`DriveType::Force`].
+    pub drive_type: Option<DriveType>,
 }
 
-/// Overdamped spring-damper for load-time joint drives — mirrors
-/// `lunco_cosim::joint`'s motor model so a USD-driven joint and a wire-driven
-/// one track their setpoint identically (≈3 Hz, ζ=2, no overshoot under XPBD
-/// substepping). avian's `MotorModel` reparameterizes stiffness/damping as
-/// frequency/ratio, so USD `physics:stiffness`/`physics:damping` are not mapped
-/// 1:1 yet; `physics:maxForce` and the targets (the load-bearing knobs) are.
+impl JointDrive {
+    /// The avian motor model this drive asks for.
+    ///
+    /// `UsdPhysicsDriveAPI` already defines the drive law —
+    /// `force = stiffness * (targetPosition - position) + damping * (targetVelocity -
+    /// velocity)` — and already defines its one axis of variation, `physics:type`:
+    /// `"force"` applies that as a force, `"acceleration"` applies it mass-normalised
+    /// so the response does not depend on what the joint is carrying. avian spells
+    /// the same pair [`MotorModel::ForceBased`] and [`MotorModel::AccelerationBased`]
+    /// with the same coefficients in the same SI units, so this is a rename, not a
+    /// conversion: a strut authored at 4000 N/m and 2200 N·s/m is that spring in the
+    /// solver, and nothing has to restate it.
+    ///
+    /// An unauthored `physics:type` takes the schema's own fallback, `"force"`
+    /// (`usdPhysics` declares `uniform token physics:type = "force"`), so the
+    /// coefficients mean what their SI units say unless a scene asks otherwise.
+    ///
+    /// A drive with neither coefficient is not a spring but a positioner: it seeks a
+    /// setpoint, and how fast it converges is a tuning choice rather than a property
+    /// of the mechanism. That one gets [`MotorModel::SpringDamper`], which is
+    /// unconditionally stable under XPBD substepping at any mass.
+    fn motor_model(&self) -> MotorModel {
+        if self.stiffness.is_none() && self.damping.is_none() {
+            return JOINT_DRIVE_MOTOR_MODEL;
+        }
+        let stiffness = self.stiffness.unwrap_or(0.0);
+        let damping = self.damping.unwrap_or(0.0);
+        match self.drive_type.unwrap_or(DriveType::Force) {
+            DriveType::Force => MotorModel::ForceBased { stiffness, damping },
+            DriveType::Acceleration => MotorModel::AccelerationBased { stiffness, damping },
+        }
+    }
+
+    /// Whether the motor should start enabled.
+    ///
+    /// A spring IS an active motor whose target is its own rest position, so a
+    /// drive with `targetPosition` left at its default is still live: it must push
+    /// back the moment the joint leaves that rest offset. Activation therefore
+    /// keys on authored stiffness/damping as well as on targets, never on a
+    /// setpoint alone.
+    pub fn is_active(&self) -> bool {
+        self.target_position.is_some()
+            || self.target_velocity.is_some()
+            || self.stiffness.is_some()
+            || self.damping.is_some()
+    }
+}
+
+/// Overdamped spring-damper for a joint drive that authors no stiffness or
+/// damping — mirrors `lunco_cosim::joint`'s motor model so a USD-driven joint and
+/// a wire-driven one track their setpoint identically (≈3 Hz, ζ=2, no overshoot
+/// under XPBD substepping). A drive that DOES author them is a physical spring;
+/// see [`JointDrive::motor_model`].
 const JOINT_DRIVE_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
     frequency: 3.0,
     damping_ratio: 2.0,
@@ -424,8 +484,8 @@ fn collect_child_colliders_from_usd(
 ///   entity's Transform rotation (composed in `lunco-usd-bevy`; compound
 ///   children get the axis rotation added in `collect_child_colliders_from_usd`).
 ///
-/// **Legacy fallback for `Cube`**: `width`/`height`/`depth` still accepted so
-/// unmigrated `.usda` files keep working (those author full dims at scale=1).
+/// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
+/// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
 fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option<Collider> {
     let ty = reader.type_name(sdf_path)?;
 
@@ -527,10 +587,8 @@ fn add_collider_from_usd(
 /// collider is a piece of that body's compound shape rather than a body (or
 /// standalone static collider) in its own right.
 ///
-/// Recognises both spellings of "this is a body": the standard `PhysicsRigidBodyAPI`
-/// schema and the legacy `physics:rigidBodyEnabled` attribute that
-/// [`extract_avian_prim`]'s fallback arm honours. Missing the legacy one would tear
-/// the colliders off an old-style body and strand them as static geometry.
+/// One spelling of "this is a body": an applied `PhysicsRigidBodyAPI`. Nothing else
+/// makes a prim a body.
 ///
 /// Walks the composed prim hierarchy, so it answers the same way off the live stage
 /// or the flatten, and independently of where the prim happens to sit in the ECS.
@@ -540,9 +598,7 @@ fn has_rigid_body_ancestor(reader: &StageView<'_>, sdf_path: &SdfPath) -> bool {
         if p.is_abs_root() {
             return false;
         }
-        if reader.has_api_schema(&p, ptok::API_RIGID_BODY)
-            || reader.scalar::<bool>(&p, ptok::A_RIGID_BODY_ENABLED) == Some(true)
-        {
+        if reader.has_api_schema(&p, ptok::API_RIGID_BODY) {
             return true;
         }
         cur = p.parent();
@@ -681,7 +737,6 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 /// - Become pure visuals — no RigidBody, no Collider
 /// - Their shapes are included in the parent's compound collider
 ///
-/// **Legacy fallback:** `physics:rigidBodyEnabled` attribute for old-style USD files.
 /// Observer: fires once per entity, the moment `sync_usd_visuals` finishes
 /// translating the USD prim (signalled by inserting `UsdVisualSynced`).
 /// By that point the stage is loaded and `Mesh3d`/`Transform` are present —
@@ -772,12 +827,11 @@ fn extract_avian_prim(
         // load-bearing. `Commands` apply in insertion order and observers fire at
         // apply time, so avian's `On<Add, RigidBody>` mass observer (avian3d
         // `dynamics/rigid_body/mass_properties/mod.rs:284-289`) runs the instant
-        // `RigidBody` lands. Applied afterwards, as this used to be, the overrides
-        // and their `NoAuto*` markers arrive too late to be seen: that observer has
-        // already derived `ComputedAngularInertia` from collider geometry at
-        // `ColliderDensity` 1.0, which is exactly the lander's measured
-        // 159.3/274.3/229.4. Authoring the overrides first means the observer's very
-        // first pass already sees `NoAuto*` and honours them.
+        // `RigidBody` lands. The overrides and their `NoAuto*` markers must already
+        // be on the entity by then, or that observer derives
+        // `ComputedAngularInertia` from collider geometry at `ColliderDensity` 1.0
+        // and the authored values never take effect. Authoring the overrides first
+        // means the observer's very first pass sees `NoAuto*` and honours them.
         apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
 
         // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
@@ -788,10 +842,16 @@ fn extract_avian_prim(
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
 
+        // The schema's own `physics:rigidBodyEnabled` (default true) says whether
+        // this body is simulated; a disabled body is unmoving collision geometry.
+        let simulated =
+            reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED).unwrap_or(true);
         // A `Dynamic`-declared body spawns `Kinematic` + `ShouldBeDynamic` and
         // settles to `Dynamic` once joints resolve (no 1-frame separation launch).
         let kinematic = reader.scalar::<bool>(sdf_path, ptok::A_KINEMATIC_ENABLED).unwrap_or(false);
-        let (body, mobility) = if kinematic {
+        let (body, mobility) = if !simulated {
+            (RigidBody::Static, lunco_core::Mobility::Static)
+        } else if kinematic {
             (RigidBody::Kinematic, lunco_core::Mobility::Kinematic)
         } else {
             commands.entity(entity).try_insert(ShouldBeDynamic);
@@ -809,34 +869,14 @@ fn extract_avian_prim(
         //
         // Ancestry, not `is_root`, is the question: a ground plane authored one
         // level down (`/Scene/Ground` under a plain `Xform`) is every bit as
-        // standalone as one at `/Ground`. Keying on root-ness silently gave such a
-        // prim NO collider at all — things fell straight through the floor with no
-        // error, and scenes worked around it by tacking on `LunCoTerrainAPI`.
+        // standalone as one at `/Ground`, and must collide the same way.
         if !has_rigid_body_ancestor(reader, sdf_path) {
             commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else {
-        // ── FALLBACK: legacy `physics:rigidBodyEnabled` ──
-        if let Some(true) = reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED) {
-            // Mass props FIRST — see the note in the `has_rigid_body_api` arm. This
-            // arm was the worse of the two: it inserted `RigidBody`, then the mass
-            // props, then the collider, so BOTH of avian's recompute triggers (the
-            // `Add, RigidBody` observer and the `Insert, RigidBodyColliders` one)
-            // fired after the overrides and clobbered them.
-            apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
-            commands.entity(entity).try_insert((
-                RigidBody::Kinematic,
-                lunco_core::Mobility::Dynamic,
-                ShouldBeDynamic,
-                lunco_core::SelectableRoot,
-            ));
-            add_collider_from_usd(commands, entity, reader, sdf_path);
-        } else if let Some(false) = reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED) {
-            commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
-            add_collider_from_usd(commands, entity, reader, sdf_path);
-        }
+        // Neither a body nor a collider: no physics components, only the marker.
         commands.entity(entity).try_insert(UsdAvianProcessed);
     }
 }
@@ -911,13 +951,35 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
     let conv = lunco_usd_bevy::stage_convention(&view);
-    let axis_of = |ax: Option<JointAxis>| {
-        conv.dir_d(match ax.unwrap_or_default() {
+    // `physics:axis` can only name a CARDINAL axis (X/Y/Z) — that is the whole
+    // vocabulary the schema has. `physics:localRot0` is how UsdPhysics orients a
+    // joint frame off-cardinal, and it is what a tilted mechanism needs: a landing
+    // leg raked 25° off vertical slides along neither the hull's Y nor its X.
+    // Ignoring it would silently build the joint on the cardinal axis — geometry
+    // right, kinematics wrong, no diagnostic.
+    let axis_of = |ax: Option<JointAxis>, rot0: DQuat| {
+        let cardinal = match ax.unwrap_or_default() {
             JointAxis::X => DVec3::X,
             JointAxis::Y => DVec3::Y,
             JointAxis::Z => DVec3::Z,
-        })
+        };
+        // Rotate in the STAGE's frame, then convert: `localRot0` is authored
+        // against the same axes as `physics:axis`, so composing before the
+        // convention keeps one conversion at the boundary rather than two.
+        conv.dir_d(rot0 * cardinal)
     };
+    /// The joint frame's orientation in body0's local space, identity when
+    /// unauthored. USD spells a `quatf` `(w, x, y, z)`.
+    fn local_rot0_of<J: JointBase>(j: &J) -> DQuat {
+        j.local_rot0_attr()
+            .get::<openusd::gf::Quatf>()
+            .ok()
+            .flatten()
+            .map(|q| {
+                DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64).normalize()
+            })
+            .unwrap_or(DQuat::IDENTITY)
+    }
     // Shared JointBase reads (both bodies + local anchors). `None` unless BOTH
     // bodies are authored — world-anchored joints aren't mapped to avian here.
     // A missing anchor is DERIVED from the transform hierarchy (see
@@ -953,13 +1015,24 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         let tp = d.target_position_attr().get::<f32>().ok().flatten().map(|v| v as f64);
         let tv = d.target_velocity_attr().get::<f32>().ok().flatten().map(|v| v as f64);
         let mf = d.max_force_attr().get::<f32>().ok().flatten().map(|v| v as f64);
-        (tp.is_some() || tv.is_some() || mf.is_some())
-            .then_some(JointDrive { target_position: tp, target_velocity: tv, max_force: mf })
+        let k = d.stiffness_attr().get::<f32>().ok().flatten().map(|v| v as f64);
+        let c = d.damping_attr().get::<f32>().ok().flatten().map(|v| v as f64);
+        let ty = d.type_attr().get::<DriveType>().ok().flatten();
+        (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
+            JointDrive {
+                target_position: tp,
+                target_velocity: tv,
+                max_force: mf,
+                stiffness: k,
+                damping: c,
+                drive_type: ty,
+            },
+        )
     };
 
     let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone()).ok().flatten() {
         let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten()
             .map(|d| (d as f64).to_radians()).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten()
@@ -971,7 +1044,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         }
     } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone()).ok().flatten() {
         let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
         PendingUsdJoint {
@@ -981,7 +1054,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         }
     } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone()).ok().flatten() {
         let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
         let swing = j.cone_angle0_limit_attr().get::<f32>().ok().flatten()
             .zip(j.cone_angle1_limit_attr().get::<f32>().ok().flatten())
             .map(|(a, b)| (a as f64, b as f64));
@@ -1382,11 +1455,11 @@ fn build_usd_physics_joints(
                     .with_limits(pending.limit_lower, pending.limit_upper);
                 if let Some(d) = pending.drive {
                     joint.motor = LinearMotor {
-                        enabled: d.target_position.is_some() || d.target_velocity.is_some(),
+                        enabled: d.is_active(),
                         target_position: d.target_position.unwrap_or(0.0),
                         target_velocity: d.target_velocity.unwrap_or(0.0),
                         max_force: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
-                        motor_model: JOINT_DRIVE_MOTOR_MODEL,
+                        motor_model: d.motor_model(),
                     };
                 }
                 commands.entity(joint_entity).try_insert(joint_bundle(joint));
@@ -1399,11 +1472,11 @@ fn build_usd_physics_joints(
                     .with_angle_limits(pending.limit_lower, pending.limit_upper);
                 if let Some(d) = pending.drive {
                     joint.motor = AngularMotor {
-                        enabled: d.target_position.is_some() || d.target_velocity.is_some(),
+                        enabled: d.is_active(),
                         target_position: d.target_position.unwrap_or(0.0),
                         target_velocity: d.target_velocity.unwrap_or(0.0),
                         max_torque: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
-                        motor_model: JOINT_DRIVE_MOTOR_MODEL,
+                        motor_model: d.motor_model(),
                     };
                 }
                 commands.entity(joint_entity).try_insert(joint_bundle(joint));
@@ -1543,11 +1616,9 @@ fn read_vec3_attribute(reader: &StageView<'_>, path: &SdfPath, attr: &str) -> Op
 /// Read mass, principal inertia, COM, damping, and friction from a rigid-body
 /// prim and insert the corresponding Avian *override* components.
 ///
-/// Centralises the previously-duplicated `physics:mass`/damping/friction reads
-/// (the main `PhysicsRigidBodyAPI` path and the legacy `rigidBodyEnabled`
-/// fallback diverged on mass handling — see the WP-3 DRY audit) and adds the
-/// **G2 load-time** mass-properties (`physics:diagonalInertia` /
-/// `physics:centerOfMass`).
+/// The single place `physics:mass`/damping/friction and the **G2 load-time**
+/// mass-properties (`physics:diagonalInertia` / `physics:centerOfMass`) are read,
+/// so every body gets them the same way.
 ///
 /// Mass defaults to 1000 kg (canonical rover mass) when unauthored — keeping
 /// gravity alive even when openusd-rs's resolver can't compose `physics:mass`
@@ -1677,8 +1748,8 @@ fn apply_rigid_body_mass_props(
 
 /// Damping is **not** a UsdPhysics concept — the core spec has no damping
 /// attribute at all. Omniverse contributes it via `PhysxRigidBodyAPI`, and these
-/// are its names. We used to author `physics:linearDamping`, squatting the
-/// UsdPhysics namespace with an attribute it does not define.
+/// are its names. `physics:*Damping` is not a valid spelling: it would squat the
+/// UsdPhysics namespace with an attribute that spec does not define.
 const PHYSX_LINEAR_DAMPING: &str = "physxRigidBody:linearDamping";
 const PHYSX_ANGULAR_DAMPING: &str = "physxRigidBody:angularDamping";
 
@@ -1754,10 +1825,9 @@ pub struct PhysicsMaterial {
 /// }
 /// ```
 ///
-/// We used to read a bare `physics:friction` off the body prim: an invented
-/// attribute inside a namespace UsdPhysics owns. Omniverse and every other
-/// physics-aware consumer ignored it, and had USD ever defined that name, our
-/// value would have been silently reinterpreted.
+/// Friction comes off the bound `Material`, never off a bare `physics:friction`
+/// on the body prim: that name is not defined by UsdPhysics, so no other
+/// physics-aware consumer reads it, and USD is free to give it another meaning.
 ///
 /// Binding resolution — namespace inheritance, and the purpose→all-purpose
 /// fallback that lets ONE `Material` drive both look and friction — is SHARED
@@ -2184,7 +2254,7 @@ def Xform "Mission"
         bool physics:collisionEnabled = true
     }
 
-    def Xform "LegacyBody"
+    def Xform "XformBody" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
     {
         bool physics:rigidBodyEnabled = true
 
@@ -2264,16 +2334,17 @@ def Xform "Mission"
         assert!(has_collider, "a bare rigid-body root must collide via its own shape");
     }
 
-    /// A body declared the legacy way (`physics:rigidBodyEnabled`, no API schema)
-    /// still owns its collider children — they must not become static geometry.
+    /// A body whose own prim carries no geometry (a plain `Xform` with
+    /// `PhysicsRigidBodyAPI`) still owns its collider children — they are pieces of
+    /// its compound shape, not static geometry.
     #[test]
-    fn legacy_rigid_body_ancestor_still_owns_its_colliders() {
+    fn xform_rigid_body_ancestor_owns_its_colliders() {
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
-        assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/LegacyBody/Shell").unwrap()));
-        let (has_collider, body) = extract(&view, "/Mission/LegacyBody/Shell");
-        assert!(!has_collider, "legacy body's collider child must stay a compound piece");
+        assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/XformBody/Shell").unwrap()));
+        let (has_collider, body) = extract(&view, "/Mission/XformBody/Shell");
+        assert!(!has_collider, "a body's collider child must stay a compound piece");
         assert_eq!(body, None);
     }
 

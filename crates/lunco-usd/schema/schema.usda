@@ -603,7 +603,7 @@ class LunCoProgram "LunCoProgram" (
         visualization is registering a name, not editing a schema."""
     )
     uniform asset info:sourceAsset = @@ (
-        doc = """The program's file — `@models/Lander.mo@`, `@scenarios/flame.rhai@`,
+        doc = """The program's file — `@models/Lander.mo@`, `@scenarios/rover_autopilot.rhai@`,
         `@behaviors/rover_patrol.xml@`.
 
         `asset`, never `string`. Only an `asset` is visible to USD's resolver and to

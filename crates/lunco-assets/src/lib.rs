@@ -394,6 +394,41 @@ pub fn assets_dir_abs() -> PathBuf {
     std::env::current_dir().unwrap_or_default().join(assets_dir())
 }
 
+/// On-disk root of a shipped Modelica package under `assets/models/` — the
+/// MODELICAPATH entry for a top-level library name (`"LunCo"` →
+/// `<assets>/models/LunCo`). `None` when it is not a structured package on this
+/// filesystem, which is the normal case on wasm.
+///
+/// Anchored on [`assets_dir_abs`], the SAME path Bevy's `AssetPlugin.file_path`
+/// serves, and that parity is the whole point. A `.mo` named by
+/// `info:sourceAsset` reaches the compiler through the AssetServer, so
+/// it is read live from disk; loading the library it belongs to out of the
+/// build-time `include_dir!` copy instead would compile an edited member as its
+/// last-built self until someone ran `cargo build`. Same tree both ways, or the
+/// two disagree silently.
+///
+/// `package.mo` is the existence marker because that is what makes a directory a
+/// STRUCTURED entity in Modelica's file-system mapping, rather than merely a
+/// folder that happens to hold `.mo` files.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn models_package_root_path(package: &str) -> Option<PathBuf> {
+    let root = assets_dir_abs().join("models").join(package);
+    if !root.join("package.mo").is_file() {
+        return None;
+    }
+    // Canonicalize for the same reason `msl_source_root_path` does: rumoca keys
+    // its source-root cache on the exact path it is handed, so a CWD-dependent
+    // form would produce a different key per caller and force full reparses.
+    std::fs::canonicalize(&root).ok().or(Some(root))
+}
+
+/// wasm has no filesystem to put a library on, so there is no MODELICAPATH entry
+/// and callers fall back to the embedded copy from [`models::package_files`].
+#[cfg(target_arch = "wasm32")]
+pub fn models_package_root_path(_package: &str) -> Option<PathBuf> {
+    None
+}
+
 /// Cache `scenarios/` directory — where a downloaded scenario's files are
 /// materialised, one subdirectory per scenario id. A downloaded scenario is
 /// mounted as an ordinary Twin root over that subdirectory, which is why it

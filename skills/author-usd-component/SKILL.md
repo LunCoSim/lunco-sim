@@ -285,7 +285,7 @@ exactly as USD picks a file-format plugin.
 
 ```usda
 def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-    uniform asset lunco:program:sourceAsset = @lunco://models/Balloon.mo@
+    uniform asset info:sourceAsset = @lunco://models/Balloon.mo@
     uniform bool lunco:program:realtimeSafe = true
 
     float inputs:force_y.connect = </Balloon.outputs:netForce>
@@ -431,7 +431,7 @@ traversed — a different bug from "patch rejected".
 - ❌ A dynamic mesh body without `physics:approximation` — trimesh can't move.
 - ❌ `physics:friction` — does not exist.
 - ❌ `string doc` inside `customData` — not a key; use prim `doc` metadata.
-- ❌ `lunco:program:sourceAsset` typed as `string` — must be `asset`.
+- ❌ `info:sourceAsset` typed as `string` — must be `asset`.
 - ❌ Editing `schema.usda` without running `scripts/gen_schema.py` — the
   runtime reads only the generated layer.
 - ❌ Hand-editing `generatedSchema.usda` — the next regenerate erases it.

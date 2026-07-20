@@ -1355,15 +1355,63 @@ fn project_usd_policies(
 /// total stage generation + count, like [`project_usd_policies`]. UI-gated: the
 /// knobs are render/camera state (`Bloom` lives in `bevy_post_process`, under
 /// `ui`); the headless server has no cameras to apply to.
+/// What the scene AUTHORED, held independently of what currently exists to
+/// apply it to.
+///
+/// [`project_env_settings`] is change-gated on stage generation, and cameras do
+/// not exist when a scene's stage first composes. Reading the prim and writing
+/// the camera in one memoised pass therefore lost the value entirely: the pass
+/// ran once against zero cameras, the generation never changed again, and the
+/// authored exposure was never applied — the scene rendered at Bevy's default
+/// EV 9.7 (~6 stops open) no matter what the USD said. Splitting the two makes
+/// the read authoritative and the application idempotent.
+#[cfg(feature = "ui")]
+#[derive(Resource, Default, Clone, Copy)]
+pub struct AuthoredEnv {
+    pub exposure_ev100: Option<f32>,
+    pub bloom_intensity: Option<f32>,
+}
+
+/// Apply [`AuthoredEnv`] to every camera/bloom that exists RIGHT NOW.
+///
+/// Runs every frame and is a no-op when the values already match, so a camera
+/// spawned (or respawned, or reparented on possession) long after the scene
+/// loaded still gets the scene's exposure.
+#[cfg(feature = "ui")]
+fn apply_authored_env(
+    authored: Option<Res<AuthoredEnv>>,
+    mut q_exposure: Query<&mut bevy::camera::Exposure>,
+    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
+) {
+    let Some(authored) = authored else { return };
+    if let Some(ev) = authored.exposure_ev100 {
+        for mut e in &mut q_exposure {
+            if e.ev100 != ev {
+                e.ev100 = ev;
+            }
+        }
+    }
+    if let Some(bi) = authored.bloom_intensity {
+        for mut b in &mut q_bloom {
+            if b.intensity != bi {
+                b.intensity = bi;
+            }
+        }
+    }
+}
+
 #[cfg(feature = "ui")]
 fn project_env_settings(
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    mut authored: ResMut<AuthoredEnv>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
     mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
     // Ambient is NOT projected here any more — it is composed from authored
     // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
     _ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
     mut q_earthshine: Query<&mut DirectionalLight, With<lunco_environment::Earthshine>>,
+    // The exposure single-source-of-truth — see the `exposureEv100` branch.
+    mut lunar_sun: Option<ResMut<lunco_environment::LunarSun>>,
     mut last: Local<Option<(usize, u64)>>,
 ) {
     let signal = (canonical.len(), canonical.iter().map(|(_, cs)| cs.generation()).sum());
@@ -1381,11 +1429,22 @@ fn project_env_settings(
                 continue;
             }
             if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100") {
+                // RECORD it — `apply_authored_env` owns getting it onto cameras,
+                // including cameras that do not exist yet. Also seed `LunarSun`,
+                // the documented single source the sun spawn and the celestial
+                // auto-exposure both read, so a scene that later gains a
+                // celestial hierarchy ramps toward the authored value instead of
+                // the studio default.
+                authored.exposure_ev100 = Some(ev);
+                if let Some(sun) = lunar_sun.as_mut() {
+                    sun.exposure_ev100 = ev;
+                }
                 for mut e in &mut q_exposure {
                     e.ev100 = ev;
                 }
             }
             if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {
+                authored.bloom_intensity = Some(bi);
                 for mut b in &mut q_bloom {
                     b.intensity = bi;
                 }
@@ -1845,19 +1904,25 @@ impl Plugin for SandboxCorePlugin {
                 {
                     error!("[offline-record] CLI failed to create output directory {}: {e}", dir_to_create.display());
                 } else {
-                    info!(
-                        "[offline-record] CLI mode armed: recording to {} at {} FPS — \
-                         starts once the scene's visuals are ready",
-                        path.display(),
-                        record_fps
-                    );
-                    // Arms through the workbench recorder's readiness gate, NOT a
-                    // hand-built active state: this path once listed its own fields
-                    // and drifted (skipped the KeepAwake/present-mode setup → recorded
-                    // through the power-save throttle at 2-10 s per frame), and
-                    // starting `active` here captured black opening frames from the
-                    // not-yet-loaded scene.
-                    lunco_workbench::screenshot::arm_recording_at_startup(app, path, record_fps);
+                    info!("[offline-record] CLI mode armed: recording to {} at {} FPS", path.display(), record_fps);
+                    // Video destination => stream into ffmpeg; the recorder
+                    // demotes to a PNG sequence if ffmpeg is missing (spawn
+                    // failure aborts loudly at the first frame).
+                    let video = lunco_workbench::screenshot::output_is_video(&path);
+                    app.insert_resource(lunco_workbench::screenshot::OfflineRecordingState {
+                        active: true,
+                        frame_index: 0,
+                        output_dir: path,
+                        fps: record_fps.max(1),
+                        is_waiting_for_frame: false,
+                        // Enter on the "advance" phase, matching `StartOfflineRecording`.
+                        frame_just_captured: true,
+                        // CLI-armed recording starts before `WinitSettings` exists to
+                        // override; `StartOfflineRecording` is what forces Continuous.
+
+                        prev_present_mode: None,
+                        video,
+                    });
                 }
             }
         }
@@ -2294,7 +2359,13 @@ impl Plugin for SandboxCorePlugin {
         // render state on stage change. UI-gated (render/camera state); core
         // persistence (authoring the prim) happens in `lunco-scene-commands`.
         #[cfg(feature = "ui")]
-        app.add_systems(Update, project_env_settings);
+        app.init_resource::<AuthoredEnv>();
+        // Read-on-stage-change, then apply-every-frame. The application is a
+        // separate system because cameras outlive neither the stage change nor
+        // each other: possession reparents them, the recorder spawns its own.
+        // Only the READ is change-gated.
+        #[cfg(feature = "ui")]
+        app.add_systems(Update, (project_env_settings, apply_authored_env).chain());
 
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.

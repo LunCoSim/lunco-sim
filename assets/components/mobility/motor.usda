@@ -54,7 +54,7 @@
 # electrical and thermal model — a circuit is one Modelica model, not one per part.
 def Xform "Motor" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoMotorAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "PhysicsMassAPI", "LunCoMotorAPI"]
 )
 {
     uniform bool lunco:spawnable = true

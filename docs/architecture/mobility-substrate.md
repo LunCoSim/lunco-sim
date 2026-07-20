@@ -42,8 +42,8 @@ read a body that is transiently `Kinematic` during settling.
   no avian.
 - **USD spawn path** (`lunco-usd-avian`) records `Mobility` at every existing
   classification point (terrain / trigger / collision-child → `Static`;
-  `physics:kinematicEnabled` → `Kinematic`; `PhysicsRigidBodyAPI` / legacy
-  `rigidBodyEnabled` → `Dynamic`; animated-demotion → `Kinematic`). The existing
+  `physics:kinematicEnabled` → `Kinematic`; `PhysicsRigidBodyAPI` → `Dynamic`;
+  animated-demotion → `Kinematic`). The existing
   `RigidBody`/`ShouldBeDynamic`/settling logic is **unchanged** — `Mobility` is
   added alongside it, so there is zero regression risk to the physics-sensitive
   spawn path.

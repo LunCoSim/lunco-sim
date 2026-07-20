@@ -48,7 +48,7 @@ def Cylinder "Wheel" (
     # Applied HERE, once: every wheel on every rover composes this prim, so the
     # APIs (and the loader's `PhysxVehicleWheelAPI` intercept) come with the arc.
     # A rover authors only its own values — index, radius — never the schemas.
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI"]
     prepend variantSets = "tire"
     variants = {
         string tire = "regolith"

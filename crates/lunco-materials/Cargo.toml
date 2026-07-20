@@ -17,6 +17,13 @@ license.workspace = true
 # only ever compiling because another crate in the graph happened to select one —
 # name it here so this crate stands alone.
 bevy = { workspace = true, features = ["bevy_mesh", "bevy_image", "zstd_rust"] }
+# `SurfaceAlpha` — transparency is a property of a SURFACE, not of a shading
+# model, so a `ShaderLook` states it in the same vocabulary a `PbrLook` does
+# instead of in a second enum free to drift from it. `lunco-render` is itself
+# render-FREE (it is the crate that exists to state appearance without
+# `bevy_pbr`), so this edge adds no wgpu, and it cannot cycle: `lunco-render`
+# depends on no lunco crate.
+lunco-render = { path = "../lunco-render" }
 
 [lints]
 workspace = true

@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "A JPL Horizons FETCH SPEC, not an ephemeris. It is the query that produces",
+    "the ephemeris: `lunco-celestial-ephemeris::load_local` reads every *.json in",
+    "this directory, and for each source either loads the already-cached CSV from",
+    ".cache/ephemeris/ or queues the Horizons request that creates it. The state",
+    "vectors themselves are that CSV — machine-local, gitignored, refetchable.",
+    "",
+    "This file used to also carry Artemis II's trajectory colours, sampling rates",
+    "and spacecraft marker sizes, and MissionPlugin spawned all of it into any",
+    "scene that declared a celestial body. That visualisation config is now USD",
+    "(assets/missions/artemis_2_mission.usda) and is opted into per scene. What is",
+    "left here is the part that was never scene config: how to obtain the numbers.",
+    "",
+    "If committed kernels ever replace the fetch, the right format is CCSDS OEM",
+    "(502.0-B KVN) or SPICE SPK — at which point this spec is replaced by the",
+    "asset itself rather than a recipe for downloading it."
+  ],
+  "ephemeris_sources": [
+    {
+      "target_id": -1024,
+      "command": "-1024",
+      "center": "500@399",
+      "ref_plane": "ECLIPTIC",
+      "start_time": "2026-04-02 01:59",
+      "stop_time": "2026-04-11 00:01",
+      "step_size": "10m"
+    }
+  ]
+}

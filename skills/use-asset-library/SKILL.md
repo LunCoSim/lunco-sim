@@ -12,7 +12,7 @@ description: >
   Project-specific and non-obvious: a shipped asset MUST be referenced as
   `@lunco://…@` (a bare relative path resolves against the *anchoring document*,
   so the same file breaks once a scene is Twin-mounted — and a failed
-  `lunco:program:sourceAsset` load is SILENT, the prim is just never driven),
+  `info:sourceAsset` load is SILENT, the prim is just never driven),
   `lunco:spawnable` is only read on the stage `defaultPrim`, the palette
   category is the IMMEDIATE parent folder Title-cased, a `.mo` with no
   `inputs:`/`outputs:` ports is never stepped, rhai `import` must NOT use
@@ -71,20 +71,20 @@ document's directory, keeping that document's scheme.** That is why it bites:
 ```usda
 # ✅ engine library — works no matter who mounts this file
 prepend references = @lunco://components/mobility/wheel.usda@
-uniform asset lunco:program:sourceAsset = @lunco://models/RoverBattery.mo@
+uniform asset info:sourceAsset = @lunco://models/RoverBattery.mo@
 
 # ✅ a file sitting next to a Twin scene
-uniform asset lunco:program:sourceAsset = @twin://my_mission/gnc.rhai@
+uniform asset info:sourceAsset = @twin://my_mission/gnc.rhai@
 
 # ⚠️ only legal when this file is itself inside assets/ AND never Twin-mounted
-uniform asset lunco:program:sourceAsset = @scenarios/foo.rhai@
+uniform asset info:sourceAsset = @scenarios/foo.rhai@
 
 # ❌ always — `..` escapes the root and returns NotFound
 prepend references = @../../components/mobility/wheel.usda@
 ```
 
 **The failure is silent for programs.** `crates/lunco-usd-sim/src/cosim.rs:249`
-reads `lunco:program:sourceAsset`; a `None` or an unresolvable asset is a bare
+reads `info:sourceAsset`; a `None` or an unresolvable asset is a bare
 `return` — no warning, the prim is simply never driven. "My model does nothing"
 is nearly always this. The guard test
 `crates/lunco-usd/tests/program_sources_exist.rs` walks every `.usda` and asserts
@@ -206,7 +206,7 @@ Two files: the maths in `assets/models/`, the binding in a `.usda`.
 
 ```usda
 def LunCoProgram "Battery" {
-    uniform asset lunco:program:sourceAsset = @lunco://models/RoverBattery.mo@
+    uniform asset info:sourceAsset = @lunco://models/RoverBattery.mo@
     uniform bool  lunco:program:realtimeSafe = true
     float inputs:drive_left.connect  = </Power.outputs:drive_left>
     float inputs:drive_right.connect = </Power.outputs:drive_right>
@@ -319,7 +319,7 @@ strict wheel reader. See [`validate-assets`](../validate-assets/SKILL.md).
   to the palette.
 - ❌ Encoding a category in the filename — the category IS the parent folder.
 - ❌ A `LunCoProgram` with no `inputs:`/`outputs:` and expecting it to run.
-- ❌ `lunco:program:sourceAsset` typed `string` — must be `asset`.
+- ❌ `info:sourceAsset` typed `string` — must be `asset`.
 - ❌ `if`/`when` in a `.mo` equation section — rumoca is branch-free.
 - ❌ Authoring `inputs:display_color` instead of `primvars:displayColor` — it
   works, and it hides the colour from every other USD consumer.

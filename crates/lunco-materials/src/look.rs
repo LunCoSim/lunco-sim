@@ -63,7 +63,8 @@
 
 use crate::dyn_params::ParamValue;
 use bevy::prelude::*;
-use std::collections::BTreeMap;
+pub use lunco_render::SurfaceAlpha;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The named texture layers a shader may sample.
 ///
@@ -126,6 +127,18 @@ pub struct ShaderLook {
     /// this material carries the same one — i.e. it is driven by a single global
     /// resource. A per-entity value belongs in `values`.
     pub live: BTreeMap<String, ParamValue>,
+    /// Parameter names this prim's USD authoring drives through a connection.
+    ///
+    /// Authored by the USD shader pass, which resolves the bound shader and so knows
+    /// exactly which of the prim's `inputs:*.connect` name parameters that shader
+    /// declares. The port backend accepts a write if and only if the name is here.
+    /// `inputs:` is the engine's spelling for every port, so this set is what
+    /// separates a shader drive from a simulation wire on the same prim — a value
+    /// the authoring layer knows and the render layer cannot infer.
+    ///
+    /// Not part of [`key`](Self::key): it says where values come from, not what the
+    /// material looks like.
+    pub driven: BTreeSet<String>,
     /// Named texture layers. Absent = the shader's fallback.
     pub textures: BTreeMap<TextureLayer, Handle<Image>>,
     /// Opt out of material sharing — this look gets a **private** material that the
@@ -158,6 +171,20 @@ pub struct ShaderLook {
     /// material state, so two looks that differ only here still share one material
     /// and one bind group.
     pub no_shadow_cast: bool,
+    /// How this surface handles transparency — the same [`SurfaceAlpha`] a
+    /// [`PbrLook`](lunco_render::PbrLook) carries, from the same authored
+    /// `primvars:displayOpacity`.
+    ///
+    /// Here for the reason `no_shadow_cast` is: taking the shader path REMOVES the
+    /// `PbrLook`, so without this a translucent prim turns opaque the moment it is
+    /// given a `.wgsl`. An emissive VOLUME — an exhaust plume, a beam — is the case
+    /// that cannot work at all without it, because what shows through it is what it
+    /// is.
+    ///
+    /// **Part of [`key`](Self::key), unlike the shadow flag.** Blend mode selects
+    /// the render pipeline the material binds, so two looks that differ here cannot
+    /// share one material.
+    pub alpha: SurfaceAlpha,
 }
 
 impl ShaderLook {
@@ -226,6 +253,15 @@ impl ShaderLook {
             vertex_shader: self.vertex_shader.clone(),
             values,
             textures: self.textures.iter().map(|(l, h)| (*l, h.id())).collect(),
+            // `SurfaceAlpha` carries an f32 in one arm, so it is `PartialEq` and not
+            // `Hash`/`Eq`. Quantise the threshold exactly as the values above are
+            // quantised — a mask cutoff a rounding error apart is the same pipeline.
+            alpha: match self.alpha {
+                SurfaceAlpha::Opaque => (0, 0),
+                SurfaceAlpha::Mask(t) => (1, q(t)),
+                SurfaceAlpha::Blend => (2, 0),
+                SurfaceAlpha::Add => (3, 0),
+            },
         }
     }
 }
@@ -237,6 +273,8 @@ pub struct ShaderLookKey {
     vertex_shader: Option<String>,
     values: Vec<(String, Vec<i32>)>,
     textures: Vec<(TextureLayer, AssetId<Image>)>,
+    /// `(discriminant, quantised mask threshold)` — see [`ShaderLook::key`].
+    alpha: (u8, i32),
 }
 
 #[cfg(test)]
@@ -266,6 +304,16 @@ mod tests {
         assert_ne!(a.key(), b.key());
         let c = ShaderLook::new("other.wgsl").with("dust", ParamValue::F32(0.5));
         assert_ne!(a.key(), c.key());
+    }
+
+    /// Blend mode selects the render PIPELINE, so two otherwise-identical looks
+    /// that disagree about transparency must not collapse onto one material — an
+    /// opaque plume is not a dimmer plume, it is a solid cone.
+    #[test]
+    fn alpha_mode_is_part_of_material_identity() {
+        let opaque = ShaderLook::new("plume.wgsl");
+        let blended = ShaderLook { alpha: SurfaceAlpha::Blend, ..ShaderLook::new("plume.wgsl") };
+        assert_ne!(opaque.key(), blended.key());
     }
 
     /// Parameters are an OPEN set — a shader can declare a name Rust has never

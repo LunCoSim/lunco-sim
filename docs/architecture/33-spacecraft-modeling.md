@@ -112,10 +112,9 @@ mass/inertia_xx/com_y` all stick on read-back while the lander keeps hovering.
 at spawn → Avian `AngularInertia { principal, local_frame }` / `CenterOfMass`
 *override* components (the SAME components the runtime mass-props ports write, so
 authored and model-driven values share one path). Implemented as a single
-`apply_rigid_body_mass_props` helper called from both the main
-`PhysicsRigidBodyAPI` path and the legacy `rigidBodyEnabled` fallback — which
-also fixed the WP-3-flagged mass-handling divergence (the fallback used to skip
-the 1000 kg default). `physics:principalAxes` (a quat rotating the principal
+`apply_rigid_body_mass_props` helper — the one place mass, inertia and COM are
+read, so every body gets them (and the 1000 kg default) identically.
+`physics:principalAxes` (a quat rotating the principal
 frame) defaults to identity — off-diagonal inertia is left to that quat and is
 almost always identity for landers/rovers. `gravity_accel` is auto-injected into
 models.
@@ -254,10 +253,12 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   on the joint's port overrides the target per tick. The port pair is the runtime
   face of `PhysxJointStateAPI:{linear,angular} physics:position` (out) +
   `PhysicsDriveAPI` `targetPosition` (in).
-- **Not yet mapped:** `physics:stiffness`/`physics:damping` — Avian's `MotorModel`
-  reparameterizes these as frequency/damping-ratio (needs body mass), so the proven
-  overdamped 3 Hz spring-damper is kept as the model; the load-bearing knobs
-  (`maxForce` + targets) are honored. Wheels are unaffected: their revolute joints
+- **`physics:stiffness`/`physics:damping` are mapped** to `MotorModel::ForceBased`
+  (or `AccelerationBased`, per `physics:type`) with the same SI coefficients — a
+  rename, not a conversion, so an authored spring IS the spring the solver
+  integrates. A drive with neither coefficient is a positioner, not a spring, and
+  keeps the overdamped 3 Hz `SpringDamper` model. `maxForce` + targets are honored
+  throughout. Wheels are unaffected: their revolute joints
   are built in `lunco-mobility`, not the authored-joint path, so the G6
   `drive:angular:maxForce` wheelie cannot recur here.
 - **Proof:** `assets/scenes/sandbox/prismatic_drive_test.usda` — a standard

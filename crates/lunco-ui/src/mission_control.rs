@@ -400,16 +400,10 @@ pub fn populate_mission_control_view(
     // The local avatar carries a `ControlBinding` too (it's a controllable), so
     // exclude it from the *rover* list.
     //
-    // `ControlBinding` — "accepts commands" — deliberately reproduces the old
-    // `With<FlightSoftware>` roster exactly, `descent_lander` included. That listing is
-    // arguably wrong (a lander is not a rover), but correcting it is a deliberate UI
-    // change, not a side effect of splitting a component.
-    //
-    // It also FIXES a per-tick churn bug: this used to filter on `Changed<FlightSoftware>`,
-    // and `apply_drive_mix` takes `&mut FlightSoftware` and writes `brake_active`
-    // unconditionally every fixed tick — so the roster rebuilt every tick for every
-    // rover. `brake_active` now lives on `CommandInputs`; `ControlBinding` is written
+    // `ControlBinding` — "accepts commands" — is the roster filter, `descent_lander`
+    // included. Filtering on it is also what keeps the roster stable: it is written
     // once at projection, so `Changed<ControlBinding>` fires on insert and then stops.
+    // Per-tick command state lives on `CommandInputs`, which is written every tick.
     rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), (With<ControlBinding>, Without<Avatar>)>,
     surface: Query<(), With<lunco_avatar::SurfaceCamera>>,
     gravity: Option<Res<lunco_celestial::LocalGravityField>>,

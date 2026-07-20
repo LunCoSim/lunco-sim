@@ -57,10 +57,13 @@ fn recording_finish() {
     cmd("CloseWindow", #{});
 }
 
-/// Standard shot directory: `<out>/shot_NN/raw_frames`, 1-based and zero-padded to
-/// match what the assembly step globs.
+/// Standard shot destination: `<out>/shot_NN/take.mp4`, 1-based and zero-padded
+/// to match what the assembly step globs. A video destination makes the recorder
+/// stream frames straight into ffmpeg (no per-frame PNGs); on a machine without
+/// ffmpeg it demotes itself to a PNG sequence in `shot_NN/take.frames`, which
+/// the assembly step handles as the fallback.
 fn shot_dir(out, idx) {
     let n = idx + 1;
     let pad = if n < 10 { "0" } else { "" };
-    return out + "/shot_" + pad + n + "/raw_frames";
+    return out + "/shot_" + pad + n + "/take.mp4";
 }

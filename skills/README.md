@@ -36,6 +36,7 @@ one directly when doing that kind of task by hand.
 | [**run-modelica**](run-modelica/SKILL.md) | Run / compile / sweep Modelica models over the HTTP API |
 | [**inspect-simulation**](inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
+| **produce-episode** (in `lunco-marketing/.claude/skills/`) | Cut a finished campaign video from a take — narration, Kdenlive assembly, master, grade |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
 | [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.wgsl`/`.rhai` — does it parse? — in seconds, with no app, window or GPU |
 
@@ -67,7 +68,7 @@ one directly when doing that kind of task by hand.
   `if`/`when` in Modelica. See [**validate-assets**](validate-assets/SKILL.md).
 - **Shipped assets are `@lunco://…@`.** A bare relative path resolves against the
   anchoring document, so it breaks once a Twin mounts the file — and for
-  `lunco:program:sourceAsset` that failure is **silent**.
+  `info:sourceAsset` that failure is **silent**.
 - **Colour is `primvars:displayColor`**, shader or not; WGSL opts in with
   `//!@engine display_color`.
 

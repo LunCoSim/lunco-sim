@@ -16,7 +16,7 @@ handful of contracts Avian reads by name, which are USD's; and behaviour (when t
 load, where to drive), which is rhai's. USD assembles the parts and holds every parameter
 VALUE; this library holds what the parameters MEAN.</p>
 
-<p>ON THE FLY. A model is bound by <code>lunco:program:sourceAsset</code>, an
+<p>ON THE FLY. A model is bound by <code>info:sourceAsset</code>, an
 <code>asset</code> — so the resolver sees it, the reference closure ships it, and editing
 the <code>.mo</code> changes the law the vessel flies without touching the vessel.</p>
 </html>"));

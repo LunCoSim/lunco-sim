@@ -249,15 +249,21 @@ pub struct ModelicaCompiler {
     /// (`ER002`) — never at construction. A library-free model never sets
     /// this and never pays the MSL cost. Latches `true` after one install
     /// so subsequent compiles skip the gate entirely.
-    msl_installed: bool,
-    /// Whether the shipped `LunCo` Modelica library (`assets/models/LunCo`, a
-    /// standard structured package) has been seated into this session. Same
-    /// demand-driven gate as [`Self::msl_installed`], but the library is tiny and
-    /// always embedded, so the install is a handful of in-memory documents rather
-    /// than MSL's 316 MB bundle. Seated on the first compile whose failure rumoca
-    /// attributes to an unresolved reference — e.g. a rover's `rucheyok_electrical.mo`
-    /// referencing `LunCo.Electrical.Battery`.
-    lunco_installed: bool,
+    /// Top-level package names whose source root is seated in this session —
+    /// `"Modelica"`, `"LunCo"`, and any other shipped library.
+    ///
+    /// This is the session's view of MODELICAPATH: Modelica looks up only the
+    /// ROOT segment of a qualified name against the search path (`LunCo` for
+    /// `LunCo.Propulsion.BellNozzle`), loads that library once, and resolves
+    /// everything below it inside the loaded tree. Keyed by that root segment for
+    /// the same reason.
+    ///
+    /// It replaces a pair of `msl_installed` / `lunco_installed` booleans, which
+    /// were the same fact recorded twice under hardcoded names — so a third
+    /// library had nowhere to be recorded, and [`Self::compile_str`]'s
+    /// package-member path had to special-case the string `"LunCo"` to avoid
+    /// clobbering itself.
+    installed_roots: std::collections::HashSet<String>,
     /// URIs of the user documents currently seated as overlays in this
     /// reused session (NOT the MSL/library source roots). Every compile is
     /// HERMETIC with respect to prior compiles: before seating its own
@@ -299,8 +305,7 @@ impl ModelicaCompiler {
         // rumoca's own structured diagnostics, not a source-text guess.
         let mut compiler = Self {
             session: Session::new(SessionConfig::default()),
-            msl_installed: false,
-            lunco_installed: false,
+            installed_roots: std::collections::HashSet::new(),
             seated_user_uris: std::collections::HashSet::new(),
         };
         // Escape hatch: `LUNCO_MODELICA_PRELOAD_MSL=1` forces the old eager
@@ -327,34 +332,57 @@ impl ModelicaCompiler {
     /// pass) call this explicitly; `compile_loaded` calls it lazily on an
     /// unresolved-reference failure.
     pub fn ensure_msl_installed(&mut self) -> bool {
-        if self.msl_installed {
+        if self.installed_roots.contains("Modelica") {
             return true;
         }
         let t = web_time::Instant::now();
         if Self::preload_from_global(&mut self.session, t) {
-            self.msl_installed = true;
+            self.installed_roots.insert("Modelica".to_string());
         }
-        self.msl_installed
+        self.installed_roots.contains("Modelica")
     }
 
-    /// Seat the shipped `LunCo` Modelica library into this session, once.
+    /// Seat a shipped Modelica library into this session by its TOP-LEVEL name,
+    /// once. `"LunCo"` → `assets/models/LunCo`, a standard structured package
+    /// (`package.mo` + `package.order` + members).
     ///
-    /// The library is `assets/models/LunCo` — a standard structured package
-    /// (`package.mo` + `package.order` + members), embedded at compile time by
-    /// `lunco_assets::models` so it is present on every target including wasm. This
-    /// loads it via [`Session`]'s in-memory source-root path, the same call bundled
-    /// examples use; rumoca then resolves `import LunCo.Electrical` the standard way,
-    /// from the packages' `within` declarations. Idempotent; cheap (a few small docs).
-    pub fn ensure_lunco_installed(&mut self) -> bool {
-        if self.lunco_installed {
+    /// This is MODELICAPATH lookup: the root segment of a qualified name names a
+    /// library, the library is loaded whole, and everything below resolves inside
+    /// the loaded tree from the members' own `within` declarations. Idempotent and
+    /// cheap on repeat.
+    ///
+    /// DISK FIRST, embedded only as the fallback. Both copies exist — `assets/models`
+    /// on the filesystem, and the `include_dir!` snapshot baked into the binary — and
+    /// they drift the moment anyone edits a `.mo` without rebuilding. The disk tree is
+    /// the one Bevy's AssetServer serves, so it is what `info:sourceAsset`
+    /// already reads; taking the library from anywhere else would make an edited
+    /// member compile as its last-built self while the scene loaded the new text.
+    /// The embedded copy is for wasm, which has no filesystem to read.
+    pub fn ensure_root_installed(&mut self, root: &str) -> bool {
+        if self.installed_roots.contains(root) {
             return true;
         }
-        let files = lunco_assets::models::package_files("LunCo");
+        if let Some(dir) = lunco_assets::models_package_root_path(root) {
+            let report = self.load_source_root(root, &dir);
+            log::info!(
+                "[ModelicaCompiler] seated library `{root}` from {} ({} docs)",
+                dir.display(),
+                report.parsed_file_count,
+            );
+            self.installed_roots.insert(root.to_string());
+            return true;
+        }
+        let files = lunco_assets::models::package_files(root);
         if files.is_empty() {
             return false;
         }
-        let _ = self.load_source_root_in_memory("LunCo", "LunCo", files);
-        self.lunco_installed = true;
+        log::info!(
+            "[ModelicaCompiler] seated library `{root}` from the embedded snapshot \
+             ({} docs) — no on-disk `assets/models/{root}`",
+            files.len(),
+        );
+        let _ = self.load_source_root_in_memory(root, root, files);
+        self.installed_roots.insert(root.to_string());
         true
     }
 
@@ -552,6 +580,40 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        // A `.mo` declaring `within P;` is a MEMBER of package `P`, not a document
+        // that stands on its own. Its class is `P.Name`, and `P`'s source root
+        // already owns it, so seating the file as a user overlay registers that
+        // qualified class under a SECOND URI and rumoca's merge pass rejects the
+        // pair — the same `Duplicate class '…' with non-identical definition` that
+        // `seated_user_uris` exists to prevent between two user docs, arrived at
+        // from the library side instead.
+        //
+        // That silently killed every USD prim pointing `info:sourceAsset`
+        // at a package member (the lander's `BellNozzle`, both scenes'
+        // `SunTracker`). The geometry still drew — the lathe is Rust-side — but the
+        // model never solved. It could not have been hit before those existed: every
+        // earlier target was a flat, `within`-less file.
+        //
+        // So do what Modelica does. `loadFile` is for documents; a library class is
+        // reached with `loadModel` — resolve the ROOT segment against the search
+        // path, seat that library, compile the qualified name. The file itself is
+        // never handed to the compiler, which is why no duplicate is possible rather
+        // than merely unlikely. `source` is still the authority on WHICH class this
+        // is: its `within` clause and class name are read straight from the text the
+        // caller loaded, not guessed from the file path.
+        if let Some(within) = crate::ast_extract::within_package_of_source(source) {
+            let root = within.split('.').next().unwrap_or(&within).to_string();
+            let qualified =
+                crate::ast_extract::qualify(&within, crate::ast_extract::short_name(model_name));
+            if !self.ensure_root_installed(&root) {
+                return Err(format!(
+                    "`{qualified}` declares `within {within};`, but no library `{root}` \
+                     could be seated (looked for `assets/models/{root}/package.mo`, then \
+                     the embedded snapshot)"
+                ));
+            }
+            return self.compile_loaded(&qualified);
+        }
         let mut keep = std::collections::HashSet::new();
         keep.insert(filename.to_string());
         self.evict_user_docs_except(&keep);
@@ -754,12 +816,22 @@ impl ModelicaCompiler {
         // different code and is returned as-is, paying no install.
         //
         // CHEAPEST FIRST, and each gated independently so a model needing only one does
-        // not pay the other. `LunCo` is a handful of embedded docs, so any unresolved
+        // not pay the other. `LunCo` is a handful of small docs, so any unresolved
         // reference earns it. MSL is a 316 MB bundle, so it is reached for ONLY if the
         // target STILL has unresolved refs after `LunCo` — otherwise every EPS model
         // (which references `LunCo` but not MSL) would drag MSL in for nothing.
-        if result.is_err() && !self.lunco_installed && self.target_has_unresolved_refs(model_name) {
-            if self.ensure_lunco_installed() {
+        //
+        // This is recovery for a model that REFERENCES a library — a flat `.mo` doing
+        // `import LunCo.Electrical`, which fails with ER002/ER003 and is retried once
+        // the library is resident. It is not the path a library's OWN class takes:
+        // that is resolved up front from its `within` clause in `compile_str`, because
+        // its failure mode is a duplicate registration, not an unresolved reference,
+        // and no error-code gate here would ever have caught it.
+        if result.is_err()
+            && !self.installed_roots.contains("LunCo")
+            && self.target_has_unresolved_refs(model_name)
+        {
+            if self.ensure_root_installed("LunCo") {
                 log::info!("[ModelicaCompiler] `{model_name}` had unresolved refs — installed LunCo, retrying");
                 result = self
                     .session
@@ -767,7 +839,7 @@ impl ModelicaCompiler {
             }
         }
         if result.is_err()
-            && !self.msl_installed
+            && !self.installed_roots.contains("Modelica")
             && msl_is_available()
             && self.target_has_unresolved_refs(model_name)
             && self.ensure_msl_installed()

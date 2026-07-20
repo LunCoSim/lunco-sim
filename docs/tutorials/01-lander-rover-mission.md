@@ -185,7 +185,7 @@ end MyLander;
 Read it top to bottom and it's just a descent controller: work out how fast we
 *should* be falling at this height, track that speed, feed gravity forward, clamp to
 a sane thrust. The `throttle` output (0..1) is the engine's "how hard am I firing
-right now" — we'll use it for the flame later.
+right now" — we'll use it for the plume later.
 
 The lines to dwell on are `cmd_throttle` and the three torques. That is the authority
 gate, and it's the whole reason a human can grab this vehicle mid-descent without
@@ -241,7 +241,7 @@ rover you'll pull in at Step 7. Create `assets/vessels/landers/my_lander.usda`:
     metersPerUnit = 1
 )
 
-def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI", "LunCoVesselAPI"] )
+def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"] )
 {
     uniform token axis = "Y"
     double radius = 2.5
@@ -254,8 +254,6 @@ def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsC
     # Gold multi-layer-insulation foil. Just a colour — see the note under the
     # solar wings below for when a surface earns a real shader instead.
     color3f primvars:displayColor = (0.78, 0.62, 0.27)
-
-    uniform bool lunco:vessel = true
 
     # The flight-control system. It is not something bolted onto the airframe — its
     # `inputs:` ARE the vessel's control surface, the ports the stick writes — so the
@@ -319,8 +317,9 @@ def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsC
 
 Notice what's *not* here: no position. A vehicle asset never says where it is.
 
-`lunco:vessel` marks it as something that can be possessed, and the `Controls`
-reference says what the keys do once you have it: Space thrusts, W/S pitch, A/D roll,
+Anything can be possessed — there is no marker for it; who may hold a thing is
+decided by the authority layer. What it can then DO is its CAPABILITY, and the
+`Controls` reference is that: it says what the keys do once you have it — Space thrusts, W/S pitch, A/D roll,
 Q/E yaw. Those land on the model inputs of the same name from Step 2.
 `info:sourceAsset` names your `.mo` file and runs it — a program is a prim,
 and here the prim it lives on is the vessel itself, because a lander without its flight
@@ -400,7 +399,7 @@ further children of `MyLander`:
     }
 
     # The engine bell: wide at the exit, narrowing to the throat, with a hot
-    # emissive lip. The flame in Step 5 comes out of this.
+    # emissive lip. The plume in Step 5 comes out of this.
     def Cone "Nozzle"
     {
         uniform token axis = "Y"
@@ -519,7 +518,7 @@ Add these lines to the `MyLander` prim (in `my_lander.usda`, not the scene):
     float inputs:piloted.connect = </MyLander.outputs:piloted>
 
     # Publish the model's throttle back onto the entity, so anything downstream
-    # (the flame in Step 5, telemetry, the Inspector) can read it as a port.
+    # (the plume in Step 5, telemetry, the Inspector) can read it as a port.
     float inputs:throttle.connect = </MyLander.outputs:throttle>
 ```
 
@@ -552,14 +551,19 @@ fly — and the Inspector will let you drag it.
 
 ---
 
-## Step 5 — Give it a flame
+## Step 5 — Give it a plume
 
-A rocket with no flame looks dead. Let's add one that grows and shrinks with the
+A rocket with no plume looks dead. Let's add one that grows and shrinks with the
 throttle and flickers like real fire.
 
-The trick: the flame is just a cone that a tiny script resizes every frame based on
-the `throttle` signal. Because it reads the engine's *actual* output, it honestly
-shows nothing when the engine is off or out of fuel — even if you're mashing Space.
+The plume is a **cone that never moves**, plus a shader that draws inside it. The
+cone is a bounding volume, authored once at the plume's full-throttle size; the
+shader is told the engine's `throttle` and draws whatever plume that throttle
+means — shorter, narrower and dimmer as it drops, nothing at all at zero.
+
+Nothing here is animated. `throttle` is *wired* to the shader with a USD
+connection, so the plume is a consequence of the engine's real output: it honestly
+shows nothing when the engine is off or out of fuel, even if you're mashing Space.
 
 Add two cones as children of `MyLander` — a soft outer plume and a hot inner core:
 
@@ -569,104 +573,107 @@ Add two cones as children of `MyLander` — a soft outer plume and a hot inner c
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, -3.5, 0)
+        # Centre the cone so its base sits at the nozzle exit (y = -2.7) and its
+        # apex reaches 3.6 m below that: -2.7 - 3.6/2.
+        double3 xformOp:translate = (0, -4.5, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
-        double3 xformOp:scale = (0.02, 0.02, 0.02)
+        # THE SIZE IS THE SCALE: 1.05 m base radius, 3.6 m long, at full throttle.
+        double3 xformOp:scale = (1.05, 3.6, 1.05)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.5, 0.16, 0.02)
-        color3f primvars:emissiveColor = (3.0, 1.0, 0.12)
-        float primvars:displayOpacity = 0.4
+        rel material:binding = </MyLander/Looks/Flame_Mat>
+        float[] primvars:displayOpacity = [0.4]
         bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
 
-        def LunCoProgram "Plume"
-        {
-            uniform asset info:sourceAsset = @scenarios/flame.rhai@
-            custom float lunco:param:wmax = 1.05
-            custom float lunco:param:lmax = 3.6
-            custom float lunco:param:flick = 1.0
-        }
+        float inputs:throttle.connect = </MyLander.outputs:throttle>
     }
     def Cone "FlameCore"
     {
         uniform token axis = "Y"
         double radius = 1.0
         double height = 1.0
-        double3 xformOp:translate = (0, -3.4, 0)
+        double3 xformOp:translate = (0, -3.95, 0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
-        double3 xformOp:scale = (0.02, 0.02, 0.02)
+        double3 xformOp:scale = (0.5, 2.5, 0.5)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.95, 0.7, 0.2)
-        color3f primvars:emissiveColor = (6.0, 3.5, 0.9)
-        float primvars:displayOpacity = 0.85
+        rel material:binding = </MyLander/Looks/FlameCore_Mat>
+        float[] primvars:displayOpacity = [0.85]
         bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
 
-        def LunCoProgram "Plume"
+        float inputs:throttle.connect = </MyLander.outputs:throttle>
+    }
+```
+
+and the two materials they bind, in your `Looks` scope:
+
+```usda
+        def Material "Flame_Mat"
         {
-            uniform asset info:sourceAsset = @scenarios/flame.rhai@
-            custom float lunco:param:wmax = 0.5
-            custom float lunco:param:lmax = 2.5
-            custom float lunco:param:flick = 0.5
+            token outputs:surface.connect = </MyLander/Looks/Flame_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
+                color3f inputs:core_color = (3.0, 1.0, 0.12)
+                color3f inputs:edge_color = (1.2, 0.35, 0.05)
+                float inputs:throttle = 0
+                float inputs:flicker = 1.0
+                token outputs:surface
+            }
         }
-    }
+
+        def Material "FlameCore_Mat"
+        {
+            token outputs:surface.connect = </MyLander/Looks/FlameCore_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/plume.wgsl@
+                color3f inputs:core_color = (6.0, 3.5, 0.9)
+                color3f inputs:edge_color = (3.0, 1.2, 0.2)
+                float inputs:throttle = 0
+                float inputs:flicker = 0.5
+                token outputs:surface
+            }
+        }
 ```
 
-A few choices worth a sentence each. `displayOpacity` makes the cones see-through.
-The emissive colours are *bigger than 1* on purpose — that makes them glow like a
-light source instead of a dull painted surface, so the sun can't wash your orange
-flame into beige. And notice both cones carry their own `LunCoProgram` prim pointing at
-the **same** script, each with its own typed parameters — `lunco:param:wmax` /
-`lunco:param:lmax` are how wide and long each gets, `lunco:param:flick` how much it
-flickers. A parameter is just an attribute on the program prim, and `param(me, "wmax",
-1.0)` reads it. That's how one script drives two different-looking flames: each cone's
-program reads its own numbers.
+A few choices worth a sentence each. `displayOpacity` makes the cones see-through —
+a plume is defined by what shows through it. The colours are *bigger than 1* on
+purpose: that makes them glow like a light source instead of a dull painted
+surface, so the sun can't wash your orange plume into beige.
 
-`scenarios/flame.rhai` already ships with the engine, and it's short enough to read
-in full:
+Both cones bind the **same** shader (`lunco://shaders/plume.wgsl`) and differ only
+in their own numbers. Their SIZE is the prim's `xformOp:scale`, so the shader never
+needs to be told it — a plume is as big as the volume it is drawn in. Their COLOUR
+and flicker depth are `inputs:` on their own `Shader` prim, which is where a
+shader's parameters belong.
 
-```rhai
-// Climb up the parents until we find whoever publishes a `throttle` (the engine).
-fn nearest_throttle(me) {
-    let cur = parent(me);
-    let hops = 0;
-    while cur != () && hops < 5 {
-        let t = get(cur, "throttle");
-        if t != () { return t; }
-        cur = parent(cur);
-        hops += 1;
-    }
-    0.0
-}
+The one connected line is the whole mechanism:
 
-fn on_tick(me) {
-    let t = nearest_throttle(me);
-    if t == () { t = 0.0; }
-    t = clamp(t, 0.0, 1.0);
-
-    // A gentle, smoothed flicker so it shimmers instead of strobing.
-    let target = 0.8 + rand() * 0.4;
-    if this.flick == () { this.flick = 1.0; }
-    this.flick = this.flick * 0.7 + target * 0.3;
-
-    // Read this cone's own size/flicker settings.
-    let wmax  = param(me, "wmax", 1.0);
-    let lmax  = param(me, "lmax", 3.0);
-    let depth = param(me, "flick", 1.0);
-    let fl = 1.0 + (this.flick - 1.0) * depth;
-
-    let width = (0.28 + 0.72 * t) * wmax;
-    let len = t * lmax * fl;
-    if len < 0.02 { len = 0.02; }
-    set(me, "Transform.scale", [width, len, width]);
-}
+```usda
+    float inputs:throttle.connect = </MyLander.outputs:throttle>
 ```
 
-`on_tick` runs every frame for any prim that carries a program. `me` is the prim running
-it, and `this` is a little scratchpad that survives between frames (we keep the
-smoothed flicker there). `param(me, "wmax", 1.0)` reads the `lunco:param:wmax` attribute
-you authored — that's the clean way to give a reusable script per-instance settings.
+`inputs:` is the engine's spelling for every port. `rewire_usd_connections` turns
+that into a wire, propagation writes the value through the port registry, and it
+lands on the shader's `throttle` uniform. A shader parameter is only drivable if
+the shader **declares** it — that is why `float inputs:throttle = 0` also appears
+on the `Shader` prim. Misspell it and you get a dangling-wire warning instead of a
+uniform that silently stays at zero.
 
 Reload and watch the descent: a flickering plume that swells under hard braking and
 dies to nothing the instant the engine cuts.
+
+> **Why not a script?** Because a plume is a *consequence*, not a performance. A
+> script that resized the cone every frame would re-derive in rhai what the engine
+> model already computed, sample a clock for the flicker, and drift the moment the
+> engine is re-tuned. Wiring the number instead means one fact, one writer, and a
+> stage you can read to see where the value comes from. The same rule gives the
+> struts their load glow in Step 4.
 
 ---
 
@@ -1058,7 +1065,7 @@ along on autopilot behind you, exactly as it should.
 ## You built a mission
 
 Step back and look at what's there: a vehicle asset with a real control law, wired
-to its own sensors, reusable in any scene; a flame driven by its actual engine
+to its own sensors, reusable in any scene; a plume wired to its actual engine
 output; model-driven warnings; a multi-stage mission that waits on physical events
 and announces its own; and an autopilot that yields to a human without ever stealing
 from one. None of it needed engine changes — just a scene, a vehicle, a model, and a
@@ -1098,8 +1105,11 @@ or give each waypoint a time limit and fail the mission if it's missed.
 - Your self-flying vehicle went inert the moment a script touched it? Something
   possessed it. `piloted` is 1, so the authority gate handed control to a pilot who
   isn't pressing anything. Use `follow()` to watch, `possess()` only to fly.
-- A flame looks beige instead of fiery? Its emissive colour is probably ≤ 1 — push
-  it above 1 so it glows instead of being lit by the sun.
+- A plume looks beige instead of fiery? Its `core_color` is probably ≤ 1 — push it
+  above 1 so it glows instead of being lit by the sun.
+- A plume never appears at all? Check the `Shader` prim declares `float
+  inputs:throttle` — a parameter the shader does not declare is refused, and the
+  wire is reported as dangling.
 - A model line with `if … else if …`? Flatten it into separate single `if`s,
   `min`/`max`, or arithmetic; chained `else if` doesn't translate cleanly.
 - Need a model to *decide* something from a wired-in value? Don't — declare a

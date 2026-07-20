@@ -99,6 +99,102 @@ pub fn insert_celestial_comms_components(
         }
     }
 
+    // --- Mission declaration (LunCoMissionAPI) ---
+    //
+    // A mission is OPT-IN per scene, and separately from the sky: declaring bodies
+    // says "this world has a Moon", not "spawn Artemis II into my landing film".
+    // Missions used to be loaded by scanning `assets/missions/*.json` whenever ANY
+    // celestial body was declared, so every lunar scene silently acquired every
+    // mission on disk. Now a scene asks by referencing the mission's USD file, the
+    // same way it asks for a sky by referencing `solar_system.usda`.
+    //
+    // Keyed on `lunco:mission:id` — the identifying attribute, following the
+    // libration/orbit convention above. A prim without one is not a half-declared
+    // mission, it is simply not a mission.
+    if let Some(id) = reader.text(sdf_path, "lunco:mission:id") {
+        let name = reader
+            .text(sdf_path, "lunco:mission:name")
+            .unwrap_or_else(|| id.clone());
+        commands.entity(entity).try_insert(lunco_celestial::MissionDecl {
+            id: id.clone(),
+            name: name.clone(),
+            description: reader
+                .text(sdf_path, "lunco:mission:description")
+                .unwrap_or_default(),
+        });
+        info!("[usd-celestial] scene declares mission {name} ({id}) at {prim_path_str}");
+    }
+
+    // --- Mission trajectory (LunCoMissionTrajectoryAPI) ---
+    //
+    // VISUALISATION parameters only. The state vectors are NOT here and never were:
+    // the curve is sampled at runtime from the ephemeris provider keyed by
+    // `trackedId`/`referenceId`, so this prim says how to DRAW a trajectory, not
+    // where the spacecraft is. Keyed on `trackedId` — without a target there is
+    // nothing to plot.
+    if let Some(tracked_id) = reader.scalar::<i32>(sdf_path, "lunco:trajectory:trackedId") {
+        let color = read_rgba(reader, sdf_path, "lunco:trajectory:color", [1.0, 1.0, 1.0, 1.0]);
+        commands
+            .entity(entity)
+            .try_insert(lunco_celestial::MissionTrajectoryDecl {
+                name: reader
+                    .text(sdf_path, "lunco:trajectory:name")
+                    .unwrap_or_else(|| prim_path_str.to_string()),
+                tracked_id,
+                // Defaults to the Moon for the same reason `lunco:anchor:body` does.
+                reference_id: reader
+                    .scalar::<i32>(sdf_path, "lunco:trajectory:referenceId")
+                    .unwrap_or(DEFAULT_ANCHOR_BODY),
+                color,
+                sampling_days: reader
+                    .real(sdf_path, "lunco:trajectory:samplingDays")
+                    .unwrap_or(1.0),
+                sampling_step: reader
+                    .real(sdf_path, "lunco:trajectory:samplingStep")
+                    .unwrap_or(0.01),
+                // `text()`, not `scalar::<String>()` — the value is an authored
+                // `token`, and reading a token with the string accessor returns
+                // None and would silently default to Inertial.
+                frame: reader
+                    .text(sdf_path, "lunco:trajectory:frame")
+                    .unwrap_or_else(|| "Inertial".to_string()),
+                user_visible: reader.scalar::<bool>(sdf_path, "lunco:trajectory:userVisible"),
+                start_epoch_jd: reader.real(sdf_path, "lunco:trajectory:startEpochJd"),
+                end_epoch_jd: reader.real(sdf_path, "lunco:trajectory:endEpochJd"),
+            });
+        info!("[usd-celestial] mission trajectory {prim_path_str}: target {tracked_id}");
+    }
+
+    // --- Mission spacecraft marker (LunCoMissionSpacecraftAPI) ---
+    //
+    // Keyed on `ephemerisId`: the marker's whole job is to sit where the ephemeris
+    // says that body is, so a prim naming no body is unplaceable, not defaulted.
+    if let Some(ephemeris_id) = reader.scalar::<i32>(sdf_path, "lunco:spacecraft:ephemerisId") {
+        commands
+            .entity(entity)
+            .try_insert(lunco_celestial::MissionSpacecraftDecl {
+                name: reader
+                    .text(sdf_path, "lunco:spacecraft:name")
+                    .unwrap_or_else(|| prim_path_str.to_string()),
+                ephemeris_id,
+                reference_id: reader
+                    .scalar::<i32>(sdf_path, "lunco:spacecraft:referenceId")
+                    .unwrap_or(DEFAULT_ANCHOR_BODY),
+                scale: reader
+                    .real_f32(sdf_path, "lunco:spacecraft:scale")
+                    .unwrap_or(1.0),
+                start_epoch_jd: reader.real(sdf_path, "lunco:spacecraft:startEpochJd"),
+                end_epoch_jd: reader.real(sdf_path, "lunco:spacecraft:endEpochJd"),
+                marker_radius_km: reader.real_f32(sdf_path, "lunco:spacecraft:markerRadiusKm"),
+                hit_radius_km: reader.real_f32(sdf_path, "lunco:spacecraft:hitRadiusKm"),
+                marker_color: reader
+                    .scalar::<Vec<f32>>(sdf_path, "lunco:spacecraft:markerColor")
+                    .filter(|v| v.len() >= 4)
+                    .map(|v| [v[0], v[1], v[2], v[3]]),
+            });
+        info!("[usd-celestial] mission spacecraft {prim_path_str}: ephemeris {ephemeris_id}");
+    }
+
     // --- Keplerian orbit (satellites) ---
     if let Some(a_m) = reader.real(sdf_path, "lunco:orbit:semiMajorAxisM") {
         let body = reader
@@ -218,6 +314,33 @@ pub fn insert_celestial_comms_components(
         commands
             .entity(entity)
             .try_insert(read_occluder_box(reader, sdf_path));
+    }
+}
+
+/// Read an authored `color4f` (or any `float[4]`-shaped attribute) as RGBA,
+/// falling back to `default` when it is absent or malformed.
+///
+/// `f32` first, then `f64`: a hand-authored `.usda` may spell the same colour as
+/// either, and a value that round-trips through a `double` array would otherwise
+/// read as absent and silently take the default — the same trap
+/// [`read_occluder_box`] handles for `extent`.
+fn read_rgba(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    sdf_path: &SdfPath,
+    attr: &str,
+    default: [f32; 4],
+) -> [f32; 4] {
+    let v = reader
+        .scalar::<Vec<f32>>(sdf_path, attr)
+        .or_else(|| {
+            reader
+                .scalar::<Vec<f64>>(sdf_path, attr)
+                .map(|v| v.into_iter().map(|f| f as f32).collect())
+        })
+        .filter(|v| v.len() >= 4);
+    match v {
+        Some(v) => [v[0], v[1], v[2], v[3]],
+        None => default,
     }
 }
 

@@ -22,6 +22,32 @@ use big_space::prelude::CellCoord;
 #[reflect(Component)]
 pub struct GridAnchor;
 
+/// WHO IS FLYING — `true` while a session holds the stick, `false` when the
+/// vessel's own guidance law has it.
+///
+/// The same fact the vessel's `piloted` port carries, hoisted to a resource so
+/// UI can read it without depending on the possession crate. Written by
+/// `PossessVessel`/`ReleaseVessel`; read by the input overlay's AUTO/MANUAL
+/// badge, which is what makes a handback legible on camera — the keys go dark
+/// and the badge flips in the same frame.
+#[derive(Resource, Debug, Default, Clone, Copy, Reflect)]
+#[reflect(Resource)]
+pub struct FlightAuthority {
+    pub piloted: bool,
+}
+
+/// A vessel's human name — "Kestrel", not "/Episode01Recording/Lander".
+///
+/// Sourced from the STANDARD UsdUI `ui:displayName` attribute
+/// (SceneGraphPrimAPI) by the USD loader — not a custom field; USD already
+/// has a word for "what this thing is called". Driver-facing UI (the HUD
+/// title, comms panels) prefers it over the `Name` component, which holds the
+/// prim PATH and reads as plumbing on camera. A vessel without one simply
+/// shows its path — absence is not an error.
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct Callsign(pub String);
+
 /// Marker: this camera's **pose is owned by an authored cinematic driver** (a
 /// USD camera path), not by the interactive camera stack.
 ///
@@ -245,9 +271,9 @@ pub const TRIGGER_COLLISION_LAYER: u32 = 1 << 7;
 /// script via the native `param(me, "wmax", default)` verb (a HashMap lookup —
 /// fast, typed, no fragile `name(me).contains(...)` string scanning).
 ///
-/// This is how a reusable script gets PER-INSTANCE config: the same `flame.rhai`
-/// drives many cones, each carrying its own `lunco:params`, instead of inferring
-/// its role from its name. Stamped by the USD loader (`lunco-usd-bevy`); lives in
+/// This is how a reusable script gets PER-INSTANCE config: one script drives many
+/// prims, each carrying its own `lunco:params`, instead of inferring its role from
+/// its name. Stamped by the USD loader (`lunco-usd-bevy`); lives in
 /// `lunco-core` so loader and scripting runtime share it (same pattern as
 /// [`TriggerZone`]).
 #[derive(Component, Debug, Clone, Reflect, Default)]

@@ -34,6 +34,54 @@ A full mission layers cleanly — never blur the layers:
 > rover is a USD file, not a Rust struct — the physics/materials philosophy applied
 > to whole vehicles.
 
+**Who computes what.** Rust owns rigid-body kinematics and dynamics — bodies,
+colliders, contacts, joints. Modelica owns everything else that evolves: thermal,
+electrical, propulsion, structural. Modelica reaches physics through cosim ports,
+and may also carry GNC or flight-software math (an equation is an equation); what it
+must never become is a second physics engine. rhai stays logic.
+
+### Physics ports vs sensors — pick the wrong one and you author a bug
+
+| | Physics ports | Sensors |
+|---|---|---|
+| There because | the body/collider EXISTS | you AUTHORED an instrument in USD |
+| Ports | `position_*`, `velocity_*`, `contact`, `contact_force` | `range`, `accel_*`, `spec_force_*`, `contact` |
+| Adds | nothing — ground truth | mount offset, range limits, out-of-range mode, noise, failure |
+| Wire to | **physical parts** — struts, dampers, structure | **flight software** — GNC, OBC, autopilot |
+
+A physical part reads PHYSICS: a strut's glow takes the `force` port off its own
+prismatic joint, because a leg carries load when the ground pushes on it — not when
+an instrument says so. Flight software reads SENSORS, because a computer knows only
+what its instruments report: `DescentGuidance` reads the altimeter *with* its mount
+offset and `rangeMax`, not the true height.
+
+Backwards costs real bugs. An altimeter's datum sits above the pads, so gating a strut
+on it forces a hand-copied constant to restate that offset, and the legs light before
+touchdown. **When a constant in a `.mo` exists only to translate between two prims'
+positions, the wire is wrong.**
+
+**A sprung mechanism belongs to the SOLVER, not to a domain model.** A landing
+leg's shock absorber is `UsdPhysicsDriveAPI:linear` — `physics:type = "force"`,
+`drive:linear:physics:stiffness` in N/m, `:damping` in N·s/m — integrated by
+avian. Its stroke and reaction are then the joint's own `displacement` and
+`force` ports. Do not write a `.mo` for the spring and do not animate it from
+rhai: Modelica earns its keep where a domain equation has no solver already
+integrating it, and this one does.
+
+Sign is a property of the joint. `force = stiffness * (targetPosition -
+displacement)` makes the reaction opposite in sign to the displacement, so a
+compressed strut reads NEGATIVE displacement and POSITIVE force, and the axis
+points the way the strut extends. Author it once in `physics:localRot0`; never
+correct it downstream in a wire's `lunco:factor:`, which is a unit conversion.
+
+**A sensor reads physics; it never re-derives it.** The touchdown switch and the
+collider contact ports share one computation (`avian::contact_of`). Two copies are
+free to drift, and nothing in the log says which one you are looking at.
+
+**No per-tick computation.** Prefer an on-demand port read over a mirror component
+kept in step by a sync system, and `Changed<T>` over an unfiltered system. Never
+per-tick work in rhai — except in a rhai *test*, where stepping is the point.
+
 This skill is the *assembly* layer over the single-domain skills:
 [`build-usd-scene`](../build-usd-scene/SKILL.md) (author the scene),
 [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md) (a vessel's GNC),
@@ -70,7 +118,7 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)              # rigid body (Avian po
     float inputs:force_local_y.connect = </Lander/GNC.outputs:thrust>   # GNC thrust → body force
 
     def LunCoProgram "GNC" {
-        uniform asset lunco:program:sourceAsset = @models/LanderGNC.mo@
+        uniform asset info:sourceAsset = @models/LanderGNC.mo@
         uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
         float inputs:altitude.connect     = </Lander.outputs:height>
         float inputs:descent_rate.connect = </Lander.outputs:velocity_y>
@@ -78,11 +126,11 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)              # rigid body (Avian po
         float inputs:g = 1.62                                           # a parameter is an input with a constant
     }
     def LunCoProgram "Power" {
-        uniform asset lunco:program:sourceAsset = @models/Battery.mo@
+        uniform asset info:sourceAsset = @models/Battery.mo@
         float inputs:load.connect = </Lander/GNC.outputs:thrust>
     }
     def LunCoProgram "Therm" {
-        uniform asset lunco:program:sourceAsset = @models/ThermalNode.mo@
+        uniform asset info:sourceAsset = @models/ThermalNode.mo@
     }
 }
 ```
@@ -117,7 +165,7 @@ def Scope "Scenario" ( kind = "component" )
     custom string lunco:scenario = "rover-surface-ops"
 
     def LunCoProgram "Mission" {
-        uniform asset lunco:program:sourceAsset = @scenarios/rover_surface_ops.rhai@
+        uniform asset info:sourceAsset = @scenarios/rover_surface_ops.rhai@
         # or author the mission state machine in place:
         # uniform string lunco:program:sourceCode = """ … """
     }
@@ -139,7 +187,7 @@ def Scope "Scenario" ( kind = "component" )
    `assets/vessels/rovers/{skid,ackermann}_rover.usda`, a lander) — wheel count,
    params, joints, drive type all come from USD; nothing hardcoded.
 3. **Add subsystems per vehicle:** a `def LunCoProgram` per domain naming its
-   `lunco:program:sourceAsset`; the body carries `PhysicsRigidBodyAPI` + the force
+   `info:sourceAsset`; the body carries `PhysicsRigidBodyAPI` + the force
    connections. Reuse existing `.mo` (`models/RocketEngine.mo`, an MSL `LimPID`
    for GNC).
 4. **Wire cross-domain ports** with connections on the consumer

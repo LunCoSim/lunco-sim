@@ -6,6 +6,36 @@ This document specifies the canonical USD/Omniverse representation for vehicle w
 
 ---
 
+## 0. Two spring mechanisms — which one to author
+
+The repo has two, and they are not interchangeable. Pick by what the spring carries.
+
+| | **Raycast vehicle suspension** | **Joint drive spring** |
+| --- | --- | --- |
+| Use for | **wheels** on a wheeled vehicle | **struts and legs** — landing gear, dampers, deployables |
+| Authored as | `PhysxVehicleSuspensionAPI` (+ `LunCoSuspensionAPI` for `restLength`), on the wheel prim or on a suspension prim bound from a `PhysxVehicleWheelAttachmentAPI` | `UsdPhysicsDriveAPI:linear` applied to a `PhysicsPrismaticJoint` |
+| Parameters | `physxVehicleSuspension:springStrength` / `:springDamperRate`, `lunco:suspension:restLength` | `drive:linear:physics:stiffness` / `:damping` / `:targetPosition` / `:maxForce`, with `:type = "force"` |
+| Ground contact | a **ray** from the attachment finds the ground; no wheel collider carries the load | ordinary rigid-body **contacts** between the foot/pad collider and the ground |
+| Who integrates the spring | `lunco-mobility`'s `apply_wheel_suspension`, analytically (§3.3) | avian's solver, as `MotorModel::ForceBased` — the same law `UsdPhysicsDriveAPI` defines, so the SI numbers pass through untouched |
+| Stroke and reaction read from | the `WheelRaycast` / `Suspension` components | the joint's own cosim ports, `displacement` (m, signed) and `force` (N) — `lunco-cosim`'s `JOINT_DISPLACEMENT_PORT` / `JOINT_FORCE_PORT` |
+
+Both are legitimate; neither substitutes for the other. A raycast wheel has no
+prismatic joint and its suspension force never appears as a joint reaction, so a
+strut's load cannot be read that way. Conversely a wheel driven by a prismatic
+drive loses the raycast model's ground-following behaviour.
+
+Sections 1–5 below specify the **raycast** mechanism. The joint-drive mechanism is
+a plain `PhysicsPrismaticJoint`: `physics:lowerLimit` / `:upperLimit` bound the
+stroke, `physics:localRot0` carries a non-cardinal axis (`physics:axis` names only
+cardinals), and anchors are left unauthored so the loader derives them from the
+transform hierarchy — which puts `displacement` at exactly 0 in the authored rest
+pose, and therefore `force` at exactly 0 until something compresses the strut.
+`assets/vessels/landers/descent_lander.usda`'s `Leg*_Spring` prims are the worked
+example. Anything downstream that needs the load — a strut's glow, a touchdown
+check — reads that `force` port, never a second copy of the spring law.
+
+---
+
 ## 1. The Omniverse/PhysX Vehicle Schema Specification
 
 In the NVIDIA Omniverse / PhysX 5 Vehicle SDK, a wheel assembly is represented by three core API schemas:
@@ -65,7 +95,7 @@ def Cylinder "Wheel_FL" (
 
 In this simplified composition, the wheel and suspension properties live on the same Prim, so their relationship is implicit.
 
-**The APIs are applied once, on the component prims, and arrive through the arcs.** `wheel.usda`'s `Wheel` applies `PhysxVehicleWheelAPI` + `PhysxVehicleEngineAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`. `apiSchemas` is a list-op and composes across reference arcs, so all 30 wheels across the seven rovers get their schemas from two files. A rover authors values, never schemas — re-shodding a wheel or retuning a spring is still one line in one place.
+**The APIs are applied once, on the component prims, and arrive through the arcs.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `PhysxVehicleWheelAPI` + `PhysxVehicleEngineAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`. `apiSchemas` is a list-op and composes across reference arcs, so all 30 wheels across the seven rovers get their schemas from two files. A rover authors values, never schemas — re-shodding a wheel or retuning a spring is still one line in one place.
 
 ---
 
@@ -129,9 +159,10 @@ It **cannot function** without suspension compliance parameters ($k, c, \text{re
 * It logs a compilation error and **refuses to map or spawn the wheel** in the simulation, exposing the asset composition bug immediately.
 
 ### 4.2. Rigid Wheels (True Rigid Axles)
-If a vehicle axle is intended to be completely rigid (no suspension travel or compliance):
-* The asset **must** be configured as a physical joint-based wheel (carrying a `PhysicsRevoluteJoint` connecting the wheel body directly to the chassis/axle, with no intermediate `PrismaticJoint` or suspension schema).
-* Contact normal forces are resolved natively via the rigid body and collider contacts in the physics engine (`Avian3D`), representing a true rigid-axle chassis without compliance forces.
+A wheel with no travel is still authored explicitly — "no suspension" is never
+spelled as "omit the schema", which §4.1 rejects. Two ways to say it:
+* **Raycast, zero travel** — reference `components/mobility/suspensions/rigid.usda`, which applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI` with `restLength = 0` and a stiff, heavily damped spring. The wheel stays on the raycast path; the spring exists only to keep the contact solver quiet. This is what `rucheyok.usda` uses.
+* **Joint-based** — a `PhysicsRevoluteJoint` connecting the wheel body directly to the chassis/axle, with no prismatic joint and no suspension schema. Contact normal forces are then resolved natively from rigid-body collider contacts in `Avian3D`, a true rigid axle with no compliance term.
 
 ---
 

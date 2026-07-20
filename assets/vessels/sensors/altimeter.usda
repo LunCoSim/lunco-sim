@@ -45,8 +45,7 @@ def Xform "Altimeter" (
     #
     # A UNIT cylinder. `radius`/`height` bake into the mesh at instantiation and are
     # never re-read, so the live length can only be `xformOp:scale` — which the
-    # `range_beam` driver writes every frame from the sensor's reported distance. Same
-    # idiom as the lander's flame cone.
+    # `range_beam` driver writes every frame from the sensor's reported distance.
     def Cylinder "Beam"
     {
         uniform token axis = "Y"

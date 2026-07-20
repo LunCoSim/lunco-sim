@@ -1,7 +1,7 @@
 within;
 // tagline: CommsLink — Friis link budget → SNR → Shannon rate → downlink buffer
 //
-// Top-level (`within;`), bound to a link node's prim via `lunco:program:sourceAsset`. A
+// Top-level (`within;`), bound to a link node's prim via `info:sourceAsset`. A
 // self-contained RF budget — one lumped equation set, no `LunCo.Electrical`-style library
 // import — so it compiles standalone from its sourceAsset.
 //

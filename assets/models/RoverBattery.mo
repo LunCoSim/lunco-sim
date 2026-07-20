@@ -17,7 +17,7 @@
 //
 // RUMOCA RULES (same as RoverDrivetrain.mo / LegStrut.mo): branch-free
 // equations — `der(x) = expr` with `max`/`min` compositions only, no
-// `if`/`when`. Compiled by rumoca via `lunco:program:sourceAsset`; the drive
+// `if`/`when`. Compiled by rumoca via `info:sourceAsset`; the drive
 // inputs wire natively via `inputs:x.connect` to the rover's FSW drive ports.
 
 model RoverBattery

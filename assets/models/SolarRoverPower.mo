@@ -4,7 +4,7 @@ within;
 // Battery, SolarPanel and DCMotor from `LunCo.Electrical`, connected on one bus node so
 // Kirchhoff balances source against load — SoC falls out of the circuit, nothing sums a
 // current. Top-level (`within;`), bound to the scene's `PowerSubsystem` prim via
-// `lunco:program:sourceAsset` and importing the seated `LunCo` library: components in the
+// `info:sourceAsset` and importing the seated `LunCo` library: components in the
 // library, the assembly per vehicle (the `rucheyok_electrical.mo` shape).
 //
 // Boundary (where cosim crosses): `sun_azimuth` from the solar bridge, `panel_yaw` from

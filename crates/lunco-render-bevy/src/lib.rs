@@ -17,9 +17,11 @@ pub mod horizon_shade;
 pub mod link_beams;
 pub mod look_cache;
 mod scene_camera;
+mod scene_ports;
 mod sensor_beams;
 pub mod shader_material;
 mod shader_look;
+mod shader_ports;
 mod terrain_maps;
 mod world_label;
 
@@ -90,10 +92,8 @@ impl Plugin for LuncoRenderPlugin {
             // scene's authored `UsdPreviewSurface` intent in typed, render-free
             // form. Registering it is what turns that from an internal detail into
             // a UNIVERSAL read surface: one line, no new verb, no per-language
-            // shim. The engine plume light reads its own emissive radiance through
-            // it (`assets/scenarios/flame.rhai`) and derives its output from it,
-            // instead of carrying a hand-tuned brightness constant that no material
-            // change can ever reach.
+            // shim — anything that wants to know what a surface looks like asks the
+            // component the loader already filled, rather than re-deriving it.
             .register_type::<PbrLook>()
             .add_observer(bind_pbr_look)
             .add_systems(
@@ -105,6 +105,10 @@ impl Plugin for LuncoRenderPlugin {
                     .in_set(lunco_render::LookRebind),
             );
         scene_camera::build(app);
+        // Lights and transforms become connection targets, so a value the
+        // simulation publishes reaches them through the ordinary port graph rather
+        // than through a script that samples a port every tick.
+        scene_ports::build(app);
         // `shader_look::build` first: it registers the `ShaderMaterial` + `Shader`
         // asset stores (idempotently), which `ShaderMaterialPlugin` needs in place
         // before it loads the shared WGSL modules through the `AssetServer`.

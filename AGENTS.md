@@ -52,11 +52,27 @@ attribute does none of that. Ambient light was a custom `lunco:env:ambientBright
 is an untextured `UsdLuxDomeLight`. Camera exposure was a Bevy constant; `UsdGeomCamera`
 declares `exposure:iso`/`:time`/`:fStop`/`:responsivity`.
 
-Watch for a *rename* of a standard, which is the same mistake wearing a namespace:
-`LunCoProgram` declares `lunco:program:implementationSource`/`:id`/`:sourceAsset`/
-`:sourceCode` — token-for-token `UsdShadeShader`'s `info:implementationSource`/`info:id`/
-`info:sourceAsset`/`info:sourceCode`. If your new attribute set reads like a standard one
-with a prefix swapped, use the standard one.
+**The test, before you type `lunco:`:** name the standard field this quantity would have
+if USD had thought of it. If you can name one, USD *did* think of it — use it. A vendor
+namespace is only correct when USD has **no concept at all** for the thing, and then it
+should cover only the genuinely new part.
+
+The lathe is the worked example, and it cuts both ways. `lunco:lathe:profile` /
+`throatRadius` / `contour` are legitimate: USD has no surface-of-revolution schema — the
+parametric gprims are Sphere/Cube/Cylinder/Cone/Capsule/Plane, and `UsdGeomNurbsPatch` is a
+*result* format (points, weights, knots), not a generator. But sampling density and
+polynomial degree are properties of the patch, so they are read from the standard
+`NurbsPatch` fields `vVertexCount` and `vOrder`. Only the *shape* was new. Two spellings of
+one quantity is the same defect as rule 3, arrived at from the other side.
+
+Also prefer a widely-adopted external standard to a bespoke blob: the mission ephemeris is
+CCSDS OEM / SPICE SPK, not a hand-rolled JSON schema.
+
+Watch for a *rename* of a standard, which is the same mistake wearing a namespace. A
+program prim names its source the way `UsdShadeShader` does — `info:implementationSource` /
+`info:id` / `info:sourceAsset` / `info:sourceCode` — because a `lunco:program:` set spelled
+token-for-token the same is a second name for one thing. If your new attribute set reads
+like a standard one with a prefix swapped, use the standard one.
 
 **1a. A `lunco:` schema is for an EXPOSED ENGINE CAPABILITY — nothing else.** That is the
 test, and it is narrow. Intents, program dispatch, terrain layers, control bindings are
@@ -94,11 +110,49 @@ not the default.**
 
 | Layer | For | You are in the right place when |
 |---|---|---|
-| **USD** | scene description: geometry, lights, materials, cameras, camera *paths*, bodies, joints, composition | a human could see and edit it in usdview |
-| **Modelica** | continuous dynamics — forces, torques, flows, anything with `der()` | you are writing an equation, not a procedure |
+| **USD** | scene description: geometry, lights, materials, cameras, camera *paths*, bodies, joints, sensors, composition | a human could see and edit it in usdview |
+| **Modelica** | continuous dynamics — thermal, electrical, propulsion, structural; anything with `der()` | you are writing an equation, not a procedure |
 | **Behaviour tree** | sequencing and mission logic | you were about to write a state machine with an index and a pile of flags |
 | **rhai** | scenario glue, per-scene policy | it reads as intentions, not a computation |
-| **Rust** | engine mechanism, hot paths, per-entity per-tick work | it must be fast, or it is what the layers above stand on |
+| **Rust** | kinematics and dynamics (avian), engine mechanism, hot paths | it must be fast, or it is what the layers above stand on |
+
+**Rust owns rigid-body physics; Modelica owns everything else that evolves.** Bodies,
+colliders, contacts and joints are the solver's — do not re-derive them in an equation.
+Thermal, electrical, propulsion and structural dynamics are Modelica's, and reach physics
+through cosim ports. Modelica running GNC or flight-software math is fine — an equation is
+an equation — but a Modelica model must never become a second physics engine.
+
+**Physics ports vs sensors — two layers, and mixing them is a bug.**
+
+| | Physics ports | Sensors |
+|---|---|---|
+| Exposed because | the body/collider EXISTS | someone AUTHORED an instrument in USD |
+| Ports | `position_*`, `velocity_*`, `contact`, `contact_force` | `range`, `accel_*`, `spec_force_*`, `contact` |
+| Adds | nothing — it is ground truth | mount offset, range limits, out-of-range mode, noise, failure |
+| Read by | **physical parts** — a strut, a damper, a structure | **flight software** — GNC, OBC, autopilot |
+
+A physical part reads PHYSICS. A landing leg carries load because the ground pushes on
+it, so the strut's glow takes the `force` port off the leg's own prismatic joint — the
+number the solver just computed. Gating that behind an authored sensor would mean a
+strut that only reports load if someone remembered to install a switch. Flight software
+reads SENSORS, because a computer only knows what its instruments tell it:
+`DescentGuidance` reads the altimeter, with its mount point, its `rangeMax` and its
+out-of-range behaviour, not the true height.
+
+Getting this backwards costs real bugs. An altimeter's datum sits 3.3 m above the pads, so
+gating a strut on it forces a hand-copied constant to restate the geometry, and the legs
+fire before touchdown. **When a constant exists only to translate between two prims'
+positions, the wire is wrong.**
+
+**A sensor READS physics, it never re-derives it.** One computation, two consumers: the
+touchdown switch and the collider contact ports both call `avian::contact_of`. Two copies
+are free to disagree, and nothing in the log says which is right.
+
+**No per-tick computation.** Prefer an on-demand port read to a mirror component kept in
+step by a sync system, and a `Changed<T>`-filtered system to an unfiltered one. The avian
+port groups read straight off avian's components and contact graph when something asks; the
+lathe re-meshes only when a parameter changes. Per-tick work in rhai is forbidden outright
+(see 5). The exception is a rhai *test*, where per-tick stepping is the point.
 
 Both campaign fixes followed this: a per-frame trigonometry camera in rhai became a
 `BasisCurves` prim (a curve you can drag beats code you cannot see until you record it);
@@ -112,6 +166,33 @@ rebuild, diffable, and composes with layers; the equivalent rhai is none of thos
 only runs when the scenario runs. The camera above is the canonical case: the *same* move
 as 30 authored control points is a thing you can see, drag, and hand to someone else.
 Script the parts USD genuinely cannot express — decisions, timing, vehicle commands.
+
+**A visual is a CONSEQUENCE of physics — wire it, never script it.** A strut reddens
+because it is carrying load, on the same tick and by the number the solver computed.
+Shader parameters are ordinary port sinks: `float inputs:load_frac.connect =
+</Lander/LegPX_Spring.outputs:force>` on the bound gprim, and the value lands on the
+WGSL uniform through the same graph a thruster force uses — no new resolver, no
+per-frame script. Normalise on the WIRE, with the SSP affine `lunco:factor:<port>` /
+`lunco:offset:<port>` the sink already carries — not in the shader, never in rhai, and
+not in a `.mo` written to hold a single rating. **Publish the physical RESULT, not the
+driving term** — a strut's load is the spring's own reaction,
+`stiffness * (targetPosition - displacement) + damping * (targetVelocity - velocity)`,
+which is zero until compression starts, not a proximity-gated force pressed onto it, which
+reads fully loaded while the leg is still in the air. That reaction is positive in
+compression, so the joint's axis — and only the joint's axis — carries the sign; a
+`lunco:factor:` is a unit conversion and never a sign fixup. When a visualization happens too early, the
+model is publishing an input. See
+[`visualize-physics-with-shaders`](skills/visualize-physics-with-shaders/SKILL.md).
+
+**A port backend must claim only names it KNOWS it owns — never guess and never widen
+to compensate.** Registry precedence is registration order and plugin add-order is not
+a contract, so a backend that accepts a name provisionally will silently swallow
+another layer's writes and return `true`, leaving propagation nothing to report. If a
+backend cannot answer from what it has, give it an authoritative set from the layer
+that can: the shader backend claims a parameter only when the USD authoring pass — which
+resolved the bound shader and knows its declared inputs — recorded it in
+`ShaderLook::driven`. A guess plus a precedence workaround is two mechanisms where one
+fact belongs.
 
 **3. No legacy, shims, or fallbacks.** Replace a mechanism and delete the old one in the
 *same* change. Two spellings of one fact means two writers, and which wins becomes a
@@ -157,7 +238,13 @@ guide?" walk gets that wrong), and `read_preview_surface` over hand-walking `inp
 These are correctness, not style.
 
 **4. Reuse, don't reinvent.** Check for a maintained crate (the repo already leans on
-`openusd`, `avian3d`, `big_space`, `rumoca`, `catppuccin`). Check for an existing pattern
+`openusd`, `avian3d`, `big_space`, `rumoca`, `catppuccin`). **Reach into the crate before
+writing your own** — `openusd` in particular already knows how to resolve composition arcs,
+walk stages, and read typed attributes, so a hand-rolled path parser, a bespoke attribute
+reader, or a private re-implementation of an arc is almost always a sign the crate's API
+was not read. If the crate genuinely lacks something, the honest move is a narrow wrapper
+(or an upstream patch) with a comment saying what was missing — not a parallel
+implementation that drifts from it. Check for an existing pattern
 here — `lunco-doc`/`lunco-doc-bevy`, `lunco-usd`/`lunco-usd-bevy`,
 `lunco-render`/`lunco-render-bevy` are one split applied three times; a fourth should look
 like them. Check the actual spec, not your memory of it. Reinventing is sometimes right,
