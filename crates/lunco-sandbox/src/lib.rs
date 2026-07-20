@@ -1163,8 +1163,8 @@ fn apply_run_status(
 const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 
 /// One authored `LunCoPolicy` prim, BEFORE its rhai source is resolved. The source is
-/// authored EITHER inline (`lunco:policy:source`, a `string` that rides the USD journal
-/// plane — live-editable, per-op synced) OR by file reference (`lunco:policy:sourcePath`,
+/// authored EITHER inline (`info:sourceCode`, a `string` that rides the USD journal
+/// plane — live-editable, per-op synced) OR by file reference (`info:sourceAsset`,
 /// an `asset` `@…rhai@` that rides the whole-twin content plane, CID-verified). Inline
 /// wins over the file — the same rule as `lunco:script`/`lunco:scriptPath` and
 /// `lunco:behavior`/`lunco:behaviorPath`.
@@ -1173,9 +1173,9 @@ struct AuthoredPolicy {
     seam: String,
     entry: String,
     deterministic: bool,
-    /// Inline rhai source (`lunco:policy:source`), non-empty when authored.
+    /// Inline rhai source (`info:sourceCode`), non-empty when authored.
     inline_source: Option<String>,
-    /// Asset path to a `.rhai` file (`lunco:policy:sourcePath`), when authored.
+    /// Asset path to a `.rhai` file (`info:sourceAsset`), when authored.
     source_path: Option<String>,
 }
 
@@ -1199,12 +1199,12 @@ fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<Auth
             // The schema default for both is empty (`""` / `@@`), so filter empties: an
             // unauthored opinion reads back as the fallback, which is not a real source.
             let inline_source = view
-                .value::<String>(&prim, "lunco:policy:source")
+                .value::<String>(&prim, "info:sourceCode")
                 .filter(|s| !s.is_empty());
             // `asset`-typed ref — read via `UsdRead::asset` (a `Value::AssetPath`, which a
             // `String` read would miss). UFCS, so no trait import is needed here.
             let source_path =
-                lunco_usd_bevy::UsdRead::asset(&view, &prim, "lunco:policy:sourcePath")
+                lunco_usd_bevy::UsdRead::asset(&view, &prim, "info:sourceAsset")
                     .filter(|s| !s.is_empty());
             if seam.is_empty() || (inline_source.is_none() && source_path.is_none()) {
                 continue;
@@ -1223,7 +1223,7 @@ fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<Auth
     out
 }
 
-/// The three states of resolving a `lunco:policy:sourcePath` `.rhai` reference.
+/// The three states of resolving a `info:sourceAsset` `.rhai` reference.
 #[cfg(feature = "networking")]
 enum PolicySource {
     /// Loaded — the file's text.
@@ -1234,7 +1234,7 @@ enum PolicySource {
     Failed,
 }
 
-/// Resolve a `lunco:policy:sourcePath` `.rhai` reference to its text via the
+/// Resolve a `info:sourceAsset` `.rhai` reference to its text via the
 /// `AssetServer` (wasm-safe — no `std::fs`), caching the handle so the asset isn't
 /// dropped mid-load. Mirrors `lunco_scripting::commands::resolve_embedded_scenario_paths`
 /// — and shares its `TODO(scenario-resolve)`: a `.rhai` fetched into a peer's
@@ -1281,8 +1281,8 @@ fn resolve_policy_source_file(
 /// each peer recomposes → each peer's projector re-registers) — no bespoke policy
 /// broadcast.
 ///
-/// A policy's rhai source may be authored inline (`lunco:policy:source`, journal
-/// plane) or by an `@…rhai@` file reference (`lunco:policy:sourcePath`, content plane),
+/// A policy's rhai source may be authored inline (`info:sourceCode`, journal
+/// plane) or by an `@…rhai@` file reference (`info:sourceAsset`, content plane),
 /// inline winning — so this also drives the async asset load, keeping the file's text
 /// resolved. Change-gated on total stage generation + stage count, PLUS a re-run while
 /// any file-backed source is still loading.
@@ -1425,12 +1425,12 @@ fn project_env_settings(
 /// underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
 /// syncs to every peer → the projector activates it** (registers the rhai hook; at
 /// `MERGE_SEAM` flips the merge strategy). Re-issuing with the same `name` (or later
-/// editing `lunco:policy:source`) **hot-replaces the hook live** — dynamic rhai
+/// editing `info:sourceCode`) **hot-replaces the hook live** — dynamic rhai
 /// editing with no file system, converging across the network.
 ///
-/// This command authors the INLINE source (`lunco:policy:source`, journal plane) —
+/// This command authors the INLINE source (`info:sourceCode`, journal plane) —
 /// the live-edit form. A file-backed policy is authored instead by pointing
-/// `lunco:policy:sourcePath` at an `@…rhai@` file (content plane, CID-synced); the
+/// `info:sourceAsset` at an `@…rhai@` file (content plane, CID-synced); the
 /// projector resolves it via the asset server, and inline wins when both are set.
 ///
 /// This is the ergonomic surface over the canonical form (a `LunCoPolicy` prim); the
@@ -1515,7 +1515,7 @@ fn on_set_rhai_policy(
         UsdOp::SetAttribute {
             edit_target: root.clone(),
             path: prim.clone(),
-            name: "lunco:policy:source".into(),
+            name: "info:sourceCode".into(),
             type_name: "string".into(),
             value: cmd.source.clone(),
         },
@@ -1656,7 +1656,7 @@ mod policy_projection_tests {
             \x20   def LunCoPolicy \"takeover\"\n    {\n\
             \x20       string lunco:policy:seam = \"control.authority.take\"\n\
             \x20       string lunco:policy:entry = \"may_take_control\"\n\
-            \x20       string lunco:policy:source = \"fn may_take_control(ctx){true}\"\n\
+            \x20       string info:sourceCode = \"fn may_take_control(ctx){true}\"\n\
             \x20       bool lunco:policy:deterministic = false\n    }\n}\n";
 
         let mut stages = CanonicalStages::default();
@@ -1677,7 +1677,7 @@ mod policy_projection_tests {
         assert!(!p.deterministic, "authored deterministic=false is read");
     }
 
-    /// A **file-backed** policy authors an `asset`-typed `lunco:policy:sourcePath`
+    /// A **file-backed** policy authors an `asset`-typed `info:sourceAsset`
     /// (`@…rhai@`) instead of inline source — the content-plane form. The extractor
     /// reads the authored path (via `UsdRead::asset`, which a plain `String` read would
     /// miss); the projector resolves it to text through the asset server. No inline
@@ -1689,7 +1689,7 @@ mod policy_projection_tests {
             \x20   def LunCoPolicy \"drive\"\n    {\n\
             \x20       string lunco:policy:seam = \"rover.drive\"\n\
             \x20       string lunco:policy:entry = \"drive\"\n\
-            \x20       asset lunco:policy:sourcePath = @scripting/policy/control_authority.rhai@\n\
+            \x20       asset info:sourceAsset = @scripting/policy/control_authority.rhai@\n\
             \x20   }\n}\n";
 
         let mut stages = CanonicalStages::default();
@@ -1724,7 +1724,7 @@ mod policy_projection_tests {
             \x20   def LunCoPolicy \"drive\"\n    {\n\
             \x20       string lunco:policy:seam = \"rover.drive\"\n\
             \x20       string lunco:policy:entry = \"drive\"\n\
-            \x20       string lunco:policy:source = \"fn drive(c){1}\"\n\
+            \x20       string info:sourceCode = \"fn drive(c){1}\"\n\
             \x20       bool lunco:policy:deterministic = true\n    }\n}\n";
 
         let id = bevy::asset::AssetId::invalid();
@@ -1751,7 +1751,7 @@ mod policy_projection_tests {
         stages
             .get(id)
             .unwrap()
-            .author_attribute(&prim, "lunco:policy:source", "string", new_src)
+            .author_attribute(&prim, "info:sourceCode", "string", new_src)
             .expect("author live edit");
 
         assert_eq!(

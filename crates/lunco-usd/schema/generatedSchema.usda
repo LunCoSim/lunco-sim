@@ -64,27 +64,27 @@ class LunCoPolicy "LunCoPolicy" (
         doc = """The seam this policy governs (the extension point it hooks).
         Uniform: a policy cannot change which seam it guards over time."""
     )
-    string lunco:policy:source = "" (
+    string info:sourceCode = "" (
         doc = """The rhai source of the hook, authored INLINE. Editing it live
         re-registers the hook. Inline source rides the USD journal plane — it is a
         per-op edit that syncs and converges like any other doc op, so it is the form
         for live/dynamic policy editing.
 
-        For a file-backed policy, author `lunco:policy:sourcePath` instead. Inline wins
-        when both are present (mirrors `lunco:script`/`lunco:scriptPath` and
-        `lunco:behavior`/`lunco:behaviorPath`)."""
+        `UsdShade`'s own property name, as on `LunCoProgram`: a policy is a pluggable
+        implementation behind a named seam, which is the same shape of thing a shader
+        is. For a file-backed policy author `info:sourceAsset` instead; inline wins
+        when both are present."""
     )
-    asset lunco:policy:sourcePath = @@ (
-        doc = """File-backed alternative to `lunco:policy:source`: an `@…rhai@`
-        reference to the hook's rhai source, loaded via the asset server (wasm-safe,
-        hot-reloadable — the same path `lunco:scriptPath` scenarios take).
+    asset info:sourceAsset = @@ (
+        doc = """File-backed alternative to `info:sourceCode`: an `@…rhai@` reference to
+        the hook's rhai source, loaded via the asset server (wasm-safe, hot-reloadable).
 
         `asset`, not `string`. A script reference is a genuine asset: only an `asset` is
         seen by USD's resolver and discoverable by the whole-twin **content plane**
         (walked, CID-addressed, fail-closed verified), so the `.rhai` ships and every
         peer resolves byte-identical source — the convergence a policy needs. Held as a
-        `string` the path would be inert. Inline `lunco:policy:source` wins over this
-        when both are authored."""
+        `string` the path would be inert. Inline `info:sourceCode` wins over this when
+        both are authored."""
     )
     string lunco:policy:entry = "" (
         doc = "Entry-point function name within the source."
@@ -507,9 +507,7 @@ class LunCoProgram "LunCoProgram" (
     instead of a connection. Wire it later and nothing about the program changes.
 
     A PRIM THAT *IS* A PROGRAM just authors these properties on itself; there is no
-    separate "apply" schema. (There was — `LunCoProgramAPI`, whose token no Rust code
-    ever read. The properties were always the mechanism, so applying it was a no-op
-    and the API was documentation pretending to be a schema.)
+    separate "apply" schema, because the properties are the whole mechanism.
 
     Which form to use is not a style question, it is whether the program is separable
     from the thing. A vessel's flight-control system is its airframe: it is what the
@@ -530,9 +528,7 @@ class LunCoProgram "LunCoProgram" (
         `UsdShadeShader` asks exactly this question of a shader and carries exactly
         these three answers; a program is the same shape of thing — a pluggable
         implementation behind typed `inputs:`/`outputs:` — so it uses the same
-        properties rather than a private rename of them. (They were once
-        `lunco:program:implementationSource`/`:id`/`:sourceAsset`/`:sourceCode`:
-        token-for-token this set, with a prefix swapped.)"""
+        properties."""
         allowedTokens = ["id", "sourceAsset", "sourceCode"]
     )
     uniform token info:id = "" (
