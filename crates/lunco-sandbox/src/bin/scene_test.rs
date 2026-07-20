@@ -52,8 +52,8 @@
 //!    multi-threaded run is NOT run-to-run reproducible, while the same scene on
 //!    one compute thread is bit-identical. A test runner that can't reproduce
 //!    its own result is worthless, so we pin `compute` to 1 thread. (This is a
-//!    deliberate divergence from how the GUI runs — see the note on
-//!    `single_thread_compute_pool` below.)
+//!    deliberate divergence from how the GUI runs — see `pinned_compute_pool`
+//!    and `--threads` below.)
 //!
 //! Manual stepping also means we do **not** call `App::run()`. The
 //! `ScheduleRunnerPlugin` that `SandboxHeadlessPlugin` installs simply never
@@ -93,11 +93,56 @@
 //! A hang is a FAILURE, not a pass. A scene whose scenario never reaches its
 //! verdict (deadlocked wheel build, scene that never loaded, script that threw)
 //! must not be able to go green by saying nothing.
+//!
+//! ## The 2x2 matrix: `--threads` × `--jitter`
+//!
+//! The two knobs above are exactly the two ways this runner differs from the
+//! GUI sandbox, and a scene can pass here while failing there. That happened:
+//! `scenes/sandbox/drivetrain_parity.usda` passes 8/8 under `scene_test` and
+//! blows up under the GUI (measured speed 4.5 → 120 → 846 m/s during the steer
+//! phase, heading NaN). Two candidate causes, and "it passes headless" tells
+//! you nothing about WHICH:
+//!
+//! ```text
+//!                jitter=0 (fixed dt)      jitter>0 (variable dt)
+//!   threads=1    the default gate         isolates DT SENSITIVITY
+//!   threads=0/N  isolates THREAD ORDER    closest to the real GUI
+//! ```
+//!
+//! Each axis isolates one thing, so read the matrix like this:
+//!
+//! * **Fails only when `--jitter > 0`** ⇒ a **dt-sensitivity bug**, not a
+//!   threading bug. Something in the drivetrain integrates in a way that is not
+//!   stable across a varying step — a per-frame delta divided by a stale `dt`,
+//!   a spring/PD gain tuned for one step size, an explicit integration that
+//!   goes unstable past a step threshold. A 4.5 → 846 m/s explosion is the
+//!   signature of exactly this: a blowup, not numerical drift.
+//! * **Fails only when `--threads` ≠ 1** ⇒ an **ordering/race bug**: avian's
+//!   parallel solver visiting islands and contacts in a different order, or a
+//!   system pair whose relative order is unconstrained.
+//! * **Fails in both** ⇒ they are the same underlying fragility, surfaced two
+//!   ways.
+//! * **Passes in all four** ⇒ the GUI differs in a THIRD way not modelled here
+//!   (rendering feedback, input, interpolation, a UI-only system) and the
+//!   bisection has to continue outside this binary.
+//!
+//! `--jitter` is a MODEL of realtime pacing, not realtime itself: the clock is
+//! still `ManualDuration`, just re-set to a different value before each update,
+//! drawn from a **seeded** PRNG (`--seed`). So a jittered failure is still
+//! exactly reproducible — same seed, same dt sequence, same blowup, every run.
+//! A test you cannot re-run is not a test, which is why this deliberately does
+//! not touch the wall clock or system randomness.
+//!
+//! Note that under `--jitter` one `app.update()` is no longer necessarily one
+//! `FixedUpdate` tick: `Time<Fixed>` accumulates a varying delta and will drain
+//! zero, one, or two ticks per update. That is the point — it is precisely the
+//! catch-up behaviour a realtime frontend produces, and it is a prime suspect
+//! for the blowup. The reported `ticks` counts UPDATES; `sim` is the summed
+//! simulated time, which stays accurate because the jitter is symmetric.
 
 use std::time::Duration;
 
-use bevy::app::{PluginGroupBuilder, TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
-use bevy::asset::{AssetMetaCheck, AssetPlugin};
+use bevy::app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
@@ -109,6 +154,10 @@ use lunco_sandbox::{SandboxCorePlugin, SandboxHeadlessPlugin};
 /// (~25 s), so hitting it means something is genuinely stuck.
 const DEFAULT_MAX_TICKS: u64 = 20_000;
 
+/// Fixed default PRNG seed for `--jitter`. A CONSTANT, never a clock read: the
+/// whole value of jitter-mode is that a failure it finds can be replayed.
+const DEFAULT_SEED: u64 = 0x5EED_1EAF_C0FF_EE01;
+
 #[derive(Clone)]
 struct Cli {
     /// Asset-root-relative USD scene path, e.g. `scenes/sandbox/drivetrain_parity.usda`.
@@ -119,6 +168,49 @@ struct Cli {
     tick_hz: f64,
     /// Optional channel-name filter for the verdict (see module docs).
     verdict_channel: Option<String>,
+    /// Compute-pool threads. `1` = the reproducible default, `0` = leave bevy's
+    /// default multi-threaded pool alone (what the GUI runs), `n>1` = pin n.
+    threads: usize,
+    /// Fractional dt jitter in `[0, 1)`. `0.0` = the exact fixed step.
+    jitter: f64,
+    /// Seed for the jitter PRNG. Irrelevant when `jitter == 0.0`.
+    seed: u64,
+}
+
+/// `xorshift64*` — a seeded, dependency-free PRNG.
+///
+/// Deliberately NOT `rand`: this needs three lines of arithmetic, and pulling a
+/// crate in would mean the dt sequence depends on a version bump. Deliberately
+/// not the system RNG or the clock either — see the module docs. The multiplier
+/// and shift triple are Vigna's; the statistical quality only has to be good
+/// enough to look like frame-pacing noise.
+struct Xorshift64Star(u64);
+
+impl Xorshift64Star {
+    fn new(seed: u64) -> Self {
+        // State must never be zero, or the generator is stuck at zero forever.
+        Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
+    }
+
+    /// Next value in `[0, 1)`, taking the high 53 bits (an f64's mantissa).
+    fn next_unit(&mut self) -> f64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        let v = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        (v >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Next dt, uniform in `[(1-frac)*base, (1+frac)*base]`.
+    fn next_dt(&mut self, base: Duration, frac: f64) -> Duration {
+        if frac <= 0.0 {
+            return base;
+        }
+        let scale = 1.0 - frac + 2.0 * frac * self.next_unit();
+        Duration::from_secs_f64(base.as_secs_f64() * scale)
+    }
 }
 
 /// The verdict, filled in by the telemetry observer. `None` until a scenario
@@ -137,6 +229,9 @@ fn parse_args() -> Result<Cli, String> {
     let mut max_ticks = DEFAULT_MAX_TICKS;
     let mut tick_hz = lunco_core::FIXED_HZ;
     let mut verdict_channel: Option<String> = None;
+    let mut threads: usize = 1;
+    let mut jitter = 0.0f64;
+    let mut seed = DEFAULT_SEED;
 
     let mut i = 0;
     while i < args.len() {
@@ -174,6 +269,32 @@ fn parse_args() -> Result<Cli, String> {
                 verdict_channel = Some(need(i, "--verdict-channel")?);
                 i += 2;
             }
+            "--threads" => {
+                let v = need(i, "--threads")?;
+                threads = v
+                    .parse()
+                    .map_err(|_| format!("--threads expects a non-negative integer, got {v:?}"))?;
+                i += 2;
+            }
+            "--jitter" => {
+                let v = need(i, "--jitter")?;
+                jitter = v
+                    .parse()
+                    .map_err(|_| format!("--jitter expects a number, got {v:?}"))?;
+                // >= 1.0 would admit a zero or negative dt, which is not
+                // "variable pacing" but a broken clock.
+                if !(0.0..1.0).contains(&jitter) {
+                    return Err("--jitter must be in [0.0, 1.0)".to_string());
+                }
+                i += 2;
+            }
+            "--seed" => {
+                let v = need(i, "--seed")?;
+                seed = v
+                    .parse()
+                    .map_err(|_| format!("--seed expects an unsigned integer, got {v:?}"))?;
+                i += 2;
+            }
             // Answer help and leave with a SUCCESS code — asking for usage is
             // not a test failure, and a `2` here would poison a wrapper script.
             "-h" | "--help" => {
@@ -188,7 +309,7 @@ fn parse_args() -> Result<Cli, String> {
     }
 
     let scene = scene.ok_or_else(|| format!("--scene is required\n\n{}", usage()))?;
-    Ok(Cli { scene, max_ticks, tick_hz, verdict_channel })
+    Ok(Cli { scene, max_ticks, tick_hz, verdict_channel, threads, jitter, seed })
 }
 
 fn usage() -> String {
@@ -198,6 +319,7 @@ scene_test — run one authored USD scene + its scenario headless and determinis
 
 USAGE:
     scene_test --scene <PATH> [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
+               [--threads N] [--jitter FRAC] [--seed U64]
 
     --scene PATH             REQUIRED. USD scene path relative to assets/, e.g.
                              scenes/sandbox/drivetrain_parity.usda
@@ -209,27 +331,56 @@ USAGE:
     --verdict-channel NAME   Only accept a PASS/FAIL from this telemetry channel.
                              Default: the first PASS/FAIL payload on any channel.
 
+DIAGNOSTIC AXES (defaults reproduce the deterministic gate exactly):
+    --threads N              Compute-pool threads (default 1).
+                               1  pin one thread — reproducible, the gate.
+                               0  DO NOT override the pool: bevy's default
+                                  multi-threaded sizing, i.e. what the GUI runs.
+                               N  pin N compute threads.
+                             Non-1 values are NOT run-to-run reproducible
+                             (avian's parallel solver reorders island work) —
+                             use them to isolate ordering bugs, not to gate.
+    --jitter FRAC            Fractional dt jitter in [0.0, 1.0) (default 0.0).
+                             0.0 keeps the exact fixed step. Above 0, each
+                             update advances by a seeded pseudo-random dt in
+                             [(1-FRAC)*base, (1+FRAC)*base], MIMICKING the
+                             variable frame pacing of the realtime GUI so that
+                             GUI-only failures can be reproduced headlessly.
+                             A scene that PASSES at jitter=0 and FAILS at
+                             jitter>0 has a DT-SENSITIVITY bug, not a threading
+                             bug. Still fully reproducible for a given --seed.
+    --seed U64               Seed for the jitter PRNG (default {seed}).
+                             Same seed => same dt sequence => same outcome.
+
 EXIT CODES:
     0  scenario emitted PASS
     1  scenario emitted FAIL
     2  no verdict (max ticks exhausted, early app exit, or bad arguments)",
         hz = lunco_core::FIXED_HZ,
+        seed = DEFAULT_SEED,
     )
 }
 
-/// Pin the compute task pool to ONE thread.
+/// Pin the compute task pool to exactly `threads` threads.
 ///
-/// `determinism_probe` is the receipt: avian's parallel solver produces
-/// run-to-run position drift on a multi-threaded pool and is bit-identical on
-/// one. A regression test that cannot reproduce itself cannot bisect a
-/// regression, so the runner trades throughput for reproducibility. The scenes
-/// under test are single-rover, so the loss is small.
-fn single_thread_compute_pool() -> TaskPoolPlugin {
+/// Same shape `determinism_probe::compute_pool` uses for both its single- and
+/// its multi-thread run, so the two binaries' configurations are comparable.
+///
+/// `determinism_probe` is the receipt for why 1 is the default: avian's
+/// parallel solver produces run-to-run position drift on a multi-threaded pool
+/// and is bit-identical on one. A regression test that cannot reproduce itself
+/// cannot bisect a regression, so the gate trades throughput for
+/// reproducibility. The scenes under test are single-rover, so the loss is
+/// small.
+///
+/// `threads == 0` is handled by the CALLER, which skips this override entirely
+/// rather than asking for a zero-sized pool.
+fn pinned_compute_pool(threads: usize) -> TaskPoolPlugin {
     TaskPoolPlugin {
         task_pool_options: TaskPoolOptions {
             compute: TaskPoolThreadAssignmentPolicy {
-                min_threads: 1,
-                max_threads: 1,
+                min_threads: threads,
+                max_threads: threads,
                 percent: 1.0,
                 on_thread_spawn: None,
                 on_thread_destroy: None,
@@ -237,76 +388,6 @@ fn single_thread_compute_pool() -> TaskPoolPlugin {
             ..default()
         },
     }
-}
-
-/// The base plugin group — a mirror of `lunco_sandbox`'s private
-/// `default_plugins(headless: true, offscreen: false)`, which is not public.
-///
-/// Kept deliberately identical to the headless branch there, including the two
-/// non-obvious parts:
-///
-/// * `.disable::<TransformPlugin>()` — `BigSpaceDefaultPlugins` (added by
-///   `SandboxCorePlugin`) owns transform propagation in the f64 cell chain.
-///   Leaving bevy's own propagation in place gives you a second whole-tree
-///   writer fighting it.
-/// * the `ui`-gated `RenderPlugin { backends: None }` — when this binary is
-///   built with the crate's DEFAULT features, `bevy_render` IS linked (it comes
-///   with the `ui` feature and a bin cannot unlink its own crate's deps), so
-///   `DefaultPlugins` carries a `RenderPlugin` that must be told not to bring up
-///   a GPU. No adapter is requested, no surface is created, no wgpu device
-///   exists — the render sub-app is never built. Built with
-///   `--no-default-features --features server` the whole block compiles away and
-///   bevy_render is genuinely absent.
-///
-/// NOTE ON `MinimalPlugins`: the sibling probes (`rover_turn`,
-/// `determinism_probe`) build their worlds in CODE, so `MinimalPlugins` + a
-/// couple of `init_asset` calls suffices for them. This runner loads a REAL
-/// authored scene, which needs the asset server rooted at `assets/`, the USD /
-/// glTF / image / shader asset types, `bevy_input` (leafwing rides it),
-/// `bevy_scene`, `bevy_state` and the window TYPES that the domain crates
-/// reference. Reconstructing that set by hand is exactly the guesswork that
-/// produces a binary which is "headless" and also subtly not the app. Starting
-/// from the shipped headless configuration and subtracting is the safe
-/// direction.
-fn headless_plugins() -> PluginGroupBuilder {
-    #[cfg(feature = "ui")]
-    use bevy::render::settings::WgpuSettings;
-
-    let group = DefaultPlugins
-        // One compute thread — see `single_thread_compute_pool`. THE one place
-        // this runner deliberately differs from the shipped headless server.
-        .set(single_thread_compute_pool())
-        .set(AssetPlugin {
-            file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
-            // We ship no `.meta` sidecars; probing for them is a failed load per asset.
-            meta_check: AssetMetaCheck::Never,
-            ..default()
-        })
-        .set(bevy::log::LogPlugin {
-            // Same filter as the app, so a failing run's log reads the same as a
-            // GUI run's. The scenario's own `print` lines come through `info`.
-            filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
-            ..default()
-        });
-
-    // No GPU. `backends: None` means bevy_render builds no render world at all.
-    #[cfg(feature = "ui")]
-    let group = group.set(bevy::render::RenderPlugin {
-        render_creation: WgpuSettings { backends: None, ..default() }.into(),
-        ..default()
-    });
-
-    // No window, and no winit event loop to want one.
-    let group = group.set(WindowPlugin {
-        primary_window: None,
-        exit_condition: bevy::window::ExitCondition::DontExit,
-        close_when_requested: false,
-        ..default()
-    });
-    #[cfg(feature = "ui")]
-    let group = group.disable::<bevy::winit::WinitPlugin>();
-
-    group.build().disable::<TransformPlugin>()
 }
 
 /// Catch the scenario's verdict off the shared telemetry bus.
@@ -349,17 +430,34 @@ fn main() -> std::process::ExitCode {
 
     let dt = Duration::from_secs_f64(1.0 / cli.tick_hz);
 
-    // THE app, built by the same function the GUI and the headless server use
-    // (`lunco_sandbox::build_sim_app`) — asset sources first (they must precede
-    // `AssetPlugin`, which snapshots the source registry), then the engine plugins,
-    // then `SandboxCorePlugin`.
+    // THE app the GUI and the headless server run, assembled exactly as
+    // `lunco_sandbox::build_sim_app(true, false)` does it — asset sources first
+    // (they MUST precede `AssetPlugin`, which snapshots the source registry), then
+    // the engine plugin group, then `SandboxCorePlugin`.
     //
     // Re-assembling that prelude here is exactly the mistake this runner made on its
     // first draft: it hand-mirrored the plugin list, omitted the asset-source
     // registration, and aborted with `Res<TwinRoots> failed validation: Resource does
     // not exist` — a resource that ships WITH the `twin://` scheme it belongs to. A
     // test runner that assembles its own lookalike app stops testing the real one.
-    let mut app = lunco_sandbox::build_sim_app(true, false);
+    //
+    // We inline the three lines of `build_sim_app` instead of calling it for ONE
+    // reason: `TaskPoolPlugin` is configured at PluginGroup-build time and cannot be
+    // reconfigured by a plugin added afterwards, so `--threads` has to reach into the
+    // group. Every part still comes from the shipped public helpers
+    // (`register_lunco_asset_sources`, `default_plugins`), so nothing is guessed —
+    // the ONLY divergence from `build_sim_app` is the compute-pool override below.
+    let mut app = App::new();
+    lunco_assets::register_lunco_asset_sources(&mut app);
+    let mut group = lunco_sandbox::default_plugins(true, false);
+    // `--threads 0` means "don't touch it": bevy sizes the pool itself and we get
+    // the same multi-threaded scheduling the GUI has. Any other value pins the
+    // compute pool; 1 (the default) is the reproducible gate.
+    if cli.threads > 0 {
+        group = group.set(pinned_compute_pool(cli.threads));
+    }
+    app.add_plugins(group);
+    app.add_plugins(SandboxCorePlugin { headless: true });
     app.add_plugins(SandboxHeadlessPlugin);
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────
@@ -369,13 +467,21 @@ fn main() -> std::process::ExitCode {
     // ticks). Under manual stepping there is no jitter to cap, and the cap would
     // silently swallow steps for any `--tick-hz` below ~30. Re-insert with a cap
     // just above our own step so it can never clamp us.
+    // The cap must clear the LARGEST step we will ever ask for, which under
+    // `--jitter` is `(1 + jitter) * dt` — a cap below that would clamp exactly the
+    // long frames we are trying to reproduce and quietly defang the experiment.
+    let max_dt = Duration::from_secs_f64(dt.as_secs_f64() * (1.0 + cli.jitter));
     let mut virtual_time = Time::<Virtual>::default();
-    virtual_time.set_max_delta(dt * 2);
+    virtual_time.set_max_delta(max_dt * 2);
     app.insert_resource(virtual_time);
     // The fixed clock must match the manual step, or one `app.update()` is not
     // one physics tick and the "ticks" in `--max-ticks` stop meaning anything.
+    // (Under `--jitter` that one-to-one relation is INTENTIONALLY broken — the
+    // fixed accumulator drains 0, 1 or 2 ticks per update, as it does in the GUI.)
     app.insert_resource(Time::<Fixed>::from_hz(cli.tick_hz));
     // THE determinism knob: the clock stops reading the wall (see module docs).
+    // With `--jitter` this resource is re-set before each update; it is still
+    // `ManualDuration`, so the wall clock never enters the run either way.
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
 
     app.insert_resource(Verdict {
@@ -389,9 +495,18 @@ fn main() -> std::process::ExitCode {
 
     let mut ticks = 0u64;
     let mut early_exit = false;
+    let mut sim_seconds = 0.0f64;
+    let mut rng = Xorshift64Star::new(cli.seed);
     while ticks < cli.max_ticks {
+        // jitter == 0 short-circuits to `dt` bit-for-bit and never advances the
+        // PRNG, so the default path is byte-identical to the pre-jitter runner.
+        let step = rng.next_dt(dt, cli.jitter);
+        if cli.jitter > 0.0 {
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(step));
+        }
         app.update();
         ticks += 1;
+        sim_seconds += step.as_secs_f64();
         if app.world().resource::<Verdict>().result.is_some() {
             break;
         }
@@ -404,18 +519,30 @@ fn main() -> std::process::ExitCode {
         }
     }
 
-    let sim_seconds = ticks as f64 / cli.tick_hz;
+    // The run CONFIGURATION, on the same line as the result. A green line that
+    // does not say which cell of the threads×jitter matrix produced it cannot be
+    // attributed, and an unattributable result is not evidence of anything.
+    let threads_desc = if cli.threads == 0 {
+        "default(multi)".to_string()
+    } else {
+        cli.threads.to_string()
+    };
+    let cfg = format!(
+        "threads={threads_desc}  jitter={:.3}  seed={}  tick_hz={:.4}",
+        cli.jitter, cli.seed, cli.tick_hz
+    );
+
     match app.world().resource::<Verdict>().result.clone() {
         Some((channel, true)) => {
             println!(
-                "scene_test PASS  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s",
+                "scene_test PASS  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
             std::process::ExitCode::SUCCESS
         }
         Some((channel, false)) => {
             println!(
-                "scene_test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s",
+                "scene_test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
             std::process::ExitCode::from(1)
@@ -427,7 +554,7 @@ fn main() -> std::process::ExitCode {
                 "max-ticks exhausted with no verdict (scenario never finished — treated as a failure)"
             };
             println!(
-                "scene_test NO-VERDICT  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  — {why}",
+                "scene_test NO-VERDICT  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}  — {why}",
                 cli.scene
             );
             std::process::ExitCode::from(2)

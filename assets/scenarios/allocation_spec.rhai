@@ -1,23 +1,25 @@
 // ── Drive-allocation SPEC — the scenario-level replacement for the kernel unit tests ──
 //
-// TEST-ONLY. Runs against `scenes/sandbox/drivetrain_parity.usda` (it uses that
-// scene's `RoverRaycast` — a skid rover with the raycast drivetrain). It is not
-// attached to that scene's USD, because that scene already owns a `LunCoProgram`
-// for its own gate; run this one explicitly against the loaded scene:
+// TEST-ONLY. Runs against `scenes/sandbox/allocation_spec.usda`, which that
+// scene attaches itself — loading the scene runs the spec:
 //
-//     load_scene  scenes/sandbox/drivetrain_parity.usda
-//     run_scenario scenarios/allocation_spec.rhai
+//     sandbox --scene scenes/sandbox/allocation_spec.usda
+//
+// That rig carries TWO skid rovers differing in exactly one authored opinion,
+// the name of their drive kernel: `RoverSkid` (stock, kernel `"skid"`, on which
+// every allocation measurement is taken) and `RoverBogus` (an unresolvable
+// `lunco:driveKernel`, which exists solely to prove the lookup MISS).
 //
 // ── WHY THIS FILE EXISTS ────────────────────────────────────────────────────
 //
 // `crates/lunco-mobility/src/kernels.rs` carries five unit tests that are the
 // ONLY executable statement of what rover drive allocation MEANS:
 //
-//   1. `skid_steer_priority_lets_the_inner_side_counter_rotate`
-//   2. `skid_reverse_mirrors_forward_at_zero_steer`
-//   3. `skid_kernel_maps_to_named_ports`
-//   4. `linear_kernel_projects_each_entry`
-//   5. `registry_defaults_resolve_by_name`
+//   1. `skid_steer_priority_lets_the_inner_side_counter_rotate`   (PART kept in Rust)
+//   2. `skid_reverse_mirrors_forward_at_zero_steer`                (replaced, deleted)
+//   3. `skid_kernel_maps_to_named_ports`                           (replaced, deleted)
+//   4. `linear_kernel_projects_each_entry`                         (replaced, deleted)
+//   5. `registry_defaults_resolve_by_name`                         (replaced, deleted)
 //
 // They are unit tests over pure functions, so they die with the functions. When
 // allocation moves out of Rust and into authored programs, the maths survives
@@ -46,6 +48,10 @@
 //       steering becomes a lazy arc" — so the PRIORITY leg asserts sharp yaw
 //       authority at FULL throttle. A mix that clamped the inner side to zero
 //       would still turn, but far more slowly.
+//       Because the exact -1/3 survives nowhere else, the Rust unit test
+//       `skid_steer_priority_lets_the_inner_side_counter_rotate` is deliberately
+//       KEPT rather than deleted with its four siblings. Deleting an unreplaced
+//       spec is worse than the doctrine violation of leaving one in Rust.
 //
 //   (2) reverse mirrors forward at zero steer — COVERED, as motion. Equal
 //       distance, opposite direction, and both banks' spin sign flipped.
@@ -54,21 +60,43 @@
 //       reflected out of the live ECS and compared against
 //       `["drive_left", "drive_right"]`.
 //
-//   (4) the linear mix projects each entry — NOT covered here, because this
-//       scene's rover is a SKID rover and has no linear mix to project. It is
-//       covered in `six_independent_parity.rhai`, which reads the six-channel
-//       `DriveMix.entries` back out of the engine and asserts each channel's
-//       coefficients alongside the motion they produce.
+//   (4) the linear mix projects each entry — COVERED, but ELSEWHERE, because
+//       both of this scene's rovers are SKID rovers and have no linear mix to
+//       project. Two scenarios carry it between them, and together they cover
+//       the unit test's mix exactly:
+//         * `six_independent_parity.rhai` reads the six-channel
+//           `DriveMix.entries` back out of the engine, asserts each channel's
+//           `forward`/`steer` coefficients, and then pins the PROJECTION through
+//           motion — straight drive (the `forward` term), each steer direction
+//           (the signed `steer` term), and a zero-throttle pivot that can only
+//           happen if the right bank's `steer = -1` is really applied.
+//         * `ackermann_parity.rhai` covers the unit test's own mix,
+//           `drive_left=1,0 drive_right=1,0 steering=0,1`, including that the
+//           drive ports carry NO steering term at steer 0 and that the
+//           dedicated `steering` entry reaches a real actuator.
+//       What neither pins is the `clamp(-1, 1)` on an entry whose terms sum past
+//       ±1; no authored mix in the repo over-drives a channel. That is a
+//       genuine, small loss, recorded here rather than papered over.
 //
-//   (5) the registry resolves kernels by name — PARTIALLY covered. That the
-//       name `"skid"` resolves to a WORKING kernel is asserted here twice over:
-//       `DriveMix.kernel` reads back as `"skid"`, and the rover then actually
-//       drives, which it cannot do through an unresolved name (`apply_drive_mix`
-//       leaves an unknown kernel un-actuated — a fail-safe coast). What is NOT
-//       observable at scenario level is the NEGATIVE half of the unit test,
-//       `reg.get("nope").is_none()`: there is no way to author a vessel with a
-//       bogus kernel name from inside a running scenario and watch the lookup
-//       miss. That assertion has no scenario-level equivalent and is lost.
+//   (5) the registry resolves kernels by name — COVERED, both halves.
+//       POSITIVE: `"skid"` resolves to a WORKING kernel, asserted twice over —
+//       `DriveMix.kernel` reads back as `"skid"`, and `RoverSkid` then actually
+//       drives, which it could not do through an unresolved name.
+//       NEGATIVE (`reg.get("nope").is_none()`): `RoverBogus` in this scene is
+//       authored with `lunco:driveKernel = "no_such_kernel__failsafe_probe"`, a
+//       name that is in neither the registry nor `lunco_hooks`. The FAILSAFE leg
+//       below holds it at FULL THROTTLE for the entire run and asserts it does
+//       not move, while `RoverSkid` — same asset, same ground, same friction,
+//       same throttle — drives away. That is a stronger statement than the unit
+//       test made: `is_none()` only says the lookup missed, whereas this says
+//       what the miss MEANS, that `apply_drive_mix` coasts rather than falling
+//       back to some other kernel.
+//       This is not a hypothetical. `components/mobility/drive_laws/*.usda`
+//       author `lunco:driveKernel = "external"` — a deliberately unresolvable
+//       name — to stand the built-in mixing down so a Modelica drive law owns
+//       the drive ports alone. If an unknown kernel ever silently fell back to
+//       skid, every Modelica-driven rover would acquire a second writer on its
+//       ports. This leg is the regression net under that mechanism.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
 //
@@ -246,13 +274,19 @@ fn on_start(me) {
     this.phase_start = 0.0;
     this.next_sample = 0.0;
 
-    this.rover = find("/DrivetrainParity/RoverRaycast");
+    this.rover = find("/AllocationSpec/RoverSkid");
     // The skid rover's four wheels. FL/RL are the LEFT bank (drive_left), FR/RR
     // the RIGHT bank (drive_right) — the two ports the `skid` kernel writes.
-    this.w_fl = find("/DrivetrainParity/RoverRaycast/Wheel_FL");
-    this.w_fr = find("/DrivetrainParity/RoverRaycast/Wheel_FR");
-    this.w_rl = find("/DrivetrainParity/RoverRaycast/Wheel_RL");
-    this.w_rr = find("/DrivetrainParity/RoverRaycast/Wheel_RR");
+    this.w_fl = find("/AllocationSpec/RoverSkid/Wheel_FL");
+    this.w_fr = find("/AllocationSpec/RoverSkid/Wheel_FR");
+    this.w_rl = find("/AllocationSpec/RoverSkid/Wheel_RL");
+    this.w_rr = find("/AllocationSpec/RoverSkid/Wheel_RR");
+
+    // The fail-safe control: same asset, unresolvable `lunco:driveKernel`.
+    this.bogus = find("/AllocationSpec/RoverBogus");
+    this.bogus_pos_prev = ();
+    this.d_bogus = 0.0;      // travel accumulated while commanded to full throttle
+    this.bogus_driven_s = 0.0;
 
     this.pos_prev = ();
     this.fprev = ();
@@ -275,12 +309,13 @@ fn on_start(me) {
     this.yaw_prio = 0.0;
 
     print("[spec] ── drive-allocation spec ─────────────────────────────────");
-    print("[spec] rover gid=" + this.rover);
+    print("[spec] rover gid=" + this.rover + "  failsafe-control gid=" + this.bogus);
     print("[spec] wheels FL=" + this.w_fl + " FR=" + this.w_fr +
           " RL=" + this.w_rl + " RR=" + this.w_rr);
     print("[spec] legs: settle -> forward -> reverse -> zero-throttle pivot -> full-throttle steer");
+    print("[spec] RoverBogus runs full throttle THROUGHOUT on an unresolvable kernel and must NOT move.");
     print("[spec] NOTE: `linear_kernel_projects_each_entry` is covered by");
-    print("[spec]   scenarios/six_independent_parity.rhai, not here - this rover is a SKID rover.");
+    print("[spec]   six_independent_parity.rhai + ackermann_parity.rhai - both rovers here are SKID rovers.");
 }
 
 fn on_tick(me) {
@@ -290,7 +325,20 @@ fn on_tick(me) {
     // subsequent read is (). Fail on the FIRST tick instead of ticking forever.
     if this.rover == () || this.rover < 0 {
         print("  SPEC FAIL: rover prim not found (gid=" + this.rover +
-              ") - wrong scene? expected scenes/sandbox/drivetrain_parity.usda");
+              ") - wrong scene? expected scenes/sandbox/allocation_spec.usda");
+        print("TESTS_FAIL 1/1");
+        print("ALLOCATION SPEC: FAIL");
+        emit("ALLOCATION_SPEC", "FAIL");
+        this.phase = "done";
+        return;
+    }
+
+    // The fail-safe control is not optional scenery: without it the negative
+    // half of the registry test silently vanishes and the run still says PASS,
+    // which is precisely the silent-scenario failure this file exists to avoid.
+    if this.bogus == () || this.bogus < 0 {
+        print("  SPEC FAIL: failsafe-control prim not found (gid=" + this.bogus +
+              ") - expected /AllocationSpec/RoverBogus in scenes/sandbox/allocation_spec.usda");
         print("TESTS_FAIL 1/1");
         print("ALLOCATION SPEC: FAIL");
         emit("ALLOCATION_SPEC", "FAIL");
@@ -312,6 +360,28 @@ fn on_tick(me) {
     let spin_r = bank_spin(this.w_fr, this.w_rr);
 
     let since = t - this.phase_start;
+
+    // ── The fail-safe control, commanded on EVERY leg ───────────────────────
+    // `RoverBogus` is held at FULL FORWARD THROTTLE from the end of the settle
+    // window to the end of the run — through legs where the measured rover is
+    // reversing, pivoting and braking, because its own command never changes and
+    // there is nothing to synchronise it with. The command is dispatched
+    // identically to the measured rover's; the only difference between the two
+    // vessels is that this one's `DriveMix.kernel` names nothing, so
+    // `apply_drive_mix` writes no port and the vessel coasts.
+    //
+    // Travel is accumulated as PATH LENGTH, not displacement: a rover that
+    // drove a wide circle back to its start has still moved, and a displacement
+    // measure would call that stationary.
+    let bpos = world_pos(this.bogus);
+    if this.phase == "settle" {
+        brake(this.bogus);
+    } else {
+        drive(this.bogus, 1.0, 0.0);
+        this.d_bogus += seg(this.bogus_pos_prev, bpos);
+        this.bogus_driven_s += dt();
+    }
+    this.bogus_pos_prev = bpos;
 
     // ── settle ──────────────────────────────────────────────────────────────
     if this.phase == "settle" {
@@ -513,7 +583,12 @@ fn on_tick(me) {
                 sl_r: sl_r, sr_r: sr_r,
                 sl_p: sl_p, sr_p: sr_p,
                 yaw_pivot: this.yaw_pivot, d_pivot: this.d_pivot,
-                yaw_prio: this.yaw_prio
+                yaw_prio: this.yaw_prio,
+                bogus_kernel: get(this.bogus, "DriveMix.kernel"),
+                bogus_ports:  get(this.bogus, "DriveMix.ports"),
+                bogus_entries: get(this.bogus, "DriveMix.entries"),
+                d_bogus: this.d_bogus,
+                bogus_driven_s: this.bogus_driven_s
             });
         }
         return;
@@ -522,8 +597,13 @@ fn on_tick(me) {
 
 /// Stop the rover if the scenario is detached or hot-reloaded mid-run.
 fn on_stop(me) {
-    let r = find("/DrivetrainParity/RoverRaycast");
+    let r = find("/AllocationSpec/RoverSkid");
     if r >= 0 { brake(r); }
+    // The control rover is left commanded to full throttle by the run; if the
+    // scenario is detached mid-leg and the kernel name is ever made resolvable,
+    // an un-braked vessel would drive off on its own.
+    let b = find("/AllocationSpec/RoverBogus");
+    if b >= 0 { brake(b); }
 }
 
 // ── The verdict ─────────────────────────────────────────────────────────────
@@ -556,13 +636,64 @@ fn verdict(s) {
         }
     }
 
-    // ── (5) `registry_defaults_resolve_by_name` — positive half only ───────
+    // ── (5a) `registry_defaults_resolve_by_name` — the POSITIVE half ───────
     // The name resolved to a WORKING kernel: an unresolved name leaves the
     // vessel un-actuated (`apply_drive_mix` fail-safe coast), so real travel is
-    // itself the proof. The negative half (`get("nope").is_none()`) has no
-    // scenario-level equivalent — see the header.
+    // itself the proof. This assertion is also the anchor of the negative half
+    // below — the two rovers are the same asset on the same ground under the
+    // same throttle, so "one drove and one did not" only means something while
+    // this one demonstrably drove.
     f.push(t_min(s.d_fwd, 15.0,
                  "forward-leg distance (m) - kernel 'skid' resolved but the rover never moved"));
+
+    // ── (5b) `registry_defaults_resolve_by_name` — the NEGATIVE half ───────
+    // `assert!(reg.get("nope").is_none())`, restated as the consequence the
+    // engine relies on: a kernel name that resolves to nothing must leave the
+    // vessel UN-ACTUATED, not fall back to some default mix.
+    //
+    // First, that the vessel really is in the un-resolvable state — a scene edit
+    // that dropped the attribute, or a reader that stopped honouring it, would
+    // otherwise turn this leg into a second (passing) skid rover, and "it didn't
+    // move" would be the only thing left to notice, at which point it wouldn't.
+    let m_bk = "failsafe control's DriveMix.kernel is '" + s.bogus_kernel;
+    m_bk += "', expected 'no_such_kernel__failsafe_probe' - the authored";
+    m_bk += " lunco:driveKernel did not reach the vessel, so this leg proves nothing";
+    f.push(t_true(s.bogus_kernel == "no_such_kernel__failsafe_probe", m_bk));
+
+    // A scripted/unknown kernel carries no ports and no entries: `derive_drive_mix`
+    // takes the `lunco:driveKernel` branch and never reaches the tank-differential
+    // one. A non-empty list here means a built-in mix was ALSO derived.
+    if type_of(s.bogus_ports) == "array" {
+        let m_bp = "failsafe control has " + s.bogus_ports.len();
+        m_bp += " DriveMix.ports, expected 0 - an unresolvable kernel must not also";
+        m_bp += " derive the built-in skid port pair";
+        f.push(t_true(s.bogus_ports.len() == 0, m_bp));
+    }
+    if type_of(s.bogus_entries) == "array" {
+        let m_be = "failsafe control has " + s.bogus_entries.len();
+        m_be += " DriveMix.entries, expected 0 - an unresolvable kernel must not also";
+        m_be += " derive a linear mix table";
+        f.push(t_true(s.bogus_entries.len() == 0, m_be));
+    }
+
+    // Second, that the command was actually ISSUED for a long window. Without
+    // this the "it did not move" assertion passes trivially on a run where the
+    // legs never advanced and nothing was ever commanded at all.
+    f.push(t_min(s.bogus_driven_s, 20.0,
+                 "seconds the failsafe control was held at full throttle - too short to conclude anything"));
+
+    // Third, the assertion itself. The bound is 3 m against a rover that covers
+    // 15 m in the forward leg alone: far enough from settle-jitter to never fire
+    // spuriously, and far enough below actuated travel that any fallback mix —
+    // even a weak one — trips it.
+    let m_fs = "FAIL-SAFE BROKEN: the vessel with kernel '" + s.bogus_kernel;
+    m_fs += "' travelled " + r2(s.d_bogus) + "m while held at full throttle for ";
+    m_fs += r2(s.bogus_driven_s) + "s. An unresolvable drive kernel must leave the";
+    m_fs += " vessel un-actuated (apply_drive_mix coasts) - anything else means an";
+    m_fs += " unknown name now falls back to a real mix, which would put a SECOND";
+    m_fs += " writer on the drive ports of every Modelica drive law";
+    m_fs += " (lunco:driveKernel = 'external').";
+    f.push(t_true(s.d_bogus.abs() <= 3.0, m_fs));
 
     // ── (2) `skid_reverse_mirrors_forward_at_zero_steer` ───────────────────
     // The unit test asserted `lf + lr == 0` and `rf + rr == 0`: pure throttle
@@ -650,8 +781,14 @@ fn verdict(s) {
     print("[spec]   spin piv  L / R (rad/s)   " + r2(s.sl_p) + " / " + r2(s.sr_p));
     print("[spec]   pivot yaw / travel        " + r2(s.yaw_pivot) + "deg / " + r2(s.d_pivot) + "m");
     print("[spec]   full-throttle steer yaw   " + r2(s.yaw_prio) + "deg");
-    print("[spec]   NOT covered here: linear-mix projection (see six_independent_parity.rhai)");
-    print("[spec]   NOT covered anywhere: registry lookup MISS for an unknown kernel name");
+    print("[spec]   failsafe kernel name      " + s.bogus_kernel);
+    let bl = "[spec]   failsafe travel (m)       " + r2(s.d_bogus);
+    bl += "  over " + r2(s.bogus_driven_s) + "s at full throttle";
+    print(bl);
+    print("[spec]   NOT covered here: linear-mix projection (see six_independent_parity.rhai");
+    print("[spec]     and ackermann_parity.rhai - both rovers in this scene are SKID rovers)");
+    print("[spec]   STILL IN RUST: the exact skid_mix_norm(1,1) = (1, -1/3) inner-side value;");
+    print("[spec]     under throttle the ground drags the wheel, so -1/3 is not observable.");
 
     let ok = t_report(f);
     emit("ALLOCATION_SPEC", if ok { "PASS" } else { "FAIL" });

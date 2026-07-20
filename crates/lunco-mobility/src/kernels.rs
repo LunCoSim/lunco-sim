@@ -224,6 +224,33 @@ pub fn linear_kernel(cmd: DriveInputs, mix: &DriveMix) -> Vec<(String, f64)> {
         .collect()
 }
 
+/// The allocation SPEC lives in `assets/scenarios/allocation_spec.rhai`, not here.
+///
+/// These kernels are mechanism; what they MEAN is policy, and policy is authored.
+/// The scenario runs `scenes/sandbox/allocation_spec.usda` and asserts the same
+/// statements as observable consequences on a live rover, so they survive the
+/// kernels moving into authored Modelica programs:
+///
+///   * skid maps to the NAMED ports `[drive_left, drive_right]`, in that order
+///     (`DriveMix.ports` read back out of the live ECS), and the ordering maps to
+///     the correct SIDE (at steer +1 the left bank spins the way it did driving
+///     forward, the right bank counter-rotates).
+///   * reverse mirrors forward at zero steer — equal distance, opposite direction
+///     along the same heading, both banks' spin sign flipped.
+///   * the registry resolves kernels by NAME, both halves: `"skid"` drives, and a
+///     rover authored with an unresolvable `lunco:driveKernel` does NOT move under
+///     full throttle (the `apply_drive_mix` fail-safe coast that
+///     `components/mobility/drive_laws/*.usda` depend on).
+///   * the linear mix projects each entry — in `six_independent_parity.rhai` and
+///     `ackermann_parity.rhai`, which read `DriveMix.entries` back and pin the
+///     projection through motion.
+///
+/// ONE assertion could NOT be restated at scenario level and so stays in Rust
+/// below: the exact inner-side value of [`skid_mix_norm`] under throttle. A wheel
+/// commanded to −1/3 while the rover travels at 4.8 m/s is dragged forward by the
+/// ground, so `spin_velocity` reports the ground rather than the allocation. The
+/// scenario asserts the PROPERTY that number exists to deliver (sharp yaw
+/// authority at full throttle) but cannot see the number itself.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,45 +263,5 @@ mod tests {
         let (l, r) = skid_mix_norm(1.0, 1.0);
         assert!((l - 1.0).abs() < 1e-9, "outer l={l}");
         assert!(r < 0.0 && (r + 1.0 / 3.0).abs() < 1e-9, "inner should counter-rotate, r={r}");
-    }
-
-    #[test]
-    fn skid_reverse_mirrors_forward_at_zero_steer() {
-        // Pure throttle mirrors cleanly (both sides saturate equally, m = 1). With
-        // steer ≠ 0 the proportional-saturation divisor differs per direction, so
-        // it is deliberately NOT a mirror there.
-        let (lf, rf) = skid_mix_norm(1.0, 0.0);
-        let (lr, rr) = skid_mix_norm(-1.0, 0.0);
-        assert!((lf + lr).abs() < 1e-9);
-        assert!((rf + rr).abs() < 1e-9);
-    }
-
-    #[test]
-    fn skid_kernel_maps_to_named_ports() {
-        let mix = DriveMix::skid("drive_left", "drive_right");
-        let out = skid_kernel(DriveInputs { throttle: 1.0, steer: -1.0, brake: 0.0 }, &mix);
-        assert_eq!(out[0].0, "drive_left");
-        assert_eq!(out[1].0, "drive_right");
-        // steer = -1 → left counter-rotates, right drives.
-        assert!(out[0].1 < 0.0 || out[0].1.abs() < 1e-9);
-        assert!(out[1].1 > 0.0);
-    }
-
-    #[test]
-    fn linear_kernel_projects_each_entry() {
-        let mix = DriveMix::parse_linear("drive_left=1,0 drive_right=1,0 steering=0,1");
-        let out = linear_kernel(DriveInputs { throttle: 0.5, steer: 0.8, brake: 0.0 }, &mix);
-        let get = |n: &str| out.iter().find(|(p, _)| p == n).unwrap().1;
-        assert!((get("drive_left") - 0.5).abs() < 1e-9);
-        assert!((get("drive_right") - 0.5).abs() < 1e-9);
-        assert!((get("steering") - 0.8).abs() < 1e-9);
-    }
-
-    #[test]
-    fn registry_defaults_resolve_by_name() {
-        let reg = ControlKernelRegistry::with_defaults();
-        assert!(reg.get("skid").is_some());
-        assert!(reg.get("linear").is_some());
-        assert!(reg.get("nope").is_none());
     }
 }
