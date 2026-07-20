@@ -308,3 +308,82 @@ fn read_shader_inputs<R: UsdRead>(
     }
     values
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+
+    /// A landing leg as `descent_lander.usda` actually authors it: a WGSL material
+    /// bound to the same prim that carries the Modelica strut wires.
+    ///
+    /// `inputs:altitude` and `inputs:descent_rate` are SIMULATION ports feeding
+    /// `LegStrut.mo` — they touch no uniform. Only `inputs:load_frac` drives the
+    /// shader, and only because `StrutShader` declares it.
+    const LEG: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    def Scope "Looks"
+    {
+        def Material "StrutMat"
+        {
+            token outputs:surface.connect = </World/Looks/StrutMat/StrutShader.outputs:surface>
+            def Shader "StrutShader"
+            {
+                uniform asset info:wgsl:sourceAsset = @shaders/strut.wgsl@
+                float inputs:load_frac = 0.0
+                token outputs:surface
+            }
+        }
+    }
+    def Cube "LegPX" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding = </World/Looks/StrutMat>
+        float inputs:altitude.connect = </World/Sensors.outputs:range>
+        float inputs:descent_rate.connect = </World/Body.outputs:velocity_y>
+    }
+    def Cube "LegPX_Lit" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding = </World/Looks/StrutMat>
+        float inputs:altitude.connect = </World/Sensors.outputs:range>
+        float inputs:load_frac.connect = </World/LegPX.outputs:load_frac>
+    }
+}
+"#;
+
+    fn stages() -> (CanonicalStages, AssetId<UsdStageAsset>) {
+        let mut cs = CanonicalStages::default();
+        let recipe = StageRecipe::from_source("leg.usda", LEG);
+        let id: AssetId<UsdStageAsset> = AssetId::invalid();
+        cs.get_or_build(id, &recipe).expect("stage builds");
+        cs.drain_all_changes();
+        (cs, id)
+    }
+
+    /// THE REGRESSION. A bare `starts_with("inputs:")` test read the legs' Modelica
+    /// wires as shader drives and made every leg's material private — four wasted
+    /// materials for uniforms nobody writes. `inputs:` is the engine's spelling for
+    /// every port, so the shader's own declared parameters are the only valid filter.
+    #[test]
+    fn simulation_wires_are_not_mistaken_for_shader_drives() {
+        let (cs, id) = stages();
+        let stage = cs.get(id).expect("canonical stage present");
+        let view = stage.view();
+        let shader = SdfPath::new("/World/Looks/StrutMat/StrutShader").unwrap();
+
+        let sim_only = SdfPath::new("/World/LegPX").unwrap();
+        assert!(
+            !has_connected_inputs(&view, &sim_only, &shader),
+            "altitude/descent_rate feed Modelica, not the shader — the material must stay shared"
+        );
+
+        let driven = SdfPath::new("/World/LegPX_Lit").unwrap();
+        assert!(
+            has_connected_inputs(&view, &driven, &shader),
+            "load_frac IS declared by the shader, so this prim needs a private material"
+        );
+    }
+}

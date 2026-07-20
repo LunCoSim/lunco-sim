@@ -105,6 +105,25 @@ only runs when the scenario runs. The camera above is the canonical case: the *s
 as 30 authored control points is a thing you can see, drag, and hand to someone else.
 Script the parts USD genuinely cannot express — decisions, timing, vehicle commands.
 
+**A visual is a CONSEQUENCE of physics — wire it, never script it.** A strut reddens
+because it is carrying load, on the same tick and by the number the solver computed.
+Shader parameters are ordinary port sinks: `float inputs:load_frac.connect =
+</Lander/LegPX.outputs:load_frac>` on the bound gprim, and the value lands on the WGSL
+uniform through the same graph a thruster force uses — no new resolver, no per-frame
+script. Normalise where the rating lives (`load_rated` in the `.mo`), not in the shader
+and never in rhai. **When a visualization "happens too early", suspect the model is
+publishing an input rather than a result**: `LegStrut.mo` once output the
+proximity-gated force pressed onto the leg, so a strut still 0.6 m in the air already
+glowed red; the honest output is the spring's own reaction, which is zero until
+compression starts. See [`visualize-physics-with-shaders`](skills/visualize-physics-with-shaders/SKILL.md).
+
+**A backend that GUESSES must never outrank one that KNOWS.** Port-registry precedence
+is registration order, and plugin add-order is not a contract — `LuncoRenderPlugin` is
+added before `CoSimPlugin`, so the shader-parameter backend registered normally sat at
+index 0 and silently swallowed Modelica and avian writes while its WGSL was still
+loading (it returns `true`, so propagation reported nothing). Anything that accepts a
+name provisionally registers with `PortRegistry::register_fallback`.
+
 **3. No legacy, shims, or fallbacks.** Replace a mechanism and delete the old one in the
 *same* change. Two spellings of one fact means two writers, and which wins becomes a
 function of load order — that is exactly how a scene that rendered correctly went dark
