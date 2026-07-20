@@ -154,10 +154,28 @@ deferral with a known migration path, not the absence of a standard.
 
 ## Gotchas
 
-- **A name the `Material` struct does not declare is refused** — and that is the
-  feature. It surfaces as a dangling-wire warning from propagation instead of the
-  classic silent dead uniform. If your wire logs as dangling, check the WGSL field
-  list before checking anything else.
+- **DECLARE A DRIVEN PARAMETER ON THE SHADER PRIM, not only in the WGSL.** This is
+  the one that silently kills a wire. The authoring pass decides what counts as a
+  shader drive by intersecting the gprim's connected `inputs:` against the
+  parameters the bound **Shader prim** authors — it reads USD, not the reflected
+  schema, which does not exist until the `.wgsl` asset loads. A parameter that
+  appears in `struct Material` but is absent from the Shader prim is therefore not
+  in the driven set: the port backend refuses the write and the uniform sits at its
+  default forever. Author it with its resting value:
+
+  ```usda
+  def Shader "Surface" {
+      uniform asset info:wgsl:sourceAsset = @lunco://shaders/strut_glow.wgsl@
+      float inputs:load_frac = 0     # ← declared here, or the wire is dead
+  }
+  ```
+
+  The Shader prim is the shader's **interface**; the WGSL is its implementation.
+  Both must name the parameter.
+- **A name neither declares is refused** — and that is the feature. It surfaces as a
+  dangling-wire warning from propagation instead of the classic silent dead uniform.
+  If your wire logs as dangling, check the Shader prim's `inputs:` first, then the
+  WGSL field list.
 - **Names are snake_case, because the reflection binds WGSL struct fields.**
   `inputs:loadFrac` and `inputs:load_frac` both reach `load_frac`, but a field
   spelled `loadFrac` in the WGSL is unreachable.

@@ -167,6 +167,15 @@ def Xform "DescentLander" (
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/strut_glow.wgsl@
                 color3f inputs:base_color = (0.55, 0.55, 0.57)
                 color3f inputs:hot_color = (0.95, 0.16, 0.05)
+                # A DRIVEN parameter is declared here like any other. The Shader
+                # prim is the shader's INTERFACE — the set of inputs it accepts —
+                # and a connection on a bound gprim is recognised as a shader drive
+                # only if it names one of them. Declaring it in the WGSL
+                # `struct Material` is not sufficient: the authoring pass reads USD,
+                # not the reflected schema, which does not exist until the asset
+                # loads. This value is the resting one, used before the first tick
+                # and by any bound prim that drives nothing.
+                float inputs:load_frac = 0
                 float inputs:glow = 3.0
                 float inputs:roughness = 0.45
                 float inputs:metallic = 0.7
