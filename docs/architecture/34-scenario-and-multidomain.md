@@ -32,7 +32,7 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 | Emitter identity on events | `TelemetryEvent.source` (sensor/script gid); `wait_for_from(name, src)`, `evt.source` | ✅ |
 | On-screen notifications | `ShowNotification` command + rhai `notify`/`notify_kind` + ui overlay | ✅ |
 | Native/foreign event → script bus | `App::project_events::<E>(…)`; e.g. keyboard → `key:<KeyCode>` events | ✅ (input wired; network projector pending) |
-| Throttle-driven engine flame | rhai signal consumer (reads `throttle`, sets `Transform.scale`) | ✅ (no built-in Rust; see tutorial) |
+| Throttle-driven engine plume | WGSL shader on a fixed bounding cone (`shaders/plume.wgsl`), `inputs:throttle.connect` on the gprim; its light from `LunCo.Propulsion.PlumePhotometry` onto scene-property ports | ✅ (no script — the visual is wired, not animated) |
 
 > **Authoring walkthrough:** [`../tutorials/01-lander-rover-mission.md`](../tutorials/01-lander-rover-mission.md)
 > builds this entire mission from scratch in USD + rhai + Modelica, exercising

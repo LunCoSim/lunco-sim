@@ -27,7 +27,7 @@ model BellNozzle "A bell nozzle's geometry and what that geometry is worth."
   input Real contour = 0.55 "Contour exponent; 1 = cone, <1 = bell";
 
   // Gas properties. Defaults are LOX/RP-1 combustion products, matching the
-  // plume chemistry the flame materials already declare in USD.
+  // plume chemistry the plume materials already declare in USD.
   input Real gamma = 1.2 "Ratio of specific heats of the exhaust";
   input Real p_chamber = 5.5e6 "Chamber pressure (Pa)";
   input Real p_exit = 8.0e3 "Exit-plane static pressure (Pa) — design point";

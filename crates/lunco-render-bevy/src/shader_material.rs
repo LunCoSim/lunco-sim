@@ -149,6 +149,13 @@ pub struct ShaderMaterial {
     /// Authored/live parameter values by name; packed into `raw` on change.
     /// Not a bind-group resource.
     pub values: BTreeMap<String, ParamValue>,
+    /// Blend mode, surfaced through [`Material::alpha_mode`]. Not a bind-group
+    /// resource — it selects the render pipeline.
+    ///
+    /// `Opaque` by default, which is right for every solid procedural surface
+    /// (terrain, panels, struts). An emissive VOLUME needs `Blend`: an exhaust
+    /// plume that cannot be seen through is a solid cone.
+    pub alpha_mode: AlphaMode,
 }
 
 /// The shared empty schema (created once). A fresh material carries this until
@@ -177,6 +184,7 @@ impl Default for ShaderMaterial {
             vertex_shader: None,
             schema: empty_schema_arc(),
             values: BTreeMap::new(),
+            alpha_mode: AlphaMode::Opaque,
         }
     }
 }
@@ -283,6 +291,13 @@ impl From<&ShaderMaterial> for ShaderKey {
 }
 
 impl Material for ShaderMaterial {
+    /// Bevy folds this into the material's pipeline properties, so a `Blend`
+    /// material sorts back-to-front and stops writing depth without anything here
+    /// touching the descriptor.
+    fn alpha_mode(&self) -> AlphaMode {
+        self.alpha_mode
+    }
+
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,

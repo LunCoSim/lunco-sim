@@ -271,9 +271,9 @@ pub const TRIGGER_COLLISION_LAYER: u32 = 1 << 7;
 /// script via the native `param(me, "wmax", default)` verb (a HashMap lookup —
 /// fast, typed, no fragile `name(me).contains(...)` string scanning).
 ///
-/// This is how a reusable script gets PER-INSTANCE config: the same `flame.rhai`
-/// drives many cones, each carrying its own `lunco:params`, instead of inferring
-/// its role from its name. Stamped by the USD loader (`lunco-usd-bevy`); lives in
+/// This is how a reusable script gets PER-INSTANCE config: one script drives many
+/// prims, each carrying its own `lunco:params`, instead of inferring its role from
+/// its name. Stamped by the USD loader (`lunco-usd-bevy`); lives in
 /// `lunco-core` so loader and scripting runtime share it (same pattern as
 /// [`TriggerZone`]).
 #[derive(Component, Debug, Clone, Reflect, Default)]

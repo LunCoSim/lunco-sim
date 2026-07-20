@@ -9,7 +9,7 @@
     startTimeCode = 0
     endTimeCode = 40
     # Compose the whole powered-descent scene (lander + rover + waypoints + the
-    # onboard GNC/flame scripts) from the base test scene, then ADD a camera rig
+    # onboard GNC) from the base test scene, then ADD a camera rig
     # and swap the orchestration script for a cinematic one. Nothing is copied.
     subLayers = [
         @lunco://scenes/sandbox/lander_test.usda@

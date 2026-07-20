@@ -37,7 +37,7 @@ use lunco_usd_bevy::{
 };
 use openusd::sdf::Path as SdfPath;
 use lunco_materials::{to_snake_case, ParamValue, ShaderLook};
-use lunco_render::PbrLook;
+use lunco_render::{PbrLook, SurfaceAlpha};
 use std::collections::BTreeMap;
 
 /// Marks a prim whose `ShaderLook` authoring has been evaluated, so the
@@ -177,7 +177,38 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // `rebind_changed_shader_look` mutate this entity's own material in place.
     let driven = driven_shader_inputs(reader, sdf_path, &shader_prim);
     let unshared = !driven.is_empty();
-    let look = ShaderLook { shader, values, no_shadow_cast, driven, unshared, ..Default::default() };
+    // `primvars:displayOpacity`, read on the GPRIM for exactly the reason above, and
+    // carried here for the same one: the shader path removes the `PbrLook` that
+    // would otherwise have expressed the author's transparency. Same attribute and
+    // same sub-1-means-blend rule the PBR path applies in `lunco-usd-bevy`. An
+    // emissive VOLUME depends on it outright — an opaque plume is a solid cone.
+    //
+    // `lunco:surface:additive` wins over both, because it is not a competing
+    // spelling of opacity — it selects a different BLEND EQUATION, and
+    // UsdPreviewSurface has no concept of one. `inputs:opacity` and
+    // `opacityThreshold` model how much light a surface TRANSMITS, which covers
+    // opaque, cutout and sorted blending but can never express `dst + src`. So
+    // this is a vendor attribute covering only the genuinely new part (AGENTS.md
+    // rule 1); opacity keeps its standard meaning in the fallback below.
+    //
+    // What it buys: an emissive backdrop that must not OCCLUDE. An additive
+    // surface is binned into the transparent phase, which depth-TESTS but does
+    // not depth-WRITE — so terrain in front still hides it, while anything
+    // farther away still shows through it. That is what lets a finite starfield
+    // dome sit 20 km out without clipping the bodies the ephemeris places at
+    // 10^8 m and beyond; an opaque dome swallows the whole sky.
+    let alpha = if lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "lunco:surface:additive")
+        .unwrap_or(false)
+    {
+        SurfaceAlpha::Add
+    } else {
+        match lunco_usd_bevy::read_primvar_f32(reader, sdf_path, "primvars:displayOpacity") {
+            Some(o) if o < 1.0 => SurfaceAlpha::Blend,
+            _ => SurfaceAlpha::Opaque,
+        }
+    };
+    let look =
+        ShaderLook { shader, values, no_shadow_cast, driven, unshared, alpha, ..Default::default() };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
     commands

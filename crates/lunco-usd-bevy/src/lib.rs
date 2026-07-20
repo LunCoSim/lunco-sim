@@ -2876,9 +2876,9 @@ fn attach_programs<R: UsdRead>(
         }
 
         // A program's parameters are typed attributes on its own program prim, one
-        // per key — `float lunco:param:wmax = 1.05`. Read by `param(me, key,
-        // default)`, which is how one reusable program drives many prims (each flame
-        // cone scales itself from its own numbers).
+        // per key — `float lunco:param:width = 1.05`. Read by `param(me, key,
+        // default)`, which is how one reusable program drives many prims, each from
+        // its own numbers.
         //
         // A Rust driver reads them the same way, from `ScriptParams`, and NOT off the
         // reader: a driver is an ordinary Bevy system, and a system has no USD reader.

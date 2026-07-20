@@ -39,6 +39,7 @@ use bevy::shader::Shader;
 use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
 use crate::shader_material::{build_shader_material, ShaderMaterial};
 use lunco_materials::{ShaderLook, ShaderLookKey, TextureLayer};
+use lunco_render::SurfaceAlpha;
 
 /// Shared `ShaderMaterial` per distinct [`ShaderLookKey`] — see the module docs.
 /// Sharing, the `unshared` bypass, and eviction all live in
@@ -69,6 +70,14 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
         // `live` params are real shader params — they are merely absent from the
         // sharing key, so a freshly-built material still has to carry them.
         values: look.values.iter().chain(look.live.iter()).map(|(k, v)| (k.clone(), *v)).collect(),
+        // The same mapping `lunco-render-bevy`'s PBR binder applies to a `PbrLook`,
+        // so a prim's authored transparency means the same thing on either path.
+        alpha_mode: match look.alpha {
+            SurfaceAlpha::Opaque => AlphaMode::Opaque,
+            SurfaceAlpha::Mask(t) => AlphaMode::Mask(t),
+            SurfaceAlpha::Blend => AlphaMode::Blend,
+            SurfaceAlpha::Add => AlphaMode::Add,
+        },
         ..Default::default()
     };
     for (layer, image) in &look.textures {

@@ -17,8 +17,8 @@
 // `rover_deployed`, the tutorial turns the rest into a student checklist. Neither
 // reaches into this script's state, and this script knows about neither.
 
-/// Reveal (`on`) or hide a waypoint dome by scaling its mesh — the same trick
-/// the flame uses. Resolved by path at call time (inside a step closure).
+/// Reveal (`on`) or hide a waypoint dome by scaling its mesh. Resolved by path at
+/// call time (inside a step closure).
 fn show_wp(n, on) {
     let s = if on { 1.0 } else { 0.0 };
     set(find("/LanderTest/RoverTarget" + n + "/Dome"), "Transform.scale", [s, s, s]);

@@ -98,6 +98,38 @@ live value; the inspector shows driven rows greyed out. If the value moves in
 `read_ports` and the colour doesn't, the problem is the shader; if it doesn't
 move there, the problem is the wire.
 
+## The same wire drives a LIGHT, and a transform
+
+A shader uniform is not the only render-side sink. `lunco-render-bevy`'s
+`SCENE_PROPERTY_BACKEND` (`scene_ports.rs`) exposes the properties a simulation
+legitimately drives, as scalar In ports on the prim that carries the component:
+
+| Component | Ports |
+|---|---|
+| `PointLight` | `light_intensity`, `light_radius`, `light_color_r/g/b` |
+| `Transform` | `translation_x/y/z`, `scale_x/y/z` |
+
+```usda
+def SphereLight "PlumeLight"
+{
+    float inputs:light_intensity.connect = </…/Photometry.outputs:intensity>
+    float inputs:light_radius.connect    = </…/Photometry.outputs:radius>
+}
+```
+
+The engine plume is the worked example end to end: `plume.wgsl` draws the plume
+from `throttle` inside a fixed bounding cone, and `LunCo.Propulsion.PlumePhotometry`
+turns the same `throttle` into luminous power (exitance × the plume's lateral area)
+and a source radius, landing on the child light through these ports. The equation is
+in Modelica because it is an equation; the ramp is in WGSL because it is a look; and
+nothing computes anything per tick in a script.
+
+**A driven `Transform` is not a licence to animate.** A transform WIRED to a port is
+a consequence — some model or joint published the number and the stage shows where
+it came from. A transform COMPUTED per tick in a script is animation, and is still
+forbidden. Also: drive a transform only on a prim nothing else moves, or the wire
+fights the USD projector, a rigid body, or a joint.
+
 ## Why the wire goes on the gprim, and what it costs
 
 A `UsdShade` input belongs to the **material**, which is shared by every prim
