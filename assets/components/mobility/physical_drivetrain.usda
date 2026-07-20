@@ -36,22 +36,22 @@ def Xform "Drivetrain" (
 {
     over "Wheel_FL"
     {
-        double3 xformOp:translate = (-0.9, -0.65, -1.225)
+        double3 xformOp:translate = (-1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_FR"
     {
-        double3 xformOp:translate = (0.9, -0.65, -1.225)
+        double3 xformOp:translate = (1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_RL"
     {
-        double3 xformOp:translate = (-0.9, -0.65, 1.225)
+        double3 xformOp:translate = (-1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_RR"
     {
-        double3 xformOp:translate = (0.9, -0.65, 1.225)
+        double3 xformOp:translate = (1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
@@ -71,7 +71,6 @@ def Xform "Drivetrain" (
         rel physics:body0 = </Drivetrain>
         rel physics:body1 = </Drivetrain/Wheel_FL>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
     def PhysicsRevoluteJoint "Wheel_FR_Hinge" (
@@ -81,7 +80,6 @@ def Xform "Drivetrain" (
         rel physics:body0 = </Drivetrain>
         rel physics:body1 = </Drivetrain/Wheel_FR>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
     def PhysicsRevoluteJoint "Wheel_RL_Hinge" (
@@ -91,7 +89,6 @@ def Xform "Drivetrain" (
         rel physics:body0 = </Drivetrain>
         rel physics:body1 = </Drivetrain/Wheel_RL>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
     def PhysicsRevoluteJoint "Wheel_RR_Hinge" (
@@ -101,7 +98,6 @@ def Xform "Drivetrain" (
         rel physics:body0 = </Drivetrain>
         rel physics:body1 = </Drivetrain/Wheel_RR>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
 }

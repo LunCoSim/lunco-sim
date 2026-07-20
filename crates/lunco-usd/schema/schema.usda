@@ -845,6 +845,221 @@ class "LunCoWheelAPI" (
     )
 }
 
+class "LunCoMotorAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A MOTOR, as a part. Applied to a prim that is a physical object — it has
+    a `PhysicsMassAPI` mass, it renders, it can be damaged, it draws power and it makes
+    waste heat (see `assets/components/mobility/motor.usda`).
+
+    A MOTOR IS NOT `PhysicsDriveAPI`. `PhysicsDriveAPI` is the motor's OUTPUT COUPLING
+    to the joint it turns: it is a multiple-apply API ON A JOINT carrying a target, a
+    stiffness, a damping and a force cap, and it cannot carry a mass, an efficiency, a
+    thermal model or a power draw — a joint is a constraint, not a machine. So the motor
+    is its own prim with its own properties, and it NAMES the joint it drives
+    (`lunco:motor:drivenJoint` + `lunco:motor:driveInstance`); the loader writes that
+    joint's `drive:<instance>:physics:*` from this motor's curve. This mirrors MuJoCo,
+    where `<actuator>` is a separate element with its own properties that targets a
+    joint, and it is why one machine can carry six independently-controlled motors that
+    differ in size, wear and temperature.
+
+    THE TORQUE CURVE IS TWO SCALARS, NOT A SAMPLED ARRAY. A brushed DC or field-oriented
+    BLDC motor's torque falls off LINEARLY with speed between two endpoints — stall
+    torque at zero speed, zero torque at the no-load speed — because that is what
+    `τ = k·(V − k·ω)/R` says, and the whole first-order motor model is those two numbers.
+    So the curve is `lunco:motor:stallTorque` and `lunco:motor:noLoadSpeed`, and
+    τ(ω) = stallTorque · (1 − ω/noLoadSpeed), clamped at zero. A sampled array was
+    rejected: it needs an interpolation rule and a units convention in the schema, it
+    cannot be edited by a slider (which is the Inspector affordance every other
+    attribute here gets for free from `customData`), and nothing in the drivetrain
+    integrator can use the extra fidelity — the friction cone at the tire clips the
+    torque long before the curve's shape matters. A motor whose real curve is NOT linear
+    (a stepper, a saturating traction motor at field weakening) is modelled by giving
+    this prim a `LunCoProgram` child with a `.mo` that computes torque; the program wins
+    over the scalars, exactly as a wired port wins over a constant.
+
+    WHAT THE SCALARS DO NOT COVER GOES IN A PROGRAM. Thermal derating, battery sag,
+    controller current limits: those are state, and state belongs to a model, not to an
+    attribute. `assets/models/RoverMotorThermal.mo` is the exemplar."""
+)
+{
+    float lunco:motor:stallTorque (
+        customData = {
+            double min = 0
+            double max = 20
+            string unit = "N·m"
+        }
+        doc = """Torque at zero shaft speed, at full demand — the high end of the linear
+        curve. SHAFT torque, before any gearbox: what reaches the wheel is this times
+        the reduction ratio times the gearbox efficiency. Authored per motor, so a
+        heavier motor on the same rover is a different number, not a different code
+        path."""
+    )
+    float lunco:motor:noLoadSpeed (
+        customData = {
+            double min = 0
+            double max = 30000
+            string unit = "rad/s"
+        }
+        doc = """Shaft speed at zero torque, at full demand — the low end of the linear
+        curve, and the motor's top speed. SHAFT speed: divide by the gearbox ratio for
+        the axle's no-load speed. This is the ONE no-load speed in the drivetrain; it
+        replaces the `physxVehicleEngine:maxRotationSpeed` that used to be authored on
+        the wheel, which was a vehicle-level PhysX attribute misapplied to a part."""
+    )
+    float lunco:motor:continuousTorque (
+        customData = {
+            double min = 0
+            double max = 2000
+            string unit = "N·m"
+        }
+        doc = """Torque the motor can hold INDEFINITELY without overheating, as opposed
+        to the stall torque it can hold for seconds. Not a limit the physics step
+        enforces — it is the threshold a thermal program compares against, and the
+        number a mission planner sizes a traverse with. Always ≤ `stallTorque`."""
+    )
+    float lunco:motor:efficiency (
+        customData = {
+            double min = 0
+            double max = 1
+        }
+        doc = """Electrical-to-mechanical conversion efficiency at the rated point,
+        0..1. Sets both the power draw (P_in = τ·ω / efficiency) and the waste heat
+        (P_heat = P_in · (1 − efficiency)) — one number, because they are the same
+        number seen from two sides. A motor that models efficiency as a function of load
+        does it in a `LunCoProgram`; this is the constant that a rover with no thermal
+        model still gets a correct-order power draw from."""
+    )
+    float lunco:motor:rotorInertia (
+        customData = {
+            double min = 0
+            double max = 1
+            string unit = "kg·m²"
+        }
+        doc = """Moment of inertia of the rotor about the shaft. Small in absolute
+        terms and NOT ignorable: seen from the axle through a reduction of ratio N it is
+        multiplied by N², so a 1e-4 kg·m² rotor behind a 1500:1 harmonic drive adds
+        225 kg·m² of reflected inertia to the wheel — far more than the wheel's own.
+        That reflected term is what makes a geared rover feel heavy to accelerate and
+        is why this is authored rather than assumed zero."""
+    )
+    float lunco:motor:ratedVoltage (
+        customData = {
+            double min = 0
+            double max = 1000
+            string unit = "V"
+        }
+        doc = """Bus voltage the stall torque and no-load speed are quoted at. The curve
+        scales with it, so a motor on a sagging battery is the same motor with a lower
+        `noLoadSpeed` — which is a thing a power program can compute and a constant
+        cannot. Carried here so the electrical model and the mechanical curve agree on
+        what "full demand" meant."""
+    )
+    rel lunco:motor:drivenWheel (
+        doc = """The WHEEL this motor turns — not the joint.
+
+        This is deliberate and load-bearing. A wheel exists in BOTH realizations; a
+        joint exists only in the physical one, so a joint-keyed motor could never bind on
+        a raycast rover, and half the fleet would have unattachable motors. Naming the
+        wheel keeps the powertrain identical across realizations and leaves the
+        difference where it belongs — in how the wheel turns torque into force on the
+        body. That is what makes raycast/physical parity structural rather than two
+        numbers a human keeps equal.
+
+        Where the wheel has a joint, the loader follows wheel → joint and writes that
+        joint's `drive:<instance>:physics:targetVelocity` and `:maxForce` from this
+        motor's curve and its `inputs:demand`; the joint carries `PhysicsDriveAPI:<instance>`
+        and nothing else. Where it does not, the raycast wheel consumes the same axle
+        torque and no-load speed directly.
+
+        A relationship, not a token path, so USD composition rebases it when the
+        component is referenced onto a vessel and a dangling target is visible to any
+        tool that walks the stage.
+
+        Unauthored means an unattached motor: it still has mass, still models its
+        thermal state, and drives nothing. That is a bench motor, and it is a legitimate
+        thing to author."""
+    )
+    uniform token lunco:motor:driveInstance = "angular" (
+        doc = """WHICH `PhysicsDriveAPI` instance on the driven wheel's joint this
+        motor's output couples to — the multiple-apply instance name, `"angular"` for a
+        revolute axle, `"linear"` for a prismatic actuator. Matches the instance already
+        authored by `assets/components/mobility/physical_drivetrain.usda`
+        (`PhysicsDriveAPI:angular`)."""
+    )
+}
+
+class "LunCoGearboxAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A REDUCTION, as a part. Applied to a prim with a `PhysicsMassAPI` mass (see
+    `assets/components/mobility/gearbox.usda`), because a gearbox weighs as much as the
+    motor in front of it and a rover that pretends otherwise is a rover with the wrong
+    mass properties.
+
+    It is its own part rather than two attributes on the motor because the reduction is
+    the decision most often changed independently: the same motor drives a fast scout at
+    100:1 and a high-torque hauler at 1500:1, and swapping one is swapping one reference
+    arc. Curiosity's wheel actuators use harmonic drives in that upper band, which is why
+    the ratio's range goes to four figures.
+
+    IDEAL, THEN LOSSY. Output torque is `input · ratio · efficiency`; output speed is
+    `input / ratio`. Backlash is authored but is a compliance in the coupling, not a
+    change to the ratio."""
+)
+{
+    float lunco:gearbox:ratio (
+        customData = {
+            double min = 1
+            double max = 3000
+            string unit = ":1"
+        }
+        doc = """Reduction ratio, input turns per output turn. Torque multiplies by it,
+        speed divides by it, and the driving motor's rotor inertia is reflected to the
+        output multiplied by its SQUARE. Greater than 1 is a reduction (the normal
+        case); exactly 1 is a direct drive, which is a legitimate authoring choice and
+        the reason the minimum is 1 rather than something larger."""
+    )
+    float lunco:gearbox:efficiency (
+        customData = {
+            double min = 0
+            double max = 1
+        }
+        doc = """Mechanical efficiency of the reduction, 0..1 — the fraction of input
+        power that leaves as output power, the rest becoming heat in the gear train. A
+        multi-stage planetary or a harmonic drive at a large ratio is meaningfully lossy
+        (0.7–0.85 is real for a cold, dry-lubricated lunar actuator), which is exactly
+        the loss that a drivetrain sized on motor torque alone forgets."""
+    )
+    float lunco:gearbox:backlash (
+        customData = {
+            double min = 0
+            double max = 0.2
+            string unit = "rad"
+        }
+        doc = """Angular lost motion at the OUTPUT: the arc the output shaft turns
+        through, on reversal, before the input takes it up again. Radians. Zero is an
+        ideal gearbox and a fine default for a rover that does not care; a nonzero value
+        is what makes a rocker-bogie rover shudder as it reverses and what a fine
+        pointing mechanism must budget for."""
+    )
+    float lunco:gearbox:maxOutputTorque (
+        customData = {
+            double min = 0
+            double max = 20000
+            string unit = "N·m"
+        }
+        doc = """Torque the output shaft is rated to carry — the structural limit of the
+        gear train, which a large reduction reaches long before the motor stalls. The
+        drivetrain clamps delivered torque to this, so a 300 N·m motor behind a 1500:1
+        reduction does not deliver a fictional 450 kN·m."""
+    )
+}
+
 class "LunCoTireAPI" (
     inherits = </APISchemaBase>
     customData = {

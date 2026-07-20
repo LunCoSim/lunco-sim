@@ -36,12 +36,34 @@ def Xform "RoverAwful" (
     # ~2.0° of margin, and the naive line FAILS by 3.7°: this tier gets in and out
     # solely by flying the route exactly, which is §3.2's "на грани проходимости"
     # made literal. Weak motors to match.
-    over "Wheel_L0" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
-    over "Wheel_L1" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
-    over "Wheel_L2" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
-    over "Wheel_R0" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
-    over "Wheel_R1" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
-    over "Wheel_R2" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
+    over "Wheel_L0" (variants = { string tire = "bald" }) { }
+    over "Wheel_L1" (variants = { string tire = "bald" }) { }
+    over "Wheel_L2" (variants = { string tire = "bald" }) { }
+    over "Wheel_R0" (variants = { string tire = "bald" }) { }
+    over "Wheel_R1" (variants = { string tire = "bald" }) { }
+    over "Wheel_R2" (variants = { string tire = "bald" }) { }
+
+    # TORQUE COMES FROM THE MOTOR — the bottom rung, and the one that makes this
+    # rover feel gutless on a grade. Was `physxVehicleEngine:peakTorque = 380` on
+    # each wheel; the axle torque is now derived as stallTorque · ratio ·
+    # efficiency = stallTorque · 1200 · 0.85, so 0.37 N·m of shaft stall torque
+    # lands 377 N·m at the axle. Ladder preserved: easy 898 › medium 653 › awful 377.
+    over "Motor_L0" { float lunco:motor:stallTorque = 0.37 }
+    over "Motor_L1" { float lunco:motor:stallTorque = 0.37 }
+    over "Motor_L2" { float lunco:motor:stallTorque = 0.37 }
+    over "Motor_R0" { float lunco:motor:stallTorque = 0.37 }
+    over "Motor_R1" { float lunco:motor:stallTorque = 0.37 }
+    over "Motor_R2" { float lunco:motor:stallTorque = 0.37 }
+
+    # Rated above the motor for the same reason as the other two tiers: the shipped
+    # 400 N·m shaft rating must never be what decides a tier. This rung sits under
+    # it anyway (377 N·m), and it is authored so the ladder is set in ONE place.
+    over "Gearbox_L0" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_L1" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_L2" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R0" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R1" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R2" { float lunco:gearbox:maxOutputTorque = 1000.0 }
 
     # Livery — hazard-red hull (hard), heavier wear to match. Tiers restyle the
     # ONE authored colour, `primvars:displayColor`, which the hull shader

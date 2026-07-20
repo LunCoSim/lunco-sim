@@ -1,0 +1,182 @@
+#usda 1.0
+(
+    defaultPrim = "AckermannParity"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Ackermann drivetrain parity rig ──────────────────────────────────────────
+#
+# The SAME rover asset (`vessels/rovers/ackermann_rover.usda`) instanced TWICE,
+# side by side on ONE flat ground, differing in EXACTLY ONE opinion: the
+# `drivetrain` variant selection (`raycast` vs `physical`). Everything else —
+# spawn height, ground, friction material, mass, wheel radius, gearing, steer
+# lock — composes in from the shared asset, so any measured difference between
+# the two is attributable to the drivetrain realization and nothing else.
+#
+# The sibling of `drivetrain_parity.usda`, which does the same for the SKID
+# rover. This file exists because the skid rig cannot cover the steered-axle
+# path at all: a skid rover has no steering actuator, so nothing in the existing
+# gate exercises the `steering` actuator port, the `SteeringActuator` slew, or
+# the `linear` allocation that feeds them. Every one of those is shared between
+# the two wheel realizations and every one of them can diverge between them.
+#
+# WHAT IS DIFFERENT ABOUT AN ACKERMANN ROVER. A skid rover turns by driving one
+# side harder than the other — steering is a consequence of the DRIVE
+# allocation. An Ackermann rover turns by pointing its front wheels: the
+# allocation writes a dedicated `steering` port
+# (`drive_left=1,0 drive_right=1,0 steering=0,1`, the `linear` kernel), and the
+# drive ports carry no steering term at all. That has a sharp, falsifiable
+# signature the scenario asserts: at ZERO throttle with FULL steer an Ackermann
+# rover must NOT rotate, because there is no drive to turn it with. A skid rover
+# pivots on the spot under exactly that command. If allocation ever regresses to
+# a differential mix, that check fires.
+#
+# THE SHARED CEILING. Both realizations read the one authored no-load axle speed
+# (the motor's `lunco:motor:noLoadSpeed` divided by the gearbox
+# `lunco:gearbox:ratio` — 14400 / 1200 = 12 rad/s): the joint motor targets it,
+# the raycast drive force rolls off toward it. With r = 0.4 m both must cap at
+# omega_max * r = 12 * 0.4 = 4.8 m/s. Parity with each other is necessary but
+# not sufficient, so the scenario also pins both to that ABSOLUTE ceiling.
+#
+# `scenarios/ackermann_parity.rhai` (attached below) drives both from ONE tick
+# loop and fails LOUDLY if they diverge. Run:
+#
+#     sandbox --scene scenes/sandbox/ackermann_parity.usda
+#
+# The rovers are 50 m apart in X and drive along -Z (their forward axis: the
+# headlights sit at z = -1.75), so their paths never intersect even while they
+# are steering into each other's lane.
+
+def Xform "AckermannParity" (
+    kind = "assembly"
+    doc = "Two instances of the same Ackermann rover — one raycast drivetrain, one joint drivetrain — on identical flat ground, for the steered-axle drivetrain parity regression test."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    # A test rig, not a spawnable part.
+    uniform bool lunco:spawnable = false
+
+    # ONE friction material, bound by BOTH rovers' shared ground. Parity is only
+    # meaningful if the surface is bit-identical under each rover, so there is a
+    # single ground prim rather than two pads.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+
+    # Flat, level, 500 x 500 m. Level matters twice over here: a slope would load
+    # the two drivetrains differently (the raycast body force and the joint motor
+    # torque do not fight gravity through the same path), AND it would apply a
+    # gravity-driven yaw moment to a steered rover that a skid rover does not
+    # feel — turning both the parity test and the zero-throttle pivot check into
+    # gradeability tests.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (500.0, 1.0, 500.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </AckermannParity/PhysicsMaterials/Friction_1_0>
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
+        double3 xformOp:translate = (0.0, 30.0, 175.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Broadside view: both rovers in frame for the whole run, so a human can SEE
+    # the divergence the numbers report — including the pivot phase, where the
+    # correct behaviour is that neither rover turns.
+    def Camera "ParityCam"
+    {
+        custom double3 lunco:cameraLookAt = (0.0, 1.0, 90.0)
+        double3 xformOp:translate = (0.0, 45.0, 190.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 24.0
+        float2 clippingRange = (0.1, 100000.0)
+    }
+
+    # ── The two rovers ───────────────────────────────────────────────────────
+    # Identical `xformOp:translate` in Y and Z; only X (lane) and the variant
+    # selection differ. Do NOT add per-instance mass, wheel, friction, or
+    # STEER-LOCK overrides here — an override on one side silently invalidates
+    # the test, and `physxVehicleAckermannSteering:maxSteerAngle` is exactly the
+    # kind of number someone will be tempted to tune per instance. The livery
+    # `over "Chassis"` is display-only (the hull shader consumes displayColor)
+    # and does not touch physics.
+
+    # `raycast` is the asset's fallback selection, but it is written out
+    # EXPLICITLY: the test's whole premise is that these two prims differ in
+    # exactly one authored opinion, and an implicit default is not a stated one.
+    def Xform "RoverRaycast" (
+        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
+        variants = {
+            string drivetrain = "raycast"
+        }
+    )
+    {
+        double3 xformOp:translate = (-25.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Chassis"
+        {
+            color3f[] primvars:displayColor = [(0.85, 0.35, 0.15)]
+        }
+    }
+
+    def Xform "RoverPhysical" (
+        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
+        variants = {
+            string drivetrain = "physical"
+        }
+    )
+    {
+        double3 xformOp:translate = (25.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Chassis"
+        {
+            color3f[] primvars:displayColor = [(0.15, 0.45, 0.85)]
+        }
+    }
+
+    # ── The test itself ──────────────────────────────────────────────────────
+    # A non-physical prim owning the harness, referencing both rovers by path
+    # with `find(...)` rather than living on either one. Hosting it on one of the
+    # rovers would make the two instances structurally different, which is the
+    # one thing this scene must not do.
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "ackermann-parity"
+
+        def LunCoProgram "ParityTest"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/ackermann_parity.rhai@
+        }
+    }
+}

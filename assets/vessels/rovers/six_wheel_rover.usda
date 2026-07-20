@@ -157,6 +157,145 @@ def Xform "SixWheelRover" (
         string lunco:drivePort = "drive_right"
     }
 
+    # --- Motors + reductions -------------------------------------------------
+    # SIX motors and six reductions, one per wheel — the point of G4 restated on the
+    # actuator side: a non-2×2 layout is a USD file, not a Rust struct, and each of
+    # these is independently sized, independently commanded and independently able to
+    # be weakened, worn or overheated by a per-instance attribute override.
+    #
+    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
+    # clamped at the gearbox's `maxOutputTorque`, with the axle's no-load speed
+    # noLoadSpeed/ratio = 14400/1200 = 12 rad/s. Torque and top speed used to be
+    # authored on the wheel as `physxVehicleEngine:peakTorque` /
+    # `:maxRotationSpeed`; they belong to the motor and the reduction behind it.
+    #
+    # Each motor's `inputs:demand` wires to the SAME channel its wheel's
+    # `lunco:drivePort` names, so the bank split above is stated once and the motors
+    # follow it. Every motor names the WHEEL it turns with
+    # `lunco:motor:drivenWheel` — an explicit relationship, not a name convention.
+    # This drivetrain is RAYCAST, so those wheels have no joint and the raycast wheel
+    # consumes the axle torque and no-load speed directly; the binding is identical to
+    # a physical rover's.
+    #
+    # The three difficulty variants (`variants/rover_*.usda`) tier themselves by
+    # `over`-ing `lunco:motor:stallTorque` on these prims through the reference arc.
+
+    # --- Left bank motors (drive_left) ---------------------------------------
+    def Xform "Motor_L0" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.45, -0.1, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelRover.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_L0>
+    }
+
+    def Xform "Gearbox_L0" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.6, -0.1, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelRover/Motor_L0.outputs:torque>
+    }
+
+    def Xform "Motor_L1" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.45, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelRover.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_L1>
+    }
+
+    def Xform "Gearbox_L1" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.6, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelRover/Motor_L1.outputs:torque>
+    }
+
+    def Xform "Motor_L2" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.45, -0.1, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelRover.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_L2>
+    }
+
+    def Xform "Gearbox_L2" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.6, -0.1, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelRover/Motor_L2.outputs:torque>
+    }
+
+    # --- Right bank motors (drive_right) -------------------------------------
+    def Xform "Motor_R0" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.45, -0.1, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelRover.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_R0>
+    }
+
+    def Xform "Gearbox_R0" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.6, -0.1, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelRover/Motor_R0.outputs:torque>
+    }
+
+    def Xform "Motor_R1" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.45, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelRover.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_R1>
+    }
+
+    def Xform "Gearbox_R1" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.6, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelRover/Motor_R1.outputs:torque>
+    }
+
+    def Xform "Motor_R2" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.45, -0.1, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelRover.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </SixWheelRover/Wheel_R2>
+    }
+
+    def Xform "Gearbox_R2" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.6, -0.1, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelRover/Motor_R2.outputs:torque>
+    }
+
     # --- Drive law -----------------------------------------------------------
     # HOW throttle/steer become per-side drive is COMPOSITION, not an
     # enumeration. The plain authored state is the instant built-in skid kernel.

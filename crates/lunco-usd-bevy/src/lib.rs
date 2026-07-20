@@ -50,6 +50,7 @@ use openusd::sdf::Value;
 mod resolver;
 mod compose;
 pub mod closure;
+pub mod obc;
 mod light;
 pub mod dome;
 mod camera;
@@ -1047,11 +1048,32 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // spacecraft) needs this tag. Empty `port_map` is fine — it means
         // "possessable, no digital actuator ports of its own" (a lander's actuation is
         // its flight-control program's inputs).
+        //
+        // TWO ORTHOGONAL CLAIMS, deliberately not conflated:
+        //   `lunco:vessel`  ⇒ POSSESSABLE — a human can take this over and look through it.
+        //   a primary OBC   ⇒ COMMANDABLE — and its `inputs:` ports are exactly the
+        //                      commands accepted (`obc::read_command_surface`).
+        // A relay satellite is the first without the second: you can possess it, it
+        // accepts nothing. A wreck is neither.
+        //
+        // Reading the OBC HERE as well as in the vehicle branch is the fix for a real
+        // defect: `read_command_surface` used to be called only inside
+        // `has_api_schema("PhysxVehicleContextAPI")`, so a lander composed
+        // `obc_lander.usda` and its ports were NEVER read — the vocabulary silently came
+        // from whatever the `Controls` profile happened to name instead. Two sources of
+        // one fact, agreeing by hand. One path now serves every vessel kind.
         if reader
             .scalar::<bool>(&sdf_path, "lunco:vessel")
             .unwrap_or(false)
         {
-            commands.entity(entity).try_insert(lunco_fsw::FlightSoftware::default());
+            let surface = obc::read_command_surface(reader, &sdf_path).unwrap_or_default();
+            let ports: Vec<&str> = surface.iter().map(String::as_str).collect();
+            commands
+                .entity(entity)
+                .try_insert(lunco_fsw::FlightSoftware::new(
+                    std::collections::HashMap::new(),
+                    &ports,
+                ));
         }
 
         // Per-vessel intent→port control map (stage 2 of control), authored as a

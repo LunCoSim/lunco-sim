@@ -34,9 +34,9 @@
 #
 # WHERE THE KNOBS LIVE, AND WHY NOT HERE. Mass properties are the BODY's, so they
 # are authored on this prim and read from it (`physics:centerOfMass` et al, in
-# lunco-usd-avian). Grip and torque are the WHEEL's — the loader reads them off each
-# wheel prim — so authoring them on this root prim did nothing at all: USD attributes
-# do not inherit down namespace. They are per-wheel `over`s below.
+# lunco-usd-avian). Grip is the TIRE's and torque is the MOTOR's, and each is read
+# off its own prim — so authoring either on this root prim does nothing at all: USD
+# attributes do not inherit down namespace. They are per-part `over`s below.
 #
 # There is no steering knob. The base is a SKID rover (`PhysxVehicleTankDifferentialAPI`):
 # it steers by driving its sides at different speeds, and its wheels do not turn.
@@ -54,17 +54,43 @@ def Xform "RoverEasy" (
     float3 physics:diagonalInertia = (2200.0, 2800.0, 1100.0)
     float physxRigidBody:angularDamping = 3.0
 
-    # Handling, per wheel. Grip comes from the TIRE — μ is a property of rubber, so
-    # the tier fits `cleated` tires (μ=1.3 ⇒ slip limit 52.4°, well past the SURVEYED
-    # site's steepest line at 39.9° NNW, so this tier drives ANY line into the crater
-    # and back — the terrain never punishes you, so you learn the route before the
-    # route matters). Torque is the wheel's own motor.
-    over "Wheel_L0" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
-    over "Wheel_L1" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
-    over "Wheel_L2" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
-    over "Wheel_R0" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
-    over "Wheel_R1" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
-    over "Wheel_R2" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
+    # Grip comes from the TIRE — μ is a property of rubber, so the tier fits
+    # `cleated` tires (μ=1.3 ⇒ slip limit 52.4°, well past the SURVEYED site's
+    # steepest line at 39.9° NNW, so this tier drives ANY line into the crater and
+    # back — the terrain never punishes you, so you learn the route before the route
+    # matters).
+    over "Wheel_L0" (variants = { string tire = "cleated" }) { }
+    over "Wheel_L1" (variants = { string tire = "cleated" }) { }
+    over "Wheel_L2" (variants = { string tire = "cleated" }) { }
+    over "Wheel_R0" (variants = { string tire = "cleated" }) { }
+    over "Wheel_R1" (variants = { string tire = "cleated" }) { }
+    over "Wheel_R2" (variants = { string tire = "cleated" }) { }
+
+    # TORQUE COMES FROM THE MOTOR. It used to be `physxVehicleEngine:peakTorque =
+    # 900` on each wheel — a vehicle-level PhysX attribute on a part, and a number
+    # that named the AXLE torque directly. The axle torque is now derived:
+    #   τ_axle = stallTorque · ratio · efficiency = stallTorque · 1200 · 0.85
+    # so this tier's 900 N·m becomes a 0.88 N·m shaft stall torque (0.88 · 1020 =
+    # 898 N·m at the axle — the same rover, expressed where the quantity lives). The
+    # tier is a per-instance attribute override on a real part, which is also how a
+    # single weak or overheating wheel would be expressed.
+    over "Motor_L0" { float lunco:motor:stallTorque = 0.88 }
+    over "Motor_L1" { float lunco:motor:stallTorque = 0.88 }
+    over "Motor_L2" { float lunco:motor:stallTorque = 0.88 }
+    over "Motor_R0" { float lunco:motor:stallTorque = 0.88 }
+    over "Motor_R1" { float lunco:motor:stallTorque = 0.88 }
+    over "Motor_R2" { float lunco:motor:stallTorque = 0.88 }
+
+    # The shipped reduction rates its output shaft at 400 N·m, which would CLAMP
+    # this tier (and medium) and flatten the ladder into "everything hits 400". A
+    # rover built for 900 N·m at the axle has the drive to carry it, so the tiers
+    # rate their gearboxes above their motors and the motor stays the only knob.
+    over "Gearbox_L0" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_L1" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_L2" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R0" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R1" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R2" { float lunco:gearbox:maxOutputTorque = 1000.0 }
 
     # Livery — calm green hull (easy=green); accent stays default. Tiers
     # restyle the ONE authored colour, `primvars:displayColor`, which the hull

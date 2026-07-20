@@ -233,7 +233,7 @@ fn every_rover_wheel_satisfies_the_unified_param_reader() {
                 continue;
             }
             wheels += 1;
-            let params = lunco_usd_sim::wheel_params::WheelParams::read(&view, &p, None)
+            let params = lunco_usd_sim::wheel_params::WheelParams::read(&view, &p, None, None)
                 .unwrap_or_else(|missing| {
                     panic!("{rover}: wheel {} is missing {:?}", p.as_str(), missing)
                 });

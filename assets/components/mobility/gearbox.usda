@@ -1,0 +1,89 @@
+#usda 1.0
+(
+    defaultPrim = "Gearbox"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A REDUCTION as a real part: a mass, a housing that collides, a ratio, an efficiency
+# and a backlash. It sits between a motor and the joint the motor turns, and it is its
+# own file because the reduction is the decision most often changed on its own — the
+# same motor makes a fast scout at 100:1 and a high-torque hauler at 1500:1.
+#
+# HOW A VESSEL COMPOSES IT. One arc per driven joint, wired motor → gearbox:
+#
+#   def Xform "Gearbox_FL" (
+#       prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+#   )
+#   {
+#       double3 xformOp:translate = (0.8, -0.2, 1.15)
+#       uniform token[] xformOpOrder = ["xformOp:translate"]
+#
+#       float inputs:torque.connect = </Rover/Motor_FL.outputs:torque>
+#       float lunco:gearbox:ratio = 800.0   # this vehicle's reduction
+#   }
+#
+# IDEAL, THEN LOSSY:
+#
+#   outputs:torque = inputs:torque · ratio · efficiency
+#   output speed   = input speed / ratio
+#   reflected inertia at the output = motor rotorInertia · ratio²
+#
+# The ratio² term is not a detail — it is usually the dominant inertia a geared rover
+# accelerates, larger than the wheel's own ½mr².
+#
+# BACKLASH IS A COMPLIANCE, NOT A RATIO. It is lost motion at the output on reversal;
+# it does not change what steady-state torque or speed the reduction delivers.
+def Xform "Gearbox" (
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoGearboxAPI"]
+)
+{
+    uniform bool lunco:spawnable = true
+
+    # --- Physics ---
+    bool physics:rigidBodyEnabled = true
+    # A harmonic drive at a rover-wheel ratio is not light — roughly half the motor it
+    # serves. Authoring it is the difference between a rover with the right sprung mass
+    # and one that is mysteriously nimble.
+    float physics:mass = 4.0 (
+        customData = {
+            double min = 0.2
+            double max = 200
+            string unit = "kg"
+        }
+    )
+
+    # --- Reduction (LunCoGearboxAPI) ---
+    # 1200:1 harmonic drive, in the band Curiosity's wheel actuators occupy (~1500:1).
+    # Paired with motor.usda's 0.25 N·m shaft stall torque and 14 400 rad/s no-load
+    # speed, it delivers ~255 N·m at 12 rad/s on the axle.
+    float lunco:gearbox:ratio = 1200.0
+    # Cold, dry-lubricated, multi-stage: 0.85 is a real number for this hardware, not a
+    # rounding of 1.0.
+    float lunco:gearbox:efficiency = 0.85
+    # A well-preloaded harmonic drive is close to zero-backlash; the arcsecond-scale
+    # residual rounds to nothing a rover feels, so this asset ships 0 and a sloppier
+    # spur-gear variant authors its own.
+    float lunco:gearbox:backlash = 0.0
+    # Structural rating of the output shaft. Reached long before the motor stalls at
+    # this ratio, so it — not the motor — is the real torque ceiling.
+    float lunco:gearbox:maxOutputTorque = 400.0
+
+    # --- Ports ---
+    # Shaft torque in from a motor's `outputs:torque`; axle torque out.
+    float inputs:torque = 0.0
+    float outputs:torque
+
+    # --- Housing: RENDERS ONLY, deliberately no collider ---
+    #
+    # Same rule as the motor: a reduction stage sits inside the vehicle envelope and
+    # contributes mass, not contacts. See `motor.usda` for why a collider here is
+    # actively harmful.
+    def Cylinder "Body"
+    {
+        double radius = 0.07
+        double height = 0.09
+        color3f[] primvars:displayColor = [(0.32, 0.32, 0.35)]
+    }
+}

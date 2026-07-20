@@ -20,8 +20,8 @@
 //! | radius | `physxVehicleWheel:radius` | yes |
 //! | mass | `physics:mass` | yes |
 //! | moment of inertia | `physxVehicleWheel:moi` | no (0 ⇒ derived ½·m·r² from authored mass+radius) |
-//! | peak drive torque | `physxVehicleEngine:peakTorque` | yes |
-//! | no-load axle speed | `physxVehicleEngine:maxRotationSpeed` | yes |
+//! | peak axle torque | MOTOR `lunco:motor:stallTorque` x gearbox `ratio` x `efficiency` | via motor |
+//! | no-load axle speed | MOTOR `lunco:motor:noLoadSpeed` / gearbox `ratio` | via motor |
 //! | bearing damping | `physxVehicleWheel:dampingRate` | yes |
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness | `physxVehicleTire:longitudinalStiffness` | yes |
@@ -137,10 +137,20 @@ impl WheelParams {
     /// prim a `PhysxVehicleWheelAttachmentAPI` binds this wheel to (canonical
     /// Omniverse topology), if any; the flat path (attrs composed onto the
     /// wheel prim itself, LunCo's compact composition) is the fallback.
+    ///
+    /// `powertrain` is the motor (and optional gearbox) that turns this wheel, found
+    /// by the caller via `lunco:motor:drivenWheel`. Torque and no-load speed come from
+    /// it, NOT from the wheel: those used to be `physxVehicleEngine:peakTorque` and
+    /// `:maxRotationSpeed` authored on the wheel prim, which is a vehicle-level PhysX
+    /// attribute misapplied to a part — and with no motor to own them, the same
+    /// quantity ended up authored twice under two names and rovers drove 5× too fast in
+    /// one realization. `None` means an undriven wheel (a castor, a trailer wheel):
+    /// zero torque, and legitimate to author.
     pub fn read<R: UsdRead>(
         reader: &R,
         wheel: &SdfPath,
         attachment_suspension: Option<&SdfPath>,
+        powertrain: Option<&crate::powertrain::PowertrainParams>,
     ) -> Result<WheelParams, Vec<&'static str>> {
         let mut missing: Vec<&'static str> = Vec::new();
         let mut req = |name: &'static str| -> f64 {
@@ -155,8 +165,12 @@ impl WheelParams {
 
         let radius = req("physxVehicleWheel:radius");
         let mass = req("physics:mass");
-        let peak_torque = req("physxVehicleEngine:peakTorque");
-        let max_rotation_speed = req("physxVehicleEngine:maxRotationSpeed").max(1e-3);
+        // From the MOTOR behind the wheel, geared. An undriven wheel has no motor and
+        // therefore no torque — that is a castor, not a wheel with a default torque.
+        // `max(1e-3)` on the speed keeps the raycast rolloff's divisor finite; it is a
+        // numerical guard, not a fallback value.
+        let peak_torque = powertrain.map_or(0.0, |p| p.axle_peak_torque());
+        let max_rotation_speed = powertrain.map_or(1e-3, |p| p.axle_no_load_speed().max(1e-3));
         let bearing_damping = req("physxVehicleWheel:dampingRate");
         let brake_torque_max = req("physxVehicleWheel:maxBrakeTorque");
         let slip_stiffness = req("physxVehicleTire:longitudinalStiffness");
@@ -444,7 +458,8 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                 .as_ref()
                 .and_then(|h| attach.get(&(h.clone(), path.clone())))
                 .and_then(|s| SdfPath::new(s).ok());
-            match WheelParams::read(&view, &sp, susp.as_ref()) {
+            let powertrain = crate::powertrain::find_for_wheel(&view, &sp);
+            match WheelParams::read(&view, &sp, susp.as_ref(), powertrain.as_ref()) {
                 Ok(params) => {
                     let max_steer_angle = crate::steering_vehicle_of(&view, path).and_then(|v| {
                         view.real(&v, "physxVehicleAckermannSteering:maxSteerAngle")

@@ -30,16 +30,25 @@
 # The drive torque comes from the rover's drivetrain, not from a program of the wheel's
 # own — a wheel is a part, not an actor.
 #
-# The parameters are Omniverse's PhysX vehicle names (`physxVehicleWheel:*`,
-# `physxVehicleEngine:*`), so they mean the same thing here as in any other PhysX
-# vehicle, and `lunco_mobility::update_wheel_spin` reads exactly them.
+# TORQUE AND SPEED ARE NOT HERE ANY MORE. They belong to the MOTOR
+# (`lunco://components/mobility/motor.usda`, `LunCoMotorAPI`) and the reduction between
+# it and this hub (`lunco://components/mobility/gearbox.usda`). They used to be authored
+# on this prim as `physxVehicleEngine:peakTorque` and `physxVehicleEngine:maxRotationSpeed`
+# — vehicle-level PhysX attributes misapplied to a part, which is how one physical
+# quantity came to be authored twice under two names. A wheel is a hub: radius, mass,
+# moment of inertia, bearing drag, brake authority and a contact patch. What turns it is
+# a different part.
+#
+# The parameters are Omniverse's PhysX vehicle names (`physxVehicleWheel:*`), so they
+# mean the same thing here as in any other PhysX vehicle, and
+# `lunco_mobility::update_wheel_spin` reads exactly them.
 
 def Cylinder "Wheel" (
     kind = "component"
     # Applied HERE, once: every wheel on every rover composes this prim, so the
     # APIs (and the loader's `PhysxVehicleWheelAPI` intercept) come with the arc.
     # A rover authors only its own values — index, radius — never the schemas.
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysxVehicleWheelAPI", "PhysxVehicleEngineAPI", "LunCoWheelAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysxVehicleWheelAPI", "LunCoWheelAPI"]
     prepend variantSets = "tire"
     variants = {
         string tire = "regolith"
@@ -78,12 +87,10 @@ def Cylinder "Wheel" (
     # The spin integrator (lunco_mobility::update_wheel_spin) reads these so the
     # visible rotation is grounded in authored data:
     #   ω̇ = (τ_drive + τ_brake − τ_traction − dampingRate·ω) / I
-    # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). The motor is a
-    # constant-torque source up to maxRotationSpeed; bearing drag is its own authored
-    # physical property (dampingRate), never inferred from the drive torque.
+    # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). τ_drive arrives
+    # from the motor + gearbox driving this hub's joint; bearing drag is the wheel's own
+    # authored physical property (dampingRate), never inferred from the drive torque.
     float physxVehicleWheel:radius = 0.4
-    float physxVehicleEngine:peakTorque = 300.0           # N·m axle drive torque at full throttle. Joint rovers: applied to the wheel about its axle (see MotorActuator); wheel↔ground friction propels the rover. Kept modest so (a) it doesn't exceed the tyre's friction-limited traction (μ·N·r ≈ 340 N·m on the Moon) and spin the wheels, and (b) its reaction couple can't wheelie the chassis. Raycast rovers reuse it as their traction force.
-    float physxVehicleEngine:maxRotationSpeed = 12.0      # rad/s no-load axle speed — THE top-speed parameter for BOTH wheel realizations. The joint wheel's velocity motor targets it (MotorActuator.max_omega); the raycast wheel rolls its drive force off toward it (drive_force_mag). 12 rad/s × 0.4 m ≈ 4.8 m/s ≈ 17 km/h — a realistic lunar rover, and the value the joint rover's feel was verified at.
     # Axle bearing + rolling drag, N·m·s (τ_drag = this · ω). Sized from what the
     # hardware actually loses, not from the drive torque: a sealed, dry-lubricated
     # lunar wheel bearing plus regolith rolling resistance costs on the order of a
@@ -91,7 +98,8 @@ def Cylinder "Wheel" (
     # ~5 N·m of drag, i.e. 5/12 ≈ 0.42 N·m·s — and rolling resistance grows with
     # speed rather than being constant, so a linear coefficient in that band is the
     # right shape. 0.45 keeps parasitic loss at ~1.8% of the 300 N·m peak at full
-    # speed, which is where a well-built wheel sits; it also lets a lifted wheel
+    # speed, which is where a well-built wheel sits (the motor+gearbox this hub is
+    # driven by deliver ~255 N·m at ~12 rad/s); it also lets a lifted wheel
     # coast down over a few seconds instead of stopping dead.
     float physxVehicleWheel:dampingRate = 0.45            # N·m·s axle bearing/rolling drag
     float physxVehicleWheel:maxBrakeTorque = 1500.0       # N·m brake authority (locks the wheel → skid)
@@ -108,16 +116,17 @@ def Cylinder "Wheel" (
     double lunco:wheel:driveForcePerNormal = 2.0    # traction authority, ×normal force
     double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
     # Joint-wheel (rigid-axle) drive tuning — reproduces the verified feel. The axle's
-    # free-spin cap is NOT here: it is `physxVehicleEngine:maxRotationSpeed` above, the
-    # one no-load speed both realizations obey.
+    # free-spin cap is NOT here and not on this prim at all: it is the motor's
+    # `lunco:motor:noLoadSpeed` divided by the gearbox ratio, the one no-load speed both
+    # wheel realizations obey.
     double lunco:wheel:driveDamping = 30.0          # axle motor damping
     double lunco:wheel:stallTorqueGain = 6.0        # torque gain approaching stall
 
-    # A driven wheel has a motor in its hub, but the motor's electrical draw is not a
-    # property of the wheel: it is a load on the vehicle's circuit
-    # (`LunCo.Electrical.DCMotor`, instantiated per wheel in the rover's electrical
-    # system). The MECHANICAL side is here, in the PhysX vehicle properties above, which
-    # the physics step reads. The wheel stays one rigid body.
+    # A driven wheel has a motor behind it, but the motor is not IN here: it is its own
+    # part (`components/mobility/motor.usda`) with its own mass, torque curve, efficiency
+    # and waste heat, and its own arc onto the vessel. Its electrical draw is a load on
+    # the vehicle's circuit, which is one Modelica model, not one per wheel. This prim
+    # keeps only what a hub is, and stays one rigid body.
 
     # --- Tires ---
     # Which rubber this wheel runs. Each variant is nothing but a reference to a tire

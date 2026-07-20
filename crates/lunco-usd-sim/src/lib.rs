@@ -183,7 +183,7 @@ impl Plugin for UsdSimPlugin {
 
 pub mod celestial;
 pub mod cosim;
-pub mod obc;
+pub mod powertrain;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 
 /// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,
@@ -1082,7 +1082,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // intents on top via `sync_fsw_command_surface` (additive/idempotent), so
             // an entity that has not yet composed its `Controls` scope still accepts
             // `set_input` for everything its OBC declares.
-            let command_surface = obc::read_command_surface(reader, &sdf_path);
+            let command_surface = lunco_usd_bevy::obc::read_command_surface(reader, &sdf_path);
             if command_surface.is_none() {
                 warn!(
                     "vessel {} composes no primary OBC — it accepts NO commands. \
@@ -1286,7 +1286,13 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // synthesizes nothing.
             let attachment_susp =
                 wheel_params::attachment_suspension_path(prim_path, wheel_attachment_targets);
-            let params = match WheelParams::read(reader, &sdf_path, attachment_susp.as_ref()) {
+            let powertrain = powertrain::find_for_wheel(reader, &sdf_path);
+            let params = match WheelParams::read(
+                reader,
+                &sdf_path,
+                attachment_susp.as_ref(),
+                powertrain.as_ref(),
+            ) {
                 Ok(p) => p,
                 Err(missing) => {
                     error!(

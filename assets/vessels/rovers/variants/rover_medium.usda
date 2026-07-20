@@ -37,12 +37,35 @@ def Xform "RoverMedium" (
     # That 1.1° margin is the design. Widen μ and the naive line stops being a gamble;
     # narrow it and the tier collapses onto `awful`. See `worn.usda` — μ is authored on
     # the TIRE, and rover_medium is its only consumer.
-    over "Wheel_L0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
-    over "Wheel_L1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
-    over "Wheel_L2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
-    over "Wheel_R0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
-    over "Wheel_R1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
-    over "Wheel_R2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
+    over "Wheel_L0" (variants = { string tire = "worn" }) { }
+    over "Wheel_L1" (variants = { string tire = "worn" }) { }
+    over "Wheel_L2" (variants = { string tire = "worn" }) { }
+    over "Wheel_R0" (variants = { string tire = "worn" }) { }
+    over "Wheel_R1" (variants = { string tire = "worn" }) { }
+    over "Wheel_R2" (variants = { string tire = "worn" }) { }
+
+    # TORQUE COMES FROM THE MOTOR — the middle rung. Was
+    # `physxVehicleEngine:peakTorque = 650` on each wheel; the axle torque is now
+    # derived as stallTorque · ratio · efficiency = stallTorque · 1200 · 0.85, so
+    # 0.64 N·m of shaft stall torque lands 653 N·m at the axle. Same rover, same
+    # ladder (easy 898 › medium 653 › awful 377), expressed on the part that
+    # actually makes the torque.
+    over "Motor_L0" { float lunco:motor:stallTorque = 0.64 }
+    over "Motor_L1" { float lunco:motor:stallTorque = 0.64 }
+    over "Motor_L2" { float lunco:motor:stallTorque = 0.64 }
+    over "Motor_R0" { float lunco:motor:stallTorque = 0.64 }
+    over "Motor_R1" { float lunco:motor:stallTorque = 0.64 }
+    over "Motor_R2" { float lunco:motor:stallTorque = 0.64 }
+
+    # The shipped reduction rates its output shaft at 400 N·m, which would clamp
+    # this tier down onto `awful` and flatten the ladder. Rated above the motor so
+    # the motor stays the only knob.
+    over "Gearbox_L0" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_L1" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_L2" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R0" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R1" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    over "Gearbox_R2" { float lunco:gearbox:maxOutputTorque = 1000.0 }
 
     # Livery — amber hull (medium). Tiers restyle the ONE authored colour,
     # `primvars:displayColor`, which the hull shader consumes as its base paint.

@@ -195,6 +195,107 @@ def Xform "SkidRover" (
         int lunco:wheel:index = 3
     }
 
+    # --- Motors + reductions -------------------------------------------
+    # One motor and one reduction PER DRIVEN WHEEL, each its own part with its own
+    # mass, torque curve, efficiency and waste heat. Torque and top speed used to be
+    # authored on the wheel (`physxVehicleEngine:peakTorque` / `:maxRotationSpeed`);
+    # they are the MOTOR's, and what reaches the axle is
+    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
+    # clamped at the gearbox's `maxOutputTorque`, with the axle's no-load speed
+    # noLoadSpeed/ratio = 14400/1200 = 12 rad/s — the ONE top-speed number both the
+    # raycast and the physical wheel realization obey.
+    #
+    # `inputs:demand` wires to the SAME drive channel the wheel binds to: the
+    # index-parity default puts the even (left) wheels on `drive_left` and the odd
+    # (right) wheels on `drive_right`, and those ports live on this rover ROOT (the
+    # drive law writes them there — see `components/thermal/motor_thermal.usda` for
+    # the same root-port connect shape).
+    #
+    # `lunco:motor:drivenWheel` names the WHEEL, not a joint, so it is authored here
+    # UNCONDITIONALLY — outside every variant. A wheel exists in both realizations;
+    # a joint exists only in `physical`. Where the wheel has a joint the loader
+    # follows wheel → joint and writes that joint's drive target; where it does not,
+    # the raycast wheel consumes the same axle torque and no-load speed directly.
+    #
+    # Placed INBOARD of the wheels, under the chassis: they are children of the
+    # chassis rigid body, so their housings join its compound collider and must not
+    # overlap the wheel colliders (which are their own bodies once jointed).
+    def Xform "Motor_FL" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.3, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SkidRover.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </SkidRover/Wheel_FL>
+    }
+
+    def Xform "Gearbox_FL" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.52, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SkidRover/Motor_FL.outputs:torque>
+    }
+
+    def Xform "Motor_FR" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.3, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SkidRover.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </SkidRover/Wheel_FR>
+    }
+
+    def Xform "Gearbox_FR" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.52, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SkidRover/Motor_FR.outputs:torque>
+    }
+
+    def Xform "Motor_RL" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.3, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SkidRover.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </SkidRover/Wheel_RL>
+    }
+
+    def Xform "Gearbox_RL" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.52, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SkidRover/Motor_RL.outputs:torque>
+    }
+
+    def Xform "Motor_RR" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.3, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SkidRover.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </SkidRover/Wheel_RR>
+    }
+
+    def Xform "Gearbox_RR" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.52, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SkidRover/Motor_RR.outputs:torque>
+    }
+
     # --- Comms ---------------------------------------------------------
     # Rover-mounted antenna (doc 49): makes this rover a connectivity endpoint
     # (`lunco:linkNode`). The kernel publishes a `LinkState` component here and
@@ -226,6 +327,10 @@ def Xform "SkidRover" (
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
+            # Nothing motor-side belongs here. The motors name their WHEELS on the
+            # motor prims above, in both realizations; this variant only adds the
+            # articulation root and the per-wheel revolute joints the loader reaches
+            # by following wheel → joint.
         }
     }
 

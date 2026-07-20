@@ -146,6 +146,136 @@ def Xform "SixWheelIndependent" (
         string lunco:drivePort = "drive_w5"
     }
 
+    # --- Motors + reductions -------------------------------------------------
+    # SIX motors, SIX channels: this is the rover the independent-drive story is
+    # about, and each motor's `inputs:demand` wires to exactly the port its wheel
+    # binds with `lunco:drivePort` — `drive_w0..drive_w5`, in that order. Nothing is
+    # renumbered; the `lunco:driveMix` above is still the only place the steer sign
+    # per bank is stated.
+    #
+    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
+    # clamped at the gearbox's `maxOutputTorque`; axle no-load speed = 14400/1200 =
+    # 12 rad/s. A weak or hot wheel on this rover is a per-instance
+    # `lunco:motor:stallTorque` override on one of these prims — never a code path.
+    #
+    # Every motor names the WHEEL it turns with `lunco:motor:drivenWheel` — the
+    # relationship IS the binding; the matching names are a convenience, not a signal.
+    # RAYCAST drivetrain: those wheels have no joint, so the raycast wheel consumes the
+    # axle torque and no-load speed directly.
+    def Xform "Motor_L0" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.45, -0.1, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w0>
+        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_L0>
+    }
+
+    def Xform "Gearbox_L0" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.6, -0.1, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelIndependent/Motor_L0.outputs:torque>
+    }
+
+    def Xform "Motor_L1" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.45, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w1>
+        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_L1>
+    }
+
+    def Xform "Gearbox_L1" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.6, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelIndependent/Motor_L1.outputs:torque>
+    }
+
+    def Xform "Motor_L2" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.45, -0.1, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w2>
+        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_L2>
+    }
+
+    def Xform "Gearbox_L2" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.6, -0.1, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelIndependent/Motor_L2.outputs:torque>
+    }
+
+    def Xform "Motor_R0" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.45, -0.1, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w3>
+        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_R0>
+    }
+
+    def Xform "Gearbox_R0" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.6, -0.1, -2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelIndependent/Motor_R0.outputs:torque>
+    }
+
+    def Xform "Motor_R1" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.45, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w4>
+        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_R1>
+    }
+
+    def Xform "Gearbox_R1" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.6, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelIndependent/Motor_R1.outputs:torque>
+    }
+
+    def Xform "Motor_R2" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.45, -0.1, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </SixWheelIndependent.outputs:drive_w5>
+        prepend rel lunco:motor:drivenWheel = </SixWheelIndependent/Wheel_R2>
+    }
+
+    def Xform "Gearbox_R2" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.6, -0.1, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </SixWheelIndependent/Motor_R2.outputs:torque>
+    }
+
     # --- Drive law -----------------------------------------------------------
     # HOW throttle/steer become the six wheel channels is COMPOSITION, not an
     # enumeration. The plain authored state is the `lunco:driveMix` above (the

@@ -5,36 +5,146 @@
     metersPerUnit = 1
 )
 
-# A drive motor as a spawnable part — a housing, a mass, and a collider.
+# A DRIVE MOTOR as a real part: a mass, a housing that collides, a torque curve, an
+# efficiency, a power draw and a waste-heat output. One machine carries as many of these
+# as it has driven wheels, and each is independently commanded, independently sized and
+# independently able to overheat or fail.
 #
-# Its electrical behaviour is not here and not its own: a motor is a load on a circuit,
-# and a circuit is one Modelica model. `LunCo.Electrical.DCMotor` is the reusable model
-# class; the vehicle it drives instantiates it in its electrical system (see
-# `vessels/rovers/rucheyok/rucheyok_electrical.mo`). The MECHANICAL side is Avian's — the
-# torque and shaft speed are PhysX vehicle properties on the wheel, and the physics step
-# owns the exchange. USD assembles the part; the circuit is the maths.
+# HOW A VESSEL COMPOSES IT. One reference arc per motor, named for the wheel it turns,
+# with the wheel target and the demand wired on the instance:
 #
-# The root is an `Xform` — a component, not a cylinder — so the visible housing is an
-# ordinary child gprim that both renders and collides, and the rigid body is the root.
+#   def Xform "Motor_FL" (
+#       prepend references = @lunco://components/mobility/motor.usda@</Motor>
+#   )
+#   {
+#       double3 xformOp:translate = (0.8, -0.2, 1.0)
+#       uniform token[] xformOpOrder = ["xformOp:translate"]
+#
+#       # WHICH WHEEL this motor turns. Never a joint: a joint exists only in the
+#       # physical drivetrain, a wheel exists in both realizations. Authored
+#       # unconditionally, OUTSIDE every variant block.
+#       prepend rel lunco:motor:drivenWheel = </Rover/Wheel_FL>
+#
+#       # WHAT it is told to do: -1..1, from the vessel's command surface (the OBC) or
+#       # from a drive law. A parameter is an input with a constant instead of a wire.
+#       float inputs:demand.connect = </Rover/OBC.outputs:drive_left>
+#   }
+#
+# `PhysicsDriveAPI` IS NOT THE MOTOR. It is the motor's OUTPUT COUPLING to the joint:
+# a multiple-apply API on a CONSTRAINT, carrying a target, a damping and a force cap.
+# It cannot hold a mass, an efficiency, a thermal model or a power draw, so it cannot be
+# the part. The motor is this prim; it NAMES its WHEEL. Where that wheel has a joint the
+# loader follows wheel → joint and writes that joint's
+# `drive:angular:physics:targetVelocity` / `:maxForce` from the curve below; where it does
+# not, the raycast wheel consumes the same axle torque and no-load speed directly. Keying
+# on the wheel is what makes raycast/physical parity structural — the powertrain is
+# identical and only the wheel's torque→force step differs.
+# MuJoCo draws the same actuator/constraint line: `<actuator>` is its own element.
+#
+# THE CURVE IS TWO SCALARS. τ(ω) = stallTorque · (1 − ω / noLoadSpeed), clamped at zero —
+# the linear DC/BLDC characteristic, and the whole first-order motor. See `LunCoMotorAPI`
+# in the schema for why a sampled array was rejected. A motor whose real curve is not
+# linear gets a `LunCoProgram` child that computes torque instead.
+#
+#   inputs:demand ──► τ(ω) curve ──► outputs:torque ──► gearbox ──► driven wheel
+#                            └─────► outputs:heat ───► thermal program / radiator
+#
+# THE SHAFT SIDE IS HERE; THE BUS SIDE IS THE VESSEL'S CIRCUIT. `outputs:heat` and the
+# power implied by `efficiency` are this motor's contribution to a vessel-level
+# electrical and thermal model — a circuit is one Modelica model, not one per part.
 def Xform "Motor" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoMotorAPI"]
 )
 {
     uniform bool lunco:spawnable = true
 
     # --- Physics ---
+    # A stand-alone motor on the ground is a rigid body; a motor bolted to a rover is a
+    # child of the chassis body and this is inert. Both are correct, and neither needs
+    # this file to change.
     bool physics:rigidBodyEnabled = true
-    float physics:mass = 8.0
+    float physics:mass = 8.0 (
+        customData = {
+            double min = 0.5
+            double max = 200
+            string unit = "kg"
+        }
+    )
 
-    # --- Housing: renders and collides ---
-    def Cylinder "Body" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    # --- Motor characteristic (LunCoMotorAPI) ---
+    # SHAFT quantities, before any reduction. Sized as a rover wheel actuator: 0.25 N·m
+    # of shaft torque through a 1200:1 harmonic drive at 0.85 efficiency lands ~255 N·m
+    # at the axle, which is the traction-limited band a lunar wheel actually works in
+    # (μ·N·r ≈ 340 N·m). The no-load speed divides down to 14 400/1200 = 12 rad/s at the
+    # axle — 12 × 0.4 m ≈ 4.8 m/s, the verified rover feel, now derived rather than
+    # authored twice under two names.
+    float lunco:motor:stallTorque = 0.25
+    float lunco:motor:noLoadSpeed = 14400.0
+    float lunco:motor:continuousTorque = 0.15
+    float lunco:motor:efficiency = 0.85
+    # A small rotor, but through a 1200:1 reduction it reflects to the axle multiplied by
+    # the ratio SQUARED — 1.2e-4 × 1200² ≈ 173 kg·m², an order more than the wheel's own
+    # ½mr² ≈ 2 kg·m². That reflected inertia is most of what a geared rover feels.
+    float lunco:motor:rotorInertia = 0.00012
+    float lunco:motor:ratedVoltage = 28.0
+    # Which drive instance on the wheel's joint the output couples to, when the wheel has
+    # one. The wheel target itself is authored per-instance by the vessel — a component
+    # cannot know which wheel it is on.
+    uniform token lunco:motor:driveInstance = "angular"
+
+    # --- Ports ---
+    # Command in. Unwired it is 0 and the motor sits there, which is what an uncommanded
+    # motor does. A drive law, an OBC port, or a script writes it; -1..1, signed.
+    float inputs:demand = 0.0
+
+    # Mechanical output — shaft torque, N·m — for whatever consumes it: a gearbox's
+    # `inputs:torque`, or a telemetry channel.
+    float outputs:torque
+
+    # Waste heat, watts: (1 − efficiency) of the electrical input. This is the port a
+    # thermal model or a radiator consumes; nothing in the physics step reads it.
+    float outputs:heat
+
+    # --- Housing: RENDERS ONLY, deliberately no collider ---
+    #
+    # Internal machinery does not collide. A hub motor lives INSIDE the vehicle
+    # envelope, so a collider here does not model anything real — it just fights the
+    # chassis and the wheel for the same space. Eight of these, interpenetrating,
+    # launched the parity rovers at 846 m/s the first time they shipped with
+    # `PhysicsCollisionAPI`.
+    #
+    # What a motor contributes to physics is MASS, via `PhysicsMassAPI` on the part
+    # above. Contacts are for things that touch the world.
+    #
+    # Sized like real hardware rather than like a placeholder: a ~0.09 m radius,
+    # 0.14 m long can is what an 8 kg rover hub motor actually looks like, and it fits
+    # inboard of a 0.4 m wheel instead of swallowing it.
+    def Cylinder "Body"
+    {
+        double radius = 0.09
+        double height = 0.14
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.4)]
+    }
+
+    # --- Optional: thermal behaviour ---
+    # A motor that does not model its temperature is still a motor. This child is where
+    # the state lives when it does: delete the prim and the mechanics are untouched,
+    # which is exactly the separability a `LunCoProgram` child is for (a bolted-on
+    # program, not the part's own engine).
+    #
+    # NOT `realtimeSafe`: it drives no force port, only telemetry. `RoverMotorThermal.mo`
+    # is a per-SIDE bank model, so a vessel wires the side command into `drive_left` /
+    # `drive_right` and reads `temp_left` / `temp_right` back; a per-motor model replaces
+    # only this one asset path.
+    def LunCoProgram "Thermal" (
+        doc = "First-order lumped heat balance for the motor bank. Pure telemetry — nothing in the sim acts on the temperature."
     )
     {
-        double radius = 0.3
-        double height = 0.8
-        color3f[] primvars:displayColor = [(0.4, 0.4, 0.4)]
-        bool physics:collisionEnabled = true
+        uniform asset lunco:program:sourceAsset = @lunco://models/RoverMotorThermal.mo@
+        uniform bool lunco:program:realtimeSafe = false
+
+        float inputs:drive_left.connect = </Motor.inputs:demand>
+        float inputs:drive_right.connect = </Motor.inputs:demand>
     }
 }

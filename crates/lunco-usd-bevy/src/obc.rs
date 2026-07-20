@@ -20,7 +20,7 @@
 //! motors and power but no computer sits still, and it does so because of what the
 //! scene composes rather than because of a special case in code.
 
-use lunco_usd_bevy::{SdfPath, UsdRead};
+use crate::{SdfPath, UsdRead};
 
 /// The API a prim applies to claim it is a vessel's command surface.
 const OBC_API: &str = "LunCoOnBoardComputerAPI";

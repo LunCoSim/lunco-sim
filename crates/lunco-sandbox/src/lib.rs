@@ -237,21 +237,12 @@ fn run_with_mode(headless: bool) -> AppExit {
         None
     };
 
-    let mut app = App::new();
+    let mut app = build_sim_app(headless, offscreen);
 
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
     if let Some(inbox) = deeplink_inbox {
         app.insert_resource(inbox);
     }
-
-    // Register every LunCo asset source (lunco://, twin://,
-    // cached_textures://) + the shared `TwinRoots` resource in ONE shared place
-    // (`lunco-assets`), so all binaries get identical schemes. MUST run before
-    // `DefaultPlugins`/`AssetPlugin` snapshots the source registry.
-    lunco_assets::register_lunco_asset_sources(&mut app);
-
-    app.add_plugins(default_plugins(headless, offscreen));
-    app.add_plugins(SandboxCorePlugin { headless });
 
 
     #[cfg(feature = "ui")]
@@ -288,7 +279,45 @@ fn run_with_mode(headless: bool) -> AppExit {
 /// `ExtractPlugin`/`SyncWorldPlugin` entirely, while still installing the render-
 /// sync component hooks that expect them. [`SandboxHeadlessPlugin`] adds
 /// `SyncWorldPlugin` back to keep despawns from aborting; see the note there.
-fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGroupBuilder {
+/// THE simulation app — asset sources, engine plugins, and every LunCo domain
+/// system. This is the whole application minus its user interface.
+///
+/// Every binary that runs the simulation builds it through here: the GUI
+/// ([`run`]), the headless server, and the headless scene-test runner. The UI is
+/// added ON TOP by `run` alone, which is the right direction of dependency — the
+/// simulation does not know the interface exists, and a test runner exercises the
+/// same app the user does rather than a re-assembled lookalike.
+///
+/// **This exists because assembling it by hand is a trap.** The asset-source
+/// registration below MUST happen before `AssetPlugin`, which snapshots the source
+/// registry when it is built. Miss it and you get an app with no `lunco://` or
+/// `twin://` scheme and no `TwinRoots` resource — which surfaces as
+/// `Res<TwinRoots> failed validation: Resource does not exist` from an observer far
+/// away, or, worse, as assets that silently never resolve. Four call sites had
+/// already open-coded this prelude and a fifth (the scene-test runner) hit the panic
+/// on its first run.
+///
+/// Do not "fix" a missing `TwinRoots` by initialising the resource on its own: that
+/// manufactures the resource WITHOUT the asset sources it is meant to accompany, and
+/// trades a loud panic for silent unresolved assets.
+pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
+    let mut app = App::new();
+    // Register every LunCo asset source (lunco://, twin://, cached_textures://) +
+    // the shared `TwinRoots` resource in ONE shared place (`lunco-assets`), so all
+    // binaries get identical schemes. MUST run before `DefaultPlugins`/`AssetPlugin`
+    // snapshots the source registry.
+    lunco_assets::register_lunco_asset_sources(&mut app);
+    app.add_plugins(default_plugins(headless, offscreen));
+    app.add_plugins(SandboxCorePlugin { headless });
+    app
+}
+
+/// Engine-level plugin set, render/UI stripped when `headless`.
+///
+/// `pub` so [`build_sim_app`] is not the only way in for a binary that genuinely
+/// needs a different plugin set — but prefer `build_sim_app`, which also does the
+/// asset-source prelude this function cannot do (it returns a group, not an `App`).
+pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGroupBuilder {
     // `bevy::render` EXISTS ONLY IN A `ui` BUILD. The no-`ui` server does not link
     // bevy_render at all (that is the point of the render decoupling), so every
     // `bevy::render::*` path below must be gated — an ungated one does not merely link a

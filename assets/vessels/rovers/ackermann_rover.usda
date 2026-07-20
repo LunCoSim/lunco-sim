@@ -142,6 +142,90 @@ def Xform "AckermannRover" (
         int lunco:wheel:index = 3
     }
 
+    # --- Motors + reductions -------------------------------------------
+    # One motor and one reduction per driven wheel — see `skid_rover.usda` for the
+    # full rationale. Ackermann steers with the KNUCKLES, so all four wheels are
+    # driven from the same two per-side channels the built-in kernel writes; the
+    # steering command is a separate port and no motor listens to it.
+    #
+    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
+    #   axle no-load speed = 14400 / 1200 = 12 rad/s
+    def Xform "Motor_FL" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.3, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </AckermannRover.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </AckermannRover/Wheel_FL>
+    }
+
+    def Xform "Gearbox_FL" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.52, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </AckermannRover/Motor_FL.outputs:torque>
+    }
+
+    def Xform "Motor_FR" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.3, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </AckermannRover.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </AckermannRover/Wheel_FR>
+    }
+
+    def Xform "Gearbox_FR" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.52, -0.35, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </AckermannRover/Motor_FR.outputs:torque>
+    }
+
+    def Xform "Motor_RL" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-0.3, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </AckermannRover.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </AckermannRover/Wheel_RL>
+    }
+
+    def Xform "Gearbox_RL" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-0.52, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </AckermannRover/Motor_RL.outputs:torque>
+    }
+
+    def Xform "Motor_RR" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (0.3, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </AckermannRover.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </AckermannRover/Wheel_RR>
+    }
+
+    def Xform "Gearbox_RR" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (0.52, -0.35, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </AckermannRover/Motor_RR.outputs:torque>
+    }
+
     # --- Drivetrain variant set (see skid_rover.usda for the contract) ---
     # Both drivetrains are authored ONCE in shared mobility components and
     # pulled in by reference; the arc path-translates their `over`/joint
@@ -155,6 +239,9 @@ def Xform "AckermannRover" (
         "physical" (
             prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
+            # Nothing motor-side here: motors name their WHEELS unconditionally above.
+            # This variant only adds the articulation root and the `Wheel_*_Hinge`
+            # joints the loader reaches by following wheel → joint.
         }
     }
 

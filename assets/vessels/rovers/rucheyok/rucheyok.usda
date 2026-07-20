@@ -222,4 +222,101 @@ def Xform "Rucheyok" (
         bool physics:collisionEnabled = true
 
     }
+
+    # --- Hub motors + reductions ---------------------------------------------
+    # The four hub motors the `Electrical` circuit above already budgets for
+    # (`inputs:motor_rated_power = 2000` W each) are now REAL PARTS rather than a
+    # parameter on a Modelica model: a mass, a housing, a torque curve, an
+    # efficiency and a waste-heat port each. The circuit's `torque_fl..rr` /
+    # `omega_fl..rr` boundary inputs are exactly what these produce, so the
+    # electrical model and the mechanics finally name the same four machines.
+    #
+    #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
+    # clamped at the gearbox's `maxOutputTorque`; axle no-load speed =
+    # 14400/1200 = 12 rad/s. NOTE this rover is authored at roughly 5× the fleet's
+    # scale (2.0 m wheels on a 15×20 m deck), so that same 12 rad/s is a much higher
+    # ground speed here than on the 0.4 m-wheeled rovers — a consequence of the
+    # asset's geometry, not of the drivetrain, and left as-is rather than silently
+    # re-geared.
+    #
+    # Skid rover (`PhysxVehicleTankDifferentialAPI`), raycast wheels, no joints: the
+    # even/left wheels take `drive_left` and the odd/right wheels `drive_right`, and
+    # each motor names the WHEEL it turns with `lunco:motor:drivenWheel`. No joint
+    # exists here, so the raycast wheel consumes the axle torque and no-load speed
+    # directly — the same binding a physical rover authors.
+    def Xform "Motor_FL" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-5.5, 0, -10.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </Rucheyok.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_FL>
+    }
+
+    def Xform "Gearbox_FL" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-6.0, 0, -10.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </Rucheyok/Motor_FL.outputs:torque>
+    }
+
+    def Xform "Motor_FR" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (5.5, 0, -10.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </Rucheyok.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_FR>
+    }
+
+    def Xform "Gearbox_FR" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (6.0, 0, -10.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </Rucheyok/Motor_FR.outputs:torque>
+    }
+
+    def Xform "Motor_RL" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (-5.5, 0, 10.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </Rucheyok.outputs:drive_left>
+        prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_RL>
+    }
+
+    def Xform "Gearbox_RL" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (-6.0, 0, 10.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </Rucheyok/Motor_RL.outputs:torque>
+    }
+
+    def Xform "Motor_RR" (
+        prepend references = @lunco://components/mobility/motor.usda@</Motor>
+    )
+    {
+        double3 xformOp:translate = (5.5, 0, 10.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:demand.connect = </Rucheyok.outputs:drive_right>
+        prepend rel lunco:motor:drivenWheel = </Rucheyok/Wheel_RR>
+    }
+
+    def Xform "Gearbox_RR" (
+        prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+    )
+    {
+        double3 xformOp:translate = (6.0, 0, 10.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:torque.connect = </Rucheyok/Motor_RR.outputs:torque>
+    }
 }

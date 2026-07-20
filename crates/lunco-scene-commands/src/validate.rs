@@ -288,7 +288,7 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
         if !view.has_api_schema(&prim, "PhysxVehicleWheelAPI") {
             continue;
         }
-        match lunco_usd_sim::wheel_params::WheelParams::read(&view, &prim, None) {
+        match lunco_usd_sim::wheel_params::WheelParams::read(&view, &prim, None, None) {
             Ok(_) => wheel_prims.push(json!({ "prim": prim.as_str(), "ok": true })),
             Err(missing) => {
                 report.errors.push(format!(

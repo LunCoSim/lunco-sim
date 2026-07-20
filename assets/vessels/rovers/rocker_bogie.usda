@@ -243,6 +243,34 @@ def Xform "RockerBogie" (
             # --- WHEEL DYNAMICS CONFIGURATION ---
             int lunco:wheel:index = 0
         }
+
+        # Motor + reduction for the front-left wheel. A CHILD OF THE ROCKER, not of
+        # the chassis: the rocker is its own rigid body, and a motor bolted to the
+        # arm must swing with the arm. Placed inboard of the wheel so its housing
+        # never overlaps the wheel collider.
+        #
+        #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
+        # clamped at the gearbox's `maxOutputTorque`; axle no-load speed =
+        # 14400/1200 = 12 rad/s. Wheel index 0 is even ⇒ `drive_left`, the same
+        # index-parity channel the wheel itself binds.
+        def Xform "Motor_FL" (
+            prepend references = @lunco://components/mobility/motor.usda@</Motor>
+        )
+        {
+            double3 xformOp:translate = (0.3, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            prepend rel lunco:motor:drivenWheel = </RockerBogie/RockerL/Wheel_FL>
+            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
+        }
+
+        def Xform "Gearbox_FL" (
+            prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+        )
+        {
+            double3 xformOp:translate = (0.15, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float inputs:torque.connect = </RockerBogie/RockerL/Motor_FL.outputs:torque>
+        }
     }
 
     # ── Right rocker ────────────────────────────────────────────────────────
@@ -332,6 +360,26 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int lunco:wheel:index = 1
+        }
+
+        # Wheel index 1 is odd ⇒ `drive_right`. Mirror of the left rocker.
+        def Xform "Motor_FR" (
+            prepend references = @lunco://components/mobility/motor.usda@</Motor>
+        )
+        {
+            double3 xformOp:translate = (-0.3, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            prepend rel lunco:motor:drivenWheel = </RockerBogie/RockerR/Wheel_FR>
+            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
+        }
+
+        def Xform "Gearbox_FR" (
+            prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+        )
+        {
+            double3 xformOp:translate = (-0.15, -0.4, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float inputs:torque.connect = </RockerBogie/RockerR/Motor_FR.outputs:torque>
         }
     }
 
@@ -457,6 +505,45 @@ def Xform "RockerBogie" (
 
             int lunco:wheel:index = 4
         }
+
+        # Two motors on this bogie — indices 2 and 4, both even ⇒ `drive_left`.
+        def Xform "Motor_ML" (
+            prepend references = @lunco://components/mobility/motor.usda@</Motor>
+        )
+        {
+            double3 xformOp:translate = (0.3, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_ML>
+            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
+        }
+
+        def Xform "Gearbox_ML" (
+            prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+        )
+        {
+            double3 xformOp:translate = (0.15, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float inputs:torque.connect = </RockerBogie/BogieL/Motor_ML.outputs:torque>
+        }
+
+        def Xform "Motor_RL" (
+            prepend references = @lunco://components/mobility/motor.usda@</Motor>
+        )
+        {
+            double3 xformOp:translate = (0.3, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_RL>
+            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
+        }
+
+        def Xform "Gearbox_RL" (
+            prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+        )
+        {
+            double3 xformOp:translate = (0.15, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float inputs:torque.connect = </RockerBogie/BogieL/Motor_RL.outputs:torque>
+        }
     }
 
     # ── Right bogie ─────────────────────────────────────────────────────────
@@ -574,6 +661,45 @@ def Xform "RockerBogie" (
 
             int lunco:wheel:index = 5
         }
+
+        # Indices 3 and 5, both odd ⇒ `drive_right`. Mirror of the left bogie.
+        def Xform "Motor_MR" (
+            prepend references = @lunco://components/mobility/motor.usda@</Motor>
+        )
+        {
+            double3 xformOp:translate = (-0.3, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_MR>
+            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
+        }
+
+        def Xform "Gearbox_MR" (
+            prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+        )
+        {
+            double3 xformOp:translate = (-0.15, -0.2, -0.4)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float inputs:torque.connect = </RockerBogie/BogieR/Motor_MR.outputs:torque>
+        }
+
+        def Xform "Motor_RR" (
+            prepend references = @lunco://components/mobility/motor.usda@</Motor>
+        )
+        {
+            double3 xformOp:translate = (-0.3, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_RR>
+            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
+        }
+
+        def Xform "Gearbox_RR" (
+            prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
+        )
+        {
+            double3 xformOp:translate = (-0.15, -0.2, 0.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float inputs:torque.connect = </RockerBogie/BogieR/Motor_RR.outputs:torque>
+        }
     }
 
     # All joints below DELIBERATELY omit `physics:localPos0`/`localPos1`: each body's
@@ -656,8 +782,13 @@ def Xform "RockerBogie" (
     }
 
     # ── Wheel revolute joints (rocker/bogie ↔ wheel) ────────────────────────
-    # These declare the joint-driven motorized properties. The parser auto-spawns
-    # them using wheel coordinates, but targets are declared here for G4 recognition.
+    # The joint is the motor's OUTPUT COUPLING, not the motor: it carries
+    # `PhysicsDriveAPI:angular`, the drive `type` and the axis, and NOTHING ELSE.
+    # `maxForce` and `targetVelocity` are deliberately absent — the loader writes
+    # them from the `Motor_*` / `Gearbox_*` pair that names this joint's WHEEL via
+    # `lunco:motor:drivenWheel` — the loader follows wheel → joint to get here — so the
+    # torque ceiling is stated once, on the part that makes the torque, instead of being
+    # typed here as a second opinion.
     def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )
@@ -665,7 +796,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/RockerL>
         rel physics:body1 = </RockerBogie/RockerL/Wheel_FL>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
 
@@ -676,7 +806,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/RockerR>
         rel physics:body1 = </RockerBogie/RockerR/Wheel_FR>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
 
@@ -687,7 +816,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/BogieL>
         rel physics:body1 = </RockerBogie/BogieL/Wheel_ML>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
 
@@ -698,7 +826,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/BogieR>
         rel physics:body1 = </RockerBogie/BogieR/Wheel_MR>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
 
@@ -709,7 +836,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/BogieL>
         rel physics:body1 = </RockerBogie/BogieL/Wheel_RL>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
 
@@ -720,7 +846,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/BogieR>
         rel physics:body1 = </RockerBogie/BogieR/Wheel_RR>
         uniform token physics:axis = "X"
-        float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
 
