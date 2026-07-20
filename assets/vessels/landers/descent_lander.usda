@@ -1001,18 +1001,30 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = true
     }
 
-    # Shock-absorber PISTON sleeves — one per leg, fixed at the strut's HULL
-    # anchor and reaching 2.6 m down the strut axis. The sleeve does not move;
+    # Shock-absorber PISTON sleeves — one per leg, hung from the strut's HULL
+    # anchor and reaching 2.6 m DOWN the strut axis. The sleeve does not move;
     # on touchdown `leg_spring.rhai` shortens the strut upward from the foot,
     # so the strut visibly slides INTO its sleeve — the compression reads as a
     # mechanism, not as a scale trick. Wider than the strut (r 0.12 over the
     # 0.15 cube) so the overlap hides the strut's sliding end. Visual only.
+    #
+    # A USD `Cylinder` is CENTRED on its origin, so "hangs from the anchor"
+    # puts the origin a HALF-LENGTH (1.3 m) DOWN-axis from the anchor, not at
+    # it. Sitting them nearer the anchor pushed each top end up to y = 1.640 —
+    # above the deck's top face (1.625), at radius 2.40, well inside the deck's
+    # 2.6 — so all four surfaced as grey nubs through the gold MLI and read as
+    # "the legs go through the roof". The struts were innocent: their top
+    # corner reaches y = 1.419, clear under the 1.475 underside.
+    #
+    # Anchor is the strut's top-centre, (2.519, 1.388) in the leg's own plane.
+    # centre = anchor − 1.3·û, û = (−sin 25°, cos 25°) the foot→hull axis. That
+    # puts the top end exactly AT the anchor, 0.087 m below the deck.
     def Cylinder "PistonPX"
     {
         uniform token axis = "Y"
         double radius = 0.12
         double height = 2.6
-        double3 xformOp:translate = (2.949, 0.462, 0)
+        double3 xformOp:translate = (3.069, 0.210, 0)
         double3 xformOp:rotateXYZ = (0, 0, 25.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
         color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
@@ -1023,7 +1035,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 0.12
         double height = 2.6
-        double3 xformOp:translate = (-2.949, 0.462, 0)
+        double3 xformOp:translate = (-3.069, 0.210, 0)
         double3 xformOp:rotateXYZ = (0, 0, -25.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
         color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
@@ -1034,7 +1046,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 0.12
         double height = 2.6
-        double3 xformOp:translate = (0, 0.462, 2.949)
+        double3 xformOp:translate = (0, 0.210, 3.069)
         double3 xformOp:rotateXYZ = (-25.0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
         color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
@@ -1045,7 +1057,7 @@ def Xform "DescentLander" (
         uniform token axis = "Y"
         double radius = 0.12
         double height = 2.6
-        double3 xformOp:translate = (0, 0.462, -2.949)
+        double3 xformOp:translate = (0, 0.210, -3.069)
         double3 xformOp:rotateXYZ = (25.0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
         color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
