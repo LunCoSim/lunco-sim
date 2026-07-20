@@ -3,43 +3,22 @@
 //! Maps USD physics attributes to Avian3D components. This is the **second** plugin in
 //! the USD processing pipeline, running after `UsdBevyPlugin` and alongside `UsdSimPlugin`.
 //!
-//! ## USD Standard: bodies and their shapes
+//! ## USD Standard: Compound Rigid Bodies
 //!
-//! Per the OpenUSD specification a prim with `PhysicsRigidBodyAPI` is a **body**, a
-//! prim with `PhysicsCollisionAPI` is a **shape**, and a shape belongs to its
-//! NEAREST ANCESTOR body. Shapes are not independent bodies — but they stay
-//! distinct prims, each with its own identity, transform and properties.
+//! Per the OpenUSD specification, a prim with `PhysicsRigidBodyAPI` aggregates all
+//! descendant colliders into a **single compound rigid body**. Children with only
+//! `PhysicsCollisionAPI` contribute collider shapes but are NOT independent bodies.
 //!
-//! We map that one-to-one, which works because avian states the same rule: its
-//! `ColliderOf` relationship attaches a `Collider` to the nearest ancestor
-//! `RigidBody` by walking the hierarchy. We author components; avian associates.
-//!
-//! - **Prim with RigidBodyAPI** → `RigidBody` + `SelectableRoot` on THAT entity
-//! - **Prim with CollisionAPI** → `Collider` on THAT entity (`ColliderOf` finds the body)
-//! - **CollisionAPI with no body ancestor** → standalone static geometry
-//!
-//! This replaced a loader that flattened every descendant shape into a single
-//! `Collider::compound` on the body and discarded the child prims' identity. USD
-//! never lost it, and the flattening silently disabled everything the schema
-//! defines PER SHAPE: `physics:density` and a bound `UsdPhysicsMaterialAPI`
-//! (friction, restitution) are per-collider, `PhysicsFilteredPairsAPI` is per-prim,
-//! and contacts could not be attributed to a part — so a landing leg could not read
-//! the force on its own pad. `Collider::compound` keeps its real job one level
-//! down: decomposing a single concave shape into convex pieces.
-//!
-//! Mass is untouched by the change, and deliberately so. `UsdPhysicsMassAPI` says an
-//! authored `physics:mass` / `diagonalInertia` / `centerOfMass` on the body WINS over
-//! anything derived from its shapes — exactly what avian's `NoAutoMass` /
-//! `NoAutoAngularInertia` / `NoAutoCenterOfMass` express. A body authoring none of
-//! them still derives from its colliders: the same shapes at the same density,
-//! whether summed by a compound or across the hierarchy.
+//! Our loader follows this standard:
+//! - **Parent with RigidBodyAPI** → ONE `RigidBody::Dynamic` + `SelectableRoot`
+//! - **Children with CollisionAPI** → `Collider` only (no independent `RigidBody`)
 //!
 //! ## Mapped Attributes
 //!
 //! | USD Attribute | Avian3D Component | Notes |
 //! |---|---|---|
-//! | `PhysicsRigidBodyAPI` | `RigidBody::Dynamic` | on the prim that declares it |
-//! | `PhysicsCollisionAPI` | `Collider` | on the prim that declares it; `ColliderOf` → nearest body |
+//! | `PhysicsRigidBodyAPI` (parent) | `RigidBody::Dynamic` | ONE per compound assembly |
+//! | `PhysicsCollisionAPI` (child) | `Collider` | Aggregated into parent compound |
 //! | `physics:mass` | `Mass` | On the rigid body root |
 //! | `physics:linearDamping` | `LinearDamping` | |
 //! | `physics:angularDamping` | `AngularDamping` | |
@@ -70,8 +49,8 @@ use bevy::mesh::VertexAttributeValues;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
 use lunco_usd_bevy::{
-    instance_key, local_transform_at, read_shape_dims, read_usd_mesh_indexed, ShapeDims,
-    StageView, UsdAnimated, UsdRead,
+    instance_key, local_transform_at, read_shape_dims, read_transform_from_usd,
+    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView, UsdAnimated, UsdRead,
     UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
@@ -351,6 +330,70 @@ const JOINT_DRIVE_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
 const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 
 /// Checks if a USD prim has a specific API schema applied.
+/// Collects collider shapes from all child prims of a compound body root,
+/// reading directly from the USD stage.
+///
+/// Returns a list of `(Position, Rotation, Collider)` tuples for `Collider::compound()`.
+fn collect_child_colliders_from_usd<R: UsdRead>(
+    reader: &R,
+    parent_path: &SdfPath,
+) -> Vec<(Position, Rotation, Collider)> {
+    let mut shapes = Vec::new();
+
+    for child_path in reader.children(parent_path) {
+        // Skip wheel children — they're independent dynamics handled
+        // by `lunco-usd-sim` (raycast probe or physical wheel rigid
+        // body), NOT collider pieces of the chassis compound. The
+        // `physxVehicleWheel:radius` attribute is the canonical marker
+        // (matches the same skip in `process_usd_avian_prims`).
+        if reader.real_f32(&child_path, "physxVehicleWheel:radius").is_some() {
+            continue;
+        }
+
+        // Check if child has collision enabled
+        let child_collision = reader
+            .scalar::<bool>(&child_path, ptok::A_COLLISION_ENABLED)
+            .unwrap_or(true);
+        if !child_collision { continue; }
+
+        // Read child's local transform (canonical decoder, shared with usd-bevy).
+        let mut child_tf = read_transform_from_usd(reader, &child_path);
+
+        // For Cylinder children, fold UsdGeomCylinder.axis into the
+        // child's compound-local rotation so the Y-axis collider lines
+        // up with the authored axis (mirrors what lunco-usd-bevy does
+        // for the entity Transform — same canonical `usd_axis_to_quat`).
+        if let Some(ty) = reader.type_name(&child_path) {
+            if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
+                let axis_tok = reader
+                    .text(&child_path, "axis")
+                    .unwrap_or_else(|| "Z".to_string());
+                // Pre-rotate by the stage convention: the `axis` token names an
+                // axis of the STAGE's frame while the collider is built in the
+                // canonical one (identical to what usd-bevy does for the visual
+                // Transform, so mesh and collider can't disagree on a Z-up stage).
+                let q_axis = lunco_usd_bevy::stage_convention(reader)
+                    .orient(usd_axis_to_quat(&axis_tok).unwrap_or(Quat::IDENTITY));
+                if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                    child_tf.rotation = child_tf.rotation * q_axis;
+                }
+            }
+        }
+
+        // Build collider from child's geometry
+        if let Some(collider) = build_collider_from_usd(reader, &child_path) {
+            let pos = Position(DVec3::new(
+                child_tf.translation.x as f64,
+                child_tf.translation.y as f64,
+                child_tf.translation.z as f64,
+            ));
+            let rot = Rotation(child_tf.rotation.as_dquat());
+            shapes.push((pos, rot, collider));
+        }
+    }
+
+    shapes
+}
 
 /// Builds a Collider from a USD prim's geometry type and dimensions.
 ///
@@ -378,8 +421,8 @@ const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 /// - **Sphere**: `double radius` (default 1.0).
 /// - **Cylinder**: `double radius`, `double height` (defaults 1, 2). Avian's
 ///   cylinder is Y-axial; the `UsdGeomCylinder.axis` token is honoured by the
-///   entity's Transform rotation (composed in `lunco-usd-bevy`), which every
-///   collider prim now carries in its own right.
+///   entity's Transform rotation (composed in `lunco-usd-bevy`; compound
+///   children get the axis rotation added in `collect_child_colliders_from_usd`).
 ///
 /// **Legacy fallback for `Cube`**: `width`/`height`/`depth` still accepted so
 /// unmigrated `.usda` files keep working (those author full dims at scale=1).
@@ -738,27 +781,13 @@ fn extract_avian_prim<R: UsdRead>(
         // first pass already sees `NoAuto*` and honours them.
         apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
 
-        // ── BODY ROOT ── its OWN shape only, if it has one.
-        //
-        // Descendant colliders are NOT folded in here. Each one gets its own
-        // `Collider` on its own entity (see the `has_collision_api` arm), and
-        // avian's `ColliderOf` relationship attaches it to the nearest ancestor
-        // body — the identical rule UsdPhysics states for which body a collision
-        // prim belongs to. Two spellings of one rule became one.
-        //
-        // The compound this replaces flattened N shape prims into a single
-        // `Collider::compound` on the parent and DISCARDED their prim identity.
-        // USD never lost it, and everything per-shape the schema allows died in
-        // that flattening: `physics:density` and a bound `UsdPhysicsMaterialAPI`
-        // (friction/restitution) are authored PER COLLIDER, so a pad with regolith
-        // friction under a metal hull silently did nothing; `PhysicsFilteredPairsAPI`
-        // is per-prim; and contacts could not be attributed to a part, so a landing
-        // leg could not read the force on its own pad.
-        //
-        // `Collider::compound` still has a job, one level down: decomposing a
-        // single concave shape into convex pieces. That is a shape detail. It was
-        // never meant to model a hierarchy USD already models.
-        add_collider_from_usd(commands, entity, reader, sdf_path);
+        // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
+        let compound_shapes = collect_child_colliders_from_usd(reader, sdf_path);
+        if !compound_shapes.is_empty() {
+            commands.entity(entity).try_insert(Collider::compound(compound_shapes));
+        } else {
+            add_collider_from_usd(commands, entity, reader, sdf_path);
+        }
 
         // A `Dynamic`-declared body spawns `Kinematic` + `ShouldBeDynamic` and
         // settles to `Dynamic` once joints resolve (no 1-frame separation launch).
@@ -773,17 +802,11 @@ fn extract_avian_prim<R: UsdRead>(
 
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else if has_collision_api {
-        // ── COLLIDER PRIM ──
-        // Per the USD physics spec a collision prim is a SHAPE OF ITS OWN that
-        // belongs to the nearest ancestor carrying `PhysicsRigidBodyAPI`. So it
-        // gets its own `Collider`, on its own entity, either way — and avian's
-        // `ColliderOf` relationship walks the hierarchy to find that ancestor body
-        // for us. Same rule, stated once, by the library whose job it is.
-        //
-        // What differs is only whether a body is found. Under one, the collider is
-        // that body's shape and needs nothing else: mass, inertia and motion are
-        // the body's. With NO rigid-body ancestor it stands alone, and standalone
-        // collision geometry is static — a ground plane, a rock.
+        // ── COLLIDER PRIM, no body of its own ──
+        // Per the USD physics spec, a collider belongs to the nearest ancestor
+        // carrying `PhysicsRigidBodyAPI`, which folds it into that body's compound
+        // shape (see the COMPOUND BODY ROOT arm above). Only when NO ancestor is a
+        // rigid body does the collider stand alone — and then it is static geometry.
         //
         // Ancestry, not `is_root`, is the question: a ground plane authored one
         // level down (`/Scene/Ground` under a plain `Xform`) is every bit as
@@ -792,8 +815,8 @@ fn extract_avian_prim<R: UsdRead>(
         // error, and scenes worked around it by tacking on `LunCoTerrainAPI`.
         if !has_rigid_body_ancestor(reader, sdf_path) {
             commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
+            add_collider_from_usd(commands, entity, reader, sdf_path);
         }
-        add_collider_from_usd(commands, entity, reader, sdf_path);
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else {
         // ── FALLBACK: legacy `physics:rigidBodyEnabled` ──
@@ -1888,32 +1911,12 @@ mod extract_parity_tests {
 
         let live = run_extract(&view, &rover);
 
-        // The LIVE path produced a full dynamic body: Kinematic (settling to
-        // Dynamic via ShouldBeDynamic) + the authored mass.
+        // The LIVE path actually produced a full dynamic body: Kinematic
+        // (settling to Dynamic via ShouldBeDynamic) + compound collider + mass.
         assert_eq!(live.0, Some(RigidBody::Kinematic), "live: rigid body");
+        assert!(live.1.is_some(), "live: compound collider built off the stage");
         assert_eq!(live.2, Some(500.0), "live: authored mass read off the stage");
         assert!(live.3, "live: ShouldBeDynamic (settles to Dynamic)");
-
-        // But NO collider of its own: `/Rover` is an Xform carrying RigidBodyAPI and
-        // no CollisionAPI, so it has no shape. It used to be handed a compound built
-        // from its descendants — which is precisely what erased their identity.
-        assert!(
-            live.1.is_none(),
-            "a body prim with no CollisionAPI of its own must not absorb its \
-             children's shapes, got {:?}",
-            live.1
-        );
-
-        // The shape stays where USD put it. `/Rover/Body` declares CollisionAPI, so
-        // it carries the `Collider` — and no `RigidBody`, because it is a shape OF
-        // `/Rover`, an ancestry avian's `ColliderOf` resolves the same way USD does.
-        let body_shape = run_extract(&view, &SdfPath::new("/Rover/Body").unwrap());
-        assert!(body_shape.1.is_some(), "the shape prim carries the collider");
-        assert_eq!(body_shape.0, None, "a shape is not a body");
-        assert!(
-            body_shape.2.is_none(),
-            "mass belongs to the body, not to each of its shapes"
-        );
     }
 }
 
@@ -2226,110 +2229,6 @@ def Xform "Mission"
         (world.get::<Collider>(entity).is_some(), world.get::<RigidBody>(entity).copied())
     }
 
-    /// A lander shaped like the film's: mass and inertia authored on the body,
-    /// shapes as separate child prims.
-    const MASS_SCENE: &str = r#"#usda 1.0
-(
-    defaultPrim = "Lander"
-)
-def Xform "Lander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"] )
-{
-    float physics:mass = 2000.0
-    float3 physics:diagonalInertia = (4625.0, 6250.0, 4625.0)
-
-    def Cylinder "Hull" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
-    {
-        uniform token axis = "Y"
-        double radius = 2.5
-        double height = 3.0
-    }
-    def Cylinder "PadPX" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
-    {
-        uniform token axis = "Y"
-        double radius = 0.4
-        double height = 0.08
-        double3 xformOp:translate = (5.5, -5.0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-}
-"#;
-
-    /// Mass properties belong to the BODY and must not follow the shapes.
-    ///
-    /// Colliders moved from one flattened `Collider::compound` on the body to a
-    /// `Collider` per shape prim. That changes shape OWNERSHIP, and it must not move
-    /// a vehicle's mass by a gram: a silent shift there surfaces as different
-    /// landing dynamics, never as a compile error.
-    ///
-    /// `UsdPhysicsMassAPI` is what makes it safe — an authored `physics:mass` /
-    /// `diagonalInertia` at the body WINS over anything derived from its shapes, and
-    /// avian spells that same rule `NoAutoMass` / `NoAutoAngularInertia`. The film's
-    /// `descent_lander.usda` authors both, so per-shape colliders cannot perturb it.
-    #[test]
-    fn authored_body_mass_is_untouched_by_per_shape_colliders() {
-        let recipe = StageRecipe::from_source("t.usda", MASS_SCENE);
-        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
-        let view = cs.view();
-
-        let mut world = World::new();
-        let body = world.spawn_empty().id();
-        {
-            let mut commands = world.commands();
-            extract_avian_prim(&view, body, &SdfPath::new("/Lander").unwrap(), &mut commands);
-        }
-        world.flush();
-
-        assert_eq!(
-            world.get::<Mass>(body).map(|m| m.0),
-            Some(2000.0),
-            "authored physics:mass must win over anything derived from the shapes"
-        );
-        assert!(
-            world.get::<NoAutoMass>(body).is_some(),
-            "an authored mass must suppress avian's aggregation — that IS the UsdPhysics rule"
-        );
-        assert!(
-            world.get::<NoAutoAngularInertia>(body).is_some(),
-            "likewise the authored diagonalInertia"
-        );
-        assert!(
-            world.get::<Collider>(body).is_none(),
-            "an Xform body with no CollisionAPI of its own must not absorb its \
-             children's shapes — that absorption is what erased their identity"
-        );
-    }
-
-    /// Each shape prim keeps its own collider and carries NO mass of its own: mass
-    /// is the body's, shapes are geometry. This is the identity the compound
-    /// destroyed, and the reason a landing leg can read the force on its own pad.
-    #[test]
-    fn shape_prims_carry_colliders_but_never_mass() {
-        let recipe = StageRecipe::from_source("t.usda", MASS_SCENE);
-        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
-        let view = cs.view();
-
-        for prim in ["/Lander/Hull", "/Lander/PadPX"] {
-            let mut world = World::new();
-            let e = world.spawn_empty().id();
-            {
-                let mut commands = world.commands();
-                extract_avian_prim(&view, e, &SdfPath::new(prim).unwrap(), &mut commands);
-            }
-            world.flush();
-
-            assert!(world.get::<Collider>(e).is_some(), "{prim} must carry its own Collider");
-            assert_eq!(
-                world.get::<RigidBody>(e),
-                None,
-                "{prim} is a SHAPE of the lander, not a body — and not static geometry either"
-            );
-            assert!(
-                world.get::<Mass>(e).is_none(),
-                "{prim} must not carry mass; that belongs to the body"
-            );
-        }
-    }
-
     /// The regression this exists for: a collider prim with no rigid-body ancestor
     /// is standalone STATIC geometry — even when it is not an ECS root. Keying this
     /// off root-ness gave `/Mission/Ground` no collider at all, silently, and
@@ -2343,35 +2242,33 @@ def Xform "Lander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAP
         assert_eq!(body, Some(RigidBody::Static), "and it must be static");
     }
 
-    /// The other half of the rule: a collider UNDER a rigid body carries its OWN
-    /// `Collider` — that is what makes it addressable per part — but never its own
-    /// `RigidBody`. Avian's `ColliderOf` attaches it to the ancestor body, which is
-    /// the same nearest-ancestor rule UsdPhysics states.
+    /// The other half of the rule: a collider UNDER a rigid body is a piece of that
+    /// body's compound shape, so it gets no collider and no body of its own.
     #[test]
-    fn collider_under_rigid_body_ancestor_gets_its_own_collider_but_no_body() {
+    fn collider_under_rigid_body_ancestor_stays_a_compound_piece() {
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let (has_collider, body) = extract(&cs.view(), "/Mission/CompoundLander/Hull");
-        assert!(has_collider, "a shape prim must carry its own collider, keeping its identity");
-        assert_eq!(body, None, "but it is a shape of the ancestor body, not a body");
+        assert!(!has_collider, "a collider child must not carry its own collider");
+        assert_eq!(body, None, "nor its own rigid body");
     }
 
-    /// A rigid-body root that also declares CollisionAPI collides via its own
-    /// geometry — a body and a shape on one prim, which USD allows.
+    /// A rigid-body root with NO collider children falls back to its own geometry.
+    /// (It always did; asserted here so the compound arm can never quietly eat it.)
     #[test]
     fn rigid_body_root_without_collider_children_uses_its_own_shape() {
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let lander = SdfPath::new("/Mission/BareLander").unwrap();
         let view = cs.view();
+        assert!(collect_child_colliders_from_usd(&view, &lander).is_empty());
         assert!(build_collider_from_usd(&view, &lander).is_some());
         let (has_collider, _) = extract(&view, "/Mission/BareLander");
         assert!(has_collider, "a bare rigid-body root must collide via its own shape");
     }
 
     /// A body declared the legacy way (`physics:rigidBodyEnabled`, no API schema)
-    /// still owns its collider children: they carry a `Collider`, but must NOT be
-    /// promoted to static geometry — that would freeze a moving vehicle's parts.
+    /// still owns its collider children — they must not become static geometry.
     #[test]
     fn legacy_rigid_body_ancestor_still_owns_its_colliders() {
         let recipe = StageRecipe::from_source("t.usda", SCENE);
@@ -2379,8 +2276,8 @@ def Xform "Lander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAP
         let view = cs.view();
         assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/LegacyBody/Shell").unwrap()));
         let (has_collider, body) = extract(&view, "/Mission/LegacyBody/Shell");
-        assert!(has_collider, "legacy body's shape child keeps its own collider");
-        assert_eq!(body, None, "and must not be promoted to static geometry");
+        assert!(!has_collider, "legacy body's collider child must stay a compound piece");
+        assert_eq!(body, None);
     }
 
     #[test]

@@ -146,12 +146,35 @@ pub struct ResolvedPort {
 #[derive(Resource, Default, Clone)]
 pub struct PortRegistry {
     backends: Vec<PortBackend>,
+    /// Index of the first FALLBACK backend. Everything below it was registered by
+    /// [`register`](Self::register), everything from it on by
+    /// [`register_fallback`](Self::register_fallback).
+    fallback_start: usize,
 }
 
 impl PortRegistry {
     /// Register a backend. Later registrations have lower precedence on name
     /// collisions. Call from a plugin `build`.
+    ///
+    /// Ordered ahead of every [`register_fallback`](Self::register_fallback)
+    /// backend regardless of when the plugins run, so precedence does not depend on
+    /// the order an app happens to add its plugins in.
     pub fn register(&mut self, backend: PortBackend) {
+        self.backends.insert(self.fallback_start, backend);
+        self.fallback_start += 1;
+    }
+
+    /// Register a backend of LAST resort — consulted only after every
+    /// [`register`](Self::register)ed one, whenever the two claim the same name.
+    ///
+    /// This exists because plugin order is not a precedence contract. The shader
+    /// parameter backend has to accept a name provisionally while its WGSL is still
+    /// loading (it cannot know its own schema yet), and `LuncoRenderPlugin` happens
+    /// to be added before `CoSimPlugin` — so registered normally it sat at index 0
+    /// and swallowed every Modelica and avian port write during shader load, with
+    /// `write_port` returning `true` so nothing was reported. A backend that guesses
+    /// must never outrank one that knows.
+    pub fn register_fallback(&mut self, backend: PortBackend) {
         self.backends.push(backend);
     }
 

@@ -20,6 +20,7 @@ mod scene_camera;
 mod sensor_beams;
 pub mod shader_material;
 mod shader_look;
+mod shader_ports;
 mod terrain_maps;
 mod world_label;
 

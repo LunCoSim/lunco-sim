@@ -2025,6 +2025,8 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         scalar: f32,
         int: i32,
         color: [f32; 3],
+        /// The engine owns this value — show it, never let the user fight it.
+        locked: bool,
     }
     let rows: Vec<Row> = {
         // The schema is a property of the ASSET: read it from the loaded WGSL
@@ -2036,11 +2038,26 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         schema
             .fields
             .iter()
-            .filter(|f| !matches!(f.ui, UiKind::Engine))
             .map(|f| {
+                // A parameter is ENGINE-OWNED when it is filled from simulation state
+                // rather than authored — either annotated `//!@engine` in the WGSL
+                // (Rust fills it, e.g. `sun_vis`) or currently driven by a USD
+                // connection (a wire writes it every tick).
+                //
+                // `ShaderLook::live` IS that fact — it is the engine-owned half of the
+                // look, the map that sits outside the material sharing key precisely
+                // because the engine mutates it. So membership in `live` is the test;
+                // there is no second registry of "which fields are driven" to keep in
+                // step, and this covers every writer (a `.connect` wire and
+                // `horizon_shade`'s engine fields alike) without naming any of them.
+                let locked = matches!(f.ui, UiKind::Engine) || look.live.contains_key(&f.name);
+                // Show the value the engine is actually pushing, not the authored one
+                // it is overriding — a locked row displaying a stale `values` entry
+                // would misreport the frame on screen.
                 let floats = look
-                    .values
+                    .live
                     .get(&f.name)
+                    .or_else(|| look.values.get(&f.name))
                     .copied()
                     .or(f.default)
                     .map(|v| v.as_floats())
@@ -2050,6 +2067,7 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
                     label: f.label.clone(),
                     ui: f.ui.clone(),
                     ty: f.ty,
+                    locked,
                     scalar: floats.first().copied().unwrap_or(0.0),
                     int: floats.first().copied().unwrap_or(0.0).round() as i32,
                     color: [
@@ -2069,6 +2087,13 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
 
     let mut edits: Vec<(String, ParamValue)> = Vec::new();
     for mut row in rows {
+        // An engine-owned parameter is SHOWN but not editable. Showing it is the
+        // point — watching `load_frac` climb as the strut compresses is what makes
+        // the wire legible. Editing it would be a lie: the next propagation tick
+        // overwrites whatever the user typed, so an enabled control would read as a
+        // broken slider rather than as a value under someone else's authority.
+        let locked = row.locked;
+        ui.add_enabled_ui(!locked, |ui| {
         match row.ui {
             UiKind::Slider { min, max } => {
                 if ui.add(egui::Slider::new(&mut row.scalar, min..=max).text(&row.label)).changed() {
@@ -2107,6 +2132,12 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
                 });
             }
         }
+        })
+        .response
+        .on_disabled_hover_text(
+            "Driven by the simulation — this value comes from a USD connection or \
+             from the engine, so it cannot be edited here.",
+        );
     }
 
     if !edits.is_empty() {

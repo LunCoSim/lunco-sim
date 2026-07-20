@@ -54,7 +54,6 @@ def Xform "Rucheyok" (
     # --- Solar Panel (physical part; its output is the Electrical circuit's) ---
     def Xform "SolarPanel" (
         prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double3 xformOp:translate = (0, 4.5, 0)
@@ -70,7 +69,6 @@ def Xform "Rucheyok" (
     # --- Battery (physical part; its charge is the Electrical circuit's) ---
     def Xform "Battery" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double3 xformOp:translate = (0, 0.8, 0)
@@ -130,7 +128,6 @@ def Xform "Rucheyok" (
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
         ]
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         uniform token axis = "Z"
@@ -154,7 +151,6 @@ def Xform "Rucheyok" (
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
         ]
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         uniform token axis = "Z"
@@ -178,7 +174,6 @@ def Xform "Rucheyok" (
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
         ]
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         uniform token axis = "Z"
@@ -202,7 +197,6 @@ def Xform "Rucheyok" (
             @lunco://components/mobility/wheel.usda@</Wheel>,
             @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
         ]
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         uniform token axis = "Z"

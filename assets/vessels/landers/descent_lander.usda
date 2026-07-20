@@ -442,11 +442,11 @@ def Xform "DescentLander" (
         # That is what keeps the rim genuinely round rather than an octagon.
         def NurbsPatch "Reflector"
         {
-            # A dish is a THIN SHELL — a real reflector is a metre of paint on a
-            # skin, not a solid — so it must draw from behind as well as in front.
-            # `doubleSided` is standard UsdGeomGprim and says exactly that; a
-            # two-surface volume would double the geometry to model a thickness
-            # nothing at this scale can resolve.
+            # A dish is a THIN SHELL — a real reflector is paint on a skin, not a
+            # solid — so it must draw from behind as well as in front. `doubleSided`
+            # is standard UsdGeomGprim and says exactly that; a two-surface volume
+            # would double the geometry to model a thickness nothing at this scale
+            # can resolve.
             uniform bool doubleSided = true
             uniform token lunco:lathe:profile = "paraboloid"
             float lunco:lathe:apexRadius = 0.02
@@ -762,9 +762,6 @@ def Xform "DescentLander" (
     # underside too. The cells slab is inset (5.45 × 3.25 vs 5.6 × 3.4) so the
     # backsheet shows as a frame border around the array.
     def Cube "SolarWingPX"
-    (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
     {
         double size = 1.0
         double3 xformOp:translate = (5.4, 1.4, 0)
@@ -787,9 +784,6 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
     }
     def Cube "SolarWingNX"
-    (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
     {
         double size = 1.0
         double3 xformOp:translate = (-5.4, 1.4, 0)
@@ -921,19 +915,13 @@ def Xform "DescentLander" (
     # scale, which the actuator reproduces exactly at zero stroke.
     def Cube "LegPX"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
+        prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (4.009, -1.807, 0)
         double3 xformOp:rotateXYZ = (0, 0, 25.0)
         double3 xformOp:scale = (0.15, 7.05, 0.15)
-        # The strut's mass, where UsdPhysics puts it. Authored rather than left to
-        # density x volume because the 0.15 x 7.05 x 0.15 box is an ENVELOPE: a real
-        # strut is a hollow tube inside it, so the solid volume would overstate it.
-        # `LegStrut.mo` reads this through the leg's `mass` port — one number, in the
-        # standard place, consumed by the model rather than restated in it.
-        float physics:mass = 40.0
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
@@ -953,11 +941,8 @@ def Xform "DescentLander" (
         # the Actuator child reads `stroke` and `load_frac` off `me` — the leg.
         uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
         uniform bool lunco:program:realtimeSafe = true
-        # PHYSICS, not a sensor: this leg's own pad collider reports the normal
-        # force the ground is pushing back with. A strut is a physical part, so
-        # it reads the physical fact — the altimeter is an INSTRUMENT and belongs
-        # to flight software (`DescentGuidance` still reads it).
-        float inputs:pad_force.connect = </DescentLander/PadPX.outputs:contact_force>
+        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
 
         # The spring, EXPOSED TO USD — a parameter is an input with a
         # constant instead of a connection (the GNC convention). Re-tune a
@@ -966,6 +951,14 @@ def Xform "DescentLander" (
         # way: it is this prim's `outputs:stroke` port on the composed
         # stage, which is exactly what the sibling Actuator (and usdview)
         # reads.
+        # Contact geometry, MEASURED on this airframe: the altimeter sits
+        # at the nozzle bottom and still reads ~5.0 m with the pads on the
+        # ground, so the model's 1.8 m default gate never fired — contact
+        # stayed 0, and with it load, stroke and the glow. The legs looked
+        # welded because the spring was never told it had landed.
+        # Full contact by 5.0 m, first touch at 5.6 m.
+        float inputs:contact_alt = 5.6
+        float inputs:gate_width = 0.6
         # SOFTENED so the stroke is visible. At k = 4000 the static settle is
         # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
         # engineering and invisible on camera: the legs looked welded and the
@@ -975,12 +968,9 @@ def Xform "DescentLander" (
         # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
         # ringing.
         float inputs:k = 1400.0
-        float inputs:c = 330.0
-        # MASS FROM PHYSICS. The strut accelerates its own mass, and that mass is
-        # a property of this leg's geometry and density — `UsdPhysicsMassAPI` on the
-        # prim below. Typed here as a constant it was the same number in two places,
-        # free to drift the moment the leg changed shape.
-        float inputs:m_strut.connect = </DescentLander/LegPX.outputs:mass>
+        float inputs:c = 1300.0
+        float inputs:m_eff = 500.0
+        float inputs:kv_impact = 900.0
         float inputs:stroke_max = 0.8
         def LunCoProgram "Actuator"
         {
@@ -1011,9 +1001,6 @@ def Xform "DescentLander" (
         }
     }
     def Cylinder "PadPX"
-    (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
     {
         uniform token axis = "Y"
         double radius = 0.4
@@ -1088,19 +1075,13 @@ def Xform "DescentLander" (
     }
 
     def Cube "LegNX" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
+        prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (-4.009, -1.807, 0)
         double3 xformOp:rotateXYZ = (0, 0, -25.0)
         double3 xformOp:scale = (0.15, 7.05, 0.15)
-        # The strut's mass, where UsdPhysics puts it. Authored rather than left to
-        # density x volume because the 0.15 x 7.05 x 0.15 box is an ENVELOPE: a real
-        # strut is a hollow tube inside it, so the solid volume would overstate it.
-        # `LegStrut.mo` reads this through the leg's `mass` port — one number, in the
-        # standard place, consumed by the model rather than restated in it.
-        float physics:mass = 40.0
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
@@ -1114,11 +1095,8 @@ def Xform "DescentLander" (
         # `Lander.mo` for `flame.rhai`.
         uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
         uniform bool lunco:program:realtimeSafe = true
-        # PHYSICS, not a sensor: this leg's own pad collider reports the normal
-        # force the ground is pushing back with. A strut is a physical part, so
-        # it reads the physical fact — the altimeter is an INSTRUMENT and belongs
-        # to flight software (`DescentGuidance` still reads it).
-        float inputs:pad_force.connect = </DescentLander/PadNX.outputs:contact_force>
+        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
 
         # The spring, EXPOSED TO USD — a parameter is an input with a
         # constant instead of a connection (the GNC convention). Re-tune a
@@ -1127,6 +1105,14 @@ def Xform "DescentLander" (
         # way: it is this prim's `outputs:stroke` port on the composed
         # stage, which is exactly what the sibling Actuator (and usdview)
         # reads.
+        # Contact geometry, MEASURED on this airframe: the altimeter sits
+        # at the nozzle bottom and still reads ~5.0 m with the pads on the
+        # ground, so the model's 1.8 m default gate never fired — contact
+        # stayed 0, and with it load, stroke and the glow. The legs looked
+        # welded because the spring was never told it had landed.
+        # Full contact by 5.0 m, first touch at 5.6 m.
+        float inputs:contact_alt = 5.6
+        float inputs:gate_width = 0.6
         # SOFTENED so the stroke is visible. At k = 4000 the static settle is
         # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
         # engineering and invisible on camera: the legs looked welded and the
@@ -1136,12 +1122,9 @@ def Xform "DescentLander" (
         # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
         # ringing.
         float inputs:k = 1400.0
-        float inputs:c = 330.0
-        # MASS FROM PHYSICS. The strut accelerates its own mass, and that mass is
-        # a property of this leg's geometry and density — `UsdPhysicsMassAPI` on the
-        # prim below. Typed here as a constant it was the same number in two places,
-        # free to drift the moment the leg changed shape.
-        float inputs:m_strut.connect = </DescentLander/LegNX.outputs:mass>
+        float inputs:c = 1300.0
+        float inputs:m_eff = 500.0
+        float inputs:kv_impact = 900.0
         float inputs:stroke_max = 0.8
         def LunCoProgram "Actuator"
         {
@@ -1172,9 +1155,6 @@ def Xform "DescentLander" (
         }
     }
     def Cylinder "PadNX"
-    (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
     {
         uniform token axis = "Y"
         double radius = 0.4
@@ -1186,19 +1166,13 @@ def Xform "DescentLander" (
     }
 
     def Cube "LegPZ" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
+        prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -1.807, 4.009)
         double3 xformOp:rotateXYZ = (-25.0, 0, 0)
         double3 xformOp:scale = (0.15, 7.05, 0.15)
-        # The strut's mass, where UsdPhysics puts it. Authored rather than left to
-        # density x volume because the 0.15 x 7.05 x 0.15 box is an ENVELOPE: a real
-        # strut is a hollow tube inside it, so the solid volume would overstate it.
-        # `LegStrut.mo` reads this through the leg's `mass` port — one number, in the
-        # standard place, consumed by the model rather than restated in it.
-        float physics:mass = 40.0
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
@@ -1212,11 +1186,8 @@ def Xform "DescentLander" (
         # `Lander.mo` for `flame.rhai`.
         uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
         uniform bool lunco:program:realtimeSafe = true
-        # PHYSICS, not a sensor: this leg's own pad collider reports the normal
-        # force the ground is pushing back with. A strut is a physical part, so
-        # it reads the physical fact — the altimeter is an INSTRUMENT and belongs
-        # to flight software (`DescentGuidance` still reads it).
-        float inputs:pad_force.connect = </DescentLander/PadPZ.outputs:contact_force>
+        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
 
         # The spring, EXPOSED TO USD — a parameter is an input with a
         # constant instead of a connection (the GNC convention). Re-tune a
@@ -1225,6 +1196,14 @@ def Xform "DescentLander" (
         # way: it is this prim's `outputs:stroke` port on the composed
         # stage, which is exactly what the sibling Actuator (and usdview)
         # reads.
+        # Contact geometry, MEASURED on this airframe: the altimeter sits
+        # at the nozzle bottom and still reads ~5.0 m with the pads on the
+        # ground, so the model's 1.8 m default gate never fired — contact
+        # stayed 0, and with it load, stroke and the glow. The legs looked
+        # welded because the spring was never told it had landed.
+        # Full contact by 5.0 m, first touch at 5.6 m.
+        float inputs:contact_alt = 5.6
+        float inputs:gate_width = 0.6
         # SOFTENED so the stroke is visible. At k = 4000 the static settle is
         # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
         # engineering and invisible on camera: the legs looked welded and the
@@ -1234,12 +1213,9 @@ def Xform "DescentLander" (
         # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
         # ringing.
         float inputs:k = 1400.0
-        float inputs:c = 330.0
-        # MASS FROM PHYSICS. The strut accelerates its own mass, and that mass is
-        # a property of this leg's geometry and density — `UsdPhysicsMassAPI` on the
-        # prim below. Typed here as a constant it was the same number in two places,
-        # free to drift the moment the leg changed shape.
-        float inputs:m_strut.connect = </DescentLander/LegPZ.outputs:mass>
+        float inputs:c = 1300.0
+        float inputs:m_eff = 500.0
+        float inputs:kv_impact = 900.0
         float inputs:stroke_max = 0.8
         def LunCoProgram "Actuator"
         {
@@ -1270,9 +1246,6 @@ def Xform "DescentLander" (
         }
     }
     def Cylinder "PadPZ"
-    (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
     {
         uniform token axis = "Y"
         double radius = 0.4
@@ -1284,19 +1257,13 @@ def Xform "DescentLander" (
     }
 
     def Cube "LegNZ" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
+        prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -1.807, -4.009)
         double3 xformOp:rotateXYZ = (25.0, 0, 0)
         double3 xformOp:scale = (0.15, 7.05, 0.15)
-        # The strut's mass, where UsdPhysics puts it. Authored rather than left to
-        # density x volume because the 0.15 x 7.05 x 0.15 box is an ENVELOPE: a real
-        # strut is a hollow tube inside it, so the solid volume would overstate it.
-        # `LegStrut.mo` reads this through the leg's `mass` port — one number, in the
-        # standard place, consumed by the model rather than restated in it.
-        float physics:mass = 40.0
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
@@ -1310,11 +1277,8 @@ def Xform "DescentLander" (
         # `Lander.mo` for `flame.rhai`.
         uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
         uniform bool lunco:program:realtimeSafe = true
-        # PHYSICS, not a sensor: this leg's own pad collider reports the normal
-        # force the ground is pushing back with. A strut is a physical part, so
-        # it reads the physical fact — the altimeter is an INSTRUMENT and belongs
-        # to flight software (`DescentGuidance` still reads it).
-        float inputs:pad_force.connect = </DescentLander/PadNZ.outputs:contact_force>
+        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
 
         # The spring, EXPOSED TO USD — a parameter is an input with a
         # constant instead of a connection (the GNC convention). Re-tune a
@@ -1323,6 +1287,14 @@ def Xform "DescentLander" (
         # way: it is this prim's `outputs:stroke` port on the composed
         # stage, which is exactly what the sibling Actuator (and usdview)
         # reads.
+        # Contact geometry, MEASURED on this airframe: the altimeter sits
+        # at the nozzle bottom and still reads ~5.0 m with the pads on the
+        # ground, so the model's 1.8 m default gate never fired — contact
+        # stayed 0, and with it load, stroke and the glow. The legs looked
+        # welded because the spring was never told it had landed.
+        # Full contact by 5.0 m, first touch at 5.6 m.
+        float inputs:contact_alt = 5.6
+        float inputs:gate_width = 0.6
         # SOFTENED so the stroke is visible. At k = 4000 the static settle is
         # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
         # engineering and invisible on camera: the legs looked welded and the
@@ -1332,12 +1304,9 @@ def Xform "DescentLander" (
         # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
         # ringing.
         float inputs:k = 1400.0
-        float inputs:c = 330.0
-        # MASS FROM PHYSICS. The strut accelerates its own mass, and that mass is
-        # a property of this leg's geometry and density — `UsdPhysicsMassAPI` on the
-        # prim below. Typed here as a constant it was the same number in two places,
-        # free to drift the moment the leg changed shape.
-        float inputs:m_strut.connect = </DescentLander/LegNZ.outputs:mass>
+        float inputs:c = 1300.0
+        float inputs:m_eff = 500.0
+        float inputs:kv_impact = 900.0
         float inputs:stroke_max = 0.8
         def LunCoProgram "Actuator"
         {
@@ -1368,9 +1337,6 @@ def Xform "DescentLander" (
         }
     }
     def Cylinder "PadNZ"
-    (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
     {
         uniform token axis = "Y"
         double radius = 0.4
