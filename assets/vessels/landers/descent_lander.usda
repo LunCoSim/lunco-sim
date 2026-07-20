@@ -911,8 +911,9 @@ def Xform "DescentLander" (
     # and `:damping`, in SI, integrated by avian. Rust owns the dynamics; there is
     # no equation and no script in the loop. Two layers remain:
     #   the joint            — the spring: k = 4000 N/m, c = 2200 N·s/m, stroke
-    #                          0..0.8 m. Static settle = 500 kg · 1.62 / 4000
-    #                          = 0.20 m per leg (a quarter of the vehicle each).
+    #                          -0.8..0 m (negative IS compression, see the axis
+    #                          note below). Static settle = 500 kg · 1.62 / 4000
+    #                          = -0.20 m per leg (a quarter of the vehicle each).
     #   Piston* cylinders    — the fixed outer tube the strut slides into, so the
     #                          compression reads as a mechanism.
     #
@@ -953,13 +954,15 @@ def Xform "DescentLander" (
         # fire before touchdown.
         #
         # `lunco:factor:load_frac` is the strut's RATING, the one number the solver
-        # cannot know: 1 / 1500 N of full-scale load. It is NEGATIVE because the
-        # joint's axis runs foot→hull, so a compressive load — the only kind a
-        # landing leg sees — is a reaction along −axis. The shader saturates
+        # cannot know: 1 / 1500 N of full-scale load. It is a UNIT CONVERSION and
+        # nothing else — newtons to full-scale fraction — so it is POSITIVE. Which
+        # way a strut travels is a fact about the joint, authored once in its
+        # `physics:localRot0`; encoding it a second time in a factor would make
+        # this wire depend on that rotation without naming it. The shader saturates
         # `load_frac` to 0..1, which leaves the (physically impossible here)
         # tension case dark rather than inventing a colour for it.
         float inputs:load_frac.connect = </DescentLander/LegPX_Spring.outputs:force>
-        float lunco:factor:load_frac = -0.00066667
+        float lunco:factor:load_frac = 0.00066667
     }
     def Cylinder "PadPX" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
@@ -1064,7 +1067,7 @@ def Xform "DescentLander" (
         # Glow from the spring's own reaction, scaled by the strut's rating —
         # see LegPX for the sign and the rating.
         float inputs:load_frac.connect = </DescentLander/LegNX_Spring.outputs:force>
-        float lunco:factor:load_frac = -0.00066667
+        float lunco:factor:load_frac = 0.00066667
     }
     def Cylinder "PadNX" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
@@ -1106,7 +1109,7 @@ def Xform "DescentLander" (
         # Glow from the spring's own reaction, scaled by the strut's rating —
         # see LegPX for the sign and the rating.
         float inputs:load_frac.connect = </DescentLander/LegPZ_Spring.outputs:force>
-        float lunco:factor:load_frac = -0.00066667
+        float lunco:factor:load_frac = 0.00066667
     }
     def Cylinder "PadPZ" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
@@ -1148,7 +1151,7 @@ def Xform "DescentLander" (
         # Glow from the spring's own reaction, scaled by the strut's rating —
         # see LegPX for the sign and the rating.
         float inputs:load_frac.connect = </DescentLander/LegNZ_Spring.outputs:force>
-        float lunco:factor:load_frac = -0.00066667
+        float lunco:factor:load_frac = 0.00066667
     }
     def Cylinder "PadNZ" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
@@ -1187,15 +1190,27 @@ def Xform "DescentLander" (
     #   k = 4000 N/m   → static settle = m_eff*g/k = 500*1.62/4000 = 0.20 m
     #   c = 2200 N·s/m → zeta = c/(2*sqrt(k*m_eff)) = 0.78: one visible
     #                    overshoot on a hard arrival, then it stops. Not ringing.
-    # Stroke runs 0 (fully extended, the rest pose the geometry is authored in)
-    # to 0.8 m of compression, well inside the 2.6 m piston sleeve, so the strut
-    # never bottoms out visually.
+    # SIGN, and it is the physically natural one: a spring's reaction is POSITIVE
+    # when the spring is COMPRESSED. The drive law is
+    # `force = stiffness * (targetPosition - displacement)`, so with
+    # `targetPosition = 0` the force is always opposite in sign to the
+    # displacement. Compression must therefore read NEGATIVE displacement, which
+    # fixes the axis: it points hull→foot, the direction the strut EXTENDS.
+    # Stroke runs -0.8 m (fully compressed) to 0 (fully extended, the rest pose
+    # the geometry is authored in), well inside the 2.6 m piston sleeve, so the
+    # strut never bottoms out visually. Everything downstream — the `force` port,
+    # the glow — then reads positive under load with no sign fixups anywhere.
     #
     # AXIS: `physics:axis` can only name a cardinal axis, and these legs are raked
-    # 25° off vertical. `physics:localRot0` is the standard way to say so — it is
-    # each leg's own `xformOp:rotateXYZ` as a quaternion, taking the hull's +Y onto
-    # the leg's axis, so the slider runs along the strut rather than straight up.
-    # Half-angle 12.5°: cos = 0.976296, sin = 0.216440.
+    # 25° off vertical, so `physics:localRot0` carries the direction — the standard
+    # way to say so, and the ONLY place this fact is authored. It takes the hull's
+    # +Y onto the leg's hull→foot axis: each leg's own `xformOp:rotateXYZ` composed
+    # with a 180° flip about that leg's rake axis (Z for the ±X legs, X for the ±Z
+    # legs), which negates where +Y lands. For LegPX the visual rake is +25° about
+    # Z, so the joint's rotation is 25° + 180° = 205° about Z, and +Y maps to
+    # (0.42262, -0.90631, 0): outward and DOWN, along the strut toward the pad.
+    # Half-angle 102.5°: cos = -0.216440, sin = 0.976296. Quaternions are
+    # (w, x, y, z).
     #
     # ANCHORS are deliberately unauthored. The loader derives them from the
     # transform hierarchy, which puts displacement at exactly 0 in the authored
@@ -1216,9 +1231,9 @@ def Xform "DescentLander" (
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegPX>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (0.976296, 0, 0, 0.216440)
-        float physics:lowerLimit = 0.0
-        float physics:upperLimit = 0.8
+        quatf physics:localRot0 = (-0.216440, 0, 0, 0.976296)
+        float physics:lowerLimit = -0.8
+        float physics:upperLimit = 0.0
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:stiffness = 4000.0
         float drive:linear:physics:damping = 2200.0
@@ -1238,9 +1253,9 @@ def Xform "DescentLander" (
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegNX>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (0.976296, 0, 0, -0.216440)
-        float physics:lowerLimit = 0.0
-        float physics:upperLimit = 0.8
+        quatf physics:localRot0 = (0.216440, 0, 0, 0.976296)
+        float physics:lowerLimit = -0.8
+        float physics:upperLimit = 0.0
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:stiffness = 4000.0
         float drive:linear:physics:damping = 2200.0
@@ -1260,9 +1275,9 @@ def Xform "DescentLander" (
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegPZ>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (0.976296, -0.216440, 0, 0)
-        float physics:lowerLimit = 0.0
-        float physics:upperLimit = 0.8
+        quatf physics:localRot0 = (0.216440, 0.976296, 0, 0)
+        float physics:lowerLimit = -0.8
+        float physics:upperLimit = 0.0
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:stiffness = 4000.0
         float drive:linear:physics:damping = 2200.0
@@ -1282,9 +1297,9 @@ def Xform "DescentLander" (
         rel physics:body0 = </DescentLander>
         rel physics:body1 = </DescentLander/LegNZ>
         uniform token physics:axis = "Y"
-        quatf physics:localRot0 = (0.976296, 0.216440, 0, 0)
-        float physics:lowerLimit = 0.0
-        float physics:upperLimit = 0.8
+        quatf physics:localRot0 = (-0.216440, 0.976296, 0, 0)
+        float physics:lowerLimit = -0.8
+        float physics:upperLimit = 0.0
         uniform token drive:linear:physics:type = "force"
         float drive:linear:physics:stiffness = 4000.0
         float drive:linear:physics:damping = 2200.0

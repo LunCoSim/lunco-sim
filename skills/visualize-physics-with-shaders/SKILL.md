@@ -82,9 +82,16 @@ def Mesh "LegPX_Strut" (prepend apiSchemas = ["MaterialBindingAPI"])
 {
     rel material:binding = </Looks/StrutMat>
     float inputs:load_frac.connect = </DescentLander/LegPX_Spring.outputs:force>
-    float lunco:factor:load_frac = -0.00066667   # 1 / 1500 N rated, sign for compression
+    float lunco:factor:load_frac = 0.00066667   # 1 / 1500 N rated
 }
 ```
+
+**A `lunco:factor:` is a UNIT CONVERSION, and nothing else.** It carries the
+rating that takes newtons to a 0..1 fraction. Never put a SIGN in it. Which way
+a mechanism travels is a fact about the joint, authored once in its
+`physics:localRot0`; a sign in the factor states it a second time, and makes the
+render wiring silently depend on an orientation it never names. If a wire needs
+a negative factor to look right, the joint's axis is backwards — fix it there.
 
 **4. Verify.** `read_ports` on the prim lists every declared parameter with its
 live value; the inspector shows driven rows greyed out. If the value moves in
@@ -131,7 +138,8 @@ deferral with a known migration path, not the absence of a standard.
   suspect something is publishing an input rather than a result.**
 - **Normalise on the WIRE, not in the shader, a script, or a model.** The affine
   `lunco:factor:<port>` / `lunco:offset:<port>` on the sink is exactly the SSP
-  `LinearTransformation`, and a rating is one number: re-rating the strut is a
+  `LinearTransformation` — a unit conversion, never a sign or an orientation
+  fixup — and a rating is one number: re-rating the strut is a
   single edit next to the connection it scales. Writing a `.mo` to hold one
   constant buys a whole solver instance and a second place for the number to
   drift.

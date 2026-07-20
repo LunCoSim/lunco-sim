@@ -44,8 +44,7 @@
 //! motor) is left entirely alone, so the two never fight over `joint.motor`.
 
 use avian3d::prelude::{
-    AngularVelocity, ComputedMass, LinearVelocity, MotorModel, Position, PrismaticJoint,
-    RevoluteJoint, Rotation,
+    AngularVelocity, LinearVelocity, MotorModel, Position, PrismaticJoint, RevoluteJoint, Rotation,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -252,36 +251,36 @@ fn read_measured_slide_rate(world: &World, entity: Entity) -> Option<f64> {
 /// zero until the joint actually leaves its rest offset — not a driving term
 /// pressed onto it from elsewhere.
 ///
-/// The expression evaluated here is the drive law `UsdPhysicsDriveAPI` defines,
-/// `stiffness * (targetPosition - position) + damping * (targetVelocity -
-/// velocity)`, and the two motor models that carry those coefficients are the two
-/// `physics:type` values: [`MotorModel::ForceBased`] yields newtons directly,
-/// [`MotorModel::AccelerationBased`] yields an acceleration, so it is multiplied
-/// by the driven body's mass to reach the newtons this port promises. Without
-/// that mass there is no honest conversion, so a body avian has not yet given a
-/// [`ComputedMass`] reads `None` rather than a number in the wrong unit.
+/// This is the motor LAW evaluated on the solver's own state, not a solver
+/// reading. avian's [`PrismaticJoint`] exposes no accumulated impulse — unlike a
+/// contact, where `warm_start_normal_impulse` is a real measured impulse — so
+/// there is no ground truth to read instead, and the law is only reported where
+/// it is exact:
 ///
-/// [`MotorModel::SpringDamper`] returns `None`: its parameters are a frequency
-/// and a damping ratio, its force is not this expression, and faking it would put
-/// a plausible-looking wrong number on a wire.
+/// - [`MotorModel::ForceBased`] — the law IS `stiffness * (targetPosition -
+///   position) + damping * (targetVelocity - velocity)`, in newtons, on the
+///   solver's own state. Exact, and the only case that yields a number.
+/// - [`MotorModel::AccelerationBased`] — the solver scales this by the EFFECTIVE
+///   mass at the joint, which depends on both bodies' inverse masses and on the
+///   anchor geometry. That is not any one body's mass, so there is no honest
+///   conversion to newtons here.
+/// - [`MotorModel::SpringDamper`] — parameterised by frequency and damping ratio,
+///   so its force is not this expression at all.
+///
+/// The last two return `None`. Coefficients that are not in newtons yield no
+/// newton reading: a plausible-looking wrong number on a wire is worse than an
+/// absent one. Authoring `physics:type = "force"` is what makes a drive readable.
 ///
 /// One computation, both consumers: the `force` port and anything else that wants
 /// the strut's load call this, so they cannot drift apart.
 pub fn joint_motor_force(world: &World, entity: Entity) -> Option<f64> {
     let j = world.get::<PrismaticJoint>(entity)?;
-    let (stiffness, damping, gain) = match j.motor.motor_model {
-        MotorModel::ForceBased { stiffness, damping } => (stiffness, damping, 1.0),
-        MotorModel::AccelerationBased { stiffness, damping } => (
-            stiffness,
-            damping,
-            world.get::<ComputedMass>(j.body2)?.value(),
-        ),
-        MotorModel::SpringDamper { .. } => return None,
+    let MotorModel::ForceBased { stiffness, damping } = j.motor.motor_model else {
+        return None;
     };
     let x = read_measured_displacement(world, entity)?;
     let v = read_measured_slide_rate(world, entity)?;
-    let f = gain
-        * (stiffness * (j.motor.target_position - x) + damping * (j.motor.target_velocity - v));
+    let f = stiffness * (j.motor.target_position - x) + damping * (j.motor.target_velocity - v);
     // The motor cannot pull harder than its saturation, so neither may the number
     // the strut reports about itself.
     let max = j.motor.max_force;
@@ -415,11 +414,11 @@ mod tests {
     /// begins at exactly 0 and the spring begins at exactly zero force — the same
     /// contract the USD legs get from their derived anchors.
     ///
-    /// The slider axis runs foot→hull, as the USD legs' axis does once their
+    /// The slider axis runs hull→foot, as the USD legs' axis does once their
     /// `physics:localRot0` is applied to `physics:axis`. Compression therefore
-    /// travels along +axis and `displacement` reads POSITIVE under load, which is
-    /// what makes the `0.0..0.8` limits the compression stroke rather than a
-    /// clamp that pins the leg at zero.
+    /// travels along −axis and `displacement` reads NEGATIVE under load, which is
+    /// what makes `force = stiffness * (target − displacement)` POSITIVE while the
+    /// strut is compressed, and what makes `-0.8..0.0` the compression stroke.
     ///
     /// The `AssetPlugin` + `Mesh` asset are not optional decoration: avian's
     /// collider cache runs a system reading `AssetEvent<Mesh>`, and a headless app
@@ -453,8 +452,8 @@ mod tests {
                 let mut j = PrismaticJoint::new(hull, leg)
                     .with_local_anchor1(DVec3::ZERO)
                     .with_local_anchor2(DVec3::new(0.0, 1.0, 0.0))
-                    .with_slider_axis(DVec3::NEG_Y)
-                    .with_limits(0.0, 0.8);
+                    .with_slider_axis(DVec3::Y)
+                    .with_limits(-0.8, 0.0);
                 j.motor.enabled = true;
                 j.motor.target_position = 0.0;
                 j.motor.target_velocity = 0.0;
@@ -484,8 +483,9 @@ mod tests {
         let (app, joint) = sprung_leg(MOON_G, 60);
         let x = read_measured_displacement(app.world(), joint).expect("displacement port");
         assert!(
-            x.abs() > 0.02,
-            "leg should be travelling after 1 s under load, got {x} m"
+            x < -0.02,
+            "leg should be COMPRESSING after 1 s under load — negative displacement \
+             is compression on a hull→foot axis — got {x} m"
         );
     }
 
@@ -502,9 +502,8 @@ mod tests {
             "solver diverged: x = {x}, v = {v}"
         );
         assert!(
-            (x.abs() - STATIC_DEFLECTION).abs() < 0.05,
-            "expected settle near {STATIC_DEFLECTION} m, got {} m",
-            x.abs()
+            (x + STATIC_DEFLECTION).abs() < 0.05,
+            "expected settle near -{STATIC_DEFLECTION} m, got {x} m"
         );
         assert!(
             v.abs() < 0.02,
@@ -522,7 +521,11 @@ mod tests {
         // At rest under gravity the spring carries the whole hung weight.
         let expected = SPRUNG_MASS * MOON_G;
         assert!(
-            (f.abs() - expected).abs() < 0.15 * expected,
+            f > 0.0,
+            "a compressed strut pushes back: reaction must be POSITIVE, got {f} N"
+        );
+        assert!(
+            (f - expected).abs() < 0.15 * expected,
             "expected ~{expected} N of reaction, got {f} N"
         );
 
