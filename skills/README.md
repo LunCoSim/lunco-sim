@@ -19,6 +19,7 @@ one directly when doing that kind of task by hand.
 
 | Skill | Use it when you want to… |
 |---|---|
+| [**geo-assets**](geo-assets/SKILL.md) | Put REAL lunar ground in a scene — download an LROC/PDS DTM, bake heightmap + colour/normal/slope maps, wire them as terrain layers |
 | [**author-usd-component**](author-usd-component/SKILL.md) | Model a reusable `.usda` asset from scratch — geometry, material, physics, parameters, spawn catalog |
 | [**build-usd-scene**](build-usd-scene/SKILL.md) | Assemble a scene from assets that already exist — load, spawn, place, and tune objects |
 | [**author-scenario**](author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, multi-entity coordination |

@@ -357,6 +357,10 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         //    author a `customData {min,max,unit}` UI hint. ────────────────
         usd_parameters_section(ui, ctx, entity);
 
+        // ── Variants: which configuration this prim composes with — a rover's
+        //    drivetrain, a scenario scene's terrain site. ─────────────────
+        usd_variants_section(ui, ctx, entity);
+
         // ── Mount: snap an attached part onto the socket it declares, re-deriving
         //    its placement + joint anchor from the mount frames (doc 48 §3.1). ──
         mount_section(ui, ctx, entity);
@@ -688,6 +692,55 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
             for (name, type_name, value) in edits {
                 ctx.defer(move |world| {
                     apply_usd_attribute_change(world, entity, &name, &type_name, value);
+                });
+            }
+        });
+}
+
+/// The ⎇ Variants section — one row per variant set the selected prim ships,
+/// from the [`UsdVariantView`](crate::ui::usd_variants::UsdVariantView)
+/// view-model. Picking an option dispatches
+/// [`UsdOp::SetVariantSelection`](lunco_usd::document::UsdOp), so it journals,
+/// replicates and undoes like every other authoring edit.
+///
+/// This is how a scenario scene switches which real lunar site it composes
+/// with (`terrain`), and how a rover instance switches drivetrain — the same
+/// control, because they are the same USD mechanism.
+///
+/// Selecting the option already composed is skipped: it would author an
+/// identical opinion, and each dispatch costs a whole-subtree rebuild.
+fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
+    let (prim_path, sets) = match ctx.resource::<crate::ui::usd_variants::UsdVariantView>() {
+        Some(v) if v.entity == Some(entity) && !v.sets.is_empty() => {
+            (v.prim_path.clone(), v.sets.clone())
+        }
+        _ => return,
+    };
+    egui::CollapsingHeader::new("⎇ Variants")
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut picked: Vec<(String, String)> = Vec::new();
+            for set in &sets {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(&set.name);
+                    for opt in &set.options {
+                        let active = set.selection.as_deref() == Some(opt.as_str());
+                        if ui.selectable_label(active, opt).clicked() && !active {
+                            picked.push((set.name.clone(), opt.clone()));
+                        }
+                    }
+                });
+                // A set whose selection does not resolve composes its fallback
+                // (or nothing) — say so rather than showing an empty row that
+                // looks like a rendering bug.
+                if set.selection.is_none() {
+                    ui.weak("no selection composed — fallback in use");
+                }
+            }
+            for (set, variant) in picked {
+                let path = prim_path.clone();
+                ctx.defer(move |world| {
+                    apply_usd_variant_selection(world, entity, path, set, variant);
                 });
             }
         });
@@ -2379,6 +2432,33 @@ fn apply_usd_path_attribute_change(
             name: name.to_string(),
             type_name: type_name.to_string(),
             value,
+        };
+        world.trigger(ApplyUsdOp { doc, op });
+    }
+}
+
+/// Dispatch a `UsdOp::SetVariantSelection` — choose which variant of `set` the
+/// prim composes with. Runs inside a deferred `&mut World` closure.
+///
+/// Coarse by nature: value resolution re-composes the prim's whole subtree, so
+/// the projection rebuilds instead of replaying incrementally
+/// (`op_needs_rebuild`). That is the point — a variant can add and remove
+/// prims, not just change values. It still journals, replicates and undoes like
+/// every other op, and the author is read-modify-write so selecting one set
+/// never drops a sibling set's selection.
+fn apply_usd_variant_selection(
+    world: &mut World,
+    entity: Entity,
+    prim_path: String,
+    set: String,
+    variant: String,
+) {
+    if let Some(doc) = resolve_doc_for_entity(world, entity) {
+        let op = UsdOp::SetVariantSelection {
+            edit_target: LayerId::root(),
+            path: prim_path,
+            variant_set: set,
+            variant,
         };
         world.trigger(ApplyUsdOp { doc, op });
     }

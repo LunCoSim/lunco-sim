@@ -74,24 +74,61 @@ Shared ROI fields: `center_lat`, `center_lon`, `window_m`,
 
 ## Wiring maps as terrain layers (USD)
 
-On a Terrain prim (live example:
+Maps bind through a **stock UsdShade Material network** — the only authoring
+path. Bind the Terrain prim to a Material, whose surface output connects to a
+Shader carrying one `asset inputs:<role>_map` + `float inputs:weight_<role>`
+per layer (live example:
 `summer_space_school/sim/scenes/traverse.usda`):
 
 ```usda
-custom string lunco:terrain:layer:albedo:map  = "terrain/<site>/materials/textures/ortho.png"
-custom float  lunco:terrain:layer:albedo:weight = 1.0
-custom string lunco:terrain:layer:normal:map  = "terrain/<site>/materials/textures/normal.png"
-custom float  lunco:terrain:layer:normal:weight = 0.5
-custom string lunco:terrain:layer:mineral:map = "terrain/<site>/materials/textures/slope.png"
-custom float  lunco:terrain:layer:mineral:weight = 0.0   # raise for a classification drape
+def Xform "Terrain" ( prepend apiSchemas = ["LunCoTerrainAPI"] )
+{
+    string lunco:assetMode = "layered"
+    rel material:binding = </Traverse/Looks/TerrainLook>
+    # … dem/overzoom/rocks layers …
+}
+
+def Scope "Looks"
+{
+    def Material "TerrainLook"
+    {
+        token outputs:surface.connect = </Traverse/Looks/TerrainLook/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
+            asset inputs:albedo_map  = @terrain/<site>/materials/textures/ortho.png@
+            float inputs:weight_albedo = 1.0
+            asset inputs:normal_map  = @terrain/<site>/materials/textures/normal.png@
+            float inputs:weight_normal = 0.5
+            asset inputs:mineral_map = @terrain/<site>/materials/textures/slope.png@
+            float inputs:weight_mineral = 0.0   # raise for a classification drape
+        }
+    }
+}
 ```
 
-Paths are twin-root-relative strings, read by `read_authored_layer_maps`
-(`lunco-sandbox`). Roles: `albedo`, `mineral`, `surface` (packed R=rough
-G=AO B=rockDens), `normal`. They bind on the static-mesh path
-(`terrain_layered.wgsl`); streamed LOD tiles derive normal/AO from the DEM
-at runtime. Future direction (UsdShade node graph, unlit overlays): the
-twin's `18_VIZ_NODEGRAPH_DESIGN.md`.
+Asset paths are **scene-root-relative** and resolve through `twin://`, so they
+travel with the twin. Read by `read_material_network_layer_maps`
+(`lunco-sandbox`), which walks `material:binding` → Material →
+`outputs:surface.connect` → Shader. Roles: `albedo`, `mineral`, `surface`
+(packed R=rough G=AO B=rockDens), `normal`.
+
+- Every `inputs:*` is a live-tunable, journaled knob (networked, undoable) and
+  the network is inspectable in usdview/Blender.
+- **CONNECTED** map inputs are skipped — a connected port is fed by a producer
+  node (doc 18 Tier B), not an authored file.
+- `mineral` composites **UNLIT after lighting**, so a slope/classification
+  drape stays readable inside shadow — its entire job.
+- Layers bind on the static-mesh path (`terrain_layered.wgsl`); streamed LOD
+  tiles derive normal/AO from the DEM at runtime, and the derived bake only
+  fills slots an authored map left empty.
+- For multi-site scenes, author these inputs **inside a terrain variant** —
+  see `14_SCENARIO_DESIGN.md` §4a in the twin, and verify with
+  `cargo run -p lunco-usd --example variant_probe -- <scene.usda>`.
+
+Roadmap (bake nodes, node-graph editor): the twin's
+`18_VIZ_NODEGRAPH_DESIGN.md`.
 
 ## Caching & staleness
 

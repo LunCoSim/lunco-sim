@@ -17,6 +17,7 @@ pub mod terrain_tools;
 pub mod connection_canvas;
 pub mod usd_prim_tree;
 pub mod usd_params;
+pub mod usd_variants;
 pub mod usd_mount;
 /// Interactive checkpoint authoring — Ctrl+LMB append + right-click context
 /// menu, routing through the existing `SetAutopilotBehavior`/`EngageAutopilot`
@@ -211,6 +212,14 @@ impl Plugin for SandboxEditUiPlugin {
         app.init_resource::<usd_params::UsdParamView>().add_systems(
             Update,
             usd_params::produce_usd_param_view.in_set(ViewModelSet),
+        );
+
+        // Variant sets: which configurations the selected prim ships (a rover's
+        // `drivetrain`, a scenario scene's `terrain` site) and which composes
+        // now — the Inspector's ⎇ Variants picker.
+        app.init_resource::<usd_variants::UsdVariantView>().add_systems(
+            Update,
+            usd_variants::produce_usd_variant_view.in_set(ViewModelSet),
         );
 
         // Mount snap: resolve each socket the selected host advertises + the

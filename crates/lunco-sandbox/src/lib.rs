@@ -2262,12 +2262,12 @@ fn track_ground_collider_pending(
 #[derive(Component)]
 struct TerrainLayersBound;
 
-/// A bindable terrain layer role: the USD `lunco:terrain:layer:<name>:*`
-/// namespace, the `ShaderMaterial` texture slot it fills, and the reflected
-/// blend-weight param(s) it raises.
+/// A bindable terrain layer role: the Shader input pair it reads
+/// (`inputs:<name>_map` / `inputs:weight_<name>`), the `ShaderMaterial` texture
+/// slot it fills, and the reflected blend-weight param(s) it raises.
 #[cfg(feature = "ui")]
 struct LayerRole {
-    /// USD namespace segment + log label, e.g. `"albedo"`.
+    /// Shader-input stem + log label, e.g. `"albedo"`.
     name: &'static str,
     /// Sets the matching `Option<Handle<Image>>` slot on the material.
     set_slot: fn(&mut lunco_render_bevy::ShaderMaterial, Handle<Image>),
@@ -2275,47 +2275,26 @@ struct LayerRole {
     weights: &'static [&'static str],
 }
 
-/// GUI-only: bind authored terrain **layer maps** onto the terrain's
-/// `ShaderMaterial`. For each role below it reads
-/// `lunco:terrain:layer:<role>:map` (a path **relative to the open Twin**, e.g.
-/// `terrain/connecting_ridge/color.png`) + optional `:weight` (default `1.0`) off
-/// the terrain prim, loads the map through the `twin://` asset source (so it
-/// travels with the Twin — no engine-global `lunco://` link), sets the
-/// matching slot, and raises the role's blend weight(s).
+/// GUI-only: read the terrain's **layer maps** from its bound **UsdShade
+/// Material network** (doc 18 §3) — the only authoring path:
+/// `rel material:binding` → Material → `outputs:surface.connect` → Shader,
+/// whose `asset inputs:<role>_map` name the rasters and
+/// `float inputs:weight_<role>` their blend weights (default 1.0).
 ///
-/// Roles: `albedo` (real colour), `mineral` (classification tint), `surface`
-/// (packed rough/AO/hazard — overrides the P3b derived bake), `normal`
-/// (meso normal — overrides the derived bake). Maps only render when the prim's
-/// `shaderPath` is `terrain_layered.wgsl` (which declares the bindings); with
-/// `regolith.wgsl` the slots are simply ignored. One-shot per terrain.
-/// Read the authored `(role, rel-path, weight)` triples off `sdf` via any
-/// [`UsdRead`] source — the live `StageView` or the flattened reader — so the
-/// binding is identical whichever plane supplied the stage.
-#[cfg(feature = "ui")]
-fn read_authored_layer_maps<R: UsdRead>(
-    reader: &R,
-    sdf: &openusd::sdf::Path,
-    roles: &'static [LayerRole],
-) -> Vec<(&'static LayerRole, String, f32)> {
-    roles
-        .iter()
-        .filter_map(|role| {
-            let map_attr = format!("lunco:terrain:layer:{}:map", role.name);
-            let rel = reader.scalar::<String>(sdf, &map_attr)?;
-            let weight = reader
-                .real_f32(sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
-                .unwrap_or(1.0);
-            Some((role, rel, weight))
-        })
-        .collect()
-}
-
-/// Read the terrain's layer maps from its bound **UsdShade Material network**
-/// (doc 18 §3): `rel material:binding` → Material → `outputs:surface.connect`
-/// → Shader, whose `asset inputs:<role>_map` name the rasters and
-/// `float inputs:weight_<role>` their blend weights (default 1.0). This is
-/// the primary authoring path; the flat `lunco:terrain:layer:*` attrs are the
-/// deprecated adapter it supersedes ([`read_authored_layer_maps`]).
+/// Map paths are **relative to the scene's own root** (e.g.
+/// `terrain/apollo15/materials/textures/ortho.png`) and load through the
+/// `twin://` asset source, so they travel with the Twin — no engine-global
+/// `lunco://` link. [`bind_terrain_layers`] sets the matching `ShaderMaterial`
+/// slot and raises the role's blend weight(s).
+///
+/// Roles: `albedo` (real colour), `mineral` (unlit classification drape),
+/// `surface` (packed rough/AO/hazard — overrides the P3b derived bake),
+/// `normal` (meso normal — overrides the derived bake). Maps only render when
+/// the prim's `shaderPath` is `terrain_layered.wgsl` (which declares the
+/// bindings); with `regolith.wgsl` the slots are simply ignored.
+///
+/// Reads via any [`UsdRead`] source — the live `StageView` or the flattened
+/// reader — so the binding is identical whichever plane supplied the stage.
 ///
 /// CONNECTED map inputs are skipped — a connected port is fed by a producer
 /// node (doc 18 Tier B, bake nodes), not by an authored file.
@@ -2537,7 +2516,6 @@ fn bind_terrain_layers(
         (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainLayersBound>),
     >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
-    twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
     // OPTIONAL, because `Assets<ShaderMaterial>` only exists where a renderer does:
     // `LuncoRenderPlugin` registers the store, and `--no-ui` never adds it. A plain
@@ -2567,7 +2545,7 @@ fn bind_terrain_layers(
 
         // Read the LIVE canonical stage (built on demand from the asset's recipe)
         // — the source of truth — through the `UsdRead` read body
-        // (`read_authored_layer_maps`).
+        // (`read_material_network_layer_maps`).
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
             if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
@@ -2580,22 +2558,9 @@ fn bind_terrain_layers(
         };
         // Collect the authored (role, rel-path, weight) before touching the
         // material, so we can wait for the Twin + material without half-binding.
-        // The bound UsdShade Material network is the primary source (doc 18
-        // §3); the flat `lunco:terrain:layer:*` attrs remain as the adapter it
-        // supersedes.
-        let mut authored: Vec<(&LayerRole, String, f32)> =
+        // The bound UsdShade Material network is the ONLY source (doc 18 §3).
+        let authored: Vec<(&LayerRole, String, f32)> =
             read_material_network_layer_maps(&cs.view(), &sdf, ROLES);
-        if authored.is_empty() {
-            authored = read_authored_layer_maps(&cs.view(), &sdf, ROLES);
-            if !authored.is_empty() {
-                warn!(
-                    "[usd-dem] terrain {} authors layer maps via the deprecated \
-                     flat `lunco:terrain:layer:*` attrs — author a UsdShade \
-                     Material network instead (doc 18 §3; see traverse.usda)",
-                    prim_path.path
-                );
-            }
-        }
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.

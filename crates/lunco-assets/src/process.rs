@@ -44,7 +44,7 @@ use crate::cache_dir;
 /// - `kind = "map"`: crop the **same geographic ROI** the `dem` pipeline
 ///   uses out of a co-registered raster (ortho `.IMG`, `_SHADE`/`_SLOPE`/
 ///   `_CLRGRAD` TIFFs) and write an 8-bit PNG at `output` — the file a
-///   terrain prim's `lunco:terrain:layer:<role>:map` attribute points at.
+///   terrain Material network's `asset inputs:<role>_map` points at.
 ///   Grayscale sources (NAC orthos are radiance floats) get a 1–99
 ///   percentile stretch; RGB sources crop as-is.
 /// - `kind = "normalmap"`: crop + resample like `dem`, then derive a

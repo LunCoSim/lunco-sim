@@ -36,9 +36,9 @@ fn apply_derived_layers(
     let Some(mut materials) = materials else { return };
     for (entity, handles, mat3d) in &q {
         let Some(mut material) = materials.get_mut(&mat3d.0) else { continue };
-        // Yield to an authored map: a USD `lunco:terrain:layer:surface/normal:map`
-        // (bound elsewhere) takes precedence — only fill a slot still empty, so
-        // the derived bake is the fallback, not an override.
+        // Yield to an authored map: a Material network's `inputs:surface_map` /
+        // `inputs:normal_map` (bound elsewhere) takes precedence — only fill a
+        // slot still empty, so the derived bake is the fallback, not an override.
         let mut weights: Vec<(&str, ParamValue)> = Vec::new();
         if material.surface_map.is_none() {
             material.surface_map = Some(handles.surface.clone());
