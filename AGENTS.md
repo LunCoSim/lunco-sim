@@ -79,9 +79,10 @@ reads SENSORS, because a computer only knows what its instruments tell it:
 `DescentGuidance` reads the altimeter, with its mount point, its `rangeMax` and its
 out-of-range behaviour, not the true height.
 
-Getting this backwards caused a real bug: the struts were gated on the ALTIMETER, whose
-datum sits 3.3 m above the pads, so a hand-copied `contact_alt` constant had to restate the
-geometry — and it was wrong, firing the legs 3.9 m before touchdown.
+Getting this backwards costs real bugs. An altimeter's datum sits 3.3 m above the pads, so
+gating a strut on it forces a hand-copied constant to restate the geometry, and the legs
+fire before touchdown. **When a constant exists only to translate between two prims'
+positions, the wire is wrong.**
 
 **A sensor READS physics, it never re-derives it.** One computation, two consumers: the
 touchdown switch and the collider contact ports both call `avian::contact_of`. Two copies
@@ -114,9 +115,12 @@ WGSL uniform through the same graph a thruster force uses — no new resolver, n
 per-frame script. Normalise on the WIRE, with the SSP affine `lunco:factor:<port>` /
 `lunco:offset:<port>` the sink already carries — not in the shader, never in rhai, and
 not in a `.mo` written to hold a single rating. **Publish the physical RESULT, not the
-driving term** — a strut's load is the spring's own reaction `k*x + c*v`, which is zero
-until compression starts, not a proximity-gated force pressed onto it, which reads fully
-loaded while the leg is still in the air. When a visualization happens too early, the
+driving term** — a strut's load is the spring's own reaction,
+`stiffness * (targetPosition - displacement) + damping * (targetVelocity - velocity)`,
+which is zero until compression starts, not a proximity-gated force pressed onto it, which
+reads fully loaded while the leg is still in the air. That reaction is positive in
+compression, so the joint's axis — and only the joint's axis — carries the sign; a
+`lunco:factor:` is a unit conversion and never a sign fixup. When a visualization happens too early, the
 model is publishing an input. See
 [`visualize-physics-with-shaders`](skills/visualize-physics-with-shaders/SKILL.md).
 
