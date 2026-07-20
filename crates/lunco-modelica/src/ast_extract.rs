@@ -69,6 +69,31 @@ pub fn extract_model_name_from_ast(ast: &StoredDefinition) -> Option<String> {
     find_first_non_package_qualified(&ast.classes, "")
 }
 
+/// The package a file's classes belong to, from its `within` clause —
+/// `within LunCo.Propulsion;` → `Some("LunCo.Propulsion")`.
+///
+/// This is what makes a `.mo` a package MEMBER rather than a standalone
+/// document, and the two cannot be compiled the same way: a member's
+/// fully-qualified class is already owned by its package's source root, so
+/// seating the file on its own registers that class a second time and rumoca's
+/// merge pass rejects the pair (`Duplicate class '…' with non-identical
+/// definition`). [`crate::ModelicaCompiler::compile_str`] routes on this.
+///
+/// A bare `within;` names the top level and is reported as `None` — it declares
+/// membership of no package, which is the same thing as having no clause.
+pub fn within_package(ast: &StoredDefinition) -> Option<String> {
+    let name = ast.within.as_ref()?.to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Source-level counterpart of [`within_package`], for callers that do not
+/// already hold a parsed AST. Parses; `None` on a source too broken to parse
+/// (such a file has no compilable class either, so the caller's next step
+/// fails on its own terms).
+pub fn within_package_of_source(source: &str) -> Option<String> {
+    within_package(&parse(source)?)
+}
+
 /// Join a parent qualified name with a child segment to form a new
 /// qualified name. When `parent` is empty, returns `child` alone —
 /// **not** `".child"`, which in Modelica (MLS §5.3.2) is a *global*
