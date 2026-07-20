@@ -49,6 +49,8 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
      "READ. Invoke a registered ApiQueryProvider by name (Raycast, Nearest, …). The read twin of cmd(). () if missing/errored."),
     ("world_pos", "world_pos(id)", "[x, y, z] | ()",
      "Absolute (big_space float-origin) world position of an entity."),
+    ("geolocation", "geolocation(id)", "#{lat, lon, height} | ()",
+     "Where on the BODY an entity is — lat/lon in degrees, height in metres (body datum). Works for anything positioned: rover, waypoint, mast, marker. Reads the same big_space position world_pos does. () when the scene has no SiteAnchor."),
     ("world_forward", "world_forward(id)", "[x, y, z] | ()",
      "Unit forward/heading vector of an entity in world space."),
     ("world_rotation", "world_rotation(id)", "[x, y, z, w] | ()",

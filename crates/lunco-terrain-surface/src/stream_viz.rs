@@ -44,7 +44,7 @@ use lunco_materials::{
 };
 use lunco_terrain_core::{measure_node_error, HeightSource, REFINE_HYSTERESIS};
 
-use crate::derived_layers::TerrainDerivedMaps;
+use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::SurfaceOracle;
 use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
 
@@ -1019,6 +1019,35 @@ pub(crate) fn apply_maps_to_look(
     set_param(look, "weight_tone", ParamValue::F32(w_tone));
 }
 
+/// Bind a terrain's AUTHORED layer maps (from its UsdShade Material network)
+/// onto one tile look — the streamed-path counterpart of the static mesh's
+/// `bind_terrain_layers`.
+///
+/// Unlike the derived maps, these weights are NOT per-depth. An authored
+/// orthophoto is the site's actual appearance at every distance; fading it by
+/// LOD would make the ground change colour as the camera moved. The author's
+/// weight is the weight.
+///
+/// A layer the network does not author gets its weight forced to zero as well
+/// as its slot left empty — both, so a stale weight surviving on a reused look
+/// can never sample Bevy's fallback white as though it were terrain.
+pub(crate) fn apply_authored_maps_to_look(look: &mut ShaderLook, authored: &TerrainAuthoredMaps) {
+    match &authored.albedo {
+        Some(h) => {
+            look.textures.insert(TextureLayer::Albedo, h.clone());
+            set_param(look, "weight_albedo", ParamValue::F32(authored.weight_albedo));
+        }
+        None => set_param(look, "weight_albedo", ParamValue::F32(0.0)),
+    }
+    match &authored.mineral {
+        Some(h) => {
+            look.textures.insert(TextureLayer::Mineral, h.clone());
+            set_param(look, "weight_mineral", ParamValue::F32(authored.weight_mineral));
+        }
+        None => set_param(look, "weight_mineral", ParamValue::F32(0.0)),
+    }
+}
+
 /// The appearance INTENT of one LOD tile: the geomorph shader (it drives both the
 /// `@vertex` morph and the `@fragment` stage), its morph band, and — in `Lit`
 /// mode — the derived maps, the far-shadow cache and the analysis overlay.
@@ -1038,6 +1067,7 @@ fn tile_look(
     morph_start: f32,
     morph_end: f32,
     maps: Option<&TerrainDerivedMaps>,
+    authored: Option<&TerrainAuthoredMaps>,
     shadow: Option<&TileShadowCache>,
     overlay: crate::overlay::OverlayUniforms,
 ) -> ShaderLook {
@@ -1055,6 +1085,11 @@ fn tile_look(
         TerrainShaderMode::Lit => {
             if let Some(maps) = maps {
                 apply_maps_to_look(&mut look, maps, depth, tile_res);
+            }
+            // AFTER the derived maps: both write `weight_*`, and the author's
+            // opinion is the one that should survive.
+            if let Some(authored) = authored {
+                apply_authored_maps_to_look(&mut look, authored);
             }
             if let Some(shadow) = shadow {
                 apply_shadow_cache_to_look(&mut look, shadow);
@@ -1083,6 +1118,7 @@ fn spawn_tile(
     morph_end: f32,
     mode: TerrainShaderMode,
     maps: Option<&TerrainDerivedMaps>,
+    authored: Option<&TerrainAuthoredMaps>,
     shadow: Option<&TileShadowCache>,
     overlay: crate::overlay::OverlayUniforms,
     // Surface height at the tile centre — the SAME value the mesh was rebased by in
@@ -1099,7 +1135,7 @@ fn spawn_tile(
     commands
         .spawn((
             Mesh3d(mesh),
-            tile_look(mode, depth, tile_res, ms, me, maps, shadow, overlay),
+            tile_look(mode, depth, tile_res, ms, me, maps, authored, shadow, overlay),
             cell,
             Transform::from_translation(local),
             Visibility::Inherited,
@@ -1264,6 +1300,7 @@ pub fn update_lod_tiles(
         &mut TerrainNodeErrors,
         Option<&TerrainShaderMode>,
         Option<&TerrainDerivedMaps>,
+        Option<&TerrainAuthoredMaps>,
         Option<&TileShadowCache>,
         Has<LodFrozen>,
     )>,
@@ -1320,7 +1357,7 @@ pub fn update_lod_tiles(
     // one terrain's worth of entries and thrash each other every frame.
     let terrain_count = terrains.iter().count().max(1);
 
-    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt, maps, shadow, frozen) in
+    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt, maps, authored, shadow, frozen) in
         &mut terrains
     {
         // Frozen and already covered ⇒ the drawn set is final. Report it as fully
@@ -1356,7 +1393,7 @@ pub fn update_lod_tiles(
             for &(ent, depth, morph_end) in swaps.iter() {
                 // Each tile carries its own morph band; restate it under the new mode.
                 let (ms, me, _) = snap_band(morph_end);
-                let look = tile_look(mode, depth, tile_res, ms, me, maps, shadow, overlay);
+                let look = tile_look(mode, depth, tile_res, ms, me, maps, authored, shadow, overlay);
                 commands.entity(ent).try_insert(look);
             }
             tiles.mode = mode;
@@ -1695,7 +1732,7 @@ pub fn update_lod_tiles(
             // spawn-time recompute) keeps mesh and placement in lock-step across gens.
             let ent = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center, depth,
-                baked.res, baked.morph_end, mode, maps, shadow, overlay, oy,
+                baked.res, baked.morph_end, mode, maps, authored, shadow, overlay, oy,
             );
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -1767,7 +1804,7 @@ pub fn update_lod_tiles(
                 // recompute — otherwise a cache hit against a since-composed oracle jumps.
                 let ent = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, tile_res, morph_end, mode, maps, shadow, overlay, *oy,
+                    s.region.center, depth, tile_res, morph_end, mode, maps, authored, shadow, overlay, *oy,
                 );
                 if let Some(old) = tiles
                     .tiles
@@ -1994,6 +2031,32 @@ pub(crate) fn bind_derived_maps_to_tiles(
         for (depth, entity) in tiles.tiles_with_depth() {
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_maps_to_look(&mut look, maps, depth, tile_res);
+            }
+        }
+    }
+}
+
+/// The same late-bind for AUTHORED maps. The layer binder needs the composed
+/// stage AND the twin's asset root, so it publishes
+/// [`TerrainAuthoredMaps`] well after the first tiles are already resident —
+/// and it re-publishes whenever the author drags a weight or repoints a map
+/// through the Material network, since those are journaled attribute edits.
+/// Restating in place keeps that live without tile churn or a re-bake.
+///
+/// Lit tiles only, for the same reason as the derived maps: the flat/debug
+/// shader declares no map bindings, so writing them there would only mint
+/// pointless material variants.
+pub(crate) fn bind_authored_maps_to_tiles(
+    changed: Query<(&TerrainAuthoredMaps, &LodTiles), Changed<TerrainAuthoredMaps>>,
+    mut looks: Query<&mut ShaderLook>,
+) {
+    for (authored, tiles) in &changed {
+        if tiles.mode != TerrainShaderMode::Lit {
+            continue;
+        }
+        for (_depth, entity) in tiles.tiles_with_depth() {
+            if let Ok(mut look) = looks.get_mut(entity) {
+                apply_authored_maps_to_look(&mut look, authored);
             }
         }
     }

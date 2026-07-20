@@ -19,6 +19,8 @@ pub mod usd_prim_tree;
 pub mod usd_params;
 pub mod usd_variants;
 pub mod usd_mount;
+/// Screen-space labels a prim authored for itself (`lunco:billboard*`).
+pub mod billboard_overlay;
 /// Interactive checkpoint authoring — Ctrl+LMB append + right-click context
 /// menu, routing through the existing `SetAutopilotBehavior`/`EngageAutopilot`
 /// commands (no new journal domain).
@@ -259,6 +261,9 @@ impl Plugin for SandboxEditUiPlugin {
                 bevy_egui::EguiPrimaryContextPass,
                 (
                     checkpoint_click::draw_waypoint_overlay,
+                    // USD-authored labels (`lunco:billboard`). Paint-only, same
+                    // pass for the same reason.
+                    billboard_overlay::draw_billboard_overlay,
                     checkpoint_click::draw_waypoint_context_menu,
                     // Crosshair + Esc-to-cancel while a placement is armed.
                     checkpoint_click::handle_waypoint_placement_mode,

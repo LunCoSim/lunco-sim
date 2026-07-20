@@ -170,6 +170,85 @@ impl LocalTangentFrame {
     }
 }
 
+/// Geodetic coordinates of a point given in **local scene metres** relative to a
+/// site anchor — "where on the Moon is this rover / waypoint / mast?".
+///
+/// `local` is the scene-frame offset from the anchor in the engine's ENU
+/// convention: **East = +X, Up = +Y, North = −Z**. `anchor` is the geodetic
+/// point the local origin sits on (a scene root's [`SiteAnchor`], or a terrain's
+/// `lunco:anchor:*`).
+///
+/// ## Why arc lengths, not a tangent plane
+///
+/// Horizontal offsets convert as **arc lengths** on the sphere (`dθ = d / R`)
+/// rather than as chords onto a tangent plane, because that is the exact
+/// inverse of how the terrain was produced: `lunco-assets` crops a DEM by
+/// taking a `window_m / pixel_scale_m` pixel window around the target lat/lon
+/// out of an equirectangular mosaic, so one local metre IS one metre of ground
+/// arc by construction. A chord projection would also invent a spurious height
+/// of `d²/2R` (≈1.2 m at the edge of a 2 km site) that no authored elevation
+/// accounts for.
+///
+/// The cosine is taken at the **destination** latitude so an east/west offset
+/// stays correct as latitude changes across the site. Error is far below one DEM
+/// pixel over the kilometre-scale windows these scenes use. This is not a
+/// geodesic solver and does not claim to be one over continental distances.
+///
+/// `height_m` is `anchor.height_m + local.y` — a plain vertical offset. The
+/// terrain pipeline keeps DEM elevations in absolute body-datum metres instead
+/// of rebasing them, so a prim's authored Y already IS the number a user expects
+/// to read back.
+pub fn local_to_geodetic(anchor: &Geodetic, radius_m: f64, local: DVec3) -> Geodetic {
+    let r = radius_m.max(1.0);
+    // North = −Z (engine ENU).
+    let d_north = -local.z;
+    let d_east = local.x;
+
+    let lat_deg = anchor.lat_deg + (d_north / r).to_degrees();
+    let cos_lat = lat_deg.to_radians().cos();
+    // At a pole an east offset is degenerate — every longitude meets there — so
+    // hold the anchor's rather than dividing by ~0 and reporting a wild one.
+    let lon_deg = if cos_lat.abs() < 1e-9 {
+        anchor.lon_deg
+    } else {
+        anchor.lon_deg + (d_east / (r * cos_lat)).to_degrees()
+    };
+
+    Geodetic {
+        lat_deg,
+        lon_deg: wrap_lon_deg(lon_deg),
+        height_m: anchor.height_m + local.y,
+    }
+}
+
+/// Inverse of [`local_to_geodetic`]: where in the local scene frame does a
+/// geodetic point land? Returns scene metres (East = +X, Up = +Y, North = −Z).
+///
+/// The longitude difference is wrapped to ±180° first, so a site straddling the
+/// antimeridian — Chang'e-4 sits at 177.6°E — does not produce an offset most of
+/// the way around the Moon.
+pub fn geodetic_to_local(anchor: &Geodetic, radius_m: f64, geo: &Geodetic) -> DVec3 {
+    let r = radius_m.max(1.0);
+    let d_lat = (geo.lat_deg - anchor.lat_deg).to_radians();
+    let d_lon = wrap_lon_deg(geo.lon_deg - anchor.lon_deg).to_radians();
+    let cos_lat = geo.lat_deg.to_radians().cos();
+
+    DVec3::new(d_lon * r * cos_lat, geo.height_m - anchor.height_m, -(d_lat * r))
+}
+
+/// Normalize a longitude to (−180, 180].
+///
+/// Sites are authored in whatever convention their source used — LROC PDS
+/// labels are 0–360°E — so both conventions reach these functions, and a
+/// difference taken naively across the seam is wrong by 360°.
+pub fn wrap_lon_deg(lon_deg: f64) -> f64 {
+    let mut l = (lon_deg + 180.0) % 360.0;
+    if l <= 0.0 {
+        l += 360.0;
+    }
+    l - 180.0
+}
+
 /// Solar-frame position of a geodetic point on `desc` at `epoch_jd`, given the
 /// body center's solar-frame position.
 pub fn solar_position_of_geodetic(
@@ -388,6 +467,85 @@ mod tests {
             );
             assert!((back.height_m - geo.height_m).abs() < 1e-6);
         }
+    }
+
+    /// Moon radius the terrain pipeline uses (`DEFAULT_ANCHOR_BODY` = 301).
+    const R_MOON: f64 = 1737.0e3;
+
+    /// The engine's ENU convention, asserted as behaviour rather than left in a
+    /// comment: **+X is east, −Z is north, +Y is up**. A sign flip here mirrors
+    /// every reported position across the site — the exact failure
+    /// `DZZ_HANDOFF.md` warns about when a route comes back from QGIS.
+    #[test]
+    fn local_axes_map_east_north_up() {
+        let anchor = Geodetic::new(0.0, 0.0, 0.0);
+        let east = local_to_geodetic(&anchor, R_MOON, DVec3::new(1000.0, 0.0, 0.0));
+        assert!(east.lon_deg > 0.0, "+X must go EAST, got {east:?}");
+        assert!(east.lat_deg.abs() < 1e-9, "+X must not change latitude");
+
+        let north = local_to_geodetic(&anchor, R_MOON, DVec3::new(0.0, 0.0, -1000.0));
+        assert!(north.lat_deg > 0.0, "−Z must go NORTH, got {north:?}");
+
+        let up = local_to_geodetic(&anchor, R_MOON, DVec3::new(0.0, 250.0, 0.0));
+        assert!((up.height_m - 250.0).abs() < 1e-9, "+Y must be height");
+    }
+
+    /// One local metre is one metre of ground arc — the property that makes this
+    /// the inverse of the DEM crop (`window_m / pixel_scale_m` pixels around the
+    /// target lat/lon of an equirectangular mosaic).
+    #[test]
+    fn a_local_metre_is_a_metre_of_ground() {
+        let anchor = Geodetic::new(26.0371, 3.6584, -1920.0);
+        // 1 km north, at the twin's own Apollo 15 anchor.
+        let p = local_to_geodetic(&anchor, R_MOON, DVec3::new(0.0, 0.0, -1000.0));
+        let expected_dlat = (1000.0f64 / R_MOON).to_degrees();
+        assert!(
+            (p.lat_deg - anchor.lat_deg - expected_dlat).abs() < 1e-12,
+            "1 km north should be {expected_dlat}° of latitude, got {}",
+            p.lat_deg - anchor.lat_deg
+        );
+    }
+
+    /// Round-trips at BOTH shipped sites, including Chang'e-4 at 177.6°E — a
+    /// site whose eastward extent crosses the antimeridian, where an unwrapped
+    /// longitude difference would place a waypoint most of the way around the
+    /// Moon instead of a kilometre away.
+    #[test]
+    fn local_geodetic_round_trips_at_both_shipped_sites() {
+        for anchor in [
+            Geodetic::new(26.0371, 3.6584, -1920.0),      // Apollo 15, near side
+            Geodetic::new(-45.4446, 177.5991, -5925.0),   // Chang'e-4, far side
+        ] {
+            for local in [
+                DVec3::ZERO,
+                DVec3::new(150.0, -47.0, 2.0),
+                DVec3::new(-380.0, 1.0, -380.0),
+                DVec3::new(1000.0, 0.0, 1000.0),
+            ] {
+                let geo = local_to_geodetic(&anchor, R_MOON, local);
+                let back = geodetic_to_local(&anchor, R_MOON, &geo);
+                assert!(
+                    (back - local).length() < 1e-6,
+                    "{anchor:?} {local:?} → {geo:?} → {back:?}"
+                );
+            }
+        }
+    }
+
+    /// Chang'e-4 is at 177.6°E; a point 60 km further east is past 180°. The
+    /// result must wrap to a negative longitude, not read as 180.6°.
+    #[test]
+    fn longitude_wraps_across_the_antimeridian() {
+        let anchor = Geodetic::new(-45.4446, 177.5991, 0.0);
+        let far_east = local_to_geodetic(&anchor, R_MOON, DVec3::new(60_000.0, 0.0, 0.0));
+        assert!(
+            far_east.lon_deg < 0.0,
+            "past 180°E must wrap negative, got {}",
+            far_east.lon_deg
+        );
+        // And the inverse still reports the true 60 km, not a near-global offset.
+        let back = geodetic_to_local(&anchor, R_MOON, &far_east);
+        assert!((back.x - 60_000.0).abs() < 1.0, "wrapped round trip: {back:?}");
     }
 
     #[test]

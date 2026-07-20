@@ -2603,14 +2603,37 @@ fn bind_terrain_layers(
         // shader system); retry next frame until it does.
         let Some(mut material) = mats.get_mut(&mat3d.0) else { continue };
 
+        // PUBLISH alongside binding, because the static mesh is only half the
+        // audience: a `lodViz = true` site draws streamed geomorph tiles, whose
+        // materials this system never touches. Handing the same handles to
+        // `TerrainAuthoredMaps` is what lets those tiles show the authored
+        // orthophoto instead of pure procedural regolith (doc 18 step 4).
+        let mut published = lunco_terrain_surface::TerrainAuthoredMaps::default();
+
         for (role, rel, weight) in authored {
             let uri = format!("{base_uri}/{rel}");
-            (role.set_slot)(&mut material, asset_server.load(&uri));
+            let handle: Handle<Image> = asset_server.load(&uri);
+            (role.set_slot)(&mut material, handle.clone());
             for w in role.weights {
                 material.set(w, ParamValue::F32(weight));
             }
+            match role.name {
+                "albedo" => {
+                    published.albedo = Some(handle);
+                    published.weight_albedo = weight;
+                }
+                "mineral" => {
+                    published.mineral = Some(handle);
+                    published.weight_mineral = weight;
+                }
+                // `surface`/`normal` are not forwarded: the streamed path bakes
+                // its own from the DEM at tile resolution (`TerrainDerivedMaps`)
+                // and its per-depth weights are a LOD decision, not the author's.
+                _ => {}
+            }
             info!("[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}", role.name);
         }
+        commands.entity(entity).try_insert(published);
         commands.entity(entity).try_insert(TerrainLayersBound);
     }
 }

@@ -653,6 +653,28 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         }
     });
 
+    // geolocation(id) -> #{ lat, lon, height } — where on the BODY the entity
+    // is. Works for anything with a position (rover, waypoint, mast, marker).
+    // `()` when the scene has no `SiteAnchor` (an un-georeferenced sandbox) or
+    // the anchor's body is absent.
+    //
+    // A MAP, not an [x,y,z] array: lat/lon/height are not interchangeable the
+    // way an XYZ triple's components are, and a script that silently swapped
+    // two of them would report a plausible WRONG place — the same class of
+    // mistake `DZZ_HANDOFF.md` §5 warns about for the Y↔Z flip.
+    engine.register_fn("geolocation", |id: i64| -> Dynamic {
+        match bridge_core::geolocation(id as u64) {
+            Some(g) => {
+                let mut m = rhai::Map::new();
+                m.insert("lat".into(), Dynamic::from_float(g.lat_deg));
+                m.insert("lon".into(), Dynamic::from_float(g.lon_deg));
+                m.insert("height".into(), Dynamic::from_float(g.height_m));
+                Dynamic::from_map(m)
+            }
+            None => Dynamic::UNIT,
+        }
+    });
+
     // world_forward(id) -> [x, y, z] unit heading in world space, or ().
     // The ONE read rhai can't derive itself (world orientation needs the ECS
     // float-origin hierarchy). All steering MATH stays in rhai (the prelude);
