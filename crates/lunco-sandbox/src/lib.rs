@@ -1166,8 +1166,8 @@ const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 /// authored EITHER inline (`info:sourceCode`, a `string` that rides the USD journal
 /// plane — live-editable, per-op synced) OR by file reference (`info:sourceAsset`,
 /// an `asset` `@…rhai@` that rides the whole-twin content plane, CID-verified). Inline
-/// wins over the file — the same rule as `lunco:script`/`lunco:scriptPath` and
-/// `lunco:behavior`/`lunco:behaviorPath`.
+/// wins over the file — the same rule every `LunCoProgram` source follows, whatever
+/// engine its extension selects (`.rhai`, `.mo`, `.xml`).
 #[cfg(feature = "networking")]
 struct AuthoredPolicy {
     seam: String,

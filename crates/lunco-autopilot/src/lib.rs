@@ -1650,7 +1650,8 @@ fn on_engage_autopilot(
         // NO ROUTE. Engaging still succeeds — the actor claims the vessel and drives a
         // CONSTANT forward setpoint — but that is almost never what the user meant when
         // they pressed Engage, and it is indistinguishable from "the autopilot is
-        // broken". A vessel gets a route from its `lunco:behavior` BT.CPP XML (stamped
+        // broken". A vessel gets a route from the BT.CPP XML on its `LunCoProgram`
+        // mission child — `info:sourceCode`, or a `.xml` `info:sourceAsset` (stamped
         // as `usd_tree::BehaviorXml` by the USD projection, then compiled into
         // `AutopilotBehaviorSpec` by `usd_tree::compile_behavior_xml`), which the editor
         // authors when you Alt+LMB the ground with the vessel possessed or selected.
@@ -1659,7 +1660,7 @@ fn on_engage_autopilot(
         let (has_xml, has_spec) = q_route.get(cmd.vessel).unwrap_or((false, false));
         if !has_xml && !has_spec {
             warn!(
-                "[autopilot] vessel {:?} has NO ROUTE (no `lunco:behavior` BT.CPP tree and no \
+                "[autopilot] vessel {:?} has NO ROUTE (no `LunCoProgram` mission BT.CPP tree and no \
                  compiled AutopilotBehaviorSpec) — engaging anyway, but it will only hold a \
                  constant throttle of {throttle} on its current heading. Give it waypoints \
                  (Alt+LMB the ground with the vessel possessed/selected) or pass `spec_json`.",

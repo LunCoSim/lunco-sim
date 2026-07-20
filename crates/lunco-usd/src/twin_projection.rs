@@ -626,7 +626,7 @@ fn apply_incremental_op_to_stage(
                 }
             }
             // A `string` attribute is non-visual metadata/behavior (`lunco:script`,
-            // descriptions, `lunco:policy:source`) — no geometry/material
+            // descriptions, a policy's `info:sourceCode`) — no geometry/material
             // consequence, and a refresh would hot-reload a running scenario
             // (resetting its `this`) on a mere save. So author, don't refresh.
             if is_string {

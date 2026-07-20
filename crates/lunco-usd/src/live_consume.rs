@@ -410,7 +410,7 @@ pub(crate) fn refresh_edited_prims_live(
     let mut prims: Vec<String> = Vec::new();
     let mut behavior_updates: Vec<(String, Option<String>, Option<String>)> = Vec::new();
     // Wheel/vehicle dynamics edits are claimed by the in-place resync (same
-    // shape as the `lunco:behavior` special-case below): excluded from the
+    // shape as the mission `info:sourceCode` special-case below): excluded from the
     // subtree refresh — which would corrupt a spawned wheel — and folded into
     // ONE `resync_wheels_for_stage` call after the loop.
     let mut wheels_dirty = false;
@@ -431,15 +431,34 @@ pub(crate) fn refresh_edited_prims_live(
                 continue;
             }
         }
-        if attr == "lunco:behavior" || attr == "lunco:behaviorPath" {
+        // A mission tree is a `LunCoProgram` child carrying `info:sourceCode` (inline
+        // XML) or `info:sourceAsset` (`@…xml@`); the behaviour engine is picked by the
+        // extension, the same rule `.mo` and `.rhai` follow. A live edit to either
+        // re-reads the tree from the prim that owns it.
+        if attr == "info:sourceCode" || attr == "info:sourceAsset" {
             // Read value under stage borrow
             if let Some(stages) = world.get_non_send::<CanonicalStages>() {
                 if let Some(cs) = stages.get(id) {
                     let view = cs.view();
                     if let Ok(sp) = SdfPath::new(prim) {
-                        let val = view.scalar::<String>(&sp, "lunco:behavior");
-                        let path_val = view.scalar::<String>(&sp, "lunco:behaviorPath");
-                        behavior_updates.push((prim.to_string(), val, path_val));
+                        let val = view
+                            .scalar::<String>(&sp, "info:sourceCode")
+                            .filter(|s| s.trim_start().starts_with('<'));
+                        let path_val = lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
+                            .filter(|s| s.ends_with(".xml"));
+                        // The tree is authored on the `LunCoProgram` child, but the
+                        // VESSEL owns it — `process_usd_sim_prims` inserts `BehaviorXml`
+                        // on the parent entity, so a live edit must resolve to the same
+                        // one or it would stamp the tree onto the program prim instead.
+                        if val.is_some() || path_val.is_some() {
+                            if let Some(owner) = sp.parent() {
+                                behavior_updates.push((
+                                    owner.as_str().to_string(),
+                                    val,
+                                    path_val,
+                                ));
+                            }
+                        }
                     }
                 }
             }

@@ -1121,21 +1121,6 @@ fn process_usd_sim_prim_read(
                 .entity(entity)
                 .try_insert(FlightSoftware::new(port_map, &[]));
 
-            if let Some(xml) = reader
-                .text(&sdf_path, "lunco:behavior")
-                .filter(|s| s.trim_start().starts_with('<'))
-            {
-                commands
-                    .entity(entity)
-                    .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
-            } else if let Some(path) = reader
-                .scalar::<String>(&sdf_path, "lunco:behaviorPath")
-                .filter(|s| s.ends_with(".xml"))
-            {
-                commands
-                    .entity(entity)
-                    .try_insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
-            }
         }
 
         // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a `LunCoProgram`

@@ -7,7 +7,9 @@ over "SandboxScene"
     }
     over "Skid_Raycast_1"
     {
-        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+        def LunCoProgram "Mission"
+        {
+            custom string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Repeat num_cycles="-1">
       <Sequence>
@@ -25,10 +27,13 @@ over "SandboxScene"
     </Repeat>
   </BehaviorTree>
 </root>"""
+        }
     }
     over "Skid_Raycast_2"
     {
-        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+        def LunCoProgram "Mission"
+        {
+            custom string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Repeat num_cycles="-1">
       <Sequence>
@@ -53,10 +58,13 @@ over "SandboxScene"
     </Repeat>
   </BehaviorTree>
 </root>"""
+        }
     }
     over "Skid_Physical_1"
     {
-        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+        def LunCoProgram "Mission"
+        {
+            custom string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Sequence>
       <Action ID="drive_to" target="5.0;0.0;-15.0"/>
@@ -64,10 +72,13 @@ over "SandboxScene"
     </Sequence>
   </BehaviorTree>
 </root>"""
+        }
     }
     over "Ackermann_Raycast_1"
     {
-        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+        def LunCoProgram "Mission"
+        {
+            custom string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Repeat num_cycles="-1">
       <Sequence>
@@ -77,5 +88,6 @@ over "SandboxScene"
     </Repeat>
   </BehaviorTree>
 </root>"""
+        }
     }
 }

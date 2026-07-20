@@ -79,7 +79,9 @@ fn undo_covers_verbs_nobody_wrote_undo_code_for() {
     host.apply(Mutation::local(UsdOp::SetAttribute {
         edit_target: LayerId::runtime(),
         path: "/World".into(),
-        name: "lunco:behavior".into(),
+        // Arbitrary custom attribute — this test is about the typed inverse of
+        // SetAttribute, not about any particular attribute's meaning.
+        name: "lunco:test:note".into(),
         type_name: "string".into(),
         value: "<root/>".into(),
     }))

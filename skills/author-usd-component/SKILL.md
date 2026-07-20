@@ -315,7 +315,9 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
   **deleted**; `SimConnection` is a derived cache, so hand-authoring one is pointless.
 
 Older attributes still exist and **inline always wins over path**: `lunco:script` /
-`lunco:scriptPath`, `lunco:behavior` / `lunco:behaviorPath`. Prefer `lunco:program:*`.
+`lunco:scriptPath`. Prefer `lunco:program:*`. Behaviour trees follow the ordinary
+`LunCoProgram` rule — a child prim (conventionally `Mission`) whose `info:sourceCode` /
+`info:sourceAsset` ends in `.xml`, exactly as `.rhai` and `.mo` select their engines.
 
 Vehicles are a special case with **no fallbacks**: a wheel missing any
 `LunCoWheelAPI` / `LunCoTireAPI` attribute logs an error and **refuses to spawn**.

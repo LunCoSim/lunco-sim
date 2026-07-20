@@ -613,7 +613,7 @@ mod real_reader_tests {
     #[test]
     fn asset_reads_an_authored_asset_path_off_the_live_stage() {
         // The exact production case that was in doubt: an `asset`-typed attribute
-        // (`lunco:layer:demSource`, `lunco:policy:sourcePath`) read off a live COMPOSED
+        // (`lunco:layer:demSource`, a policy's `info:sourceAsset`) read off a live COMPOSED
         // stage. `scalar::<String>` / `text` must NOT read it (it's `Value::AssetPath`,
         // not String/Token); `asset` must return the authored `@…@` path.
         const S: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\

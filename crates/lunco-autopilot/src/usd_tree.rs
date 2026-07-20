@@ -26,7 +26,9 @@
 //! ```usda
 //! def Xform "Rover" {
 //!     custom string lunco:vessel = "true"
-//!     custom string lunco:behaviorPath = "behaviors/rover_patrol.xml"   # or inline lunco:behavior
+//!     def LunCoProgram "Mission" {
+//!         uniform asset info:sourceAsset = @behaviors/rover_patrol.xml@   # or inline info:sourceCode
+//!     }
 //! }
 //! def Scope "Behaviors" { def "RoverPatrol" {
 //!     def Xform "wp0" (prepend references = @vessels/markers/waypoint.usda@) {
@@ -36,8 +38,13 @@
 //! }}
 //! ```
 //!
-//! `lunco:behavior` (inline) / `lunco:behaviorPath` (asset) mirror the established
-//! `lunco:script` / `lunco:scriptPath` pair exactly, inline winning over the file.
+//! A mission is BOLTED ON: it is a `LunCoProgram` child prim (conventionally named
+//! `Mission`) carrying the standard UsdShade-style source properties —
+//! `info:sourceCode` (inline) / `info:sourceAsset` (file), inline winning over the
+//! file. Delete the prim and the behaviour is gone. The engine is chosen by the
+//! source's EXTENSION: `.xml` → BT.CPP, exactly as `.mo` → Modelica and `.rhai` →
+//! script already work. There is no behaviour-specific schema and no separate
+//! "which child is the tree" pointer.
 //!
 //! ## Waypoints are not children of the vessel
 //!
@@ -63,13 +70,15 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde_json::Value;
 
-/// The XML text of a vessel's behaviour tree — inline `lunco:behavior`, or the
-/// loaded contents of `lunco:behaviorPath`. Stamped on the VESSEL entity by the USD
-/// bridge (`lunco-usd-sim`).
+/// The XML text of a vessel's behaviour tree — inline `info:sourceCode` on the
+/// vessel's `LunCoProgram` mission child, or the loaded contents of that prim's
+/// `info:sourceAsset`. Stamped on the VESSEL entity by the USD bridge
+/// (`lunco-usd-sim`).
 #[derive(Component, Debug, Clone)]
 pub struct BehaviorXml(pub String);
 
-/// A vessel whose `lunco:behaviorPath` names a `.xml` asset still being loaded.
+/// A vessel whose mission prim's `info:sourceAsset` names a `.xml` asset still being
+/// loaded.
 /// [`load_behavior_xml_assets`] swaps it for [`BehaviorXml`] once the asset lands.
 #[derive(Component, Debug, Clone)]
 pub struct BehaviorXmlPath(pub String);
@@ -92,7 +101,7 @@ pub struct TargetBindings(pub HashMap<String, Entity>);
 ///
 /// LIVE-SCENE STATE — deliberately NOT authored to USD. It greys the visited pin and
 /// strips the leg from the **compiled** tree so the rover advances, but the on-disk
-/// `lunco:behavior` XML keeps every leg. It resets on reload (the component just
+/// mission `info:sourceCode` XML keeps every leg. It resets on reload (the component just
 /// starts empty). Kept out of the XML on purpose: dropping a new waypoint re-authors
 /// the whole XML through `ApplyUsdOp`, which would otherwise bake this transient
 /// "visited" flag into the saved `.usda`. [`compile_behavior_xml`] reads it to strip
@@ -101,7 +110,7 @@ pub struct TargetBindings(pub HashMap<String, Entity>);
 pub struct ReachedWaypoints(pub std::collections::HashSet<String>);
 
 /// Raw text of a `.xml` behaviour tree — the file-backed twin of inline
-/// `lunco:behavior`, so a mission stays an editable, hot-reloadable file that Groot2
+/// `info:sourceCode`, so a mission stays an editable, hot-reloadable file that Groot2
 /// can open.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct BehaviorXmlAsset {
@@ -135,7 +144,7 @@ impl AssetLoader for BehaviorXmlLoader {
     }
 }
 
-/// Kick off the asset load for each `lunco:behaviorPath`, and swap the loaded text in
+/// Kick off the asset load for each mission `info:sourceAsset`, and swap the loaded text in
 /// as [`BehaviorXml`]. Routed through `AssetServer` (never `std::fs`) so it works on
 /// wasm — same rule as the `.rhai` scenario loader.
 pub fn load_behavior_xml_assets(

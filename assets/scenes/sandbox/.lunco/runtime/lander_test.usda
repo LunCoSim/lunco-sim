@@ -7,7 +7,9 @@ over "LanderTest"
     }
     over "SkidRover"
     {
-        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+        def LunCoProgram "Mission"
+        {
+            custom string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Repeat num_cycles="-1">
       <Sequence>
@@ -20,5 +22,6 @@ over "LanderTest"
     </Repeat>
   </BehaviorTree>
 </root>"""
+        }
     }
 }

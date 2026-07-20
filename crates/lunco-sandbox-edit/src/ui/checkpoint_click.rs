@@ -5,7 +5,8 @@
 //!
 //! There is no checkpoint domain. A waypoint is an ordinary prim referencing
 //! `vessels/markers/waypoint.usda`, and the vessel's BT.CPP mission
-//! (`lunco:behavior`) gains a `drive_to` leaf that names it by path. Both edits go
+//! (the `info:sourceCode` of its `LunCoProgram "Mission"` child) gains a `drive_to`
+//! leaf that names it by path. Both edits go
 //! through the one authoring funnel, [`ApplyUsdOp`] — so the waypoint is journaled,
 //! undoable, persisted to `.usda`, and replicated exactly like every other prim, with
 //! no new command verb.
@@ -51,6 +52,9 @@ use crate::SelectedEntities;
 /// A route lives in WORLD space, so it is deliberately NOT a child of the vessel —
 /// parented under the rover, the waypoints would ride along as it drives.
 const BEHAVIORS_SCOPE: &str = "Behaviors";
+
+/// Name of the `LunCoProgram` child that carries a vessel's mission tree.
+const MISSION_PROGRAM: &str = "Mission";
 
 /// Track context menu state for right-clicking waypoints.
 #[derive(Resource, Default)]
@@ -359,12 +363,13 @@ pub fn on_scene_click_checkpoint(
     };
 
     // ── Author: only update the mission that names it ────────────────────────
+    let mission = ensure_mission_program(&mut commands, host, doc, &vessel_prim.path);
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::SetAttribute {
             edit_target: LayerId::runtime(),
-            path: vessel_prim.path.clone(),
-            name: "lunco:behavior".to_string(),
+            path: mission,
+            name: "info:sourceCode".to_string(),
             type_name: "string".to_string(),
             value: xml,
         },
@@ -469,8 +474,10 @@ pub fn on_scene_click_place_waypoint(
                 doc,
                 op: UsdOp::SetAttribute {
                     edit_target: LayerId::runtime(),
-                    path: vessel_prim.path.clone(),
-                    name: "lunco:behavior".to_string(),
+                    // Editing an EXISTING tree, so the program prim is already there —
+                    // the XML above was read back off it.
+                    path: join_prim(&vessel_prim.path, MISSION_PROGRAM),
+                    name: "info:sourceCode".to_string(),
                     type_name: "string".to_string(),
                     value: new_xml,
                 },
@@ -482,7 +489,7 @@ pub fn on_scene_click_place_waypoint(
 
 /// Draw the right-clicked waypoint's context menu (an egui `Area`).
 ///
-/// Every action edits the vessel's `lunco:behavior` XML through the one authoring
+/// Every action edits the vessel's mission `info:sourceCode` XML through the one authoring
 /// funnel ([`ApplyUsdOp`]), so each is journaled, undoable, saved and replicated like
 /// any other prim edit — `Move`/`Insert after` just defer the edit until the follow-up
 /// ground click ([`on_scene_click_place_waypoint`]).
@@ -632,8 +639,8 @@ pub fn draw_waypoint_context_menu(
             doc,
             op: UsdOp::SetAttribute {
                 edit_target: LayerId::runtime(),
-                path: vessel_prim.path.clone(),
-                name: "lunco:behavior".to_string(),
+                path: join_prim(&vessel_prim.path, MISSION_PROGRAM),
+                name: "info:sourceCode".to_string(),
                 type_name: "string".to_string(),
                 value,
             },
@@ -972,6 +979,39 @@ fn join_prim(parent: &str, name: &str) -> String {
     }
 }
 
+/// The `LunCoProgram` prim that carries a vessel's mission tree, creating it if
+/// this is the first waypoint — returns the path to author `info:sourceCode` onto.
+///
+/// The tree is a PROGRAM, not an attribute on the vessel: a mission is bolted on,
+/// so it is a child prim that can be deleted to remove the behaviour, and the
+/// behaviour engine is chosen by the source's extension exactly as `.mo` and
+/// `.rhai` are. `process_usd_sim_prims` reads it back off this child and stamps
+/// `BehaviorXml` on the vessel that owns it.
+///
+/// `AddPrim` on an existing prim is a rejection rather than a merge, so it is only
+/// authored when genuinely absent — the same rule the `Behaviors` scope follows.
+fn ensure_mission_program(
+    commands: &mut Commands,
+    host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
+    doc: lunco_doc::DocumentId,
+    vessel_path: &str,
+) -> String {
+    let path = join_prim(vessel_path, MISSION_PROGRAM);
+    if !prim_exists(host, &path) {
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::AddPrim {
+                edit_target: LayerId::runtime(),
+                parent_path: vessel_path.to_string(),
+                name: MISSION_PROGRAM.to_string(),
+                type_name: Some("LunCoProgram".to_string()),
+                reference: None,
+            },
+        });
+    }
+    path
+}
+
 /// Whether `path` is already authored in either layer of the document.
 fn prim_exists(host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>, path: &str) -> bool {
     let Ok(sdf) = lunco_usd_bevy::SdfPath::new(path) else { return false };
@@ -1003,7 +1043,7 @@ fn parse_coord_target(target: &str) -> Option<DVec3> {
 /// A **coordinate** waypoint is recorded in the vessel's runtime [`ReachedWaypoints`]
 /// set — LIVE-ONLY state that greys the pin and strips the leg from the compiled tree
 /// so the rover advances. It is deliberately never written to the XML or USD: the
-/// waypoint-drop path re-authors the whole `lunco:behavior` string through
+/// waypoint-drop path re-authors the whole mission `info:sourceCode` string through
 /// `ApplyUsdOp`, so a flag living in that XML would get journaled and baked into the
 /// saved `.usda` and survive a reload. Keeping it in a component means it simply
 /// resets each session.
@@ -1080,8 +1120,8 @@ pub fn delete_reached_waypoints(
                                     doc,
                                     op: UsdOp::SetAttribute {
                                         edit_target: LayerId::runtime(),
-                                        path: vessel_path.path.clone(),
-                                        name: "lunco:behavior".to_string(),
+                                        path: join_prim(&vessel_path.path, MISSION_PROGRAM),
+                                        name: "info:sourceCode".to_string(),
                                         type_name: "string".to_string(),
                                         value: new_xml,
                                     },
