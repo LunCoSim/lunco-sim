@@ -9,13 +9,13 @@
 # runs the program comes from its source's extension, so a `.py` routes to the Python
 # backend and a `.mo` to Modelica — nothing else about the prim changes.
 #
-# The balloon IS its plant, so `LunCoProgramAPI` is applied here rather than the model
+# The balloon IS its plant, so the program is authored here rather than the model
 # being carried as a separate child program. The root is an `Xform` — the envelope is a
 # child gprim that renders and collides, and the rigid body is the root.
 
 def Xform "PythonBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -25,7 +25,7 @@ def Xform "PythonBalloon" (
     float physics:mass = 4.5
 
     # ── The plant ────────────────────────────────────────────────────────────
-    uniform asset lunco:program:sourceAsset = @lunco://models/GreenBalloon.py@
+    uniform asset info:sourceAsset = @lunco://models/GreenBalloon.py@
 
     # It drives `force_y` every solver step on a body the client predicts, so it must
     # promise it steps fast enough to be trusted with a force.

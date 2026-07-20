@@ -27,10 +27,10 @@ use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
 use lunco_cosim::sensors::RangeSensor;
 use lunco_render::PbrLook;
 
-/// The `lunco:program:id` the beam driver answers to.
+/// The `info:id` the beam driver answers to.
 const DRIVER_ID: &str = "range_beam";
 
-/// The `lunco:program:id` the landing-point marker answers to.
+/// The `info:id` the landing-point marker answers to.
 const HIT_DRIVER_ID: &str = "range_hit";
 
 /// Fallback marker radius, if the program prim authors no `lunco:param:radius`.

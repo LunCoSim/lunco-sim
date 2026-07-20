@@ -166,21 +166,17 @@ def Xform "SolarRoverTest" (
         }
 
         # ── Sun Tracker Controller (Modelica) ──
-        def Xform "SunTrackerController" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
-        )
+        def Xform "SunTrackerController"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://models/SunTracker.mo@
+            uniform asset info:sourceAsset = @lunco://models/SunTracker.mo@
             # Self-wire sun azimuth from environment solar bridge
             float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_azimuth>
         }
 
         # ── Power Subsystem Model (Modelica) ──
-        def Xform "PowerSubsystem" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
-        )
+        def Xform "PowerSubsystem"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://models/SolarRoverPower.mo@
+            uniform asset info:sourceAsset = @lunco://models/SolarRoverPower.mo@
             # Self-wire sun azimuth from environment solar bridge
             float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/PowerSubsystem.outputs:sun_azimuth>
             # Connect actual panel yaw from SunTracker's yaw output
@@ -191,7 +187,7 @@ def Xform "SolarRoverTest" (
         # ── Autopilot Script (Rhai) ──
         def LunCoProgram "Autopilot"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/solar_rover_demo.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/solar_rover_demo.rhai@
         }
 
         # ── Chase camera riding behind the rover ──
@@ -247,7 +243,7 @@ def Xform "SolarRoverTest" (
 
         def LunCoProgram "Mission"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/solar_rover_cinematic.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/solar_rover_cinematic.rhai@
         }
     }
 }

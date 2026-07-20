@@ -30,7 +30,7 @@ def Xform "Thermal" (
     # The physics: per-side first-order heat balance, solver-clocked.
     def LunCoProgram "MotorThermal"
     {
-        uniform asset lunco:program:sourceAsset = @lunco://models/RoverMotorThermal.mo@
+        uniform asset info:sourceAsset = @lunco://models/RoverMotorThermal.mo@
         uniform bool lunco:program:realtimeSafe = true
         # `</Thermal.…>` = the host rover root after arc translation: the model
         # reads the same per-side FSW drive ports the wheels listen to, so

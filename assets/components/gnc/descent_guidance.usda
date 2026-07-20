@@ -54,7 +54,7 @@ over "DescentGuidance"
         doc = "Velocity-scheduled powered-descent guidance. Flies the vehicle down on its altimeter."
     )
     {
-        uniform asset lunco:program:sourceAsset = @lunco://models/DescentGuidance.mo@
+        uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
 
         # It drives the airframe's thrust every solver step, on a body the client
         # predicts — so it must promise it steps fast enough to be trusted with it.

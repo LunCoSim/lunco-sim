@@ -1861,11 +1861,6 @@ mod extract_parity_tests {
     //! authored transform, exercising the whole read layer (schema detect →
     //! compound collider → `collect_child_colliders` → `read_transform_from_usd`
     //! → `local_transform_at` → mass props).
-    //!
-    //! Originally this was a two-reader PARITY test — live stage vs the flattened
-    //! `sdf::Data` — and passing it is what authorized deleting the flattened
-    //! reader. With one reader left there is nothing to compare against, so it
-    //! now stands as a plain characterization test of the surviving path.
 
     use super::extract_avian_prim;
     use avian3d::prelude::*;

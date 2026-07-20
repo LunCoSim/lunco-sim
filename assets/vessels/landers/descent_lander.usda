@@ -19,7 +19,7 @@
 #   )
 #   { double3 xformOp:translate = (0, 60.0, 0) }
 #
-# The airframe's flight-control system is APPLIED here (`LunCoProgramAPI`), not bolted
+# The airframe's flight-control system is AUTHORED here (`info:sourceAsset`), not bolted
 # on, because it is not separable: its `inputs:` ARE the vessel's control surface — the
 # ports the control profile writes when a session takes the stick. A lander without it
 # is not a lander without an autopilot; it is a lander without an engine.
@@ -48,7 +48,7 @@ def Xform "DescentLander" (
     # contain component models, and the kind is what tells a browser (and the UI)
     # whether a prim is a thing you open up or a thing you place.
     kind = "assembly"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoVesselAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoVesselAPI"]
     # The ON-BOARD COMPUTER, as a reference arc — the vessel's COMMAND SURFACE.
     # Its `inputs:` ports (`external_throttle`/`pitch`/`roll`/`yaw`/`release`) ARE
     # the set of commands this vessel accepts; there is no lander class in engine
@@ -196,7 +196,7 @@ def Xform "DescentLander" (
     # see `models/Lander.mo`. Its `inputs:` are the vessel's control surface: the
     # control profile writes `external_throttle` / `pitch` / `roll` / `yaw` into them
     # when a session possesses this prim.
-    uniform asset lunco:program:sourceAsset = @lunco://models/Lander.mo@
+    uniform asset info:sourceAsset = @lunco://models/Lander.mo@
 
     # It drives thrust every solver step on a body the client predicts, so it must
     # promise it steps fast enough to be trusted with a force.
@@ -279,7 +279,7 @@ def Xform "DescentLander" (
         doc = "Touchdown latch and propellant-event notices. Does not fly the vehicle."
     )
     {
-        uniform asset lunco:program:sourceAsset = @lunco://scenarios/lander_subsystems.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/lander_subsystems.rhai@
     }
 
     # Intent->port control: shared lander profile as a child `references` arc
@@ -421,7 +421,7 @@ def Xform "DescentLander" (
 
         def LunCoProgram "Plume"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/flame.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/flame.rhai@
             custom float lunco:param:wmax = 1.05
             custom float lunco:param:lmax = 3.6
             custom float lunco:param:flick = 1.0
@@ -443,7 +443,7 @@ def Xform "DescentLander" (
 
         def LunCoProgram "Plume"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/flame.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/flame.rhai@
             custom float lunco:param:wmax = 0.5
             custom float lunco:param:lmax = 2.5
             custom float lunco:param:flick = 0.5
@@ -609,7 +609,7 @@ def Xform "DescentLander" (
         # and slides the strut into its piston sleeve. No Rust anywhere.
         def LunCoProgram "Strut"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform asset info:sourceAsset = @lunco://models/LegStrut.mo@
             uniform bool lunco:program:realtimeSafe = true
             float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
             float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
@@ -631,7 +631,7 @@ def Xform "DescentLander" (
         }
         def LunCoProgram "Actuator"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/leg_spring.rhai@
             custom float lunco:param:bx = 5.5
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 0.0
@@ -714,7 +714,7 @@ def Xform "DescentLander" (
 
         def LunCoProgram "Strut"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform asset info:sourceAsset = @lunco://models/LegStrut.mo@
             uniform bool lunco:program:realtimeSafe = true
             float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
             float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
@@ -736,7 +736,7 @@ def Xform "DescentLander" (
         }
         def LunCoProgram "Actuator"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/leg_spring.rhai@
             custom float lunco:param:bx = -5.5
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 0.0
@@ -768,7 +768,7 @@ def Xform "DescentLander" (
 
         def LunCoProgram "Strut"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform asset info:sourceAsset = @lunco://models/LegStrut.mo@
             uniform bool lunco:program:realtimeSafe = true
             float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
             float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
@@ -790,7 +790,7 @@ def Xform "DescentLander" (
         }
         def LunCoProgram "Actuator"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/leg_spring.rhai@
             custom float lunco:param:bx = 0.0
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 5.5
@@ -822,7 +822,7 @@ def Xform "DescentLander" (
 
         def LunCoProgram "Strut"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform asset info:sourceAsset = @lunco://models/LegStrut.mo@
             uniform bool lunco:program:realtimeSafe = true
             float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
             float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
@@ -844,7 +844,7 @@ def Xform "DescentLander" (
         }
         def LunCoProgram "Actuator"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/leg_spring.rhai@
             custom float lunco:param:bx = 0.0
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = -5.5

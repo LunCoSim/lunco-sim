@@ -101,12 +101,10 @@ def Xform "Rucheyok" (
     # by the twin.
     def Scope "Electrical"
     {
-        def LunCoProgram "System" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
-        )
+        def LunCoProgram "System"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://vessels/rovers/rucheyok/rucheyok_electrical.mo@
-            uniform token lunco:program:sourceAsset:subIdentifier = "RucheyokElectrical"
+            uniform asset info:sourceAsset = @lunco://vessels/rovers/rucheyok/rucheyok_electrical.mo@
+            uniform token info:sourceAsset:subIdentifier = "RucheyokElectrical"
 
             # This rover's ratings — the circuit's top-level parameters.
             float inputs:panel_area = 72.0          # m2, the 12x6 m panel

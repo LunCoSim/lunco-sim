@@ -33,7 +33,7 @@ def Xform "Power" (
     # The physics: state-of-charge energy budget, solver-clocked.
     def LunCoProgram "Battery"
     {
-        uniform asset lunco:program:sourceAsset = @lunco://models/RoverBattery.mo@
+        uniform asset info:sourceAsset = @lunco://models/RoverBattery.mo@
         uniform bool lunco:program:realtimeSafe = true
         # `</Power.…>` = the host rover root after arc translation: the model
         # reads the same per-side FSW drive ports the wheels listen to, so the
@@ -46,6 +46,6 @@ def Xform "Power" (
     # Deliberately inert while the battery is healthy (see the bridge header).
     def LunCoProgram "PowerBridge"
     {
-        uniform asset lunco:program:sourceAsset = @lunco://scenarios/rover_battery.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/rover_battery.rhai@
     }
 }

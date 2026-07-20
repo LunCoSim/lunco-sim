@@ -2792,7 +2792,7 @@ pub fn get_attribute_as_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str)
 ///
 /// Two of `implementationSource`'s three arms land here:
 ///
-/// * **`lunco:program:id`** — a name the runtime already implements, resolved from
+/// * **`info:id`** — a name the runtime already implements, resolved from
 ///   `ProgramDriverRegistry`. There is no source, so the extension rule has nothing
 ///   to dispatch on; this is `info:id` beside UsdShade's `info:sourceAsset`.
 /// * **`.rhai` source** (`sourceCode` or `sourceAsset`) — the script engine.
@@ -2812,23 +2812,23 @@ fn attach_programs(
 
         // A program that NAMES its implementation rather than supplying it.
         //
-        // `text()`, NOT `scalar::<String>()`. `lunco:program:id` is a `token` (as
+        // `text()`, NOT `scalar::<String>()`. `info:id` is a `token` (as
         // `info:id` is), and a token is a DISTINCT `sdf::Value` variant from a string
         // — `scalar::<String>` silently returns `None` for one, which reads as "no id
         // authored" and leaves the prim undriven with no error anywhere. `sourceCode`
         // below is genuinely `uniform string`, which is what makes the wrong call
         // look right here.
         let driver_id = reader
-            .text(&child, "lunco:program:id")
+            .text(&child, "info:id")
             .filter(|s| !s.trim().is_empty());
 
         // Inline source wins over a file: `sourceCode` is the live-authoring path,
         // and an author editing it in place means it.
         let inline = reader
-            .scalar::<String>(&child, "lunco:program:sourceCode")
+            .scalar::<String>(&child, "info:sourceCode")
             .filter(|s| !s.trim().is_empty());
         let file = reader
-            .asset(&child, "lunco:program:sourceAsset")
+            .asset(&child, "info:sourceAsset")
             .filter(|s| s.ends_with(".rhai"));
         if driver_id.is_none() && inline.is_none() && file.is_none() {
             continue;

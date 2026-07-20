@@ -61,8 +61,8 @@ def Xform "Altimeter" (
 
         def LunCoProgram "RangeBeam"
         {
-            uniform token lunco:program:implementationSource = "id"
-            uniform token lunco:program:id = "range_beam"
+            uniform token info:implementationSource = "id"
+            uniform token info:id = "range_beam"
             # Half-width in metres. A beam is a RAY — it reads as a line, not a pipe,
             # so this is deliberately thinner than the waypoint route ribbon's 0.12:
             # the ribbon is a path you drive along, this is a measurement.
@@ -93,8 +93,8 @@ def Xform "Altimeter" (
 
         def LunCoProgram "RangeHit"
         {
-            uniform token lunco:program:implementationSource = "id"
-            uniform token lunco:program:id = "range_hit"
+            uniform token info:implementationSource = "id"
+            uniform token info:id = "range_hit"
             # Radius in metres — twice the beam's half-width, so it reads as a marker
             # on the ray rather than a bead threaded onto it.
             custom float lunco:param:radius = 0.06

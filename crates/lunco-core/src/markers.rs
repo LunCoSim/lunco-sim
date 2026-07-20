@@ -180,7 +180,7 @@ impl Default for HorizonShadowTerrain {
 pub struct EmbeddedScenarioSource(pub String);
 
 /// A per-entity scenario referenced by FILE PATH in USD — the
-/// `uniform asset lunco:program:sourceAsset = @scenarios/foo.rhai@` of a
+/// `uniform asset info:sourceAsset = @scenarios/foo.rhai@` of a
 /// `LunCoProgram` prim — awaiting load.
 ///
 /// The asset-relative path to a `.rhai` source. The USD loader
@@ -200,7 +200,7 @@ pub struct EmbeddedScenarioPath(pub String);
 /// A script's `me` is its OWNER — the vessel it acts for — so the runtime hangs the
 /// scenario on the owner's entity. But the program is a prim of its own, and that is
 /// where its source belongs: saving a live-edited scenario authors
-/// `lunco:program:sourceCode` back onto THIS path, not onto the vessel. Without it a
+/// `info:sourceCode` back onto THIS path, not onto the vessel. Without it a
 /// save has no idea which of an owner's programs it is saving, and would write the
 /// source onto a prim that runs nothing.
 #[derive(Component, Debug, Clone, Reflect, Default)]

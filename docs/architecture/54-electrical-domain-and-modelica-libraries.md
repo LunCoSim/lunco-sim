@@ -67,8 +67,8 @@ In USD this is **one** `LunCoProgram` under a domain scope (doc 38's shape):
 
 ```usd
 def Scope "Electrical" {
-    def LunCoProgram "System" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset lunco:program:sourceAsset = @vessels/rovers/rucheyok/rucheyok_electrical.mo@
+    def LunCoProgram "System" {
+        uniform asset info:sourceAsset = @vessels/rovers/rucheyok/rucheyok_electrical.mo@
         float inputs:battery_capacity = 312.0   # the circuit's parameters, valued here
         float inputs:irradiance                 # boundary — cosim wires it to the sun
         float inputs:omega_fl                   # boundary — cosim wires it to a wheel

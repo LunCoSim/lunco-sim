@@ -146,7 +146,7 @@ def Xform "LanderTest" (
         # moment you spawned it would be a surprise, not a feature.
         def LunCoProgram "Autopilot"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/rover_autopilot.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/rover_autopilot.rhai@
         }
     }
 
@@ -218,7 +218,7 @@ def Xform "LanderTest" (
         # state predicates (`wait_until`); no tick-counting / dt integration in rhai.
         def LunCoProgram "Mission"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/rover_surface_ops.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/rover_surface_ops.rhai@
         }
     }
 }

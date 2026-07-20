@@ -241,7 +241,7 @@ rover you'll pull in at Step 7. Create `assets/vessels/landers/my_lander.usda`:
     metersPerUnit = 1
 )
 
-def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI", "LunCoVesselAPI", "LunCoProgramAPI"] )
+def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI", "LunCoVesselAPI"] )
 {
     uniform token axis = "Y"
     double radius = 2.5
@@ -259,8 +259,8 @@ def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsC
 
     # The flight-control system. It is not something bolted onto the airframe — its
     # `inputs:` ARE the vessel's control surface, the ports the stick writes — so the
-    # vessel prim IS the program: `LunCoProgramAPI`, applied above.
-    uniform asset lunco:program:sourceAsset = @models/MyLander.mo@
+    # vessel prim IS the program: the `info:*` properties are authored right here.
+    uniform asset info:sourceAsset = @models/MyLander.mo@
     uniform bool lunco:program:realtimeSafe = true
 
     # Intent -> port map, so possessing this vessel actually does something.
@@ -322,7 +322,7 @@ Notice what's *not* here: no position. A vehicle asset never says where it is.
 `lunco:vessel` marks it as something that can be possessed, and the `Controls`
 reference says what the keys do once you have it: Space thrusts, W/S pitch, A/D roll,
 Q/E yaw. Those land on the model inputs of the same name from Step 2.
-`lunco:program:sourceAsset` names your `.mo` file and runs it — a program is a prim,
+`info:sourceAsset` names your `.mo` file and runs it — a program is a prim,
 and here the prim it lives on is the vessel itself, because a lander without its flight
 software is not a lander with no autopilot, it is a lander with no engine. And
 `references` pulls
@@ -580,7 +580,7 @@ Add two cones as children of `MyLander` — a soft outer plume and a hot inner c
 
         def LunCoProgram "Plume"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@
+            uniform asset info:sourceAsset = @scenarios/flame.rhai@
             custom float lunco:param:wmax = 1.05
             custom float lunco:param:lmax = 3.6
             custom float lunco:param:flick = 1.0
@@ -602,7 +602,7 @@ Add two cones as children of `MyLander` — a soft outer plume and a hot inner c
 
         def LunCoProgram "Plume"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@
+            uniform asset info:sourceAsset = @scenarios/flame.rhai@
             custom float lunco:param:wmax = 0.5
             custom float lunco:param:lmax = 2.5
             custom float lunco:param:flick = 0.5
@@ -698,7 +698,7 @@ the vehicle and let the engine watch them. Add to the `MyLander` prim:
     # And the supervisor that reacts to them — bolted on, so a child program prim.
     def LunCoProgram "Supervisor"
     {
-        uniform asset lunco:program:sourceAsset = @scenarios/my_mission/lander_supervisor.rhai@
+        uniform asset info:sourceAsset = @scenarios/my_mission/lander_supervisor.rhai@
     }
 ```
 
@@ -767,7 +767,7 @@ scene (`my_mission.usda`) and clamp it to the lander with a fixed joint:
 
         def LunCoProgram "Autopilot"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/my_mission/rover_autopilot.rhai@
+            uniform asset info:sourceAsset = @scenarios/my_mission/rover_autopilot.rhai@
         }
     }
 
@@ -868,7 +868,7 @@ Add it to `my_mission.usda`:
 
         def LunCoProgram "Mission"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/my_mission/mission.rhai@
+            uniform asset info:sourceAsset = @scenarios/my_mission/mission.rhai@
         }
     }
 ```

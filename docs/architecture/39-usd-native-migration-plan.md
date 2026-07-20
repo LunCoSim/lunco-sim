@@ -143,16 +143,16 @@ by-slot hot loop are untouched; two peers converge on identical wiring from repl
   (`schemas/registry.rs`) — needs either typed views or a light codeless-schema registry contribution.
   *Verify:* `has_api_schema` gates dispatch.
 - **P2.2 🟡 — Gate on applied schema, never a heuristic** (`cosim.rs`). Identity = "this prim binds a program
-  and declares ports" — read off `LunCoProgram`/`LunCoProgramAPI` and the domain schema, not off the shape of
+  and declares ports" — read off `LunCoProgram`/the prim's `info:*` properties and the domain schema, not off the shape of
   an attribute value.
-- **P2.3 🟡 — Keep the binding neutral:** a program names its source (`lunco:program:sourceAsset`, plus
+- **P2.3 🟡 — Keep the binding neutral:** a program names its source (`info:sourceAsset`, plus
   `:subIdentifier` when the file holds several definitions) and the engine follows the extension —
   `modelica|python|rhai|fmu` is never a second attribute, because role is not declarable (the same `.py` is a
   plant on one prim and a script on the next). This is a **SysML allocation** and the USD+FMI convergence hook
   (doc 38 §14.2, §14.5, §A10). *Verify:* the binding resolves identically across every backend.
 
 **Phase 2 done when:** domain identity is a load-bearing applied schema; the binding is one neutral
-`lunco:program:*` allocation.
+`info:*` allocation.
 
 ---
 
@@ -250,7 +250,7 @@ in `openusd` v0.5** (doc 38 §12.2) — adoption is deletion on our side, not im
 ## Federation seams (track, don't build now; doc 38 §11)
 
 - **SPICE → USD xforms** — already done (`lunco-celestial`); carry NAIF ids as prim metadata.
-- **USD+FMI** — the one live convergence; `lunco:program:*` (P2.3) is the hook. Track AOUSD; doc 37 already
+- **USD+FMI** — the one live convergence; `info:*` (P2.3) is the hook. Track AOUSD; doc 37 already
   implements the pattern (candidate to contribute).
 - **SysML v2 API → USD projection** — future; the naming (part/port/connection/flow/allocation, doc 38 §14.5)
   makes it near-mechanical when built.

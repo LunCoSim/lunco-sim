@@ -124,9 +124,9 @@ program is a prim, not an attribute — delete the prim and the behaviour goes w
 ```usda
 def Xform "Rover_01" {
     def LunCoProgram "Mission" {
-        uniform asset lunco:program:sourceAsset = @scenarios/my_rover_mission.rhai@
+        uniform asset info:sourceAsset = @scenarios/my_rover_mission.rhai@
         # …or author the source in place:
-        # uniform string lunco:program:sourceCode = '''<rhai source>'''
+        # uniform string info:sourceCode = '''<rhai source>'''
     }
 }
 ```
@@ -378,9 +378,9 @@ Available nodes include:
 
 - **Per-entity scenarios → USD (load):** a script is a `LunCoProgram` child prim, and it
   auto-attaches and runs when the prim is spawned:
-  - `uniform asset lunco:program:sourceAsset = @scenarios/foo.rhai@` — the file, resolved
+  - `uniform asset info:sourceAsset = @scenarios/foo.rhai@` — the file, resolved
     like every other asset the scene depends on.
-  - `uniform string lunco:program:sourceCode = '''<rhai>'''` — the source authored in place
+  - `uniform string info:sourceCode = '''<rhai>'''` — the source authored in place
     in the USD layer. An edit to it is an ordinary attribute edit, so it journals, undoes
     and replicates like any other.
   - `custom float lunco:param:<key> = <v>` — one typed attribute per per-instance setting,

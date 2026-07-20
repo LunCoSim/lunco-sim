@@ -46,7 +46,7 @@ The earlier assumption "rover is hardcoded in Rust" is **largely false today**:
   `Prismatic`, `Fixed` joints from `Physics*Joint` prims (body refs, axis, anchors, limits).
 - **Compound rigid bodies** follow OpenUSD spec: `PhysicsRigidBodyAPI` on parent +
   `PhysicsCollisionAPI` on children → one body, compound collider.
-- **Cosim binding is USD-authored.** A program is a prim: `lunco:program:sourceAsset =
+- **Cosim binding is USD-authored.** A program is a prim: `info:sourceAsset =
   @models/Foo.mo@` names the model, and native USD connections
   (`inputs:x.connect = </Body.outputs:y>`) wire its I/O.
   Live example: `assets/vessels/balloons/modelica_balloon.usda`.
@@ -359,8 +359,8 @@ Matters for reproducibility and standards interop, not for modeling more assets.
 1. **USD prim** `/World/Lander`: `PhysicsRigidBodyAPI`, `physics:mass`,
    `physics:diagonalInertia`, `physics:centerOfMass` (needs G2), collider(s).
 2. **Bind the program**: the lander's flight-control law is inseparable from the
-   airframe, so apply `LunCoProgramAPI` on the prim and author
-   `uniform asset lunco:program:sourceAsset = @models/Lander.mo@` (extend
+   airframe, so author
+   `uniform asset info:sourceAsset = @models/Lander.mo@` directly on the prim (extend
    `RocketEngine.mo` with gimbal angles + throttle) plus
    `uniform bool lunco:program:realtimeSafe = true` — it drives a force on a predicted
    body.

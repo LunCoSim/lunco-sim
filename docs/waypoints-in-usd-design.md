@@ -49,7 +49,7 @@ def Xform "Rover" (
     uniform bool lunco:vessel = true
 
     def LunCoProgram "Patrol" {
-        uniform asset lunco:program:sourceAsset = @behaviors/rover_patrol.btxml@
+        uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@
     }
 }
 
@@ -62,7 +62,7 @@ def Scope "Behaviors" {
 ```
 
 A behaviour tree is a program like any other: a `LunCoProgram` child prim naming the
-XML through `lunco:program:sourceAsset` (or carrying it in `lunco:program:sourceCode`).
+XML through `info:sourceAsset` (or carrying it in `info:sourceCode`).
 The engine that runs it comes from the source's extension, so nothing about the tree
 needs a binding of its own — and deleting the prim deletes the mission, which is exactly
 what a patrol should be.
@@ -98,7 +98,7 @@ A tree naming a deleted waypoint **refuses to compile** and keeps its last good 
 
 **No new command verbs.** Alt+LMB triggers `ApplyUsdOp` three times: `AddPrim` (the
 pin, referencing the marker asset), `SetTranslate` (where it landed), `SetAttribute`
-(`lunco:program:sourceCode` on the mission's `LunCoProgram` prim — the tree that now
+(`info:sourceCode` on the mission's `LunCoProgram` prim — the tree that now
 names it).
 
 Everything else about a waypoint is *already implemented*, by code that knows nothing

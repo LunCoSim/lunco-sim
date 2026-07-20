@@ -59,11 +59,11 @@ over "OBC"
             }
         )
 
-        # NO power draw attribute here. Avionics load is not a per-part scalar, it is a
-        # term in the vessel's electrical NETWORK — and a circuit is one Modelica model,
-        # not one constant per part (see `components/mobility/motor.usda`). When this
-        # OBC's draw needs to matter it publishes an `outputs:` port that the power
-        # program consumes, exactly as the motor publishes `outputs:heat`.
+        # Avionics load belongs to the vessel's electrical NETWORK, not to a constant on
+        # this part — a circuit is one Modelica model, not one scalar per part (see
+        # `components/mobility/motor.usda`). When this OBC's draw needs to matter it
+        # publishes an `outputs:` port the power program consumes, exactly as the motor
+        # publishes `outputs:heat`.
 
         # --- The command surface itself ---
         #

@@ -8,8 +8,8 @@
 # Reusable Modelica-driven balloon.
 #
 # The balloon IS its plant: the buoyancy model is not bolted onto the sphere, it is
-# what makes the sphere a balloon — so `LunCoProgramAPI` is applied to the vessel prim
-# itself and `lunco:program:sourceAsset` names the Modelica source. The model's
+# what makes the sphere a balloon — so the program is authored on the vessel prim
+# itself and `info:sourceAsset` names the Modelica source. The model's
 # `netForce` output is the body's `force_y` input; the body's height and velocity are
 # the model's inputs. One prim, one self-loop.
 #
@@ -24,7 +24,7 @@
 
 def Xform "ModelicaBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -36,7 +36,7 @@ def Xform "ModelicaBalloon" (
     # ── The plant ────────────────────────────────────────────────────────────
     # Buoyancy, drag and envelope volume. `asset`, so the resolver and the reference
     # closure can see the file this scene depends on.
-    uniform asset lunco:program:sourceAsset = @lunco://models/Balloon.mo@
+    uniform asset info:sourceAsset = @lunco://models/Balloon.mo@
 
     # It drives `force_y` every solver step on a body the client predicts, so it must
     # promise it steps fast enough to be trusted with a force.

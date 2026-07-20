@@ -451,20 +451,16 @@ def Xform "SandboxScene" (
     # resolves them to ECS entities and spawns one `SimConnection` each.
     # Result: the target sphere bobs ±50 N at 1 Hz.
 
-    def "Oscillator" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
-    )
+    def "Oscillator"
     {
-        uniform asset lunco:program:sourceAsset = @lunco://models/Oscillator.mo@
+        uniform asset info:sourceAsset = @lunco://models/Oscillator.mo@
         # Pure source: declares its output port (the active-cosim marker).
         float outputs:signal
     }
 
-    def "Amplifier" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
-    )
+    def "Amplifier"
     {
-        uniform asset lunco:program:sourceAsset = @lunco://models/Amplifier.py@
+        uniform asset info:sourceAsset = @lunco://models/Amplifier.py@
         # Its `scaled` output lands on CosimTarget's `force_y` — a force on a body
         # the client predicts, which only a realtime-safe program may drive.
         uniform bool lunco:program:realtimeSafe = true

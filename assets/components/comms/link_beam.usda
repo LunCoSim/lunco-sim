@@ -42,8 +42,8 @@ def Xform "LinkBeam" (
 
         def LunCoProgram "Driver"
         {
-            uniform token lunco:program:implementationSource = "id"
-            uniform token lunco:program:id = "link_beams"
+            uniform token info:implementationSource = "id"
+            uniform token info:id = "link_beams"
             # 0 = this template draws CONNECTED peers.
             custom float lunco:param:state = 0
             custom float lunco:param:width = 0.04
@@ -75,8 +75,8 @@ def Xform "LinkBeam" (
 
         def LunCoProgram "Driver"
         {
-            uniform token lunco:program:implementationSource = "id"
-            uniform token lunco:program:id = "link_beams"
+            uniform token info:implementationSource = "id"
+            uniform token info:id = "link_beams"
             custom float lunco:param:state = 1
         }
     }

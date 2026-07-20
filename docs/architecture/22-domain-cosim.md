@@ -289,15 +289,15 @@ registered by `UsdSimPlugin`) reads:
 
 | Property | What it does |
 |---|---|
-| `uniform asset lunco:program:sourceAsset = @models/Balloon.mo@` | Names the program's file. The ENGINE follows from the extension, never from a second attribute: `.mo` opens the source, dispatches `ModelicaCommand::Compile` and populates `ModelicaModel` + `SimComponent` once the worker returns; `.py` registers a `ScriptDocument` and attaches `ScriptedModel` + `SimComponent`, stepped by `lunco-scripting::run_scripted_models` each `FixedUpdate`. |
-| `uniform string lunco:program:sourceCode` | The same, for a program authored in place rather than in a file. |
+| `uniform asset info:sourceAsset = @models/Balloon.mo@` | Names the program's file. The ENGINE follows from the extension, never from a second attribute: `.mo` opens the source, dispatches `ModelicaCommand::Compile` and populates `ModelicaModel` + `SimComponent` once the worker returns; `.py` registers a `ScriptDocument` and attaches `ScriptedModel` + `SimComponent`, stepped by `lunco-scripting::run_scripted_models` each `FixedUpdate`. |
+| `uniform string info:sourceCode` | The same, for a program authored in place rather than in a file. |
 | `uniform bool lunco:program:realtimeSafe` | The author's promise that the program may drive a force on a client-predicted body (see [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md)). |
 | `float inputs:<port>` / `float outputs:<port>` | The program's ports. A `.connect` makes one a wire; a constant makes it a parameter. A prim is stepped iff it BOTH binds a program AND declares ports. |
 
 A program that is bolted onto a thing — a guidance law, a battery, a supervisory script
 — is a `def LunCoProgram` CHILD prim, so deleting the prim removes the behaviour. A prim
 that IS a program — a vessel's own flight-control system, inseparable from the airframe
-— applies `LunCoProgramAPI` in place instead.
+— authors the `info:*` properties on itself instead.
 
 A wire is a native USD connection, authored on the prim that CONSUMES the value. The
 same form serves within one prim (a model's output driving the body's force input) and
@@ -306,7 +306,7 @@ same form serves within one prim (a model's output driving the body's force inpu
 ```usda
 def LunCoProgram "Amplifier"
 {
-    uniform asset lunco:program:sourceAsset = @models/Amplifier.py@
+    uniform asset info:sourceAsset = @models/Amplifier.py@
     float inputs:signal.connect = </Scene/Oscillator.outputs:signal>
 }
 ```

@@ -246,7 +246,7 @@ fn process_usd_cosim_prim_read(
     // prim and a script on the next, so a `lunco:pythonModel`-style name would be
     // asserting a role the file does not have. This is how USD itself dispatches
     // `.usda` / `.usdc` / `.usdz`.
-    let source = reader.asset(sdf_path, "lunco:program:sourceAsset");
+    let source = reader.asset(sdf_path, "info:sourceAsset");
     let (modelica_path, python_path) = match source.as_deref().map(solver_language) {
         Some(Some(SolverLanguage::Modelica)) => (source.clone(), None),
         Some(Some(SolverLanguage::Python)) => (None, source.clone()),

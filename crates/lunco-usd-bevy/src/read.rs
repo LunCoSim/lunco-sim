@@ -1,13 +1,12 @@
-//! `UsdRead` — the minimal composed-read surface over the canonical stage,
-//! implemented by [`StageView`](crate::view::StageView).
+//! `UsdRead` — the composed-read surface over the canonical stage, implemented
+//! by [`StageView`](crate::view::StageView).
 //!
-//! It is the **composed-read plane**: every read goes through PCP composition,
-//! so an extractor sees the same resolved values usdview would. This is the
-//! only read surface — the flattened `sdf::Data` impl is retired (see the note
-//! at the bottom of this module). `sdf::Data` survives solely as the Document's
-//! *authored-layer* storage, read through
-//! [`UsdDataExt`](crate::usd_data::UsdDataExt); that is the authoring plane and
-//! is deliberately pre-composition.
+//! This is the **composed-read plane**: every read resolves through PCP, so an
+//! extractor sees the values usdview would. Its counterpart is the *authoring*
+//! plane — the Document's authored `sdf::Data` layers, read through
+//! [`UsdDataExt`](crate::usd_data::UsdDataExt), deliberately pre-composition
+//! because "which layer holds this opinion" is a question only it can answer.
+//! Two planes, two traits; do not conflate them.
 //!
 //! **Real-valued reads use the [`real`](UsdRead::real) family, never
 //! `scalar::<f64>`/`scalar::<f32>` directly** — a bare typed scalar matches only
@@ -576,19 +575,6 @@ impl UsdRead for StageView<'_> {
         v.as_str().map(str::to_string).filter(|s| !s.is_empty())
     }
 }
-
-// `impl UsdRead for openusd::sdf::Data` — the FLATTENED read path — is RETIRED.
-//
-// It read a single pre-flattened layer, so it saw no PCP composition: references,
-// variants and `over` opinions were baked in ahead of time or lost. Every read now
-// goes through `StageView` — the live, composed stage — which is what the running
-// app has always used. Keeping a second reader meant every extractor had to be
-// generic over both, which is exactly what kept openusd's typed schema APIs
-// (`MaterialBindingAPI`, `Xformable`, the geom shapes) out of reach: they need a
-// real `&Stage`, and the flattened impl could never supply one.
-//
-// `sdf::Data` is still the DOCUMENT's authored-layer storage (base ⊕ runtime) and
-// is still read via `UsdDataExt` — that is a different job and stays.
 
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

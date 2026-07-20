@@ -31,9 +31,9 @@ A model is a PROGRAM, and a program is a prim with typed ports — exactly as a
 
 ```usda
 # 1. Name the model. The lander's flight-control system is inseparable from the
-#    airframe, so the vessel prim APPLIES `LunCoProgramAPI` and carries it in place
+#    airframe, so the vessel prim authors the `info:*` properties on ITSELF
 #    (a bolted-on program — a guidance law, a supervisor — is a child prim instead).
-uniform asset lunco:program:sourceAsset = @models/Lander.mo@
+uniform asset info:sourceAsset = @models/Lander.mo@
 
 #    It drives a force on a body the client predicts, so it must promise it steps
 #    fast enough to be trusted with one.
@@ -109,7 +109,7 @@ equation
 To cosim it onto a rover:
 
 1. **Attach** — add a `def LunCoProgram "Power"` child prim on the rover with
-   `uniform asset lunco:program:sourceAsset = @models/Battery.mo@`. It is a subsystem
+   `uniform asset info:sourceAsset = @models/Battery.mo@`. It is a subsystem
    bolted on, not the rover's own control law, so it is a child prim.
 2. **Wire** — connect the rover's motor current (or a proxy proportional to throttle)
    into the program's `inputs:current_in`, and read `outputs:soc_out` from wherever you

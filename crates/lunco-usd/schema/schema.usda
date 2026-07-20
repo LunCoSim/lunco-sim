@@ -555,25 +555,40 @@ class LunCoProgram "LunCoProgram" (
     format plugin by `.usda` / `.usdc` / `.usdz`.
 
     PARAMETERS ARE PORTS. A gain is `float inputs:kv = 1.2` — an input with a constant
-    instead of a connection. Wire it later and nothing about the program changes."""
+    instead of a connection. Wire it later and nothing about the program changes.
+
+    A PRIM THAT *IS* A PROGRAM just authors these properties on itself; there is no
+    separate "apply" schema, because the properties are the whole mechanism.
+
+    Which form to use is not a style question, it is whether the program is separable
+    from the thing. A vessel's flight-control system is its airframe: it is what the
+    stick talks to, its `inputs:` ARE the vessel's control surface, and a lander
+    without it is not a lander with no autopilot — it is a lander with no engine. So
+    those properties go ON the vessel. A guidance law, a supervisory script, a patrol
+    tree are bolted on, and each is a `LunCoProgram` CHILD arriving on its own
+    `references` arc: delete the prim and the behaviour is gone, which is exactly what
+    you want for an autopilot and must never have for an engine."""
 )
 {
-    uniform token lunco:program:implementationSource = "sourceAsset" (
+    uniform token info:implementationSource = "sourceAsset" (
         doc = """Which property carries this program: a name the runtime already
-        implements (`lunco:program:id`), an external file
-        (`lunco:program:sourceAsset`), or text authored in place
-        (`lunco:program:sourceCode`). Named for `UsdShade`'s
-        `info:implementationSource`, which asks the same question of a shader — and
-        carries the same three answers, for the same reason."""
+        implements (`info:id`), an external file (`info:sourceAsset`), or text
+        authored in place (`info:sourceCode`).
+
+        These are `UsdShade`'s OWN property names, not a lunco spelling of them.
+        `UsdShadeShader` asks exactly this question of a shader and carries exactly
+        these three answers; a program is the same shape of thing — a pluggable
+        implementation behind typed `inputs:`/`outputs:` — so it uses the same
+        properties."""
         allowedTokens = ["id", "sourceAsset", "sourceCode"]
     )
-    uniform token lunco:program:id = "" (
+    uniform token info:id = "" (
         doc = """A program the runtime ALREADY implements, named rather than supplied
         — `"range_beam"`, `"skid"`. Resolved against an open registry of Rust drivers,
         exactly as `info:id = "UsdPreviewSurface"` names a shader every renderer is
         expected to have rather than shipping its source.
 
-        This is the case `lunco:program:sourceAsset`'s extension rule cannot cover:
+        This is the case `info:sourceAsset`'s extension rule cannot cover:
         there is no source, so there is no extension to dispatch on. A built-in wins
         over a script hook of the same name, and an id nothing implements is a
         fail-safe no-op with a warning — never a hard error, because a scene authored
@@ -582,7 +597,7 @@ class LunCoProgram "LunCoProgram" (
         The registry is open: a crate registers a driver, USD SELECTS it. Adding a
         visualization is registering a name, not editing a schema."""
     )
-    uniform asset lunco:program:sourceAsset = @@ (
+    uniform asset info:sourceAsset = @@ (
         doc = """The program's file — `@models/Lander.mo@`, `@scenarios/flame.rhai@`,
         `@behaviors/rover_patrol.xml@`.
 
@@ -591,12 +606,12 @@ class LunCoProgram "LunCoProgram" (
         closure, packaging, `usdzip`. A path smuggled in a `string` names a file that
         does not travel with the scene, and cannot even be checked for existence."""
     )
-    uniform string lunco:program:sourceCode = "" (
+    uniform string info:sourceCode = "" (
         doc = """The program's text, authored in place instead of in a file. This is
         the live-authoring path: an edit to it is an ordinary attribute edit, so it
         journals, undoes, and replicates like every other edit."""
     )
-    uniform token lunco:program:sourceAsset:subIdentifier = "" (
+    uniform token info:sourceAsset:subIdentifier = "" (
         doc = """WHICH definition inside the source, when the file holds more than one
         — a `.mo` that declares several models, a `.rhai` with several entry points.
         Empty means the file's single definition, and a file with exactly one needs
@@ -619,48 +634,6 @@ class LunCoProgram "LunCoProgram" (
 
         Programs that never touch physics — a supervisory script, a battery model —
         leave this alone. It is not a quality rating."""
-    )
-}
-
-class "LunCoProgramAPI" (
-    inherits = </APISchemaBase>
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """A prim that IS a program, rather than one that carries programs as
-    children — the same properties as [`LunCoProgram`], applied in place.
-
-    Which form to use is not a style question, it is a question of whether the
-    program is separable from the thing. A vessel's flight-control system is its
-    airframe: it is what the stick talks to, its `inputs:` ARE the vessel's control
-    surface, and a lander without it is not a lander with no autopilot — it is a
-    lander with no engine. That is applied HERE, on the vessel.
-
-    A guidance law, a supervisory script, a patrol tree: those are bolted on, and each
-    is a [`LunCoProgram`] child prim that arrives on its own `references` arc. Delete
-    the prim and the behaviour is gone, which is exactly what you want to be able to
-    do to an autopilot and exactly what you must never be able to do to an engine."""
-)
-{
-    uniform token lunco:program:implementationSource = "sourceAsset" (
-        doc = """Whether the program is a name the runtime implements, an external
-        file, or text authored in place."""
-        allowedTokens = ["id", "sourceAsset", "sourceCode"]
-    )
-    uniform token lunco:program:id = "" (
-        doc = """A program the runtime already implements, named rather than supplied
-        — resolved against an open registry of Rust drivers, as `info:id` names a
-        shader. See `LunCoProgram`'s `lunco:program:id` for the full rationale."""
-    )
-    uniform asset lunco:program:sourceAsset = @@ (
-        doc = "The program's file. `asset`, never `string`."
-    )
-    uniform string lunco:program:sourceCode = "" (
-        doc = "The program's text, authored in place."
-    )
-    uniform bool lunco:program:realtimeSafe = false (
-        doc = """Whether this program may drive a force/torque port on a
-        client-predicted body. A promise about step latency, declared by the author."""
     )
 }
 

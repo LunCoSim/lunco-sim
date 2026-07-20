@@ -41,19 +41,19 @@ entities; `lunco-cosim` itself stays engine-agnostic.
 ### A program is a prim
 
 A model is not an attribute on the body it drives: it is a program with typed ports,
-and ports connect. A body that IS its own model applies `LunCoProgramAPI` in place; a
-model that is bolted on is a `LunCoProgram` child prim, so deleting the prim removes
-the behaviour.
+and ports connect. A body that IS its own model authors the `info:*` properties in
+place; a model that is bolted on is a `LunCoProgram` child prim, so deleting the prim
+removes the behaviour.
 
 ```usda
 def Sphere "RedBalloon" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
 )
 {
     double radius = 1.0
     float physics:mass = 4.5
 
-    uniform asset lunco:program:sourceAsset = @models/Balloon.mo@
+    uniform asset info:sourceAsset = @models/Balloon.mo@
     uniform bool lunco:program:realtimeSafe = true
 
     # Self-loop: the model's outputs are the body's inputs, and back again.
@@ -65,9 +65,9 @@ def Sphere "RedBalloon" (
 
 | Property | Purpose |
 |---|---|
-| `uniform asset lunco:program:sourceAsset` | The program's file. The ENGINE that runs it comes from the extension — `.mo` dispatches `ModelicaCommand::Compile` to the worker and (once `model.variables` populates) wraps the result in a `SimComponent`; `.py` registers a `ScriptDocument` + attaches `ScriptedModel` + `SimComponent` immediately (no compile step). `asset`, never `string`: only an `asset` is visible to USD's resolver and travels with the scene. |
-| `uniform token lunco:program:sourceAsset:subIdentifier` | Which definition inside the source, when the file declares more than one. |
-| `uniform string lunco:program:sourceCode` | The program's text, authored in place instead of in a file. |
+| `uniform asset info:sourceAsset` | The program's file. The ENGINE that runs it comes from the extension — `.mo` dispatches `ModelicaCommand::Compile` to the worker and (once `model.variables` populates) wraps the result in a `SimComponent`; `.py` registers a `ScriptDocument` + attaches `ScriptedModel` + `SimComponent` immediately (no compile step). `asset`, never `string`: only an `asset` is visible to USD's resolver and travels with the scene. |
+| `uniform token info:sourceAsset:subIdentifier` | Which definition inside the source, when the file declares more than one. |
+| `uniform string info:sourceCode` | The program's text, authored in place instead of in a file. |
 | `uniform bool lunco:program:realtimeSafe` | The author's promise that the program steps fast enough to be trusted with a FORCE. Absent ⇒ not promised, and the wiring pass refuses it a `force_*`/`torque_*` port on a client-predicted body. |
 | `float inputs:<port>` | An input port. With a `.connect` it is a wire; with a constant it is a parameter — `float inputs:kv = 1.2`. |
 

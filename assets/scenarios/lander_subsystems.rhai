@@ -1,6 +1,6 @@
 // Lander onboard SUPERVISOR — bound by the `def LunCoProgram "Subsystems"` child prim
 // on the lander asset (`vessels/landers/descent_lander.usda`), whose
-// `uniform asset lunco:program:sourceAsset = @scenarios/lander_subsystems.rhai@` names
+// `uniform asset info:sourceAsset = @scenarios/lander_subsystems.rhai@` names
 // this file, so it rides along into any scene that references one. Everything below resolves relative to `me`; nothing here names a
 // scene path. EVENT-DRIVEN only: no control loop, no per-tick routing.
 //

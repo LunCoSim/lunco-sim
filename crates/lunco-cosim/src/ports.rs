@@ -64,7 +64,7 @@ pub struct AvianGroup {
 }
 
 /// The avian backend table: every avian kind we expose, in one place.
-const AVIAN: &[AvianGroup] = &[
+pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::avian::RIGID_BODY_GROUP,
     crate::joint::REVOLUTE_JOINT_GROUP,
     crate::joint::PRISMATIC_JOINT_GROUP,

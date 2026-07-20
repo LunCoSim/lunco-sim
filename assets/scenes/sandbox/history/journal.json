@@ -1,7 +1,8 @@
 {
-  "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
-  "local_author": "peer-0394417ed539ee2f",
-  "clock": 726,
+  "version": 1,
+  "twin": "/home/rod/Documents/luncosim-workspace/main/assets/scenes/sandbox",
+  "local_author": "peer-4dd94511211d7b84",
+  "clock": 730,
   "entries": [
     {
       "id": {
@@ -19879,6 +19880,114 @@
         }
       },
       "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-4dd94511211d7b84",
+        "lamport": 727
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 726
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784547421560,
+      "twin": "/home/rod/Documents/luncosim-workspace/main/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-4dd94511211d7b84",
+        "lamport": 728
+      },
+      "parents": [
+        {
+          "author": "peer-4dd94511211d7b84",
+          "lamport": 727
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784547556878,
+      "twin": "/home/rod/Documents/luncosim-workspace/main/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-4dd94511211d7b84",
+        "lamport": 729
+      },
+      "parents": [
+        {
+          "author": "peer-4dd94511211d7b84",
+          "lamport": 728
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784547576704,
+      "twin": "/home/rod/Documents/luncosim-workspace/main/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-4dd94511211d7b84",
+        "lamport": 730
+      },
+      "parents": [
+        {
+          "author": "peer-4dd94511211d7b84",
+          "lamport": 729
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784549291926,
+      "twin": "/home/rod/Documents/luncosim-workspace/main/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
     }
   ],
   "streams": [
@@ -19887,8 +19996,8 @@
       "name": "main",
       "composition": "Sequential",
       "head": {
-        "author": "peer-0394417ed539ee2f",
-        "lamport": 726
+        "author": "peer-4dd94511211d7b84",
+        "lamport": 730
       },
       "parent_streams": [],
       "created_at_ms": 1783097117973,
@@ -19903,8 +20012,8 @@
       "name": "main",
       "stream": "main",
       "head": {
-        "author": "peer-0394417ed539ee2f",
-        "lamport": 726
+        "author": "peer-4dd94511211d7b84",
+        "lamport": 730
       }
     }
   ],

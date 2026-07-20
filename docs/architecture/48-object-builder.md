@@ -292,7 +292,7 @@ built by the twin-projection work: `DocBackedTwinScenes` maps a running scene's
 - **`SaveScenario { target }`** (in `lunco-sandbox`, the only crate that depends on both
   `lunco-usd` and `lunco-scripting` — `lunco-usd-sim` can't, it would be circular). It resolves
   the entity's live source (`ScriptRegistry`), its prim path, and the backing document, then
-  authors `lunco:program:sourceCode` on the program prim, onto the root layer via `ApplyUsdOp` — so it journals, and
+  authors `info:sourceCode` on the program prim, onto the root layer via `ApplyUsdOp` — so it journals, and
   `SaveDocument` writes it through to the `.usda`.
 - **String authoring is one architectural rule, not per-call-site escaping.** `SetAttribute`
   with `type_name == "string"` authors the value **raw** (`Value::String`): the USDA writer
@@ -488,7 +488,7 @@ it). Follows `SelectedEntities`, resolves `ScriptedModel → ScriptRegistry` sou
 buffer (re-synced only on a doc/generation change with no unsaved edits, so typing is never clobbered),
 and surfaces `DocumentDiagnostics` (the line/col the rhai compile path emits) as a click-to-jump list
 plus a compile-status chip. **Save & Run** = `RunScenario{source}` (sets live source + hot-reloads the
-scenario) → `SaveScenario` (persists onto the program prim's `lunco:program:sourceCode`), both journaled; **Revert** reloads the saved
+scenario) → `SaveScenario` (persists onto the program prim's `info:sourceCode`), both journaled; **Revert** reloads the saved
 source. Boot-verified: attaching a rhai script with a deliberate `let boost = ;` showed the source and
 the diagnostic `✗ 9:17 Unexpected ';' (line 9, position 17)`. **Follow-up:** a painted line-number
 gutter (the codebase has none; the Modelica editor deliberately deferred it — the diagnostics list is

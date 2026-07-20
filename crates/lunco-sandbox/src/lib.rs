@@ -1536,7 +1536,7 @@ fn on_set_rhai_policy(
 /// Save a live-edited rhai scenario's current source back onto the `LunCoProgram`
 /// prim it came from — the other half of scenario authoring.
 ///
-/// The source is authored onto that prim's `lunco:program:sourceCode`, which is what
+/// The source is authored onto that prim's `info:sourceCode`, which is what
 /// the loader prefers over a `sourceAsset`: text authored in place is an author saying
 /// they mean it. The write goes through [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
 /// (whose `string` type authors the value RAW — no hand-escaping), so the whole rhai
@@ -1610,7 +1610,7 @@ fn on_save_scenario(
         return;
     };
 
-    // 3. Author the source onto the PROGRAM prim's `lunco:program:sourceCode` (root
+    // 3. Author the source onto the PROGRAM prim's `info:sourceCode` (root
     //    layer → durable in the .usda on SaveDocument). A `string` value is authored
     //    RAW — `SetAttribute` handles the escaping (writer-side), so the whole rhai
     //    source round-trips verbatim with no hand-escaping here. Through `ApplyUsdOp`
@@ -1627,7 +1627,7 @@ fn on_save_scenario(
         op: lunco_usd::UsdOp::SetAttribute {
             edit_target: lunco_usd::LayerId::root(),
             path: program.0.clone(),
-            name: "lunco:program:sourceCode".into(),
+            name: "info:sourceCode".into(),
             type_name: "string".into(),
             value: source,
         },

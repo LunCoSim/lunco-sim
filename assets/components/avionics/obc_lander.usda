@@ -66,9 +66,8 @@ over "LanderOBC"
             }
         )
 
-        # NO power draw attribute here — see `obc.usda`. Avionics load is a term in the
-        # vessel's electrical network, modelled in the power program, not a constant
-        # bolted to the part.
+        # Avionics load is a term in the vessel's electrical network, modelled in the
+        # power program rather than as a constant on this part — see `obc.usda`.
 
         # --- The command surface itself ---
         #

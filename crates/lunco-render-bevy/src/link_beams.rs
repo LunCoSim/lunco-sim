@@ -30,7 +30,7 @@ use lunco_core::coords::world_pose;
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
 use lunco_core::{GlobalEntityId, ScriptParams};
 
-/// The `lunco:program:id` the beam part authors.
+/// The `info:id` the beam part authors.
 const DRIVER_ID: &str = "link_beams";
 
 // Fallbacks when the part authors no `lunco:param:*`.

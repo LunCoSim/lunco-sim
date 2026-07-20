@@ -35,7 +35,7 @@ def Xform "DriveLaw" (
     # solver-clocked.
     def LunCoProgram "Drivetrain"
     {
-        uniform asset lunco:program:sourceAsset = @lunco://models/RoverAckermannDrivetrain.mo@
+        uniform asset info:sourceAsset = @lunco://models/RoverAckermannDrivetrain.mo@
         uniform bool lunco:program:realtimeSafe = true
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same FSW command ports the built-in kernels read.
@@ -46,6 +46,6 @@ def Xform "DriveLaw" (
     # The actuation: model outputs → the rover's drive + steering ports.
     def LunCoProgram "DriveBridge"
     {
-        uniform asset lunco:program:sourceAsset = @lunco://scenarios/rover_modelica_ackermann_drive.rhai@
+        uniform asset info:sourceAsset = @lunco://scenarios/rover_modelica_ackermann_drive.rhai@
     }
 }

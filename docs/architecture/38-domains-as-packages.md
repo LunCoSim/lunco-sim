@@ -446,7 +446,7 @@ radius. Ordered by leverage.
 
 ### A10 — Shape the Modelica binding to converge with AOUSD USD+FMI
 
-- `lunco:program:sourceAsset` is the behavior binding, and it is deliberately neutral — "*the program this
+- `info:sourceAsset` is the behavior binding, and it is deliberately neutral — "*the program this
   prim runs*", not "*the Modelica model*". It can become an **FMI/FMU reference** when the AOUSD USD+FMI
   standard lands (our `compile_str → SimulationSession` is the local FMU-equivalent). No Modelica-only
   assumption reaches the cosim projection: the engine follows the source's extension, exactly as USD picks a
@@ -751,7 +751,7 @@ governs:
 | a wire | attribute **connection** (`.connect`) | `SimConnection` | `connection` / `interface` |
 | a signal on a wire | connected value | f64 exchange | `flow` (item flow; item = Real) |
 | a parameter | attribute | `SimComponent.parameters` | `attribute` |
-| behavior binding | a `LunCoProgram` prim + `lunco:program:*` | model backend | **`allocation`** (part → model) |
+| behavior binding | a `LunCoProgram` prim + `info:*` | model backend | **`allocation`** (part → model) |
 
 These are intentionally the *same* concepts, so a name in one layer is recognizable in the others — and
 the SysML-v2→USD and USD→FMI projections become near-mechanical.
@@ -784,8 +784,8 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 | `LunCoPowerComponentAPI`, `LunCoActuatorAPI`, `LunCoMobilityComponentAPI`, `LunCoPowerDistributionAPI` (authored but **not dispatched** — dead-ish) | **make load-bearing** codeless applied schemas; keep the PascalCase+`API` convention | promote to real |
 | implicit model kind | author `kind = "component"` / `"assembly"` | USD `kind` | add |
 | rigid-body/collision/mass/drive/articulation/vehicle | `PhysicsRigidBodyAPI`, `PhysicsDriveAPI`, `PhysicsArticulationRootAPI`, `PhysxVehicle*` (already used) | USD/PhysX standard | keep |
-| the program binding: a `LunCoProgram` prim (or `LunCoProgramAPI` applied in place) carrying `lunco:program:sourceAsset` — role is never declared, and the engine follows the file's extension | it is a **SysML allocation** (part→behavior); converges with USD+FMI | keep |
-| `lunco:program:sourceAsset:subIdentifier` — which definition inside the source, when the file holds several (the `UsdShade` `info:sourceAsset:subIdentifier` move) | — | keep |
+| the program binding: a `LunCoProgram` prim (or `info:*` authored in place) carrying `info:sourceAsset` — role is never declared, and the engine follows the file's extension | it is a **SysML allocation** (part→behavior); converges with USD+FMI | keep |
+| `info:sourceAsset:subIdentifier` — which definition inside the source, when the file holds several (adopted verbatim from `UsdShadeShader`) | — | keep |
 
 ### 14.3 Domain params — fold into model parameters, adopt standard where it exists
 
@@ -896,7 +896,7 @@ volume. Nothing to promote to, so it is now declared properly as `LunCoLightAPI`
 `lunco:ephemeris_id` (SPICE metadata, §11), `lunco:net:*` (replication), `lunco:scenario`/`nextScene`/
 `triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:vessel`/`avatar` (role — or a `LunCoVesselAPI`
 applied schema), `lunco:sensor:*` (mirror Isaac vendor schemas, §8.5), `lunco:terrain:*`/`shadow:*` (LunCo
-render params — a partial `UsdRenderSettings` alignment is possible but not standard), `lunco:program:*`
+render params — a partial `UsdRenderSettings` alignment is possible but not standard), `info:*`
 (the SysML **allocation** / USD+FMI-future binding).
 
 > Rule of thumb: **geometry, camera, light, visibility/purpose, collections, display name, node layout,

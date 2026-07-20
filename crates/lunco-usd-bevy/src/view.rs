@@ -1,10 +1,7 @@
 //! `StageView` — composed reads over a **live** openusd `Stage` (Ph0′ substrate).
 //!
-//! This is the ONE composed-read source. It offers typed reads directly against
-//! the live (`!Send`) `Stage`; the domain extractors all read through it. The
-//! earlier pipeline — flatten a composed `Stage` into a Send-safe [`sdf::Data`]
-//! and read that — is retired, and the parity tests in [`crate::compose`] /
-//! this module are what proved the cutover byte-identical before it went.
+//! This is the ONE composed-read source: typed reads straight against the live
+//! (`!Send`) `Stage`, which every domain extractor reads through.
 //!
 //! Reads are default-time composed opinions (LIVRPS): references, sublayers,
 //! variants, and inherits are resolved by the stage. (Time-sampled / animation
@@ -107,14 +104,11 @@ impl<'a> StageView<'a> {
     }
 }
 
-// `rel_target`, `has_api_schema`, `prim_paths` and `children` are NOT inherent
-// methods: they live on [`UsdRead`] only. While the reader was generic these
-// names existed in both places, and a Rust inherent method SHADOWS a trait
-// method of the same name — so collapsing the generics silently re-pointed every
-// call to the inherent twin. `rel_target` returned `Option<SdfPath>` inherently
-// vs `Option<String>` on the trait, which is exactly the kind of quiet
-// return-type swap that compiles at some call sites and not others. One name,
-// one definition.
+// `rel_target`, `has_api_schema`, `prim_paths` and `children` live on
+// [`UsdRead`] ONLY — never add an inherent method of the same name. A Rust
+// inherent method silently shadows the trait method, so a duplicate pair can
+// differ in return type and each call site picks whichever is in scope. One
+// name, one definition.
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod compose_tests {

@@ -141,7 +141,7 @@ def Xform "Motor" (
         doc = "First-order lumped heat balance for the motor bank. Pure telemetry — nothing in the sim acts on the temperature."
     )
     {
-        uniform asset lunco:program:sourceAsset = @lunco://models/RoverMotorThermal.mo@
+        uniform asset info:sourceAsset = @lunco://models/RoverMotorThermal.mo@
         uniform bool lunco:program:realtimeSafe = false
 
         float inputs:drive_left.connect = </Motor.inputs:demand>

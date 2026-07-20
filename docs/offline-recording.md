@@ -321,7 +321,7 @@ def Xform "Vehicle" ( prepend references = @lunco://vessels/rovers/six_wheel_rov
 {
     def LunCoProgram "Recorder"
     {
-        uniform asset lunco:program:sourceAsset = @twin://my_episode/my_episode.rhai@
+        uniform asset info:sourceAsset = @twin://my_episode/my_episode.rhai@
     }
 }
 ```

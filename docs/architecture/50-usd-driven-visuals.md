@@ -51,8 +51,8 @@ source):
 
 | Attribute | Resolves to |
 |---|---|
-| `uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@` | the script engine (`.rhai`) or the behaviour-tree engine (`.xml`) |
-| `uniform token lunco:program:id = "range_beam"` | a Rust driver, from `ProgramDriverRegistry` |
+| `uniform asset info:sourceAsset = @scenarios/flame.rhai@` | the script engine (`.rhai`) or the behaviour-tree engine (`.xml`) |
+| `uniform token info:id = "range_beam"` | a Rust driver, from `ProgramDriverRegistry` |
 
 Same prim type, same discovery, same per-instance params. The registry follows
 `ControlKernelRegistry` (`lunco-core/src/kernels.rs`) — a `Resource` holding a
@@ -214,7 +214,7 @@ variant from a string, so the call returns `None` for every authored value. `dri
 was always `None`, the program fell through to the rhai path, found no `.rhai`, and
 `continue`d. No entity was ever stamped, so even the unknown-id warning stayed quiet —
 there was nothing to warn about. Use `UsdRead::text()` for `token`, `::asset()` for
-`asset`. The trap is that the neighbouring `lunco:program:sourceCode` is genuinely
+`asset`. The trap is that the neighbouring `info:sourceCode` is genuinely
 `uniform string`, which makes the wrong accessor look right.
 
 **Writing alpha to an opaque material.** `SurfaceAlpha` is derived from the authored

@@ -7,7 +7,7 @@
 //
 // Many cones can share this one script — each mounts it as its own
 // `def LunCoProgram "Plume"` child prim with
-// `uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@`. Each program
+// `uniform asset info:sourceAsset = @scenarios/flame.rhai@`. Each program
 // prim carries its OWN per-instance config as typed attributes
 // (`custom float lunco:param:wmax = 1.05`, `lunco:param:lmax`, `lunco:param:flick`),
 // read here through `param(me, key, default)` — `wmax`/`lmax` size, `flick` flicker

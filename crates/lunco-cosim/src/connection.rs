@@ -125,12 +125,14 @@ impl Default for SimConnection {
 #[reflect(Component)]
 pub struct RealtimeSafe;
 
-/// Is `port` an avian force/torque input — i.e. does writing it push a
-/// rigid body around? These are the port names the avian backend exposes
-/// (`force_x/y/z`, `torque_x/y/z`), and they are the ONLY ports whose writer
-/// can desync a client-predicted body. Used by the [`RealtimeSafe`] gate.
+/// Is `port` an avian force/torque input — i.e. does writing it push a rigid
+/// body around? These are the ONLY ports whose writer can desync a
+/// client-predicted body, so they are what the [`RealtimeSafe`] gate guards.
+///
+/// The set is [`crate::avian::BODY_FORCE_PORTS`], declared beside the port table
+/// that implements it — NOT matched by spelling here.
 pub fn is_physics_force_port(port: &str) -> bool {
-    port.starts_with("force") || port.starts_with("torque")
+    crate::avian::BODY_FORCE_PORTS.contains(&port)
 }
 
 #[cfg(test)]
@@ -141,7 +143,35 @@ mod realtime_gate_tests {
     fn force_ports_are_the_gated_ones() {
         assert!(is_physics_force_port("force_y"));
         assert!(is_physics_force_port("torque_z"));
+        // Body-frame thrust pushes a body just as hard as world-frame thrust.
+        assert!(is_physics_force_port("force_local_x"));
         assert!(!is_physics_force_port("throttle"));
         assert!(!is_physics_force_port("angle"));
+        // A gearbox's MECHANICAL shaft torque is not a body force: it drives a
+        // reduction, not a rigid body, so it must not demand a realtime promise.
+        assert!(!is_physics_force_port("torque"));
+    }
+
+    /// Tripwire: a body-force port added to the avian table but not declared in
+    /// [`crate::avian::BODY_FORCE_PORTS`] would go UNGATED and silently. This
+    /// cannot see through the write closures, so it uses the naming convention
+    /// as a heuristic alarm — if you add a conventionally-named force port,
+    /// declare it (or, if it genuinely does not touch a body, rename it).
+    #[test]
+    fn conventionally_named_force_ports_are_all_declared() {
+        for group in crate::ports::AVIAN {
+            for p in group.ports {
+                let looks_like_force =
+                    p.name.starts_with("force_") || p.name.starts_with("torque_");
+                if looks_like_force {
+                    assert!(
+                        is_physics_force_port(p.name),
+                        "avian port `{}` looks like a body-force port but is not in \
+                         BODY_FORCE_PORTS — it would bypass the RealtimeSafe gate",
+                        p.name
+                    );
+                }
+            }
+        }
     }
 }

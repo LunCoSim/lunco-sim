@@ -1,7 +1,7 @@
 // Mission orchestration for the on-surface rover scenario (doc 34, Decision 3).
 //
 // Bound from USD by the `def LunCoProgram "Mission"` child prim of
-// `/LanderTest/Scenario`, whose `uniform asset lunco:program:sourceAsset` names this
+// `/LanderTest/Scenario`, whose `uniform asset info:sourceAsset` names this
 // file.
 // This is a DECLARATIVE task: the prelude sequencer advances it each tick using
 // INTERNAL SIM TIME (`wait` = elapsed sim seconds) and STATE PREDICATES

@@ -23,7 +23,7 @@ fn steps() {
 
         #{ anchor: "",
            title: "Where the model is attached",
-           body: "A program is a PRIM, like a UsdShade shader. The lander's flight-control system is inseparable from the airframe, so it applies `LunCoProgramAPI` in place: `uniform asset lunco:program:sourceAsset = @models/Lander.mo@` on the vessel prim itself. The model's `inputs:` (throttle, pitch, roll, yaw) ARE the vessel's control surface — the live command ports a session writes when it takes the stick. A program that is bolted on instead — a guidance law, a supervisory script — is a `def LunCoProgram` CHILD prim, so deleting the prim removes the behaviour." },
+           body: "A program is a PRIM, like a UsdShade shader. The lander's flight-control system is inseparable from the airframe, so it authors the program properties in place: `uniform asset info:sourceAsset = @models/Lander.mo@` on the vessel prim itself. The model's `inputs:` (throttle, pitch, roll, yaw) ARE the vessel's control surface — the live command ports a session writes when it takes the stick. A program that is bolted on instead — a guidance law, a supervisory script — is a `def LunCoProgram` CHILD prim, so deleting the prim removes the behaviour." },
 
         #{ anchor: "",
            title: "The wire",

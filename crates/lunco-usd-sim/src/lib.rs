@@ -1171,14 +1171,14 @@ fn process_usd_sim_prim_read(
                 continue;
             }
             if let Some(xml) = reader
-                .scalar::<String>(&child, "lunco:program:sourceCode")
+                .scalar::<String>(&child, "info:sourceCode")
                 .filter(|s| s.trim_start().starts_with('<'))
             {
                 commands
                     .entity(entity)
                     .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
             } else if let Some(path) = reader
-                .asset(&child, "lunco:program:sourceAsset")
+                .asset(&child, "info:sourceAsset")
                 .filter(|s| s.ends_with(".xml"))
             {
                 commands

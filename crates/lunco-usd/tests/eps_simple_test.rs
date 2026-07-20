@@ -39,7 +39,7 @@ fn rover_has_one_electrical_program_bound_to_its_circuit() {
     let prim = SdfPath::new(ELECTRICAL).unwrap();
 
     let model = view
-        .asset(&prim, "lunco:program:sourceAsset")
+        .asset(&prim, "info:sourceAsset")
         .expect("the Electrical program must name a Modelica circuit");
     assert!(
         model.ends_with("rucheyok_electrical.mo"),
@@ -50,9 +50,9 @@ fn rover_has_one_electrical_program_bound_to_its_circuit() {
     let programs: Vec<_> = view
         .prim_paths()
         .into_iter()
-        .filter(|p| view.asset(p, "lunco:program:sourceAsset").is_some())
+        .filter(|p| view.asset(p, "info:sourceAsset").is_some())
         .filter(|p| {
-            view.asset(p, "lunco:program:sourceAsset")
+            view.asset(p, "info:sourceAsset")
                 .map(|m| m.ends_with("rucheyok_electrical.mo"))
                 .unwrap_or(false)
         })
@@ -109,7 +109,7 @@ fn power_parts_are_geometry_not_programs() {
     ] {
         let p = SdfPath::new(prim).unwrap();
         assert!(
-            view.asset(&p, "lunco:program:sourceAsset").is_none(),
+            view.asset(&p, "info:sourceAsset").is_none(),
             "{prim} should be a physical part with no program of its own"
         );
     }

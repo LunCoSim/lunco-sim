@@ -156,7 +156,7 @@ def Xform "SixIndependentParity" (
 
         def LunCoProgram "MotionTest"
         {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/six_independent_parity.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/six_independent_parity.rhai@
         }
     }
 }

@@ -69,8 +69,8 @@ def "Altimeter" (prepend references = @../../vessels/sensors/altimeter.usda@</Al
 { double3 xformOp:translate = (0, -1, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 
 # on the vessel prim — its flight-control system is inseparable from the airframe, so
-# apply `LunCoProgramAPI` and name the model in place:
-uniform asset lunco:program:sourceAsset = @models/Hover.mo@
+# name the model in place, on the prim itself:
+uniform asset info:sourceAsset = @models/Hover.mo@
 uniform bool  lunco:program:realtimeSafe = true      # it drives a force on a predicted body
 
 # a wire is a native USD connection, authored on the consumer:
@@ -82,7 +82,7 @@ float inputs:throttle.connect     = </Vessel.outputs:throttle>
 
 # the supervisor is bolted on, so it is a child program prim:
 def LunCoProgram "Supervisor" {
-    uniform asset lunco:program:sourceAsset = @scenarios/hover_super.rhai@
+    uniform asset info:sourceAsset = @scenarios/hover_super.rhai@
 }
 ```
 

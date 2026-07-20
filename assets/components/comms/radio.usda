@@ -50,11 +50,10 @@
 # SNR and report a healthy radio that does not exist.
 def Xform "CommsRadio" (
     prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
-    prepend apiSchemas = ["LunCoProgramAPI"]
     kind = "component"
 )
 {
-    uniform asset lunco:program:sourceAsset = @lunco://models/CommsLink.mo@
+    uniform asset info:sourceAsset = @lunco://models/CommsLink.mo@
 
     # Geometry in, from the link kernel via the cosim bridge. Self-loop: the bridge
     # writes these `outputs:` on this prim; the model's inputs read them back.

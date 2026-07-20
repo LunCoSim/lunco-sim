@@ -15,6 +15,30 @@ Start here, in order (new to the codebase? the canonical narrative path is **[do
 ## Agent Mandates
 - **Crate Maintenance**: Whenever a new crate is added to the workspace, the agent MUST update `docs/crates-index.md` to include the new crate in the appropriate category with a concise responsibility summary.
 - **Doc accuracy**: when you rename/remove a crate, type, or binary, grep the docs (`*.md`) for the old name and fix references in the same change — don't leave dangling docs for a later audit.
+- **Generated artifacts are generated.** `crates/lunco-usd/schema/generatedSchema.usda` and
+  the `Types` block of `schema/plugInfo.json` both come from `scripts/gen_schema.py`. Edit
+  `schema.usda` and re-run it; never hand-edit the outputs. `plugInfo.json` *was*
+  hand-maintained and drifted — three API schemas were declared but unregistered, so no
+  external USD runtime could resolve them, which is the entire reason they are codeless
+  schemas rather than loose `customData`. A schema that isn't in `plugInfo.json` does not
+  exist outside this engine.
+- **Verify before you assert.** Read the source before reporting a finding — never relay a
+  claim from a subagent report, a doc comment, or a summary as fact. In one session a
+  survey reported a "bug" in a visibility walk that was provably correct, and a "missing
+  schema" that was a word inside a code comment. Both were caught only by opening the
+  file. A doc comment is evidence of intent, not of behaviour.
+- **Capture real exit codes.** `cmd > log 2>&1; echo "EXIT=$?"` reports the *echo's* status
+  to any watcher; a background task that "succeeded" can contain a failing test. Grep the
+  log for the verdict, and when a test fails, confirm whether it fails on a clean tree
+  before attributing it to your change.
+- **Subagent batches**: give each agent a disjoint file lot, and tell it explicitly **not**
+  to run `cargo build`/`check`/`test` — parallel builds thrash the machine and mask each
+  other. The coordinator runs one workspace check after all agents land. See
+  `skills/subagent-batches`. Repo skills live in `skills/`, never `.claude/`.
+- **Behaviour-changing refactors need a baseline.** Capture the parity verdicts *before*
+  editing (`cargo run -p lunco-sandbox --bin scene_test -- --scene scenes/sandbox/…`,
+  exit 0=PASS/1=FAIL/2=no verdict) and re-run after. "It compiles" is not evidence that a
+  drivetrain still behaves the same.
 
 ## Before You Write Code — prior art, layer, no legacy
 
@@ -27,6 +51,43 @@ standard spelling composes, round-trips, and opens in other tools. A custom `lun
 attribute does none of that. Ambient light was a custom `lunco:env:ambientBrightness`; it
 is an untextured `UsdLuxDomeLight`. Camera exposure was a Bevy constant; `UsdGeomCamera`
 declares `exposure:iso`/`:time`/`:fStop`/`:responsivity`.
+
+Watch for a *rename* of a standard, which is the same mistake wearing a namespace:
+`LunCoProgram` declares `lunco:program:implementationSource`/`:id`/`:sourceAsset`/
+`:sourceCode` — token-for-token `UsdShadeShader`'s `info:implementationSource`/`info:id`/
+`info:sourceAsset`/`info:sourceCode`. If your new attribute set reads like a standard one
+with a prefix swapped, use the standard one.
+
+**1a. A `lunco:` schema is for an EXPOSED ENGINE CAPABILITY — nothing else.** That is the
+test, and it is narrow. Intents, program dispatch, terrain layers, control bindings are
+engine capabilities: the engine defines the vocabulary, so USD is where it gets declared
+and validated. A number that merely *describes a part* is not a capability, and a
+behaviour with state is not one either. Three ways this goes wrong:
+
+- **Reinventing a standard** — see above.
+- **Modelling physics the standard already models.** Solver-facing actuation is
+  `UsdPhysicsDriveAPI` on a joint (`type`/`targetPosition`/`targetVelocity`/`stiffness`/
+  `damping`/`maxForce`) — that is the whole standard vocabulary for "something drives
+  this". There is no AOUSD vehicle schema, so `physxVehicle*` names are adopted for
+  interop (**names, not runtime semantics**); invent `lunco:` only where neither exists.
+- **Attributes with no reader.** `lunco:obc:powerDraw` was authored on two assets and read
+  by nothing but a doc comment justifying its own existence. A schema property nothing
+  consumes is dead weight that reads as architecture.
+
+**1b. USD holds nameplate, models hold equations and state.** A part's authored numbers —
+mass, `stallTorque`, gear `ratio`, efficiency — are scene data: swapping a motor is
+swapping one reference arc, and the Inspector gets a slider free from `customData`. The
+*equations* and anything with state — thermal derating, battery sag, current limits — are
+Modelica or rhai, and **the program overrides the scalars** the way a wired port beats a
+constant (`assets/models/RoverMotorThermal.mo` is the exemplar). Same line UsdPhysics
+draws: mass is authored, `F=ma` is the solver's.
+
+Corollaries. **Do not derive a physics quantity from geometry** — a wheel's rolling radius
+is authored (`physxVehicleWheel:radius`) because under load it legitimately differs from
+the mesh; deriving it silently couples two things allowed to disagree. And **a flow is a
+network, not a per-part scalar**: power and heat are `outputs:` ports feeding one Modelica
+circuit (`motor.usda` publishes `outputs:heat`), because "a circuit is one Modelica model,
+not one per part."
 
 **2. Which layer?** Ask in order, stop at the first that fits. **Rust is the last resort,
 not the default.**
@@ -58,6 +119,42 @@ function of load order — that is exactly how a scene that rendered correctly w
 when someone gave it a sky. If a migration truly cannot land at once, say so and leave a
 `TODO` naming the trigger; never a silent half-state. **A write with no reader is worse
 than no write** — it makes the journal claim a setting persisted when it did not.
+
+**Deleting the old mechanism is not done until its traces are gone**, and the traces
+outlive the code:
+
+- **The abstraction it needed.** A trait with one implementor is a shim for the implementor
+  that left. When the flattened `sdf::Data` reader was retired, 106 functions stayed
+  generic over `UsdRead` for a second source that no longer existed.
+- **One name, one definition.** `rel_target` existed as *both* an inherent method
+  (`-> Option<SdfPath>`) and a trait method (`-> Option<String>`). Rust inherent methods
+  **shadow** trait methods, so removing the generics silently re-pointed every call to the
+  other one. It happened to break the build; it could as easily have compiled and behaved
+  differently.
+- **The prose.** Comments asserting the retired design are worse than stale — they are
+  read as current and copied. Grep the old mechanism's *name* and fix every doc hit in the
+  same change, including the ones that only mention it in passing.
+- **Duplicate implementations of one concept.** "The bound shader" had four
+  implementations; three did a raw `material:binding` read and silently dropped inherited
+  bindings. Duplication does not announce itself — it drifts, and the copies that are
+  wrong keep passing their own tests.
+
+**4a. Two read planes; never conflate them.** Composed reads (`UsdRead` on `StageView`
+over the canonical stage) resolve references, variants and inherits — that is what the
+domain extractors and anything solver-facing must use. Authored-layer reads (`UsdDataExt`
+over `sdf::Data`) are deliberately *pre*-composition and exist for the document/authoring
+plane: "which layer holds this opinion" is a question only they can answer, and document
+tests assert exactly that. Using the authored plane where composition is meant hides
+inherited opinions; using the composed plane in a document test destroys what it tests.
+
+**4b. Use openusd's computed APIs, not a hand-rolled walk.** `ComputeBoundMaterial`
+resolves inherited bindings, collection bindings and binding strength; a raw
+`rel_target(prim, "material:binding")` sees only an opinion authored on that exact prim —
+and inherited bindings are the common case, not the corner case. Likewise
+`ComputeVisibility`/`ComputePurpose` (purpose resolves to the *nearest ancestor that
+authors an opinion*, so a child can opt back out of a `guide` group — an "is any ancestor
+guide?" walk gets that wrong), and `read_preview_surface` over hand-walking `inputs:`.
+These are correctness, not style.
 
 **4. Reuse, don't reinvent.** Check for a maintained crate (the repo already leans on
 `openusd`, `avian3d`, `big_space`, `rumoca`, `catppuccin`). Check for an existing pattern

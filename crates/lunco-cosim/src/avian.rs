@@ -27,6 +27,32 @@ use bevy::prelude::*;
 use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
 
+/// The avian input ports that sink into [`PendingForces`] — i.e. **writing one
+/// pushes a rigid body around**. Declared here, beside the port table that
+/// implements them, because a port's meaning belongs to the backend that owns
+/// it. [`crate::connection::is_physics_force_port`] is the consumer.
+///
+/// ENUMERATED, never matched by spelling. A name test cannot tell a body torque
+/// (N·m about a world axis, applied to a rigid body) from a shaft torque (N·m
+/// through a gearbox, applied to nothing) — and it cannot see a body-force port
+/// that is not spelled `force*`/`torque*` at all. Add a port that writes
+/// `PendingForces`, add it here.
+pub const BODY_FORCE_PORTS: &[&str] = &[
+    // World-space linear force → `PendingForces::f`.
+    "force_x",
+    "force_y",
+    "force_z",
+    // Body-frame linear force → `PendingForces::f_local` (rotated into world at
+    // apply time). These are why an exact `force_{x,y,z}` list would be a hole.
+    "force_local_x",
+    "force_local_y",
+    "force_local_z",
+    // World-space torque → `PendingForces::torque`.
+    "torque_x",
+    "torque_y",
+    "torque_z",
+];
+
 /// Per-entity force accumulator written by `force_*` input ports and drained
 /// into avian each physics tick by [`apply_pending_forces`].
 ///

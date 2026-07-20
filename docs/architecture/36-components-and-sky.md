@@ -61,7 +61,7 @@ def Xform "CommsSystem" (kind = "component") {          # ── the reusable un
         # + collider, mount frame, optional gimbal joint
     }
     def LunCoProgram "Link" {                           # ── Layer 2: RF dynamics (Modelica)
-        uniform asset lunco:program:sourceAsset = @models/CommsLink.mo@   # Friis → data-rate → buffer
+        uniform asset info:sourceAsset = @models/CommsLink.mo@   # Friis → data-rate → buffer
         float inputs:u_range.connect = </CommsSystem/Geom.outputs:range_km>
         float inputs:u_up.connect    = </CommsSystem/Geom.outputs:connected>
 
@@ -79,12 +79,12 @@ def Xform "CommsSystem" (kind = "component") {          # ── the reusable un
         }
     }
     def LunCoProgram "Power" {                          # ── Layer 3: electrical draw (Modelica)
-        uniform asset lunco:program:sourceAsset = @models/CommsPower.mo@  # TX state → DC watts
+        uniform asset info:sourceAsset = @models/CommsPower.mo@  # TX state → DC watts
         float inputs:u_tx.connect = </CommsSystem/Link.outputs:txActive>
         # its `outputs:p_draw` is what the vehicle's EPS bus consumes
     }
     def LunCoProgram "Policy" {                         # ── Layer 4: mode/relay policy (rhai)
-        uniform asset lunco:program:sourceAsset = @scripts/comms_policy.rhai@   # handover, duty-cycle, safe-mode
+        uniform asset info:sourceAsset = @scripts/comms_policy.rhai@   # handover, duty-cycle, safe-mode
     }
 }
 ```
@@ -126,7 +126,7 @@ shipping drivetrain `raycast|physical` variant:
 def Xform "CommsSystem" (kind="component") {
     variantSet "fidelity" = {
         "ideal"     { over "Link" { } over "Power" { } }        # kernel LOS only → connected bool
-        "linkbudget"{ over "Link" { uniform asset lunco:program:sourceAsset = @models/CommsLink.mo@ } }   # + Friis/buffer
+        "linkbudget"{ over "Link" { uniform asset info:sourceAsset = @models/CommsLink.mo@ } }   # + Friis/buffer
         "full"      { over "Link" {…} over "Power" {…} over "Therm" {…} }             # + electrical + thermal
     }
     prepend variantSets = "fidelity"

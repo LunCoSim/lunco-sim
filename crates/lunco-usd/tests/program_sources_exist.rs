@@ -45,10 +45,10 @@ fn every_program_source_asset_exists() {
         for (n, line) in text.lines().enumerate() {
             // A comment explains; it does not bind.
             let code = line.split('#').next().unwrap_or("");
-            if !code.contains("lunco:program:sourceAsset") {
+            if !code.contains("info:sourceAsset") {
                 continue;
             }
-            // `uniform asset lunco:program:sourceAsset = @models/Lander.mo@`
+            // `uniform asset info:sourceAsset = @models/Lander.mo@`
             let Some(rel) = code
                 .split_once('@')
                 .and_then(|(_, rest)| rest.split_once('@'))

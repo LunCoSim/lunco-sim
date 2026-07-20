@@ -1,9 +1,9 @@
 //! Program drivers — the Rust half of `LunCoProgram`.
 //!
 //! A `LunCoProgram` prim names its implementation one of three ways, exactly as
-//! `UsdShade.Shader` does: `lunco:program:sourceAsset` (a file — the engine comes
-//! from its extension), `lunco:program:sourceCode` (text in place), or
-//! **`lunco:program:id`** — a name the runtime already implements, resolved here.
+//! `UsdShade.Shader` does: `info:sourceAsset` (a file — the engine comes
+//! from its extension), `info:sourceCode` (text in place), or
+//! **`info:id`** — a name the runtime already implements, resolved here.
 //! That third arm is `info:id = "UsdPreviewSurface"`: a thing every renderer is
 //! expected to have, named rather than shipped.
 //!
@@ -35,7 +35,7 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-/// The program id authored on a `LunCoProgram` prim (`lunco:program:id`), stamped on
+/// The program id authored on a `LunCoProgram` prim (`info:id`), stamped on
 /// the prim that **owns** the program — not on the program prim itself.
 ///
 /// Owner, because that is what the program drives: `me` is the Cone, and the program
@@ -66,7 +66,7 @@ impl ProgramDriverRegistry {
     }
 }
 
-/// Register a Rust driver for a `lunco:program:id`.
+/// Register a Rust driver for a `info:id`.
 pub trait ProgramDriverAppExt {
     /// Bind `id` to `system`, which runs every frame for the prims that select it.
     ///
@@ -102,7 +102,7 @@ impl ProgramDriverAppExt for App {
     }
 }
 
-/// Report a `lunco:program:id` that nothing implements.
+/// Report a `info:id` that nothing implements.
 ///
 /// **A no-op with a warning, never a panic.** A scene authored against a newer
 /// runtime — or against a driver in a crate this binary did not link — must still
@@ -122,7 +122,7 @@ fn warn_unknown_program_drivers(
         if !registry.contains(&id.0) && warned.insert(id.0.clone()) {
             let names: Vec<&str> = registry.names().collect();
             warn!(
-                "unknown lunco:program:id {:?} on {:?} — no Rust driver is registered \
+                "unknown info:id {:?} on {:?} — no Rust driver is registered \
                  under that name; the prim is not driven. Registered: {:?}",
                 id.0, entity, names
             );
