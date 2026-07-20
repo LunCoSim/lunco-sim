@@ -167,10 +167,19 @@ impl Plugin for SandboxUiPlugin {
                     terrain_progress::draw_terrain_progress,
                     // Surface ⇄ Moon ⇄ Earth switcher — appears only when the
                     // celestial hierarchy is live (the scene declared bodies).
-                    view_mode::draw_view_mode_switcher,
+                    //
+                    // NOT while recording: these two are EDITOR chrome — they
+                    // exist so an operator can retarget the view and scrub the
+                    // sky clock. An offline take is film output, and a scene
+                    // that declares celestial bodies (which any scene with a
+                    // real sun now does) would otherwise burn a clock readout
+                    // and a view switcher into every frame. The driver HUD
+                    // below is deliberately NOT gated: vehicle state is
+                    // instrumentation, not chrome.
+                    view_mode::draw_view_mode_switcher.run_if(not(recording_offline)),
                     // Sky clock: rate + couple/detach for the CELESTIAL clock only
                     // (not the sim transport). Same visibility gate.
-                    celestial_time::draw_celestial_time,
+                    celestial_time::draw_celestial_time.run_if(not(recording_offline)),
                     // Driver cockpit: attitude/tilt (bottom-left) + nav/controls
                     // (bottom-right). Only while possessing a vessel. Transport
                     // (pause + rate) lives on the workbench toolbar, next to the
@@ -268,6 +277,16 @@ impl Plugin for SandboxUiPlugin {
 /// Inserts the sharpest shadow filter (`Hardware2x2`) on every 3D camera as it
 /// appears. USD- and Avatar-spawned cameras land async over many frames; the
 /// `Without<ShadowFilteringMethod>` filter catches each exactly once.
+/// True while an offline take is capturing frames — the signal that "this
+/// viewport is the film, not the editor". Chrome that exists for an operator
+/// (view switcher, sky-clock scrubber) hides behind it; instrumentation that
+/// describes the VEHICLE does not.
+fn recording_offline(
+    state: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
+) -> bool {
+    state.is_some_and(|s| s.active)
+}
+
 fn force_hard_shadow_filtering(
     mut commands: Commands,
     q: Query<Entity, (With<Camera3d>, Without<bevy::light::ShadowFilteringMethod>)>,

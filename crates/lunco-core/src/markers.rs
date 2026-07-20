@@ -22,6 +22,20 @@ use big_space::prelude::CellCoord;
 #[reflect(Component)]
 pub struct GridAnchor;
 
+/// WHO IS FLYING — `true` while a session holds the stick, `false` when the
+/// vessel's own guidance law has it.
+///
+/// The same fact the vessel's `piloted` port carries, hoisted to a resource so
+/// UI can read it without depending on the possession crate. Written by
+/// `PossessVessel`/`ReleaseVessel`; read by the input overlay's AUTO/MANUAL
+/// badge, which is what makes a handback legible on camera — the keys go dark
+/// and the badge flips in the same frame.
+#[derive(Resource, Debug, Default, Clone, Copy, Reflect)]
+#[reflect(Resource)]
+pub struct FlightAuthority {
+    pub piloted: bool,
+}
+
 /// A vessel's human name — "Kestrel", not "/Episode01Recording/Lander".
 ///
 /// Sourced from the STANDARD UsdUI `ui:displayName` attribute

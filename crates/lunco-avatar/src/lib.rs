@@ -2619,7 +2619,13 @@ fn on_release_command(
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
+    mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
 ) {
+    // The stick goes back to the guidance law — publish it for the UI that
+    // shows WHO is flying (the overlay's AUTO/MANUAL badge).
+    if let Some(a) = authority.as_mut() {
+        a.piloted = false;
+    }
     // A wire-applied release (a client telling the host it let go) carries that
     // client's avatar, which is meaningless here — the host frees ownership in
     // `release_possession_authority`, not by touching a local camera.
@@ -2765,6 +2771,7 @@ fn on_possess_command(
     rbac: Res<lunco_core::session::SessionRbac>,
     session: Res<lunco_core::LocalSession>,
     q_owned: Query<&lunco_core::GlobalEntityId>,
+    mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
 ) {
     let cmd = trigger.event();
     // A *remote* possession applied from the wire (host attributing a client's
@@ -2773,6 +2780,11 @@ fn on_possess_command(
     // here we only do the local camera-bind for our own (non-wire) possessions.
     if guard.is_from_sync() {
         return;
+    }
+    // A session has the stick — publish it for the AUTO/MANUAL badge. Set after
+    // the sync guard so a remote player's possession does not relabel OUR view.
+    if let Some(a) = authority.as_mut() {
+        a.piloted = true;
     }
     // Possession arbitration — ONE predicate, shared with the authority leg
     // (`record_possession_authority`). `may_control` = `may_possess` (free / already
