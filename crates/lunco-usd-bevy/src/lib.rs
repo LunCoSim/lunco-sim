@@ -63,6 +63,7 @@ pub mod view;
 pub mod camera_path;
 pub mod canonical;
 pub mod curve_sweep;
+pub mod lathe;
 pub mod nurbs;
 pub mod trim;
 pub mod mount;
@@ -162,6 +163,15 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<UsdAnimated>()
             .register_type::<UsdResetXformStack>()
             .register_type::<camera_track::CameraTrack>()
+            // The retained NurbsPatch definition + its parametric layer. Registered
+            // (not merely derived) because registration is what makes them reachable
+            // from a script: `set(id, "UsdLathe.profile.exit_radius", 1.6)` resolves
+            // through `AppTypeRegistry` by short type path. An unregistered component
+            // fails there with `unknown type`, which is exactly the error the old
+            // `set(me, "NurbsPatch.points", ...)` actuator died on.
+            .register_type::<lathe::NurbsSurface>()
+            .register_type::<lathe::UsdLathe>()
+            .register_type::<lathe::LatheProfile>()
             .init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
             // Guarantee the viewport substrate exists wherever these camera
@@ -206,6 +216,20 @@ impl Plugin for UsdBevyPlugin {
             // Runs every frame rather than once: the ancestry a prim must be
             // lifted out of is itself spawned asynchronously during load.
             .add_systems(Update, detach_reset_xform_stack_prims)
+            // Parametric lathes. BOTH are `Changed`-filtered, so on a scene nobody is
+            // editing they iterate NOTHING — a nozzle's shape does not change while
+            // the engine burns, and re-lathing it per frame is the exact mistake the
+            // deleted rhai actuator made.
+            //
+            // `.chain()` matters: a parameter edit must reach the mesh in the SAME
+            // frame. Unchained, `relathe_changed`'s write to `NurbsSurface` would be
+            // seen by `regenerate_patch_meshes` only on the next run, so every
+            // parameter change would render one frame stale — invisible when dragging
+            // a slider, and a real off-by-one-frame artefact in a recorded take.
+            .add_systems(
+                Update,
+                (lathe::relathe_changed, lathe::regenerate_patch_meshes).chain(),
+            )
             .add_systems(Update, camera_mount::resolve_camera_mounts)
             .add_systems(
                 PostUpdate,
@@ -962,9 +986,25 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         } else if prim_type.as_deref() == Some("NurbsPatch") {
             // Tensor-product rational surface — how USD spells a lathe, and the
             // only way to express a PARTIAL revolution (the gprims are complete
-            // revolutions with no sweep-angle). `trimCurve:*` is not honoured;
-            // see the fn doc.
-            build_usd_nurbs_patch_mesh(reader, &sdf_path).map(|m| meshes.add(m))
+            // revolutions with no sweep-angle). `trimCurve:*` IS honoured; see the
+            // fn doc.
+            //
+            // The patch's DEFINITION is retained on the entity rather than being
+            // consumed and thrown away, which is what makes the surface editable at
+            // all — `NurbsSurface` and `UsdLathe` are reflected components, so the
+            // existing scripting bridge writes them with no new verb, and
+            // `crate::lathe`'s `Changed`-filtered systems rebuild the mesh once per
+            // edit instead of once per frame.
+            build_usd_nurbs_patch_mesh(reader, &sdf_path).map(|(mesh, def)| {
+                if let Some((surface, lathe_params)) = def {
+                    let mut e = commands.entity(entity);
+                    e.try_insert(surface);
+                    if let Some(l) = lathe_params {
+                        e.try_insert(l);
+                    }
+                }
+                meshes.add(mesh)
+            })
         } else if matches!(prim_type.as_deref(), Some("BasisCurves") | Some("NurbsCurves")) {
             // A curve prim with `widths` is a TUBE — swept geometry, not a line.
             // `build_usd_curve_mesh` returns `None` when `widths` is unauthored,
@@ -3725,9 +3765,22 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
 /// face value while the code underneath was working, so a missing surface was
 /// blamed on trim support that in fact existed. A doc comment that describes a
 /// capability the code no longer lacks is worse than no comment.)
-fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
-    use bevy::asset::RenderAssetUsages;
-    use bevy_mesh::PrimitiveTopology;
+/// Read a `NurbsPatch` prim's definition — either GENERATED from a
+/// `lunco:lathe:*` profile, or read from the authored control arrays.
+///
+/// This is the single place the two spellings of "what surface is this" meet, and
+/// they are mutually exclusive by design: a prim that declares a lathe profile does
+/// not author `points`, because the whole point of the parametric form is that the
+/// control net is derived. Authoring both is the duplication that let the engine
+/// bell's drawn contour (effective exponent ≈1.3) drift away from the contour its
+/// own Modelica model declared (0.55) with nothing to catch it.
+fn read_patch_surface<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+) -> Option<(lathe::NurbsSurface, Option<lathe::UsdLathe>)> {
+    if let Some(l) = lathe::read_lathe(reader, path) {
+        return Some((l.surface(), Some(l)));
+    }
 
     let points = read_mesh_points(reader, path)?;
     let u_count = reader.scalar::<i32>(path, "uVertexCount").unwrap_or(0).max(0) as usize;
@@ -3748,7 +3801,47 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
     if v_knots.is_empty() {
         v_knots = crate::nurbs::default_clamped_knots(v_count, v_order);
     }
-    let weights = reader.reals(path, "pointWeights");
+
+    Some((
+        lathe::NurbsSurface {
+            points,
+            weights: reader.reals(path, "pointWeights"),
+            u_count: u_count as u32,
+            v_count: v_count as u32,
+            u_order: u_order as u32,
+            v_order: v_order as u32,
+            u_knots,
+            v_knots,
+            left_handed: reader.text(path, "orientation").as_deref() == Some("leftHanded"),
+        },
+        None,
+    ))
+}
+
+/// Build a `NurbsPatch`'s mesh AND the definition to retain alongside it.
+///
+/// The returned [`lathe::NurbsSurface`] is `None` for a TRIMMED patch. That is
+/// deliberate: a trim loop lives in the patch's own `(u, v)` parameter space, and
+/// re-deriving the trimmed triangulation from an edited control net is a different
+/// problem from retessellating an untrimmed one. Withholding the component means a
+/// trimmed patch is simply not live-editable, rather than editable-but-wrong — the
+/// trim would silently stop matching the surface it cuts.
+fn build_usd_nurbs_patch_mesh<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+) -> Option<(Mesh, Option<(lathe::NurbsSurface, Option<lathe::UsdLathe>)>)> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy_mesh::PrimitiveTopology;
+
+    let (surface, lathe_params) = read_patch_surface(reader, path)?;
+    let points = surface.points.clone();
+    let weights = surface.weights.clone();
+    let u_count = surface.u_count as usize;
+    let v_count = surface.v_count as usize;
+    let u_order = surface.u_order as usize;
+    let v_order = surface.v_order as usize;
+    let u_knots = surface.u_knots.clone();
+    let v_knots = surface.v_knots.clone();
 
     // ── Trim curves ─────────────────────────────────────────────────────────
     // `trimCurve:*` IS applied — see `crate::trim`. A trimmed patch gets an
@@ -3870,7 +3963,11 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
                     uvs.push(s.uv);
                 }
                 let mut indices = domain.indices;
-                apply_patch_orientation(reader, path, &mut normals, &mut indices);
+                crate::lathe::flip_if_left_handed(
+                    surface.left_handed,
+                    &mut normals,
+                    &mut indices,
+                );
                 let mut mesh = Mesh::new(
                     PrimitiveTopology::TriangleList,
                     RenderAssetUsages::default(),
@@ -3879,7 +3976,8 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
                 mesh.insert_indices(bevy_mesh::Indices::U32(indices));
-                return Some(mesh);
+                // No `NurbsSurface` for a trimmed patch — see the fn doc.
+                return Some((mesh, None));
             }
         }
         bevy::log::warn!(
@@ -3888,17 +3986,11 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
         );
     }
 
-    // Tessellation density. Fixed for now — this is exactly where adaptive,
-    // curvature-driven refinement belongs, and where a coarse-while-dragging /
-    // refine-on-release policy would hang once patches are editable in-sim.
-    let u_steps = (u_count * 6).clamp(8, 128);
-    let v_steps = (v_count * 6).clamp(8, 128);
-
-    let grid = crate::nurbs::sample_nurbs_patch(
-        &points, &weights, u_count, v_count, u_order, v_order, &u_knots, &v_knots, u_steps,
-        v_steps,
-    );
-    if grid.is_empty() {
+    // The untrimmed build now lives on `NurbsSurface` itself, because it is
+    // EXACTLY the operation the regeneration system has to perform when a parameter
+    // changes. Keeping a second copy here would be two tessellators that can
+    // disagree — the same trap `crate::nurbs`' module doc describes for evaluators.
+    let Some(mesh) = surface.mesh() else {
         // `sample_nurbs_patch_at` has already warned WHICH guard fired; this
         // adds the prim path, which it has no way to know.
         bevy::log::warn!(
@@ -3906,7 +3998,7 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
             path.as_str()
         );
         return None;
-    }
+    };
     // Parity with the trimmed branch above, which logs its vert/tri counts. The
     // untrimmed branch used to be completely SILENT, so a patch that reached
     // here and built correctly was indistinguishable in the log from one whose
@@ -3914,129 +4006,17 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
     // you need when a surface is missing from the render, and not being able to
     // is what made the HAB-1 dome expensive to diagnose.
     bevy::log::info!(
-        "[usd-bevy] {} untrimmed patch: {}x{} grid, {} verts",
+        "[usd-bevy] {} untrimmed patch: {}x{} net{}, {} verts",
         path.as_str(),
-        u_steps + 1,
-        v_steps + 1,
-        grid.len()
+        surface.u_count,
+        surface.v_count,
+        match &lathe_params {
+            Some(l) => format!(" (lathed, {:?})", l.profile),
+            None => String::new(),
+        },
+        mesh.count_vertices()
     );
-
-    let cols = u_steps + 1;
-    let rows = v_steps + 1;
-    let mut positions = Vec::with_capacity(grid.len());
-    let mut normals = Vec::with_capacity(grid.len());
-    let mut uvs = Vec::with_capacity(grid.len());
-    for s in &grid {
-        positions.push(s.position);
-        normals.push(s.normal);
-        uvs.push(s.uv);
-    }
-
-    let mut indices = Vec::with_capacity(u_steps * v_steps * 6);
-    for r in 0..v_steps {
-        for c in 0..u_steps {
-            let (a, b, d, e) = (
-                (r * cols + c) as u32,
-                (r * cols + c + 1) as u32,
-                ((r + 1) * cols + c) as u32,
-                ((r + 1) * cols + c + 1) as u32,
-            );
-            // WINDING MUST AGREE WITH THE VERTEX NORMALS, and it did not.
-            //
-            // These were `[a, d, e]` / `[a, e, b]`, winding each quad so its
-            // FACE normal is dP/dv x dP/du. But the vertex normals in `grid`
-            // come from `sample_nurbs_patch_at` as dP/du x dP/dv — the opposite
-            // sign. Every untrimmed patch therefore shipped with its triangles
-            // facing one way and its normals the other.
-            //
-            // The mismatch is invisible until something flips one of them.
-            // `apply_patch_orientation` below flips BOTH, which preserves the
-            // disagreement instead of fixing it — so on a `leftHanded` patch the
-            // normals come out correct and the winding comes out backwards. With
-            // `doubleSided = true` Bevy then draws the back face and NEGATES its
-            // normal, pointing it inward again, and the surface is black under
-            // any light from any direction.
-            //
-            // That is the HAB-1 dome. Telemetry confirmed its normals outward
-            // ("flipped 1045 normals ... n[0] now [1.0, -0.0, -0.0]") while it
-            // still rendered black, which is why it read as a lighting or
-            // material fault for so long: the normals really were right, and the
-            // rasteriser was discarding them.
-            //
-            // `[a, e, d]` / `[a, b, e]` makes the face normal dP/du x dP/dv, so
-            // it matches the vertex normals. Both are inward for a +X -> +Z wound
-            // net, and `apply_patch_orientation` then flips them together to
-            // outward — which is what the token is for.
-            //
-            // The trimmed branch needs no such change: `triangulate_trimmed`
-            // already emits triangles in the same handedness as the normals,
-            // which is why the shells looked right while the dome did not.
-            indices.extend_from_slice(&[a, e, d]);
-            indices.extend_from_slice(&[a, b, e]);
-        }
-    }
-    debug_assert_eq!(positions.len(), cols * rows);
-    apply_patch_orientation(reader, path, &mut normals, &mut indices);
-
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_indices(bevy_mesh::Indices::U32(indices));
-    Some(mesh)
-}
-
-/// Apply a `NurbsPatch`'s `orientation` token to its generated normals + winding.
-///
-/// A NURBS surface normal is defined by the parameterisation — `N = dP/du x
-/// dP/dv` — so which way it faces is a property of how the control net was
-/// WOUND, not of the shape. Wind the `u` ring the other way round and the same
-/// dome has normals pointing at its own centre.
-///
-/// USD's answer to that is [`orientation`] on every gprim: `"leftHanded"` means
-/// "my winding is reversed, flip me". We honoured it for `Mesh`
-/// ([`build_mesh_from_prim`]) and ignored it for `NurbsPatch`, which left an
-/// author with a net they could not correct without re-authoring geometry.
-///
-/// That gap cost real time. HAB-1's shells and dome are wound `+X -> +Z`, giving
-/// `N = Z x Y = -X` — inward. The habitat rendered with a pitch-black dome and
-/// sunlight on the INNER face of its wall, and looked for all the world like a
-/// broken light rig. Rewinding `u` was not an option: the surfaces carry twelve
-/// trim loops whose `(u, v)` coordinates would all have had to be mirrored.
-///
-/// Flipping normals alone is not enough — back-face culling keys off winding, so
-/// a flipped normal on unflipped triangles renders lit-but-invisible from the
-/// side you want. Both must move together, which is why they are one function.
-fn apply_patch_orientation<R: UsdRead>(
-    reader: &R,
-    path: &SdfPath,
-    normals: &mut [[f32; 3]],
-    indices: &mut [u32],
-) {
-    if reader.text(path, "orientation").as_deref() != Some("leftHanded") {
-        return;
-    }
-    // Telemetry, for the same reason the trimmed/untrimmed patch build logs:
-    // a silent geometry transform is indistinguishable from one that never ran,
-    // and "is the flag even reaching the builder" cost a debugging session on
-    // HAB-1's dome. Reports the first normal so the direction is visible, not
-    // merely the fact that the branch was taken.
-    bevy::log::info!(
-        "[usd-bevy] {} orientation=leftHanded: flipped {} normals, {} tris (n[0] now {:?})",
-        path.as_str(),
-        normals.len(),
-        indices.len() / 3,
-        normals.first().map(|n| [-n[0], -n[1], -n[2]]),
-    );
-    for n in normals.iter_mut() {
-        n[0] = -n[0];
-        n[1] = -n[1];
-        n[2] = -n[2];
-    }
-    // Reverse each triangle's winding by swapping two of its corners.
-    for tri in indices.chunks_exact_mut(3) {
-        tri.swap(1, 2);
-    }
+    Some((mesh, Some((surface, lathe_params))))
 }
 
 fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {

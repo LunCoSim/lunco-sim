@@ -67,8 +67,20 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:id = "UsdPreviewSurface"
-                color3f inputs:diffuseColor = (0.14, 0.14, 0.16)
-                color3f inputs:emissiveColor = (0.5, 0.18, 0.03)
+                # Niobium-alloy bell: dark, warm-tinted metal with the faint
+                # heat-tint a fired nozzle carries. METALLIC and fairly smooth,
+                # so it picks up the sun and the plume light as highlights
+                # along the flare instead of reading as flat paint.
+                color3f inputs:diffuseColor = (0.20, 0.17, 0.15)
+                float inputs:metallic = 0.85
+                float inputs:roughness = 0.38
+                # Barely-there throat glow. The old (0.5, 0.18, 0.03) lit the
+                # WHOLE bell orange at all times — a cold, idle engine looked
+                # like a glowing traffic cone. The plume's own light
+                # (`flame.rhai` drives a SphereLight from the flame material)
+                # is what should illuminate this when the engine is actually
+                # firing; the material only needs to not vanish into black.
+                color3f inputs:emissiveColor = (0.06, 0.025, 0.008)
                 token outputs:surface
             }
         }
@@ -130,14 +142,14 @@ def Xform "DescentLander" (
             {
                 uniform token info:id = "UsdPreviewSurface"
                 color3f inputs:diffuseColor = (0.4, 0.42, 0.46)
-                # The glow at NOMINAL load — instrument GREEN, "the structure
-                # is working and happy". The actuator grades this toward the
-                # overload red authored in its `hot_r/g/b` params as the strut
-                # model's live `load` climbs past `load_ref`: green = good,
-                # red = heavily compressed. Both endpoints are authored data —
-                # retint either and the landing reads differently, no script
-                # edit.
-                color3f inputs:emissiveColor = (0.4, 3.4, 0.9)
+                # The COLD stop of the strut ramp — unloaded, in flight: clean
+                # instrument GREEN. The actuator grades this through the amber
+                # `warm_*` params to the red `hot_*` ones as the strut model's
+                # own `load_frac` rises, so the landing reads green → red at
+                # the impact spike → settling back to amber under static
+                # weight. All three stops are authored data; retint any of them
+                # and the landing reads differently with no script edit.
+                color3f inputs:emissiveColor = (0.25, 3.6, 0.6)
                 token outputs:surface
             }
         }
@@ -377,7 +389,10 @@ def Xform "DescentLander" (
         double height = 0.15
         double3 xformOp:translate = (0, 1.55, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.6, 0.58, 0.55)]
+        # MLI, like the hull — the deck is the vehicle's most sun-exposed face,
+        # so bare grey read as a lid rather than part of the spacecraft.
+        color3f[] primvars:displayColor = [(0.82, 0.66, 0.24)]
+        rel material:binding = </DescentLander/Looks/MliFoil_Mat>
         bool physics:collisionEnabled = false
     }
 
@@ -411,28 +426,30 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (2.6, 2.6, 2.6)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
 
+        # PARAMETRIC. The 36 control points that used to sit here are gone: the
+        # surface is now LATHED by the engine from the four numbers below, and
+        # `crate::lathe` regenerates it whenever one of them changes. Authoring
+        # both the parameters and the net is what let the engine bell's drawn
+        # contour drift away from the contour its own model declared.
+        #
+        # `y = r² / 4f` with f = 0.35 m, walked from a small apex to the rim.
+        # `apexRadius` is deliberately non-zero: a ring collapsed exactly onto the
+        # axis is a degenerate row whose normal is a zero cross product, and a NaN
+        # normal renders as a black hole at the vertex of the dish.
+        #
+        # The u direction (the exact rational circle — 9 CVs, √2/2 diagonals,
+        # doubled interior knots) is GENERATED, not authored, so it cannot drift.
+        # That is what keeps the rim genuinely round rather than an octagon.
         def NurbsPatch "Reflector"
         {
-            int uVertexCount = 9
-            int vVertexCount = 4
-            int uOrder = 3
-            int vOrder = 3
-            double[] uKnots = [0, 0, 0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1, 1, 1]
-            # vKnots unauthored → reader defaults to clamped, which is what a
-            # profile curve wants.
-            double[] pointWeights = [
-                1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1,
-                1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1,
-                1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1,
-                1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1]
-            # 4 profile rings (r, y): (0.02, 0) (0.20, 0.03) (0.40, 0.11) (0.58, 0.24),
-            # u varying fastest; corner CVs sit at (±r, y, ±r) per the rational form.
-            point3f[] points = [
-                (0.02, 0, 0), (0.02, 0, 0.02), (0, 0, 0.02), (-0.02, 0, 0.02), (-0.02, 0, 0), (-0.02, 0, -0.02), (0, 0, -0.02), (0.02, 0, -0.02), (0.02, 0, 0),
-                (0.20, 0.03, 0), (0.20, 0.03, 0.20), (0, 0.03, 0.20), (-0.20, 0.03, 0.20), (-0.20, 0.03, 0), (-0.20, 0.03, -0.20), (0, 0.03, -0.20), (0.20, 0.03, -0.20), (0.20, 0.03, 0),
-                (0.40, 0.11, 0), (0.40, 0.11, 0.40), (0, 0.11, 0.40), (-0.40, 0.11, 0.40), (-0.40, 0.11, 0), (-0.40, 0.11, -0.40), (0, 0.11, -0.40), (0.40, 0.11, -0.40), (0.40, 0.11, 0),
-                (0.58, 0.24, 0), (0.58, 0.24, 0.58), (0, 0.24, 0.58), (-0.58, 0.24, 0.58), (-0.58, 0.24, 0), (-0.58, 0.24, -0.58), (0, 0.24, -0.58), (0.58, 0.24, -0.58), (0.58, 0.24, 0)]
-            color3f[] primvars:displayColor = [(0.92, 0.92, 0.95)]
+            uniform token lunco:lathe:profile = "paraboloid"
+            float lunco:lathe:apexRadius = 0.02
+            float lunco:lathe:rimRadius = 0.58
+            float lunco:lathe:focalLength = 0.35
+            # White thermal-control paint — what a high-gain reflector is
+            # actually finished in, and it separates the dish from the gold
+            # blanket underneath it.
+            color3f[] primvars:displayColor = [(0.95, 0.95, 0.93)]
             bool physics:collisionEnabled = false
         }
 
@@ -474,19 +491,99 @@ def Xform "DescentLander" (
         }
     }
 
-    # Engine bell — flares WIDE at the exit (bottom), narrowing to the throat (top).
-    # Bevy renders an axis-Y cone apex-down, so the 180° flip puts the wide mouth at
-    # the bottom. Dark metallic with a hot emissive throat.
-    def Cone "Nozzle"
+    # ── Engine bell ─────────────────────────────────────────────────────────
+    # A real BELL, lathed as a rational NurbsPatch — not a cone.
+    #
+    # Two things were wrong with the cone this replaces. It pointed the WRONG
+    # WAY: the comment claimed Bevy renders an axis-Y cone apex-down and the
+    # 180° flip corrected it, but the renders show the opposite — with the flip
+    # the apex ended up at the BOTTOM and the ship appeared to fly on an
+    # ice-cream cone. A nozzle is the other way round: a narrow throat at the
+    # top where the gas is choked, flaring to a wide exit plane at the bottom
+    # where it has expanded. And a straight cone is not the shape anyway — a
+    # nozzle contour is a bell, steep off the throat and easing out toward the
+    # exit (the family Rao's method produces).
+    #
+    # Same lathe spelling as the high-gain dish: u is an EXACT circle (9 CVs,
+    # rational 4-arc form, √2/2 on the diagonals, doubled interior knots), v
+    # walks the bell contour from throat to exit — (0.35, 0) → (0.52, -0.55) →
+    # (0.86, -1.15) → (1.35, -1.90).
+    def NurbsPatch "Nozzle"
     {
-        uniform token axis = "Y"
-        double radius = 1.35
-        double height = 1.9
-        double3 xformOp:translate = (0, -2.6, 0)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        # PARAMETRIC. `r(s) = throat + (exit - throat) * s^contour`, lathed by the
+        # engine about +Y and regenerated on change — the same law, verbatim, that
+        # `LunCo.Propulsion.BellNozzle` uses for `r_station_1` / `r_station_2`.
+        # Those stations are s = 1/3 and 2/3, which with 4 control rings ARE
+        # control points 1 and 2, so the model and the drawn surface now agree by
+        # construction instead of by hand.
+        #
+        # THE SHAPE CHANGED HERE, on purpose. The 36 literal control points this
+        # replaces were hand-placed and had an effective contour exponent of ≈1.3
+        # — a cone that flares LATE — while the model beside them declared 0.55, a
+        # bell that flares fast off the throat and eases toward the exit. The two
+        # had silently disagreed since the bell was authored; `r_station_*` exists
+        # in the model precisely to expose that, and it was exposing it. The
+        # parameters win, because they are what the engineering is computed from.
+        uniform token lunco:lathe:profile = "bell"
+        float lunco:lathe:throatRadius = 0.35
+        float lunco:lathe:exitRadius = 1.35
+        float lunco:lathe:length = 1.90
+        float lunco:lathe:contour = 0.55
+        # SEATED IN the hull, not hanging under it. The hull cylinder (radius
+        # 2.5, height 3.0, uncentred) spans y = -1.5 to +1.5, so a throat at
+        # -1.65 left a 0.15 m gap of empty space between the bell and the body
+        # — the engine appeared to float. -1.42 sinks the throat ~0.08 m into
+        # the hull bottom so the join is closed from every angle; the exit
+        # plane lands at y = -3.32, still above the plume cones at -3.5.
+        double3 xformOp:translate = (0, -1.42, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </DescentLander/Looks/Nozzle_Mat>
         bool physics:collisionEnabled = false
+
+        # ── The bell's DESIGN, and what it is worth ─────────────────────────
+        # The control points above are the drawn shape; these inputs are what
+        # that shape MEANS, and `LunCo.Propulsion.BellNozzle` turns them into
+        # the engineering that follows: expansion ratio, thrust coefficient,
+        # specific impulse, thrust.
+        #
+        # The math is in MODELICA, not in a script. A nozzle's shape does not
+        # change while the engine burns, so nothing here should be recomputed
+        # per frame — an earlier rhai actuator re-lathed the patch every tick,
+        # which was both wasted work and (because `set(NurbsPatch.points)` is
+        # not supported by the bridge) an error thrown 25 times a second that
+        # masked every other scenario error in the log.
+        #
+        # `contour` is what makes this a BELL rather than a cone: 1.0 gives the
+        # cone back, lower values flare fast off the throat then ease toward
+        # the exit. Expansion ratio here is (1.35/0.35)^2 ≈ 14.9 — a sensible
+        # figure for a vacuum lander, and the reason the bell flares this hard.
+        #
+        # CLOSED. The drawn surface is lathed from `lunco:lathe:*` on the patch
+        # prim above using the identical contour law, so `r_station_*` and the
+        # geometry cannot disagree about the shape — they evaluate the same
+        # function. The four numbers are still typed twice (here, and as the
+        # lathe's parameters) because a Modelica `inputs:` port can only be fed
+        # by a constant or by a wire from another MODEL's port, not by a plain
+        # attribute on the owning geometry prim; closing that last link needs a
+        # cosim change. What is gone is the duplication that actually bit: the
+        # 36-point control net that encoded a DIFFERENT bell to the one the model
+        # was computing thrust for.
+        def LunCoProgram "Design"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LunCo/Propulsion/BellNozzle.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:throat_radius = 0.35
+            float inputs:exit_radius = 1.35
+            float inputs:length = 1.90
+            float inputs:contour = 0.55
+            # LOX/RP-1 products, matching the plume chemistry the flame
+            # materials declare. Ambient 0 — this engine only ever fires in
+            # vacuum.
+            float inputs:gamma = 1.2
+            float inputs:p_chamber = 5500000.0
+            float inputs:p_exit = 8000.0
+            float inputs:p_ambient = 0.0
+        }
     }
 
     # Engine exhaust plume — TWO translucent emissive cones (apex DOWN, below the
@@ -807,48 +904,84 @@ def Xform "DescentLander" (
     # the vessel frame; they must agree with the authored translate/rotate/
     # scale, which the actuator reproduces exactly at zero stroke.
     def Cube "LegPX"
+    (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         double size = 1.0
-        double3 xformOp:translate = (3.95, -1.68, 0)
+        double3 xformOp:translate = (4.009, -1.807, 0)
         double3 xformOp:rotateXYZ = (0, 0, 25.0)
-        double3 xformOp:scale = (0.15, 7.33, 0.15)
+        double3 xformOp:scale = (0.15, 7.05, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        # The strut's PHYSICS — a Modelica spring-damper (one instance per
-        # leg), wired to the airframe's own sensors exactly the way the GNC
-        # component wires its inputs. The Actuator beside it reads `stroke`
-        # and slides the strut into its piston sleeve. No Rust anywhere.
-        def LunCoProgram "Strut"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
-            uniform bool lunco:program:realtimeSafe = true
-            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
-            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+        # The strut's PHYSICS — a Modelica spring-damper, one instance per leg,
+        # wired to the airframe's own sensors.
+        #
+        # APPLIED to the leg (`LunCoProgramAPI`), not mounted as a child
+        # `def LunCoProgram` prim. That distinction is load-bearing and cost a
+        # night: a child program binds and solves (the log says `bound`, the
+        # compiler says OK) but its outputs are NOT readable as ports on any
+        # entity a script can reach — `get(strut, "stroke")` returns nothing
+        # from the leg, its children or its ancestors. Applied to the prim, the
+        # ports land on that prim's own entity, which is how the vessel carries
+        # `Lander.mo` and how `flame.rhai` reads `throttle`. Same rule here:
+        # the Actuator child reads `stroke` and `load_frac` off `me` — the leg.
+        uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
 
-            # The spring, EXPOSED TO USD — a parameter is an input with a
-            # constant instead of a connection (the GNC convention). Re-tune a
-            # leg from any scene with an `over`; wire one later and nothing
-            # about the model changes. The live `stroke` comes back the same
-            # way: it is this prim's `outputs:stroke` port on the composed
-            # stage, which is exactly what the sibling Actuator (and usdview)
-            # reads.
-            float inputs:k = 4000.0
-            float inputs:c = 2200.0
-            float inputs:m_eff = 500.0
-            float inputs:contact_alt = 1.8
-            float inputs:gate_width = 0.4
-            float inputs:kv_impact = 900.0
-            float inputs:stroke_max = 0.8
-        }
+        # The spring, EXPOSED TO USD — a parameter is an input with a
+        # constant instead of a connection (the GNC convention). Re-tune a
+        # leg from any scene with an `over`; wire one later and nothing
+        # about the model changes. The live `stroke` comes back the same
+        # way: it is this prim's `outputs:stroke` port on the composed
+        # stage, which is exactly what the sibling Actuator (and usdview)
+        # reads.
+        # Contact geometry, MEASURED on this airframe: the altimeter sits
+        # at the nozzle bottom and still reads ~5.0 m with the pads on the
+        # ground, so the model's 1.8 m default gate never fired — contact
+        # stayed 0, and with it load, stroke and the glow. The legs looked
+        # welded because the spring was never told it had landed.
+        # Full contact by 5.0 m, first touch at 5.6 m.
+        float inputs:contact_alt = 5.6
+        float inputs:gate_width = 0.6
+        # SOFTENED so the stroke is visible. At k = 4000 the static settle is
+        # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
+        # engineering and invisible on camera: the legs looked welded and the
+        # force story had nothing to show. k = 1400 puts the settle at 0.58 m
+        # (8%) and a hard arrival near the 0.8 m stop, so the springs visibly
+        # take the impact and rebound. `c` follows to hold the same damping
+        # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
+        # ringing.
+        float inputs:k = 1400.0
+        float inputs:c = 1300.0
+        float inputs:m_eff = 500.0
+        float inputs:kv_impact = 900.0
+        float inputs:stroke_max = 0.8
         def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
-            # Load (N) at which the strut glow reaches the material's authored
-            # colour; static settle (m_eff*g = 810 N) glows at ~54%.
-            custom float lunco:param:load_ref = 1500.0
+            # The glow ramp's WARM and HOT stops (the cold stop is the bound
+            # material's emissive). `warm_at` is the load fraction where amber
+            # peaks: the static settle (m_eff*g = 810 N against the model's
+            # 1500 N rating) lands at 0.54, so a parked lander sits amber and
+            # only the impact transient pushes into red. Full-scale itself is
+            # the MODEL's `load_rated` — not repeated here.
+            custom float lunco:param:warm_at = 0.55
+            custom float lunco:param:warm_r = 4.2
+            custom float lunco:param:warm_g = 2.6
+            custom float lunco:param:warm_b = 0.2
+            custom float lunco:param:hot_r = 5.0
+            custom float lunco:param:hot_g = 0.35
+            custom float lunco:param:hot_b = 0.1
+            # Authored length MUST match the leg's xformOp:scale.y — the
+            # actuator rebuilds the strut from this every tick, so a stale
+            # default silently restores the old geometry.
+            custom float lunco:param:len = 7.05
             custom float lunco:param:bx = 5.5
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 0.0
@@ -919,45 +1052,78 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
     }
 
-    def Cube "LegNX"
+    def Cube "LegNX" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         double size = 1.0
-        double3 xformOp:translate = (-3.95, -1.68, 0)
+        double3 xformOp:translate = (-4.009, -1.807, 0)
         double3 xformOp:rotateXYZ = (0, 0, -25.0)
-        double3 xformOp:scale = (0.15, 7.33, 0.15)
+        double3 xformOp:scale = (0.15, 7.05, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Strut"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
-            uniform bool lunco:program:realtimeSafe = true
-            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
-            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+        # The strut's PHYSICS — a Modelica spring-damper, one per leg.
+        # APPLIED to the leg (`LunCoProgramAPI`), not a child `def LunCoProgram`
+        # prim: a child program binds and solves, but its outputs are NOT
+        # readable as ports from any entity a script can reach. Applied, the
+        # ports land on this prim's entity — the same way the vessel carries
+        # `Lander.mo` for `flame.rhai`.
+        uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
 
-            # The spring, EXPOSED TO USD — a parameter is an input with a
-            # constant instead of a connection (the GNC convention). Re-tune a
-            # leg from any scene with an `over`; wire one later and nothing
-            # about the model changes. The live `stroke` comes back the same
-            # way: it is this prim's `outputs:stroke` port on the composed
-            # stage, which is exactly what the sibling Actuator (and usdview)
-            # reads.
-            float inputs:k = 4000.0
-            float inputs:c = 2200.0
-            float inputs:m_eff = 500.0
-            float inputs:contact_alt = 1.8
-            float inputs:gate_width = 0.4
-            float inputs:kv_impact = 900.0
-            float inputs:stroke_max = 0.8
-        }
+        # The spring, EXPOSED TO USD — a parameter is an input with a
+        # constant instead of a connection (the GNC convention). Re-tune a
+        # leg from any scene with an `over`; wire one later and nothing
+        # about the model changes. The live `stroke` comes back the same
+        # way: it is this prim's `outputs:stroke` port on the composed
+        # stage, which is exactly what the sibling Actuator (and usdview)
+        # reads.
+        # Contact geometry, MEASURED on this airframe: the altimeter sits
+        # at the nozzle bottom and still reads ~5.0 m with the pads on the
+        # ground, so the model's 1.8 m default gate never fired — contact
+        # stayed 0, and with it load, stroke and the glow. The legs looked
+        # welded because the spring was never told it had landed.
+        # Full contact by 5.0 m, first touch at 5.6 m.
+        float inputs:contact_alt = 5.6
+        float inputs:gate_width = 0.6
+        # SOFTENED so the stroke is visible. At k = 4000 the static settle is
+        # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
+        # engineering and invisible on camera: the legs looked welded and the
+        # force story had nothing to show. k = 1400 puts the settle at 0.58 m
+        # (8%) and a hard arrival near the 0.8 m stop, so the springs visibly
+        # take the impact and rebound. `c` follows to hold the same damping
+        # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
+        # ringing.
+        float inputs:k = 1400.0
+        float inputs:c = 1300.0
+        float inputs:m_eff = 500.0
+        float inputs:kv_impact = 900.0
+        float inputs:stroke_max = 0.8
         def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
-            # Load (N) at which the strut glow reaches the material's authored
-            # colour; static settle (m_eff*g = 810 N) glows at ~54%.
-            custom float lunco:param:load_ref = 1500.0
+            # The glow ramp's WARM and HOT stops (the cold stop is the bound
+            # material's emissive). `warm_at` is the load fraction where amber
+            # peaks: the static settle (m_eff*g = 810 N against the model's
+            # 1500 N rating) lands at 0.54, so a parked lander sits amber and
+            # only the impact transient pushes into red. Full-scale itself is
+            # the MODEL's `load_rated` — not repeated here.
+            custom float lunco:param:warm_at = 0.55
+            custom float lunco:param:warm_r = 4.2
+            custom float lunco:param:warm_g = 2.6
+            custom float lunco:param:warm_b = 0.2
+            custom float lunco:param:hot_r = 5.0
+            custom float lunco:param:hot_g = 0.35
+            custom float lunco:param:hot_b = 0.1
+            # Authored length MUST match the leg's xformOp:scale.y — the
+            # actuator rebuilds the strut from this every tick, so a stale
+            # default silently restores the old geometry.
+            custom float lunco:param:len = 7.05
             custom float lunco:param:bx = -5.5
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 0.0
@@ -977,45 +1143,78 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = true
     }
 
-    def Cube "LegPZ"
+    def Cube "LegPZ" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -1.68, 3.95)
+        double3 xformOp:translate = (0, -1.807, 4.009)
         double3 xformOp:rotateXYZ = (-25.0, 0, 0)
-        double3 xformOp:scale = (0.15, 7.33, 0.15)
+        double3 xformOp:scale = (0.15, 7.05, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Strut"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
-            uniform bool lunco:program:realtimeSafe = true
-            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
-            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+        # The strut's PHYSICS — a Modelica spring-damper, one per leg.
+        # APPLIED to the leg (`LunCoProgramAPI`), not a child `def LunCoProgram`
+        # prim: a child program binds and solves, but its outputs are NOT
+        # readable as ports from any entity a script can reach. Applied, the
+        # ports land on this prim's entity — the same way the vessel carries
+        # `Lander.mo` for `flame.rhai`.
+        uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
 
-            # The spring, EXPOSED TO USD — a parameter is an input with a
-            # constant instead of a connection (the GNC convention). Re-tune a
-            # leg from any scene with an `over`; wire one later and nothing
-            # about the model changes. The live `stroke` comes back the same
-            # way: it is this prim's `outputs:stroke` port on the composed
-            # stage, which is exactly what the sibling Actuator (and usdview)
-            # reads.
-            float inputs:k = 4000.0
-            float inputs:c = 2200.0
-            float inputs:m_eff = 500.0
-            float inputs:contact_alt = 1.8
-            float inputs:gate_width = 0.4
-            float inputs:kv_impact = 900.0
-            float inputs:stroke_max = 0.8
-        }
+        # The spring, EXPOSED TO USD — a parameter is an input with a
+        # constant instead of a connection (the GNC convention). Re-tune a
+        # leg from any scene with an `over`; wire one later and nothing
+        # about the model changes. The live `stroke` comes back the same
+        # way: it is this prim's `outputs:stroke` port on the composed
+        # stage, which is exactly what the sibling Actuator (and usdview)
+        # reads.
+        # Contact geometry, MEASURED on this airframe: the altimeter sits
+        # at the nozzle bottom and still reads ~5.0 m with the pads on the
+        # ground, so the model's 1.8 m default gate never fired — contact
+        # stayed 0, and with it load, stroke and the glow. The legs looked
+        # welded because the spring was never told it had landed.
+        # Full contact by 5.0 m, first touch at 5.6 m.
+        float inputs:contact_alt = 5.6
+        float inputs:gate_width = 0.6
+        # SOFTENED so the stroke is visible. At k = 4000 the static settle is
+        # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
+        # engineering and invisible on camera: the legs looked welded and the
+        # force story had nothing to show. k = 1400 puts the settle at 0.58 m
+        # (8%) and a hard arrival near the 0.8 m stop, so the springs visibly
+        # take the impact and rebound. `c` follows to hold the same damping
+        # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
+        # ringing.
+        float inputs:k = 1400.0
+        float inputs:c = 1300.0
+        float inputs:m_eff = 500.0
+        float inputs:kv_impact = 900.0
+        float inputs:stroke_max = 0.8
         def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
-            # Load (N) at which the strut glow reaches the material's authored
-            # colour; static settle (m_eff*g = 810 N) glows at ~54%.
-            custom float lunco:param:load_ref = 1500.0
+            # The glow ramp's WARM and HOT stops (the cold stop is the bound
+            # material's emissive). `warm_at` is the load fraction where amber
+            # peaks: the static settle (m_eff*g = 810 N against the model's
+            # 1500 N rating) lands at 0.54, so a parked lander sits amber and
+            # only the impact transient pushes into red. Full-scale itself is
+            # the MODEL's `load_rated` — not repeated here.
+            custom float lunco:param:warm_at = 0.55
+            custom float lunco:param:warm_r = 4.2
+            custom float lunco:param:warm_g = 2.6
+            custom float lunco:param:warm_b = 0.2
+            custom float lunco:param:hot_r = 5.0
+            custom float lunco:param:hot_g = 0.35
+            custom float lunco:param:hot_b = 0.1
+            # Authored length MUST match the leg's xformOp:scale.y — the
+            # actuator rebuilds the strut from this every tick, so a stale
+            # default silently restores the old geometry.
+            custom float lunco:param:len = 7.05
             custom float lunco:param:bx = 0.0
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 5.5
@@ -1035,45 +1234,78 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = true
     }
 
-    def Cube "LegNZ"
+    def Cube "LegNZ" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -1.68, -3.95)
+        double3 xformOp:translate = (0, -1.807, -4.009)
         double3 xformOp:rotateXYZ = (25.0, 0, 0)
-        double3 xformOp:scale = (0.15, 7.33, 0.15)
+        double3 xformOp:scale = (0.15, 7.05, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Strut"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
-            uniform bool lunco:program:realtimeSafe = true
-            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
-            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+        # The strut's PHYSICS — a Modelica spring-damper, one per leg.
+        # APPLIED to the leg (`LunCoProgramAPI`), not a child `def LunCoProgram`
+        # prim: a child program binds and solves, but its outputs are NOT
+        # readable as ports from any entity a script can reach. Applied, the
+        # ports land on this prim's entity — the same way the vessel carries
+        # `Lander.mo` for `flame.rhai`.
+        uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
 
-            # The spring, EXPOSED TO USD — a parameter is an input with a
-            # constant instead of a connection (the GNC convention). Re-tune a
-            # leg from any scene with an `over`; wire one later and nothing
-            # about the model changes. The live `stroke` comes back the same
-            # way: it is this prim's `outputs:stroke` port on the composed
-            # stage, which is exactly what the sibling Actuator (and usdview)
-            # reads.
-            float inputs:k = 4000.0
-            float inputs:c = 2200.0
-            float inputs:m_eff = 500.0
-            float inputs:contact_alt = 1.8
-            float inputs:gate_width = 0.4
-            float inputs:kv_impact = 900.0
-            float inputs:stroke_max = 0.8
-        }
+        # The spring, EXPOSED TO USD — a parameter is an input with a
+        # constant instead of a connection (the GNC convention). Re-tune a
+        # leg from any scene with an `over`; wire one later and nothing
+        # about the model changes. The live `stroke` comes back the same
+        # way: it is this prim's `outputs:stroke` port on the composed
+        # stage, which is exactly what the sibling Actuator (and usdview)
+        # reads.
+        # Contact geometry, MEASURED on this airframe: the altimeter sits
+        # at the nozzle bottom and still reads ~5.0 m with the pads on the
+        # ground, so the model's 1.8 m default gate never fired — contact
+        # stayed 0, and with it load, stroke and the glow. The legs looked
+        # welded because the spring was never told it had landed.
+        # Full contact by 5.0 m, first touch at 5.6 m.
+        float inputs:contact_alt = 5.6
+        float inputs:gate_width = 0.6
+        # SOFTENED so the stroke is visible. At k = 4000 the static settle is
+        # m_eff*g/k = 810/4000 = 0.20 m on a 7.33 m leg — 2.7%, which is real
+        # engineering and invisible on camera: the legs looked welded and the
+        # force story had nothing to show. k = 1400 puts the settle at 0.58 m
+        # (8%) and a hard arrival near the 0.8 m stop, so the springs visibly
+        # take the impact and rebound. `c` follows to hold the same damping
+        # ratio (zeta = c / (2*sqrt(k*m_eff)) ~ 0.78): one clean overshoot, no
+        # ringing.
+        float inputs:k = 1400.0
+        float inputs:c = 1300.0
+        float inputs:m_eff = 500.0
+        float inputs:kv_impact = 900.0
+        float inputs:stroke_max = 0.8
         def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
-            # Load (N) at which the strut glow reaches the material's authored
-            # colour; static settle (m_eff*g = 810 N) glows at ~54%.
-            custom float lunco:param:load_ref = 1500.0
+            # The glow ramp's WARM and HOT stops (the cold stop is the bound
+            # material's emissive). `warm_at` is the load fraction where amber
+            # peaks: the static settle (m_eff*g = 810 N against the model's
+            # 1500 N rating) lands at 0.54, so a parked lander sits amber and
+            # only the impact transient pushes into red. Full-scale itself is
+            # the MODEL's `load_rated` — not repeated here.
+            custom float lunco:param:warm_at = 0.55
+            custom float lunco:param:warm_r = 4.2
+            custom float lunco:param:warm_g = 2.6
+            custom float lunco:param:warm_b = 0.2
+            custom float lunco:param:hot_r = 5.0
+            custom float lunco:param:hot_g = 0.35
+            custom float lunco:param:hot_b = 0.1
+            # Authored length MUST match the leg's xformOp:scale.y — the
+            # actuator rebuilds the strut from this every tick, so a stale
+            # default silently restores the old geometry.
+            custom float lunco:param:len = 7.05
             custom float lunco:param:bx = 0.0
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = -5.5
