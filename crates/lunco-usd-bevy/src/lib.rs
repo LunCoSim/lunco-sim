@@ -2864,10 +2864,32 @@ fn attach_programs(
         let inline = reader
             .scalar::<String>(&child, "info:sourceCode")
             .filter(|s| !s.trim().is_empty());
-        let file = reader
+        // Read the ref UNFILTERED first, so the two reasons this loop skips a program
+        // stay distinguishable below: a `.mo`/`.xml` belongs to another engine (normal,
+        // silent), whereas NO recognised source name at all is an authoring mistake.
+        let source_asset = reader
             .asset(&child, "info:sourceAsset")
+            .filter(|s| !s.trim().is_empty());
+        let file = source_asset
+            .clone()
             .filter(|s| s.ends_with(".rhai"));
         if driver_id.is_none() && inline.is_none() && file.is_none() {
+            // A program prim that names its implementation NOWHERE the runtime looks is
+            // silently inert — the failure mode that cost two days on the episode-01
+            // recorder, which authored `lunco:program:sourceAsset` (a name nothing
+            // reads) and so never armed, with no line anywhere saying why. Only the
+            // genuinely-unauthored case warns: a program whose `sourceAsset` this
+            // engine does not run belongs to another one (`.mo` → co-sim) and is
+            // skipped without noise, exactly as before.
+            if source_asset.is_none() {
+                warn!(
+                    "[usd] `LunCoProgram` {} names no implementation — expected one of \
+                     `info:sourceAsset` (a file; the extension picks the engine), \
+                     `info:sourceCode` (inline), or `info:id` (a registered driver). \
+                     The prim is INERT. (`lunco:program:sourceAsset` is read by nothing.)",
+                    child.as_str()
+                );
+            }
             continue;
         }
 

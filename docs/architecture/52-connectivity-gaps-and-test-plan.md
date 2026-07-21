@@ -226,7 +226,9 @@ actuation command (keyboard, API and autopilot all funnel into it), so gating it
 "driving" while possession, cameras and queries stay available.
 
 **The policy is authored rhai, shipped with the course as a `LunCoPolicy` prim** in
-`traverse.usda` (`lunco:policy:sourcePath = @./teleop_policy.rhai@`). A policy is a prim, so
+`traverse.usda` (`info:sourceAsset = @twin://SummerSpaceSchool/sim/tutorials/teleop_policy.rhai@`
+— the same name a `LunCoProgram` and a UsdShade shader use; a `../` relative path is
+rejected by the asset server's `UnapprovedPathMode`). A policy is a prim, so
 it composes, journals, syncs and undoes like any scene edit — and is **retracted when the
 stage goes away**. That scoping is the whole reason:
 
