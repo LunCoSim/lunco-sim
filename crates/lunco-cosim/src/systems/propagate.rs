@@ -240,6 +240,9 @@ pub fn propagate_connections(
     // the whole process and silently dropped every other one, which is exactly
     // how a model that lost ALL of its inputs could look like it had lost one.
     mut reported: Local<std::collections::HashSet<String>>,
+    // The target NAME SET the `reported` dedup was last cleared for. See the reset
+    // below: `rewired` fires far more often than "a new scene".
+    mut last_targets: Local<std::collections::HashSet<String>>,
 ) {
     // Registry is a `Vec` of `Copy` backend fn-pointers; clone it out so the
     // write phase can take `&mut World` without holding a resource borrow.
@@ -258,8 +261,20 @@ pub fn propagate_connections(
     // dedup set — keyed by port name for the process lifetime — would silence a
     // genuine dangling `angle` in the scene you just loaded because some earlier
     // scene already had one.
+    //
+    // But clear on a CHANGED fabric, not on every rebuild. `rewire_usd_connections`
+    // despawns and respawns EVERY `SimConnection` on any structural change — any
+    // prim spawn or despawn anywhere, or any live USD edit — so `rewired` is true
+    // on a large fraction of frames while a scene is streaming in. Resetting the
+    // dedup set there turned a once-per-name report into hundreds of identical
+    // lines per second. Key the reset on the target names actually changing.
     if rewired {
-        reported.clear();
+        let names: std::collections::HashSet<String> =
+            compiled.targets.iter().map(|t| t.name.clone()).collect();
+        if *last_targets != names {
+            reported.clear();
+            *last_targets = names;
+        }
     }
 
     if compiled.targets.is_empty() {
@@ -309,13 +324,43 @@ pub fn propagate_connections(
             }
             None => registry.write_port(world, t.entity, &t.name, acc[i]),
         };
+        // A target on an entity that exposes NO PORT SURFACE AT ALL is not a
+        // dangling wire, and reporting it as one buried the real diagnostic:
+        //
+        // * `demand` on a `Motor_*` and `torque` on a `Gearbox_*` are STRUCTURAL
+        //   endpoints. Those prims' data is folded into `WheelParams` at parse
+        //   time and the runtime path is CommandInputs → DriveMix → wheel port;
+        //   nothing registers a backend for those names, by design. The USD wires
+        //   document the mechanical chain, and they should stay.
+        // * `throttle`, `drive_left`, `drive_right` DO belong to real backends —
+        //   the OBC's command inputs, a `.mo` model's declared inputs — but those
+        //   backends only claim the entity once the model asset finishes loading
+        //   or the control binding lands. Warning during that window described a
+        //   load order, not a fault.
+        //
+        // An entity that exposes ports but not THIS name is the genuine case — a
+        // typo'd or stale wire — and still warns.
+        //
+        // DOWNGRADED, not silenced. `sun_tracker` fails today with exactly this
+        // shape — a model that never publishes `sun_azimuth` — and dropping the
+        // line entirely would have taken the only evidence with it.
+        let has_port_surface = !registry.entity_ports(world, t.entity).is_empty();
         if !written && reported.insert(t.name.clone()) {
-            warn!(
-                "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
-                 (declare the port or fix the wire)",
-                t.name,
-                t.entity
-            );
+            if has_port_surface {
+                warn!(
+                    "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
+                     (declare the port or fix the wire)",
+                    t.name,
+                    t.entity
+                );
+            } else {
+                debug!(
+                    "[cosim] connection targets '{}' on {:?}, which exposes no ports yet — \
+                     value dropped (structural endpoint, or a model still loading)",
+                    t.name,
+                    t.entity
+                );
+            }
         }
     }
 }

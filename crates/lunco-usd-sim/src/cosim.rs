@@ -853,6 +853,14 @@ pub fn rewire_usd_connections(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
+    // ⚠ DO NOT "fix" the short-circuit here by draining `removed` unconditionally.
+    // It looks like a bug — `||` means a frame with any `added` never reads the
+    // removal queue, so those events re-fire and keep `structural` true for several
+    // extra frames. Those extra rewires are LOAD-BEARING: a `.mo` model publishes
+    // its `SimComponent` when its asset finishes loading, which is not a prim spawn
+    // and raises no other rebuild signal, so the trailing rewires are what re-resolve
+    // a self-wire against the model that has just appeared. Draining eagerly makes
+    // `sun_tracker` fail with `yaw = 0` — the wire never binds.
     let structural =
         !added.is_empty() || !id_assigned.is_empty() || removed.read().next().is_some();
     if !structural && !dirty.0 {
