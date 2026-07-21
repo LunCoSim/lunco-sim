@@ -78,8 +78,6 @@ pub struct EntityTreeView {
     pub kids: HashMap<Entity, Vec<Entity>>,
     /// Leaf display label per named entity.
     pub labels: HashMap<Entity, String>,
-    /// Shader-editable entities (those carrying a `ShaderLook`), pinned group, sorted.
-    pub shader_rows: Vec<(Entity, String)>,
     /// Set once the first build runs, so the change-gate forces an initial fill.
     built: bool,
 }
@@ -126,9 +124,6 @@ pub(crate) fn populate_entity_tree_view(
     child_q: Query<(Entity, &ChildOf)>,
     selectable_q: Query<Entity, With<lunco_core::SelectableRoot>>,
     mesh_q: Query<Entity, With<Mesh3d>>,
-    // Classification by INTENT, not by bound material — `ShaderLook` is the thing a
-    // user can edit, and it exists whether or not a renderer bound it.
-    shader_q: Query<(Entity, &Name), With<lunco_materials::ShaderLook>>,
 ) {
     // ── Harvest (read-only).
     // System-owned churn (streamed LOD tiles, globe tiles, scatter) is dropped
@@ -161,17 +156,12 @@ pub(crate) fn populate_entity_tree_view(
     let selectable: HashSet<Entity> = selectable_q.iter().collect();
     let has_mesh: HashSet<Entity> = mesh_q.iter().collect();
 
-    // Shader-editable subset (terrain + props with a custom shader look),
-    // pinned at the top for quick access to the shader params.
-    // Same system filter: every streamed tile carries a `ShaderLook`, so without
-    // it this "pinned" group is hundreds of `LodTile d3 4,7` rows.
-    let mut shader_rows: Vec<(Entity, String)> = shader_q
-        .iter()
-        .filter(|(e, _)| !system.contains(e))
-        .map(|(e, n)| (e, leaf(n.as_str())))
-        .collect();
-    shader_rows.sort_by(|a, b| a.1.cmp(&b.1));
-
+    // NOTE: there is deliberately no separate "shader materials" group any more.
+    // Every `ShaderLook` entity is already a mesh in the tree below, so the pinned
+    // group was the same objects listed twice — and since every streamed terrain
+    // tile carries a `ShaderLook`, it was mostly LOD churn. Select the object in
+    // the tree; its shader params are in the Inspector as before.
+    //
     // Build the display tree: each named entity's parent is its nearest named
     // ancestor (unnamed wrappers collapse away), giving rover→wheel nesting
     // instead of a flat alphabetical dump.
@@ -225,13 +215,12 @@ pub(crate) fn populate_entity_tree_view(
     view.roots = roots;
     view.kids = pruned;
     view.labels = labels;
-    view.shader_rows = shader_rows;
     view.built = true;
 }
 
 /// Run condition for [`populate_entity_tree_view`]: rebuild only when the scene
 /// topology that the tree depends on changes — names/hierarchy added or
-/// modified (`Changed` includes `Added`), the interesting/shader marker sets
+/// modified (`Changed` includes `Added`), the interesting marker sets
 /// gain members, or any of those components are removed (covers despawns). The
 /// `Local` flag forces one initial build (a freshly-added system does not see
 /// pre-existing entities as `Changed`). On a quiescent scene this returns
@@ -249,22 +238,14 @@ pub(crate) fn scene_topology_changed(
     added: Query<
         (),
         (
-            Or<(
-                Added<Mesh3d>,
-                Added<lunco_core::SelectableRoot>,
-                Added<lunco_materials::ShaderLook>,
-            )>,
+            Or<(Added<Mesh3d>, Added<lunco_core::SelectableRoot>)>,
             Without<lunco_core::SystemManaged>,
         ),
     >,
     added_system: Query<
         (),
         (
-            Or<(
-                Added<Mesh3d>,
-                Added<lunco_core::SelectableRoot>,
-                Added<lunco_materials::ShaderLook>,
-            )>,
+            Or<(Added<Mesh3d>, Added<lunco_core::SelectableRoot>)>,
             With<lunco_core::SystemManaged>,
         ),
     >,
@@ -272,7 +253,6 @@ pub(crate) fn scene_topology_changed(
     mut rm_child: RemovedComponents<ChildOf>,
     mut rm_mesh: RemovedComponents<Mesh3d>,
     mut rm_sel: RemovedComponents<lunco_core::SelectableRoot>,
-    mut rm_shader: RemovedComponents<lunco_materials::ShaderLook>,
 ) -> bool {
     // Drain removal buffers every frame (keeps them from accumulating) and note
     // whether anything relevant was removed. A removed entity can no longer be
@@ -286,8 +266,7 @@ pub(crate) fn scene_topology_changed(
     let removed = drained(&mut rm_name.read())
         | drained(&mut rm_child.read())
         | drained(&mut rm_mesh.read())
-        | drained(&mut rm_sel.read())
-        | drained(&mut rm_shader.read());
+        | drained(&mut rm_sel.read());
     let system_churn =
         settings.show_system && (!changed_system.is_empty() || !added_system.is_empty());
     let run = !*first
@@ -359,8 +338,8 @@ fn render_node(
 }
 
 /// A selectable entity label: single click selects, double click also flags it
-/// for camera focus. Shared by the tree nodes and the flat shader group so the
-/// click/double-click behaviour stays identical everywhere.
+/// for camera focus. Shared by every row in the tree so the click/double-click
+/// behaviour stays identical at every depth.
 fn select_label(
     ui: &mut egui::Ui,
     entity: Entity,
@@ -404,31 +383,14 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             return;
         };
 
-        // ONE panel-level ScrollArea owning every row — the shader group included.
-        // With the group outside it, an expanded materials list pushed the tree
-        // past the panel rect with no way to reach the bottom entries.
-        // `auto_shrink([false; 2])` makes the area claim the panel's full height
-        // instead of shrinking to content (a shrunk area never scrolls).
+        // ONE panel-level ScrollArea owning every row. `auto_shrink([false; 2])`
+        // makes the area claim the panel's full height instead of shrinking to
+        // content — a shrunk area never scrolls, which is why a long tree ran off
+        // the bottom of the panel with no way to reach it.
         egui::ScrollArea::vertical()
             .id_salt("entity_list_scroll")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                // Pinned shader-materials group.
-                if !view.shader_rows.is_empty() {
-                    egui::CollapsingHeader::new("🎨 Shader materials")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            ui.label(egui::RichText::new("Edit params in the Inspector").weak());
-                            for (e, label) in &view.shader_rows {
-                                select_label(
-                                    ui, *e, label, &selected, &mut to_select, &mut to_focus,
-                                );
-                            }
-                        });
-                    ui.separator();
-                }
-
-                // The hierarchy.
                 for &root in &view.roots {
                     render_node(ui, root, view, &selected, &mut to_select, &mut to_focus);
                 }
