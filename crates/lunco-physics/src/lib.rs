@@ -54,6 +54,21 @@ impl PhysicsHolds {
     pub const TERRAIN_READY: &'static str = "terrain-ready";
     /// Obstacle-field regeneration settle window (`lunco-obstacle-field`).
     pub const OBSTACLE_FIELD: &'static str = "obstacle-field";
+    /// A co-simulation model has not finished its first compile
+    /// (`lunco-modelica`).
+    ///
+    /// A cosim model is part of the vehicle, not decoration: a lander's guidance,
+    /// a rover's motor controller. Integrating before it exists does not merely
+    /// delay it — it simulates a DIFFERENT vehicle, one whose controller outputs
+    /// nothing, and the wires into it are dropped as unknown ports because the
+    /// stepper that declares them has not been installed. A powered descent
+    /// becomes a free fall, and by the time the compile lands (seconds, when MSL
+    /// has to load) the vehicle it was meant to fly is already wreckage.
+    ///
+    /// Held only until each model's first compile SETTLES — success or failure.
+    /// A model that fails to compile releases the hold and reports itself; the
+    /// world must not be frozen by a broken model.
+    pub const COSIM_MODELS: &'static str = "cosim-models";
     /// A scripted cutscene / offline recording is choosing when the world moves.
     ///
     /// Held, physics is frozen but `Time<Virtual>` keeps running, so `FixedUpdate` —

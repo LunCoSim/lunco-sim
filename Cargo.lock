@@ -7191,6 +7191,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
+ "lunco-physics",
  "lunco-scripting",
  "lunco-settings",
  "lunco-storage",
