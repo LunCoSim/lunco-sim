@@ -136,11 +136,19 @@ Three stages, first failure short-circuits:
 
 `info.wheel_prims` lists each wheel with `ok` and, when failing, `missing`.
 
-> Two things it does **not** catch: binary leaf references (`.glb`/`.obj`/`.stl`
-> are not layers, so a broken mesh path passes), and suspension-inherited wheel
+> Three things it does **not** catch: binary leaf references (`.glb`/`.obj`/`.stl`
+> are not layers, so a broken mesh path passes); suspension-inherited wheel
 > attrs — the reader is called with no attachment suspension, so a wheel that
 > only validates once its suspension arc composes at spawn time is judged
-> without it.
+> without it; and **collider geometry**, which is where mechanism bugs live.
+>
+> That last one is a limit worth knowing. Validation is per-prim and
+> schema-shaped, so it cannot see that two colliders on the same vehicle overlap,
+> or that a strut hangs lower than the foot that is supposed to carry it — facts
+> about composed transforms and extents, not about attributes. Clearance is a
+> **runtime** check: run the scene under `scene_test` and assert the mechanism
+> moved (see [`author-usd-physics`](../author-usd-physics/SKILL.md#2-a-prismatic-joint-carries-moment)).
+> A vehicle can validate perfectly and still land on its shins.
 
 ### `.wgsl` — cannot fail, read the warnings
 

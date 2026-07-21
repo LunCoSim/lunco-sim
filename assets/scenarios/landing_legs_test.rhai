@@ -109,6 +109,26 @@ fn strut_strokes(springs) {
     out
 }
 
+/// Each strut's angular-lock error, in degrees — see `joint_lock_error_deg`.
+///
+/// A leg that BENDS instead of stroking carries the vehicle on a constraint the
+/// joint is supposed to hold rigid, and the spring never feels the landing. That
+/// is invisible in position, height and tilt: the vehicle looks perfectly landed.
+fn frame_errors(hull, legs) {
+    // `localRot0 * physics:axis`, per leg: the free axis in the HULL's frame.
+    let a0 = [[0.42262, -0.90631, 0.0], [-0.42262, -0.90631, 0.0],
+              [0.0, -0.90631, 0.42262], [0.0, -0.90631, -0.42262]];
+    // `localRot1 * physics:axis`: every leg authors `localRot1` as the bare 180°
+    // flip — the rake lives in the leg's own transform — so this is -Y for all four.
+    let a1 = [0.0, -1.0, 0.0];
+    let out = [];
+    for i in 0..legs.len() {
+        let d = joint_lock_error_deg(hull, a0[i], legs[i], a1);
+        if d < 0.0 { out.push(()); } else { out.push(r4(d)); }
+    }
+    out
+}
+
 fn on_tick(me) {
     if this.phase == "done" { return; }
 
@@ -141,6 +161,7 @@ fn on_tick(me) {
         for v in x { if v == () { xr.push(0.0); } else { xr.push(v); } }
         row(this.t, y, tilt, fr, xr);
         print("[legs]     pad_y=" + ys(this.pads) + "  leg_y=" + ys(this.legs));
+        print("[legs]     frame_err_deg=" + frame_errors(this.hull, this.legs));
         this.next_sample = this.t + this.sample_s;
     }
 
@@ -163,6 +184,7 @@ fn on_tick(me) {
                 world_pos(this.legs[0]), world_pos(this.legs[1]),
                 world_pos(this.legs[2]), world_pos(this.legs[3]),
             ],
+            frame_err: frame_errors(this.hull, this.legs),
         });
     }
 }
@@ -191,6 +213,20 @@ fn on_tick(me) {
 //                    the largest. A leg reading ~0 while its neighbours carry
 //                    the vehicle is a dead joint — the failure that looks most
 //                    like a working scene in a screenshot.
+//
+//   struts COMPRESS  every stroke < 0, because the axis points hull→foot and the
+//                    ground pushes the foot back toward the hull. Force alone is
+//                    not enough: a strut jammed against a limit stop can report a
+//                    plausible reaction while never moving.
+//
+//   the slider slid  the prismatic's own angular lock (`rot0·localRot0 ==
+//                    rot1·localRot1`) still holds at rest. This is the check that
+//                    catches a gear which settles by BENDING rather than
+//                    stroking — the vehicle looks landed and level, the hull sits
+//                    at a believable height, and the springs are carrying nothing
+//                    because the load never reached the axial DOF. It caught the
+//                    strut-collider grounding bug (see the pad-depth note in
+//                    descent_lander.usda), and nothing else in this file did.
 fn verdict(s) {
     let f = [];
 
@@ -226,11 +262,36 @@ fn verdict(s) {
         }
     }
 
+    // The struts must have SHORTENED. A leg pinned at a limit stop reports a
+    // reaction it is not developing, so travel is checked separately from load.
+    for i in 0..4 {
+        let x = s.strokes[i];
+        if x != () {
+            f.push(t_true(x < -0.005,
+                "strut " + names[i] + " did not compress (" + r4(x) + " m). The axis " +
+                "points hull→foot, so a loaded leg reads NEGATIVE; ~0 means the " +
+                "vehicle's weight is reaching the ground through something other " +
+                "than the spring"));
+        }
+    }
+
+    // The slider must still be a slider at rest.
+    for i in 0..4 {
+        let e = s.frame_err[i];
+        if e != () {
+            f.push(t_range(e, 0.0, 1.0,
+                "strut " + names[i] + " angular-lock error (deg) — the gear is " +
+                "settling by bending the prismatic's rotational constraint " +
+                "instead of stroking along it"));
+        }
+    }
+
     print("[legs] ── results ──────────────────────────────────────────");
     print("[legs]   hull y      " + r2(s.hull_y) + " m");
     print("[legs]   hull tilt   " + r2(s.tilt) + " deg");
     print("[legs]   strut loads " + s.forces);
     print("[legs]   strut stroke " + s.strokes);
+    print("[legs]   frame err   " + s.frame_err + " deg");
     print("[legs]   peak strut  " + r2(s.peak_force) + " N");
 
     report_verdict(f, "LANDING LEGS", "LANDING_LEGS");

@@ -422,3 +422,37 @@ thermal → `tr_bdf2`, `tol=1e-3`, `dt=3600`), the **known-failing models** tabl
 (don't tune solvers for structural rumoca gaps), and the ranked
 rumoca/lunco-modelica backlog. Shortcut: a bit-identical `fail_t` across
 tolerance sweeps is an IC-solve degeneracy, not a tunable.
+
+## 10. Diagnosing a mechanism that misbehaves
+
+A mechanism failure names itself badly. "The spring loads the wrong way", "the
+joint's sign is inverted", "the limits must be backwards" — these describe a
+*reading*, not a cause, and acting on the reading is how a compensating sign flip
+gets committed. Two readings that look identical from a port:
+
+- a DOF that is **jammed** (nothing reaches it), and
+- a DOF that is **reversed** (the load reaches it with the wrong sign).
+
+Separate them before touching any authored number.
+
+**Isolate by single variable, and let the measurement kill the hypothesis.** One
+change per run, against a rig that already works. Hypotheses that feel compelling
+and are cheap to refute — change a mass 20× for solver conditioning, halve μ for
+friction, widen one limit for a boundary. A behaviour invariant to mass and
+friction is *geometric*, and geometry means contact or frame.
+
+**Verify the load path, not just the state.** A vehicle at a believable height,
+level and at rest, proves nothing about *how* it is held up. Check that the
+element you designed to carry the load is carrying it: sum what the springs report
+and compare it against the weight. When they disagree, something rigid is in the
+path.
+
+**Trust a second, independent measurement over a better argument.** Derive the
+same quantity two ways — a port and raw world positions, a constraint's residual
+from each body separately — and compare. A port and a solver that share a bug
+agree with each other perfectly. This is what turns "I think the axis is wrong"
+into "the axis is right and the strut never moved".
+
+**Correct the record.** A wrong diagnosis written into a doc or skill costs more
+than the bug did, because the next reader spends their budget on your dead end.
+When a documented cause turns out to be wrong, rewrite it — do not append.

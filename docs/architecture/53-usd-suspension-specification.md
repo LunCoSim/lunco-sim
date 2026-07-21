@@ -34,6 +34,36 @@ pose, and therefore `force` at exactly 0 until something compresses the strut.
 example. Anything downstream that needs the load — a strut's glow, a touchdown
 check — reads that `force` port, never a second copy of the spring law.
 
+### 0.1 A joint-drive strut is only as good as its foot
+
+The two mechanisms fail differently, and this is the difference that matters.
+
+A raycast wheel's spring is fed by a **ray**, so it is immune to what the rest of
+the vehicle touches: nothing else can intercept the load. A joint-drive strut is
+fed by **ordinary contacts**, so it competes with every other collider on the leg.
+Give the leg a second way to reach the ground and that path takes the load, because
+it is rigid and the spring is not — and it latches on the first frame it grazes.
+
+Consequences that are properties of the mechanism, not of any one asset:
+
+- **The foot must be the leg's only ground contact, by a margin no small rotation
+  can close.** A raked box strut's bottom corner hangs `half_thickness · sin(rake)`
+  below its tip, so a foot centred on that tip clears it by almost nothing. Size
+  the foot to hang below the strut, not to straddle it.
+- **Half-measures invert.** Deepening a foot that stays centred on the tip makes it
+  worse: reaching the ground then demands a larger leg rotation, which brings the
+  strut down faster than the foot drops.
+- **A prismatic carries moment**, so a leg denied its axial DOF absorbs the landing
+  by bending its angular lock instead. The vehicle ends up level, at a plausible
+  height, at rest — and the spring reads nothing.
+
+The observable contract, and what `landing_legs_test` asserts: struts **compress**
+(negative `displacement`, since the axis points chassis→foot), and each joint's
+angular lock still holds at rest. Height and tilt do not distinguish a gear that
+absorbed a landing from one that bent under it; those two do. The prelude's
+`joint_lock_error_deg` computes the residual from the two bodies' orientations
+independently, so it cannot share a bug with the port it is checking.
+
 ---
 
 ## 1. The Omniverse/PhysX Vehicle Schema Specification

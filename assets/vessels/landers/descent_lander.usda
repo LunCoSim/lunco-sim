@@ -980,9 +980,33 @@ def Xform "DescentLander" (
     # non-uniform `xformOp:scale` (0.15, 7.05, 0.15) that a child pad would
     # inherit and be crushed by, so the weld is expressed as physics, where it
     # belongs, instead of as hierarchy.
-    # Lowest point is the pads (y=-5.0). Both struts and pads carry colliders, so
-    # a tipped-over lander catches on its legs instead of the struts clipping
-    # through terrain (and a rover cannot drive through a leg).
+    # Both struts and pads carry colliders, so a tipped-over lander catches on its
+    # legs instead of the struts clipping through terrain (and a rover cannot drive
+    # through a leg).
+    #
+    # THE PAD IS A DISH HUNG BELOW THE STRUT'S TIP, not a wafer centred on it, and
+    # that is a load-path requirement rather than a styling one. The footpad has to
+    # be the leg's ONLY ground contact by a margin no solver tolerance and no small
+    # rotation can close.
+    #
+    # The strut is a box raked 25°, so its bottom corner reaches 0.075*sin 25 =
+    # 0.032 m below its tip. Centre a 0.08 m pad on that tip and its contact face
+    # sits 0.040 m down — SIX MILLIMETRES clear of the corner, on an eleven-metre
+    # vehicle. Touchdown tips the leg a fraction of a degree, the corner takes the
+    # ground, and that rigid contact LATCHES: the vehicle stands on its shins. The
+    # struts then read 0 N at 0 stroke while carrying a lander, and the gear settles
+    # by bending the prismatic's angular lock ~2° instead of sliding along it. It
+    # presents as a sign error in the joint — as though the spring were being loaded
+    # the wrong way — and it is nothing of the kind.
+    #
+    # The loop is self-reinforcing, which is why half-measures fail: a deeper pad
+    # centred on the tip needs a LARGER leg rotation to reach the ground, and that
+    # rotation brings the corner down faster than the pad drops.
+    #
+    # h = 0.30 with the centre 0.15 m down-axis puts the pad's top face at the
+    # strut's tip and its contact face 0.267 m below the corner. `landing_legs_test`
+    # asserts the consequences — compression NEGATIVE, and the angular lock still
+    # holding at rest — because a gear that settles by bending looks landed.
     #
     # The SPRING is the joint's own linear drive — `drive:linear:physics:stiffness`
     # and `:damping`, in SI, integrated by avian. Rust owns the dynamics; there is
@@ -1045,17 +1069,17 @@ def Xform "DescentLander" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # The pad rides with its LEG, not with the hull — it is welded to
-        # LegPX by PadPX_Gimbal below. Cylinder r = 0.4, h = 0.08, m = 10:
-        #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
+        # The pad rides with its LEG, not with the hull — it is gimballed to
+        # LegPX by PadPX_Gimbal below. Cylinder r = 0.4, h = 0.30, m = 10:
+        #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
         float physics:mass = 10.0
-        float3 physics:diagonalInertia = (0.41, 0.80, 0.41)
+        float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
 
         uniform token axis = "Y"
         double radius = 0.4
-        double height = 0.08
-        double3 xformOp:translate = (5.5, -5.0, 0)
+        double height = 0.3
+        double3 xformOp:translate = (5.5634, -5.1359, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true
@@ -1150,17 +1174,17 @@ def Xform "DescentLander" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # The pad rides with its LEG, not with the hull — it is welded to
-        # LegNX by PadNX_Gimbal below. Cylinder r = 0.4, h = 0.08, m = 10:
-        #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
+        # The pad rides with its LEG, not with the hull — it is gimballed to
+        # LegNX by PadNX_Gimbal below. Cylinder r = 0.4, h = 0.30, m = 10:
+        #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
         float physics:mass = 10.0
-        float3 physics:diagonalInertia = (0.41, 0.80, 0.41)
+        float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
 
         uniform token axis = "Y"
         double radius = 0.4
-        double height = 0.08
-        double3 xformOp:translate = (-5.5, -5.0, 0)
+        double height = 0.3
+        double3 xformOp:translate = (-5.5634, -5.1359, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true
@@ -1192,17 +1216,17 @@ def Xform "DescentLander" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # The pad rides with its LEG, not with the hull — it is welded to
-        # LegPZ by PadPZ_Gimbal below. Cylinder r = 0.4, h = 0.08, m = 10:
-        #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
+        # The pad rides with its LEG, not with the hull — it is gimballed to
+        # LegPZ by PadPZ_Gimbal below. Cylinder r = 0.4, h = 0.30, m = 10:
+        #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
         float physics:mass = 10.0
-        float3 physics:diagonalInertia = (0.41, 0.80, 0.41)
+        float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
 
         uniform token axis = "Y"
         double radius = 0.4
-        double height = 0.08
-        double3 xformOp:translate = (0, -5.0, 5.5)
+        double height = 0.3
+        double3 xformOp:translate = (0, -5.1359, 5.5634)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true
@@ -1234,17 +1258,17 @@ def Xform "DescentLander" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # The pad rides with its LEG, not with the hull — it is welded to
-        # LegNZ by PadNZ_Gimbal below. Cylinder r = 0.4, h = 0.08, m = 10:
-        #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
+        # The pad rides with its LEG, not with the hull — it is gimballed to
+        # LegNZ by PadNZ_Gimbal below. Cylinder r = 0.4, h = 0.30, m = 10:
+        #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
         float physics:mass = 10.0
-        float3 physics:diagonalInertia = (0.41, 0.80, 0.41)
+        float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
 
         uniform token axis = "Y"
         double radius = 0.4
-        double height = 0.08
-        double3 xformOp:translate = (0, -5.0, -5.5)
+        double height = 0.3
+        double3 xformOp:translate = (0, -5.1359, -5.5634)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true

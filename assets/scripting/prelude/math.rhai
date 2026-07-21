@@ -68,3 +68,28 @@ fn is_tipped(id, max_deg) {
     t >= 0.0 && t > max_deg
 }
 
+
+/// Error, in DEGREES, in the angular lock a non-spherical joint holds between
+/// two bodies — or -1.0 if either body has no orientation.
+///
+/// Every avian joint but the spherical constrains relative orientation, holding
+/// `rot0 · localRot0 == rot1 · localRot1`. Both sides are computable from the
+/// bodies' own world orientations, so the angle between them IS the constraint's
+/// residual: ~0 while the joint is doing its job.
+///
+/// `axis0` / `axis1` are the joint's free axis expressed in each body's LOCAL
+/// frame — i.e. `localRot0 * physics:axis` and `localRot1 * physics:axis`, the
+/// authored quantities, computed once by hand from the USD.
+///
+/// This is the only way a scenario can tell a mechanism that ABSORBED a load
+/// from one that BENT under it. Both look identical in position, height and
+/// tilt; a suspension whose spring reads no load while the vehicle stands on it
+/// has usually found a rigid path, and the bend is where it went.
+fn joint_lock_error_deg(body0, axis0, body1, axis1) {
+    let q0 = world_rotation(body0);
+    let q1 = world_rotation(body1);
+    if q0 == () || q1 == () { return -1.0; }
+    let deg = angle_deg(qrot(q0, axis0), qrot(q1, axis1));
+    if deg == () { return -1.0; }
+    deg
+}

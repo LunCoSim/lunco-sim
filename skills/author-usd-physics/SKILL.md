@@ -97,33 +97,79 @@ A `PhysicsPrismaticJoint` locks all three rotational DOF. It is a slider, not a
 pin. This has a consequence that is easy to miss and impossible to see in a
 screenshot:
 
-**Splayed legs joined by prismatics form a rigid frame.** Four raked struts,
-each moment-connected to the hull, close through the ground into a portal frame
-whose outward thrusts balance internally through the hull. The vehicle stands
-up, looks correct, and the springs never see the load — measured ~20 N against
-875 N/leg of vehicle weight, with stroke reading `0.0000` forever. Lowering
-ground friction changes nothing, because nothing needs to slide.
+Because it carries moment, a sprung leg has **two** ways to absorb a landing:
+slide along its axis, which is the one you designed, or bend its angular lock,
+which you did not. The second is always available, and the solver will take it
+whenever a stray contact makes it cheaper.
 
-**A sprung leg needs a moment-free pivot.** Model it as joints in series with a
-small intermediate body:
+### The failure: a second contact steals the load path
 
+A suspension has exactly one intended load path — foot → spring → chassis. Give
+the leg **any** second way to reach the ground and that path wins, because it is
+rigid and the spring is not. A contact that only *sometimes* touches is worse
+than one that always does: it latches on the first frame it grazes and never
+lets go.
+
+The signature is unmistakable once you know it:
+
+- `displacement` reads `0.0000` in **every** regime — free fall, impact, rest.
+  Touchdown changes nothing.
+- `force` reads near zero while the vehicle is demonstrably standing on the leg.
+- The vehicle looks perfect: level, at a believable height, at rest.
+- The joint's **angular lock is bent by a degree or two** and stays there.
+
+That last one is the tell, and nothing else in a scene reports it. The gear
+settled by *bending* rather than *stroking*, so the load never reached the axial
+DOF the spring lives on.
+
+**Ground clearance is a load-path property, not a styling one.** A raked box
+strut's bottom corner hangs `half_thickness * sin(rake)` below its tip, so a
+footpad centred on that tip clears it by almost nothing. Millimetres of margin on
+a metres-long vehicle is zero margin: a fraction of a degree of tip puts the
+strut on the ground. Size the foot so it is the *only* thing that can touch, by a
+margin no small rotation can close — and beware that half-measures make it worse,
+because a deeper foot demands a larger leg rotation to reach the ground, which
+brings the strut down faster than the foot drops.
+
+### Diagnosing it
+
+Measure the angular lock directly. A prismatic holds `rot0 · localRot0 == rot1 ·
+localRot1`, and both sides are readable from the bodies' world orientations, so
+the angle between them **is** the constraint's error:
+
+```rhai
+// per leg: the joint's free axis, computed from each body independently
+let from_chassis = qrot(world_rotation(hull), localRot0_times_Y);
+let from_strut   = qrot(world_rotation(leg),  localRot1_times_Y);
+angle_deg(from_chassis, from_strut)   // ~0 healthy; >1 means it is bending
 ```
-hull --PhysicsSphericalJoint--> pivot --PhysicsPrismaticJoint(spring)--> strut --PhysicsSphericalJoint--> pad
-```
 
-Then the strut is a two-force member and its axial spring takes the load.
+Then bisect the contacts. Disable one collider at a time and re-run — the one
+whose removal restores the stroke is the thief. Do **not** start from the joint:
+the joint is usually innocent, and its authoring is where the time goes.
 
-**Sanity check before believing a suspension works:** read the joint's
-`displacement` and `force` ports. A stroke that is exactly `0.0000` in every
-regime — free fall, impact, rest — is a pinned DOF, not a stiff spring.
+Two hypotheses that look compelling here and are worth ruling out by measurement
+before you spend a day on either: solver conditioning (change a body's mass by
+20× — if nothing moves, it is not conditioning) and friction (drop μ by 2× — same
+test). A steady error that is invariant to both is *geometric*, and geometry means
+contact.
 
 ### Where a joint's rest position sits
 
 Anchors left unauthored are DERIVED from the transform hierarchy, which puts
-displacement at exactly 0 in the authored rest pose. If the travel limits are
-`-0.8 .. 0.0`, the joint therefore rests **on its upper limit** and can only
-travel one way. Check that the direction the load actually pushes is the
-direction the limits allow.
+displacement at exactly 0 in the authored rest pose. A leg authored `-0.8 .. 0.0`
+therefore rests **on** its upper limit and travels one way only — by design: 0 is
+the fully-extended pose the geometry is drawn in, and the ground can only
+compress it.
+
+So a stroke pinned at `0.0000` is not evidence the limits are backwards. Check
+the load path first. Widening the limit to make a jammed leg move buries the
+actual defect under a range the mechanism never needed.
+
+**Anchors are also why you cannot freely move a body to fix clearance.** The
+anchor is derived from the body's origin; move the origin and you move the
+joint's zero, silently preloading the spring by the axial component of the shift.
+Change the part's *extent*, or the mating part, not the sprung body's origin.
 
 ## 3. Gravity is authored per scene
 
@@ -191,7 +237,8 @@ scene-derived state and do not register it, you have added a leak.
 | `origin.is_finite()` panic in `obvhs` | a body reached ±inf; a raycast was issued from it. The *cause* is upstream — find the first `body left the world` |
 | `[physics] body left the world: …` | first escapee names the mechanism that diverged. Bodies at the end of a lever arm (pads, wheels) escape first |
 | `joint … starts violated by … rad` | a joint frame; see §1 |
-| stroke reads exactly `0.0000` | a pinned DOF — a limit boundary (§2) or a moment-carrying joint |
+| stroke reads exactly `0.0000` in every regime | a second contact carrying the load (§2). Measure the joint's angular-lock error before touching its limits |
+| a spring loads the "wrong way" | almost never the joint. A jammed DOF and a reversed one look identical from the port; §2 tells them apart |
 | a scene behaves like the previous one | a resource that outlived its scene (§4) |
 
 ## Verify it, headlessly
