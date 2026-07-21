@@ -128,6 +128,12 @@ impl Plugin for SandboxEditUiPlugin {
                     has_tour: false,
                 },
             )
+            // TODO(perspectives): re-introduce 🏔 Terrain and 🧩 Object Builder once
+            // the authoring flows behind them are ready. Registration is commented
+            // out — NOT deleted: `TerrainPerspective` / `ObjectBuilderPerspective`
+            // and their help entries stay intact, so re-enabling is uncommenting
+            // this block.
+            /*
             .register_perspective(TerrainPerspective)
             .register_perspective_help(
                 PerspectiveId("terrain_sculpt"),
@@ -172,10 +178,18 @@ impl Plugin for SandboxEditUiPlugin {
                     ],
                     has_tour: false,
                 },
-            );
+            )
+            */
+            ;
 
         // WP-8: the Entity list is a pure view over `EntityTreeView`, derived by
         // a change-gated producer instead of being rebuilt every egui frame.
+        // …and its "show system entities" filter is a persisted pref exposed in the
+        // workbench Settings menu, not a panel-local toolbar.
+        lunco_settings::AppSettingsExt::register_settings_section::<
+            entity_list::EntityListSettings,
+        >(app);
+        app.add_systems(Startup, entity_list::register_settings_menu);
         app.init_resource::<entity_list::EntityTreeView>().add_systems(
             Update,
             entity_list::populate_entity_tree_view

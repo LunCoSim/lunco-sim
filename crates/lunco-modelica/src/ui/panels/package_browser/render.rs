@@ -20,6 +20,11 @@ impl Panel for PackageBrowserPanel {
     fn id(&self) -> PanelId { PanelId("modelica_package_browser") }
     fn title(&self) -> String { "📚 Package Browser".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    /// Not listed: legacy browser, superseded by the Twin browser and docked by
+    /// no perspective. Still registered so old saved layouts resolve.
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Hidden
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let active_path_str = ctx

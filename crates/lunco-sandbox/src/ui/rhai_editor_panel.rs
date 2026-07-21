@@ -125,6 +125,10 @@ impl Panel for RhaiEditorPanel {
     fn title(&self) -> String {
         "📜 Behaviour".into()
     }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
+
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center
     }

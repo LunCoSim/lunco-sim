@@ -237,6 +237,9 @@ impl Panel for Inspector {
     fn id(&self) -> PanelId { PanelId("sandbox_inspector") }
     fn title(&self) -> String { "Inspector".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

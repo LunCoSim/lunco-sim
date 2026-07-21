@@ -43,6 +43,10 @@ impl Panel for FilesPanel {
         "Files".to_string()
     }
 
+    fn menu_group(&self) -> crate::PanelMenuGroup {
+        crate::PanelMenuGroup::Design
+    }
+
     fn default_slot(&self) -> PanelSlot {
         // Hidden by default: the Twin Browser panel now renders the
         // Files section inline as a sibling of the Modelica section,

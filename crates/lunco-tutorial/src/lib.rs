@@ -738,6 +738,10 @@ impl Panel for TutorialsPanel {
     fn title(&self) -> String {
         "Tutorials".to_string()
     }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Tools
+    }
+
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::SideBrowser
     }

@@ -112,7 +112,7 @@ pub use workspace_state::{
 };
 pub use render_robustness::preferred_wgpu_settings;
 
-pub use panel::{InstancePanel, Panel, PanelCtx, PanelId, PanelSlot, TabId};
+pub use panel::{InstancePanel, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot, TabId};
 
 /// SystemSet that runs the main workbench egui pass. Use
 /// `.after(WorkbenchRenderSet)` for systems that need to read
@@ -3001,11 +3001,13 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     ui.close();
                 }
                 ui.separator();
-                ui.label(egui::RichText::new("Panels").weak().small());
-                // List every registered panel with a checkbox showing
-                // whether it's currently in the dock. Clicking a closed
-                // panel re-docks it in its default slot.
-                let panels_meta: Vec<(PanelId, String, PanelSlot, bool)> = {
+                // Panels, grouped by the workflow each one declares
+                // (`Panel::menu_group`) instead of one flat alphabetical dump.
+                // Each row is a checkbox showing whether the panel is currently
+                // in the dock; clicking a closed one re-docks it in its default
+                // slot. `Hidden` panels never appear (fixtures like the
+                // viewport, legacy entries, instance-tab facets).
+                let panels_meta: Vec<(PanelMenuGroup, PanelId, String, PanelSlot, bool)> = {
                     // Only track singleton tabs for the "Panels" menu —
                     // instance tabs (one per open doc) aren't a menu
                     // concept.
@@ -3017,18 +3019,53 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                             TabId::Instance { .. } => None,
                         })
                         .collect();
-                    let mut sorted: Vec<(PanelId, String, PanelSlot, bool)> = layout
-                        .panels
-                        .values()
-                        .map(|p| {
-                            let id = p.id();
-                            (id, p.title(), p.default_slot(), docked.contains(&id))
-                        })
-                        .collect();
-                    sorted.sort_by(|a, b| a.1.cmp(&b.1));
+                    let mut sorted: Vec<(PanelMenuGroup, PanelId, String, PanelSlot, bool)> =
+                        layout
+                            .panels
+                            .values()
+                            .filter(|p| p.menu_group() != PanelMenuGroup::Hidden)
+                            .map(|p| {
+                                let id = p.id();
+                                (
+                                    p.menu_group(),
+                                    id,
+                                    p.title(),
+                                    p.default_slot(),
+                                    docked.contains(&id),
+                                )
+                            })
+                            .collect();
+                    // Group first, then title — but sort titles on their FIRST
+                    // ALPHANUMERIC char: sorting on the raw string put every
+                    // emoji-prefixed title ("🛠 Tools") in a block after every
+                    // plain one, which is why related panels never sat together.
+                    let sort_key = |t: &str| -> String {
+                        t.chars()
+                            .skip_while(|c| !c.is_alphanumeric())
+                            .collect::<String>()
+                            .to_lowercase()
+                    };
+                    sorted.sort_by(|a, b| {
+                        a.0.cmp(&b.0).then_with(|| sort_key(&a.2).cmp(&sort_key(&b.2)))
+                    });
                     sorted
                 };
-                for (id, title, slot, is_open) in panels_meta {
+                let mut last_group: Option<PanelMenuGroup> = None;
+                for (group, id, title, slot, is_open) in panels_meta {
+                    if last_group != Some(group) {
+                        if last_group.is_some() {
+                            ui.separator();
+                        }
+                        let heading = match group {
+                            PanelMenuGroup::Scene => "Scene",
+                            PanelMenuGroup::Design => "Design",
+                            PanelMenuGroup::Tools => "Tools",
+                            PanelMenuGroup::Other => "Other",
+                            PanelMenuGroup::Hidden => unreachable!("filtered above"),
+                        };
+                        ui.label(egui::RichText::new(heading).weak().small());
+                        last_group = Some(group);
+                    }
                     let mut checked = is_open;
                     if ui.checkbox(&mut checked, title).clicked() {
                         if checked && !is_open {
@@ -3037,6 +3074,16 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                             // the *live* dock without a full rebuild
                             // — rebuild_dock would wipe instance tabs
                             // (model views) the user has open.
+                            //
+                            // A `Floating` default slot has no slot list and no
+                            // dock region, so ticking such a panel used to drop
+                            // it into an arbitrary leaf and lose it on the next
+                            // Reset Layout — a checkbox that did nothing you
+                            // could find. Dock those in the side browser.
+                            let slot = match slot {
+                                PanelSlot::Floating => PanelSlot::SideBrowser,
+                                other => other,
+                            };
                             match slot {
                                 PanelSlot::SideBrowser => {
                                     if !layout.side_browser.contains(&id) {
@@ -3058,7 +3105,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                                         layout.bottom.push(id);
                                     }
                                 }
-                                PanelSlot::Floating => {}
+                                PanelSlot::Floating => unreachable!("remapped above"),
                             }
                             layout.insert_panel_into_dock(id, slot);
                         } else if !checked && is_open {

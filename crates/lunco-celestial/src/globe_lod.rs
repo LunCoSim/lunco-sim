@@ -284,6 +284,8 @@ pub fn update_globe_lod(
                     // treatment as the Sun body mesh.
                     bevy::light::NotShadowCaster,
                     Name::new(format!("Globe tile f{} L{} {},{}", coord.face, coord.level, coord.i, coord.j)),
+                    // Streamed runtime detail — hidden from author-facing lists.
+                    lunco_core::SystemManaged,
                     ChildOf(lod.surface_grid),
                 ))
                 .id();

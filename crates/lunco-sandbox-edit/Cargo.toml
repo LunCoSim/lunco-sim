@@ -31,6 +31,10 @@ lunco-workbench = { path = "../lunco-workbench", optional = true }
 # over it, mirroring lunco-modelica's diagram). Editor-only → optional, on `ui`.
 lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+# Persisted view prefs (Entity list "show system entities") — a `SettingsSection`,
+# not a bespoke file.
+lunco-settings = { path = "../lunco-settings" }
 avian3d = { workspace = true }
 
 big_space.workspace = true

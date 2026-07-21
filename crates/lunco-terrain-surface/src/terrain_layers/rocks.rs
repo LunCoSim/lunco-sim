@@ -218,6 +218,10 @@ impl TerrainLayer for RockScatterLayer {
                     TerrainRock,
                     TerrainScatterEntity,
                     Name::new("TerrainRock"),
+                    // Procedural scatter, re-spawned as the field restreams — runtime
+                    // detail, not authored content. (The *placed* rock below is
+                    // authored and stays visible.)
+                    lunco_core::SystemManaged,
                     Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
                         .with_rotation(Quat::from_rotation_y(p.yaw)),
                     Visibility::Inherited,

@@ -25,6 +25,9 @@ impl Panel for CodePanel {
     fn id(&self) -> PanelId { PanelId("rover_code") }
     fn title(&self) -> String { "📄 Code".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

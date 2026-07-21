@@ -44,6 +44,10 @@ impl Panel for RhaiReplPanel {
     fn title(&self) -> String {
         "🐚 Rhai".into()
     }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Tools
+    }
+
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Bottom
     }

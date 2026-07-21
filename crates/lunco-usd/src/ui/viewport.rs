@@ -667,6 +667,10 @@ impl Panel for UsdViewportPanel {
         "USD Preview".to_string()
     }
 
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
+
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center
     }

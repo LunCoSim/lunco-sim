@@ -345,6 +345,10 @@ impl Panel for CinematicPanel {
     fn title(&self) -> String {
         "🎬 Cinematic".into()
     }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
+
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::SideBrowser
     }
