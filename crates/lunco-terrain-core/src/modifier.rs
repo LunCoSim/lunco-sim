@@ -183,44 +183,78 @@ impl HeightModifier for FlattenModifier {
 /// surface, makes every oracle consumer (tile meshes, colliders, shadow
 /// heightfield, height queries) agree with the sphere:
 ///
-/// * subtracts the sagitta, dropping the surface onto the sphere as `d` grows;
-/// * feathers the composed relief to zero over the outer radial band, so at
-///   `d = half_extent` the terrain sits exactly at sphere + `edge_lift_m`
-///   (a small lift so the last row never z-fights globe tiles);
-/// * beyond `d = half_extent` (the square footprint's corners) the surface is
-///   fully feathered — a sphere-hugging apron that reads as the globe itself.
+/// * subtracts the sagitta at the true radial distance (curvature IS radial);
+/// * feathers the composed RELIEF — the departure from `datum_m`, the site's own
+///   ground elevation — to zero over the crop's outer FRAME, so at the DEM's
+///   boundary the terrain sits at `datum_m` + `edge_lift_m` (a small lift so the
+///   last row never z-fights globe tiles);
+/// * outside the DEM the surface is fully feathered — a sphere-hugging apron at
+///   the site's own elevation.
+///
+/// **The feather is square, because the DEM is square.** It used to run on the
+/// radial distance, which put the whole feather band inside the crop and threw
+/// away its corners: 21% of every DEM ever baked was ramped to the apron despite
+/// having real measured heights, and `d > half_extent` — every corner beyond the
+/// inscribed circle — was discarded outright. A scene authored where its own
+/// survey said the ground was (the Summer Space School rover starts in the NW
+/// corner of its 1 km crop) was standing on invented apron, not on Apollo 15.
+/// Feathering on the Chebyshev distance `max(|x|, |z|)` matches the footprint the
+/// data actually has, so every sample inside the crop keeps its measured height.
+///
+/// **`datum_m` is what makes this safe on an absolute-datum DEM.** LROC/LOLA
+/// products state elevations against the body datum, and the pipeline never
+/// rebases them, so a real site reads −1918 m (Hadley) or +1946 m (the moonbase
+/// ridge) at *every* point — that offset is the site's elevation, not relief.
+/// Feathering `h_in` itself toward zero therefore ramped the whole crop back to
+/// the datum plane across the band: at Hadley the ground climbed 1.9 km between
+/// `d = 300 m` and the crop edge, the scene sat at the bottom of a pit, and
+/// anything authored at its real elevation outside `0.6 · half_extent` (the
+/// rover, the base mast) spawned under the apron with no collider beneath it and
+/// fell forever. Feathering `h_in − datum_m` keeps the interior identical and
+/// lands the apron on the plain the crop was cut from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BodyCurvature {
     /// Body mean radius (metres).
     pub radius_m: f64,
-    /// DEM half side length (metres) — feathering completes at this RADIAL
-    /// distance from the site origin.
+    /// DEM half side length (metres) — feathering completes at this distance
+    /// from the site origin along the dominant axis (the crop's edge).
     pub half_extent_m: f64,
-    /// Height above the sphere at (and beyond) the feathered edge (metres).
+    /// The site's ground elevation (metres, body datum) — the height the apron
+    /// feathers to, and the sphere the sagitta is measured on. Zero for a DEM
+    /// already expressed as height above the datum plane.
+    pub datum_m: f64,
+    /// Height above the apron at (and beyond) the feathered edge (metres).
     pub edge_lift_m: f64,
     /// Radial fraction of `half_extent_m` where the edge feather begins.
     pub feather_from: f64,
 }
 
 impl BodyCurvature {
-    pub fn new(radius_m: f64, half_extent_m: f64) -> Self {
-        // feather_from 0.6: elevated sites (Shackleton ridge ≈ +1.9 km over
-        // the reference sphere) descend the full relief inside the feather
-        // band — a narrow band reads as a mesa cliff wall around the patch.
-        Self { radius_m, half_extent_m, edge_lift_m: 1.0, feather_from: 0.6 }
+    pub fn new(radius_m: f64, half_extent_m: f64, datum_m: f64) -> Self {
+        // feather_from 0.85: what feathers is RELIEF ABOVE THE DATUM — metres,
+        // not the site's elevation — so the band only has to be wide enough to
+        // blend local relief, and every metre it spends is a metre of measured
+        // DEM overwritten with apron. It was 0.6 back when the feather ran to
+        // zero and had a kilometre of datum to swallow.
+        Self { radius_m, half_extent_m, datum_m, edge_lift_m: 1.0, feather_from: 0.85 }
     }
 }
 
 impl HeightModifier for BodyCurvature {
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
-        let d2 = x * x + z * z;
-        // Sphere height below the tangent plane at horizontal distance d
-        // (exact, not the d²/2R approximation — free in f64).
-        let sag = (self.radius_m * self.radius_m - d2).max(0.0).sqrt() - self.radius_m;
+        // The ground rides the sphere at the SITE's radius, not the mean one —
+        // a 1.9 km datum offset changes the sagitta by ~0.1% of itself, but it
+        // keeps the apron on the surface the DEM actually describes.
+        let r = self.radius_m + self.datum_m;
+        // Sphere height below the tangent plane at RADIAL distance d (exact, not
+        // the d²/2R approximation — free in f64). Curvature is radial even though
+        // the feather below is square: they are different questions.
+        let sag = (r * r - (x * x + z * z)).max(0.0).sqrt() - r;
+        let edge = x.abs().max(z.abs()); // Chebyshev — the crop is a square
         let start = self.half_extent_m * self.feather_from;
         let band = (self.half_extent_m - start).max(1e-6);
-        let f = 1.0 - smoothstep((d2.sqrt() - start) / band); // 1 interior → 0 at edge
-        sag + h_in * f + self.edge_lift_m * (1.0 - f)
+        let f = 1.0 - smoothstep((edge - start) / band); // 1 interior → 0 at edge
+        self.datum_m + sag + (h_in - self.datum_m) * f + self.edge_lift_m * (1.0 - f)
     }
     // No `with_min_wavelength` override: planet-scale wavelength, never aliases.
 }
@@ -332,7 +366,7 @@ mod tests {
     #[test]
     fn body_curvature_hugs_sphere_and_feathers_edge() {
         let (r, he) = (1.737e6, 8000.0);
-        let c = BodyCurvature::new(r, he);
+        let c = BodyCurvature::new(r, he, 0.0);
         // Site centre: untouched (full relief, zero sagitta).
         assert!((c.apply(0.0, 0.0, 120.0) - 120.0).abs() < 1e-9);
         // Interior (inside the feather start): relief kept, sagitta subtracted.
@@ -345,6 +379,48 @@ mod tests {
         let sag_e = (r * r - he * he).sqrt() - r;
         assert!((c.apply(he, 0.0, 300.0) - (sag_e + c.edge_lift_m)).abs() < 1e-6);
         assert!((c.apply(0.0, -he, -300.0) - (sag_e + c.edge_lift_m)).abs() < 1e-6);
+    }
+
+    /// The DEM is a square, so its corners carry real measured heights and must
+    /// survive. A radial feather ramped everything past the inscribed circle to
+    /// the apron — 21% of every crop, including the corner the Summer Space
+    /// School twin starts its rover in.
+    #[test]
+    fn body_curvature_feathers_on_the_square_not_the_inscribed_circle() {
+        let (r, he) = (1.737e6, 500.0);
+        let c = BodyCurvature::new(r, he, 0.0);
+        // A corner sample well inside the crop on BOTH axes (Chebyshev 380) but
+        // outside the inscribed circle (radial 537): fully interior, relief kept.
+        let sag = (r * r - (380.0f64 * 380.0 + 380.0 * 380.0)).sqrt() - r;
+        assert!(
+            (c.apply(-380.0, -380.0, 42.0) - (42.0 + sag)).abs() < 1e-6,
+            "a corner inside the square keeps its measured height"
+        );
+        // The frame still feathers: at the crop edge, relief is gone.
+        assert!((c.apply(-he, -he, 42.0) - c.apply(-he, -he, -99.0)).abs() < 1e-9);
+    }
+
+    /// An absolute-datum DEM (Hadley reads ≈ −1918 m at every point) must keep
+    /// its interior EXACTLY and land its apron on the same plain — not ramp
+    /// 1.9 km back up to the datum plane across the feather band, which put the
+    /// rover's authored start under the apron with nothing to stand on.
+    #[test]
+    fn body_curvature_feathers_to_the_site_datum_not_to_zero() {
+        let (r, he, datum) = (1.737e6, 498.0, -1918.0);
+        let c = BodyCurvature::new(r, he, datum);
+        // Interior: relief preserved (sagitta at this scale is sub-millimetre).
+        assert!((c.apply(0.0, 0.0, -1947.6) - -1947.6).abs() < 1e-6);
+        // Outside the crop entirely: the apron. It must land on the site's own
+        // plain — before this it read ≈ +0.9 m, i.e. 1.9 km above the ground the
+        // scene is authored on, with nothing beneath the rover to stand on.
+        let apron = c.apply(-700.0, -700.0, -1917.8);
+        assert!(
+            (apron - (datum + c.edge_lift_m)).abs() < 1.0,
+            "apron must land on the site datum, got {apron}"
+        );
+        // And the relief must be gone out there — the apron is flat, whatever
+        // the (extrapolated) input relief claims.
+        assert!((c.apply(-700.0, -700.0, -1800.0) - apron).abs() < 1e-9);
     }
 
     #[test]

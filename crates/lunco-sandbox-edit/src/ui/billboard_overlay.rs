@@ -29,6 +29,31 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_usd_sim::billboard::{render_billboard, BillboardFacts, UsdBillboard};
 
+/// The egui layer every **world-space overlay** paints into: labels, numbers and
+/// gizmo text that annotate the 3D scene.
+///
+/// It sits in `Order::Background` — the same order the workbench's whole chrome
+/// occupies (`render_layout` builds its root `Ui` on `LayerId::background()`, and
+/// every panel and the dock show into that) — and the overlay systems are ordered
+/// `.before(WorkbenchRenderSet)`, so within that order the overlay layer is
+/// registered first and the chrome paints on top of it.
+///
+/// **That ordering is the fix, not a clip rect.** These overlays used to paint
+/// into `Order::Foreground`, which is *above* all chrome by definition, so a
+/// waypoint's coordinates drew straight across the Inspector in every authoring
+/// perspective. Clipping them to the scene rect would have hidden the symptom
+/// while leaving the layering upside-down; putting them under the chrome is the
+/// structural statement — an opaque panel covers them because it is in front,
+/// a deliberately transparent one lets them show through because the 3D shows
+/// through there too, and neither case needs a rectangle plumbed anywhere.
+///
+/// They still paint over the 3D render itself: Bevy's framebuffer is beneath the
+/// entire egui pass, not an egui layer, so `Order::Background` is as far down as
+/// an overlay can go and still be visible.
+pub fn world_overlay_layer(id: &'static str) -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Background, egui::Id::new(id))
+}
+
 /// Paint every visible [`UsdBillboard`].
 #[allow(clippy::too_many_arguments)]
 pub fn draw_billboard_overlay(
@@ -38,7 +63,7 @@ pub fn draw_billboard_overlay(
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
-    q_bodies: Query<&lunco_celestial::CelestialBody>,
+    registry: Option<Res<lunco_celestial::registry::CelestialBodyRegistry>>,
     mut egui_ctx: bevy_egui::EguiContexts,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
@@ -58,15 +83,20 @@ pub fn draw_billboard_overlay(
 
     // Site anchor + body radius, resolved ONCE — every label on screen shares
     // them, and they cannot change within a frame.
+    //
+    // The radius comes from the body REGISTRY, not from a spawned `CelestialBody`
+    // entity. Celestial content is opt-in per scene: a surface scene that anchors
+    // to the Moon and never asks for a globe (the Summer Space School twin) spawns
+    // no body entity at all, so the entity lookup found nothing and every
+    // `{lat}`/`{lon}`/`{height}` on screen rendered `—`. The registry is the same
+    // source `sync_terrain_body_curvature` reads to curve the DEM, so the label
+    // and the ground now agree on which sphere they are on.
     let site = q_site.iter().next().copied();
-    let radius_m = site.and_then(|a| {
-        q_bodies.iter().find(|b| b.ephemeris_id == a.body).map(|b| b.radius_m)
+    let radius_m = site.zip(registry.as_ref()).and_then(|(a, reg)| {
+        reg.bodies.iter().find(|b| b.ephemeris_id == a.body).map(|b| b.radius_m)
     });
 
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("usd_billboard_overlay"),
-    ));
+    let painter = ctx.layer_painter(world_overlay_layer("usd_billboard_overlay"));
 
     // Collect first so we can paint far-to-near: with no depth buffer, drawing
     // nearest LAST is what keeps a close label on top of a distant one.

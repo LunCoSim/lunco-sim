@@ -42,6 +42,34 @@ impl HeightGrid {
         (2.0 * self.half_extent) / (self.res as f32 - 1.0)
     }
 
+    /// The grid's **datum**: the median height around its border ring — the
+    /// elevation the surrounding body continues at where this crop was cut.
+    ///
+    /// A real DEM states absolute body-datum elevations (Hadley ≈ −1918 m,
+    /// the moonbase ridge ≈ +1946 m) and the pipeline never rebases them, so
+    /// "height above the site" is `height − datum`. The BORDER, not the centre:
+    /// the centre of a crop chosen for a landform is the landform (Hadley's
+    /// centre is 30 m down the crater it was cropped around), and the apron has
+    /// to meet the plain, not the hole. Median, not mean, so a single nodata
+    /// spike or one rim segment cannot drag it.
+    ///
+    /// Cheap and exact — O(border) with one sort of ~4·res samples.
+    pub fn border_datum(&self) -> f64 {
+        let n = self.res;
+        if n == 0 {
+            return 0.0;
+        }
+        let mut ring: Vec<f64> = Vec::with_capacity(4 * n);
+        for i in 0..n {
+            ring.push(self.heights[self.idx(i, 0)]);
+            ring.push(self.heights[self.idx(i, n - 1)]);
+            ring.push(self.heights[self.idx(0, i)]);
+            ring.push(self.heights[self.idx(n - 1, i)]);
+        }
+        ring.sort_by(f64::total_cmp);
+        ring[ring.len() / 2]
+    }
+
     #[inline]
     fn idx(&self, x: usize, z: usize) -> usize {
         z * self.res + x
