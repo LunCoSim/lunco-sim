@@ -179,8 +179,15 @@ fn apply_lint_policy(mut report: ValidationReport, text: &str) -> ValidationRepo
         // shipping it costs one clone of a file already in memory.
         ("source".to_string(), H::str(text.to_string())),
     ];
-    if let Some(extra) = report.lint_facts.take() {
-        facts.push(("subject".to_string(), extra));
+    // The domain's own facts are MERGED IN AT TOP LEVEL, not nested under a key.
+    // A rule must see the identical shape whether it was reached from here or
+    // from `RunLint` on the live scene — nest them here and `facts.bodies` is
+    // suddenly `facts.subject.bodies`, every USD rule silently matches nothing,
+    // and the linter reports a clean bill of health for a broken file. That is
+    // exactly what happened the first time this was wired, and what
+    // `the_deliberately_broken_scene_still_fails_the_same_gate` now pins.
+    if let Some(H::Map(domain_facts)) = report.lint_facts.take() {
+        facts.extend(domain_facts);
     }
 
     for f in lunco_lint::run_lint(&report.kind, H::Map(facts)) {

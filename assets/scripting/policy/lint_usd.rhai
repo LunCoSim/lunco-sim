@@ -58,6 +58,15 @@ fn finding(rule, severity, subject, message) {
     f
 }
 
+/// The applied schemas of `path`, from the generic prim projection — the escape
+/// hatch that lets a rule ask about a schema no fact was pre-chewed for.
+fn schemas_of(facts, path) {
+    for p in facts.prims {
+        if p.path == path { return p.schemas; }
+    }
+    []
+}
+
 fn lint_usd(facts) {
     let out = [];
     for f in nested_body_no_joint(facts) { out.push(f); }
@@ -84,10 +93,25 @@ fn lint_usd(facts) {
 /// MJCF treats a jointless nested body as welded, and neither has any notion of a
 /// link inside a link attached to nothing.
 fn nested_body_no_joint(facts) {
+    // Prims the ENGINE realizes rather than the joint graph. A wheel carrying
+    // `PhysxVehicleWheelAPI` is one: in the `physical` drivetrain it gets a
+    // revolute joint, and in `raycast` the spawner deliberately gives it neither
+    // body nor collider and drives it from the suspension cast
+    // (`lunco-mobility`, `sync_raycast_wheel_physics_pose`). Both are correct and
+    // neither is "a part held by nothing", so the rule would otherwise fire on
+    // every raycast rover we ship — and a rule that fires on everything is read
+    // by no one. That wheels STAY ON is checked where it belongs, by simulating
+    // it: `scenes/sandbox/parts_attached.usda`.
+    let engine_realized = "PhysxVehicleWheelAPI";
+
     let out = [];
     for b in facts.bodies {
         if b.host_body == "" { continue; }
         if b.jointed { continue; }
+        // A disabled body is unmoving collision geometry, not a free body: it
+        // cannot fall out of anything, so it is not this rule's business.
+        if !b.simulated { continue; }
+        if schemas_of(facts, b.path).contains(engine_realized) { continue; }
         // Built by successive `+=`: rhai caps EXPRESSION complexity, and one long
         // concatenation chain fails to COMPILE — which would take the whole
         // policy down, not just this rule.

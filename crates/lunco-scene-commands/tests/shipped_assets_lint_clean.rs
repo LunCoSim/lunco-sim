@@ -52,9 +52,16 @@ fn usda_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn shipped_usd_assets_have_no_lint_errors() {
     register_usd_lint_policy();
 
+    // COMPLETE assets only. `assets/components/` holds parts and composition
+    // OVERLAYS (`raycast_drivetrain.usda` is nothing but `over` opinions onto
+    // wheels that must already exist), and a rule asked about a fragment in
+    // isolation answers a question the file cannot be responsible for: its joint
+    // targets, its host body and half its prims arrive with the reference arc.
+    // Components are covered where they actually run — every vessel below
+    // composes them, and a broken part fails through its hosts.
     let assets = assets_dir();
     let mut files = Vec::new();
-    for sub in ["components", "vessels", "scenes", "missions", "tutorials"] {
+    for sub in ["vessels", "scenes", "missions", "tutorials"] {
         usda_files(&assets.join(sub), &mut files);
     }
     files.sort();
@@ -80,4 +87,27 @@ fn shipped_usd_assets_have_no_lint_errors() {
         offenders.len(),
         offenders.join("\n")
     );
+}
+
+/// The gate above has teeth.
+///
+/// "All assets clean" and "the rules never ran" are the same green square, and
+/// the second one is how a linter dies quietly. So the deliberately broken scene
+/// — the one the clean sweep skips — must come back dirty through the very same
+/// `ValidateAsset` path, with the rule that caught the motors.
+#[test]
+fn the_deliberately_broken_scene_still_fails_the_same_gate() {
+    register_usd_lint_policy();
+
+    let broken = assets_dir().join("scenes/sandbox/lint_selftest.usda");
+    let report = lunco_scene_commands::validate::validate_asset(&broken.to_string_lossy());
+    let lint_errors: Vec<&String> =
+        report.errors.iter().filter(|e| e.starts_with("[usd/")).collect();
+
+    assert!(
+        lint_errors.iter().any(|e| e.contains("nested-body-no-joint")),
+        "lint_selftest.usda must trip nested-body-no-joint through ValidateAsset — \
+         got {lint_errors:?}"
+    );
+    assert!(!report.ok, "a file with lint ERRORS must not report ok");
 }

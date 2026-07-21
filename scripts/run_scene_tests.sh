@@ -60,6 +60,7 @@ SCENES=(
     "scenes/sandbox/ackermann_parity.usda"
     "scenes/sandbox/six_independent_parity.usda"
     "scenes/sandbox/parts_attached.usda"
+    "scenes/sandbox/lint_selftest.usda"
 )
 
 # Args: any `--stress` anywhere enables the diagnostic pass; the first remaining
