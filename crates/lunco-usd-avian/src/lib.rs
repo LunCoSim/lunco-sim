@@ -74,6 +74,9 @@ pub use lint::{lint_stage, physics_facts, USD_LINT_DOMAIN};
 pub mod filtered_pairs;
 pub use filtered_pairs::{FilteredPairs, PendingFilteredPairs, UsdCollisionFilter};
 
+pub mod collision_groups;
+pub use collision_groups::{CollisionGroupTable, CollisionGroupTables};
+
 /// Bevy plugin for USD physics mapping.
 ///
 /// Adds an observer for USD prim spawning and a deferred processing system that maps
@@ -99,11 +102,18 @@ impl Plugin for UsdAvianPlugin {
         // Note there is NO automatic lint on load: linting is something you RUN
         // (`RunLint`), not something that runs at you — see `lunco-lint`.
         app.init_resource::<lunco_lint::LintReport>();
+        app.init_resource::<CollisionGroupTables>();
         app.add_systems(
             lunco_usd_bevy::scene_lifecycle::SceneTeardown,
-            |mut commands: Commands, mut lint: ResMut<lunco_lint::LintReport>| {
+            |mut commands: Commands,
+             mut lint: ResMut<lunco_lint::LintReport>,
+             mut groups: ResMut<CollisionGroupTables>| {
                 commands.remove_resource::<PhysicsSceneGravity>();
                 lint.clear_domain(lint::USD_LINT_DOMAIN);
+                // The groups belong to the scene being replaced. Carried over,
+                // they would put the next scene's colliders on layers nothing in
+                // it defines.
+                groups.clear();
             },
         );
 
@@ -482,7 +492,28 @@ fn collect_child_colliders_from_usd(
 ) -> Vec<(Position, Rotation, Collider)> {
     let mut shapes = Vec::new();
 
-    for child_path in reader.children(parent_path) {
+    // `UsdGeomImageable.purpose` decides which of a body's children are its
+    // COLLISION geometry, when the body carries more than one description of its
+    // own shape. That is the standard way to say "this cheap box is what you
+    // collide, that mesh is what you look at", and it is why a proxy exists at
+    // all: `proxy` wins over `render` for physics, exactly as `render` wins over
+    // `proxy` for drawing.
+    let children: Vec<SdfPath> = reader.children(parent_path).into_iter().collect();
+    let has_proxy = children.iter().any(|c| effective_purpose(reader, c) == Purpose::Proxy);
+
+    for child_path in children {
+        // `guide` is annotation — a debug axis, a sensor cone, a planned path. It
+        // is never physical, whatever geometry it happens to be made of.
+        let purpose = effective_purpose(reader, &child_path);
+        if purpose == Purpose::Guide {
+            continue;
+        }
+        // With a proxy present, the render geometry is NOT also a collider —
+        // folding both in would collide the vehicle twice, once at each level of
+        // detail, and the expensive one would win every contact.
+        if has_proxy && purpose == Purpose::Render {
+            continue;
+        }
         // Skip wheel children — they're independent dynamics handled
         // by `lunco-usd-sim` (raycast probe or physical wheel rigid
         // body), NOT collider pieces of the chassis compound. The
@@ -842,6 +873,7 @@ fn process_usd_avian_prims(
     query: Query<&UsdPrimPath, Without<UsdAvianProcessed>>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
+    mut group_tables: ResMut<CollisionGroupTables>,
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
@@ -863,7 +895,12 @@ fn process_usd_avian_prims(
     };
     bevy::log::debug!("[canonical] avian extract off LIVE stage: {}", prim_path.path);
 
-    extract_avian_prim(&cs.view(), entity, &sdf_path, &mut commands);
+    // Collision groups are a STAGE-wide statement read one prim at a time, so the
+    // table is resolved once per stage and cached; recomputing it per prim would
+    // be quadratic in prim count on a scene that authors any group at all.
+    let view = cs.view();
+    let groups = group_tables.get_or_read(id, &view).clone();
+    extract_avian_prim(&view, entity, &sdf_path, &groups, &mut commands);
 }
 
 /// Which `UsdPhysicsScene` prim set the world's gravity, and to what.
@@ -950,6 +987,7 @@ fn extract_avian_prim(
     reader: &StageView<'_>,
     entity: Entity,
     sdf_path: &SdfPath,
+    groups: &CollisionGroupTable,
     commands: &mut Commands,
 ) {
     // `UsdPhysicsScene` — simulation-wide settings, of which this engine consumes
@@ -964,6 +1002,14 @@ fn extract_avian_prim(
 
     // Skip wheel prims — the sim plugin handles those.
     if reader.real_f32(sdf_path, "physxVehicleWheel:radius").is_some() {
+        commands.entity(entity).try_insert(UsdAvianProcessed);
+        return;
+    }
+
+    // `guide` geometry is annotation — a debug axis, a planned path, a sensor
+    // cone. It is never physical, whatever schemas happen to be on it, so it is
+    // refused a body and a collider both rather than being quietly collided with.
+    if effective_purpose(reader, sdf_path) == Purpose::Guide {
         commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
     }
@@ -1032,6 +1078,7 @@ fn extract_avian_prim(
         } else {
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
+        apply_collision_groups(commands, entity, groups, sdf_path);
 
         // The schema's own `physics:rigidBodyEnabled` (default true) says whether
         // this body is simulated; a disabled body is unmoving collision geometry.
@@ -1064,11 +1111,75 @@ fn extract_avian_prim(
         if !has_rigid_body_ancestor(reader, sdf_path) {
             commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
+            apply_collision_groups(commands, entity, groups, sdf_path);
         }
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else {
         // Neither a body nor a collider: no physics components, only the marker.
         commands.entity(entity).try_insert(UsdAvianProcessed);
+    }
+}
+
+/// `UsdGeomImageable.purpose` — what a prim's geometry is FOR.
+///
+/// The four standard values, and what each means to a simulator:
+///
+/// | purpose | drawn | collided |
+/// |---|---|---|
+/// | `default` | yes | yes |
+/// | `render` | yes | only when no `proxy` sibling exists |
+/// | `proxy` | no | yes — this IS the collision shape |
+/// | `guide` | no | never |
+///
+/// Authoring none of them (which every asset in this repo does today) means
+/// `default`, so nothing shipped changes behaviour by this existing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    /// `default` — the ordinary case: drawn and collided.
+    Default,
+    /// `render` — the presentation form; deferred to a `proxy` for physics.
+    Render,
+    /// `proxy` — the stand-in: cheap collision geometry, not drawn.
+    Proxy,
+    /// `guide` — annotation: never drawn in a beauty pass, never physical.
+    Guide,
+}
+
+/// The composed purpose of `path`, which is INHERITED: `purpose` is a uniform
+/// token, so a prim with none of its own takes its nearest ancestor's. Authoring
+/// it once on a `Proxy` scope is meant to cover everything inside it.
+pub fn effective_purpose(reader: &StageView<'_>, path: &SdfPath) -> Purpose {
+    let mut cur = Some(path.clone());
+    while let Some(p) = cur {
+        if p.is_abs_root() {
+            break;
+        }
+        match reader.text(&p, "purpose").as_deref() {
+            Some("guide") => return Purpose::Guide,
+            Some("proxy") => return Purpose::Proxy,
+            Some("render") => return Purpose::Render,
+            Some("default") => return Purpose::Default,
+            _ => {}
+        }
+        cur = p.parent();
+    }
+    Purpose::Default
+}
+
+/// Put a collider on the layers its `PhysicsCollisionGroup` membership implies.
+///
+/// A no-op when the prim is in no group, and that matters: writing "collides with
+/// everything" here would erase the explicit layers a trigger zone sets for
+/// itself, and would make introducing one group elsewhere on the stage a silent
+/// change to every other collider.
+fn apply_collision_groups(
+    commands: &mut Commands,
+    entity: Entity,
+    groups: &CollisionGroupTable,
+    sdf_path: &SdfPath,
+) {
+    if let Some(layers) = groups.layers_for(&sdf_path.to_string()) {
+        commands.entity(entity).try_insert(layers);
     }
 }
 
@@ -2212,7 +2323,7 @@ mod extract_parity_tests {
     //! compound collider → `collect_child_colliders` → `read_transform_from_usd`
     //! → `local_transform_at` → mass props).
 
-    use super::extract_avian_prim;
+    use super::{extract_avian_prim, CollisionGroupTable};
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
@@ -2234,7 +2345,7 @@ mod extract_parity_tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            extract_avian_prim(reader, e, path, &mut commands);
+            extract_avian_prim(reader, e, path, &CollisionGroupTable::default(), &mut commands);
         }
         queue.apply(&mut world);
         (
@@ -2658,7 +2769,7 @@ def Xform "Mission"
         let sdf = SdfPath::new(path).unwrap();
         {
             let mut commands = world.commands();
-            extract_avian_prim(view, entity, &sdf, &mut commands);
+            extract_avian_prim(view, entity, &sdf, &CollisionGroupTable::default(), &mut commands);
         }
         world.flush();
         (world.get::<Collider>(entity).is_some(), world.get::<RigidBody>(entity).copied())
@@ -2720,6 +2831,68 @@ def Xform "Rig"
             "the leg's compound is its strut alone — the pad is its own body, not \
              the leg's geometry"
         );
+    }
+
+    /// A body describing its shape twice — a detailed `render` mesh and a cheap
+    /// `proxy` box — collides the PROXY, and only the proxy. Folding both in
+    /// would collide the vehicle at two levels of detail at once, and the
+    /// expensive one would win every contact.
+    ///
+    /// `guide` geometry is never physical at all: it is annotation, whatever
+    /// shape it happens to be.
+    const PURPOSES: &str = r#"#usda 1.0
+def Xform "Rig"
+{
+    def Xform "Hull" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
+    {
+        def Cube "Shell" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            uniform token purpose = "render"
+            double size = 4.0
+        }
+        def Cube "Bounds" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            uniform token purpose = "proxy"
+            double size = 2.0
+        }
+        def Cube "AxisMarker" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            uniform token purpose = "guide"
+            double size = 1.0
+        }
+    }
+}
+"#;
+
+    #[test]
+    fn a_body_with_a_proxy_collides_the_proxy_and_never_the_guide() {
+        let recipe = StageRecipe::from_source("t.usda", PURPOSES);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let view = cs.view();
+        let hull = SdfPath::new("/Rig/Hull").unwrap();
+        let pieces = collect_child_colliders_from_usd(&view, &hull);
+        assert_eq!(
+            pieces.len(),
+            1,
+            "expected exactly the proxy — got {} pieces, so the render mesh or the \
+             guide marker is being collided too",
+            pieces.len()
+        );
+    }
+
+    /// `purpose` is a uniform token and INHERITS, so authoring it once on a scope
+    /// covers everything inside it — which is how a proxy is normally authored.
+    #[test]
+    fn purpose_is_inherited_from_an_ancestor() {
+        let recipe = StageRecipe::from_source("t.usda", PURPOSES);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let view = cs.view();
+        let marker = SdfPath::new("/Rig/Hull/AxisMarker").unwrap();
+        assert_eq!(effective_purpose(&view, &marker), Purpose::Guide);
+        // Nothing authored anywhere up the chain: the ordinary case, and the one
+        // every asset in this repo is in today.
+        let hull = SdfPath::new("/Rig/Hull").unwrap();
+        assert_eq!(effective_purpose(&view, &hull), Purpose::Default);
     }
 
     /// The regression this exists for: a collider prim with no rigid-body ancestor

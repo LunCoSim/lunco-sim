@@ -1,0 +1,97 @@
+#usda 1.0
+(
+    defaultPrim = "FilteredPairRig"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ISOLATED collision-filtering test rig (not a vehicle).
+#
+# Three bodies in a chain, hanging in the air with nothing else to touch:
+#
+#   Hull  ──fixed──  Arm  ──fixed──  Pad
+#    │                                │
+#    └──────── overlapping ───────────┘   two joints apart
+#
+# The Pad is authored 0.5 m INSIDE the Hull on purpose, and is two joints away
+# from it — so `JointCollisionDisabled`, which covers only the pair a joint
+# names, does not reach it. Nothing but an authored `PhysicsFilteredPairsAPI`
+# can stop these two colliding, which is what makes the rig a clean instrument
+# for the question.
+#
+# The filtering itself is NOT authored here. Each scene that references this rig
+# says whether the pair is filtered, because that is the variable under test —
+# `scenes/tests/filtered_pairs.usda` adds the rel in an `over`, and
+# `filtered_pairs_unfiltered.usda` adds nothing at all. Authoring it here and
+# deleting it there would make the control a subtraction, and a subtraction is
+# harder to be sure of than an addition.
+#
+# The Hull is KINEMATIC: an immovable reference. A dynamic hull would answer a
+# contact by moving, and the test would become about the response rather than
+# about whether the contact exists at all.
+
+def Xform "FilteredPairRig" (
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+    doc = "A pad bolted to an arm bolted to a hull, with the pad deliberately overlapping the hull — a rig for checking that an authored never-collide pair works."
+)
+{
+    bool lunco:spawnable = false
+
+    def Cube "Hull" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 2.0
+        color3f[] primvars:displayColor = [(0.35, 0.4, 0.5)]
+        float physics:mass = 500.0
+        bool physics:kinematicEnabled = true
+        bool physics:collisionEnabled = true
+    }
+
+    # Clear of the hull (hull spans x -1..1, arm spans 1.8..2.2). The Arm–Hull
+    # pair is directly jointed anyway and never in question.
+    def Cube "Arm" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.4
+        double3 xformOp:translate = (2.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.8, 0.6, 0.2)]
+        float physics:mass = 10.0
+        bool physics:collisionEnabled = true
+    }
+
+    # Spans x 0.5..1.1 against the hull's -1..1 — 0.5 m inside it.
+    def Cube "Pad" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.6
+        double3 xformOp:translate = (0.8, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.9, 0.3, 0.3)]
+        float physics:mass = 5.0
+        bool physics:collisionEnabled = true
+
+        # The instrument: whether this pair is in contact is read directly,
+        # rather than inferred from how far anything moved afterwards.
+        custom bool lunco:sensor:contact = true
+    }
+
+    def PhysicsFixedJoint "HullToArm"
+    {
+        rel physics:body0 = </FilteredPairRig/Hull>
+        rel physics:body1 = </FilteredPairRig/Arm>
+        point3f physics:localPos0 = (2.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+
+    def PhysicsFixedJoint "ArmToPad"
+    {
+        rel physics:body0 = </FilteredPairRig/Arm>
+        rel physics:body1 = </FilteredPairRig/Pad>
+        point3f physics:localPos0 = (-1.2, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+}

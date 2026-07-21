@@ -7,26 +7,17 @@
 
 # Verifies `PhysicsFilteredPairsAPI` — an AUTHORED pair that must never collide.
 #
-# A joint filters the pair it names and no further: `JointCollisionDisabled`
-# covers parent and child. Parts TWO joints apart still collide, which is a hull
-# and the footpad on the end of its leg. This rig is that case, reduced:
-#
-#   Hull  ──fixed──  Arm  ──fixed──  Pad
-#    │                                │
-#    └──────── overlapping ───────────┘   (two joints apart: NOT covered)
-#
-# The Pad is authored INSIDE the Hull's volume on purpose. Without the filter the
-# solver has a real contact to resolve and spends every step pushing the assembly
-# apart from itself; with `physics:filteredPairs` naming the Hull, the pair is
-# never created and the overlap is simply allowed.
+# The rig is `vessels/rigs/filtered_pair_rig.usda`, referenced (not copied): a pad
+# authored 0.5 m inside a hull it is TWO JOINTS away from, so nothing but an
+# authored pair can stop them touching. Its control,
+# `filtered_pairs_unfiltered.usda`, references the same rig and authors no
+# filtering — so the `over` below is the ONLY difference between the two scenes.
 #
 # What is measured is the CONTACT, not its aftermath: the Pad carries
 # `lunco:sensor:contact`, so the test reads whether the pair exists rather than
-# guessing from how far something moved. Its control is
-# `filtered_pairs_unfiltered_test.usda` — the same rig with the rel removed,
-# where the same sensor must read 1.
+# guessing from how far something moved.
 #
-# Read live:  ListPorts -> Pad exposes `contact` and `contact_force`.
+# Read live:  ListPorts -> Rig/Pad exposes `contact` and `contact_force`.
 # Loaded by `sandbox --scene scenes/tests/filtered_pairs.usda`.
 
 def Xform "SandboxScene" (
@@ -66,75 +57,24 @@ def Xform "SandboxScene" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # The rig hangs in the air, clear of the ground by 5 m, so the only contact
-    # any of it can have is with itself. A contact sensor that could also feel
-    # the floor would prove nothing about the pair.
-    def Xform "Rig"
+    # Held 6 m up, clear of the ground: the only contact anything in the rig can
+    # have is with itself. A contact sensor that could also feel the floor would
+    # prove nothing about the pair.
+    def Xform "Rig" (
+        prepend references = @lunco://vessels/rigs/filtered_pair_rig.usda@</FilteredPairRig>
+    )
     {
-        # Kinematic: an immovable reference the pair is measured against. A
-        # dynamic hull would answer the contact by moving, and then the test
-        # would be about the response instead of the contact.
-        def Cube "Hull" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        double3 xformOp:translate = (0, 6.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # THE THING UNDER TEST, and the only difference from the control scene.
+        # Filtering is symmetric, so one opinion is the whole pair — the Hull
+        # authors nothing.
+        over "Pad" (
+            prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
         )
         {
-            double size = 2.0
-            double3 xformOp:translate = (0.0, 6.0, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.35, 0.4, 0.5)]
-            float physics:mass = 500.0
-            bool physics:kinematicEnabled = true
-            bool physics:collisionEnabled = true
-        }
-
-        # Clear of the hull (hull spans x -1..1, arm spans 1.8..2.2): the
-        # Arm–Hull pair is directly jointed anyway and never in question.
-        def Cube "Arm" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
-        )
-        {
-            double size = 0.4
-            double3 xformOp:translate = (2.0, 6.0, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.8, 0.6, 0.2)]
-            float physics:mass = 10.0
-            bool physics:collisionEnabled = true
-        }
-
-        # Spans x 0.5..1.1 against the hull's -1..1 — 0.5 m INSIDE it. Two
-        # joints from the hull, so nothing but an authored pair can filter it.
-        def Cube "Pad" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
-        )
-        {
-            double size = 0.6
-            double3 xformOp:translate = (0.8, 6.0, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.9, 0.3, 0.3)]
-            float physics:mass = 5.0
-            bool physics:collisionEnabled = true
-
-            # THE THING UNDER TEST. Filtering is symmetric, so one opinion is the
-            # whole pair — the Hull authors nothing.
             rel physics:filteredPairs = </SandboxScene/Rig/Hull>
-
-            custom bool lunco:sensor:contact = true
-        }
-
-        def PhysicsFixedJoint "HullToArm"
-        {
-            rel physics:body0 = </SandboxScene/Rig/Hull>
-            rel physics:body1 = </SandboxScene/Rig/Arm>
-            point3f physics:localPos0 = (2.0, 0.0, 0.0)
-            point3f physics:localPos1 = (0.0, 0.0, 0.0)
-        }
-
-        def PhysicsFixedJoint "ArmToPad"
-        {
-            rel physics:body0 = </SandboxScene/Rig/Arm>
-            rel physics:body1 = </SandboxScene/Rig/Pad>
-            point3f physics:localPos0 = (-1.2, 0.0, 0.0)
-            point3f physics:localPos1 = (0.0, 0.0, 0.0)
         }
     }
 

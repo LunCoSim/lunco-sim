@@ -317,10 +317,45 @@ Two properties worth knowing:
   with its own base. MuJoCo, PhysX and URDF/MoveIt each landed in the same
   place: automatic for adjacency, authored beyond it.
 
-`PhysicsCollisionGroup` (the group-level `physics:filteredGroups` /
-`invertFilteredGroups` / `mergeGroup` form, which maps to avian `CollisionLayers`)
-is **not** read yet. Pairwise authoring is O(n²) in a subassembly, so this is the
-next thing to add if a vehicle ever needs more than a handful of pairs.
+**Group-vs-group** filtering, for when pairs stop scaling (twenty parts is O(n²)
+rels), is `UsdPhysicsCollisionGroup` — read by `lunco-usd-avian::collision_groups`
+and mapped onto avian `CollisionLayers`, one layer bit per group:
+
+```usda
+def PhysicsCollisionGroup "Wheels"
+{
+    prepend rel collection:colliders:includes = </Rover/Wheels>
+    prepend rel physics:filteredGroups = </Scene/Groups/Chassis>
+}
+```
+
+- **Membership is a `UsdCollectionAPI`** (`collection:colliders:includes` /
+  `:excludes`) — the schema applies `CollectionAPI:colliders`, and the standard
+  `expandPrims` rule applies: an include brings its subtree, a deeper exclude
+  takes part of it back out. Same construct as material binding and light
+  linking, not a bespoke token.
+- **`physics:mergeGroup`** — group prims sharing a non-empty merge key ARE one
+  group and share a bit, so two layers can each contribute members without
+  knowing about each other.
+- **`physics:invertFilteredGroups`** — the listed groups become the only ones the
+  group collides with, read literally (a group that inverts and does not list
+  itself stops colliding with its own members).
+- **Ungrouped bodies keep colliding.** Groups take bits from 1 up, never bit 0
+  (avian's default) and never bit 7 (`TRIGGER_COLLISION_LAYER`), so adding a
+  group never silently switches off a contact between two parts outside it.
+- The table is resolved once per stage (`CollisionGroupTables`, cleared on
+  teardown) because membership is a stage-wide question the loader asks one prim
+  at a time.
+
+The two spellings are proven to agree: `scenes/tests/filtered_pairs.usda` and
+`scenes/tests/collision_groups.usda` are the same rig, referenced, filtered the
+two different ways, sharing one control and one scenario.
+
+`PhysicsArticulationRootAPI` is authored on `skid_rover`, `rocker_bogie` and
+`physical_drivetrain` and is deliberately **not** consumed: avian has no
+reduced-coordinate articulation to map it onto, and there is no honest
+translation. It is kept because it is what a PhysX-based tool reads on the way
+back out — round-trip fidelity, not engine behaviour.
 
 ### Sensors
 

@@ -411,6 +411,59 @@ it is two joints away from, reporting no contact) against its control
 second). The measurement is the CONTACT itself, off `lunco:sensor:contact` —
 not how far something moved afterwards.
 
+### When it is not two parts but twenty — `PhysicsCollisionGroup`
+
+A pair is O(n²). Six wheels that must not touch their own rockers is fifteen
+rels, and every part added reopens the file. Groups are the O(n) form of the same
+statement:
+
+```usda
+def PhysicsCollisionGroup "Wheels"
+{
+    prepend rel collection:colliders:includes = </Rover/Wheels>
+    prepend rel physics:filteredGroups = </Scene/Groups/Chassis>
+}
+```
+
+Membership is a **`UsdCollectionAPI`** — the schema applies
+`CollectionAPI:colliders`, so `collection:colliders:includes` /`:excludes` under
+the standard `expandPrims` rule: an include brings its subtree, a deeper exclude
+takes part of it back out ("the whole vehicle EXCEPT its wheels" is two lines).
+`physics:mergeGroup` makes two group prims one group, so two layers can each
+contribute members. `physics:invertFilteredGroups` flips the sense: the listed
+groups become the only ones this group collides with — including with respect to
+itself, so a group that inverts and does not list itself stops colliding
+internally.
+
+Adding a group never changes anything outside it: groups take avian layer bits
+from 1 up, never bit 0 (the default every ungrouped body keeps) and never bit 7
+(the trigger-zone layer).
+
+Both spellings are held to the same answer by `scenes/tests/collision_groups.usda`
+— the same rig as the pair test, referenced, filtered the other way, sharing one
+control and one scenario.
+
+## 6b. `purpose` — which geometry is the collision geometry
+
+`UsdGeomImageable.purpose` is how a prim says what its geometry is FOR, and it is
+INHERITED, so authoring it once on a scope covers everything inside:
+
+| purpose | drawn | collided |
+|---|---|---|
+| `default` (nothing authored) | yes | yes |
+| `render` | yes | only when the body has no `proxy` |
+| `proxy` | no | **yes — this is the collision shape** |
+| `guide` | no | never |
+
+So a body that describes itself twice — a detailed mesh to look at, a cheap box
+to hit — says so in the standard way, and the physics takes the box. A `guide`
+prim (debug axis, sensor cone, planned path) is refused a body and a collider
+both, whatever schemas are on it.
+
+This is the tool to reach for when a strut's visual shape and its contact shape
+want to be different. It is NOT a substitute for §2b: the *frame* problem (a body
+that is its own scaled mesh) is separate, and a proxy inherits the same frame.
+
 ### Catch it before the screenshot
 
 ```bash

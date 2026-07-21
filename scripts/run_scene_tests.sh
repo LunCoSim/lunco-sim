@@ -62,13 +62,24 @@ STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
 # A test scene that asserts nothing is not skipped-and-forgotten either: it is
 # caught by `lunco-scene-commands`'s `every_test_scene_carries_a_scenario`, which
 # fails naming it. The two halves together leave nowhere for a silent test to sit.
+# A scene that CANNOT return a headless verdict says so in itself, with a reason
+# (`lunco:notHeadlessTestable` — the render checks, which need a GPU). That one
+# fact is read here AND by `every_test_scene_carries_a_scenario`; a second
+# exception list in either place would disagree with the first the day it changed.
 mapfile -t SCENES < <(
-    ls assets/scenes/tests/*.usda | sed 's|^assets/||' | sort
+    grep -L "lunco:notHeadlessTestable" assets/scenes/tests/*.usda | sed 's|^assets/||' | sort
 )
 if [[ ${#SCENES[@]} -eq 0 ]]; then
     echo "assets/scenes/tests/ is empty — the discovery glob is wrong" >&2
     exit 2
 fi
+mapfile -t SKIPPED < <(
+    grep -l "lunco:notHeadlessTestable" assets/scenes/tests/*.usda | sed 's|^assets/||' | sort
+)
+for s in "${SKIPPED[@]}"; do
+    # Named, never silent: a skipped scene the reader cannot see reads as a pass.
+    echo "==> SKIP $(basename "$s" .usda) — declares lunco:notHeadlessTestable"
+done
 
 # Args: any `--stress` anywhere enables the diagnostic pass; the first remaining
 # positional is the substring filter.

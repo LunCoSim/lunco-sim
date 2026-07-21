@@ -39,6 +39,12 @@
 //       is between bodies, not between shapes. `missing` = targets that are not
 //       prims on this stage.
 //
+//   facts.collision_groups[]  #{ path, merge, invert, includes[], filtered[],
+//                                 missing_includes[], missing_filtered[] }
+//       every `PhysicsCollisionGroup`. `includes` are collection:colliders roots
+//       (a SUBTREE each), `filtered` the groups it does not collide with, and the
+//       two `missing_*` lists the targets that resolve to nothing.
+//
 //   facts.prims[]   #{ path, type, parent, schemas[] }
 //       EVERY prim applying any schema at all — the generic projection, so a new
 //       rule about a schema nobody has thought about yet needs no Rust change.
@@ -92,6 +98,7 @@ fn lint_usd(facts) {
     for f in sprung_foot_not_lowest(facts) { out.push(f); }
     for f in body_is_its_own_scaled_mesh(facts) { out.push(f); }
     for f in filtered_pair_is_inert(facts) { out.push(f); }
+    for f in collision_group_is_inert(facts) { out.push(f); }
     out
 }
 
@@ -415,6 +422,41 @@ fn filtered_pair_is_inert(facts) {
             m += " shape, and a body never collides with itself. This filters";
             m += " nothing; the pair you meant is between two DIFFERENT bodies.";
             out.push(finding("filtered-pair-same-body", "warn", fp.path, m));
+        }
+    }
+    out
+}
+
+/// A `PhysicsCollisionGroup` that groups nothing, or filters against nothing.
+///
+/// The group form of `filtered-pair-is-inert`, and the same silence: a collection
+/// whose include names a prim that was renamed matches NO members, so the group
+/// exists, the filter resolves, and not one collider is on it. Nothing in a log
+/// says so — the parts simply keep colliding, which reads as bad tuning.
+///
+/// `filteredGroups` naming a prim that is not itself a `PhysicsCollisionGroup` is
+/// the same mistake one level up: the rel points at the rover, or at the scope
+/// holding the groups, instead of at a group.
+fn collision_group_is_inert(facts) {
+    let out = [];
+    for g in facts.collision_groups {
+        if g.includes.is_empty() {
+            let m = "is a PhysicsCollisionGroup whose collection:colliders includes";
+            m += " nothing, so no collider is in it and the filters below it do";
+            m += " nothing. Add the prims it is meant to group.";
+            out.push(finding("collision-group-empty", "warn", g.path, m));
+        }
+        for t in g.missing_includes {
+            let m = "groups <" + t + ">, which matches no prim on this stage — that";
+            m += " part of the group is empty and whatever it was meant to protect";
+            m += " still collides.";
+            out.push(finding("collision-group-include-missing", "error", g.path, m));
+        }
+        for t in g.missing_filtered {
+            let m = "filters against <" + t + ">, which is not a PhysicsCollisionGroup";
+            m += " — physics:filteredGroups names GROUPS, not the prims in them, so";
+            m += " this filter is dropped.";
+            out.push(finding("collision-group-filter-not-a-group", "error", g.path, m));
         }
     }
     out

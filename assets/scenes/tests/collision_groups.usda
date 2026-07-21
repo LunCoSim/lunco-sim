@@ -1,0 +1,105 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Verifies `PhysicsCollisionGroup` — the GROUP form of "these never collide".
+#
+# Same rig as `filtered_pairs.usda` (`vessels/rigs/filtered_pair_rig.usda`,
+# referenced), same overlap, same sensor, and the same control
+# (`filtered_pairs_unfiltered.usda`, which authors no filtering of any kind). The
+# only thing that changes is HOW the filtering is said:
+#
+#   filtered_pairs.usda     one `physics:filteredPairs` rel, pad → hull
+#   this scene              two collision groups, one filtering the other
+#
+# Which is the point of having both. A pair is the right tool for two parts and
+# the wrong one for twenty — twenty parts is O(n²) rels — and a group is the
+# other end of that trade. They must produce the SAME physical answer, and the
+# only way to know they do is to ask them the same question.
+#
+# Membership is a `UsdCollectionAPI` (`collection:colliders`), which is what
+# `PhysicsCollisionGroup` applies in the schema — the same collection construct
+# material binding and light linking use, not a bespoke token.
+#
+# Loaded by `sandbox --scene scenes/tests/collision_groups.usda`.
+
+def Xform "SandboxScene" (
+    kind = "assembly"
+    doc = "The overlapping pad-and-hull rig again, with the never-collide rule stated as two collision groups instead of one named pair. Checks the group form reaches the same answer."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 6.0, 0.0)
+        double3 xformOp:translate = (0.0, 8.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rig" (
+        prepend references = @lunco://vessels/rigs/filtered_pair_rig.usda@</FilteredPairRig>
+    )
+    {
+        double3 xformOp:translate = (0, 6.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # THE THING UNDER TEST. One opinion — `Hulls` names `Pads` — and the loader
+    # makes it symmetric, because a filter that held in one direction only would
+    # make the contact depend on which body avian happened to see first.
+    def Scope "CollisionGroups"
+    {
+        def PhysicsCollisionGroup "Hulls"
+        {
+            prepend rel collection:colliders:includes = </SandboxScene/Rig/Hull>
+            prepend rel physics:filteredGroups = </SandboxScene/CollisionGroups/Pads>
+        }
+
+        def PhysicsCollisionGroup "Pads"
+        {
+            prepend rel collection:colliders:includes = </SandboxScene/Rig/Pad>
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "filtered-pairs"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/filtered_pairs.rhai@
+            # The pair must not collide …
+            custom float lunco:param:filtered = 1.0
+            # … and it is said with GROUPS, so the failure message names the
+            # schema this scene actually authors.
+            custom float lunco:param:by_group = 1.0
+        }
+    }
+}

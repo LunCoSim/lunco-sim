@@ -1,10 +1,15 @@
-// ── An authored never-collide pair really does not collide ──────────────────
+// ── An authored never-collide rule really does stop the contact ─────────────
 //
-// TEST-ONLY. Drives BOTH scenes that share this rig, and which one it is running
-// is read from the scene, not from a second copy of this file:
+// TEST-ONLY. Drives ALL THREE scenes that share this rig, and which one it is
+// running is read from the scene, not from three copies of this file:
 //
-//   scenes/tests/filtered_pairs.usda             rel authored → no contact
-//   scenes/tests/filtered_pairs_unfiltered.usda  rel removed  → contact
+//   scenes/tests/filtered_pairs.usda             one filteredPairs rel → no contact
+//   scenes/tests/collision_groups.usda           two collision groups  → no contact
+//   scenes/tests/filtered_pairs_unfiltered.usda  nothing authored      → contact
+//
+// The first two say the SAME thing in the two spellings UsdPhysics provides — a
+// named pair, and group-vs-group — and must reach the same physical answer. The
+// third is the control both are measured against.
 //
 // WHAT IT GUARDS. `PhysicsFilteredPairsAPI` fails SILENTLY in both directions.
 // Unread, the rel is a comment: the parts collide and a vehicle spends every step
@@ -43,6 +48,9 @@ fn on_start(me) {
     // back off the Pad's own schema would make the expectation depend on the very
     // authoring under test.
     this.filtered = param(me, "filtered", -1.0);
+    // WHICH schema this scene authors it with. Only the failure message depends
+    // on it: the physics being asserted is identical, which is the point.
+    this.by_group = param(me, "by_group", 0.0);
 
     // Was there ever a contact to filter? Held over the whole run, because a
     // contact that existed for one tick is still a contact the filter missed.
@@ -83,6 +91,7 @@ fn on_tick(me) {
         this.phase = "done";
         verdict(#{
             filtered: this.filtered,
+            by_group: this.by_group,
             contact: get(this.pad, "contact"),
             seen: this.contact_seen,
             gap: this.min_gap,
@@ -122,21 +131,22 @@ fn verdict(s) {
         "pad — the rig left the world, which ends contact for reasons that have " +
         "nothing to do with the filter"));
 
+    let schema = if s.by_group > 0.5 { "PhysicsCollisionGroup" } else { "physics:filteredPairs" };
     if s.filtered > 0.5 {
         f.push(t_true(s.seen < 0.5,
-            "the authored filtered pair did NOT stop the contact: the pad reported " +
-            "contact " + r2(s.seen) + " against a hull it names in " +
-            "physics:filteredPairs — the rel was read as a comment"));
+            "the authored " + schema + " did NOT stop the contact: the pad reported " +
+            "contact " + r2(s.seen) + " against a hull it is filtered from — the " +
+            "authoring was read as a comment"));
     } else {
         f.push(t_true(s.seen > 0.5,
-            "control: with no physics:filteredPairs the overlapping pad must " +
-            "report contact, and it reported " + r2(s.seen) + " — either the pair " +
-            "is being filtered when nothing asked for it, or the sensor cannot " +
-            "see this contact at all and the filtered case proves nothing"));
+            "control: with nothing authored the overlapping pad must report " +
+            "contact, and it reported " + r2(s.seen) + " — either the pair is being " +
+            "filtered when nothing asked for it, or the sensor cannot see this " +
+            "contact at all and the filtered cases prove nothing"));
     }
 
     print("[pairs] ── results ──────────────────────────────────────────");
-    print("[pairs]   filtered      " + s.filtered);
+    print("[pairs]   filtered      " + s.filtered + "  (" + schema + ")");
     print("[pairs]   contact seen  " + r2(s.seen) + " (final " + r2(s.contact) + ")");
     print("[pairs]   closest gap   " + r4(s.gap) + " m (touch at " + TOUCH_DIST + ")");
 

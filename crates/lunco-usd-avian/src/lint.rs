@@ -322,7 +322,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .filter(|t| !t.is_empty())
             .collect();
         let missing: Vec<String> =
-            targets.iter().filter(|t| !known.contains(t)).cloned().collect();
+            targets.iter().filter(|t| !known.contains(*t)).cloned().collect();
         let owners: Vec<String> = targets.iter().map(|t| owner_of(t)).collect();
         filtered_pairs.push(H::map([
             ("path", H::str(path.clone())),
@@ -330,6 +330,54 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ("targets", H::Array(targets.into_iter().map(H::str).collect())),
             ("target_owners", H::Array(owners.into_iter().map(H::str).collect())),
             ("missing", H::Array(missing.into_iter().map(H::str).collect())),
+        ]));
+    }
+
+    // Collision groups. A group whose collection includes nothing that exists, or
+    // that filters against a prim which is not a group, is authoring that reads as
+    // protection and is not — decidable here, and at runtime only a warning in a
+    // log nobody is watching.
+    let mut collision_groups: Vec<H> = Vec::new();
+    let group_paths: HashSet<String> = paths
+        .iter()
+        .filter(|p| reader.prim_type_name(p).as_deref() == Some(ptok::T_PHYSICS_COLLISION_GROUP))
+        .map(|p| p.to_string())
+        .collect();
+    for p in &paths {
+        let path = p.to_string();
+        if !group_paths.contains(&path) {
+            continue;
+        }
+        let includes: Vec<String> = reader
+            .rel_targets(p, "collection:colliders:includes")
+            .into_iter()
+            .map(|t| t.to_string())
+            .collect();
+        let filtered: Vec<String> = reader
+            .rel_targets(p, ptok::A_FILTERED_GROUPS)
+            .into_iter()
+            .map(|t| t.to_string())
+            .collect();
+        // An include is a SUBTREE root, so "exists" means some prim is it or under
+        // it — an include naming a prim that was renamed matches nothing at all.
+        let missing_includes: Vec<String> = includes
+            .iter()
+            .filter(|t| !known.iter().any(|k| k == *t || k.starts_with(&format!("{t}/"))))
+            .cloned()
+            .collect();
+        let missing_filtered: Vec<String> =
+            filtered.iter().filter(|t| !group_paths.contains(*t)).cloned().collect();
+        collision_groups.push(H::map([
+            ("path", H::str(path)),
+            ("merge", H::str(reader.text(p, ptok::A_MERGE_GROUP).unwrap_or_default())),
+            (
+                "invert",
+                H::Bool(reader.scalar::<bool>(p, ptok::A_INVERT_FILTERED_GROUPS).unwrap_or(false)),
+            ),
+            ("includes", H::Array(includes.into_iter().map(H::str).collect())),
+            ("filtered", H::Array(filtered.into_iter().map(H::str).collect())),
+            ("missing_includes", H::Array(missing_includes.into_iter().map(H::str).collect())),
+            ("missing_filtered", H::Array(missing_filtered.into_iter().map(H::str).collect())),
         ]));
     }
 
@@ -410,6 +458,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("bodies", H::Array(body_facts)),
         ("joints", H::Array(joints)),
         ("filtered_pairs", H::Array(filtered_pairs)),
+        ("collision_groups", H::Array(collision_groups)),
         ("prims", H::Array(prims)),
     ])
 }

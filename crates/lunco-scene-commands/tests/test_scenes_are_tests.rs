@@ -28,15 +28,16 @@ fn assets_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets")
 }
 
-/// Scenes under `scenes/tests/` that cannot carry a headless verdict.
+/// The attribute a scene uses to declare it cannot carry a headless verdict, with
+/// the reason as its value.
 ///
-/// Each needs a reason, and the reason must be about the SCENE, not about the
-/// effort of writing one — "it would be work" is how this list becomes the place
-/// tests go to die.
-const NOT_HEADLESS_TESTABLE: &[(&str, &str)] = &[
-    ("hdri", "a render check: the thing under test is the image, and scene_test has no GPU"),
-    ("shader_fallback", "a render check: asserts what a material looks like when its shader is missing"),
-];
+/// It lives in the SCENE, not in a list here, because
+/// `scripts/run_scene_tests.sh` needs the same answer — it skips exactly these —
+/// and two exception lists disagree the day one of them is edited. The reason
+/// must be about the scene (the render checks need a GPU), never about the effort
+/// of writing a scenario: "it would be work" is how an exception list becomes the
+/// place tests go to die.
+const NOT_HEADLESS_TESTABLE: &str = "lunco:notHeadlessTestable";
 
 fn usda_files(dir: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
@@ -57,10 +58,10 @@ fn every_test_scene_carries_a_scenario() {
     let mut silent = Vec::new();
 
     for (stem, path) in &scenes {
-        if NOT_HEADLESS_TESTABLE.iter().any(|(n, _)| n == stem) {
+        let src = std::fs::read_to_string(path).expect("read scene");
+        if src.contains(NOT_HEADLESS_TESTABLE) {
             continue;
         }
-        let src = std::fs::read_to_string(path).expect("read scene");
         // A verdict needs a scenario to emit it, and a scenario reaches the scene
         // through a `LunCoProgram`. Both, so that neither half can rot alone.
         if !src.contains("lunco:scenario") || !src.contains("LunCoProgram") {
@@ -74,8 +75,9 @@ fn every_test_scene_carries_a_scenario() {
         silent.is_empty(),
         "test scenes that assert nothing ({}):\n  {}\n\n\
          Give each one a scenario that checks the invariant its header already \
-         describes, or add it to NOT_HEADLESS_TESTABLE with a reason. A scene \
-         that cannot fail is not a test.",
+         describes, or — if it genuinely cannot return a headless verdict — author \
+         `custom string {NOT_HEADLESS_TESTABLE} = \"<why>\"` on its root prim. A \
+         scene that cannot fail is not a test.",
         silent.len(),
         silent.join("\n  ")
     );

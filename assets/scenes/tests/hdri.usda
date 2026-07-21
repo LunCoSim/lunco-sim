@@ -22,6 +22,12 @@ def Xform "HdriTest" (
     doc = "HDRI environment probe: a textured UsdLuxDomeLight driving skybox + image-based lighting on a row of metal/rough spheres."
 )
 {
+    # NOT headless-testable, and this is where that is DECLARED — one fact, read
+    # by both `scripts/run_scene_tests.sh` (which skips it) and by
+    # `every_test_scene_carries_a_scenario` (which stops demanding a verdict of
+    # it). Two separate exception lists would disagree the day one was edited.
+    custom string lunco:notHeadlessTestable = "a render check: the thing under test is the image, and scene_test has no GPU"
+
 
     # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
     # reads gravity from it and applies it to every body, so a second scene prim

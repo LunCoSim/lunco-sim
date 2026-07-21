@@ -14,6 +14,10 @@ def Xform "ShaderFallbackTest" (
     doc = "Robustness probe: a cube that wrongly points its material at a shader library with no fragment entry. The app must keep the StandardMaterial and warn once instead of storming the pipeline cache."
 )
 {
+    # NOT headless-testable — see `lunco:notHeadlessTestable` in `hdri.usda` for
+    # why the reason lives in the scene rather than in two exception lists.
+    custom string lunco:notHeadlessTestable = "a render check: asserts what a material looks like when its shader is missing"
+
 
     # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
     # reads gravity from it and applies it to every body, so a second scene prim

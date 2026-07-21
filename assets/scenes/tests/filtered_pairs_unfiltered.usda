@@ -5,18 +5,18 @@
     metersPerUnit = 1
 )
 
-# The CONTROL for `filtered_pairs_test.usda`: the same Hull–Arm–Pad rig with the
-# same deliberate overlap, and NO `PhysicsFilteredPairsAPI` on the Pad.
+# The CONTROL for `filtered_pairs.usda`: the SAME rig
+# (`vessels/rigs/filtered_pair_rig.usda`, referenced), with no filtering authored
+# on it at all.
 #
 # It is half the test. "The pad reports no contact" passes trivially on a rig
 # whose parts never touched — a typo in a translate, a joint that never built, a
 # collider that never loaded, and the filtered scene still goes green while
 # proving nothing. This scene is what shows the measurement can tell the
-# difference: with the rel gone, the very same sensor must read a contact.
+# difference: with no rel, the very same sensor must read a contact.
 #
-# Everything else is IDENTICAL by construction. If the two scenes ever drift
-# apart geometrically, the pair stops being a control and starts being a second
-# experiment.
+# The geometry cannot drift between the two scenes, because there is only one
+# copy of it. The difference is one `over` in the other file, and nothing here.
 #
 # Loaded by `sandbox --scene scenes/tests/filtered_pairs_unfiltered.usda`.
 
@@ -57,63 +57,12 @@ def Xform "SandboxScene" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Xform "Rig"
+    def Xform "Rig" (
+        prepend references = @lunco://vessels/rigs/filtered_pair_rig.usda@</FilteredPairRig>
+    )
     {
-        def Cube "Hull" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
-        )
-        {
-            double size = 2.0
-            double3 xformOp:translate = (0.0, 6.0, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.35, 0.4, 0.5)]
-            float physics:mass = 500.0
-            bool physics:kinematicEnabled = true
-            bool physics:collisionEnabled = true
-        }
-
-        def Cube "Arm" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
-        )
-        {
-            double size = 0.4
-            double3 xformOp:translate = (2.0, 6.0, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.8, 0.6, 0.2)]
-            float physics:mass = 10.0
-            bool physics:collisionEnabled = true
-        }
-
-        # The one difference: no `PhysicsFilteredPairsAPI`, no rel.
-        def Cube "Pad" (
-            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
-        )
-        {
-            double size = 0.6
-            double3 xformOp:translate = (0.8, 6.0, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.9, 0.3, 0.3)]
-            float physics:mass = 5.0
-            bool physics:collisionEnabled = true
-
-            custom bool lunco:sensor:contact = true
-        }
-
-        def PhysicsFixedJoint "HullToArm"
-        {
-            rel physics:body0 = </SandboxScene/Rig/Hull>
-            rel physics:body1 = </SandboxScene/Rig/Arm>
-            point3f physics:localPos0 = (2.0, 0.0, 0.0)
-            point3f physics:localPos1 = (0.0, 0.0, 0.0)
-        }
-
-        def PhysicsFixedJoint "ArmToPad"
-        {
-            rel physics:body0 = </SandboxScene/Rig/Arm>
-            rel physics:body1 = </SandboxScene/Rig/Pad>
-            point3f physics:localPos0 = (-1.2, 0.0, 0.0)
-            point3f physics:localPos1 = (0.0, 0.0, 0.0)
-        }
+        double3 xformOp:translate = (0, 6.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
     def Scope "Scenario"
