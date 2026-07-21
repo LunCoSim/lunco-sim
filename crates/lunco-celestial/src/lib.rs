@@ -100,6 +100,25 @@ pub struct CelestialBodyDecl {
     pub naif: i32,
 }
 
+/// A body map authored ON the body prim — the ECS projection of
+/// `asset lunco:body:albedoMap = @lunco://textures/earth.png@`.
+///
+/// Which map a body wears is scene content, and this is the one-attribute way
+/// to say it: no Material network, just a texture, resolved through the
+/// ordinary asset schemes. A Twin can therefore ship its own Earth
+/// (`@twin://mytwin/textures/earth_1970.png@`) without touching the engine's
+/// manifest, and a scene that says nothing falls back to the declared dataset
+/// (see `imagery`), then to the body's own colour.
+///
+/// For anything richer than an albedo map — a custom shader, extra inputs —
+/// bind a `UsdShade` Material to the prim instead; that path already exists
+/// and wins over both.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct AuthoredBodyAlbedo {
+    /// Asset reference exactly as authored, resolved by the `AssetServer`.
+    pub asset: String,
+}
+
 /// Run condition: does the loaded scene actually ask for celestial content?
 ///
 /// Replaces `CelestialConfig.spawn_hierarchy` — a boolean in Rust that decided
@@ -325,11 +344,14 @@ impl Plugin for CelestialPlugin {
         // package). It runs BEFORE the authored-look adoption so a scene that
         // binds its own Material still wins — content overrules the default.
         app.init_resource::<imagery::BoundBodyImagery>();
-        app.add_systems(Startup, imagery::register_body_imagery_datasets);
         app.add_systems(
             Update,
             (
+                // Weakest first, so a stronger statement overwrites it in the
+                // same frame: engine-wide dataset default → the map authored on
+                // the prim → a full Material bound to the prim.
                 imagery::bind_dataset_body_imagery,
+                imagery::adopt_authored_body_albedo,
                 big_space_setup::adopt_authored_body_look,
                 globe_lod::update_globe_lod,
             )

@@ -242,6 +242,53 @@ pub fn packed_cache_dir() -> PathBuf {
     assets_dir_abs().join(".cache")
 }
 
+/// The directory holding the engine's dataset manifests: `assets/manifests`.
+///
+/// Manifests are DATA, not code. They live beside the assets they declare, ship
+/// with the package (`assets/` is staged), and are read at runtime — so adding a
+/// dataset, correcting a URL or bumping a version is an edit to a `.toml`, not a
+/// rebuild. A Twin's `Assets.toml` already worked this way; this makes the
+/// engine's own declarations the same kind of thing rather than a compiled-in
+/// special case.
+///
+/// One file per **group**, named for it: `celestial.toml` declares the
+/// `celestial` group. The file stem is what the UI shows as the owning library,
+/// so a new group is a new file and nothing else.
+pub fn manifests_dir() -> PathBuf {
+    assets_dir_abs().join("manifests")
+}
+
+/// Every engine manifest as `(group, path)`, sorted by group.
+///
+/// Sorted because it drives both a UI listing and the CLI's iteration order, and
+/// `read_dir` order is whatever the filesystem feels like — which would make the
+/// download list reshuffle between machines for no reason.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn engine_manifests() -> Vec<(String, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(manifests_dir()) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+        .filter_map(|p| {
+            let group = p.file_stem()?.to_str()?.to_string();
+            Some((group, p))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// The text of one engine manifest by group name, or `None` when there is no
+/// such group. For a consumer that wants its OWN declarations and nothing else
+/// (the MSL installer reading `[msl]`), rather than the whole set.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn engine_manifest_text(group: &str) -> Option<String> {
+    std::fs::read_to_string(manifests_dir().join(format!("{group}.toml"))).ok()
+}
+
 /// Every cache root a library-relative reference is looked up in, in order:
 /// the packed cache beside `assets/`, then the shared machine-wide pool.
 ///

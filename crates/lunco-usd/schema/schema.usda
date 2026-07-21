@@ -409,6 +409,22 @@ class "LunCoCelestialBodyAPI" (
         Uniform: a prim does not become a different planet partway through a shot.
         `0` is not a body — it means "unset", and such a prim is ignored."""
     )
+
+    asset lunco:body:albedoMap = @@ (
+        doc = """Surface map this body wears — an ordinary asset reference,
+        resolved by the same schemes as any other (`@lunco://textures/earth.png@`,
+        `@twin://myschool/textures/earth_1970.png@`).
+
+        Which map a body wears is scene content, so a Twin dresses its own Earth
+        without touching the engine's manifests. Unset is a complete state, not a
+        broken one: the body falls back to the imagery declared in
+        `assets/manifests/celestial.toml` (if that dataset is installed), and then
+        to its own colour — ocean blue, regolith grey.
+
+        For anything richer than an albedo map — a custom shader, extra inputs —
+        bind a `UsdShade` Material to this prim instead. That path already exists
+        and outranks this one, which in turn outranks the manifest default."""
+    )
 }
 
 class "LunCoLinkAPI" (

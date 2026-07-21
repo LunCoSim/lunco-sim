@@ -1301,15 +1301,17 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
     render_optional_libraries(ui, world);
 }
 
-/// Parse the bundled `Assets.toml` exactly once. The source is a
-/// compile-time `const &str`, so the parse result is immutable — doing it
-/// every frame `render_optional_libraries` runs (CQ-216) was pure waste.
+/// Parse `assets/manifests/modelica.toml` exactly once. Reading and parsing it
+/// every frame `render_optional_libraries` runs (CQ-216) was pure waste; the
+/// file is data now rather than a compiled-in constant, so the once-only read
+/// also keeps it off the render frame.
 #[cfg(not(target_arch = "wasm32"))]
 fn bundled_asset_manifest() -> &'static Result<lunco_assets::download::AssetManifest, String> {
     use lunco_assets::download::AssetManifest;
     static CACHE: std::sync::OnceLock<Result<AssetManifest, String>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
-        crate::msl_remote::BUNDLED_ASSETS_TOML
+        crate::msl_remote::assets_manifest_text()
+            .ok_or_else(|| "assets/manifests/modelica.toml not found".to_string())?
             .parse::<AssetManifest>()
             .map_err(|e| e.to_string())
     })

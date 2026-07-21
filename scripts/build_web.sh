@@ -586,7 +586,7 @@ generate_bindings() {
     done
     if [ -z "$dejavu_src" ]; then
         info "DejaVu Sans font not found. Attempting to download automatically..."
-        if LUNCOSIM_CACHE="$PROJECT_DIR/.cache" cargo run -p lunco-assets -- download -p lunco-theme; then
+        if LUNCOSIM_CACHE="$PROJECT_DIR/.cache" cargo run -p lunco-assets -- download -g fonts; then
             for candidate in \
                 "$PROJECT_DIR/../.cache/fonts/DejaVuSans.ttf" \
                 "$PROJECT_DIR/.cache/fonts/DejaVuSans.ttf"; do
@@ -694,7 +694,7 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
     # Stage the PROCESSED models (e.g. NASA Perseverance) next to the wasm — same
     # idea as the luncosim textures above. Populate the cache first with:
     #   cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance \
-    #     && cargo run -p lunco-assets --bin lunco-assets -- process -p lunco-usd
+    #     && cargo run -p lunco-assets --bin lunco-assets -- process -g models
     if [ "$binary" = "sandbox" ]; then
         local models_src=""
         for candidate in \
@@ -715,7 +715,7 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
             done
         else
             warn "no .cache/models — glTF models (Perseverance rover) will 404 in the browser. \
-Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance && … -- process -p lunco-usd"
+Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance && … -- process -g models"
         fi
     fi
 

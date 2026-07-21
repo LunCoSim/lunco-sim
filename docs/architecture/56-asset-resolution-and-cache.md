@@ -283,6 +283,21 @@ id. Adding Mars imagery is a manifest entry; deleting a dataset removes the
 imagery. No crate holds a texture filename, and `registry.rs`'s old
 `texture_path` field — which named files the engine did not ship — is gone.
 
+A scene overrides that default by authoring the map on the body prim:
+
+```usda
+def Xform "Earth" ( prepend apiSchemas = ["LunCoCelestialBodyAPI"] )
+{
+    uniform int lunco:body = 399
+    asset lunco:body:albedoMap = @twin://myschool/textures/earth_1970.png@
+}
+```
+
+Three tiers, weakest first, each overwriting the last in the same frame:
+manifest default → `lunco:body:albedoMap` → a `UsdShade` Material bound to the
+prim (which says strictly more, so it wins). A Twin can therefore dress its own
+Earth without touching the engine's manifests.
+
 Three arrival routes, one code path: downloaded now, cached from an earlier run,
 or packed into the distribution at `assets/.cache/textures/earth.png`. The
 registry probes read roots, so the packed case reports *installed* and binds on
@@ -295,20 +310,7 @@ installed. Otherwise the UI says "installed" while every consumer still finds
 nothing — the CLI's two-command flow (`download` then `process`) has no
 equivalent second command in the app.
 
-### Still open: which body wears which map is scene content
-
-The binding above is engine-wide: the Earth dataset dresses *the* Earth. A Twin
-that wants its own map still cannot say so without touching the manifest.
-Authored instead as an ordinary prim with an ordinary asset reference:
-
-```usda
-def Xform "Earth" ( prepend apiSchemas = ["LunCoCelestialBodyAPI"] )
-{
-    asset lunco:body:albedoMap = @lunco://textures/earth.png@
-}
-```
-
-Not a new mechanism — it is what terrain already does
+`lunco:body:albedoMap` is not a new mechanism — it is what terrain already does
 (`demSource = @terrain/apollo15@`), what materials do (`lunco:material:shader`),
 and what HDRI does (`UsdLuxDomeLight`). It buys: the texture becomes a normal
 USD reference inheriting cache fallback and web staging with no

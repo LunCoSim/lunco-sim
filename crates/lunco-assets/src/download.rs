@@ -196,7 +196,24 @@ impl std::str::FromStr for AssetManifest {
 }
 
 impl AssetManifest {
-    /// Reads and parses `Assets.toml` from the given crate directory.
+    /// Reads and parses a manifest FILE — `assets/manifests/<group>.toml` for
+    /// the engine, `<twin>/Assets.toml` for a Twin.
+    pub fn from_file(path: &Path) -> Result<Self, std::io::Error> {
+        if !path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("No manifest at {}", path.display()),
+            ));
+        }
+        let content = std::fs::read_to_string(path)?;
+        toml::from_str(&content).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+        })
+    }
+
+    /// Reads and parses `Assets.toml` from a **Twin folder**. Twins keep their
+    /// manifest at the root of the folder they travel as; only the ENGINE's
+    /// declarations moved into `assets/manifests/`.
     pub fn from_crate_dir(crate_dir: &Path) -> Result<Self, std::io::Error> {
         let path = crate_dir.join("Assets.toml");
         if !path.exists() {
@@ -499,20 +516,22 @@ pub fn download_asset_with_control(
     Ok(())
 }
 
-/// Downloads all assets from the given crate's `Assets.toml`. Resolves each
-/// `dest` against the shared cache root (crates are workspace members, not
-/// Twin folders — their downloads belong in the cache).
+/// Downloads every asset in one engine manifest group
+/// (`assets/manifests/<group>.toml`). Resolves each `dest` against the shared
+/// cache root — engine declarations are not Twin-owned, so their downloads
+/// belong in the machine-wide pool.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_all_for_crate(crate_dir: &Path) -> Result<(), DownloadError> {
-    let manifest = AssetManifest::from_crate_dir(crate_dir)
+pub fn download_all_for_group(group: &str) -> Result<(), DownloadError> {
+    let path = crate::manifests_dir().join(format!("{group}.toml"));
+    let manifest = AssetManifest::from_file(&path)
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
 
     if manifest.assets.is_empty() {
-        println!("No assets declared in {}", crate_dir.join("Assets.toml").display());
+        println!("No assets declared in {}", path.display());
         return Ok(());
     }
 
-    println!("Downloading assets for {}...", crate_dir.file_name().unwrap_or_default().to_string_lossy());
+    println!("Downloading assets for `{group}`...");
 
     for (key, entry) in &manifest.assets {
         download_asset(entry, key, None)?;
@@ -570,95 +589,56 @@ pub fn download_one_for_twin(twin_root: &Path, asset_key: &str) -> Result<(), Do
     }
 }
 
-/// Downloads a single asset by key, searching every crate's
-/// `Assets.toml` across the workspace. Returns the first match.
+/// Downloads a single asset by key, searching every engine manifest group.
+/// Returns the first match.
 ///
 /// Use case: `cargo run -p lunco-assets -- download -a dejavu_sans`
 /// — pulls only the DejaVu font without refetching 20+ MB of NASA
-/// textures from an unrelated crate.
+/// textures from an unrelated group.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_one_workspace(
-    workspace_root: &Path,
-    asset_key: &str,
-) -> Result<(), DownloadError> {
-    let cargo_toml = workspace_root.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml)
-        .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
-    let workspace: toml::Value = toml::from_str(&content)
-        .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
-
-    let members = workspace["workspace"]["members"]
-        .as_array()
-        .ok_or_else(|| {
-            DownloadError::ManifestFailed("No workspace.members in Cargo.toml".into())
-        })?;
-
-    for member in members {
-        let Some(path) = member.as_str() else { continue };
-        let crate_dir = workspace_root.join(path);
-        let manifest_path = crate_dir.join("Assets.toml");
-        if !manifest_path.exists() {
+pub fn download_one_engine(asset_key: &str) -> Result<(), DownloadError> {
+    for (group, path) in crate::engine_manifests() {
+        let Ok(manifest) = AssetManifest::from_file(&path) else {
             continue;
-        }
-        let manifest = match AssetManifest::from_crate_dir(&crate_dir) {
-            Ok(m) => m,
-            Err(_) => continue,
         };
         if let Some(entry) = manifest.assets.get(asset_key) {
-            println!(
-                "Downloading `{}` from {}...",
-                asset_key,
-                crate_dir.file_name().unwrap_or_default().to_string_lossy()
-            );
+            println!("Downloading `{asset_key}` from `{group}`...");
             return download_asset(entry, asset_key, None);
         }
     }
 
     Err(DownloadError::ManifestFailed(format!(
-        "asset `{asset_key}` not found in any Assets.toml across the workspace"
+        "asset `{asset_key}` not declared in any manifest under {}",
+        crate::manifests_dir().display()
     )))
 }
 
-/// Downloads all assets from every crate in the workspace.
+/// Downloads every asset declared by every engine manifest group.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_all_workspace(workspace_root: &Path) -> Result<(), DownloadError> {
-    let cargo_toml = workspace_root.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml)
-        .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
-    let workspace: toml::Value = toml::from_str(&content)
-        .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
-
-    let members = workspace["workspace"]["members"]
-        .as_array()
-        .ok_or_else(|| DownloadError::ManifestFailed("No workspace.members in Cargo.toml".into()))?;
-
-    for member in members {
-        if let Some(path) = member.as_str() {
-            let crate_dir = workspace_root.join(path);
-            if crate_dir.join("Assets.toml").exists() {
-                download_all_for_crate(&crate_dir)?;
-            }
-        }
+pub fn download_all_engine() -> Result<(), DownloadError> {
+    for (group, _) in crate::engine_manifests() {
+        download_all_for_group(&group)?;
     }
-
     Ok(())
 }
 
-/// Lists all assets from a crate's `Assets.toml`. `dest_root` selects the
-/// base `dest` is probed against (`None` = cache; `Some` = that folder) so
-/// the status reflects where a Twin download would actually land.
-pub fn list_for_crate(
-    crate_dir: &Path,
+/// Lists all assets in one manifest FILE. `dest_root` selects the base `dest`
+/// is probed against (`None` = shared cache; `Some` = that folder) so the
+/// status reflects where a download would actually land. `label` names the set
+/// in the heading — a group for the engine, the folder for a Twin.
+pub fn list_manifest(
+    manifest_path: &Path,
+    label: &str,
     dest_root: Option<&Path>,
 ) -> Result<(), std::io::Error> {
-    let manifest = AssetManifest::from_crate_dir(crate_dir)?;
+    let manifest = AssetManifest::from_file(manifest_path)?;
 
     if manifest.assets.is_empty() {
-        println!("No assets declared in {}", crate_dir.join("Assets.toml").display());
+        println!("No assets declared in {}", manifest_path.display());
         return Ok(());
     }
 
-    println!("Assets for {}:", crate_dir.file_name().unwrap_or_default().to_string_lossy());
+    println!("Assets for {label}:");
     for (key, entry) in &manifest.assets {
         let dest = entry_dest_path(entry, dest_root);
         let status = if dest.exists() {
@@ -692,7 +672,25 @@ pub fn list_for_crate(
 /// Lists all assets from a **Twin folder's** `Assets.toml`, probing `dest`
 /// against the Twin root so the status reflects where files land.
 pub fn list_for_twin(twin_root: &Path) -> Result<(), std::io::Error> {
-    list_for_crate(twin_root, Some(&crate::twin_cache_dir(twin_root)))
+    let label = twin_root
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    list_manifest(
+        &twin_root.join("Assets.toml"),
+        &label,
+        Some(&crate::twin_cache_dir(twin_root)),
+    )
+}
+
+/// Lists one engine manifest group (`assets/manifests/<group>.toml`).
+pub fn list_group(group: &str) -> Result<(), std::io::Error> {
+    list_manifest(
+        &crate::manifests_dir().join(format!("{group}.toml")),
+        group,
+        None,
+    )
 }
 
 /// A `dest` path is "twin-safe" iff it is strictly relative, contains no
@@ -885,7 +883,7 @@ mod tests {
         );
     }
 
-    /// Sanity-check that `list_for_crate` honours `dest_root` so `--twin`
+    /// Sanity-check that `list_manifest` honours `dest_root` so `--twin`
     /// reports against the Twin folder, not the cache. We can't exercise a
     /// real `Assets.toml` without a fixture, but the path-join is the only
     /// behaviour the twin path adds to `list`, so assert the resolved probe
@@ -902,7 +900,7 @@ mod tests {
         .unwrap();
         // Not downloaded yet → "not installed", but the function must not
         // panic and must complete (i.e. dest_root was accepted).
-        let res = list_for_crate(&tmp, Some(&tmp));
+        let res = list_manifest(&tmp.join("Assets.toml"), "twin", Some(&tmp));
         assert!(res.is_ok());
         let _ = std::fs::remove_dir_all(&tmp);
     }

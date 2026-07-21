@@ -44,10 +44,10 @@
 #   Windows (x86_64)            — needs MSVC build tools (Visual Studio)
 #
 # Cache assets are NOT downloaded by this script. Populate them first with:
-#   cargo run -p lunco-assets -- download -p lunco-theme   # fonts
-#   cargo run -p lunco-assets -- download -p lunco-modelica  # MSL (for lunica)
-#   cargo run -p lunco-assets -- download -p lunco-usd && \
-#     cargo run -p lunco-assets -- process -p lunco-usd     # rover model (for sandbox)
+#   cargo run -p lunco-assets -- download -g fonts        # UI font
+#   cargo run -p lunco-assets -- download -g modelica     # MSL (for lunica)
+#   cargo run -p lunco-assets -- download -g models && \
+#     cargo run -p lunco-assets -- process -g models      # rover model (for sandbox)
 #
 # The package layout:
 #   dist/<binary>-<platform>-<arch>/
@@ -197,10 +197,11 @@ sync_dir() {
 }
 
 # ── Download cache assets for a binary ────────────────────────────────────
-# Runs `cargo run -p lunco-assets -- download` for each crate whose assets
-# the binary needs, then `process` for crates with a process step (e.g.
-# lunco-usd's glTF transform). Idempotent — re-running with a populated
-# .cache/ is a no-op (the tool verifies sha256 and skips present files).
+# Runs `cargo run -p lunco-assets -- download -g GROUP` for each manifest group
+# the binary needs, then `process` for groups with a process step (e.g. the
+# `models` group's glTF transform). Groups are the files in assets/manifests/.
+# Idempotent — re-running with a populated cache is a no-op (the tool verifies
+# sha256 and skips present files).
 #
 # Skipped when --no-cache is set, when the lunco-assets bin can't build
 # (e.g. missing system deps on a fresh CI runner), or when SKIP_DOWNLOAD=1
@@ -215,36 +216,35 @@ download_cache_for() {
     fi
     info "Downloading cache assets for $binary → $cache_dir"
 
-    # Each binary needs fonts (lunco-theme) + its own crate's assets.
-    # sandbox also needs the processed glTF from lunco-usd.
-    local crates_to_download=""
-    local crates_to_process=""
+    # Every binary needs the UI font; lunica also needs MSL.
+    local groups_to_download=""
+    local groups_to_process=""
     case "$binary" in
         lunica)
-            crates_to_download="lunco-theme lunco-modelica"
+            groups_to_download="fonts modelica"
             ;;
         sandbox)
-            crates_to_download="lunco-theme"
+            groups_to_download="fonts"
             ;;
     esac
 
     # Export so the lunco-assets binary picks it up.
     export LUNCOSIM_CACHE="$cache_dir"
 
-    for crate in $crates_to_download; do
-        info "  downloading assets for $crate …"
-        if cargo run -p lunco-assets -- download -p "$crate"; then
-            success "  downloaded $crate assets"
+    for group in $groups_to_download; do
+        info "  downloading assets for group '$group' …"
+        if cargo run -p lunco-assets -- download -g "$group"; then
+            success "  downloaded $group assets"
         else
-            warn "  download for $crate failed — continuing (build_native.sh will warn about missing .cache/ subdirs)"
+            warn "  download for $group failed — continuing (build_native.sh will warn about missing cache subdirs)"
         fi
     done
-    for crate in $crates_to_process; do
-        info "  processing assets for $crate …"
-        if cargo run -p lunco-assets -- process -p "$crate"; then
-            success "  processed $crate assets"
+    for group in $groups_to_process; do
+        info "  processing assets for group '$group' …"
+        if cargo run -p lunco-assets -- process -g "$group"; then
+            success "  processed $group assets"
         else
-            warn "  process for $crate failed — continuing (the raw asset may be missing or npx unavailable)"
+            warn "  process for $group failed — continuing (the raw asset may be missing or npx unavailable)"
         fi
     done
 }
@@ -562,7 +562,7 @@ if [ "$NO_CACHE" -eq 0 ]; then
                     sync_dir "$CACHE_SRC/$subdir/" "$PACKED_CACHE/$subdir/" no-delete
                 else
                     warn "cache/$subdir not found at $CACHE_SRC — $BINARY may need it at runtime"
-                    warn "  Populate with: cargo run -p lunco-assets -- download -p <crate>"
+                    warn "  Populate with: cargo run -p lunco-assets -- download -g <group>"
                 fi
             done
         fi

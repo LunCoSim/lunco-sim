@@ -833,10 +833,15 @@ const PARSE_LOG_INTERVAL_SECS: u64 = 10;
 // stays responsive throughout. `drain_native_msl_install` promotes the
 // shared `NativeInstallSlot` into ECS state each frame.
 
-/// Bundled copy of `crates/lunco-modelica/Assets.toml`. Packaged
-/// binaries don't have the source tree, so we compile the manifest in.
+/// The `[msl]` declaration, read from `assets/manifests/modelica.toml`.
+///
+/// Data, not a compiled-in constant: a packaged build ships `assets/`, so the
+/// manifest is there to be read — and bumping the MSL version becomes an edit
+/// to a `.toml` instead of a rebuild.
 #[cfg(not(target_arch = "wasm32"))]
-pub const BUNDLED_ASSETS_TOML: &str = include_str!("../Assets.toml");
+pub fn assets_manifest_text() -> Option<String> {
+    lunco_assets::engine_manifest_text("modelica")
+}
 
 /// Cooperative cancel flag for the in-flight MSL install task. The
 /// download polls it between chunks; the indexer polls it between
@@ -872,7 +877,17 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
     let cancel_for_task = cancel.clone();
     pool.spawn(async move {
         // Parse the bundled Assets.toml to recover the `[msl]` entry.
-        let manifest = match BUNDLED_ASSETS_TOML.parse::<AssetManifest>() {
+        let Some(manifest_text) = assets_manifest_text() else {
+            set_install_state(
+                &slot,
+                MslLoadState::Failed(
+                    "assets/manifests/modelica.toml not found — is `assets/` beside the binary?"
+                        .into(),
+                ),
+            );
+            return;
+        };
+        let manifest = match manifest_text.parse::<AssetManifest>() {
             Ok(m) => m,
             Err(e) => {
                 set_install_state(

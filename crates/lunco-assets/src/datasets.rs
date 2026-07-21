@@ -619,14 +619,46 @@ fn scan_open_twins_for_datasets(
     }
 }
 
-/// Adds the [`DatasetRegistry`], its status pump, and the open-Twin scan.
-/// Idempotent.
+/// Register every engine manifest in `assets/manifests/`, one group per file.
+///
+/// No crate declares anything in Rust: the manifests are data, read from the
+/// shipped asset library at startup exactly as an open Twin's is read when it
+/// opens. A crate that OWNS a dataset still owns what to do with the bytes —
+/// it just no longer carries a compiled-in copy of the declaration, so adding a
+/// dataset or fixing a URL is an edit to a `.toml`.
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>) {
+    let Some(mut registry) = registry else { return };
+    let manifests = crate::engine_manifests();
+    if manifests.is_empty() {
+        // Not fatal — an app may ship no declarations at all — but it is also
+        // exactly what a mis-staged package looks like, so say so once.
+        info!(
+            "[datasets] no manifests in {} — nothing is offered for download",
+            crate::manifests_dir().display()
+        );
+        return;
+    }
+    let mut total = 0;
+    for (group, path) in manifests {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => total += registry.register(&text, &group),
+            Err(e) => error!("[datasets] cannot read {}: {e}", path.display()),
+        }
+    }
+    info!("[datasets] {total} declared dataset(s) from assets/manifests");
+}
+
+/// Adds the [`DatasetRegistry`], its status pump, the engine-manifest scan and
+/// the open-Twin scan. Idempotent.
 pub struct DatasetsPlugin;
 
 impl Plugin for DatasetsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DatasetRegistry>();
         app.add_systems(Update, drain_dataset_status);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Startup, scan_engine_manifests);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, scan_open_twins_for_datasets);
     }

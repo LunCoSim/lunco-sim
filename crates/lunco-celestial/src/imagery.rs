@@ -4,14 +4,17 @@
 //! What it LOOKS like is data, and data that is far too big for git: the Blue
 //! Marble mosaic and the LROC colour map are hundreds of megabytes of source
 //! that get resized into 4K textures. So they are DECLARED in this crate's
-//! `Assets.toml`, listed in Settings ▸ Downloadable data with everything else,
+//! manifest (`assets/manifests/celestial.toml`), listed in
+//! Settings ▸ Downloadable data with everything else,
 //! and fetched only when a user asks.
 //!
-//! There is deliberately no path to a texture anywhere in this crate. The
-//! manifest entry names the body it belongs to (`[earth.body] naif_id = 399`),
-//! and this module walks the registry looking for that sub-table. Adding
-//! imagery for Mars is a manifest entry, not a code change; removing a dataset
-//! removes the imagery. The engine never learns a filename.
+//! There is deliberately no path to a texture anywhere in this crate, and no
+//! compiled-in copy of the manifest either. The declaration is DATA read from
+//! the shipped asset library at startup; the entry names the body it belongs to
+//! (`[earth.body] naif_id = 399`), and this module walks the registry looking
+//! for that sub-table. Adding imagery for Mars is a `.toml` edit — no rebuild,
+//! no code change; removing a dataset removes the imagery. The engine never
+//! learns a filename.
 //!
 //! Three ways the bytes arrive, one code path for all of them:
 //!
@@ -46,17 +49,55 @@ struct BodyImageryDecl {
 #[derive(Resource, Default)]
 pub(crate) struct BoundBodyImagery(Vec<i32>);
 
-/// Declare this crate's datasets into the engine-wide registry that owns
-/// fetching. Embedded, because a packaged binary has no source tree.
-pub(crate) fn register_body_imagery_datasets(
-    registry: Option<ResMut<lunco_assets::datasets::DatasetRegistry>>,
+/// Adopt a body map AUTHORED on the body prim
+/// (`asset lunco:body:albedoMap = @…@`) onto that body's globe.
+///
+/// Beats the dataset default and is not beaten by it: the naif id is recorded
+/// in [`BoundBodyImagery`], so a dataset installed later leaves an
+/// author's choice alone. Scene content outranks an engine-wide default —
+/// the same rule `adopt_authored_body_look` follows for full Materials, which
+/// in turn outranks this, since a Material says strictly more.
+pub(crate) fn adopt_authored_body_albedo(
+    q_decl: Query<
+        (&crate::CelestialBodyDecl, &crate::AuthoredBodyAlbedo),
+        Changed<crate::AuthoredBodyAlbedo>,
+    >,
+    asset_server: Res<AssetServer>,
+    mut bound: ResMut<BoundBodyImagery>,
+    mut q_globes: Query<(&CelestialBody, &mut GlobeLod, &mut GlobeTiles)>,
+    mut commands: Commands,
 ) {
-    let Some(mut registry) = registry else {
-        // No `DatasetsPlugin` (headless probe, test harness): the crate still
-        // works, it just has nothing to offer for download.
-        return;
-    };
-    registry.register(include_str!("../Assets.toml"), "celestial");
+    for (decl, albedo) in &q_decl {
+        let Some((_, mut lod, mut tiles)) = q_globes
+            .iter_mut()
+            .find(|(body, _, _)| body.ephemeris_id == decl.naif)
+        else {
+            continue; // globe not built yet — `Changed` still holds next frame
+        };
+        let image = asset_server.load(albedo.asset.clone());
+        lod.look = lod.look.clone().with_texture(TextureLayer::Albedo, image);
+        drop_resident_tiles(&mut tiles, &mut commands);
+        if !bound.0.contains(&decl.naif) {
+            bound.0.push(decl.naif);
+        }
+        info!(
+            "[celestial] body {} took the imagery authored on its prim ({})",
+            decl.naif, albedo.asset
+        );
+    }
+}
+
+/// Drop the tiles carrying the previous look; `update_globe_lod` respawns the
+/// same set with the new one on the next frame. The look is cloned onto each
+/// tile at spawn, so changing it on the `GlobeLod` alone would leave every
+/// resident tile wearing the old one until it happened to be re-tessellated.
+fn drop_resident_tiles(tiles: &mut GlobeTiles, commands: &mut Commands) {
+    for (_, e) in tiles.resident.drain() {
+        commands.entity(e).try_despawn();
+    }
+    for (e, _) in tiles.retiring.drain(..) {
+        commands.entity(e).try_despawn();
+    }
 }
 
 /// The NAIF id a dataset declares imagery for, or `None` when it declares none.
@@ -120,14 +161,7 @@ pub(crate) fn bind_dataset_body_imagery(
         // file shipped with the build or was downloaded a moment ago.
         let image = asset_server.load(entry.artifact_uri());
         lod.look = lod.look.clone().with_texture(TextureLayer::Albedo, image);
-        // Resident tiles carry the OLD look (cloned onto each at spawn). Drop
-        // them; `update_globe_lod` respawns the same set with the new one.
-        for (_, e) in tiles.resident.drain() {
-            commands.entity(e).try_despawn();
-        }
-        for (e, _) in tiles.retiring.drain(..) {
-            commands.entity(e).try_despawn();
-        }
+        drop_resident_tiles(&mut tiles, &mut commands);
         bound.0.push(naif_id);
         info!(
             "[celestial] body {naif_id} took its imagery from dataset '{}'",
@@ -141,13 +175,28 @@ mod tests {
     use super::*;
     use lunco_assets::datasets::{DatasetRegistry, DatasetScope};
 
+    /// The SHIPPED manifest, read from the same file the app reads.
+    ///
+    /// Not `include_str!`: that would test a compiled-in copy while the running
+    /// app reads a file, which is exactly the drift that moving manifests out
+    /// of the crates was meant to end. Anchored on `CARGO_MANIFEST_DIR` rather
+    /// than `lunco_assets::manifests_dir()` because cargo runs a test with the
+    /// CRATE as its working directory, while the app runs from the workspace
+    /// root — same file, reached the way each caller can actually reach it.
+    fn celestial_manifest() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/manifests/celestial.toml");
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} must ship with the library: {e}", path.display()))
+    }
+
     /// The shipped manifest must actually declare which body each texture is
     /// of. This is the whole binding: drop the `[earth.body]` table and Earth
     /// silently renders untextured forever, with nothing in the code to notice.
     #[test]
     fn the_shipped_manifest_binds_its_textures_to_bodies() {
         let mut r = DatasetRegistry::default();
-        assert!(r.register(include_str!("../Assets.toml"), "celestial") >= 2);
+        assert!(r.register(&celestial_manifest(), "celestial") >= 2);
         let bodies: Vec<(String, Option<i32>)> = r
             .entries()
             .iter()
@@ -169,7 +218,7 @@ mod tests {
     #[test]
     fn imagery_is_addressed_as_a_library_uri_not_a_cache_path() {
         let mut r = DatasetRegistry::default();
-        r.register(include_str!("../Assets.toml"), "celestial");
+        r.register(&celestial_manifest(), "celestial");
         let earth = r
             .entries()
             .iter()

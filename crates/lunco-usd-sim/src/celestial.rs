@@ -63,6 +63,21 @@ pub fn insert_celestial_comms_components(
         }
     }
 
+    // --- Body imagery authored on the body prim ---
+    //
+    // `asset lunco:body:albedoMap = @lunco://textures/earth.png@` — which map a
+    // body wears is scene content, so a Twin can dress its own Earth without
+    // touching the engine's `Assets.toml`. Read as an ASSET, not a string:
+    // `sdf::Value` keeps those distinct and a `text()` read of an asset-typed
+    // attribute silently yields nothing.
+    if let Some(albedo) = reader.asset(sdf_path, "lunco:body:albedoMap") {
+        if !albedo.is_empty() {
+            commands
+                .entity(entity)
+                .try_insert(lunco_celestial::AuthoredBodyAlbedo { asset: albedo });
+        }
+    }
+
     // --- Geodetic anchor (ground stations + scene site anchor) ---
     let lat = reader.real(sdf_path, "lunco:anchor:lat");
     let lon = reader.real(sdf_path, "lunco:anchor:lon");

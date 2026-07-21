@@ -503,27 +503,15 @@ impl Plugin for EphemerisPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // Declare, then adopt: whatever is already cached is picked up on
-            // the first `Update`, and anything downloaded later on the frame
-            // the registry reports it installed. One code path for both.
-            app.add_systems(Startup, register_ephemeris_datasets);
+            // Declaring is `DatasetsPlugin`'s job — it scans
+            // `assets/manifests/`, where this crate's datasets live as DATA
+            // (`ephemeris.toml`). This crate only ADOPTS: whatever is already
+            // cached is picked up on the first `Update`, and anything
+            // downloaded later on the frame the registry reports it installed.
+            // One code path for both.
             app.add_systems(Update, adopt_ephemeris_datasets);
         }
     }
-}
-
-/// The datasets this crate declares, embedded so a packaged binary needs no
-/// source tree. Registered into the engine-wide registry that owns fetching.
-#[cfg(not(target_arch = "wasm32"))]
-fn register_ephemeris_datasets(
-    registry: Option<ResMut<lunco_assets::datasets::DatasetRegistry>>,
-) {
-    let Some(mut registry) = registry else {
-        // No `DatasetsPlugin` in this app (a headless probe, a test harness):
-        // the crate still works, it just has nothing to offer for download.
-        return;
-    };
-    registry.register(include_str!("../Assets.toml"), "ephemeris");
 }
 
 /// Adopt every ephemeris dataset whose file is on disk — cached from an earlier
