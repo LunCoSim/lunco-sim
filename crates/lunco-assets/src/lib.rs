@@ -221,6 +221,38 @@ pub fn cache_dir() -> PathBuf {
     }
 }
 
+/// The cache that travels WITH the shipped library: `<assets>/.cache`.
+///
+/// A packaged build is a folder — binary, `assets/`, and the large binaries it
+/// needs. Those binaries are cache artifacts (downloaded, processed,
+/// git-ignored), so they cannot live in `assets/` proper; but a distribution
+/// that only knew the machine-global [`cache_dir`] would arrive empty on a
+/// machine that had never run the downloader, and would depend on a launcher
+/// script exporting `LUNCOSIM_CACHE` to find its own payload.
+///
+/// So the library gets a cache of its own, right beside it, read BEFORE the
+/// global one. That is the same rule a Twin already follows
+/// ([`twin_cache_dir`]): the unit you ship carries its data inside itself, and
+/// the global pool is a shared convenience underneath — not a prerequisite.
+///
+/// Read-only in practice: downloads still land in [`cache_dir`], because a
+/// packaged `assets/` may sit on a read-only mount and because one machine
+/// should not re-fetch the same product per installed copy.
+pub fn packed_cache_dir() -> PathBuf {
+    assets_dir_abs().join(".cache")
+}
+
+/// Every cache root a library-relative reference is looked up in, in order:
+/// the packed cache beside `assets/`, then the shared machine-wide pool.
+///
+/// The ONE place that order is decided. The `lunco://` asset source, the
+/// synchronous resolver ([`engine_asset_local_path`]) and any tool probing for
+/// bytes all ask here, so a file found by the loader is a file found by the
+/// validator.
+pub fn cache_roots() -> Vec<PathBuf> {
+    vec![packed_cache_dir(), cache_dir()]
+}
+
 /// Where a **Twin's** downloaded assets live: `<twin_root>/.cache`.
 ///
 /// Two caches, one rule: an asset declared by the ENGINE lands in the shared
@@ -524,12 +556,28 @@ pub fn engine_asset_rel(reference: &str) -> &str {
 /// the shader `@fragment` pre-validator) resolves a reference exactly as the
 /// loader will — whether it was authored bare (`shaders/wheel.wgsl`) or schemed
 /// (`lunco://shaders/wheel.wgsl`).
+///
+/// It probes the SAME chain the source reads — `assets/`, then the packed
+/// cache, then the shared pool ([`cache_roots`]) — and returns the first root
+/// that actually holds the file. When none does, it returns the `assets/` path
+/// anyway, so an error message names where the file was EXPECTED rather than
+/// where it was last looked for.
 pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
     let rel = engine_asset_rel(reference);
     if has_scheme(rel) {
         return None; // another scheme's root — not in the shipped library
     }
-    Some(assets_dir_abs().join(rel))
+    let authored = assets_dir_abs().join(rel);
+    if authored.exists() {
+        return Some(authored);
+    }
+    for root in cache_roots() {
+        let candidate = root.join(rel);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    Some(authored)
 }
 
 /// The local filesystem path ANY reference resolves to, whichever root owns it —

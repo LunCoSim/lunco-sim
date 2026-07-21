@@ -37,7 +37,6 @@ fn body(name: &str, ephemeris_id: i32, radius_m: f64) -> lunco_celestial::regist
         gm: 0.0,
         soi_radius_m: None,
         parent_id: None,
-        texture_path: None,
         iau: None,
     }
 }

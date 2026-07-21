@@ -661,11 +661,12 @@ generate_bindings() {
     # was prototyped and backed out (2026-07-18) to avoid growing the shared
     # manifest schema; see `docs/architecture/56-asset-resolution-and-cache.md`.
 
-    # luncosim renders Earth/Moon as celestial bodies; their PROCESSED textures
-    # (`cached_textures://earth.png|moon.png`) load over HTTP same-origin —
-    # `cache_dir()` resolves to ".cache" on wasm, so the bevy HTTP reader fetches
-    # `<origin>/.cache/textures/<tex>`. Stage them next to the wasm (same idea as
-    # the DejaVu font above). Populate the cache first with:
+    # luncosim renders Earth/Moon as celestial bodies whose imagery is a declared
+    # dataset (`crates/lunco-celestial/Assets.toml`), loaded as
+    # `lunco://textures/<tex>`. On wasm every root of that scheme is an HTTP root,
+    # so staging into `assets/.cache/textures/` — the PACKED cache, exactly where
+    # `build_native.sh` puts it — serves them same-origin with no web-only path.
+    # Populate the cache first with:
     #   cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process
     if [ "$binary" = "luncosim" ]; then
         for tex in earth.png moon.png; do
@@ -676,9 +677,9 @@ generate_bindings() {
                 if [ -f "$candidate" ]; then tex_src="$candidate"; break; fi
             done
             if [ -n "$tex_src" ]; then
-                mkdir -p "$dist_dir/.cache/textures"
-                cp "$tex_src" "$dist_dir/.cache/textures/$tex"
-                info "Copied $tex → $dist_dir/.cache/textures/"
+                mkdir -p "$dist_dir/assets/.cache/textures"
+                cp "$tex_src" "$dist_dir/assets/.cache/textures/$tex"
+                info "Copied $tex → $dist_dir/assets/.cache/textures/"
             else
                 warn "celestial texture $tex not found — that body renders untextured in \
 the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process"

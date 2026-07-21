@@ -71,8 +71,6 @@ pub struct BodyDescriptor {
     pub soi_radius_m: Option<f64>,
     /// NAIF ID of the body this body orbits (e.g., Moon parent is Earth-Moon Barycenter).
     pub parent_id: Option<i32>,
-    /// Optional asset path for planetary surface textures.
-    pub texture_path: Option<String>,
     /// The IAU/WGCCRE rotation elements, ICRF-referenced. `None` for
     /// non-rotating frames (the Sun's spin is irrelevant here; the EMB is a
     /// barycenter, not a body).
@@ -144,7 +142,6 @@ impl CelestialBodyRegistry {
                     gm: 1.327_124_400_18e20,
                     soi_radius_m: None,
                     parent_id: None,
-                    texture_path: None,
                     iau: None,
                 },
                 BodyDescriptor {
@@ -154,7 +151,6 @@ impl CelestialBodyRegistry {
                     gm: 0.0,
                     soi_radius_m: None,
                     parent_id: Some(10), // Sun
-                    texture_path: None,
                     iau: None,
                 },
                 BodyDescriptor {
@@ -164,7 +160,6 @@ impl CelestialBodyRegistry {
                     gm: 3.986004418e14,
                     soi_radius_m: Some(924.0e6),
                     parent_id: Some(3), // EMB
-                    texture_path: Some("textures/earth.png".to_string()),
                     // = 360.9856235 °/day. The rate was always right; the PHASE
                     // (W₀ = 190.147°, east of the equator's node on the ICRF
                     // equator) was the missing half — without it every ground
@@ -179,7 +174,6 @@ impl CelestialBodyRegistry {
                     gm: 4.9048695e12,
                     soi_radius_m: Some(66.0e6),
                     parent_id: Some(3), // EMB
-                    texture_path: Some("textures/moon.png".to_string()),
                     // = 13.17635815 °/day, with W₀ = 38.3213°. The 1.543°
                     // Cassini tilt of the pole is no longer a hand-typed
                     // "mean-of-2026 snapshot": it falls out of the WGCCRE E1

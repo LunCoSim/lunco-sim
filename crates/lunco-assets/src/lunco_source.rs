@@ -5,7 +5,9 @@
 //! not part of the address:
 //!
 //! 1. `assets/<rel>` — git-tracked, authored content
-//! 2. `<cache>/<rel>` — externally-fetched binaries declared in `Assets.toml`
+//! 2. `assets/.cache/<rel>` — the PACKED cache: binaries shipped inside the
+//!    distribution, so a packaged build carries its own payload
+//! 3. `<cache>/<rel>` — the shared machine-wide pool, filled by the downloader
 //!
 //! This replaced the old `lunco-lib://` scheme. That scheme addressed the cache
 //! *directly*, so a `.usda` shipped in the repo asserted "this asset lives in my
@@ -17,11 +19,11 @@
 //!
 //! See `docs/architecture/56-asset-resolution-and-cache.md`.
 //!
-//! **One resolver, every platform.** Both roots are read through Bevy's own
+//! **One resolver, every platform.** Every root is read through Bevy's own
 //! [`AssetSource::get_default_reader`], which yields a file reader natively and
-//! an HTTP reader on wasm. So the browser resolves `assets/` then `.cache/`
-//! over HTTP exactly as native resolves two directories — the fallback is not a
-//! native-only convenience that silently disappears on web.
+//! an HTTP reader on wasm. So the browser resolves the same chain over HTTP as
+//! native resolves over directories — the fallback is not a native-only
+//! convenience that silently disappears on web.
 
 use std::path::{Path, PathBuf};
 
@@ -29,8 +31,6 @@ use bevy::asset::io::{
     AssetReader, AssetReaderError, AssetSource, AssetSourceBuilder, ErasedAssetReader, PathStream,
     Reader,
 };
-
-use crate::cache_dir;
 
 /// The asset-source scheme for the engine asset library — the name it is
 /// registered under, both as a Bevy `AssetSource` and in the
@@ -83,41 +83,55 @@ pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> 
     }
 }
 
-/// Build the `lunco://` [`AssetSourceBuilder`]: `assets/`, then the cache.
+/// Build the `lunco://` [`AssetSourceBuilder`]: `assets/`, then each cache root
+/// in [`cache_roots`](crate::cache_roots) order.
 pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
-    let assets = assets_dir.to_string_lossy().into_owned();
-    let cache = cache_dir().to_string_lossy().into_owned();
+    let mut roots = vec![assets_dir.to_string_lossy().into_owned()];
+    roots.extend(
+        crate::cache_roots()
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned()),
+    );
     AssetSourceBuilder::new(move || {
         Box::new(FallbackReader {
-            primary: AssetSource::get_default_reader(assets.clone())(),
-            secondary: AssetSource::get_default_reader(cache.clone())(),
+            readers: roots
+                .iter()
+                .map(|r| AssetSource::get_default_reader(r.clone())())
+                .collect(),
         }) as Box<dyn ErasedAssetReader>
     })
 }
 
-/// Reads from `primary`, falling back to `secondary` when the asset is absent.
+/// Reads each root in turn, moving on only when the asset is absent there.
 ///
-/// Authored content wins: a file committed under `assets/` shadows a cached
-/// download of the same relative path, so a repo asset is never silently
-/// replaced by whatever an earlier `download` left behind.
+/// Order is priority: authored content wins over the packed cache, which wins
+/// over the shared pool. So a file committed under `assets/` is never silently
+/// replaced by whatever a download left behind, and a distribution's own
+/// payload is never shadowed by a stale copy in the machine-wide cache.
 ///
 /// Only [`AssetReaderError::NotFound`] falls through. A genuine I/O failure —
 /// permissions, a truncated HTTP response — propagates immediately, because
-/// retrying it against the other root would convert a real error into a
-/// confusing "not found" and hide the actual cause.
+/// retrying it against the next root would convert a real error into a
+/// confusing "not found" and hide the actual cause. The LAST root's error is
+/// the one returned, so a miss reports the deepest place we looked.
 struct FallbackReader {
-    primary: Box<dyn ErasedAssetReader>,
-    secondary: Box<dyn ErasedAssetReader>,
+    readers: Vec<Box<dyn ErasedAssetReader>>,
 }
 
-/// Run `primary`, then `secondary` iff the first reported `NotFound`.
+/// Try each root in order; the first non-`NotFound` answer wins.
 macro_rules! try_both {
-    ($self:ident, $method:ident, $path:expr) => {
-        match $self.primary.$method($path).await {
-            Err(AssetReaderError::NotFound(_)) => $self.secondary.$method($path).await,
-            other => other,
+    ($self:ident, $method:ident, $path:expr) => {{
+        // `readers` is non-empty by construction (`assets/` is always first),
+        // so the loop always assigns before the unwrap.
+        let mut last = None;
+        for reader in &$self.readers {
+            match reader.$method($path).await {
+                Err(AssetReaderError::NotFound(p)) => last = Some(Err(AssetReaderError::NotFound(p))),
+                other => return other,
+            }
         }
-    };
+        last.unwrap()
+    }};
 }
 
 impl AssetReader for FallbackReader {
@@ -139,11 +153,14 @@ impl AssetReader for FallbackReader {
     async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
         // `is_directory` answers false rather than erroring for a missing path,
         // so `NotFound` is not the signal here — a plain `false` is.
-        match self.primary.is_directory(path).await {
-            Ok(false) | Err(AssetReaderError::NotFound(_)) => {
-                self.secondary.is_directory(path).await
+        let mut last = Ok(false);
+        for reader in &self.readers {
+            match reader.is_directory(path).await {
+                Ok(false) => last = Ok(false),
+                Err(AssetReaderError::NotFound(p)) => last = Err(AssetReaderError::NotFound(p)),
+                other => return other,
             }
-            other => other,
         }
+        last
     }
 }

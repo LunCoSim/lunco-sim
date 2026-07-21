@@ -23,15 +23,39 @@ scheme: naming the mistake legibly would make it permanent.
 
 | Scheme | Resolves to | For |
 |---|---|---|
-| `lunco://` | `<cwd>/assets`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
+| `lunco://` | `<cwd>/assets`, then `<cwd>/assets/.cache`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
 | `twin://<name>/…` | the Twin's root, then `<twin>/.cache` | Twin-owned content, and downloaded scenarios |
 | `cached_textures://` | texture cache dir | *derived* pipeline outputs |
 
-Both schemes resolve **authored first, cache second**: `lunco://` tries
-`assets/` then `<cache>`; `twin://` tries `<twin>/<rel>` then
-`<twin>/.cache/<rel>`. So a downloaded binary is reachable at its logical
+Both schemes resolve **authored first, then the cache that travels with the
+unit, then the shared pool**. So a downloaded binary is reachable at its logical
 address without any authored file naming a cache, and a file the author
 committed always wins over a materialised copy of it.
+
+### The unit you ship carries its own data
+
+`assets/.cache` and `<twin>/.cache` are the same idea applied to the two things
+we distribute:
+
+- a **package** is a folder — binary, `assets/`, and the large binaries it
+  needs. Those binaries are cache artifacts (downloaded, derived, git-ignored),
+  so they cannot live in `assets/` proper; `build_native.sh` stages them into
+  `assets/.cache/`, the resolver's second root. The package therefore resolves
+  its own payload with no environment variable and no network — running the
+  binary directly behaves exactly like running the launcher.
+- a **Twin** is a folder someone tars up and sends. Its downloads and its
+  derived products both land in `<twin>/.cache`, so the archive arrives
+  complete: `DatasetRegistry` probes read roots rather than the one root it
+  would have written to, and reports those datasets *installed* instead of
+  offering to re-fetch files already on disk.
+
+The machine-wide `<cache>` sits underneath both as a shared convenience, never
+as a prerequisite. Writes still go there ([`DatasetScope::dest_root`]): a
+package may sit on a read-only mount, and one machine should not hold a copy of
+the same product per installation. `lunco_assets::cache_roots()` is the single
+place that order is decided; the `AssetSource`, the synchronous resolver
+(`engine_asset_local_path`) and the dataset registry all ask it, so a file the
+loader finds is a file the validator finds.
 
 Both `twin://` readers implement that fallback — the `AssetReader` and the
 `SchemeRegistry` handler — because they must agree: a file the asset server can
@@ -237,15 +261,44 @@ manifest, so a Twin cannot be broken by a workspace rename and neither can
 shadow the other. The workspace `assets/` dir is just a root with an
 `Assets.toml`, exactly like a Twin.
 
-## Open: bodies and their textures belong in USD
+## Bodies and their textures
 
-The same argument reaches one layer up. Celestial bodies are a **hardcoded Rust
-registry** (`lunco-celestial/src/registry.rs` `texture_path`,
-`big_space_setup.rs` loading `cached_textures://earth.png`). Which bodies exist,
-and which map each wears, is **scene content** — yet it lives in Rust, where a
-Twin cannot change it without a recompile. That conflicts with "USD is truth,
-ECS is a projection", and with celestial being opt-in per scene.
+Body imagery is **declared data, not a path in Rust**. `lunco-celestial`'s
+`Assets.toml` carries the Earth and Moon maps like any other dataset — listed in
+Settings ▸ Downloadable data, fetched only when a user asks — and each entry
+names the body it belongs to in a domain sub-table:
 
+```toml
+[earth.process]
+target_resolution = [4096, 2048]
+output = "textures/earth.png"
+
+[earth.body]
+naif_id = 399
+```
+
+`imagery::bind_dataset_body_imagery` walks the registry for entries carrying a
+`[*.body]` table and binds the installed artifact onto the globe with that NAIF
+id. Adding Mars imagery is a manifest entry; deleting a dataset removes the
+imagery. No crate holds a texture filename, and `registry.rs`'s old
+`texture_path` field — which named files the engine did not ship — is gone.
+
+Three arrival routes, one code path: downloaded now, cached from an earlier run,
+or packed into the distribution at `assets/.cache/textures/earth.png`. The
+registry probes read roots, so the packed case reports *installed* and binds on
+the first frame with no network. A body with no imagery renders its own colour
+(ocean blue, regolith grey) — a complete appearance, not a degraded one.
+
+A derived dataset is only ready when its **process output** exists, not its
+download, so an in-app fetch runs the `[*.process]` step before reporting
+installed. Otherwise the UI says "installed" while every consumer still finds
+nothing — the CLI's two-command flow (`download` then `process`) has no
+equivalent second command in the app.
+
+### Still open: which body wears which map is scene content
+
+The binding above is engine-wide: the Earth dataset dresses *the* Earth. A Twin
+that wants its own map still cannot say so without touching the manifest.
 Authored instead as an ordinary prim with an ordinary asset reference:
 
 ```usda

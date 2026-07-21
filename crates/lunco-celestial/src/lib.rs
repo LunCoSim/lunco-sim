@@ -24,6 +24,7 @@ pub mod pose;
 pub mod queries;
 mod big_space_setup;
 mod globe_lod;
+mod imagery;
 mod systems;
 /// Coordinate-frame newtypes. Zero-cost, and they make the two silent frame-mix incidents
 /// this crate has already shipped (the Shackleton sun 45° below the horizon; an ecliptic sun
@@ -317,9 +318,22 @@ impl Plugin for CelestialPlugin {
         // prim, the ordinary USD → `ShaderLook` path authored it there and this
         // carries it onto the globe. Ordered before the LOD so an adopted look
         // and the tiles that carry it land in the same frame.
+        //
+        // Body IMAGERY is a declared dataset, not a path in this crate: the
+        // manifest says which body each texture is of, and `imagery` binds
+        // whatever is installed (downloaded, cached, or shipped in the
+        // package). It runs BEFORE the authored-look adoption so a scene that
+        // binds its own Material still wins — content overrules the default.
+        app.init_resource::<imagery::BoundBodyImagery>();
+        app.add_systems(Startup, imagery::register_body_imagery_datasets);
         app.add_systems(
             Update,
-            (big_space_setup::adopt_authored_body_look, globe_lod::update_globe_lod).chain(),
+            (
+                imagery::bind_dataset_body_imagery,
+                big_space_setup::adopt_authored_body_look,
+                globe_lod::update_globe_lod,
+            )
+                .chain(),
         );
 
         // Site-anchored scenes: hand the DEM terrain the body radius so it

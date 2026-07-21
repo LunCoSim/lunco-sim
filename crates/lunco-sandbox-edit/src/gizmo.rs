@@ -596,6 +596,7 @@ mod tests {
     fn test_gizmo_prev_pos_component() {
         let pos = GizmoPrevPos { 
             local_pos: DVec3::new(1.0, 2.0, 3.0), 
+            abs_pos: DVec3::new(1.0, 2.0, 3.0),
             original_body: Some(RigidBody::Dynamic),
             had_translation_interpolation: false,
             had_rotation_interpolation: false,
@@ -617,6 +618,7 @@ mod tests {
             GizmoTarget::default(),
             GizmoPrevPos { 
                 local_pos: DVec3::ZERO, 
+                abs_pos: DVec3::ZERO,
                 original_body: Some(RigidBody::Dynamic),
                 had_translation_interpolation: false,
                 had_rotation_interpolation: false,
@@ -660,6 +662,7 @@ mod tests {
                 GizmoTarget::default(),
                 GizmoPrevPos {
                     local_pos: DVec3::ZERO,
+                    abs_pos: DVec3::ZERO,
                     original_body: None,
                     had_translation_interpolation: false,
                     had_rotation_interpolation: false,
@@ -729,6 +732,7 @@ mod tests {
                 lunco_core::GlobalEntityId::from_raw(42),
                 GizmoPrevPos {
                     local_pos: DVec3::new(3.0, 4.0, 5.0),
+                    abs_pos: DVec3::new(3.0, 4.0, 5.0),
                     original_body: Some(RigidBody::Dynamic),
                     had_translation_interpolation: false,
                     had_rotation_interpolation: false,

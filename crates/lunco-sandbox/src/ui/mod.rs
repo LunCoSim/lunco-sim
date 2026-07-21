@@ -639,22 +639,38 @@ fn register_downloadable_assets_settings(world: &mut World) {
             return;
         }
         // Snapshot: the rows below need `&mut World` to request a download.
+        //
+        // The heading is WHO declared it — the LunCo library that owns the
+        // dataset ("celestial", "ephemeris", "modelica") or the twin's own
+        // name. `scope.label()` says "engine" for every engine dataset, which
+        // is true and useless: a user looking for Earth imagery is looking for
+        // the celestial library, not for the fact that it isn't a twin's.
         let rows: Vec<(String, String, String, DatasetState)> = registry
             .entries()
             .iter()
             .map(|e| {
-                (
-                    e.key.clone(),
-                    e.scope.label().to_string(),
-                    e.name.clone(),
-                    e.state.clone(),
-                )
+                let owner = match &e.scope {
+                    lunco_assets::datasets::DatasetScope::Engine => e.group.clone(),
+                    lunco_assets::datasets::DatasetScope::Twin { name, .. } => name.clone(),
+                };
+                (e.key.clone(), owner, e.name.clone(), e.state.clone())
             })
             .collect();
+        // Registration order already groups by owner; sorting makes that a
+        // guarantee rather than a coincidence, so the headings below can be
+        // emitted on change instead of buffering the whole list.
+        let mut rows = rows;
+        rows.sort_by(|a, b| a.1.cmp(&b.1));
         let mut requested: Option<String> = None;
-        for (key, scope, name, state) in &rows {
+        let mut heading: Option<&str> = None;
+        for (key, owner, name, state) in &rows {
+            if heading != Some(owner.as_str()) {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(owner).weak().small());
+                heading = Some(owner.as_str());
+            }
             ui.horizontal(|ui| {
-                ui.label(format!("{scope} · {name}"));
+                ui.label(name.as_str());
                 match state {
                     DatasetState::Installed => {
                         ui.label(egui::RichText::new("✔ cached").weak());

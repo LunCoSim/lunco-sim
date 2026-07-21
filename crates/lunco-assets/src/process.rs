@@ -175,17 +175,47 @@ fn default_dem_pixel_scale_m() -> f64 {
 /// - `"map"` / `"normalmap"`: co-registered ROI crops — see the
 ///   [`ProcessConfig`] kind list.
 ///
-/// `twin_root` resolves `output_root = "twin"` against a caller-supplied
-/// Twin folder (the CLI's `--twin <DIR>`); `None` falls back to cache for
-/// the `"cache"` / unrecognised roots (see [`ProcessConfig::output_root`]).
+/// `twin_root` is the caller-supplied Twin folder (the CLI's `--twin <DIR>`).
+/// `output_root = "twin"` resolves against it directly; `"cache"` resolves
+/// against that Twin's OWN cache, so a processed product stays inside the
+/// folder that declared it. Without a Twin, both fall back to the shared cache.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn process_asset(
     source_path: &Path,
     process: &ProcessConfig,
     twin_root: Option<&Path>,
 ) -> Result<(), std::io::Error> {
-    // Resolve the output path against the configured root.
-    let output_path = match process.output_root.as_str() {
+    let owner_cache = twin_root.map(crate::twin_cache_dir);
+    let output_path = process_output_path(process, owner_cache.as_deref(), twin_root);
+
+    // Create output directory if needed
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    process_asset_to(source_path, process, &output_path)
+}
+
+/// Where a `[*.process]` step writes its product — the ONE resolver, so the
+/// step that WRITES the artifact and the registry that reports whether it
+/// EXISTS can never disagree about the path.
+///
+/// `cache_root` is the cache of whoever DECLARED the asset — a Twin's own
+/// `.cache` for a Twin manifest, the shared pool for a crate's — and is what
+/// the default `output_root = "cache"` resolves against. The processed product
+/// belongs beside the source it was derived from, so a Twin packed into an
+/// archive carries its derived textures with it instead of leaving them behind
+/// in a machine-global cache the recipient does not have.
+///
+/// `twin_root` is the Twin FOLDER itself, for `output_root = "twin"` (authored
+/// content the Twin ships, not a cache artifact). Both fall back to the shared
+/// cache when absent.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn process_output_path(
+    process: &ProcessConfig,
+    cache_root: Option<&Path>,
+    twin_root: Option<&Path>,
+) -> std::path::PathBuf {
+    match process.output_root.as_str() {
         "assets" => {
             // Workspace-rooted: writes under <workspace>/assets/<output>.
             // We resolve the workspace root by walking up from the
@@ -219,13 +249,21 @@ pub fn process_asset(
                 .unwrap_or_else(cache_dir);
             root.join(&process.output)
         }
-        _ => cache_dir().join(&process.output),
-    };
-
-    // Create output directory if needed
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        _ => cache_root
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(cache_dir)
+            .join(&process.output),
     }
+}
+
+/// The body of [`process_asset`] once its output path is known.
+#[cfg(not(target_arch = "wasm32"))]
+fn process_asset_to(
+    source_path: &Path,
+    process: &ProcessConfig,
+    output_path: &Path,
+) -> Result<(), std::io::Error> {
+    let output_path = output_path.to_path_buf();
 
     // ── Bake-key staleness check ──────────────────────────────────────────
     // The processed output is a pure function of (source bytes, this config,

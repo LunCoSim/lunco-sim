@@ -4,9 +4,15 @@
 # ============================================================================
 # Builds a LunCoSim desktop binary (lunica or sandbox) for the
 # host platform (Linux, macOS, Windows) and assembles a self-contained
-# distributable directory containing the binary, the assets/ tree, the
-# relevant .cache/ subdirs (fonts, MSL, models, …), and a launcher script
-# that sets LUNCOSIM_CACHE so the app finds bundled cache assets.
+# distributable directory containing the binary, the assets/ tree with the
+# relevant cache subdirs (fonts, MSL, models, …) packed INSIDE it, and a
+# launcher script.
+#
+# The packed cache lives at assets/.cache/ because that is the second root the
+# `lunco://` resolver reads (assets/ → assets/.cache/ → the machine-wide cache
+# — see lunco_assets::cache_roots). A package therefore carries its own payload
+# and resolves it with no environment variable and no network: running the
+# binary directly works exactly as running the launcher does.
 #
 # Usage:
 #     ./scripts/build_native.sh <binary> [--release] [--package] [options]
@@ -19,9 +25,9 @@
 #     --release          Optimized release build (default: dev)
 #     --package          Create a .tar.gz (unix) or .zip (windows) archive
 #     --target <triple>  Cross-compile target (default: host triple)
-#     --no-cache         Skip bundling .cache/ subdirs (binary + assets only)
+#     --no-cache         Skip bundling assets/.cache/ subdirs (binary + assets only)
 #     --skip-download    Skip the cache asset download step (use existing .cache/)
-#     --full-cache       Bundle ALL .cache/ subdirs (default: per-binary subset)
+#     --full-cache       Bundle ALL cache subdirs (default: per-binary subset)
 #     --no-assets        Skip bundling the assets/ tree
 #     --out <dir>        Output directory (default: dist/<binary>-<platform>-<arch>/)
 #     --extra <args>     Pass extra args to cargo build
@@ -47,8 +53,8 @@
 #   dist/<binary>-<platform>-<arch>/
 #     <binary>[.exe]          — the compiled binary
 #     assets/                  — scene files, config, models, shaders
-#     .cache/                  — fonts, MSL, models, ephemeris (what each binary needs)
-#     run.sh / run.bat         — launcher that sets LUNCOSIM_CACHE and runs the binary
+#     assets/.cache/           — fonts, MSL, models, ephemeris (what each binary needs)
+#     run.sh / run.bat         — launcher
 #     README.md                — quick-start for end users
 # ============================================================================
 
@@ -249,10 +255,10 @@ write_launcher_unix() {
     local launcher="$dir/run.sh"
     cat > "$launcher" <<EOF
 #!/usr/bin/env bash
-# Launcher for $binary — sets LUNCOSIM_CACHE to the bundled .cache/ dir
-# so the app finds fonts / MSL / models without a separate download step.
+# Launcher for $binary. It only enters the package directory: the bundled data
+# lives in assets/.cache/, which the app resolves on its own, so running the
+# binary directly behaves identically to running this script.
 cd "\$(dirname "\$0")"
-export LUNCOSIM_CACHE="\$PWD/.cache"
 exec "./$binary" "\$@"
 EOF
     chmod +x "$launcher"
@@ -264,7 +270,6 @@ write_launcher_windows() {
     cat > "$launcher" <<EOF
 @echo off
 cd /d "%~dp0"
-set LUNCOSIM_CACHE=%CD%\.cache
 $binary.exe %*
 EOF
 }
@@ -296,7 +301,7 @@ Or run the binary directly (from this directory):
 
 - \`$binary\` — the application binary
 - \`assets/\` — scene files, config, models, shaders
-- \`.cache/\` — fonts and runtime data (MSL, models, ephemeris as needed)
+- \`assets/.cache/\` — fonts and runtime data (MSL, models, ephemeris as needed)
 - \`docs/\` — architecture docs, tutorials, app guides
 - \`skills/\` — project-level agent skills (runbook workflows)
 - \`AGENTS.md\` — AI agent guidelines for working on the codebase
@@ -319,8 +324,13 @@ plugin layering, tunability mandate, TDD-first).
 
 ## Cache directory
 
-The launcher sets \`LUNCOSIM_CACHE\` to the bundled \`.cache/\` directory.
-If you move the binary without the cache, the app falls back to:
+Bundled data lives in \`assets/.cache/\` and is found automatically — it is
+the second place the app looks for any asset, after \`assets/\` itself. No
+environment variable is involved, so running the binary directly is the same
+as running the launcher.
+
+Anything not bundled (and anything you download from Settings ▸ Downloadable
+data) comes from the shared machine cache:
   - Linux:   ~/.cache/lunco/
   - macOS:   ~/Library/Caches/lunco/
   - Windows: %LOCALAPPDATA%\\lunco\\
@@ -534,32 +544,34 @@ if [ "$NO_ASSETS" -eq 0 ]; then
     fi
 fi
 
-# Copy .cache/ subdirs
+# Copy the packed cache into assets/.cache/ — the resolver's second root, so a
+# package finds its own payload without LUNCOSIM_CACHE and without a launcher.
+PACKED_CACHE="$OUT_DIR/assets/.cache"
 if [ "$NO_CACHE" -eq 0 ]; then
     CACHE_SRC="$(resolve_cache_dir)"
     if [ -n "$CACHE_SRC" ] && [ -d "$CACHE_SRC" ]; then
         if [ "$FULL_CACHE" -eq 1 ]; then
-            info "Bundling full .cache/ → $OUT_DIR/.cache/"
-            sync_dir "$CACHE_SRC/" "$OUT_DIR/.cache/"
+            info "Bundling full cache → $PACKED_CACHE/"
+            sync_dir "$CACHE_SRC/" "$PACKED_CACHE/"
         else
             SUBDIRS="$(cache_subdirs_for "$BINARY")"
             for subdir in $SUBDIRS; do
                 if [ -d "$CACHE_SRC/$subdir" ]; then
-                    mkdir -p "$OUT_DIR/.cache"
-                    info "Bundling .cache/$subdir → $OUT_DIR/.cache/$subdir/ ($(du -sh "$CACHE_SRC/$subdir" | cut -f1))"
-                    sync_dir "$CACHE_SRC/$subdir/" "$OUT_DIR/.cache/$subdir/" no-delete
+                    mkdir -p "$PACKED_CACHE"
+                    info "Bundling $subdir → assets/.cache/$subdir/ ($(du -sh "$CACHE_SRC/$subdir" | cut -f1))"
+                    sync_dir "$CACHE_SRC/$subdir/" "$PACKED_CACHE/$subdir/" no-delete
                 else
-                    warn ".cache/$subdir not found at $CACHE_SRC — $BINARY may need it at runtime"
+                    warn "cache/$subdir not found at $CACHE_SRC — $BINARY may need it at runtime"
                     warn "  Populate with: cargo run -p lunco-assets -- download -p <crate>"
                 fi
             done
         fi
     else
-        warn "No .cache/ directory found — app will use OS cache dir at runtime"
+        warn "No cache directory found — app will use the OS cache dir at runtime"
         warn "  Populate with: cargo run -p lunco-assets -- download"
     fi
 else
-    info "Skipping .cache/ bundle (--no-cache)"
+    info "Skipping packed cache (--no-cache)"
 fi
 
 # Write launcher script

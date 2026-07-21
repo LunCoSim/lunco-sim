@@ -88,11 +88,30 @@ pub enum DatasetScope {
 }
 
 impl DatasetScope {
-    /// The directory a scoped entry's `dest` resolves against.
+    /// The directory a scoped entry's `dest` resolves against — where a
+    /// download WRITES.
     pub fn dest_root(&self) -> PathBuf {
         match self {
             DatasetScope::Engine => crate::cache_dir(),
             DatasetScope::Twin { root, .. } => crate::twin_cache_dir(root),
+        }
+    }
+
+    /// Every directory a scoped entry's file may be READ from, in priority
+    /// order. Wider than [`dest_root`](Self::dest_root) on purpose: bytes that
+    /// arrived with a distribution were never written by this machine.
+    ///
+    /// An engine dataset may ship inside the package (`assets/.cache`) rather
+    /// than sitting in the machine's pool; a Twin's may arrive in the `.cache`
+    /// of an archive someone sent. Both are installed — asking only where WE
+    /// would have written would report them missing and offer to re-download a
+    /// file already on disk.
+    pub fn read_roots(&self) -> Vec<PathBuf> {
+        match self {
+            DatasetScope::Engine => crate::cache_roots(),
+            DatasetScope::Twin { root, .. } => {
+                vec![crate::twin_cache_dir(root), root.clone()]
+            }
         }
     }
 
@@ -119,12 +138,105 @@ pub struct DatasetEntry {
     pub name: String,
     /// Where the file lands once downloaded.
     pub path: PathBuf,
+    /// The file this dataset actually DELIVERS, relative to its scope root:
+    /// the `[*.process]` output when the declaration has one, else the download
+    /// itself.
+    ///
+    /// The two differ for anything derived — Earth's manifest downloads a 5400×
+    /// JPEG and delivers a 4096×2048 PNG. Reporting "installed" off the
+    /// *download* would call a dataset ready while the file every consumer
+    /// actually loads was still missing, which is precisely the state a user
+    /// cannot distinguish from a broken texture.
+    ///
+    /// Relative, not absolute, because the same relative path is where the file
+    /// is WRITTEN (under [`DatasetScope::dest_root`]) and where it may already
+    /// be found (under any [`DatasetScope::read_roots`]) — see
+    /// [`artifact_path`](Self::artifact_path) and [`artifact_uri`](Self::artifact_uri).
+    pub artifact_rel: String,
     /// Live status.
     pub state: DatasetState,
     /// The full declaration, so the crate that owns this dataset can read its
     /// own domain sub-table ([`AssetEntry::domain`]) — for an engine manifest
     /// and a Twin's alike, without either of them re-reading the file.
     pub spec: AssetEntry,
+}
+
+/// Whether a path holds bytes we can read *locally*.
+///
+/// Always `false` on wasm: the browser build has no filesystem (`Path::exists`
+/// panics there with "no filesystem on this platform"), and its assets are
+/// served by the host over HTTP rather than installed. So a web build reports
+/// every dataset missing, which is the honest answer — it cannot install one
+/// either.
+fn present(path: &std::path::Path) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        path.exists()
+    }
+}
+
+impl DatasetEntry {
+    /// Absolute path of the delivered file: the first
+    /// [`read root`](DatasetScope::read_roots) that actually holds it, else the
+    /// root a download would write it to.
+    pub fn artifact_path(&self) -> PathBuf {
+        let roots = self.scope.read_roots();
+        for root in &roots {
+            let candidate = root.join(&self.artifact_rel);
+            if present(&candidate) {
+                return candidate;
+            }
+        }
+        self.scope.dest_root().join(&self.artifact_rel)
+    }
+
+    /// The asset URI the delivered file loads at — `lunco://<rel>` for an
+    /// engine dataset, `twin://<name>/<rel>` for a Twin's.
+    ///
+    /// Both schemes already search their own cache before falling through, so
+    /// a consumer never learns which root the bytes came from. That is what
+    /// lets one URI mean "packaged copy" on a distributed build and "freshly
+    /// downloaded" on a dev machine, with no branch at the call site.
+    pub fn artifact_uri(&self) -> String {
+        match &self.scope {
+            DatasetScope::Engine => crate::asset_path::uri(crate::LUNCO_SCHEME, &self.artifact_rel),
+            DatasetScope::Twin { name, .. } => crate::twin_uri(name, &self.artifact_rel),
+        }
+    }
+}
+
+/// Scope-root-relative path of the file a declaration ultimately delivers — its
+/// `[*.process]` output where there is one, else the download destination.
+///
+/// Twin scope hands the process resolver BOTH roots it distinguishes: the
+/// Twin's `.cache` for derived artifacts, the Twin folder for authored ones.
+fn artifact_rel_of(entry: &AssetEntry, scope: &DatasetScope, dest: &std::path::Path) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(cfg) = &entry.process {
+        let twin_root = match scope {
+            DatasetScope::Twin { root, .. } => Some(root.as_path()),
+            DatasetScope::Engine => None,
+        };
+        let cache_root = scope.dest_root();
+        let abs = crate::process::process_output_path(cfg, Some(&cache_root), twin_root);
+        // `output_root = "assets"` writes into the source tree, which no scope
+        // root contains; the declared `output` is already the right relative
+        // spelling there, so fall back to it rather than to an absolute path
+        // no reader could resolve.
+        return abs
+            .strip_prefix(&cache_root)
+            .map(crate::asset_path::slashed)
+            .unwrap_or_else(|_| cfg.output.clone());
+    }
+    let _ = entry;
+    dest.strip_prefix(scope.dest_root())
+        .map(crate::asset_path::slashed)
+        .unwrap_or_else(|_| crate::asset_path::slashed(dest))
 }
 
 /// Cross-thread slot a download task writes its progress into.
@@ -183,20 +295,28 @@ impl DatasetRegistry {
                 continue;
             }
             let path = entry_dest_path(&entry, Some(&dest_root));
+            let artifact_rel = artifact_rel_of(&entry, &scope, &path);
+            let installed = scope
+                .read_roots()
+                .iter()
+                .any(|r| present(&r.join(&artifact_rel)));
             self.entries.push(DatasetEntry {
                 key: key.clone(),
                 group: group.to_string(),
                 scope: scope.clone(),
                 name: entry.name.clone(),
                 // Present on disk ⇒ installed, whoever put it there (a previous
-                // run, the CLI downloader, a hand-copied file). The registry
-                // reports the filesystem, it doesn't own a separate truth.
-                state: if path.exists() {
+                // run, the CLI downloader, an archive a colleague sent). The
+                // registry reports the filesystem, it doesn't own a separate
+                // truth — which is what makes a Twin unpacked WITH its `.cache`
+                // simply show up installed, no re-download and no import step.
+                state: if installed {
                     DatasetState::Installed
                 } else {
                     DatasetState::Missing
                 },
                 path,
+                artifact_rel,
                 spec: entry,
             });
             self.slots.push(Arc::new(Mutex::new(None)));
@@ -254,7 +374,7 @@ impl DatasetRegistry {
             if matches!(e.state, DatasetState::Downloading { .. }) {
                 continue;
             }
-            e.state = if e.path.exists() {
+            e.state = if present(&e.artifact_path()) {
                 DatasetState::Installed
             } else if let DatasetState::Failed(msg) = &e.state {
                 DatasetState::Failed(msg.clone())
@@ -274,12 +394,24 @@ impl DatasetRegistry {
         self.entries.iter().find(|e| e.key == key).map(|e| &e.state)
     }
 
-    /// On-disk path of one dataset, or `None` if nothing declared that key.
-    pub fn path(&self, key: &str) -> Option<&std::path::Path> {
+    /// On-disk path of the file one dataset DELIVERS (its `[*.process]` output
+    /// where it has one), or `None` if nothing declared that key. This is the
+    /// path a consumer loads; [`DatasetEntry::path`] is where the download
+    /// landed, which for a derived product is not the same file.
+    pub fn path(&self, key: &str) -> Option<PathBuf> {
         self.entries
             .iter()
             .find(|e| e.key == key)
-            .map(|e| e.path.as_path())
+            .map(|e| e.artifact_path())
+    }
+
+    /// The installed dataset delivering `key`, or `None` when it is not
+    /// declared or not on disk. The one call a consumer needs: "are these bytes
+    /// available, and where?".
+    pub fn installed(&self, key: &str) -> Option<&DatasetEntry> {
+        self.entries
+            .iter()
+            .find(|e| e.key == key && e.state.is_installed())
     }
 
     /// Datasets that are declared but not on disk.
@@ -309,9 +441,9 @@ impl DatasetRegistry {
             bytes_done: 0,
             bytes_total: 0,
         };
-        let dest_root = self.entries[i].scope.dest_root();
+        let scope = self.entries[i].scope.clone();
         let spec = self.entries[i].spec.clone();
-        spawn_download(&self.entries[i], &spec, dest_root, self.slots[i].clone());
+        spawn_download(&self.entries[i], &spec, scope, self.slots[i].clone());
     }
 
     /// Start every missing dataset. Same authorisation rule as [`request`](Self::request).
@@ -325,12 +457,14 @@ impl DatasetRegistry {
 
 /// Spawn the actual fetch on the async pool.
 #[cfg(not(target_arch = "wasm32"))]
-fn spawn_download(entry: &DatasetEntry, spec: &AssetEntry, dest_root: PathBuf, slot: StatusSlot) {
+fn spawn_download(entry: &DatasetEntry, spec: &AssetEntry, scope: DatasetScope, slot: StatusSlot) {
     use crate::download::{download_asset_with_control, DownloadControl};
 
     let key = entry.key.clone();
     let name = entry.name.clone();
     let spec = spec.clone();
+    let dest = entry.path.clone();
+    let dest_root = scope.dest_root();
     let progress_slot = slot.clone();
     info!("[datasets] downloading '{key}' ({name}) — user-requested");
     bevy::tasks::AsyncComputeTaskPool::get()
@@ -357,7 +491,15 @@ fn spawn_download(entry: &DatasetEntry, spec: &AssetEntry, dest_root: PathBuf, s
                 control,
                 Some(dest_root.as_path()),
             ) {
-                Ok(()) => DatasetState::Installed,
+                // A download is only half of a derived dataset. The CLI has
+                // always run `process` as a second command; in-app there is no
+                // second command to run, so the fetch that a user authorised
+                // has to produce the file they asked for — otherwise the UI
+                // says "installed" and the consumer still finds nothing.
+                Ok(()) => match run_process_step(&spec, &scope, &dest) {
+                    Ok(()) => DatasetState::Installed,
+                    Err(e) => DatasetState::Failed(format!("processing failed: {e}")),
+                },
                 Err(e) => DatasetState::Failed(e.to_string()),
             };
             if let Ok(mut s) = slot.lock() {
@@ -367,6 +509,26 @@ fn spawn_download(entry: &DatasetEntry, spec: &AssetEntry, dest_root: PathBuf, s
         .detach();
 }
 
+/// Run the entry's `[*.process]` step, if it declares one, into the same path
+/// [`artifact_path`] reported — one resolver, so "installed" and "loadable"
+/// cannot mean different files.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_process_step(
+    spec: &AssetEntry,
+    scope: &DatasetScope,
+    dest: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    let Some(cfg) = &spec.process else {
+        return Ok(());
+    };
+    let twin_root = match scope {
+        DatasetScope::Twin { root, .. } => Some(root.clone()),
+        DatasetScope::Engine => None,
+    };
+    info!("[datasets] processing '{}' ({})", cfg.kind, dest.display());
+    crate::process::process_asset(dest, cfg, twin_root.as_deref())
+}
+
 /// The web build has no cache directory to fill and no HTTP downloader here;
 /// its assets are served by the host. Requesting is a reported no-op rather
 /// than a silent one.
@@ -374,7 +536,7 @@ fn spawn_download(entry: &DatasetEntry, spec: &AssetEntry, dest_root: PathBuf, s
 fn spawn_download(
     entry: &DatasetEntry,
     _spec: &AssetEntry,
-    _dest_root: PathBuf,
+    _scope: DatasetScope,
     slot: StatusSlot,
 ) {
     warn!(
@@ -514,5 +676,74 @@ dest = "ephemeris/demo.csv"
         let r = DatasetRegistry::default();
         assert!(r.state("nope").is_none());
         assert!(r.path("nope").is_none());
+    }
+
+    /// A derived dataset DELIVERS its process output, not its download. Calling
+    /// it installed once the source lands would leave every consumer loading a
+    /// file that does not exist yet.
+    #[test]
+    fn a_processed_dataset_is_identified_by_its_output_not_its_download() {
+        const DERIVED: &str = r#"
+[earthlike]
+name = "Earthlike"
+url = "https://example.invalid/source.jpg"
+dest = "textures/earthlike_source.jpg"
+
+[earthlike.process]
+target_resolution = [4, 2]
+output = "textures/earthlike.png"
+"#;
+        let mut r = DatasetRegistry::default();
+        assert_eq!(r.register(DERIVED, "demo"), 1);
+        let e = &r.entries()[0];
+        assert_eq!(e.artifact_rel, "textures/earthlike.png");
+        assert!(e.path.ends_with("textures/earthlike_source.jpg"));
+        assert_eq!(e.artifact_uri(), "lunco://textures/earthlike.png");
+    }
+
+    /// A Twin's dataset addresses through `twin://`, so bytes that arrived
+    /// inside the folder — an archive someone sent, `.cache` included — load
+    /// through the same URI a freshly downloaded copy would.
+    #[test]
+    fn a_twin_dataset_addresses_through_its_own_scheme() {
+        let mut r = DatasetRegistry::default();
+        let scope = DatasetScope::Twin {
+            name: "school".into(),
+            root: PathBuf::from("/twins/school"),
+        };
+        assert_eq!(r.register_scoped(MANIFEST, "school", scope), 1);
+        assert_eq!(
+            r.entries()[0].artifact_uri(),
+            "twin://school/ephemeris/demo.csv"
+        );
+    }
+
+    /// Read roots are wider than the write root, and ordered: a copy packed
+    /// into a distribution outranks the machine-wide pool.
+    #[test]
+    fn engine_scope_reads_the_packed_cache_before_the_shared_pool() {
+        let roots = DatasetScope::Engine.read_roots();
+        assert_eq!(roots, crate::cache_roots());
+        assert_eq!(roots[0], crate::packed_cache_dir());
+        assert_eq!(roots[1], crate::cache_dir());
+        // The write root stays the shared pool: a package may be read-only,
+        // and one machine should not hold a copy per installation.
+        assert_eq!(DatasetScope::Engine.dest_root(), crate::cache_dir());
+    }
+
+    /// A Twin folder is self-contained in BOTH directions: its `.cache` is
+    /// where downloads land and the first place reads look.
+    #[test]
+    fn twin_scope_reads_its_own_cache_then_its_authored_tree() {
+        let root = PathBuf::from("/twins/school");
+        let scope = DatasetScope::Twin {
+            name: "school".into(),
+            root: root.clone(),
+        };
+        assert_eq!(scope.dest_root(), crate::twin_cache_dir(&root));
+        assert_eq!(
+            scope.read_roots(),
+            vec![crate::twin_cache_dir(&root), root]
+        );
     }
 }

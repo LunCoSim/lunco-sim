@@ -1,8 +1,22 @@
-# lunco-celestial Assets
+# lunco-celestial — declared datasets.
 #
-# External assets required by the celestial simulation crate.
-# Run: cargo run -p lunco-assets -- download
-# Run: cargo run -p lunco-assets -- process
+# Body IMAGERY. The bodies themselves are code (radius, GM, rotation are
+# physics); how they LOOK is data, and this file is the whole of what the engine
+# knows about it. Nothing here is fetched on its own — these appear in
+# Settings ▸ Downloadable data and are downloaded when a user asks, exactly like
+# every other declared dataset. Without them Earth renders ocean blue and the
+# Moon regolith grey, which is a complete appearance, not a broken one.
+#
+# `dest` is resolved against the shared engine cache (`lunco_assets::cache_dir`)
+# and holds the SOURCE download; `[*.process]` derives the file the renderer
+# actually samples. Both roots are on the `lunco://` lookup chain, so a packaged
+# build that ships `assets/.cache/textures/earth.png` resolves it with no cache
+# and no network at all.
+#
+# The `[*.body]` sub-table is DOMAIN metadata: it names the body these pixels
+# belong to, by NAIF id, so `bind_dataset_body_imagery` can apply an installed
+# texture without any crate hardcoding a path. Add a body's imagery by adding an
+# entry here — there is no second place to edit.
 
 [earth]
 name = "Earth Blue Marble (NASA Next Generation)"
@@ -14,6 +28,11 @@ sha256 = "a9f0088972dee0254610af851c4d6838ca3f2cf79176987e0a5713e2c15ec042"
 target_resolution = [4096, 2048]
 output = "textures/earth.png"
 
+# DOMAIN metadata: which body these pixels belong to. `bind_dataset_body_imagery`
+# reads it, so imagery is added by adding an entry here — no path in Rust.
+[earth.body]
+naif_id = 399
+
 [moon]
 name = "Moon Color Map (NASA CGI Moon Kit)"
 url = "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_srgb_4k.tif"
@@ -23,3 +42,6 @@ sha256 = "9731fa8af425b6c2f88f277ecca82bf8c603f3743894f64ed7b25c5bfefa22ff"
 [moon.process]
 target_resolution = [4096, 2048]
 output = "textures/moon.png"
+
+[moon.body]
+naif_id = 301
