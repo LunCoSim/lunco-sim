@@ -18,6 +18,13 @@
 // kernel cannot produce this pair of verdicts in any ordering — if range were
 // what decided it, the blocked mast would be the one that stayed up.
 //
+// ⚠ The assertion is on the DIRECT EDGE, not on `reachable`. `reachable` is
+// breadth-first over the whole graph, and the control mast is a perfectly good
+// relay: rover → MastClear → Mast is two up links and answers "yes" while the
+// blocked segment is severed exactly as it should be. Asking the reachability
+// question here measures the relay, not the wall. (This file asked it first, and
+// went red against a kernel that was doing its job.)
+//
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
 //
 // `emit("COMMS_WALL", "PASS"|"FAIL")` — the telemetry verdict `scene_test` reads
@@ -38,12 +45,25 @@ fn on_tick(me) {
     if this.t < this.settle_s { return; }
 
     this.phase = "done";
+    // Geometry, printed alongside the verdict: when a link that should be severed
+    // is not, the first question is always "is the wall where the kernel thinks
+    // the segment is", and the answer has to be in the log rather than in a
+    // debugger.
+    let wall = find("/CommsWallTest/Wall/Body");
+    let ra = find("/CommsWallTest/Rover/Comms");
+    let ma = find("/CommsWallTest/Mast/Antenna");
+    print("[wall] wall body  gid=" + wall + " pos=" + world_pos(wall));
+    print("[wall] rover ant  gid=" + ra + " pos=" + world_pos(ra));
+    print("[wall] mast ant   gid=" + ma + " pos=" + world_pos(ma));
+
     let g = links();
+    let peers = if g == () { [] } else { neighbours(g, ra) };
     verdict(#{
         graph: g,
         n_nodes: if g == () { -1 } else { g.nodes.len() },
-        blocked: reachable("rover", "base"),
-        clear: reachable("rover", "base_clear"),
+        n_peers: peers.len(),
+        blocked: ma in peers,
+        clear: find("/CommsWallTest/MastClear/Antenna") in peers,
     });
 }
 
@@ -69,21 +89,26 @@ fn verdict(s) {
         "the link graph carries " + s.n_nodes + " node(s); this scene authors " +
         "three (rover, base, base_clear) and a missing one cannot be occluded"));
 
+    f.push(t_true(s.n_peers > 0,
+        "the rover has no direct peers at all, so 'the blocked mast is not among " +
+        "them' is true of a rover talking to nobody"));
+
     f.push(t_true(s.clear,
-        "the CLEAR sight-line to MastClear is down. It is 41.8 m — LONGER than " +
-        "the blocked one — and nothing stands on it, so either the link range is " +
-        "too short for this scene or the kernel is connecting nothing at all. " +
-        "Without this link up, the blocked verdict below proves nothing."));
+        "the CLEAR sight-line to MastClear is not a direct link. It is 41.8 m — " +
+        "LONGER than the blocked one — and nothing stands on it, so either the " +
+        "link range is too short for this scene or the kernel is connecting " +
+        "nothing at all. Without this link up, the blocked verdict below proves " +
+        "nothing."));
 
     f.push(t_true(!s.blocked,
-        "the rover still reaches the mast THROUGH the wall. Connectivity is being " +
-        "decided by range alone: this is the shorter of the two baselines, and the " +
-        "wall's `lunco:occluder` is not reaching the kernel."));
+        "the rover has a DIRECT link to the mast THROUGH the wall. Connectivity is " +
+        "being decided by range alone: this is the shorter of the two baselines, " +
+        "and the wall's `lunco:occluder` is not reaching the kernel."));
 
     print("[wall] ── results ──────────────────────────────────────────");
-    print("[wall]   nodes            " + s.n_nodes);
-    print("[wall]   rover -> base    " + s.blocked + "  (40.0 m, wall on the line — must be false)");
-    print("[wall]   rover -> clear   " + s.clear + "  (41.8 m, nothing on the line — must be true)");
+    print("[wall]   nodes            " + s.n_nodes + "  rover peers " + s.n_peers);
+    print("[wall]   direct -> base   " + s.blocked + "  (40.0 m, wall on the line — must be false)");
+    print("[wall]   direct -> clear  " + s.clear + "  (41.8 m, nothing on the line — must be true)");
 
     report_verdict(f, "COMMS WALL", "COMMS_WALL");
 }

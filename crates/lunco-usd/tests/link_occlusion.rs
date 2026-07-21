@@ -167,8 +167,10 @@ fn comms_wall_scene_authors_two_nodes_and_a_wall_between_them() {
     classes.sort();
     assert_eq!(
         classes,
-        vec!["base".to_string(), "rover".to_string()],
-        "the scene must author exactly the two endpoints the lesson talks about"
+        vec!["base".to_string(), "base_clear".to_string(), "rover".to_string()],
+        "the scene must author the two endpoints the lesson talks about, plus the \
+         CONTROL mast (`base_clear`) whose sight-line misses the wall — without it \
+         'the link is down' is equally true of a kernel that connects nothing"
     );
 
     // Exactly one occluder: the wall.

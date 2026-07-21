@@ -128,6 +128,15 @@ def Xform "CommsDemoScene" (
             # DISTANT peer below the horizon (Earth, a set relay) links is decided by
             # OCCLUSION — the ray through the Moon — not by this angle.
             double lunco:link:minElevationDeg = -10.0
+            # REACH. A rover's antenna is a rover's antenna: it talks to things in
+            # the lunar neighbourhood — the base mast 26 m away, a relay in lunar
+            # orbit — and it does not close a 384,000 km link to a DSN dish on its
+            # own. Left unbounded (the schema default is effectively infinite) it
+            # did exactly that, and the relay satellite this scene is built around
+            # became decorative: `link_path(rover, earth)` was one hop straight to
+            # Madrid. 100,000 km keeps every lunar peer in reach and Earth out of
+            # it, which is what makes the relay load-bearing and the routing real.
+            double lunco:link:maxRangeM = 100000000
         }
     }
 
@@ -187,4 +196,14 @@ def Xform "CommsDemoScene" (
     # the builtin `link.connected` verdict applies range / elevation / body +
     # terrain occlusion. Routing / autonomy is authored on top of its LinkState +
     # link.aos / link.los events.
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "comms-demo"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/comms_demo.rhai@
+        }
+    }
 }

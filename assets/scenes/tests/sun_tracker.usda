@@ -209,4 +209,14 @@ def Xform "SunTrackerTest" (
             float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
         }
     }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "sun-tracker"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/sun_tracker.rhai@
+        }
+    }
 }

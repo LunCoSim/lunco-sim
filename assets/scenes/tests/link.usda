@@ -192,4 +192,14 @@ def Xform "LinkTest" (
         double lunco:orbit:inclinationDeg = 90
         double lunco:orbit:meanAnomalyDeg = 180
     }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "link"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/link.rhai@
+        }
+    }
 }
