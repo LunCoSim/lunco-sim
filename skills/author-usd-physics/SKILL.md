@@ -240,6 +240,66 @@ scene-derived state and do not register it, you have added a leak.
 | stroke reads exactly `0.0000` in every regime | a second contact carrying the load (§2). Measure the joint's angular-lock error before touching its limits |
 | a spring loads the "wrong way" | almost never the joint. A jammed DOF and a reversed one look identical from the port; §2 tells them apart |
 | a scene behaves like the previous one | a resource that outlived its scene (§4) |
+| a part is lying on the ground behind the vehicle | it declared its own body and no joint holds it (§6). `--validate` the asset, or `cmd("RunLint", #{})` the scene |
+
+## 6. A part is not a body
+
+`PhysicsRigidBodyAPI` declares a **body**, and the loader honours it wherever it
+appears — ancestry is never consulted, because nesting-plus-joint is exactly how
+a wheel is mounted (`Wheel_FL` under the chassis + a `PhysicsRevoluteJoint`).
+So a prim that applies it and is jointed to nothing is a **free body inside your
+vehicle**, and it leaves:
+
+```usda
+def Xform "Rover" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) {
+    def Xform "Motor_FL" (prepend apiSchemas = ["PhysicsRigidBodyAPI"]) { … }   # ❌ falls out
+    def Xform "Motor_FL" (prepend apiSchemas = ["PhysicsMassAPI"])      { … }   # ✅ part of the rover
+}
+```
+
+This shipped. Four motors per rover, on every rover in the sandbox, gone on the
+first physics step — while the rovers still drove, still steered and still made
+their authored top speed. Every parity gate stayed green; the bug was found in a
+screenshot of hardware lying on the regolith.
+
+**The rule.** Hierarchy is namespace; a **joint** is attachment.
+
+- An internal part (motor, gearbox, battery, panel, lamp) = mass + geometry, **no
+  body**. Its colliders fold into the host body's compound, its mass belongs to
+  the host.
+- A part that must move relative to its host = a body **and** a joint, authored
+  together. That is what a mount (`AttachSpec`) writes, and it is why
+  `mount_probe.usda` may keep its body.
+- Same answer in every robotics dialect: URDF lumps a fixed-jointed link into its
+  parent's inertia, MJCF welds a jointless nested body, and neither has a notion
+  of a link inside a link attached to nothing. Reflected rotor inertia belongs to
+  the joint (`armature`-style), not to a body of its own.
+
+### Catch it before the screenshot
+
+```bash
+cargo run -q -p lunco-sandbox --bin sandbox -j 2 -- --validate assets/vessels/rovers/skid_rover.usda
+```
+
+```
+[usd/nested-body-no-joint] /SkidRover/Motor_FL — applies PhysicsRigidBodyAPI
+inside the body </SkidRover> but no joint names it — …
+```
+
+and on the **loaded** scene (which no file describes once you have spawned into
+it), the same rules through the verb:
+
+```rhai
+cmd("RunLint", #{}); query("LintReport");
+```
+
+The rules are authored in `assets/scripting/policy/lint_usd.rhai` — add one there
+rather than in Rust. Two gates hold this: `shipped_assets_lint_clean.rs` (every
+shipped asset lint-clean) and `scenes/sandbox/parts_attached.usda` (nothing
+drifts >0.5 m from its vessel over a 12 s drive — the behavioural proof, since a
+lint cannot simulate). See
+[`validate-assets`](../validate-assets/SKILL.md#the-rules-are-authored--the-lint-layer)
+and [`docs/architecture/lint-substrate.md`](../../docs/architecture/lint-substrate.md).
 
 ## Verify it, headlessly
 

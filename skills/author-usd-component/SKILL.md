@@ -261,6 +261,19 @@ Backend is **Avian3D**. One prim with `PhysicsRigidBodyAPI` becomes **one**
 rigid body aggregating all descendant colliders into a compound; descendants
 carry `PhysicsCollisionAPI` only and get **no** independent body.
 
+> **A component that gets MOUNTED must not apply `PhysicsRigidBodyAPI`.** The
+> loader honours the schema wherever it appears — ancestry is never consulted,
+> because nesting-plus-joint is how a wheel is mounted — so a part inside a
+> vehicle that no joint names is a free body and falls out of it. That shipped:
+> `components/mobility/motor.usda` applied it, and four motors per rover dropped
+> through the hull on the first physics step while every parity test stayed
+> green. An internal part is **mass + geometry** (`PhysicsMassAPI`,
+> `PhysicsCollisionAPI` on its gprims) — `gearbox.usda` is the model to copy. A
+> part that must MOVE relative to its host gets a body **and** a joint, authored
+> together, which is what a mount (`AttachSpec`) writes. `sandbox --validate`
+> reports the mistake as `[usd/nested-body-no-joint]`; see
+> [`author-usd-physics`](../author-usd-physics/SKILL.md#6-a-part-is-not-a-body).
+
 - **`physics:approximation` defaults to `trimesh`, and a trimesh cannot be a
   moving rigid body in parry.** A dynamic mesh body must author `"convexHull"` or
   `"convexDecomposition"` or it will not behave.

@@ -234,6 +234,31 @@ libraries → `<twin>/tools/*.rhai`.
 - ❌ A generic `spawn(...)` — use `cmd("SpawnEntity", #{entry_id, position})` so clients reconstruct from the catalog.
 - ❌ Reading raw `Transform` for position — use `world_pos` (float-origin correct).
 
+## The gate set — what the shipped scene tests guard
+
+`./scripts/run_scene_tests.sh` builds `scene_test` once and runs every gate scene
+headless and deterministically (`--threads 1 --jitter 0`), exit 0=PASS / 1=FAIL /
+2=no verdict. The set, and what each one is FOR:
+
+| Scene | Guards |
+|---|---|
+| `drivetrain_parity` · `ackermann_parity` · `six_independent_parity` | raycast ≡ physical for one authored parameter set (below) |
+| `parts_attached` | **nothing falls off the vehicle.** Four rovers driven 12 s; no descendant of a vessel may change its distance to that vessel by >0.5 m. Written because four motors per rover silently fell out while every parity gate stayed green |
+| `lint_selftest` | **the linter itself.** A scene authored wrong on purpose, so `RunLint` → rules → `LintReport` can be shown to FIND the faults by rule id — and to stay silent on the correctly jointed wheel beside them |
+
+Two lessons those last two encode, worth copying into any new gate:
+
+- **Measure something rotation-invariant.** `parts_attached` compares
+  `|p_part − p_vessel|` before and after a drive: a spinning wheel, a steering
+  knuckle and a stroking suspension all leave it alone, while a part left on the
+  ground changes it by the length of the drive. It walks `children()`, so it
+  needs no list of part names and covers parts added later.
+- **Prove the measurement can fail.** Each of these asserts its subject actually
+  MOVED (or that a deliberate fault was actually FOUND). A vessel that never
+  simulates, a hook that never fires and a clean scene are indistinguishable
+  otherwise — `parts_attached` excludes rucheyok for exactly that reason rather
+  than counting a frozen rover as a pass.
+
 ## Drivetrain parity test
 
 A scenario can also be a **regression test**. `assets/scenarios/drivetrain_parity_test.rhai`

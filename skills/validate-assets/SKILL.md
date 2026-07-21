@@ -15,7 +15,11 @@ description: >
   not link it), the CLI form starts no app/window/GPU at all, `.mo` treats
   `if`/`when` in an equation section as ERRORS (rumoca is branch-free), `.wgsl`
   can never fail (only warn), `twin://` cannot be resolved, and a bare relative
-  path is tried against the CWD *before* the assets root.
+  path is tried against the CWD *before* the assets root. Since the lint layer
+  landed it ALSO runs the authored rules for the file's domain
+  (`assets/scripting/policy/lint_<domain>.rhai`) — so `.usda` pre-flight now
+  reports parts that would fall off a vehicle, not just files that would not
+  parse. Use `RunLint` instead when the subject is the LOADED scene.
 ---
 
 # Validate an asset (pre-flight)
@@ -184,6 +188,52 @@ Consequences:
   the resolver only knows the engine root. Pass the twin file's real filesystem
   path instead.
 
+## The rules are authored — the lint layer
+
+Everything above is what the **loader** would refuse: parse, compose,
+`WheelParams`. Compiled, because it is the loader's own code. A second tier runs
+on the same call and answers a different question — **is this right?** Those
+rules live in `assets/scripting/policy/lint_<domain>.rhai` and are reached
+through the `lint.<domain>` hook, so adding, tightening or silencing one is an
+edit to a script, not a rebuild.
+
+Findings arrive in the same report: `error` severity joins `errors` (and flips
+`ok`), everything else joins `warnings`. Each line is prefixed with its domain
+and rule id, which is what you grep for:
+
+```
+[usd/nested-body-no-joint] /Rover/Motor_FL — applies PhysicsRigidBodyAPI inside
+the body </Rover> but no joint names it — it is a SEPARATE body held by nothing
+and will fall out of the vehicle. …
+```
+
+The shipped USD rules: `nested-body-no-joint` (error — **this is the one that
+caught four motors falling off every rover**), `joint-target-not-a-body` (error),
+`dynamic-body-no-collider` (warn), `mass-outside-any-body` (warn). See
+[`author-usd-physics`](../author-usd-physics/SKILL.md#6-a-part-is-not-a-body)
+for the authoring rule they enforce and
+[`docs/architecture/lint-substrate.md`](../../docs/architecture/lint-substrate.md)
+for the design.
+
+### The file is not the scene — `RunLint`
+
+`ValidateAsset` lints a **file**. After a scene is loaded, spawned into and
+edited, no file describes what is running; lint **that** with the verb:
+
+```rhai
+cmd("RunLint", #{});        // lints every loaded stage, same rules, same facts
+query("LintReport");        // { errors, warnings, findings[] }
+```
+
+or `{"command":"RunLint"}` over HTTP/MCP. Nothing lints automatically at load —
+deliberately. A scenario calling that pair on a cadence *is* a live linter, and
+
+```rhai
+register_hook("lint.usd", "lint_usd", my_rules);   // next RunLint obeys
+```
+
+re-shapes the rules on a running sim.
+
 ## Where it fits
 
 ```
@@ -214,3 +264,11 @@ run costs seconds; a sandbox launch that dies on a typo costs a compile.
   report `ok: false`, so the warnings ARE the result.
 - ❌ Adding an `if` to a `.mo` equation section to "handle a case" — rewrite it
   branch-free; the lint is enforcing a real solver constraint, not a style rule.
+- ❌ Reading a `[usd/…]` lint error as "the file is broken syntax". It parsed and
+  composed fine — it says the file would load and then behave wrongly. Fix the
+  authoring, don't chase the parser.
+- ❌ Validating a file and concluding the running scene is clean. Runtime spawns
+  and edits are in no file; `cmd("RunLint", #{})` is the check for those.
+- ❌ Adding a rule in Rust. Rules go in `assets/scripting/policy/lint_*.rhai`;
+  only new FACTS are Rust, and only when no existing fact can answer the
+  question (`facts.prims[].schemas` answers most of them).

@@ -100,6 +100,7 @@ these are the reasoning.
 | [`terrain-lod-audit.md`](terrain-lod-audit.md) · [`terrain-precompute-plan.md`](terrain-precompute-plan.md) | The CDLOD streamer audited against the real moonbase DEM (surface only; the globe is out of scope), and the precomputed-tile architecture that replaces its finding #6 |
 | [`telemetry-subsystem.md`](telemetry-subsystem.md) | Channels, rates and clock binding. **Phases 0–1 landed; 2–5 are proposal** |
 | [`ports-system-design.md`](ports-system-design.md) | `PortRegistry` — the one scalar-port surface (Substrate D) |
+| [**`lint-substrate.md`**](lint-substrate.md) | Authoring mistakes that have no runtime symptom. **Facts in Rust, rules in rhai policy** (`lint.<domain>`), one linter per domain, findings in one report. Nothing lints on load — `RunLint` is a verb, and a scenario calling it on a cadence is the realtime linter |
 | [`derive-substrate.md`](derive-substrate.md) · [`precompute-substrate.md`](precompute-substrate.md) · [`hashing-substrate.md`](hashing-substrate.md) · [`mobility-substrate.md`](mobility-substrate.md) | The derived-artifact substrates (A–E) |
 | [`caching-and-precompute-strategy.md`](caching-and-precompute-strategy.md) · [`scenario-program-cache.md`](scenario-program-cache.md) | Caching strategy; the rhai program cache |
 | [`efficiency-and-maintainability.md`](efficiency-and-maintainability.md) | The North Star |

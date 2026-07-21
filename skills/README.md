@@ -24,7 +24,7 @@ one directly when doing that kind of task by hand.
 | [**author-usd-component**](author-usd-component/SKILL.md) | Model a reusable `.usda` asset from scratch — geometry, material, physics, parameters, spawn catalog |
 | [**build-vehicle**](build-vehicle/SKILL.md) | Assemble a rover/vehicle from the mobility component library — wheels, tires, suspensions, chassis, variant axes, drive laws, live tuning |
 | [**build-usd-scene**](build-usd-scene/SKILL.md) | Assemble a scene from assets that already exist — load, spawn, place, and tune objects |
-| [**author-usd-physics**](author-usd-physics/SKILL.md) | Author physics in USD — joints and joint FRAMES, gravity per scene, why a mechanism is rigid or a vehicle flies apart |
+| [**author-usd-physics**](author-usd-physics/SKILL.md) | Author physics in USD — joints and joint FRAMES, gravity per scene, why a mechanism is rigid, a vehicle flies apart, or a part falls off it |
 | [**author-scenario**](author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, multi-entity coordination |
 | [**authoring-vessel-controllers**](authoring-vessel-controllers/SKILL.md) | Give a vessel a self-driving GNC / autopilot with manual handoff |
 | [**compose-multidomain-twin**](compose-multidomain-twin/SKILL.md) | Assemble a full mission — USD + Modelica + cosim + rhai — into a Twin |
@@ -39,7 +39,7 @@ one directly when doing that kind of task by hand.
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
 | **produce-episode** (in `lunco-marketing/.claude/skills/`) | Cut a finished campaign video from a take — narration, Kdenlive assembly, master, grade |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
-| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.wgsl`/`.rhai` — does it parse? — in seconds, with no app, window or GPU |
+| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.wgsl`/`.rhai` — does it parse, and is it *right*? — in seconds, with no app, window or GPU; plus `RunLint` for the loaded scene and where lint rules are authored |
 
 ## Extend the engine
 
@@ -66,7 +66,17 @@ one directly when doing that kind of task by hand.
 - **Use the API `Exit`**, never `pkill`, to stop a running app.
 - **Validate before you run.** `sandbox -- --validate <files…>` parses assets in
   seconds with no GPU and catches broken references, missing wheel attrs and
-  `if`/`when` in Modelica. See [**validate-assets**](validate-assets/SKILL.md).
+  `if`/`when` in Modelica — **and runs the authored lint rules**, which is what
+  reports a part that would fall off a vehicle. On a *loaded* scene use the verb:
+  `cmd("RunLint", #{})` + `query("LintReport")`; nothing lints on its own. Rules
+  are rhai (`assets/scripting/policy/lint_*.rhai`), one linter per domain, so a
+  new rule is an edit, not a rebuild. See
+  [**validate-assets**](validate-assets/SKILL.md) and
+  [lint-substrate](../docs/architecture/lint-substrate.md).
+- **Hierarchy is namespace; a joint is attachment.** A mounted part that applies
+  `PhysicsRigidBodyAPI` and is jointed to nothing is a free body and falls out of
+  the vehicle — silently, with every parity test green. See
+  [**author-usd-physics** §6](author-usd-physics/SKILL.md#6-a-part-is-not-a-body).
 - **Shipped assets are `@lunco://…@`.** A bare relative path resolves against the
   anchoring document, so it breaks once a Twin mounts the file — and for
   `info:sourceAsset` that failure is **silent**.

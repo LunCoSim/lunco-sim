@@ -39,6 +39,26 @@ Start here, in order (new to the codebase? the canonical narrative path is **[do
   editing (`cargo run -p lunco-sandbox --bin scene_test -- --scene scenes/sandbox/…`,
   exit 0=PASS/1=FAIL/2=no verdict) and re-run after. "It compiles" is not evidence that a
   drivetrain still behaves the same.
+- **Rules go in policy, not in Rust.** The lint layer is FACTS in Rust (the crate that
+  owns the subject) and RULES in `assets/scripting/policy/lint_<domain>.rhai`, reached via
+  the `lint.<domain>` hook — one linter per domain (`usd`, `rhai`, `modelica`). Add a rule
+  by editing the script; add Rust only when no existing fact can answer the question
+  (`facts.prims[].schemas` answers most). Nothing lints on load: `RunLint` is a verb
+  (`cmd("RunLint", #{})` / `{"command":"RunLint"}`), `query("LintReport")` reads it back,
+  and `sandbox --validate` runs the same rules over a file. Design:
+  [`docs/architecture/lint-substrate.md`](docs/architecture/lint-substrate.md).
+- **Hierarchy is namespace; a joint is attachment.** A mounted part that applies
+  `PhysicsRigidBodyAPI` and is named by no joint is a SEPARATE free body and falls out of
+  the vehicle — silently, with every parity gate green (four motors per rover did exactly
+  that). Internal part = mass + geometry, no body; movable part = body **and** joint,
+  authored together. Guarded by `nested-body-no-joint`
+  (`crates/lunco-scene-commands/tests/shipped_assets_lint_clean.rs`) and, behaviourally,
+  by `scenes/sandbox/parts_attached.usda`.
+- **A green gate must be able to go red.** A linter with no broken fixture, or a scene
+  test whose subject never moves, reports "clean" and "not running" identically. Ship the
+  negative case with the check — `lint_selftest.usda` exists for exactly this, and a
+  vessel that never simulates is excluded from `parts_attached.usda` rather than counted
+  as a pass.
 
 ## Before You Write Code — prior art, layer, no legacy
 
