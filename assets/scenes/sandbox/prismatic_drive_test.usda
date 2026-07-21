@@ -98,16 +98,25 @@ def Xform "SandboxScene" (
         bool physics:kinematicEnabled = true
     }
 
-    def Cube "Platform" (
+    def Xform "Platform" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        double size = 0.5
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
         double3 xformOp:translate = (0.0, 4.0, 0.0)
-        double3 xformOp:scale = (1.6, 0.3, 1.6)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 50.0
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.5
+            double3 xformOp:scale = (1.6, 0.3, 1.6)
+            color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
     }
 
     def PhysicsPrismaticJoint "Lift" (
@@ -128,5 +137,15 @@ def Xform "SandboxScene" (
         # (a target is authored), so the Platform deploys to -1.5 m and holds.
         float drive:linear:physics:targetPosition = -1.5
         float drive:linear:physics:maxForce = 5000.0
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "prismatic-drive"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/prismatic_drive_test.rhai@
+        }
     }
 }

@@ -58,33 +58,61 @@ def Xform "DiffRig" (
     }
 
     # Front-heavy rocker: centre 0.75 m forward of its pivot (pivot at rear end).
-    def Cube "RockerL" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    # A body prim is a FRAME, not a mesh: the shaping transform lives on the beam
+    # below, so this prim's frame stays usable — anything mounted on the rocker can
+    # be placed in it without inheriting a 1:7.5 stretch. A prim that is both body
+    # and geometry cannot host a child at all.
+    def Xform "RockerL" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        double size = 1.0
         float physics:mass = 60.0
         float3 physics:diagonalInertia = (50.0, 50.0, 5.0)
         float physxRigidBody:angularDamping = 8.0
         double3 xformOp:translate = (-1.2, 1.0, 0.75)
-        double3 xformOp:scale = (0.2, 0.2, 1.5)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.85, 0.2, 0.2)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # 0.2 x 0.2 x 1.5 m beam. A rectangular section has no dimensioned USD
+        # primitive — `UsdGeomCube` carries only a uniform `size` — so the scale
+        # stays here, on the geometry it shapes, where it belongs.
+        def Cube "Beam" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.2, 0.2, 1.5)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.85, 0.2, 0.2)]
+        }
     }
 
     # Balanced rocker: pivot at its centre (no gravity torque).
-    def Cube "RockerR" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    # A body prim is a FRAME, not a mesh: the shaping transform lives on the beam
+    # below, so this prim's frame stays usable — anything mounted on the rocker can
+    # be placed in it without inheriting a 1:7.5 stretch. A prim that is both body
+    # and geometry cannot host a child at all.
+    def Xform "RockerR" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        double size = 1.0
         float physics:mass = 60.0
         float3 physics:diagonalInertia = (50.0, 50.0, 5.0)
         float physxRigidBody:angularDamping = 8.0
         double3 xformOp:translate = (1.2, 1.0, 0.0)
-        double3 xformOp:scale = (0.2, 0.2, 1.5)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.2, 0.2, 0.85)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # 0.2 x 0.2 x 1.5 m beam. A rectangular section has no dimensioned USD
+        # primitive — `UsdGeomCube` carries only a uniform `size` — so the scale
+        # stays here, on the geometry it shapes, where it belongs.
+        def Cube "Beam" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.2, 0.2, 1.5)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.2, 0.2, 0.85)]
+        }
     }
 
     def PhysicsRevoluteJoint "HingeL"

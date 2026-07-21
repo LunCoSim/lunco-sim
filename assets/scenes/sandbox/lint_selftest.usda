@@ -21,6 +21,10 @@
 #   Ghost        a dynamic body with no collider anywhere   → dynamic-body-no-collider
 #   Leg          a sprung strut that outreaches its own foot → sprung-foot-not-lowest
 #                (geometry, not schema: it would validate clean)
+#   Leg/Strut    a body prim that is also its own scaled mesh  → body-is-its-own-scaled-mesh
+#                DELIBERATE. Every other rig in this folder has been converted to
+#                an Xform frame + shape child; this one keeps the old shape because
+#                it is the fixture that proves the rule fires. Do not "fix" it.
 #
 # and one CORRECT construction that must stay silent:
 #

@@ -91,16 +91,25 @@ def Xform "SandboxScene" (
         bool physics:kinematicEnabled = true
     }
 
-    def Cube "Arm" (
+    def Xform "Arm" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        double size = 0.5
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
         double3 xformOp:translate = (2.0, 5.0, 0.0)
-        double3 xformOp:scale = (4.0, 0.4, 0.4)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 1.0
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.5
+            double3 xformOp:scale = (4.0, 0.4, 0.4)
+            color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
     }
 
     def PhysicsRevoluteJoint "Hinge"
@@ -112,5 +121,15 @@ def Xform "SandboxScene" (
         # -2 along X so its hinge point sits at the Anchor center.
         point3f physics:localPos0 = (0.0, 0, 0)
         point3f physics:localPos1 = (-2.0, 0, 0)
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "revolute-motor"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/revolute_motor_test.rhai@
+        }
     }
 }

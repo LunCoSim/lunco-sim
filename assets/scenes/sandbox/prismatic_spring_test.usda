@@ -104,16 +104,25 @@ def Xform "PrismaticSpringTest" (
     #   rake, compressing: (sin25,  cos25, 0) = ( 0.42262,  0.90631, 0)
 
     # ── Extension: the bob hangs BELOW its anchor ────────────────────────────
-    def Cube "AnchorExt" (
+    def Xform "AnchorExt" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI"]
     )
     {
-        double size = 1.0
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
         double3 xformOp:translate = (-3.0, 10.0, 0)
-        double3 xformOp:scale = (0.6, 0.3, 0.6)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.35, 0.36, 0.4)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         bool physics:kinematicEnabled = true
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.6, 0.3, 0.6)
+            color3f[] primvars:displayColor = [(0.35, 0.36, 0.4)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
     }
 
     def Sphere "BobExt" (
@@ -149,16 +158,25 @@ def Xform "PrismaticSpringTest" (
     }
 
     # ── Compression: the bob sits ABOVE its anchor — the landing-leg regime ───
-    def Cube "AnchorComp" (
+    def Xform "AnchorComp" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI"]
     )
     {
-        double size = 1.0
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
         double3 xformOp:translate = (3.0, 8.0, 0)
-        double3 xformOp:scale = (0.6, 0.3, 0.6)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.35, 0.36, 0.4)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         bool physics:kinematicEnabled = true
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.6, 0.3, 0.6)
+            color3f[] primvars:displayColor = [(0.35, 0.36, 0.4)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
     }
 
     def Sphere "BobComp" (
@@ -214,16 +232,25 @@ def Xform "PrismaticSpringTest" (
     #
     # and the bob's horizontal travel separates them outright: a raked axis moves
     # it 0.0776 m in X, a vertical one moves it not at all.
-    def Cube "AnchorLegLike" (
+    def Xform "AnchorLegLike" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI"]
     )
     {
-        double size = 1.0
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
         double3 xformOp:translate = (0, 10.0, 0)
-        double3 xformOp:scale = (0.6, 0.3, 0.6)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.35, 0.36, 0.4)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         bool physics:kinematicEnabled = true
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (0.6, 0.3, 0.6)
+            color3f[] primvars:displayColor = [(0.35, 0.36, 0.4)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
     }
 
     # Rotated 25° about Z in its own right — exactly as a leg strut is — so the

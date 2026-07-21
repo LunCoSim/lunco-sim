@@ -481,6 +481,20 @@ fn collect_child_colliders_from_usd(
             continue;
         }
 
+        // A child that is its OWN rigid body is not a piece of this body's
+        // compound shape. It is a separate body, and if it is attached at all a
+        // joint says so — which is how a foot mounts on a leg and a wheel on a
+        // chassis. Folding its collider in as well gives one piece of geometry two
+        // owners: the compound holds it rigidly in the parent's frame while the
+        // joint tries to move it, and the two fight until a body leaves the world.
+        //
+        // This is the same rule the loader already applies in the other direction
+        // (a collider with no rigid-body ancestor is static geometry, never a
+        // body): ownership stops at a body boundary, in both directions.
+        if reader.has_api_schema(&child_path, ptok::API_RIGID_BODY) {
+            continue;
+        }
+
         // Check if child has collision enabled
         let child_collision = reader
             .scalar::<bool>(&child_path, ptok::A_COLLISION_ENABLED)
@@ -2630,6 +2644,64 @@ def Xform "Mission"
         }
         world.flush();
         (world.get::<Collider>(entity).is_some(), world.get::<RigidBody>(entity).copied())
+    }
+
+    /// A leg with a footpad: the pad is a CHILD of the leg, its own body, and
+    /// jointed to it — how a foot mounts on a leg and a wheel on a chassis.
+    const NESTED_BODY: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Rig"
+{
+    def Xform "Leg" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
+    {
+        def Cylinder "Strut" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            uniform token axis = "Y"
+            double radius = 0.075
+            double height = 7.05
+        }
+        def Cylinder "Pad" (prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"])
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (0, -3.675, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def PhysicsSphericalJoint "Gimbal"
+        {
+            rel physics:body0 = </Rig/Leg>
+            rel physics:body1 = </Rig/Leg/Pad>
+        }
+    }
+}
+"#;
+
+    /// OWNERSHIP STOPS AT A BODY BOUNDARY, and this is the direction that was
+    /// missing. A child that is its own rigid body is a neighbour, not geometry:
+    /// folding its collider into the parent's compound gives one shape two owners
+    /// — the compound holds it rigidly in the parent's frame while its joint tries
+    /// to move it. The pair fight every step until a body leaves the world, which
+    /// is what a landing gear did at 10^15 m once its pad became a child.
+    ///
+    /// Wheels survived only because `physxVehicleWheel:radius` skipped them by
+    /// name. This is the general rule that carve-out was standing in for.
+    #[test]
+    fn a_nested_body_is_not_a_piece_of_its_parents_compound_shape() {
+        let recipe = StageRecipe::from_source("t.usda", NESTED_BODY);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let view = cs.view();
+        let leg = SdfPath::new("/Rig/Leg").unwrap();
+        let pieces = collect_child_colliders_from_usd(&view, &leg);
+        assert_eq!(
+            pieces.len(),
+            1,
+            "the leg's compound is its strut alone — the pad is its own body, not \
+             the leg's geometry"
+        );
     }
 
     /// The regression this exists for: a collider prim with no rigid-body ancestor

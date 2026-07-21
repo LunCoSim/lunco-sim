@@ -57,12 +57,50 @@ Consequences that are properties of the mechanism, not of any one asset:
   by bending its angular lock instead. The vehicle ends up level, at a plausible
   height, at rest — and the spring reads nothing.
 
+### 0.2 Author the leg as a frame
+
+A strut's clearance is a relationship between two parts, so author it as one. Make
+the leg body an `Xform` **frame** — origin at its chassis anchor, local −Y down the
+leg — and put the strut mesh and the foot inside it as children, placed by how far
+down the leg they sit. "The foot is below the strut's tip" is then a fact a reader
+can see and a linter can compute. Placed in vehicle coordinates instead, the same
+geometry is written twice in two frames, and the copies drift silently.
+
+Two things this depends on:
+
+- **The body cannot also be the mesh.** A prim that is both carries the shaping
+  transform, and every child inherits it. Splitting the geometry into a child frees
+  the frame — which is what makes the foot placeable in it at all.
+- **Author dimensions, not scale.** `UsdGeomCube` has only a uniform `size`, so a
+  real box needs a non-uniform `xformOp:scale` that then belongs to the prim rather
+  than the shape. `Cylinder`/`Capsule` carry `radius`/`height` directly. This is not
+  only tidiness: a box has corners, and a raked box's corner hangs
+  `half_thickness · sin(rake)` below its tip — which is the part that reaches the
+  ground first. Re-authoring one lander's struts as cylinders took its legs from
+  0.07 m of travel under 170 N to 0.22 m under 900 N, the load they were sized for,
+  and settled footpads that had been hunting a 5–24° band indefinitely.
+
+Ownership then follows the hierarchy, stopping at every body boundary in both
+directions: a nested body's collider is that body's, never the parent's compound,
+and a nested body is attached by a **joint** or it falls off.
+
 The observable contract, and what `landing_legs_test` asserts: struts **compress**
-(negative `displacement`, since the axis points chassis→foot), and each joint's
-angular lock still holds at rest. Height and tilt do not distinguish a gear that
-absorbed a landing from one that bent under it; those two do. The prelude's
-`joint_lock_error_deg` computes the residual from the two bodies' orientations
-independently, so it cannot share a bug with the port it is checking.
+— negative `displacement`, since the axis points chassis→foot — by a comparable
+amount on every leg, and the feet still gimbal rather than riding their cone stops.
+Height and tilt distinguish nothing: a gear that absorbed a landing and one that
+bent under it both sit level at a plausible height.
+
+Sharing is judged on **stroke**, not on the `force` port. The load a spring carries
+is `k·x`; the port reports the whole drive law `k·x + c·v`, and with a stiff damper
+a few tenths of a m/s of contact jitter swamps the carried load. Stroke is the
+state, and a dead strut still reads ~0.
+
+The joint's angular-lock residual — `joint_lock_error_deg` in the rhai prelude,
+computed from the two bodies' orientations independently so it cannot share a bug
+with the port it checks — is worth **logging** but not asserting: an XPBD joint is
+elastic, so the bend tracks load. A bypassed leg bends ~2° carrying nothing and a
+healthy one bends ~2° carrying 900 N. The signal is the conjunction, bending while
+the spring reads nothing, and stroke already carries that half.
 
 ---
 

@@ -96,6 +96,26 @@ fn applied_schemas(reader: &StageView<'_>, prim: &SdfPath) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Whether `s` lies inside a body nested under `root` — i.e. belongs to someone
+/// else's body rather than to `root`'s.
+///
+/// OWNERSHIP STOPS AT A BODY BOUNDARY, and it is the same rule the loader applies
+/// when it folds child colliders into a compound shape. A foot mounted on a leg is
+/// the leg's neighbour, not the leg's geometry: counting it as the leg's would
+/// make a leg look like it reaches as low as its own foot, which is exactly the
+/// question `sprung-foot-not-lowest` asks.
+fn inside_nested_body(bodies: &HashSet<String>, root: &str, s: &str) -> bool {
+    for b in bodies {
+        if b == root || !b.starts_with(&format!("{root}/")) {
+            continue;
+        }
+        if s == b || s.starts_with(&format!("{b}/")) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether `path` or any descendant carries `PhysicsCollisionAPI`.
 ///
 /// `sorted` is every prim path in lexical order, so a subtree is one contiguous
@@ -185,6 +205,7 @@ fn world_aabb(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
 fn collider_world_aabb(
     reader: &StageView<'_>,
     sorted: &[String],
+    bodies: &HashSet<String>,
     path: &str,
 ) -> Option<(Vec3, Vec3)> {
     let prefix = format!("{path}/");
@@ -195,6 +216,9 @@ fn collider_world_aabb(
     for s in subtree {
         let Ok(p) = SdfPath::new(&s) else { continue };
         if !reader.has_api_schema(&p, ptok::API_COLLISION) {
+            continue;
+        }
+        if inside_nested_body(bodies, path, &s) {
             continue;
         }
         // Collision is opt-OUT: the API applied with `physics:collisionEnabled = 0`
@@ -281,7 +305,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             continue;
         }
         let own_collider = reader.has_api_schema(p, ptok::API_COLLISION);
-        let aabb = collider_world_aabb(reader, &sorted, &path);
+        let aabb = collider_world_aabb(reader, &sorted, &bodies, &path);
         body_facts.push(H::map([
             ("path", H::str(path.clone())),
             ("type", H::str(reader.prim_type_name(p).unwrap_or_default())),
@@ -306,6 +330,17 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             // mechanisms: which part reaches the ground FIRST. `[]` when nothing
             // in the subtree has statable bounds, so a rule can tell "no collider"
             // from "collider of unknown size" instead of reading both as zero.
+            // A shaping transform on the BODY prim itself. Harmless for a lone
+            // test rig; a design fault on anything that hosts a part, because a
+            // child cannot be placed in a frame that stretches it.
+            (
+                "scale_nonuniform",
+                H::Bool(
+                    reader
+                        .value_vec3(p, "xformOp:scale")
+                        .is_some_and(|v| v[0] != v[1] || v[1] != v[2]),
+                ),
+            ),
             ("collider_min", vec3_h(aabb.map(|b| b.0))),
             ("collider_max", vec3_h(aabb.map(|b| b.1))),
         ]));

@@ -71,16 +71,25 @@ def Xform "SandboxScene" (
         bool physics:kinematicEnabled = true
     }
 
-    def Cube "BallArm" (
+    def Xform "BallArm" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        double size = 0.3
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
         double3 xformOp:translate = (-2.0, 5.0, 0.0)
-        double3 xformOp:scale = (1.0, 3.0, 1.0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 2.0
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.3
+            double3 xformOp:scale = (1.0, 3.0, 1.0)
+            color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
     }
 
     def PhysicsSphericalJoint "BallJoint"
@@ -142,16 +151,25 @@ def Xform "SandboxScene" (
         bool physics:kinematicEnabled = true
     }
 
-    def Cube "D6Arm" (
+    def Xform "D6Arm" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        double size = 0.3
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
         double3 xformOp:translate = (0.0, 5.0, 0.0)
-        double3 xformOp:scale = (1.0, 3.0, 1.0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.9, 0.6, 0.2)]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 2.0
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.3
+            double3 xformOp:scale = (1.0, 3.0, 1.0)
+            color3f[] primvars:displayColor = [(0.9, 0.6, 0.2)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
     }
 
     def PhysicsD6Joint "D6Hinge" (
@@ -173,5 +191,15 @@ def Xform "SandboxScene" (
         float limit:rotX:physics:high = -1.0
         float limit:rotY:physics:low = 1.0
         float limit:rotY:physics:high = -1.0
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "g7-joints"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/g7_joints_test.rhai@
+        }
     }
 }

@@ -116,11 +116,13 @@ The signature is unmistakable once you know it:
   Touchdown changes nothing.
 - `force` reads near zero while the vehicle is demonstrably standing on the leg.
 - The vehicle looks perfect: level, at a believable height, at rest.
-- The joint's **angular lock is bent by a degree or two** and stays there.
+- The joint's angular lock is bent a degree or two and stays there.
 
-That last one is the tell, and nothing else in a scene reports it. The gear
-settled by *bending* rather than *stroking*, so the load never reached the axial
-DOF the spring lives on.
+**The bend alone proves nothing** — measure it, but read it with the load. An
+XPBD joint is elastic, so the bend tracks FORCE: a bypassed leg bends ~2°
+carrying nothing, and a healthy one bends ~2° carrying 900 N. The tell is the
+CONJUNCTION — bending while the spring reads nothing. Stroke is what actually
+discriminates, so that is what a test should assert.
 
 **Ground clearance is a load-path property, not a styling one.** A raked box
 strut's bottom corner hangs `half_thickness * sin(rake)` below its tip, so a
@@ -148,6 +150,14 @@ Then bisect the contacts. Disable one collider at a time and re-run — the one
 whose removal restores the stroke is the thief. Do **not** start from the joint:
 the joint is usually innocent, and its authoring is where the time goes.
 
+**Suspect the shape before the physics.** The thief here was a strut modelled as
+a unit `Cube` under a non-uniform `xformOp:scale`: a box has corners, and a raked
+box's corner hangs `half_thickness * sin(rake)` below its tip, which is what
+reached the ground. The same strut as a `Cylinder` with a real `radius` has no
+corner to dig in, and the gear went from 0.07 m of travel under 170 N to 0.22 m
+under 900 N — the load it was designed for — with the footpads settling flat
+instead of hunting a 5..24° band forever.
+
 Two hypotheses that look compelling here and are worth ruling out by measurement
 before you spend a day on either: solver conditioning (change a body's mass by
 20× — if nothing moves, it is not conditioning) and friction (drop μ by 2× — same
@@ -170,6 +180,56 @@ actual defect under a range the mechanism never needed.
 anchor is derived from the body's origin; move the origin and you move the
 joint's zero, silently preloading the spring by the axial component of the shift.
 Change the part's *extent*, or the mating part, not the sprung body's origin.
+
+## 2b. Author the body as a FRAME, with real dimensions
+
+### Make the body a frame, not a mesh
+
+A prim that is both the rigid body and the geometry cannot host children, because
+its shaping transform applies to them too. Give the body its own frame and put the
+geometry inside it:
+
+```usda
+def Xform "LegPX" (prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"])
+{
+    # origin at the hull anchor, local -Y down the leg
+    double3 xformOp:translate = (2.519, 1.388, 0)
+    double3 xformOp:rotateXYZ = (0, 0, 25.0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+    def Cylinder "Strut" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        uniform token axis = "Y"
+        double radius = 0.075
+        double height = 7.05                       # spans local y 0 .. -7.05
+        double3 xformOp:translate = (0, -3.525, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Cylinder "PadPX" (prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"])
+    {
+        double3 xformOp:translate = (0, -7.2, 0)   # 0.15 below the strut's tip
+        ...                                        # + a joint, below
+    }
+}
+```
+
+Now every part of the leg is placed by how far down the leg it sits, in ONE frame,
+next to its neighbours. "The foot is below the strut's tip" is something a reader
+can see and a linter can compute. Place them in world coordinates instead and you
+have written the same geometry twice, in two frames — and the copies drift.
+
+### Author DIMENSIONS, not scale
+
+`UsdGeomCube` has only a uniform `size`, so any real box has to be faked with a
+non-uniform `xformOp:scale`. That scale then belongs to the prim rather than to
+the shape, and everything downstream has to remember it: the frame is unusable for
+children, the collider is a scaled shape rather than a measured one, and the part's
+true dimensions appear nowhere in the file.
+
+`Cylinder`, `Capsule`, `Cone` and `Sphere` carry `radius` / `height` — the
+dimensions themselves, in metres. Prefer them, and prefer a `Mesh` with authored
+`extent` to a scaled primitive. A strut is a cylinder; modelling it as a squashed
+cube buys nothing and costs the frame.
 
 ## 3. Gravity is authored per scene
 
@@ -263,6 +323,24 @@ their authored top speed. Every parity gate stayed green; the bug was found in a
 screenshot of hardware lying on the regolith.
 
 **The rule.** Hierarchy is namespace; a **joint** is attachment.
+
+Ownership follows from that, and it stops at every body boundary in BOTH
+directions — USD and avian agree:
+
+| what you author | what it becomes |
+|---|---|
+| collider with **no** body ancestor | standalone STATIC geometry |
+| collider under a body | a piece of that body's compound shape |
+| collider under a **nested** body | that nested body's piece — never the parent's |
+| a nested body | a SEPARATE body; a **joint** attaches it, or it falls off |
+
+Hierarchy is namespace. **The joint is what attaches** — nesting a body without
+one is the motor bug (`nested-body-no-joint`), and nesting one *with* a joint is
+how a foot mounts on a leg and a wheel on a chassis. Both directions of that rule
+matter: fold a nested body's collider into its parent's compound and one shape has
+two owners, the compound holding it rigidly while its joint pulls it. They fight
+every step until a body leaves the world.
+
 
 - An internal part (motor, gearbox, battery, panel, lamp) = mass + geometry, **no
   body**. Its colliders fold into the host body's compound, its mass belongs to

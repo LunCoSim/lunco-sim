@@ -22,7 +22,10 @@
 //       ANCESTOR body ("" if none) and `jointed` says whether any joint names it.
 //       `collider_min`/`collider_max` are WORLD-space bounds of everything the
 //       body can touch the world with — `[x,y,z]`, or `[]` when unknown, which is
-//       NOT the same as zero. They are the only geometric facts here, and they
+//       NOT the same as zero. They STOP AT A NESTED BODY: a leg's bounds do not
+//       include the foot mounted on it, because that foot is its own body. Count
+//       it and a leg looks like it reaches exactly as low as its own foot, which
+//       is the question `sprung_foot_not_lowest` asks. They are the only geometric facts here, and they
 //       exist because a mechanism can be topologically perfect and still wrong:
 //       see `sprung_foot_not_lowest`.
 //
@@ -80,6 +83,7 @@ fn lint_usd(facts) {
     for f in dynamic_body_no_collider(facts) { out.push(f); }
     for f in mass_outside_any_body(facts) { out.push(f); }
     for f in sprung_foot_not_lowest(facts) { out.push(f); }
+    for f in body_is_its_own_scaled_mesh(facts) { out.push(f); }
     out
 }
 
@@ -329,4 +333,38 @@ fn clearance(jpath, strut, foot, sy, fy, reach) {
         return finding("sprung-foot-thin-clearance", "error", jpath, m);
     }
     ()
+}
+
+/// A rigid body prim that is also its own shaped geometry.
+///
+/// `UsdGeomCube` carries only a uniform `size`, so a rectangular part gets faked
+/// with a non-uniform `xformOp:scale`. Put that on the BODY prim and the body's
+/// frame is no longer usable: every child inherits the stretch, so nothing can be
+/// mounted on the part without being deformed by it. Authors then place the
+/// neighbouring part in VEHICLE coordinates instead — writing the same geometry a
+/// second time, in a second frame, free to drift from the first. That is how a
+/// landing strut and the footpad meant to carry it ended up 6.6 mm apart with
+/// nothing relating the two numbers.
+///
+/// The fix is not to delete the scale but to MOVE it: make the body an `Xform`
+/// frame and put the geometry in a child, where a shaping transform belongs.
+/// Better still, use a primitive that carries real dimensions — `Cylinder`,
+/// `Capsule`, `Sphere` have `radius`/`height` in metres and need no scale at all.
+///
+/// A WARN, not an error: a lone test rig with no children and nothing to clear is
+/// harmed by none of this, and a rule that fails a build over a fixture is a rule
+/// people switch off. The consequence that IS always wrong has its own rule —
+/// `sprung-foot-not-lowest`.
+fn body_is_its_own_scaled_mesh(facts) {
+    let out = [];
+    for b in facts.bodies {
+        if !b.scale_nonuniform { continue; }
+        let m = "is a rigid body carrying a non-uniform xformOp:scale, so its frame";
+        m += " stretches anything placed in it and no part can be mounted on it.";
+        m += " Make this prim an Xform frame and move the geometry (and the scale)";
+        m += " into a child — or use a Cylinder/Capsule/Sphere, which carry real";
+        m += " radius/height and need no scale.";
+        out.push(finding("body-is-its-own-scaled-mesh", "warn", b.path, m));
+    }
+    out
 }

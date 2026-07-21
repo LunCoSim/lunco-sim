@@ -975,11 +975,16 @@ def Xform "DescentLander" (
 
     # ── Landing legs with footpads ──
     # Each leg is its OWN rigid body, sprung against the hull by a
-    # `PhysicsPrismaticJoint` (`Leg*_Spring` below). The pad rides with its leg
-    # via a `PhysicsFixedJoint` rather than by reparenting: a leg carries a
-    # non-uniform `xformOp:scale` (0.15, 7.05, 0.15) that a child pad would
-    # inherit and be crushed by, so the weld is expressed as physics, where it
-    # belongs, instead of as hierarchy.
+    # `PhysicsPrismaticJoint` (`Leg*_Spring` below), and it is an Xform FRAME
+    # rather than a piece of geometry: the strut mesh and the footpad are both
+    # children, placed by how far down the leg they sit. The scale that shapes the
+    # strut lives on the strut, not on the body, so the frame stays usable.
+    #
+    # That is what keeps the leg's invariants checkable. A part placed in world
+    # coordinates restates geometry the leg already fixed, and the two copies
+    # drift silently — which is how the pad came to clear the strut's corner by
+    # 6.6 mm. Placed in the leg's frame, "the foot sits below the strut's tip" is
+    # something a reader can see and a linter can compute.
     # Both struts and pads carry colliders, so a tipped-over lander catches on its
     # legs instead of the struts clipping through terrain (and a rover cannot drive
     # through a leg).
@@ -1022,32 +1027,69 @@ def Xform "DescentLander" (
     # the wire itself as the SSP linear transformation `lunco:factor:load_frac` —
     # the rating is one number per sink, and a whole model to hold one number is a
     # model that will drift from the wire it decorates.
-    def Cube "LegPX"
+    def Xform "LegPX"
     (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # Mass and inertia of the STRUT ITSELF — the slender 0.15 x 7.05 x 0.15
-        # box below, not the vehicle share it carries. That share arrives through
+        # THE LEG'S OWN FRAME, and the reason this prim is an Xform and not the
+        # strut itself: origin AT the hull anchor, local -Y straight down the
+        # strut. Every part of the leg is then placed by how far down the leg it
+        # sits, in one frame, next to each other — so the relationship BETWEEN
+        # them is authored, not re-derived as a second set of world coordinates
+        # that can drift from the first.
+        #
+        # That drift is not hypothetical. With the strut and the pad both placed
+        # absolutely, the pad's clearance over the strut's rotated corner was
+        # 6.6 mm on an eleven-metre vehicle — nothing said so, because nothing
+        # related the two numbers. Here the strut ends at local y = -7.05 and the
+        # pad's top face is AT that tip, which a reader can check by looking.
+        #
+        # The body carries NO scale. A prim that is both the rigid body and the
+        # mesh has to, and then no child can be placed in its frame without being
+        # crushed by it — which is exactly why the pad used to be a sibling in
+        # hull coordinates. Splitting the mesh into `Strut` frees the frame.
+        double3 xformOp:translate = (2.519, 1.388, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 25.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        # Mass and inertia of the STRUT ITSELF — the slender r = 0.075, h = 7.05
+        # cylinder below, not the vehicle share it carries. That share arrives through
         # the joint, which is where a sprung leg's load belongs.
-        #   I_xx = I_zz = m*(b^2 + c^2)/12 = 30*(49.70 + 0.02)/12 = 124.3
-        #   I_yy        = m*(a^2 + c^2)/12 = 30*(0.02 + 0.02)/12  =   0.11
+        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 30*(0.017 + 49.70)/12 = 124.3
+        #   I_yy        = m*r^2/2            = 30*0.005625/2       =   0.084
         # Authored together, always: mass alone overrides the mass and nothing
         # else, leaving avian the inertia it derived at default density (see the
         # hull's note above).
         float physics:mass = 30.0
-        float3 physics:diagonalInertia = (124.3, 0.11, 124.3)
+        float3 physics:diagonalInertia = (124.3, 0.084, 124.3)
 
-        double size = 1.0
-        double3 xformOp:translate = (4.009, -1.807, 0)
-        double3 xformOp:rotateXYZ = (0, 0, 25.0)
-        double3 xformOp:scale = (0.15, 7.05, 0.15)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
-        rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
-        bool physics:collisionEnabled = true
+        # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
+        # far end IS the leg's reach and the pad below is placed against it.
+        #
+        # A Cylinder, and NOT a unit Cube under `xformOp:scale`, because a
+        # `UsdGeomCube` has only a uniform `size` — any real box has to be faked
+        # with a non-uniform scale, and that scale then belongs to the prim rather
+        # than to the shape. Everything downstream has to remember it: the frame is
+        # unusable for children, the collider is a scaled shape rather than a
+        # measured one, and the strut's true 0.075 m half-width is nowhere in the
+        # file. `radius` and `height` are the dimensions themselves, in metres, and
+        # nothing has to compose a scale to know what this part is.
+        def Cylinder "Strut" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.075
+            double height = 7.05
+            double3 xformOp:translate = (0, -3.525, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
+            rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
+            bool physics:collisionEnabled = true
 
-        # THE GLOW, wired straight from the physics that causes it.
+        # THE GLOW, wired straight from the physics that causes it, and carried on
+        # the prim that owns the material — see `lunco-render-bevy/shader_ports`.
         #
         # `outputs:force` is the SPRING'S OWN REACTION, computed by the solver that
         # integrates it. A spring cannot push until it is compressed, so this is
@@ -1062,27 +1104,38 @@ def Xform "DescentLander" (
         # this wire depend on that rotation without naming it. The shader saturates
         # `load_frac` to 0..1, which leaves the (physically impossible here)
         # tension case dark rather than inventing a colour for it.
-        float inputs:load_frac.connect = </DescentLander/LegPX_Spring.outputs:force>
-        float lunco:factor:load_frac = 0.00066667
-    }
-    def Cylinder "PadPX" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        # The pad rides with its LEG, not with the hull — it is gimballed to
-        # LegPX by PadPX_Gimbal below. Cylinder r = 0.4, h = 0.30, m = 10:
-        #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
-        float physics:mass = 10.0
-        float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
+            float inputs:load_frac.connect = </DescentLander/LegPX_Spring.outputs:force>
+            float lunco:factor:load_frac = 0.00066667
+        }
 
-        uniform token axis = "Y"
-        double radius = 0.4
-        double height = 0.3
-        double3 xformOp:translate = (5.5634, -5.1359, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
-        bool physics:collisionEnabled = true
+        def Cylinder "PadPX" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            # The pad is its own body, gimballed to the strut by PadPX_Gimbal, and a
+            # CHILD of the leg so its place is stated once: 0.15 m below the strut's
+            # tip, in the leg's frame. Move the strut and the foot follows.
+            #
+            # `xformOp:rotateXYZ` cancels the leg's rake so the pad hangs FLAT. It is
+            # the leg's own angle negated, in the leg's own frame, which is a
+            # relationship a reader can verify — unlike a world-space orientation
+            # that happens to come out level.
+            #
+            # Cylinder r = 0.4, h = 0.30, m = 10:
+            #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
+            #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
+            float physics:mass = 10.0
+            float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
+
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (0, -7.2, 0)
+            double3 xformOp:rotateXYZ = (0, 0, -25.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            bool physics:collisionEnabled = true
+        }
     }
 
     # Shock-absorber PISTON sleeves — one per leg, hung from the strut's HULL
@@ -1148,130 +1201,190 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
     }
 
-    def Cube "LegNX" (
+    def Xform "LegNX"
+    (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # Strut's own mass/inertia — see LegPX for the derivation.
-        float physics:mass = 30.0
-        float3 physics:diagonalInertia = (124.3, 0.11, 124.3)
-
-        double size = 1.0
-        double3 xformOp:translate = (-4.009, -1.807, 0)
+        # Frame and construction: see LegPX.
+        double3 xformOp:translate = (-2.519, 1.388, 0)
         double3 xformOp:rotateXYZ = (0, 0, -25.0)
-        double3 xformOp:scale = (0.15, 7.05, 0.15)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
-        rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
-        bool physics:collisionEnabled = true
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Glow from the spring's own reaction, scaled by the strut's rating —
-        # see LegPX for the sign and the rating.
-        float inputs:load_frac.connect = </DescentLander/LegNX_Spring.outputs:force>
-        float lunco:factor:load_frac = 0.00066667
-    }
-    def Cylinder "PadNX" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        # The pad rides with its LEG, not with the hull — it is gimballed to
-        # LegNX by PadNX_Gimbal below. Cylinder r = 0.4, h = 0.30, m = 10:
-        #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
-        float physics:mass = 10.0
-        float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
-
-        uniform token axis = "Y"
-        double radius = 0.4
-        double height = 0.3
-        double3 xformOp:translate = (-5.5634, -5.1359, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
-        bool physics:collisionEnabled = true
-    }
-
-    def Cube "LegPZ" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        # Strut's own mass/inertia — see LegPX for the derivation.
+        # Strut mass/inertia — see LegPX for the derivation.
         float physics:mass = 30.0
-        float3 physics:diagonalInertia = (124.3, 0.11, 124.3)
+        float3 physics:diagonalInertia = (124.3, 0.084, 124.3)
 
-        double size = 1.0
-        double3 xformOp:translate = (0, -1.807, 4.009)
+        # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
+        # far end IS the leg's reach and the pad below is placed against it.
+        #
+        # A Cylinder, and NOT a unit Cube under `xformOp:scale`, because a
+        # `UsdGeomCube` has only a uniform `size` — any real box has to be faked
+        # with a non-uniform scale, and that scale then belongs to the prim rather
+        # than to the shape. Everything downstream has to remember it: the frame is
+        # unusable for children, the collider is a scaled shape rather than a
+        # measured one, and the strut's true 0.075 m half-width is nowhere in the
+        # file. `radius` and `height` are the dimensions themselves, in metres, and
+        # nothing has to compose a scale to know what this part is.
+        def Cylinder "Strut" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.075
+            double height = 7.05
+            double3 xformOp:translate = (0, -3.525, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
+            rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
+            bool physics:collisionEnabled = true
+
+            # see LegPX for the sign and the rating.
+            float inputs:load_frac.connect = </DescentLander/LegNX_Spring.outputs:force>
+            float lunco:factor:load_frac = 0.00066667
+        }
+
+        def Cylinder "PadNX" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            # Foot: see PadPX.
+            float physics:mass = 10.0
+            float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
+
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (0, -7.2, 0)
+            double3 xformOp:rotateXYZ = (0, 0, 25.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            bool physics:collisionEnabled = true
+        }
+    }
+
+    def Xform "LegPZ"
+    (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        # Frame and construction: see LegPX.
+        double3 xformOp:translate = (0, 1.388, 2.519)
         double3 xformOp:rotateXYZ = (-25.0, 0, 0)
-        double3 xformOp:scale = (0.15, 7.05, 0.15)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
-        rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
-        bool physics:collisionEnabled = true
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        # Glow from the spring's own reaction, scaled by the strut's rating —
-        # see LegPX for the sign and the rating.
-        float inputs:load_frac.connect = </DescentLander/LegPZ_Spring.outputs:force>
-        float lunco:factor:load_frac = 0.00066667
-    }
-    def Cylinder "PadPZ" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        # The pad rides with its LEG, not with the hull — it is gimballed to
-        # LegPZ by PadPZ_Gimbal below. Cylinder r = 0.4, h = 0.30, m = 10:
-        #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
-        float physics:mass = 10.0
-        float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
-
-        uniform token axis = "Y"
-        double radius = 0.4
-        double height = 0.3
-        double3 xformOp:translate = (0, -5.1359, 5.5634)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
-        bool physics:collisionEnabled = true
-    }
-
-    def Cube "LegNZ" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        # Strut's own mass/inertia — see LegPX for the derivation.
+        # Strut mass/inertia — see LegPX for the derivation.
         float physics:mass = 30.0
-        float3 physics:diagonalInertia = (124.3, 0.11, 124.3)
+        float3 physics:diagonalInertia = (124.3, 0.084, 124.3)
 
-        double size = 1.0
-        double3 xformOp:translate = (0, -1.807, -4.009)
-        double3 xformOp:rotateXYZ = (25.0, 0, 0)
-        double3 xformOp:scale = (0.15, 7.05, 0.15)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
-        rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
-        bool physics:collisionEnabled = true
+        # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
+        # far end IS the leg's reach and the pad below is placed against it.
+        #
+        # A Cylinder, and NOT a unit Cube under `xformOp:scale`, because a
+        # `UsdGeomCube` has only a uniform `size` — any real box has to be faked
+        # with a non-uniform scale, and that scale then belongs to the prim rather
+        # than to the shape. Everything downstream has to remember it: the frame is
+        # unusable for children, the collider is a scaled shape rather than a
+        # measured one, and the strut's true 0.075 m half-width is nowhere in the
+        # file. `radius` and `height` are the dimensions themselves, in metres, and
+        # nothing has to compose a scale to know what this part is.
+        def Cylinder "Strut" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.075
+            double height = 7.05
+            double3 xformOp:translate = (0, -3.525, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
+            rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
+            bool physics:collisionEnabled = true
 
-        # Glow from the spring's own reaction, scaled by the strut's rating —
-        # see LegPX for the sign and the rating.
-        float inputs:load_frac.connect = </DescentLander/LegNZ_Spring.outputs:force>
-        float lunco:factor:load_frac = 0.00066667
+            # see LegPX for the sign and the rating.
+            float inputs:load_frac.connect = </DescentLander/LegPZ_Spring.outputs:force>
+            float lunco:factor:load_frac = 0.00066667
+        }
+
+        def Cylinder "PadPZ" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            # Foot: see PadPX.
+            float physics:mass = 10.0
+            float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
+
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (0, -7.2, 0)
+            double3 xformOp:rotateXYZ = (25.0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            bool physics:collisionEnabled = true
+        }
     }
-    def Cylinder "PadNZ" (
+
+    def Xform "LegNZ"
+    (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # The pad rides with its LEG, not with the hull — it is gimballed to
-        # LegNZ by PadNZ_Gimbal below. Cylinder r = 0.4, h = 0.30, m = 10:
-        #   I_yy        = m*r^2/2           = 10*0.16/2       = 0.80
-        #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.57/12      = 0.475
-        float physics:mass = 10.0
-        float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
+        # Frame and construction: see LegPX.
+        double3 xformOp:translate = (0, 1.388, -2.519)
+        double3 xformOp:rotateXYZ = (25.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
-        uniform token axis = "Y"
-        double radius = 0.4
-        double height = 0.3
-        double3 xformOp:translate = (0, -5.1359, -5.5634)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
-        bool physics:collisionEnabled = true
+        # Strut mass/inertia — see LegPX for the derivation.
+        float physics:mass = 30.0
+        float3 physics:diagonalInertia = (124.3, 0.084, 124.3)
+
+        # The strut: geometry and collider only. Spans local y 0 .. -7.05, so its
+        # far end IS the leg's reach and the pad below is placed against it.
+        #
+        # A Cylinder, and NOT a unit Cube under `xformOp:scale`, because a
+        # `UsdGeomCube` has only a uniform `size` — any real box has to be faked
+        # with a non-uniform scale, and that scale then belongs to the prim rather
+        # than to the shape. Everything downstream has to remember it: the frame is
+        # unusable for children, the collider is a scaled shape rather than a
+        # measured one, and the strut's true 0.075 m half-width is nowhere in the
+        # file. `radius` and `height` are the dimensions themselves, in metres, and
+        # nothing has to compose a scale to know what this part is.
+        def Cylinder "Strut" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.075
+            double height = 7.05
+            double3 xformOp:translate = (0, -3.525, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
+            rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
+            bool physics:collisionEnabled = true
+
+            # see LegPX for the sign and the rating.
+            float inputs:load_frac.connect = </DescentLander/LegNZ_Spring.outputs:force>
+            float lunco:factor:load_frac = 0.00066667
+        }
+
+        def Cylinder "PadNZ" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            # Foot: see PadPX.
+            float physics:mass = 10.0
+            float3 physics:diagonalInertia = (0.475, 0.80, 0.475)
+
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (0, -7.2, 0)
+            double3 xformOp:rotateXYZ = (-25.0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            bool physics:collisionEnabled = true
+        }
     }
 
     # ── Landing-gear suspension ──
@@ -1327,10 +1440,11 @@ def Xform "DescentLander" (
     # would be restating the geometry a second time, giving it a second place to
     # drift from the airframe.
     #
-    # Each pad is a body of its own, welded to its leg, so it rides down with the
-    # strut. Reparenting it under the leg would have been the obvious move and is
-    # wrong: the leg carries a non-uniform `xformOp:scale` (0.15, 7.05, 0.15) that
-    # a child would inherit and be crushed by.
+    # Each pad is a body of its own, CHILD of its leg and jointed to it, so it
+    # rides down with the strut and its placement is stated in the leg's frame.
+    # Nesting a body is only wrong when nothing joints it (see the linter's
+    # `nested-body-no-joint`); nesting-plus-joint is how this engine mounts a
+    # wheel, and it is how a foot belongs on a leg.
     #
     # The pad is GIMBALLED, not welded — a `PhysicsSphericalJoint` about the
     # strut's foot, which is what a landing footpad is: it has to meet whatever
@@ -1342,26 +1456,15 @@ def Xform "DescentLander" (
     # strut's load therefore passes exactly through the pivot and can exert NO
     # torque on the foot, however hard the leg pushes or however raked it is.
     #
-    # The price is that the pad is NEUTRALLY STABLE at every angle inside its
-    # cone: nothing rights it, so it keeps whatever tilt it lands at and wanders a
-    # ~5..24 deg band on flat ground. That is the honest behaviour of a foot
-    # gimballed at its own centre, not a defect, and the three obvious cures are
-    # all worse — each measured:
+    # Offsetting the mass from the ball is the tempting mistake, because a real
+    # dish does carry its material low. Move it 0.08 m and the strut's ~700 N gains
+    # a lever on the foot: 0.08*700*sin25 = 23.7 N m of tilting against 0.44 N m of
+    # gravity righting, 53:1. The pad then rides its 30 deg cone stop.
     #
-    #   ball moved up to the strut's tip  the pad becomes a pendulum bob whose
-    #                                     contact swings sideways as it tilts;
-    #                                     pads leave the world at 23 km/s
-    #   angular damping on the pad        inert. The wander is not free swinging,
-    #                                     so there is no energy to bleed off
-    #   centre of mass below the ball     WORSE, and this is the one that looks
-    #                                     most right. Offsetting the mass 0.08 m
-    #                                     hands the strut's ~700 N a lever:
-    #                                     0.08*700*sin25 = 23.7 N m of tilting
-    #                                     against 0.44 N m of gravity righting,
-    #                                     53:1. Tilt then reaches the 30 deg cone
-    #
-    # `landing_legs_test` asserts only that the pads are not PINNED on their cone
-    # stop. Anything tighter asserts the wander, which is weather, not a contract.
+    # With the ball on the centre of mass and the strut a CYLINDER rather than a
+    # scaled box, the pads settle flat — measured 0.1 deg on level ground and
+    # steady. A wandering foot is not what a centre-gimballed pad does; it is what
+    # a strut with a corner does to the foot it scuffs.
     #
     # It is also what makes the gear a MECHANISM rather than a structure. Four
     # raked sliders whose pads are rigidly welded, closed through four ground
@@ -1398,7 +1501,7 @@ def Xform "DescentLander" (
         float physics:coneAngle0Limit = 30.0
         float physics:coneAngle1Limit = 30.0
         rel physics:body0 = </DescentLander/LegPX>
-        rel physics:body1 = </DescentLander/PadPX>
+        rel physics:body1 = </DescentLander/LegPX/PadPX>
     }
 
     def PhysicsPrismaticJoint "LegNX_Spring" (
@@ -1425,7 +1528,7 @@ def Xform "DescentLander" (
         float physics:coneAngle0Limit = 30.0
         float physics:coneAngle1Limit = 30.0
         rel physics:body0 = </DescentLander/LegNX>
-        rel physics:body1 = </DescentLander/PadNX>
+        rel physics:body1 = </DescentLander/LegNX/PadNX>
     }
 
     def PhysicsPrismaticJoint "LegPZ_Spring" (
@@ -1452,7 +1555,7 @@ def Xform "DescentLander" (
         float physics:coneAngle0Limit = 30.0
         float physics:coneAngle1Limit = 30.0
         rel physics:body0 = </DescentLander/LegPZ>
-        rel physics:body1 = </DescentLander/PadPZ>
+        rel physics:body1 = </DescentLander/LegPZ/PadPZ>
     }
 
     def PhysicsPrismaticJoint "LegNZ_Spring" (
@@ -1479,6 +1582,6 @@ def Xform "DescentLander" (
         float physics:coneAngle0Limit = 30.0
         float physics:coneAngle1Limit = 30.0
         rel physics:body0 = </DescentLander/LegNZ>
-        rel physics:body1 = </DescentLander/PadNZ>
+        rel physics:body1 = </DescentLander/LegNZ/PadNZ>
     }
 }
