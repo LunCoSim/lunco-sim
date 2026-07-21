@@ -351,11 +351,26 @@ The two spellings are proven to agree: `scenes/tests/filtered_pairs.usda` and
 `scenes/tests/collision_groups.usda` are the same rig, referenced, filtered the
 two different ways, sharing one control and one scenario.
 
-`PhysicsArticulationRootAPI` is authored on `skid_rover`, `rocker_bogie` and
-`physical_drivetrain` and is deliberately **not** consumed: avian has no
-reduced-coordinate articulation to map it onto, and there is no honest
-translation. It is kept because it is what a PhysX-based tool reads on the way
-back out — round-trip fidelity, not engine behaviour.
+### TODO — standard schema this engine does not read yet
+
+Kept as a list rather than as folklore, because the cost of not knowing is
+authoring that looks meaningful and does nothing. Anything here is a candidate;
+nothing here is a bug.
+
+| schema | status | why it is not read |
+|---|---|---|
+| `PhysicsArticulationRootAPI` | authored, **deliberately** inert | avian has no reduced-coordinate articulation, so there is no honest translation. Authored on `skid_rover`, `rocker_bogie`, `physical_drivetrain` and kept for PhysX round-trip — a tool reading these files back out wants it. |
+| `UsdGeomPointInstancer` | not read | scattered rocks and vessel fleets are spawned prim-by-prim. USD's own instancing is the answer to that cost and nothing uses it yet. |
+| `instanceable = true` + prototypes | not read | same story one level down: every spawned copy is a full prim tree. |
+| `UsdCollectionAPI` (general) | read only where `PhysicsCollisionGroup` applies it | membership resolution lives in `collision_groups.rs`. A general collection reader would also serve material binding and light linking. |
+| `UsdGeomSubset` | not read | per-face material / collider subsets. No use case in the fleet yet. |
+| `proxyPrim` relationship | not read | `purpose` covers the case we have (a proxy SIBLING). The rel names a specific proxy for a specific render prim, which nothing authors. |
+| `extentsHint` | not read | model-level bounds cache. `extent` itself IS read (it is what `lunco:occluder` sizes from). |
+| `UsdSkel` | not read | no skinned geometry in the fleet. |
+
+The rule for adding to this table: if an asset authors it and the engine ignores
+it, it belongs here — or the authoring should be deleted. Silence is the failure
+mode, in both directions.
 
 ### Sensors
 

@@ -127,24 +127,6 @@ def Xform "LinkTest" (
         int lunco:anchor:body = 301
     }
 
-    # SAME SITE, NO ELEVATION MASK. Malapert with `minElevationDeg = -90` — the
-    # probe that says WHY the masked node above links or does not. Same geodetic
-    # placement, same epoch, same peers in range; the only difference is the mask.
-    # Without it, "the base has no Earth link" has two possible causes (the
-    # placement did not resolve, or Earth is below its horizon) and no way to tell
-    # them apart.
-    def Xform "MalapertHorizonFree" (
-        prepend apiSchemas = ["LunCoLinkAPI"]
-    )
-    {
-        bool lunco:linkNode = true
-        string lunco:link:class = "probe"
-        double lunco:link:minElevationDeg = -90
-        double lunco:anchor:lat = -85.43
-        double lunco:anchor:lon = -0.94
-        int lunco:anchor:body = 301
-    }
-
     # ── Placement 4: LIBRATION — a relay parked at an L-point of a PAIR ──────
     #
     # `lunco:libration:*` is the third placement kind. The pair IS the placement:

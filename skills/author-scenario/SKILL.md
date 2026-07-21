@@ -221,6 +221,25 @@ the very authoring the test exists to check.
 - **Helper functions never see `this`.** `on_tick` has it; anything it calls does
   not. Pass every measurement through the verdict map — which is also what keeps
   the verdict a pure function of what was measured.
+- **A guard that cannot run is not a guard.** Wrapping a check in
+  `if s.x != () { ... }` makes it vanish silently when the port is absent — which
+  is precisely when you needed it. `sun_tracker` sampled its "did the sun move"
+  baseline on a fixed 4 s timer, `SunTracker.mo` was still compiling, and the
+  guard skipped itself for two runs. WAIT for the port to exist, then measure;
+  and count the assertions (`TESTS_OK 7`, not 5) when you expect a guard to fire.
+- **Never do arithmetic on a possibly-absent reading.** `()` divided by 1000
+  THROWS, the scenario dies between its last print and `report_verdict`, and
+  `scene_test` reports NO-VERDICT — the failure looks like a hang, not like the
+  assertion that was about to fail. Route every logged number through a formatter
+  that answers `"(none)"`.
+- **A control must vary the thing that actually gates.** Chasing a missing link,
+  a probe was authored at the same site with the elevation mask relaxed to −90°;
+  it had identical peers, and the "obvious" conclusion would have been that the
+  geometry was broken. The mask is enforced at BOTH ends of a link — the far end
+  was doing the gating. Before trusting a control, confirm it moves the variable
+  you think it moves.
+- **Measure what you claim.** "The node has zero peers" was reported from two
+  missing edges without ever calling `neighbours()`. It had one.
 
 ## 4. Missions & sequencing (two layers, both pure rhai)
 

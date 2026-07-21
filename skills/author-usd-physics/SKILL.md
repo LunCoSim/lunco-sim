@@ -490,6 +490,25 @@ lint cannot simulate). See
 [`validate-assets`](../validate-assets/SKILL.md#the-rules-are-authored--the-lint-layer)
 and [`docs/architecture/lint-substrate.md`](../../docs/architecture/lint-substrate.md).
 
+## 6c. What this engine does NOT read
+
+Before authoring a schema because a DCC offers it, check it is consumed. The full
+table is in [`docs/architecture/21-domain-usd.md`](../../docs/architecture/21-domain-usd.md)
+("standard schema this engine does not read yet"); the ones you are most likely
+to reach for:
+
+- **`PhysicsArticulationRootAPI`** — authored on three of our rovers and
+  deliberately inert. avian has no reduced-coordinate articulation. Keep it for
+  PhysX round-trip; do not expect it to change anything here.
+- **`UsdGeomPointInstancer` / `instanceable`** — not read. Every copy is a full
+  prim tree.
+- **`proxyPrim`** — not read; `purpose` on a sibling covers the case we have
+  (see §6b).
+
+If you author something from that table, nothing warns you. That is exactly why
+the table exists — and why anything on it either gets implemented or gets deleted
+from the assets rather than left looking meaningful.
+
 ## Verify it, headlessly
 
 `scene_test` runs one authored scene plus its scenario deterministically, and

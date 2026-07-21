@@ -69,10 +69,11 @@ fn on_tick(me) {
     }
 
     let base = find("/LinkTest/MalapertBase");
-    let probe = find("/LinkTest/MalapertHorizonFree");
-    print("[link]   base peers  " + neighbours(g, base).len() +
-          "   probe(no mask) peers " + neighbours(g, probe).len());
-    let l1 = find("/LinkTest/L1_Relay");
+    let name_of = #{};
+    for n in g.nodes { name_of["" + n.id] = n.name; }
+    let bp = [];
+    for id in neighbours(g, base) { bp.push(name_of["" + id]); }
+    print("[link]   base peers  " + bp);
     let short = find("/LinkTest/ShortRangeSat");
     let earths = link_ids(g, "earth");
 
@@ -105,6 +106,7 @@ fn on_tick(me) {
         cross_lo: lo,
         cross_hi: hi,
         lt_err: lt_err,
+        base_peers: neighbours(g, base).len(),
         relay_to_earth: any_edge(g, find("/LinkTest/Relay"), earths),
         short_to_earth: any_edge(g, short, earths),
     });
@@ -118,34 +120,6 @@ fn edge_range(g, a, b) {
         if (e.a == a && e.b == b) || (e.a == b && e.b == a) { return e.range_m; }
     }
     ()
-}
-
-/// The SHORTEST edge from `a` to any node in `ids` — "the complex that can see us
-/// right now". Which of the three DSN complexes that is changes as the Earth
-/// turns, and the test must not depend on which.
-fn best_range(g, a, ids) {
-    let best = ();
-    for id in ids {
-        let r = edge_range(g, a, id);
-        if r != () && (best == () || r < best) { best = r; }
-    }
-    best
-}
-
-/// `light_time_s` of the shortest edge from `a` into `ids`.
-fn best_light_time(g, a, ids) {
-    let best_r = ();
-    let best_lt = ();
-    for id in ids {
-        for e in g.edges {
-            let hit = (e.a == a && e.b == id) || (e.a == id && e.b == a);
-            if hit && (best_r == () || e.range_m < best_r) {
-                best_r = e.range_m;
-                best_lt = e.light_time_s;
-            }
-        }
-    }
-    best_lt
 }
 
 /// Metres as kilometres for a log line, or "(none)" — NEVER arithmetic on `()`.
@@ -184,6 +158,17 @@ fn verdict(s) {
     f.push(t_true(s.n_earth == 3,
         "expected the three DSN complexes in class `earth`, found " + s.n_earth));
 
+    // The SURFACE placement resolved and links. It does NOT necessarily reach a
+    // DSN complex, and that is not a defect: every complex here authors
+    // `minElevationDeg = 5`, and the elevation gate is applied at BOTH ends — so
+    // the Malapert link is decided by the Moon's elevation in the COMPLEX's sky,
+    // not by the base's own mask. When no complex has the Moon 5 deg up, the base
+    // is legitimately off the air. That is the handover this scene exists to show,
+    // and asserting "the base always sees Earth" would encode one epoch as law.
+    f.push(t_true(s.base_peers > 0,
+        "the Malapert surface node has no peers at all — a geodetic placement that " +
+        "resolves should at least reach the relays sharing its sky"));
+
     f.push(t_true(s.n_cross > 0,
         "not one edge joins an Earth complex to a lunar node, so there is no " +
         "cross-body geometry to measure and the placements below are unproven"));
@@ -217,6 +202,7 @@ fn verdict(s) {
     print("[link]   cross-body  " + s.n_cross + " edge(s), " + km(s.cross_lo) +
           " to " + km(s.cross_hi) + " km (band " + km(PERIGEE_M) + "-" + km(APOGEE_M) + ")");
     print("[link]   light time  worst error " + r4(s.lt_err * 100.0) + "%");
+    print("[link]   base peers  " + s.base_peers + " (Earth link is gated at the COMPLEX's end, 5 deg)");
     print("[link]   range gate  relay->earth=" + s.relay_to_earth +
           "  shortsat->earth=" + s.short_to_earth);
 
