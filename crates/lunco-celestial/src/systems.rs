@@ -243,16 +243,30 @@ pub fn update_sun_light_system(
             Without<DirectionalLight>,
         ),
     >,
-    q_site: Query<(), With<crate::geo::SiteAnchor>>,
 ) {
-    // ONLY steer in site-anchored scenes: there the world frame is the site
-    // ENU and the ephemeris direction is physically meaningful. In a plain
-    // scene (default sandbox) the world frame is arbitrary — steering would
-    // clobber the authored fallback-sun direction with a near-horizontal
-    // ecliptic vector and plunge the whole scene into grazing darkness.
-    if q_site.is_empty() {
+    // THE GATE IS THE ALIGN FRAME, NOT THE SITE ANCHOR.
+    //
+    // Steering is meaningful exactly when the ecliptic→world rotation is KNOWN,
+    // and that rotation lives on `SiteAlignGrid`, which only exists when the scene
+    // opted into the celestial hierarchy. Those are two independent opt-ins, and
+    // gating on the anchor got both directions wrong:
+    //
+    // * anchor but no celestial (`comms_wall.usda`) — the old code passed the gate,
+    //   found no align frame, and `unwrap_or`'d to the RAW ECLIPTIC vector. Moon→Sun
+    //   has ecliptic z≈0 and `ecliptic_to_bevy` maps (x,y,z)→(x,z,−y), so the light
+    //   was aimed along the horizon at Y≈2e-4 — epoch-independent, and it clobbered
+    //   the scene's authored `DistantLight`. That is the "no sun" report: the ground
+    //   went black in scenes that had authored a perfectly good sun.
+    // * celestial but no anchor (`artemis_2_review.usda`) — the old gate returned
+    //   early, so the celestial "Sun Light" was never aimed at all and emitted along
+    //   world −Z forever.
+    //
+    // With the align rotation as the gate, a scene without one keeps its authored
+    // light untouched (the sandbox case the old comment was defending), and a scene
+    // with one always gets the real direction.
+    let Some(align_rot) = q_solar.iter().next().map(|tf| tf.rotation) else {
         return;
-    }
+    };
     let Some(ephemeris) = ephemeris else { return; };
 
     // No ephemeris for the Sun or the Moon ⇒ we do not know where the light comes from, so we
@@ -275,11 +289,10 @@ pub fn update_sun_light_system(
     // the Solar Grid by `align`). Re-express the direction, or a Shackleton
     // scene gets its sun at an arbitrary elevation instead of the real
     // grazing ~1° — terrain lit from nowhere.
-    let dir = q_solar
-        .iter()
-        .next()
-        .map(|solar_tf| (solar_tf.rotation * dir).normalize())
-        .unwrap_or(dir);
+    // Alignment is MANDATORY, never skipped: the gate above already proved the
+    // rotation exists, so there is no fallback branch left to silently emit an
+    // ecliptic vector into a world frame.
+    let dir = (align_rot * dir).normalize();
     let up = if dir.dot(Vec3::Y).abs() > 0.99 { Vec3::X } else { Vec3::Y };
     if sun_dir_out.0 != dir {
         sun_dir_out.0 = dir;

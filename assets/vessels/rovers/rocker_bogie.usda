@@ -31,6 +31,11 @@ def Xform "RockerBogie" (
     # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
     # this rover accepts no commands at all. See `skid_rover.usda`.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend variantSets = ["power", "thermal"]
+    variants = {
+        string power = "infinite"
+        string thermal = "none"
+    }
 )
 {
     uniform bool lunco:spawnable = true
@@ -40,6 +45,16 @@ def Xform "RockerBogie" (
     float lunco:spawnLift = 1.5
     float physxRigidBody:linearDamping = 0.4
     float physxRigidBody:angularDamping = 2.0
+
+    # The two bank actuator ports, as attributes the motors CONNECT to. Declaring
+    # them here gives each `inputs:demand.connect` a real property to resolve to, so
+    # the binding is PCP-resolved and path-translated through the reference arcs
+    # instead of matched by name. Without them every `Motor_*` on this chassis wires
+    # to a property that does not exist and the cosim bridge drops the value with
+    # "connection targets unknown input port 'drive_left'" — the same declaration
+    # `six_wheel_rover.usda` has always carried.
+    float outputs:drive_left = 0.0
+    float outputs:drive_right = 0.0
 
     # Intent->port control (stage 2): shared rover profile as a child `references`
     # arc so it composes through a spawn/reference like the wheels.
@@ -83,28 +98,34 @@ def Xform "RockerBogie" (
         bool physics:collisionEnabled = false
     }
 
-    # High-gain antenna mast and dish
-    def Cylinder "AntennaMast"
+    # High-gain antenna — the catalogue dish, referenced. It used to be a bare
+    # cylinder-on-a-stick here; the project has exactly one antenna now and this is
+    # it. `lunco:linkNode` rides in with the component, so a rocker-bogie is a
+    # connectivity endpoint out of the box — author `lunco:link:class` /
+    # `minElevationDeg` on this prim per scene.
+    #
+    # s = 0.35 ⇒ a 0.41 m dish: rover scale, and it clears the solar deck.
+    def "Antenna" (
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    )
     {
-        uniform token axis = "Y"
-        double radius = 0.015
-        double height = 0.3
-        double3 xformOp:translate = (0.3, 0.35, 0.6)
+        string lunco:link:class = "rover"
+        double3 xformOp:translate = (0.3, 0.22, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
-        bool physics:collisionEnabled = false
-    }
 
-    def Cylinder "AntennaDish"
-    {
-        uniform token axis = "Y"
-        double radius = 0.15
-        double height = 0.02
-        double3 xformOp:translate = (0.3, 0.5, 0.6)
-        double3 xformOp:rotateXYZ = (30.0, 45.0, 0.0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)]
-        bool physics:collisionEnabled = false
+        over "Mast"
+        {
+            double radius = 0.015
+            double height = 0.3
+            double3 xformOp:translate = (0.0, 0.15, 0.0)
+            color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
+        }
+        over "DishHead"
+        {
+            double3 xformOp:translate = (0.0, 0.3, 0.0)
+            double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
+            double3 xformOp:scale = (0.35, 0.35, 0.35)
+        }
     }
 
     # Instrument platform / science mast
@@ -865,4 +886,39 @@ def Xform "RockerBogie" (
     # The wheels here author no `inputs:drive` connection, so they use the index-parity
     # default (even 0/2/4 = FL/ML/RL ⇒ drive_left, odd 1/3/5 = FR/MR/RR ⇒
     # drive_right) — exactly the port pair the skid law writes.
+
+    # --- Power: does driving cost anything ----------------------------------
+    # ORTHOGONAL to the drive law: `infinite` is EMPTY — the absence of a battery
+    # is today's drive-forever behavior. `battery` composes the RoverBattery.mo
+    # energy budget onto the root: drain follows the commanded drive magnitude,
+    # and its `alive` cutoff brownouts the drive ports over the last ~2% of
+    # charge — a variant chooses a component, it never restates one.
+    #
+    # Same two sets `six_wheel_rover.usda` carries, because the difficulty tiers
+    # (`variants/rover_*.usda`) sit on THIS chassis now and a tier must not lose a
+    # capability by changing suspension.
+    variantSet "power" = {
+        "infinite" {
+        }
+
+        "battery" (
+            prepend references = @lunco://components/power/rover_battery.usda@</Power>
+        ) {
+        }
+    }
+
+    # --- Thermal: do the motors have temperatures ---------------------------
+    # `none` is EMPTY. `basic` composes the RoverMotorThermal.mo per-side heat
+    # balance onto the root: pure telemetry (`temp_left`/`temp_right`, kelvin,
+    # readable/watchable ports), nothing acts on it — same choose-a-component
+    # shape as `power`.
+    variantSet "thermal" = {
+        "none" {
+        }
+
+        "basic" (
+            prepend references = @lunco://components/thermal/motor_thermal.usda@</Thermal>
+        ) {
+        }
+    }
 }

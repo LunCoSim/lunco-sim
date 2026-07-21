@@ -43,7 +43,7 @@
 def Xform "RoverEasy" (
     doc = "Easy rover (Explorer LT) — low centre of mass, planted and forgiving. The trainer tier: it climbs the borderline slope and resists tipping. Start here."
     prepend apiSchemas = ["LunCoCatalogAPI"]
-    prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
+    prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
 )
 {
     uniform bool lunco:spawnable = true
@@ -59,12 +59,41 @@ def Xform "RoverEasy" (
     # steepest line at 39.9° NNW, so this tier drives ANY line into the crater and
     # back — the terrain never punishes you, so you learn the route before the route
     # matters).
-    over "Wheel_L0" (variants = { string tire = "cleated" }) { }
-    over "Wheel_L1" (variants = { string tire = "cleated" }) { }
-    over "Wheel_L2" (variants = { string tire = "cleated" }) { }
-    over "Wheel_R0" (variants = { string tire = "cleated" }) { }
-    over "Wheel_R1" (variants = { string tire = "cleated" }) { }
-    over "Wheel_R2" (variants = { string tire = "cleated" }) { }
+    # ⚠ The wheels, motors and gearboxes are CHILDREN OF THE SUSPENSION, not of the
+    # chassis: a rocker-bogie's front wheel hangs off the rocker arm and its middle
+    # and rear wheels off the bogie, so each tier's opinions are nested one level
+    # deeper than they were on the flat six-wheel chassis. Same six wheels, same
+    # ladder — the arm they hang from is what changed.
+    over "RockerL"
+    {
+        over "Wheel_FL" (variants = { string tire = "cleated" }) { }
+        over "Motor_FL" { float lunco:motor:stallTorque = 0.88 }
+        over "Gearbox_FL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    }
+    over "RockerR"
+    {
+        over "Wheel_FR" (variants = { string tire = "cleated" }) { }
+        over "Motor_FR" { float lunco:motor:stallTorque = 0.88 }
+        over "Gearbox_FR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    }
+    over "BogieL"
+    {
+        over "Wheel_ML" (variants = { string tire = "cleated" }) { }
+        over "Wheel_RL" (variants = { string tire = "cleated" }) { }
+        over "Motor_ML" { float lunco:motor:stallTorque = 0.88 }
+        over "Motor_RL" { float lunco:motor:stallTorque = 0.88 }
+        over "Gearbox_ML" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+        over "Gearbox_RL" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    }
+    over "BogieR"
+    {
+        over "Wheel_MR" (variants = { string tire = "cleated" }) { }
+        over "Wheel_RR" (variants = { string tire = "cleated" }) { }
+        over "Motor_MR" { float lunco:motor:stallTorque = 0.88 }
+        over "Motor_RR" { float lunco:motor:stallTorque = 0.88 }
+        over "Gearbox_MR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+        over "Gearbox_RR" { float lunco:gearbox:maxOutputTorque = 1000.0 }
+    }
 
     # TORQUE COMES FROM THE MOTOR. It used to be `physxVehicleEngine:peakTorque =
     # 900` on each wheel — a vehicle-level PhysX attribute on a part, and a number
@@ -74,28 +103,16 @@ def Xform "RoverEasy" (
     # 898 N·m at the axle — the same rover, expressed where the quantity lives). The
     # tier is a per-instance attribute override on a real part, which is also how a
     # single weak or overheating wheel would be expressed.
-    over "Motor_L0" { float lunco:motor:stallTorque = 0.88 }
-    over "Motor_L1" { float lunco:motor:stallTorque = 0.88 }
-    over "Motor_L2" { float lunco:motor:stallTorque = 0.88 }
-    over "Motor_R0" { float lunco:motor:stallTorque = 0.88 }
-    over "Motor_R1" { float lunco:motor:stallTorque = 0.88 }
-    over "Motor_R2" { float lunco:motor:stallTorque = 0.88 }
 
     # The shipped reduction rates its output shaft at 400 N·m, which would CLAMP
     # this tier (and medium) and flatten the ladder into "everything hits 400". A
     # rover built for 900 N·m at the axle has the drive to carry it, so the tiers
     # rate their gearboxes above their motors and the motor stays the only knob.
-    over "Gearbox_L0" { float lunco:gearbox:maxOutputTorque = 1000.0 }
-    over "Gearbox_L1" { float lunco:gearbox:maxOutputTorque = 1000.0 }
-    over "Gearbox_L2" { float lunco:gearbox:maxOutputTorque = 1000.0 }
-    over "Gearbox_R0" { float lunco:gearbox:maxOutputTorque = 1000.0 }
-    over "Gearbox_R1" { float lunco:gearbox:maxOutputTorque = 1000.0 }
-    over "Gearbox_R2" { float lunco:gearbox:maxOutputTorque = 1000.0 }
 
     # Livery — calm green hull (easy=green); accent stays default. Tiers
     # restyle the ONE authored colour, `primvars:displayColor`, which the hull
     # shader consumes as its base paint.
-    over "Chassis"
+    over "Body"
     {
         color3f[] primvars:displayColor = [(0.3, 0.72, 0.35)]
     }

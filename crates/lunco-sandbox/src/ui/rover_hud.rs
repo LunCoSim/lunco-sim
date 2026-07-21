@@ -141,6 +141,12 @@ struct LinkInfo {
     connected: bool,
     /// Peer prim name, or a GID fallback if the peer has no `Name`.
     peer_label: String,
+    /// Where the peer IS, in body-fixed coordinates: `(lat_deg, lon_deg, height_m)`.
+    /// `None` when the scene has no site anchor or the body's radius is unknown —
+    /// the same two facts the billboards need, and the same `—` when they are
+    /// missing. NOT scene XYZ: "300 m east of the map origin" is a fact about the
+    /// crop, not about the Moon, and it stops being true the moment the site moves.
+    peer_geo: Option<(f64, f64, f64)>,
     range_m: f64,
     elevation_deg: f64,
     /// True when the node has no peers at all — a different failure from "severed":
@@ -160,6 +166,12 @@ fn resolve_link(
     q_parents: &Query<&ChildOf>,
     q_name: &Query<&Name>,
     q_ids: &Query<(Entity, &GlobalEntityId)>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    // Site anchor + body radius, resolved once by the caller. `None` in a scene
+    // with no site frame — the peer still gets a name and a range, just no
+    // coordinates, exactly as the billboards degrade.
+    geo_ctx: Option<(&lunco_celestial::GeodeticAnchor, f64)>,
 ) -> Option<LinkInfo> {
     // Depth cap: a radio hangs a hop or two under its vessel. This also makes the
     // walk terminate on a malformed hierarchy instead of spinning.
@@ -184,6 +196,7 @@ fn resolve_link(
         return Some(LinkInfo {
             connected: false,
             peer_label: "—".into(),
+            peer_geo: None,
             range_m: 0.0,
             elevation_deg: 0.0,
             no_peers: true,
@@ -209,30 +222,46 @@ fn resolve_link(
     // every frame per driven vessel, and eagerly copying both names allocated two
     // Strings to throw one away. Exactly one allocation happens now, on the
     // branch that survives.
+    // ⚠ `Name` on a USD-spawned entity is the FULL PRIM PATH
+    // (`Name::new(child_path.to_string())`, `lunco-usd-bevy`), not the leaf. The
+    // owner-substitution below used to compare the whole path against "Antenna",
+    // which never matched — so the driver read `/Traverse/Base/Antenna` where the
+    // code intended `Base`. Truncate to the leaf FIRST, then decide.
+    let leaf = |n: &str| n.rsplit('/').next().unwrap_or(n).to_string();
+
     let peer_ent = q_ids.iter().find(|(_, g)| g.get() == pick.peer).map(|(e, _)| e);
     let peer_label = match peer_ent {
         Some(e) => {
-            let own = q_name.get(e).ok().map(|n| n.as_str());
+            let own = q_name.get(e).ok().map(|n| leaf(n.as_str()));
             let parent = q_parents
                 .get(e)
                 .ok()
                 .and_then(|p| q_name.get(p.parent()).ok())
-                .map(|n| n.as_str());
+                .map(|n| leaf(n.as_str()));
             match (own, parent) {
                 // An "Antenna"/"Comms" node under a named structure reads better as
                 // its owner; anything else keeps its own name.
-                (Some(o), Some(p)) if o == "Antenna" || o == "Comms" => p.to_string(),
-                (Some(o), _) => o.to_string(),
-                (None, Some(p)) => p.to_string(),
+                (Some(o), Some(p)) if o == "Antenna" || o == "Comms" => p,
+                (Some(o), _) => o,
+                (None, Some(p)) => p,
                 (None, None) => format!("#{}", pick.peer),
             }
         }
         None => format!("#{}", pick.peer),
     };
 
+    // Selenographic, through the site anchor — the same conversion the billboards
+    // use, so a peer's readout and its floating label always agree.
+    let peer_geo = peer_ent.zip(geo_ctx).and_then(|(e, (anchor, radius))| {
+        lunco_core::coords::world_position(e, q_parents, q_grids, q_spatial)
+            .map(|pos| lunco_celestial::geo::local_to_geodetic(&anchor.geodetic, radius, pos))
+            .map(|g| (g.lat_deg, g.lon_deg, g.height_m))
+    });
+
     Some(LinkInfo {
         connected: pick.connected,
         peer_label,
+        peer_geo,
         range_m: pick.range_m,
         elevation_deg: pick.elevation_deg,
         no_peers: false,
@@ -253,6 +282,10 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
+    // Site anchor + body radius for the selenographic peer readout. Resolved by
+    // the caller because every peer on screen shares it and it cannot change
+    // within a frame — the same reason `billboard_overlay` hoists it.
+    geo_ctx: Option<(&lunco_celestial::GeodeticAnchor, f64)>,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
     let (pos, rot) = lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
@@ -348,7 +381,9 @@ fn resolve_driven(
         pitch_deg,
         heading_deg,
         speed: q_vel.get(vessel).ok().map(|v| v.length() as f32),
-        link: resolve_link(vessel, q_links, q_parents, q_name, q_ids),
+        link: resolve_link(
+            vessel, q_links, q_parents, q_name, q_ids, q_grids, q_spatial, geo_ctx,
+        ),
         caution_deg,
         danger_deg,
         limits_derived,
@@ -678,12 +713,22 @@ pub(crate) fn draw_rover_hud(
     q_ids: Query<(Entity, &GlobalEntityId)>,
     q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: Query<&ComputedCenterOfMass>,
+    // Selenographic context for the peer readout — the site's geodetic anchor and
+    // the body's radius, the same pair `billboard_overlay` resolves.
+    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    registry: Option<Res<lunco_celestial::registry::CelestialBodyRegistry>>,
 ) {
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
+    let site = q_site.iter().next();
+    let geo_ctx = site.and_then(|a| {
+        let reg = registry.as_ref()?;
+        let r = reg.bodies.iter().find(|b| b.ephemeris_id == a.body)?.radius_m;
+        Some((a, r))
+    });
     let Some(v) = resolve_driven(
         &q_avatar, &q_name, &q_callsign, &q_gid, &q_vel, &q_parents, &q_grids, &q_spatial,
-        &q_links, &q_ids, &q_wheels, &q_com,
+        &q_links, &q_ids, &q_wheels, &q_com, geo_ctx,
     ) else {
         return;
     };
@@ -775,6 +820,19 @@ pub(crate) fn draw_rover_hud(
                                 link.peer_label.clone(),
                                 if link.connected { pal.value } else { pal.muted },
                             );
+                            // WHERE the peer is, in body-fixed degrees — the same
+                            // frame the billboards and `geolocation()` report, so
+                            // the three never disagree. Scene XYZ would be a fact
+                            // about the DEM crop, not about the Moon.
+                            if let Some((lat, lon, h)) = link.peer_geo {
+                                readout(
+                                    ui,
+                                    "at",
+                                    format!("{lat:.5}, {lon:.5}"),
+                                    pal.muted,
+                                );
+                                readout(ui, "alt", format!("{h:.1} m"), pal.muted);
+                            }
                             // Range stays legible across the whole span the kernel
                             // covers: metres on a site, km once a peer is orbital or
                             // on another body (Earth is ~384,000 km out).

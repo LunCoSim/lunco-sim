@@ -23,6 +23,17 @@ use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTa
 pub struct GizmoPrevPos {
     /// Parent-local position in the previous frame (meters).
     pub local_pos: DVec3,
+    /// Grid-ABSOLUTE position in the previous frame (meters).
+    ///
+    /// The drag velocity MUST be differenced from this, never from `local_pos`:
+    /// `Transform.translation` is the CELL REMAINDER, and big_space re-splits a
+    /// grid-direct entity's cell whenever it crosses a boundary. Freezing
+    /// `FloatingOrigin` stops the CAMERA from shifting the world; it does not stop
+    /// the dragged entity's own re-binning. So the remainder jumps a full
+    /// `cell_edge` (2 km) in one frame while the object barely moved, and Δ/dt
+    /// handed the solver ~1.2e5 m/s — which blew up every joint-coupled body into
+    /// NaN and surfaced as an `origin.is_finite()` panic inside avian's raycast.
+    pub abs_pos: DVec3,
     /// Original RigidBody type before drag started, or `None` if the entity had
     /// no `RigidBody` at all. `None` must stay `None` on restore: inserting a
     /// `Dynamic` body onto a prim that never had one gives avian a body with no
@@ -219,6 +230,9 @@ pub fn capture_gizmo_start(
     q_rigid_bodies: Query<&RigidBody>,
     q_prev_pos: Query<&GizmoPrevPos>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+    // The cell chain, for the grid-absolute drag anchor (`GizmoPrevPos::abs_pos`).
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&big_space::prelude::Grid>,
     q_interpolation: Query<(Has<TranslationInterpolation>, Has<RotationInterpolation>)>,
     q_floating_origin: Query<Entity, With<FloatingOrigin>>,
     mut commands: Commands,
@@ -238,9 +252,12 @@ pub fn capture_gizmo_start(
 
         let original_body = q_rigid_bodies.get(entity).copied().ok();
 
-        // Resolve initial parent-local position.
+        // Resolve initial parent-local position, and the absolute pose the drag
+        // velocity is differenced from (see `GizmoPrevPos::abs_pos`).
         let Ok((_, tf)) = q_spatial.get(entity) else { continue; };
         let local_pos = tf.translation.as_dvec3();
+        let abs_pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
+            .unwrap_or(local_pos);
 
         info!("GIZMO: drag started for {:?}, local_pos={:?}", entity, local_pos);
 
@@ -248,6 +265,7 @@ pub fn capture_gizmo_start(
             .try_insert(RigidBody::Kinematic)
             .try_insert(GizmoPrevPos { 
                 local_pos, 
+                abs_pos,
                 original_body,
                 had_translation_interpolation: had_translation,
                 had_rotation_interpolation: had_rotation,
@@ -271,6 +289,8 @@ pub fn capture_gizmo_start(
 pub fn sync_gizmo_transforms(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&big_space::prelude::Grid>,
     mut q_lin_vel: Query<&mut LinearVelocity>,
     mut q_prev_pos: Query<&mut GizmoPrevPos>,
     time: Res<Time>,
@@ -301,13 +321,26 @@ pub fn sync_gizmo_transforms(
         // drags joint-coupled child bodies along and is meaningless at dt = 0)
         // stays gated on dt.
         if let Ok(mut prev) = q_prev_pos.get_mut(entity) {
+            // ABSOLUTE, not the cell remainder — see `GizmoPrevPos::abs_pos`.
+            let abs_pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
+                .unwrap_or(local_pos);
             let dt = time.delta_secs();
             if dt > 1e-6 {
-                let delta = local_pos - prev.local_pos;
+                let delta = abs_pos - prev.abs_pos;
                 if let Ok(mut lin_vel) = q_lin_vel.get_mut(entity) {
-                    lin_vel.0 = delta / dt as f64;
+                    let v = delta / dt as f64;
+                    // Finite AND bounded: a mid-drag reparent, a scene reload or a
+                    // teleport can still move the absolute pose arbitrarily far in
+                    // one frame, and this velocity is injected into a Kinematic body
+                    // that drags its joint-coupled children with it.
+                    lin_vel.0 = if v.is_finite() {
+                        v.clamp_length_max(1.0e3)
+                    } else {
+                        DVec3::ZERO
+                    };
                 }
             }
+            prev.abs_pos = abs_pos;
             prev.local_pos = local_pos;
         }
     }

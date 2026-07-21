@@ -23,14 +23,34 @@ def Xform "CommsMast" (
 
     # The link endpoint, at the dish. Scene-local (no anchor/orbit): the site frame
     # poses it, so it rides whatever ground the mast is placed on.
-    def Xform "Antenna" (
+    #
+    # It is also the DISH ITSELF: the catalogue antenna arrives by reference, so this
+    # mast draws the same lathed paraboloid as the lander and the ground stations
+    # instead of the flattened sphere that used to stand here. Its own `Mast` stalk is
+    # hidden — the tower below is the mast — and the head is scaled to a 4 m aperture,
+    # the size the sphere it replaces read as.
+    def "Antenna" (
         prepend apiSchemas = ["LunCoLinkAPI"]
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
         bool lunco:linkNode = true
         string lunco:link:class = "base"
         double3 xformOp:translate = (0, 10.6, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Mast"
+        {
+            token visibility = "invisible"
+        }
+        over "DishHead"
+        {
+            # 2 · 0.58 · 3.4 ≈ 3.9 m aperture. Sits at the head, tilted back 35° —
+            # a relay dish parked toward Earth.
+            double3 xformOp:translate = (0, 0.3, 0.4)
+            double3 xformOp:rotateXYZ = (-35, 0, 0)
+            double3 xformOp:scale = (3.4, 3.4, 3.4)
+        }
     }
 
     def Cube "FootPad" (
@@ -66,26 +86,8 @@ def Xform "CommsMast" (
         color3f[] primvars:displayColor = [(0.4, 0.4, 0.43)]
     }
 
-    # Dish — flattened sphere reads as a shallow paraboloid, tilted to Earth.
-    def Sphere "Dish"
-    {
-        double radius = 2.0
-        double3 xformOp:translate = (0, 10.6, 0.8)
-        double3 xformOp:rotateXYZ = (35, 0, 0)
-        double3 xformOp:scale = (1.0, 0.25, 1.0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.85, 0.85, 0.88)]
-    }
-
-    # Feed horn — thin cylinder pointing into the dish.
-    def Cylinder "Feed"
-    {
-        uniform token axis = "Y"
-        double radius = 0.05
-        double height = 1.2
-        double3 xformOp:translate = (0, 10.9, 1.4)
-        double3 xformOp:rotateXYZ = (35, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.6, 0.6, 0.62)]
-    }
+    # (No `Dish`/`Feed` prims here. The dish is the `Antenna` prim above — the
+    # catalogue's lathed paraboloid, referenced. A flattened `Sphere` used to stand
+    # in for it, which meant the mast, the lander and the rovers each drew a
+    # different shape and called it the same thing.)
 }

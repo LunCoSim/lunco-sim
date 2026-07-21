@@ -37,6 +37,8 @@ mod celestial_time;
 /// and the physics-real transport band. Paints only while possessing a vessel.
 mod rover_hud;
 mod view_mode;
+/// Which floating viewport overlays are shown (persisted, off by default).
+pub mod overlays;
 /// Centered "Downloading <scenario>" overlay during scenario-sync asset fetch.
 /// Networking-only — the file carries its own `#![cfg(feature = "networking")]`.
 #[cfg(feature = "networking")]
@@ -84,6 +86,8 @@ impl Plugin for SandboxUiPlugin {
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
             .add_plugins(lunco_workbench::WorkbenchPlugin)
+            // Overlay visibility prefs + the Time-menu rows that drive them.
+            .add_plugins(overlays::plugin)
             // USD Twin browser. NOTE: the USD *viewport preview*
             // (`UsdViewportPlugin`) is intentionally NOT added here. It is an
             // editor tool that OWNS its own scene — it parses the active USD doc
@@ -180,14 +184,21 @@ impl Plugin for SandboxUiPlugin {
                     // gated on the View perspective (`in_view_perspective`) —
                     // in an authoring perspective they painted straight across
                     // the docked panels.
+                    // Both are also OPT-IN now (`OverlaySettings`, off by default,
+                    // toggled from the Time menu). Permanent chrome over the
+                    // viewport should be something you asked for; the sky clock's
+                    // controls live in that menu regardless, so switching the pill
+                    // off costs no capability.
                     view_mode::draw_view_mode_switcher
                         .run_if(not(recording_offline))
-                        .run_if(in_view_perspective),
+                        .run_if(in_view_perspective)
+                        .run_if(overlays::view_switcher_visible),
                     // Sky clock: rate + couple/detach for the CELESTIAL clock only
                     // (not the sim transport). Same visibility gate.
                     celestial_time::draw_celestial_time
                         .run_if(not(recording_offline))
-                        .run_if(in_view_perspective),
+                        .run_if(in_view_perspective)
+                        .run_if(overlays::sky_clock_visible),
                     // Driver cockpit: attitude/tilt (bottom-left) + nav/controls
                     // (bottom-right). Only while possessing a vessel, and only in
                     // View. Transport (pause + rate) lives on the workbench

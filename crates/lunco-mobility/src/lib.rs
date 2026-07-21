@@ -639,6 +639,17 @@ fn sync_raycast_wheel_physics_pose(
                 wtf.translation.as_dvec3(),
                 wtf.rotation.as_dquat(),
             );
+            // The wheel's `Position`/`Rotation` IS avian's ray-origin frame: the
+            // caster's local origin is `DVec3::ZERO`, so the global origin is
+            // `Position + Rotation * ZERO` — and a NaN rotation poisons even that.
+            // avian's `raycast` asserts `origin.is_finite()` and takes the whole
+            // app down with it, so a solver blow-up upstream must STOP HERE rather
+            // than becoming a panic in a system that did nothing wrong. Holding
+            // last tick's pose for a frame is strictly better than a crash; if the
+            // chassis recovers, the wheel snaps back on the next tick.
+            if !hub_pos.is_finite() || !hub_rot.is_finite() {
+                continue;
+            }
             wpos.0 = hub_pos;
             wrot.0 = hub_rot;
         }

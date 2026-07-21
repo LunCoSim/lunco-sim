@@ -438,103 +438,42 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
     }
 
-    # ── High-gain antenna: a REAL parabolic dish, not a sphere placeholder ──
+    # ── High-gain antenna: the CATALOGUE dish, referenced ───────────────────
     # The airframe carries exactly ONE comms structure. A mast, a spike and a
     # sphere "dish" each lived here at some point and are gone rather than
     # deactivated: a library asset that ships switched-off geometry makes every
     # consumer read three prims to learn which one is real.
-    # The reflector is a rational NurbsPatch: u is an EXACT circle (9 CVs, the
-    # classic 4-arc rational form — √2/2 weights on the diagonal CVs and doubled
-    # interior knots), v a cubic parabola profile y = r²/4f, f = 0.35 m. This is
-    # the "lathe" spelling the engine's NURBS reader exists for; the sampled
-    # surface is a true paraboloid, which a scaled Sphere never was.
-    # Deactivated by director's call (2026-07-20): with the yaw spin added to
-    # the exposition beats the dish reads as clutter on camera, and the comms
-    # story is carried by the mast + spike. The NURBS reflector stays authored
-    # — it is the parametric-antenna base for the Earth-tracking gimbal work —
-    # flip active when that lands.
-    # ACTIVE and mounted ON TOP of the mast, scaled ×2.6 → ~3 m across: a
-    # high-gain dish the audience can actually SEE at video size and read as
-    # comms hardware. (Authored at 0.58 m radius for the parametric work; the
-    # scale is the film's call, the geometry stays the real paraboloid.)
-    def Xform "HighGainDish"
+    #
+    # The lathed paraboloid this used to author INLINE now lives in
+    # `components/comms/antenna.usda` and arrives by reference — the lander was
+    # the only thing in the project drawing a real reflector while the base mast
+    # and the rovers drew flattened spheres. Same geometry, one spelling, and
+    # every other antenna inherits the fix.
+    #
+    # Scaled ×2.6 → ~3 m across: a high-gain dish the audience can actually SEE at
+    # video size and read as comms hardware. Boresight ~35° off vertical toward
+    # +X, like a parked high-gain waiting for Earth.
+    def "HighGainDish" (
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    )
     {
-        # Sits straight on the upper deck now the mast is gone (deck top is
-        # y≈1.63; the dish's own boom carries the rest).
-        double3 xformOp:translate = (0.0, 2.05, 0.0)
-        # Face the dish up-and-outboard, like a parked high-gain waiting for
-        # Earth: boresight ~35° off vertical toward +X.
-        double3 xformOp:rotateXYZ = (0.0, 0.0, -35.0)
-        double3 xformOp:scale = (2.6, 2.6, 2.6)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        # Straight on the upper deck (deck top is y≈1.63); the component's own
+        # mast is the mounting boom.
+        double3 xformOp:translate = (0.0, 1.63, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        # PARAMETRIC. The surface is LATHED by the engine from the four numbers
-        # below, and `crate::lathe` regenerates it whenever one of them changes.
-        # The control-point net is NEVER authored alongside them: two spellings of
-        # one shape let the drawn contour disagree with the declared model.
-        #
-        # `y = r² / 4f` with f = 0.35 m, walked from a small apex to the rim.
-        # `apexRadius` is deliberately non-zero: a ring collapsed exactly onto the
-        # axis is a degenerate row whose normal is a zero cross product, and a NaN
-        # normal renders as a black hole at the vertex of the dish.
-        #
-        # The u direction (the exact rational circle — 9 CVs, √2/2 diagonals,
-        # doubled interior knots) is GENERATED, not authored, so it cannot drift.
-        # That is what keeps the rim genuinely round rather than an octagon.
-        def NurbsPatch "Reflector"
+        over "Mast"
         {
-            # A dish is a THIN SHELL — a real reflector is paint on a skin, not a
-            # solid — so it must draw from behind as well as in front. `doubleSided`
-            # is standard UsdGeomGprim and says exactly that; a two-surface volume
-            # would double the geometry to model a thickness nothing at this scale
-            # can resolve.
-            uniform bool doubleSided = true
-            uniform token lunco:lathe:profile = "paraboloid"
-            float lunco:lathe:apexRadius = 0.02
-            float lunco:lathe:rimRadius = 0.58
-            float lunco:lathe:focalLength = 0.35
-            # White thermal-control paint — what a high-gain reflector is
-            # actually finished in, and it separates the dish from the gold
-            # blanket underneath it.
-            color3f[] primvars:displayColor = [(0.95, 0.95, 0.93)]
-            bool physics:collisionEnabled = false
-        }
-
-        # Feed arm: a NURBS curve swept into a TUBE by its authored `widths` —
-        # rim to focus (f = 0.35 above the apex) in one smooth cubic.
-        def NurbsCurves "FeedArm"
-        {
-            int[] curveVertexCounts = [4]
-            int[] order = [4]
-            double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
-            point3f[] points = [(0.56, 0.25, 0), (0.44, 0.44, 0), (0.16, 0.47, 0), (0.0, 0.38, 0)]
-            float[] widths = [0.03]
-            color3f[] primvars:displayColor = [(0.75, 0.75, 0.78)]
-            bool physics:collisionEnabled = false
-        }
-
-        # The feed horn at the focus, looking back into the reflector.
-        def Cylinder "FeedHorn"
-        {
-            uniform token axis = "Y"
-            double radius = 0.045
-            double height = 0.09
-            double3 xformOp:translate = (0.0, 0.36, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.3, 0.3, 0.34)]
-            bool physics:collisionEnabled = false
-        }
-
-        # Mounting boom, dish back down to the deck edge.
-        def Cylinder "Boom"
-        {
-            uniform token axis = "Y"
             double radius = 0.05
             double height = 0.7
-            double3 xformOp:translate = (0.0, -0.38, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            double3 xformOp:translate = (0.0, 0.35, 0.0)
             color3f[] primvars:displayColor = [(0.55, 0.55, 0.58)]
-            bool physics:collisionEnabled = false
+        }
+        over "DishHead"
+        {
+            double3 xformOp:translate = (0.0, 0.7, 0.0)
+            double3 xformOp:rotateXYZ = (0.0, 0.0, -35.0)
+            double3 xformOp:scale = (2.6, 2.6, 2.6)
         }
     }
 

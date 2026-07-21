@@ -5,15 +5,52 @@
     metersPerUnit = 1
 )
 
-# Comms antenna — rover/lander-mountable mast + dish (doc 43).
+# Comms antenna — the ONE dish in the catalogue (doc 43).
+#
 # `lunco:linkNode` makes this a connectivity endpoint: the generic link kernel
 # pairs it with every other node, applies the `link.connected` verdict (range,
 # elevation, body + terrain occlusion), and publishes link state. Pose tracking
 # follows automatically. Author `lunco:link:class` / `maxRangeM` / `minElevationDeg`
 # per instance in the scene (a rover vs a relay vs a ground station).
+#
+# ── The reflector is PARAMETRIC, and it is a real paraboloid ──────────────────
+#
+# The surface is LATHED by the engine from the three numbers on `Reflector`, and
+# `crate::lathe` regenerates it whenever one of them changes. The control-point
+# net is NEVER authored alongside them: two spellings of one shape let the drawn
+# contour disagree with the declared model. `y = r²/4f`, walked from a small apex
+# to the rim; the u direction (the exact rational circle — 9 CVs, √2/2 diagonals,
+# doubled interior knots) is GENERATED, so the rim stays genuinely round rather
+# than an octagon.
+#
+# This geometry was the descent lander's `HighGainDish`, authored inline there and
+# nowhere else while every other antenna in the project drew a FLATTENED SPHERE.
+# One dish, one spelling: the lander, the base mast, the rovers and the Earth
+# stations all reference this prim now.
+#
+# ── The two knobs, and which one to turn ──────────────────────────────────────
+#
+#   SIZE  → `over "DishHead" { double3 xformOp:scale = (s, s, s) }`
+#           The whole head — reflector, feed arm, horn — scales together, so the
+#           feed stays at the focus. This is the knob you almost always want.
+#           Dish diameter = 2 · rimRadius · s = 1.16 · s metres.
+#
+#   SHAPE → `over "DishHead" { over "Reflector" { float lunco:lathe:focalLength = … } }`
+#           f/D — how deep the bowl is. Changing `rimRadius` alone does NOT move
+#           the authored feed-arm control points, so a rim change wants the arm
+#           re-authored; scale does not.
+#
+#   MOUNT → `over "Mast" { double height = … }` for a taller stalk, or
+#           `over "Mast" { token visibility = "invisible" }` when the host already
+#           has a boom or tower to carry the dish.
+#
+# Examples in the tree: `structures/comms_mast.usda` (s = 3.4, mast hidden — the
+# tower is the mast), `vessels/landers/descent_lander.usda` (s = 2.6, mast as the
+# deck boom), `vessels/rovers/rocker_bogie.usda` (s = 0.35, stock mast).
 def Xform "CommsAntenna" (
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoLinkAPI"]
     kind = "component"
+    doc = "Parabolic comms antenna — lathed reflector, feed arm and horn on a short mast. The catalogue's only dish; scale `DishHead` for size, override `Reflector`'s lathe params for f/D."
 )
 {
     uniform bool lunco:spawnable = true
@@ -27,27 +64,66 @@ def Xform "CommsAntenna" (
         double3 xformOp:translate = (0, 0.4, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.7, 0.7, 0.72)]
+        bool physics:collisionEnabled = false
     }
 
-    # Dish — flattened sphere reads as a shallow paraboloid (comms_mast style).
-    def Sphere "Dish"
+    # The head: everything that must stay in proportion with the dish. Scale THIS,
+    # not the reflector, so the feed horn stays at the focus.
+    #
+    # Default s = 0.6 ⇒ a 0.70 m dish, the rover/lander whip class. Tilted 30° back
+    # from the zenith, the parked attitude of a high-gain waiting for a pass; a
+    # scene that actually points its antennas overrides `xformOp:rotateXYZ`.
+    def Xform "DishHead"
     {
-        double radius = 0.22
         double3 xformOp:translate = (0, 0.85, 0)
-        double3 xformOp:rotateXYZ = (30, 0, 0)
-        double3 xformOp:scale = (1.0, 0.35, 1.0)
+        double3 xformOp:rotateXYZ = (-30, 0, 0)
+        double3 xformOp:scale = (0.6, 0.6, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.9, 0.9, 0.95)]
-    }
 
-    def Cylinder "Feed"
-    {
-        uniform token axis = "Y"
-        double radius = 0.015
-        double height = 0.18
-        double3 xformOp:translate = (0, 0.95, 0.05)
-        double3 xformOp:rotateXYZ = (30, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.85, 0.55, 0.2)]
+        # A dish is a THIN SHELL — a real reflector is paint on a skin, not a solid
+        # — so it must draw from behind as well as in front. `doubleSided` is stock
+        # UsdGeomGprim and says exactly that; a two-surface volume would double the
+        # geometry to model a thickness nothing at this scale can resolve.
+        #
+        # `apexRadius` is deliberately non-zero: a ring collapsed exactly onto the
+        # axis is a degenerate row whose normal is a zero cross product, and a NaN
+        # normal renders as a black hole at the vertex of the dish.
+        def NurbsPatch "Reflector"
+        {
+            uniform bool doubleSided = true
+            uniform token lunco:lathe:profile = "paraboloid"
+            float lunco:lathe:apexRadius = 0.02
+            float lunco:lathe:rimRadius = 0.58
+            float lunco:lathe:focalLength = 0.35
+            # White thermal-control paint — what a high-gain reflector is actually
+            # finished in.
+            color3f[] primvars:displayColor = [(0.95, 0.95, 0.93)]
+            bool physics:collisionEnabled = false
+        }
+
+        # Feed arm: a NURBS curve swept into a TUBE by its authored `widths` — rim
+        # to focus (f = 0.35 above the apex) in one smooth cubic.
+        def NurbsCurves "FeedArm"
+        {
+            int[] curveVertexCounts = [4]
+            int[] order = [4]
+            double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
+            point3f[] points = [(0.56, 0.25, 0), (0.44, 0.44, 0), (0.16, 0.47, 0), (0.0, 0.38, 0)]
+            float[] widths = [0.03]
+            color3f[] primvars:displayColor = [(0.75, 0.75, 0.78)]
+            bool physics:collisionEnabled = false
+        }
+
+        # The feed horn at the focus, looking back into the reflector.
+        def Cylinder "FeedHorn"
+        {
+            uniform token axis = "Y"
+            double radius = 0.045
+            double height = 0.09
+            double3 xformOp:translate = (0.0, 0.36, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.3, 0.3, 0.34)]
+            bool physics:collisionEnabled = false
+        }
     }
 }
