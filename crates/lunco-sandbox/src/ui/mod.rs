@@ -173,18 +173,26 @@ impl Plugin for SandboxUiPlugin {
                     // sky clock. An offline take is film output, and a scene
                     // that declares celestial bodies (which any scene with a
                     // real sun now does) would otherwise burn a clock readout
-                    // and a view switcher into every frame. The driver HUD
-                    // below is deliberately NOT gated: vehicle state is
-                    // instrumentation, not chrome.
-                    view_mode::draw_view_mode_switcher.run_if(not(recording_offline)),
+                    // and a view switcher into every frame.
+                    //
+                    // All three are window-space `egui::Area`s, so they are also
+                    // gated on the View perspective (`in_view_perspective`) —
+                    // in an authoring perspective they painted straight across
+                    // the docked panels.
+                    view_mode::draw_view_mode_switcher
+                        .run_if(not(recording_offline))
+                        .run_if(in_view_perspective),
                     // Sky clock: rate + couple/detach for the CELESTIAL clock only
                     // (not the sim transport). Same visibility gate.
-                    celestial_time::draw_celestial_time.run_if(not(recording_offline)),
+                    celestial_time::draw_celestial_time
+                        .run_if(not(recording_offline))
+                        .run_if(in_view_perspective),
                     // Driver cockpit: attitude/tilt (bottom-left) + nav/controls
-                    // (bottom-right). Only while possessing a vessel. Transport
-                    // (pause + rate) lives on the workbench toolbar, next to the
-                    // pause button that already owns `TimeTransport`.
-                    rover_hud::draw_rover_hud,
+                    // (bottom-right). Only while possessing a vessel, and only in
+                    // View. Transport (pause + rate) lives on the workbench
+                    // toolbar, next to the pause button that already owns
+                    // `TimeTransport`.
+                    rover_hud::draw_rover_hud.run_if(in_view_perspective),
                 ),
             );
         // G2: "Downloading <scenario>" overlay during scenario-sync asset fetch.
@@ -285,6 +293,19 @@ fn recording_offline(
     state: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
 ) -> bool {
     state.is_some_and(|s| s.active)
+}
+
+/// True only in the 🎬 View perspective — full-screen 3D, no dock.
+///
+/// The floating overlays (driver HUD, view switcher, sky clock) are raw
+/// `egui::Area`s in window space: they know nothing about the dock and paint
+/// straight over whatever panels an authoring perspective has open. That reads as
+/// a broken layer while building, so they exist only where the whole window IS
+/// the viewport.
+fn in_view_perspective(layout: Option<Res<lunco_workbench::WorkbenchLayout>>) -> bool {
+    layout.is_some_and(|l| {
+        l.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
+    })
 }
 
 fn force_hard_shadow_filtering(
