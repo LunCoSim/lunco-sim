@@ -17,42 +17,11 @@
 //
 // `emit("LANDER_ROVER_STACK", "PASS"|"FAIL")` — the telemetry verdict
 // `scene_test` reads for its exit code, plus a `[stack]` sample table.
-
-fn r2(x) { (x * 100.0).round() / 100.0 }
-
-/// Positive-form range test. Never write this as `!(v < lo || v > hi)`: NaN
-/// compares false against everything, so the negated form admits exactly the
-/// value this test exists to catch.
-fn t_range(v, lo, hi, what) {
-    if type_of(v) == "()" { return what + ": MISSING"; }
-    if v >= lo && v <= hi { return ""; }
-    return what + ": " + r2(v) + " outside [" + lo + ", " + hi + "]";
-}
-
-fn t_true(cond, what) { if cond { "" } else { what } }
+//
+// Assertion + verdict helpers come from the prelude (`prelude/verdict.rhai`).
+// Do not paste private copies of them into a new test.
 
 /// A body must be finite and inside the scene. The "still an assembly" check.
-fn t_bounded(p, what) {
-    if type_of(p) == "()" { return what + ": MISSING (no world_pos)"; }
-    let l = vlen(p);
-    if l >= 0.0 && l <= 100.0 { return ""; }
-    return what + ": |pos|=" + r2(l) + " m — left the scene (or is not finite)";
-}
-
-fn t_report(fails) {
-    let real = [];
-    for f in fails { if f != "" { real.push(f); } }
-    if real.is_empty() {
-        print("TESTS_OK " + fails.len());
-        print("LANDER ROVER STACK: PASS");
-        return true;
-    }
-    for f in real { print("  STACK FAIL: " + f); }
-    print("TESTS_FAIL " + real.len() + "/" + fails.len());
-    print("LANDER ROVER STACK: FAIL");
-    false
-}
-
 fn on_start(me) {
     this.t = 0.0;
     this.settle_s = 8.0;
@@ -74,11 +43,8 @@ fn on_tick(me) {
     if this.phase == "done" { return; }
 
     if this.hull == () || this.hull < 0 || this.rover == () || this.rover < 0 {
-        print("  STACK FAIL: lander or rover prim not found (hull=" + this.hull +
-              " rover=" + this.rover + ") — wrong scene?");
-        print("TESTS_FAIL 1/1");
-        print("LANDER ROVER STACK: FAIL");
-        emit("LANDER_ROVER_STACK", "FAIL");
+        fail_fast("lander or rover prim not found (hull=" + this.hull + " rover=" +
+                  this.rover + ") — wrong scene?", "LANDER ROVER STACK", "LANDER_ROVER_STACK");
         this.phase = "done";
         return;
     }
@@ -88,12 +54,12 @@ fn on_tick(me) {
     let pr = world_pos(this.rover);
 
     let gap = ();
-    if type_of(ph) != "()" && type_of(pr) != "()" { gap = vlen(vsub(ph, pr)); }
-    if this.gap0 == () && type_of(gap) != "()" { this.gap0 = gap; }
+    if ph != () && pr != () { gap = vlen(vsub(ph, pr)); }
+    if this.gap0 == () && gap != () { this.gap0 = gap; }
 
     if this.t >= this.next_sample {
         let hy = ();
-        if type_of(ph) != "()" { hy = ph[1]; }
+        if ph != () { hy = ph[1]; }
         let s = "[stack] t=" + r2(this.t) + "s";
         s += "  hull_y=" + r2(hy);
         s += "  tilt=" + r2(tilt_deg(this.hull)) + "deg";
@@ -128,8 +94,8 @@ fn on_tick(me) {
 //   hull height      1.0 .. 8.0 m — sank through the ground, or never fell.
 fn verdict(s) {
     let f = [];
-    f.push(t_bounded(s.hull_pos, "lander"));
-    f.push(t_bounded(s.rover_pos, "rover"));
+    f.push(t_bounded(s.hull_pos, 100.0, "lander"));
+    f.push(t_bounded(s.rover_pos, 100.0, "rover"));
     f.push(t_range(s.tilt, 0.0, 5.0, "lander tilt at rest (deg)"));
     f.push(t_range(s.rover_tilt, 0.0, 5.0, "rover tilt at rest (deg)"));
     f.push(t_range(s.hull_y, 1.0, 8.0, "hull height at rest (m)"));
@@ -148,11 +114,5 @@ fn verdict(s) {
     print("[stack]   rover tilt   " + r2(s.rover_tilt) + " deg");
     print("[stack]   stack gap    " + r2(s.gap0) + " -> " + r2(s.gap) + " m");
 
-    let ok = t_report(f);
-    emit("LANDER_ROVER_STACK", if ok { "PASS" } else { "FAIL" });
-    if ok {
-        notify_kind("Lander/rover stack: PASS", "success");
-    } else {
-        notify_kind("Lander/rover stack: FAIL — the assembly came apart", "error");
-    }
+    report_verdict(f, "LANDER ROVER STACK", "LANDER_ROVER_STACK");
 }

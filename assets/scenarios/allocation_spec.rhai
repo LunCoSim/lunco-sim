@@ -127,43 +127,11 @@
 
 // ── Local assertion helpers (stateless — `this` is NOT bound in helpers) ────
 
-/// 2 dp, for the log table.
-fn r2(x) { (x * 100.0).round() / 100.0 }
-
-/// Plain predicate check.
-fn t_true(cond, what) { if cond { "" } else { what } }
-
 /// A magnitude must EXCEED a bound — the anti-dead-test guard.
 fn t_min(v, lo, what) {
     if type_of(v) == "()" { return what + ": MISSING"; }
     if v.abs() >= lo { return ""; }
     return what + ": " + r2(v) + " below " + lo + " - nothing happened, so this is a dead test";
-}
-
-/// A magnitude must stay BELOW a bound. `()` fails explicitly rather than
-/// sliding through as "small".
-fn t_max(v, hi, what) {
-    if type_of(v) == "()" { return what + ": MISSING"; }
-    if v.abs() <= hi { return ""; }
-    return what + ": " + r2(v) + " exceeds " + hi;
-}
-
-/// RELATIVE-tolerance compare, as a percentage of the larger magnitude. Two
-/// values that are both ~0 are a FAILURE, not a pass — the dead-command-surface
-/// case, where nothing moved and everything "matched".
-fn t_rel(a, b, tol_pct, what) {
-    if type_of(a) == "()" || type_of(b) == "()" {
-        return what + ": MISSING (a=" + a + " b=" + b + ")";
-    }
-    let m = if a.abs() > b.abs() { a.abs() } else { b.abs() };
-    if m < 0.001 {
-        return what + ": BOTH ~ZERO (a=" + r2(a) + " b=" + r2(b) +
-               ") - nothing moved, so this is a dead test, not a match";
-    }
-    let d = (a - b).abs() / m * 100.0;
-    if d <= tol_pct { return ""; }
-    return what + ": a=" + r2(a) + " b=" + r2(b) + " diff=" + r2(d) +
-           "% (tol " + tol_pct + "%)";
 }
 
 /// Two values must have OPPOSITE, non-trivial signs. The direct expression of
@@ -183,29 +151,6 @@ fn t_opposite(a, b, dead, what) {
                ") - the banks are not counter-rotating";
     }
     ""
-}
-
-/// Print the failures and the verdict. Call ONCE, last. Returns true on pass.
-/// The LAST line printed is `ALLOCATION SPEC: PASS|FAIL` — the greppable one.
-fn t_report(fails) {
-    let real = [];
-    for f in fails { if f != "" { real.push(f); } }
-    let total = fails.len();
-    if real.is_empty() {
-        print("TESTS_OK " + total);
-        print("ALLOCATION SPEC: PASS");
-        return true;
-    }
-    for f in real { print("  SPEC FAIL: " + f); }
-    print("TESTS_FAIL " + real.len() + "/" + total);
-    print("ALLOCATION SPEC: FAIL");
-    false
-}
-
-/// Path length of one tick's motion, 0 when there is no previous sample.
-fn seg(prev, cur) {
-    if prev == () || cur == () { return 0.0; }
-    vlen(vsub(cur, prev))
 }
 
 /// Signed heading change in DEGREES between two forward vectors, positive to the
@@ -775,7 +720,7 @@ fn verdict(s) {
     print("[spec]   STILL IN RUST: the exact skid_mix_norm(1,1) = (1, -1/3) inner-side value;");
     print("[spec]     under throttle the ground drags the wheel, so -1/3 is not observable.");
 
-    let ok = t_report(f);
+    let ok = report_verdict(f, "ALLOCATION SPEC", "ALLOCATION_SPEC");
     emit("ALLOCATION_SPEC", if ok { "PASS" } else { "FAIL" });
     if ok {
         notify_kind("Allocation spec: PASS", "success");

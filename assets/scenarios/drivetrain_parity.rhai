@@ -52,65 +52,6 @@
 
 // ── Local assertion helpers (stateless — `this` is NOT bound in helpers) ────
 
-/// 2 dp, for the log table.
-fn r2(x) { (x * 100.0).round() / 100.0 }
-
-/// RELATIVE-tolerance compare, as a percentage of the larger magnitude.
-///
-/// Relative (not absolute, unlike `t_near` in the shared harness) because the
-/// quantity under test is a RATIO between two solvers: the historic bug was 5x,
-/// and "within 15% of each other" is the honest statement of parity at any
-/// speed. Two values that are both ~0 are a FAILURE, not a pass — that is the
-/// dead-command-surface case, where nothing moved and everything "matched".
-fn t_rel(a, b, tol_pct, what) {
-    if type_of(a) == "()" || type_of(b) == "()" {
-        return what + ": MISSING (raycast=" + a + " physical=" + b + ")";
-    }
-    let m = if a.abs() > b.abs() { a.abs() } else { b.abs() };
-    if m < 0.001 {
-        return what + ": BOTH ~ZERO (raycast=" + r2(a) + " physical=" + r2(b) +
-               ") - nothing moved, so this is a dead test, not a match";
-    }
-    let d = (a - b).abs() / m * 100.0;
-    if d <= tol_pct { return ""; }
-    return what + ": raycast=" + r2(a) + " physical=" + r2(b) +
-           " ratio=" + r2(a / b) + "x diff=" + r2(d) + "% (tol " + tol_pct + "%)";
-}
-
-/// Plain predicate check.
-fn t_true(cond, what) { if cond { "" } else { what } }
-
-/// A value must sit within [lo, hi]. Used for the ABSOLUTE ceiling: parity with
-/// each other is necessary but not sufficient — both could drift together.
-fn t_range(v, lo, hi, what) {
-    if type_of(v) == "()" { return what + ": MISSING"; }
-    if v >= lo && v <= hi { return ""; }
-    return what + ": " + r2(v) + " outside [" + lo + ", " + hi + "]";
-}
-
-/// Print the failures and the verdict. Call ONCE, last. Returns true on pass.
-/// The LAST line printed is `DRIVETRAIN PARITY: PASS|FAIL` — the greppable one.
-fn t_report(fails) {
-    let real = [];
-    for f in fails { if f != "" { real.push(f); } }
-    let total = fails.len();
-    if real.is_empty() {
-        print("TESTS_OK " + total);
-        print("DRIVETRAIN PARITY: PASS");
-        return true;
-    }
-    for f in real { print("  PARITY FAIL: " + f); }
-    print("TESTS_FAIL " + real.len() + "/" + total);
-    print("DRIVETRAIN PARITY: FAIL");
-    false
-}
-
-/// Path length of one tick's motion, 0 when there is no previous sample.
-fn seg(prev, cur) {
-    if prev == () || cur == () { return 0.0; }
-    vlen(vsub(cur, prev))
-}
-
 /// Signed heading change in DEGREES between two forward vectors, positive to the
 /// RIGHT (matching the skid-drive sign convention in `prelude/nav.rhai`, where
 /// +steer yaws right). Sign is taken from the yaw-plane cross product, so a
@@ -443,7 +384,7 @@ fn verdict(s) {
     print("[parity]   yaw        (deg)  " + s.yaw_rc + "       " + s.yaw_ph);
     print("[parity]   authored ceiling omega_max*r = " + s.v_ceiling + " m/s");
 
-    let ok = t_report(f);
+    let ok = report_verdict(f, "DRIVETRAIN PARITY", "DRIVETRAIN_PARITY");
     emit("DRIVETRAIN_PARITY", if ok { "PASS" } else { "FAIL" });
     if ok {
         notify_kind("Drivetrain parity: PASS", "success");

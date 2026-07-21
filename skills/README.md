@@ -24,6 +24,7 @@ one directly when doing that kind of task by hand.
 | [**author-usd-component**](author-usd-component/SKILL.md) | Model a reusable `.usda` asset from scratch — geometry, material, physics, parameters, spawn catalog |
 | [**build-vehicle**](build-vehicle/SKILL.md) | Assemble a rover/vehicle from the mobility component library — wheels, tires, suspensions, chassis, variant axes, drive laws, live tuning |
 | [**build-usd-scene**](build-usd-scene/SKILL.md) | Assemble a scene from assets that already exist — load, spawn, place, and tune objects |
+| [**author-usd-physics**](author-usd-physics/SKILL.md) | Author physics in USD — joints and joint FRAMES, gravity per scene, why a mechanism is rigid or a vehicle flies apart |
 | [**author-scenario**](author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, multi-entity coordination |
 | [**authoring-vessel-controllers**](authoring-vessel-controllers/SKILL.md) | Give a vessel a self-driving GNC / autopilot with manual handoff |
 | [**compose-multidomain-twin**](compose-multidomain-twin/SKILL.md) | Assemble a full mission — USD + Modelica + cosim + rhai — into a Twin |

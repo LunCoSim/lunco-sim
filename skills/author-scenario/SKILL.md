@@ -37,8 +37,29 @@ simulation tick** via lifecycle hooks — not a one-shot snippet. It is the
   writing a per-tick control loop here, stop — see
   [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md).
 - **Scene structure / spawning geometry / wiring** → USD.
+- **Vector and angle math is already NATIVE — never write it in a script.**
+  `vadd` `vsub` `vscale` `vlen` `vdot` `vcross` `vnorm` `qrot` `clamp`
+  `angle_deg` `yaw_delta_deg` are Rust (`lunco_scripting::rhai_math`, on glam),
+  operating on the same `[x,y,z]` float arrays `world_pos` / `world_forward`
+  return. Reimplementing one in rhai is how four scripts ended up with four
+  copies of the same broken `acos` guard.
 - A scenario **senses and decides**; it drives via high-level verbs
   (`nav_to`, `drive`, `cmd`), reacts to events, and sequences phases.
+
+**The two rules that make the math surface safe:**
+
+1. **Every math verb is TOTAL and returns `()` when there is nothing to
+   measure** — a `()` input, a wrong-length array, a degenerate orientation.
+   Check with `== ()`; never accumulate an unchecked result. There is no NaN to
+   guard against, because a partial function's domain is enforced in Rust:
+   ```rhai
+   let d = yaw_delta_deg(this.fprev, world_forward(me));
+   if d != () { this.yaw += d; }        // skip the tick, don't poison the sum
+   ```
+2. **Angles are PER-TICK DELTAS.** `yaw_delta_deg` saturates at 180°, so a total
+   swept angle is accumulated from deltas — never measured start-to-end. Past
+   half a revolution a direct measure folds back and reads as a turn the other
+   way.
 
 Full reference: [`docs/scripting-guide.md`](../../docs/scripting-guide.md). The
 authoritative callable surface in one place: the `ScriptingCatalog` query.

@@ -114,77 +114,12 @@
 
 // ── Local assertion helpers (stateless — `this` is NOT bound in helpers) ────
 
-/// 2 dp, for the log table.
-fn r2(x) { (x * 100.0).round() / 100.0 }
-
-/// Plain predicate check.
-fn t_true(cond, what) { if cond { "" } else { what } }
-
-/// A value must sit within [lo, hi] — the ABSOLUTE checks (terminal speed
-/// against the authored ceiling, leg distances).
-fn t_range(v, lo, hi, what) {
-    if type_of(v) == "()" { return what + ": MISSING"; }
-    if v >= lo && v <= hi { return ""; }
-    return what + ": " + r2(v) + " outside [" + lo + ", " + hi + "]";
-}
-
-/// A magnitude must stay BELOW a bound. Used where the PASS condition is "did
-/// not move" / "did not turn", so unlike the other helpers a missing value must
-/// NOT read as a small one — `()` fails explicitly rather than sliding through.
-fn t_max(v, hi, what) {
-    if type_of(v) == "()" { return what + ": MISSING"; }
-    if v.abs() <= hi { return ""; }
-    return what + ": " + r2(v) + " exceeds " + hi;
-}
-
 /// A magnitude must EXCEED a bound — the anti-dead-test guard. Every check whose
 /// pass condition is "small" is paired with one of these on the same run.
 fn t_min(v, lo, what) {
     if type_of(v) == "()" { return what + ": MISSING"; }
     if v.abs() >= lo { return ""; }
     return what + ": " + r2(v) + " below " + lo + " - nothing happened, so this is a dead test";
-}
-
-/// RELATIVE-tolerance compare, as a percentage of the larger magnitude. Used for
-/// the steer-symmetry check (a right leg and a left leg of the same command
-/// magnitude should sweep comparable angles). Two values that are both ~0 are a
-/// FAILURE, not a pass — that is the dead-command-surface case.
-fn t_rel(a, b, tol_pct, what) {
-    if type_of(a) == "()" || type_of(b) == "()" {
-        return what + ": MISSING (a=" + a + " b=" + b + ")";
-    }
-    let m = if a.abs() > b.abs() { a.abs() } else { b.abs() };
-    if m < 0.001 {
-        return what + ": BOTH ~ZERO (a=" + r2(a) + " b=" + r2(b) +
-               ") - nothing moved, so this is a dead test, not a match";
-    }
-    let d = (a - b).abs() / m * 100.0;
-    if d <= tol_pct { return ""; }
-    return what + ": a=" + r2(a) + " b=" + r2(b) + " diff=" + r2(d) +
-           "% (tol " + tol_pct + "%)";
-}
-
-/// Print the failures and the verdict. Call ONCE, last. Returns true on pass.
-/// The LAST line printed is `SIX INDEPENDENT MOTION: PASS|FAIL` — the greppable one.
-fn t_report(fails) {
-    let real = [];
-    for f in fails { if f != "" { real.push(f); } }
-    let total = fails.len();
-    if real.is_empty() {
-        print("TESTS_OK " + total);
-        print("SIX INDEPENDENT MOTION: PASS");
-        return true;
-    }
-    for f in real { print("  MOTION FAIL: " + f); }
-    print("TESTS_FAIL " + real.len() + "/" + total);
-    print("SIX INDEPENDENT MOTION: FAIL");
-    false
-}
-
-/// Path length of one tick's motion, 0 when there is no previous sample.
-fn seg(prev, cur) {
-    if prev == () || cur == () { return 0.0; }
-    vlen(vsub(cur, prev))
 }
 
 /// Signed heading change in DEGREES between two forward vectors, positive to the
@@ -649,7 +584,7 @@ fn verdict(s) {
     print("[six]   kernel                " + s.kernel);
     print("[six]   authored ceiling omega_max*r = " + s.v_ceiling + " m/s");
 
-    let ok = t_report(f);
+    let ok = report_verdict(f, "SIX INDEPENDENT", "SIX_INDEPENDENT");
     emit("SIX_INDEPENDENT_MOTION", if ok { "PASS" } else { "FAIL" });
     if ok {
         notify_kind("Six-wheel independent motion: PASS", "success");

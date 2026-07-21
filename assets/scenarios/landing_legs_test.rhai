@@ -24,45 +24,9 @@
 // reads to set its exit code. The log also carries a per-sample table; a run
 // with no `[legs]` rows proves nothing and is itself a failure.
 
-// ── Local assertion helpers (stateless — `this` is NOT bound in helpers) ────
-
-fn r2(x) { (x * 100.0).round() / 100.0 }
-
-/// A value must sit within [lo, hi].
-///
-/// Phrased POSITIVELY (`v >= lo && v <= hi`), never as `!(v < lo || v > hi)`:
-/// NaN compares false against everything, so the negated form admits exactly the
-/// value this test exists to catch.
-fn t_range(v, lo, hi, what) {
-    if type_of(v) == "()" { return what + ": MISSING"; }
-    if v >= lo && v <= hi { return ""; }
-    return what + ": " + r2(v) + " outside [" + lo + ", " + hi + "]";
-}
-
-fn t_true(cond, what) { if cond { "" } else { what } }
-
-/// A position must be finite and inside the scene. The bound is deliberately
-/// generous — this is the "did the vehicle survive" check, not a placement one.
-fn t_bounded(p, what) {
-    if type_of(p) == "()" { return what + ": MISSING (no world_pos)"; }
-    let l = vlen(p);
-    if l >= 0.0 && l <= 100.0 { return ""; }
-    return what + ": |pos|=" + r2(l) + " m — left the scene (or is not finite)";
-}
-
-fn t_report(fails) {
-    let real = [];
-    for f in fails { if f != "" { real.push(f); } }
-    if real.is_empty() {
-        print("TESTS_OK " + fails.len());
-        print("LANDING LEGS: PASS");
-        return true;
-    }
-    for f in real { print("  LEGS FAIL: " + f); }
-    print("TESTS_FAIL " + real.len() + "/" + fails.len());
-    print("LANDING LEGS: FAIL");
-    false
-}
+// Assertion + verdict helpers come from the prelude (`prelude/verdict.rhai`):
+// `r2` `r4` `t_range` `t_true` `t_bounded` `report_verdict` `fail_fast` `ys`.
+// Do not paste private copies of them into a new test.
 
 /// One log row. Built by successive `+=`: rhai caps EXPRESSION complexity and a
 /// single multi-value concatenation chain trips it at compile time.
@@ -75,15 +39,13 @@ fn row(t, y, tilt, f, x) {
     print(s);
 }
 
-fn r4(v) { (v * 10000.0).round() / 10000.0 }
-
 /// Vertical position of each body in a list, for tracing what is holding the
 /// vehicle up: a pad above the ground is not carrying anything.
 fn ys(ids) {
     let out = [];
     for i in ids {
         let p = world_pos(i);
-        if type_of(p) == "()" { out.push("()"); } else { out.push((p[1] * 10000.0).round() / 10000.0); }
+        if p == () { out.push("()"); } else { out.push(r4(p[1])); }
     }
     out
 }
@@ -153,11 +115,8 @@ fn on_tick(me) {
     // A missing prim is the classic silent no-op: `find` yields -1 and every read
     // after it is `()`. Fail on the FIRST tick rather than ticking forever.
     if this.hull == () || this.hull < 0 {
-        print("  LEGS FAIL: hull prim not found — wrong scene? expected " +
-              "scenes/sandbox/landing_legs_test.usda");
-        print("TESTS_FAIL 1/1");
-        print("LANDING LEGS: FAIL");
-        emit("LANDING_LEGS", "FAIL");
+        fail_fast("hull prim not found — wrong scene? expected " +
+                  "scenes/sandbox/landing_legs_test.usda", "LANDING LEGS", "LANDING_LEGS");
         this.phase = "done";
         return;
     }
@@ -169,17 +128,17 @@ fn on_tick(me) {
     let x = strut_strokes(this.springs);
 
     let y = ();
-    if type_of(pos) != "()" { y = pos[1]; }
+    if pos != () { y = pos[1]; }
 
     for v in f {
-        if type_of(v) != "()" && v > this.peak_force { this.peak_force = v; }
+        if v != () && v > this.peak_force { this.peak_force = v; }
     }
 
     if this.t >= this.next_sample {
         let fr = [];
-        for v in f { if type_of(v) == "()" { fr.push(0.0); } else { fr.push(v); } }
+        for v in f { if v == () { fr.push(0.0); } else { fr.push(v); } }
         let xr = [];
-        for v in x { if type_of(v) == "()" { xr.push(0.0); } else { xr.push(v); } }
+        for v in x { if v == () { xr.push(0.0); } else { xr.push(v); } }
         row(this.t, y, tilt, fr, xr);
         print("[legs]     pad_y=" + ys(this.pads) + "  leg_y=" + ys(this.legs));
         this.next_sample = this.t + this.sample_s;
@@ -235,11 +194,11 @@ fn on_tick(me) {
 fn verdict(s) {
     let f = [];
 
-    f.push(t_bounded(s.hull_pos, "hull"));
+    f.push(t_bounded(s.hull_pos, 100.0, "hull"));
     let names = ["PX", "NX", "PZ", "NZ"];
     for i in 0..4 {
-        f.push(t_bounded(s.leg_pos[i], "strut " + names[i]));
-        f.push(t_bounded(s.pad_pos[i], "pad " + names[i]));
+        f.push(t_bounded(s.leg_pos[i], 100.0, "strut " + names[i]));
+        f.push(t_bounded(s.pad_pos[i], 100.0, "pad " + names[i]));
     }
 
     f.push(t_range(s.tilt, 0.0, 5.0, "hull tilt at rest (deg)"));
@@ -250,7 +209,7 @@ fn verdict(s) {
     let fmax = 0.0;
     let missing = false;
     for v in s.forces {
-        if type_of(v) == "()" { missing = true; }
+        if v == () { missing = true; }
         else { if v > fmax { fmax = v; } }
     }
     f.push(t_true(!missing, "a spring joint published no `force` port"));
@@ -260,7 +219,7 @@ fn verdict(s) {
     if fmax > 100.0 {
         for i in 0..4 {
             let v = s.forces[i];
-            if type_of(v) != "()" {
+            if v != () {
                 f.push(t_range(v, fmax * 0.6, fmax * 1.4,
                                "strut " + names[i] + " load vs peak " + r2(fmax) + " N"));
             }
@@ -274,11 +233,5 @@ fn verdict(s) {
     print("[legs]   strut stroke " + s.strokes);
     print("[legs]   peak strut  " + r2(s.peak_force) + " N");
 
-    let ok = t_report(f);
-    emit("LANDING_LEGS", if ok { "PASS" } else { "FAIL" });
-    if ok {
-        notify_kind("Landing legs: PASS", "success");
-    } else {
-        notify_kind("Landing legs: FAIL — the gear did not take the load", "error");
-    }
+    report_verdict(f, "LANDING LEGS", "LANDING_LEGS");
 }

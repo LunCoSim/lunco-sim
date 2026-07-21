@@ -86,6 +86,7 @@ these are the reasoning.
 | [`57-dem-georeferencing.md`](57-dem-georeferencing.md) · [`59-georeferenced-rasters-as-assets.md`](59-georeferenced-rasters-as-assets.md) | **The raster carries its own spatial reference.** Writing it out (a self-describing GeoTIFF, never a sidecar restating the transform) and reading it back in (an external GIS raster enters as an asset, not through an import subsystem) |
 | [`58-vessel-envelope-and-routes.md`](58-vessel-envelope-and-routes.md) | Vehicle capability is **derived, not copied** — slip limit is `atan(μ)`, not a constant retyped into six files. HUD derivation and rhai accessors are built; routes and tiers are proposed |
 | [`60-curvature-elevation-and-gravity.md`](60-curvature-elevation-and-gravity.md) | **PLANNED.** The measured curvature-feather defect (the edge feather descends ABSOLUTE relief, so a 1 km site renders as kilometre-tall spikes) and the plan for radial gravity on curved ground |
+| [`61-scene-lifecycle-and-teardown.md`](61-scene-lifecycle-and-teardown.md) | **A scene owns more than its entities.** Entities die by structural tag (`CelestialDerived`); resources, caches and handles die in the `SceneTeardown` schedule — a schedule rather than a registry so the reset lives beside the code that writes the state. Remove vs restore, and why gravity is the restore case |
 
 ## Cross-cutting
 
