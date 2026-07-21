@@ -39,6 +39,21 @@ use std::sync::Arc;
 use lunco_core::{Ack, CommandResults, OpId, TelemetryEvent, TelemetryValue};
 use lunco_hash::Fnv1a;
 
+/// True the FIRST time this (entity, path) `set` failure is seen; false after.
+///
+/// Scenario `on_tick` bodies retry the same write every frame, so an
+/// unrecoverable failure (bad path, no such port) would otherwise print at
+/// frame rate. Keyed by the pair so a DIFFERENT bad write still reports.
+fn first_set_failure(id: u64, path: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashSet<(u64, String)>>> = Mutex::new(None);
+    let mut guard = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(HashSet::new)
+        .insert((id, path.to_string()))
+}
+
 use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, AST};
 
 use crate::bridge_core::{self, ValueBuilder};
@@ -809,7 +824,14 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
                         return true;
                     }
                 }
-                warn!("[rhai] set({id}, \"{path}\") failed: {e}");
+                // ONCE per (entity, path). A failing `set` in a scenario's
+                // `on_tick` repeats at frame rate — the same line 60×/s buries
+                // every other log line and tells you nothing the first one
+                // didn't. The condition is static (a bad path stays bad), so
+                // one line is the whole story.
+                if first_set_failure(id as u64, path.as_str()) {
+                    warn!("[rhai] set({id}, \"{path}\") failed: {e} (further identical failures silenced)");
+                }
                 false
             }
         }

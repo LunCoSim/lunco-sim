@@ -2721,6 +2721,7 @@ fn on_release_command(
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
+    mut viewport: Option<ResMut<lunco_core::SceneViewport>>,
 ) {
     // The stick goes back to the guidance law — publish it for the UI that
     // shows WHO is flying (the overlay's AUTO/MANUAL badge).
@@ -2819,6 +2820,19 @@ fn on_release_command(
             pitch,
             damping: None,
         });
+    }
+    // Give the VIEWPORT back to the player's own eye.
+    //
+    // Cancel means "return me to myself". A cinematic/scenario that ran
+    // `set_camera("RoverCam")` leaves the viewport bound to a scene camera; the
+    // avatar camera keeps taking WASD but renders nothing, so releasing looks
+    // like a hard lock-up: the view never moves, and pressing Backspace again
+    // changes nothing (there is nothing left to release). Clearing the binding
+    // is enough — `reconcile_scene_viewport` revalidates every frame and falls
+    // back to the `LocalAvatar` camera, so this stays a single-writer change
+    // and needs no camera lookup here.
+    if let Some(vp) = viewport.as_mut() {
+        vp.active_camera = None;
     }
     info!("Released possession → camera at current position (surface={})", is_surface);
 }

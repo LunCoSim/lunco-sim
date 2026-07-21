@@ -138,6 +138,7 @@ impl Plugin for SandboxUiPlugin {
             .add_systems(Startup, (
                 init_current_scene_path,
                 register_sandbox_scenarios_menu,
+                register_downloadable_assets_settings,
             ))
             .add_observer(|t: On<lunco_usd::LoadScene>, mut current: ResMut<CurrentScenePath>, current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>| {
                 current.0 = t.event().path.clone();
@@ -593,6 +594,58 @@ fn init_current_scene_path(
             .to_string();
     }
 }
+
+/// Settings ▸ downloadable data. The app never reaches the network on its own;
+/// anything fetchable is listed here and downloaded on an explicit click.
+///
+/// Today that is the JPL-Horizons mission ephemeris CSVs (`assets/missions/*.json`
+/// declare them; only the ones already cached load at boot). A mission whose
+/// vectors are missing simply has no trajectory until you download it — that is
+/// the intended offline behaviour, not an error.
+#[cfg(not(target_arch = "wasm32"))]
+fn register_downloadable_assets_settings(world: &mut World) {
+    use bevy_egui::egui;
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_settings(|ui, world| {
+        ui.label(egui::RichText::new("Downloadable data").weak().small());
+        let Some(mut dl) =
+            world.get_resource_mut::<lunco_celestial_ephemeris::EphemerisDownloads>()
+        else {
+            ui.label(egui::RichText::new("(ephemeris provider not loaded)").weak().italics());
+            return;
+        };
+        let missing = dl.missing_count();
+        let in_flight = dl.in_flight();
+        if in_flight > 0 {
+            ui.label(format!("Mission ephemeris: downloading {in_flight}…"));
+            return;
+        }
+        if missing == 0 {
+            ui.label("Mission ephemeris: all declared datasets cached");
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.label(format!("Mission ephemeris: {missing} dataset(s) missing"));
+            if ui
+                .button("⬇ Download")
+                .on_hover_text(
+                    "Fetches the missing mission vectors from JPL Horizons \
+                     (ssd.jpl.nasa.gov) and caches them on disk. This is the \
+                     only network request the sandbox makes.",
+                )
+                .clicked()
+            {
+                dl.request_download();
+            }
+        });
+    });
+}
+
+/// wasm has no local cache to fill and no `ureq`; nothing to offer.
+#[cfg(target_arch = "wasm32")]
+fn register_downloadable_assets_settings(_world: &mut World) {}
 
 fn register_sandbox_scenarios_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {

@@ -18,6 +18,18 @@ impl Plugin for LunCoLogPlugin {
 
 fn log_telemetry_events(trigger: On<TelemetryEvent>) {
     let evt = trigger.event();
+    // `cmd:*` and `key:*` are MECHANICAL events: every command the API/UI runs and
+    // every key the player taps is republished on this bus so scenarios can
+    // `wait_for("cmd:SpawnEntity")`. That makes them continuous, not rare — a
+    // scenario writing a port each tick emits `cmd:SetPorts` at frame rate and
+    // buries every real line in the terminal. They stay on the bus (scripts still
+    // see them); they just stop being default-visible log output. Mission events
+    // (touchdown, low-fuel, `emit("rover_deployed")`) keep `info!`.
+    if evt.name.starts_with("cmd:") || evt.name.starts_with("key:") {
+        debug!("[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
+            evt.name, evt.severity, evt.data, evt.timestamp);
+        return;
+    }
     info!("[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
         evt.name, evt.severity, evt.data, evt.timestamp);
 }

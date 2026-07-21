@@ -558,13 +558,21 @@ impl Plugin for EphemerisPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            app.insert_resource(EphemerisFetch {
+            app.insert_resource(EphemerisDownloads {
                 data: provider.custom_data.clone(),
-                pending: _pending,
+                missing: _pending,
+                requested: false,
                 tasks: Vec::new(),
             });
-            app.add_systems(Startup, spawn_ephemeris_fetches);
-            app.add_systems(Update, poll_ephemeris_fetches);
+            // NO startup fetch. Launching the app must not open a network
+            // connection on its own: the missing datasets are CATALOGUED here
+            // and downloaded only when the user asks (Settings ▸ Ephemeris
+            // data ▸ Download). `start_requested_ephemeris_fetches` is the sole
+            // place a request turns into traffic.
+            app.add_systems(
+                Update,
+                (start_requested_ephemeris_fetches, poll_ephemeris_fetches),
+            );
         }
 
         app.insert_resource(EphemerisResource {
@@ -573,15 +581,48 @@ impl Plugin for EphemerisPlugin {
     }
 }
 
-/// Background JPL-Horizons fetch state. `data` aliases the live
-/// provider's `custom_data`, so vectors fetched after launch become
-/// available to `position()` in the same session (no restart needed).
+/// Downloadable ephemeris datasets and their fetch state.
+///
+/// `missing` is the CATALOGUE: mission ephemeris sources declared in
+/// `assets/missions/*.json` whose CSV cache is not on disk. Nothing is fetched
+/// until [`request_download`](Self::request_download) is called — the app never
+/// reaches the network on its own. `data` aliases the live provider's
+/// `custom_data`, so vectors downloaded mid-session become available to
+/// `position()` immediately (no restart).
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
-struct EphemerisFetch {
+pub struct EphemerisDownloads {
     data: Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>,
-    pending: Vec<PendingFetch>,
+    missing: Vec<PendingFetch>,
+    requested: bool,
     tasks: Vec<(i32, PathBuf, bevy::tasks::Task<Option<String>>)>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl EphemerisDownloads {
+    /// NAIF ids of the mission datasets that are declared but not cached.
+    pub fn missing_ids(&self) -> Vec<i32> {
+        self.missing.iter().map(|p| p.target_id).collect()
+    }
+
+    /// How many declared datasets are missing locally.
+    pub fn missing_count(&self) -> usize {
+        self.missing.len()
+    }
+
+    /// How many downloads are currently in flight.
+    pub fn in_flight(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Ask for the missing datasets to be downloaded from JPL Horizons.
+    ///
+    /// This is the ONLY thing that authorises network traffic in this crate;
+    /// call it from an explicit user action (a Settings-menu button), never
+    /// from startup or scene load.
+    pub fn request_download(&mut self) {
+        self.requested = true;
+    }
 }
 
 /// Blocking JPL-Horizons fetch with a hard timeout, run on a task-pool
@@ -601,15 +642,20 @@ fn fetch_horizons(url: &str) -> Option<String> {
     Some(text[start..end].replace("$$SOE", "").replace("$$EOE", ""))
 }
 
-/// Startup: spawn one async fetch per missing mission CSV. Runs after
-/// plugin build so the `AsyncComputeTaskPool` is guaranteed initialized.
+/// Spawn one async fetch per missing mission CSV — but only after the user
+/// asked for it via [`EphemerisDownloads::request_download`]. Cheap no-op
+/// otherwise, which is the normal state.
 #[cfg(not(target_arch = "wasm32"))]
-fn spawn_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
-    if fetch.pending.is_empty() {
+fn start_requested_ephemeris_fetches(mut fetch: ResMut<EphemerisDownloads>) {
+    if !fetch.requested {
+        return;
+    }
+    fetch.requested = false;
+    if fetch.missing.is_empty() {
         return;
     }
     let pool = bevy::tasks::AsyncComputeTaskPool::get();
-    let pending = std::mem::take(&mut fetch.pending);
+    let pending = std::mem::take(&mut fetch.missing);
     for p in pending {
         info!("[ephemeris] fetching mission vectors for NAIF {} (async)", p.target_id);
         let url = p.url;
@@ -622,7 +668,7 @@ fn spawn_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
 /// insert the parsed vectors into the shared map so `position()` sees
 /// them immediately. Cheap no-op once all tasks have drained.
 #[cfg(not(target_arch = "wasm32"))]
-fn poll_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
+fn poll_ephemeris_fetches(mut fetch: ResMut<EphemerisDownloads>) {
     use bevy::tasks::{block_on, futures_lite::future};
     if fetch.tasks.is_empty() {
         return;

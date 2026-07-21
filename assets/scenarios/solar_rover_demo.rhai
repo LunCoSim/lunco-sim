@@ -4,15 +4,22 @@
 
 fn wp_pos(i) { world_pos(find("/SolarRoverTest/RoverTarget" + i)) }
 
+// The power PORTS (`soc_out`, `solar_charging`, `vehicle_throttle`) live on the
+// PROGRAM prim that binds SolarRoverPower.mo — not on the rover body `me`.
+// Reading them off `me` silently returned () and fell through to the "battery
+// full" defaults, so the pack never drained, the cinematic's
+// `wait_until(soc < 0.05)` never fired, and the demo hung after the last waypoint.
+fn power() { find("/SolarRoverTest/SolarRover/PowerSubsystem") }
+
 fn on_tick(me) {
     if this.active != true { return; }   // wait for mission start signal
 
     // 1. Read the battery State of Charge from our Modelica power program
-    let soc = get(me, "soc_out");
+    let soc = get(power(), "soc_out");
     if soc == () { soc = 1.0; } // Fallback to full if program isn't fully loaded
 
     // Read the solar charging current from the model
-    let charging = get(me, "solar_charging");
+    let charging = get(power(), "solar_charging");
     if charging == () { charging = 0.0; }
 
     // Print battery status to console periodically
@@ -26,7 +33,7 @@ fn on_tick(me) {
     if this.dead_battery == true {
         // Battery is dead: apply brakes and wait to solar-charge
         brake(me);
-        set(me, "vehicle_throttle", 0.0); // No motor current draw
+        set(power(), "vehicle_throttle", 0.0); // No motor current draw
 
         // Charged to 20%? Ready to resume!
         if soc >= 0.20 {
@@ -40,7 +47,7 @@ fn on_tick(me) {
     if soc < 0.05 {
         this.dead_battery = true;
         brake(me);
-        set(me, "vehicle_throttle", 0.0);
+        set(power(), "vehicle_throttle", 0.0);
         notify_kind("Warning: Battery depleted (< 5% SOC). Entering solar charging mode.", "warn");
         return;
     }
@@ -49,7 +56,7 @@ fn on_tick(me) {
     if this.i == () { this.i = 1; }
     if this.i > 3 {
         brake(me);
-        set(me, "vehicle_throttle", 0.0);
+        set(power(), "vehicle_throttle", 0.0);
         return; // Course complete
     }
 
@@ -62,7 +69,7 @@ fn on_tick(me) {
     // Check if we arrived at current waypoint
     if arrived(me, target, radius) {
         brake(me);
-        set(me, "vehicle_throttle", 0.0);
+        set(power(), "vehicle_throttle", 0.0);
         this.i += 1;
     } else {
         // Run navigation math
@@ -80,7 +87,7 @@ fn on_tick(me) {
         drive(me, fwd, steer);
         
         // Feed the throttle command back to the Modelica battery model to drain it!
-        set(me, "vehicle_throttle", fwd);
+        set(power(), "vehicle_throttle", fwd);
     }
 }
 

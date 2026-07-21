@@ -33,7 +33,8 @@ fn task(me) {
 
         // ── Beat 3: Wait until battery is depleted ─────────
         wait_until(|m| {
-            let r = find("/SolarRoverTest/SolarRover");
+            // SOC is a port on the power PROGRAM prim, not on the rover body.
+            let r = find("/SolarRoverTest/SolarRover/PowerSubsystem");
             if r < 0 { return false; }
             let soc = get(r, "soc_out");
             soc != () && soc < 0.05
@@ -55,7 +56,8 @@ fn task(me) {
 
         // ── Beat 5: Wait until battery is recharged ─────────
         wait_until(|m| {
-            let r = find("/SolarRoverTest/SolarRover");
+            // SOC is a port on the power PROGRAM prim, not on the rover body.
+            let r = find("/SolarRoverTest/SolarRover/PowerSubsystem");
             if r < 0 { return false; }
             let soc = get(r, "soc_out");
             soc != () && soc >= 0.20
