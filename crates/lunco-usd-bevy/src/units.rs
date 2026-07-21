@@ -59,7 +59,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::log::{error_once, warn_once};
-use bevy::math::{DVec3, Quat, Vec3};
+use bevy::math::{DQuat, DVec3, Quat, Vec3};
 use bevy::prelude::Transform;
 
 use crate::read::UsdRead;
@@ -394,6 +394,15 @@ impl ConventionTransform {
     /// scaled. Same `f32`-rotation caveat as [`point_d`](Self::point_d).
     pub fn dir_d(&self, v: DVec3) -> DVec3 {
         self.rot.as_dquat() * v
+    }
+
+    /// [`rotation`](Self::rotation) in `f64` — a joint frame's basis
+    /// (`physics:localRot0/1`), which the physics bridge keeps in [`DQuat`]
+    /// alongside its [`DVec3`] anchor. Same `f32`-rotation caveat as
+    /// [`point_d`](Self::point_d).
+    pub fn rotation_d(&self, q: DQuat) -> DQuat {
+        let r = self.rot.as_dquat();
+        r * q * r.inverse()
     }
 
     /// A **geometry orientation** authored in stage-local coordinates (e.g. the

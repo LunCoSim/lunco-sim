@@ -1046,7 +1046,7 @@ def Xform "DescentLander" (
     )
     {
         # The pad rides with its LEG, not with the hull — it is welded to
-        # LegPX by PadPX_Weld below. Cylinder r = 0.4, h = 0.08, m = 10:
+        # LegPX by PadPX_Gimbal below. Cylinder r = 0.4, h = 0.08, m = 10:
         #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
         #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
         float physics:mass = 10.0
@@ -1151,7 +1151,7 @@ def Xform "DescentLander" (
     )
     {
         # The pad rides with its LEG, not with the hull — it is welded to
-        # LegNX by PadNX_Weld below. Cylinder r = 0.4, h = 0.08, m = 10:
+        # LegNX by PadNX_Gimbal below. Cylinder r = 0.4, h = 0.08, m = 10:
         #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
         #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
         float physics:mass = 10.0
@@ -1193,7 +1193,7 @@ def Xform "DescentLander" (
     )
     {
         # The pad rides with its LEG, not with the hull — it is welded to
-        # LegPZ by PadPZ_Weld below. Cylinder r = 0.4, h = 0.08, m = 10:
+        # LegPZ by PadPZ_Gimbal below. Cylinder r = 0.4, h = 0.08, m = 10:
         #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
         #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
         float physics:mass = 10.0
@@ -1235,7 +1235,7 @@ def Xform "DescentLander" (
     )
     {
         # The pad rides with its LEG, not with the hull — it is welded to
-        # LegNZ by PadNZ_Weld below. Cylinder r = 0.4, h = 0.08, m = 10:
+        # LegNZ by PadNZ_Gimbal below. Cylinder r = 0.4, h = 0.08, m = 10:
         #   I_yy        = m*r^2/2          = 10*0.16/2        = 0.80
         #   I_xx = I_zz = m*(3r^2 + h^2)/12 = 10*0.4864/12    = 0.41
         float physics:mass = 10.0
@@ -1278,16 +1278,23 @@ def Xform "DescentLander" (
     # strut never bottoms out visually. Everything downstream — the `force` port,
     # the glow — then reads positive under load with no sign fixups anywhere.
     #
-    # AXIS: `physics:axis` can only name a cardinal axis, and these legs are raked
-    # 25° off vertical, so `physics:localRot0` carries the direction — the standard
-    # way to say so, and the ONLY place this fact is authored. It takes the hull's
-    # +Y onto the leg's hull→foot axis: each leg's own `xformOp:rotateXYZ` composed
-    # with a 180° flip about that leg's rake axis (Z for the ±X legs, X for the ±Z
-    # legs), which negates where +Y lands. For LegPX the visual rake is +25° about
-    # Z, so the joint's rotation is 25° + 180° = 205° about Z, and +Y maps to
-    # (0.42262, -0.90631, 0): outward and DOWN, along the strut toward the pad.
-    # Half-angle 102.5°: cos = -0.216440, sin = 0.976296. Quaternions are
-    # (w, x, y, z).
+    # FRAMES: a UsdPhysics joint is TWO frames — `physics:localPos0`/`localRot0` on
+    # body0 and `localPos1`/`localRot1` on body1 — and `physics:axis` names a
+    # cardinal axis OF THOSE FRAMES, which is the whole vocabulary it has. These
+    # legs are raked 25° off vertical, so the rake lives in the frames.
+    #
+    # `localRot0` takes the hull's +Y onto the leg's hull→foot axis: each leg's own
+    # `xformOp:rotateXYZ` composed with a 180° flip about that leg's rake axis (Z
+    # for the ±X legs, X for the ±Z legs), which negates where +Y lands. For LegPX
+    # the visual rake is +25° about Z, so the frame's rotation is 25° + 180° = 205°
+    # about Z, and +Y maps to (0.42262, -0.90631, 0): outward and DOWN, along the
+    # strut toward the pad. Half-angle 102.5°: cos = -0.216440, sin = 0.976296.
+    # Quaternions are (w, x, y, z).
+    #
+    # `localRot1` is that same 180° flip and nothing else, because the leg BODY
+    # already carries the 25° as its `xformOp:rotateXYZ`. A prismatic joint locks
+    # all three rotational DOF — it holds `rot0·localRot0 == rot1·localRot1` — so
+    # both frames must land on the same orientation in the rest pose.
     #
     # ANCHORS are deliberately unauthored. The loader derives them from the
     # transform hierarchy, which puts displacement at exactly 0 in the authored
@@ -1300,6 +1307,21 @@ def Xform "DescentLander" (
     # strut. Reparenting it under the leg would have been the obvious move and is
     # wrong: the leg carries a non-uniform `xformOp:scale` (0.15, 7.05, 0.15) that
     # a child would inherit and be crushed by.
+    #
+    # The pad is GIMBALLED, not welded — a `PhysicsSphericalJoint` about the
+    # strut's foot, which is what a landing footpad is: it has to meet whatever
+    # slope it lands on while the strut points where the airframe points.
+    #
+    # It is also what makes the gear a MECHANISM rather than a structure. Four
+    # raked sliders whose pads are rigidly welded, closed through four ground
+    # contacts, is over-constrained — 10 DOF against 12 constraints — so the
+    # truss carries the vehicle and the springs never see it. Freeing the pads'
+    # rotation lets the gear articulate, and the strut's own spring takes the
+    # load it was sized for.
+    #
+    # `localRot0` puts the cone's centre on the FLAT pose: 25° back about the
+    # leg's rake axis, so a level landing sits mid-travel instead of hard against
+    # one side of the cone. Half-angle 12.5°: cos = 0.976296, sin = 0.216440.
 
     def PhysicsPrismaticJoint "LegPX_Spring" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear"]
@@ -1309,6 +1331,7 @@ def Xform "DescentLander" (
         rel physics:body1 = </DescentLander/LegPX>
         uniform token physics:axis = "Y"
         quatf physics:localRot0 = (-0.216440, 0, 0, 0.976296)
+        quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
         uniform token drive:linear:physics:type = "force"
@@ -1317,8 +1340,12 @@ def Xform "DescentLander" (
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:maxForce = 20000.0
     }
-    def PhysicsFixedJoint "PadPX_Weld"
+    def PhysicsSphericalJoint "PadPX_Gimbal"
     {
+        quatf physics:localRot0 = (0.976296, 0, 0, -0.216440)
+        uniform token physics:axis = "Y"
+        float physics:coneAngle0Limit = 30.0
+        float physics:coneAngle1Limit = 30.0
         rel physics:body0 = </DescentLander/LegPX>
         rel physics:body1 = </DescentLander/PadPX>
     }
@@ -1331,6 +1358,7 @@ def Xform "DescentLander" (
         rel physics:body1 = </DescentLander/LegNX>
         uniform token physics:axis = "Y"
         quatf physics:localRot0 = (0.216440, 0, 0, 0.976296)
+        quatf physics:localRot1 = (0, 0, 0, 1)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
         uniform token drive:linear:physics:type = "force"
@@ -1339,8 +1367,12 @@ def Xform "DescentLander" (
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:maxForce = 20000.0
     }
-    def PhysicsFixedJoint "PadNX_Weld"
+    def PhysicsSphericalJoint "PadNX_Gimbal"
     {
+        quatf physics:localRot0 = (0.976296, 0, 0, 0.216440)
+        uniform token physics:axis = "Y"
+        float physics:coneAngle0Limit = 30.0
+        float physics:coneAngle1Limit = 30.0
         rel physics:body0 = </DescentLander/LegNX>
         rel physics:body1 = </DescentLander/PadNX>
     }
@@ -1353,6 +1385,7 @@ def Xform "DescentLander" (
         rel physics:body1 = </DescentLander/LegPZ>
         uniform token physics:axis = "Y"
         quatf physics:localRot0 = (0.216440, 0.976296, 0, 0)
+        quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
         uniform token drive:linear:physics:type = "force"
@@ -1361,8 +1394,12 @@ def Xform "DescentLander" (
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:maxForce = 20000.0
     }
-    def PhysicsFixedJoint "PadPZ_Weld"
+    def PhysicsSphericalJoint "PadPZ_Gimbal"
     {
+        quatf physics:localRot0 = (0.976296, 0.216440, 0, 0)
+        uniform token physics:axis = "Y"
+        float physics:coneAngle0Limit = 30.0
+        float physics:coneAngle1Limit = 30.0
         rel physics:body0 = </DescentLander/LegPZ>
         rel physics:body1 = </DescentLander/PadPZ>
     }
@@ -1375,6 +1412,7 @@ def Xform "DescentLander" (
         rel physics:body1 = </DescentLander/LegNZ>
         uniform token physics:axis = "Y"
         quatf physics:localRot0 = (-0.216440, 0.976296, 0, 0)
+        quatf physics:localRot1 = (0, 1, 0, 0)
         float physics:lowerLimit = -0.8
         float physics:upperLimit = 0.0
         uniform token drive:linear:physics:type = "force"
@@ -1383,8 +1421,12 @@ def Xform "DescentLander" (
         float drive:linear:physics:targetPosition = 0.0
         float drive:linear:physics:maxForce = 20000.0
     }
-    def PhysicsFixedJoint "PadNZ_Weld"
+    def PhysicsSphericalJoint "PadNZ_Gimbal"
     {
+        quatf physics:localRot0 = (0.976296, -0.216440, 0, 0)
+        uniform token physics:axis = "Y"
+        float physics:coneAngle0Limit = 30.0
+        float physics:coneAngle1Limit = 30.0
         rel physics:body0 = </DescentLander/LegNZ>
         rel physics:body1 = </DescentLander/PadNZ>
     }

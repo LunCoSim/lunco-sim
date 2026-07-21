@@ -283,6 +283,15 @@ pub struct PendingUsdJoint {
     /// Anchor point on body1 in body1's local frame
     /// (UsdPhysics `physics:localPos1`). Defaults to origin.
     pub local_pos1: DVec3,
+    /// Basis of the joint frame on body0, in body0's local frame (UsdPhysics
+    /// `physics:localRot0`). Identity when unauthored. [`axis`](Self::axis) is
+    /// read IN this basis, and every joint but the spherical constrains
+    /// `rot0 · local_rot0` to `rot1 · local_rot1` — so a pair of bodies that rest
+    /// at different orientations is expressed here, not by tilting the axis.
+    pub local_rot0: DQuat,
+    /// Basis of the joint frame on body1 (UsdPhysics `physics:localRot1`).
+    /// Identity when unauthored. See [`local_rot0`](Self::local_rot0).
+    pub local_rot1: DQuat,
     /// Lower travel limit along the axis (meters for prismatic, radians for revolute).
     pub limit_lower: f64,
     /// Upper travel limit.
@@ -299,6 +308,17 @@ pub struct PendingUsdJoint {
     /// then stays passive until a cosim wire commands its `displacement`/`angle`
     /// port.
     pub drive: Option<JointDrive>,
+}
+
+/// The `UsdPhysicsJoint` base reads every joint type shares: the two bodies and
+/// the two joint frames (`physics:localPos0/1` + `physics:localRot0/1`).
+struct JointBaseRead {
+    body0: String,
+    body1: String,
+    local_pos0: DVec3,
+    local_pos1: DVec3,
+    local_rot0: DQuat,
+    local_rot1: DQuat,
 }
 
 /// A `UsdPhysicsDriveAPI` joint drive, read at load. Configures the Avian joint
@@ -983,32 +1003,44 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
     let conv = lunco_usd_bevy::stage_convention(&view);
-    // `physics:axis` can only name a CARDINAL axis (X/Y/Z) — that is the whole
-    // vocabulary the schema has. `physics:localRot0` is how UsdPhysics orients a
-    // joint frame off-cardinal, and it is what a tilted mechanism needs: a landing
-    // leg raked 25° off vertical slides along neither the hull's Y nor its X.
-    // Ignoring it would silently build the joint on the cardinal axis — geometry
-    // right, kinematics wrong, no diagnostic.
-    let axis_of = |ax: Option<JointAxis>, rot0: DQuat| {
-        let cardinal = match ax.unwrap_or_default() {
+    // A UsdPhysics joint is defined by a FRAME on each body: `physics:localPos0`
+    // + `physics:localRot0` on body0, `localPos1` + `localRot1` on body1. The
+    // joint constrains those two frames to each other, and `physics:axis` names a
+    // cardinal axis *of the joint frame* — X/Y/Z is the entire vocabulary the
+    // schema has, which is why `localRot` exists: it is how a raked mechanism (a
+    // landing leg 25° off vertical) says where its axis really points. avian
+    // spells the same thing as `JointFrame { anchor, basis }`, with
+    // `slider_axis`/`hinge_axis`/`twist_axis` likewise read in the basis
+    // (`free_axis1 = rotation1 * basis1 * slider_axis`), so the two models map
+    // one-to-one and the axis stays CARDINAL on both sides.
+    //
+    // Both halves of the frame must cross: every avian joint but the spherical
+    // locks relative orientation through `basis1`/`basis2`, so an identity basis
+    // constrains its body to the OTHER body's orientation. Carrying the rake in
+    // the axis alone would aim the slider correctly and still wrench the strut
+    // square to the hull.
+    let axis_of = |ax: Option<JointAxis>| {
+        conv.dir_d(match ax.unwrap_or_default() {
             JointAxis::X => DVec3::X,
             JointAxis::Y => DVec3::Y,
             JointAxis::Z => DVec3::Z,
-        };
-        // Rotate in the STAGE's frame, then convert: `localRot0` is authored
-        // against the same axes as `physics:axis`, so composing before the
-        // convention keeps one conversion at the boundary rather than two.
-        conv.dir_d(rot0 * cardinal)
+        })
     };
-    /// The joint frame's orientation in body0's local space, identity when
-    /// unauthored. USD spells a `quatf` `(w, x, y, z)`.
-    fn local_rot0_of<J: JointBase>(j: &J) -> DQuat {
-        j.local_rot0_attr()
-            .get::<openusd::gf::Quatf>()
+    /// A joint frame's basis in its body's local space, identity when unauthored.
+    /// USD spells a `quatf` `(w, x, y, z)`.
+    ///
+    /// A body-local rotation converts by CONJUGATION (`Q·q·Q⁻¹`), matching how
+    /// the same prim's `xformOp:orient` is converted — the basis and the body it
+    /// hangs off must land in one frame or the joint is built against a pose the
+    /// renderer never shows.
+    fn local_rot_of(attr: openusd::usd::Attribute, conv: &lunco_usd_bevy::ConventionTransform) -> DQuat {
+        attr.get::<openusd::gf::Quatf>()
             .ok()
             .flatten()
             .map(|q| {
-                DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64).normalize()
+                conv.rotation_d(
+                    DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64).normalize(),
+                )
             })
             .unwrap_or(DQuat::IDENTITY)
     }
@@ -1023,7 +1055,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // here. A DERIVED one must not: `derive_joint_anchor` builds it from
     // `world_transform` → `local_transform_at`, which already converted. Applying
     // the convention to both would double-convert the derived path.
-    fn base<J: JointBase>(j: &J, reader: &StageView<'_>) -> Option<(String, String, DVec3, DVec3)> {
+    fn base<J: JointBase>(j: &J, reader: &StageView<'_>) -> Option<JointBaseRead> {
         let conv = lunco_usd_bevy::stage_convention(reader);
         let to_dvec =
             move |a: [f32; 3]| conv.point_d(DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64));
@@ -1040,7 +1072,14 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         } else {
             (lp0_auth.unwrap(), lp1_auth.unwrap())
         };
-        Some((b0, b1, lp0, lp1))
+        Some(JointBaseRead {
+            body0: b0,
+            body1: b1,
+            local_pos0: lp0,
+            local_pos1: lp1,
+            local_rot0: local_rot_of(j.local_rot0_attr(), &conv),
+            local_rot1: local_rot_of(j.local_rot1_attr(), &conv),
+        })
     }
     let read_drive = |ns: &str, body1: &str| -> Option<JointDrive> {
         let d = physics::DriveAPI::get(stage, path.clone(), ns).ok().flatten()?;
@@ -1087,66 +1126,68 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         )
     };
 
+    // Every arm builds the same `PendingUsdJoint` shape off the shared
+    // `JointBaseRead`; only the axis, the limits and the drive differ by type.
+    let pending_from = |b: JointBaseRead,
+                        axis: DVec3,
+                        limit_lower: f64,
+                        limit_upper: f64,
+                        joint_type: &str,
+                        swing_limit: Option<(f64, f64)>,
+                        drive: Option<JointDrive>| PendingUsdJoint {
+        body0_path: b.body0,
+        body1_path: b.body1,
+        axis,
+        local_pos0: b.local_pos0,
+        local_pos1: b.local_pos1,
+        local_rot0: b.local_rot0,
+        local_rot1: b.local_rot1,
+        limit_lower,
+        limit_upper,
+        joint_type: joint_type.into(),
+        swing_limit,
+        drive,
+    };
+
     let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
+        let b = base(&j, &view)?;
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten()
             .map(|d| (d as f64).to_radians()).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten()
             .map(|d| (d as f64).to_radians()).unwrap_or(f64::INFINITY);
-        let drive = read_drive("angular", &b1);
-        PendingUsdJoint {
-            body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
-            limit_lower: lo, limit_upper: hi, joint_type: "PhysicsRevoluteJoint".into(),
-            swing_limit: None, drive,
-        }
+        let drive = read_drive("angular", &b.body1);
+        pending_from(b, axis, lo, hi, "PhysicsRevoluteJoint", None, drive)
     } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
+        let b = base(&j, &view)?;
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
-        let drive = read_drive("linear", &b1);
-        PendingUsdJoint {
-            body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
-            limit_lower: lo, limit_upper: hi, joint_type: "PhysicsPrismaticJoint".into(),
-            swing_limit: None, drive,
-        }
+        let drive = read_drive("linear", &b.body1);
+        pending_from(b, axis, lo, hi, "PhysicsPrismaticJoint", None, drive)
     } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
+        let b = base(&j, &view)?;
+        let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
+        // `physics:coneAngle{0,1}Limit` is in DEGREES, like every other angular
+        // quantity UsdPhysics authors (and like the revolute limits above);
+        // avian's `AngleLimit` is in radians.
         let swing = j.cone_angle0_limit_attr().get::<f32>().ok().flatten()
             .zip(j.cone_angle1_limit_attr().get::<f32>().ok().flatten())
-            .map(|(a, b)| (a as f64, b as f64));
-        PendingUsdJoint {
-            body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
-            limit_lower: f64::NEG_INFINITY, limit_upper: f64::INFINITY,
-            joint_type: "PhysicsSphericalJoint".into(), swing_limit: swing, drive: None,
-        }
+            .map(|(a, b)| ((a as f64).to_radians(), (b as f64).to_radians()));
+        pending_from(b, axis, f64::NEG_INFINITY, f64::INFINITY, "PhysicsSphericalJoint", swing, None)
     } else if let Some(j) = physics::FixedJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j, &view)?;
-        PendingUsdJoint {
-            body0_path: b0, body1_path: b1, axis: DVec3::Y, local_pos0: lp0, local_pos1: lp1,
-            limit_lower: f64::NEG_INFINITY, limit_upper: f64::INFINITY,
-            joint_type: "PhysicsFixedJoint".into(), swing_limit: None, drive: None,
-        }
+        let b = base(&j, &view)?;
+        pending_from(b, DVec3::Y, f64::NEG_INFINITY, f64::INFINITY, "PhysicsFixedJoint", None, None)
     } else if let Some(j) = physics::DistanceJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j, &view)?;
+        let b = base(&j, &view)?;
         let lo = j.min_distance_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
         let hi = j.max_distance_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
-        PendingUsdJoint {
-            body0_path: b0, body1_path: b1, axis: DVec3::Y, local_pos0: lp0, local_pos1: lp1,
-            limit_lower: lo, limit_upper: hi, joint_type: "PhysicsDistanceJoint".into(),
-            swing_limit: None, drive: None,
-        }
+        pending_from(b, DVec3::Y, lo, hi, "PhysicsDistanceJoint", None, None)
     } else if let Some(j) = physics::Joint::get(stage, path.clone()).ok().flatten() {
         // Generic/D6 → reduce via per-DOF UsdPhysicsLimitAPI (typed).
-        let (b0, b1, lp0, lp1) = base(&j, &view)?;
+        let b = base(&j, &view)?;
         let (reduced, axis, lo, hi) = reduce_generic_joint_typed(stage, path)?;
-        PendingUsdJoint {
-            body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
-            limit_lower: lo, limit_upper: hi, joint_type: reduced.into(),
-            swing_limit: None, drive: None,
-        }
+        pending_from(b, axis, lo, hi, reduced, None, None)
     } else {
         return None;
     };
@@ -1407,25 +1448,39 @@ fn build_usd_physics_joints(
         // tumbles. Seating position and then handing the solver a 7 m/s velocity
         // discontinuity trades an explosion for a slower explosion.
         //
-        // Orientation and velocity are only seated for a WELD. `PhysicsFixedJoint`
-        // is built with identity `JointFrame`s on both bodies, so it holds
-        // `rot1 == rot0` and the two move as one rigid body — both corrections are
-        // then unambiguous. Every other joint type leaves rotational or linear DOF
-        // free by design, and forcing agreement across a free DOF would destroy
-        // authored state (a revolute joint's whole purpose is that the bodies'
-        // orientations differ). For those, position remains the only safe seat.
+        // Orientation is seated for the joint types that lock ALL THREE rotational
+        // DOF: `PhysicsFixedJoint` and `PhysicsPrismaticJoint`. Both hold
+        // `rot0 · localRot0 == rot1 · localRot1`, which pins body1's orientation to
+        // exactly one value, so the correction is unambiguous. A revolute or
+        // spherical joint leaves rotational DOF free by design — forcing agreement
+        // there would destroy authored state (a revolute joint's whole purpose is
+        // that the bodies' orientations differ), so those are REPORTED and left to
+        // the solver. Velocity is seated for a weld only, where the pair moves as
+        // one rigid body; a slider is free to translate along its axis.
+        //
+        // The measure is against the joint FRAMES, not the raw body rotations,
+        // which is what makes a raked mechanism checkable: a landing leg whose
+        // `localRot` agrees with its `xformOp:rotateXYZ` reads as satisfied, and
+        // one whose frames disagree reads as the violation it is.
+        let locks_rotation = matches!(
+            pending.joint_type.as_str(),
+            "PhysicsFixedJoint" | "PhysicsPrismaticJoint"
+        );
         let rigid = pending.joint_type == "PhysicsFixedJoint";
 
         let pose0 = q_pose.get(b0).ok().map(|(p, r)| (p.0, r.0));
         let pose1 = q_pose.get(b1).ok().map(|(p, r)| (p.0, r.0));
 
         if let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) {
+            // The orientation the constraint demands of body1:
+            // `rot1 = rot0 · localRot0 · localRot1⁻¹`.
+            let r1_target = r0 * pending.local_rot0 * pending.local_rot1.inverse();
             // Seat orientation FIRST, then measure position against the corrected
             // orientation: rotating body1 swings its anchor through `local_pos1`,
             // so a delta computed from the old rotation would leave a residual
             // exactly as large as that swing.
-            let r1_seated = if rigid { r0 } else { r1 };
-            let angle = if rigid { r1.angle_between(r0) } else { 0.0 };
+            let angle = if locks_rotation { r1.angle_between(r1_target) } else { 0.0 };
+            let r1_seated = if locks_rotation { r1_target } else { r1 };
 
             let anchor0_world = p0 + r0 * pending.local_pos0;
             let anchor1_world = p1 + r1_seated * pending.local_pos1;
@@ -1439,23 +1494,29 @@ fn build_usd_physics_joints(
 
             if seat_pos || seat_rot {
                 let worst = delta.length().max(angle);
-                // The anchors are printed because a violation is ambiguous without
-                // them: the same delta arises from bodies placed wrongly AND from
-                // anchors that failed to read and defaulted to zero, and those have
-                // opposite fixes. Zeros here with a non-zero delta mean the anchor
-                // read/derive fell through, not that the scene is misplaced.
+                // The whole joint FRAME is printed because a violation is ambiguous
+                // without it: the same delta arises from bodies placed wrongly AND
+                // from an anchor or basis that failed to read and defaulted to
+                // identity, and those have opposite fixes. Zeros/identities here
+                // with a non-zero delta mean the read/derive fell through, not that
+                // the scene is misplaced. An ANGULAR violation on a raked mechanism
+                // is nearly always a missing `physics:localRot1`: body0's frame is
+                // authored off-cardinal and body1's is left at identity, so the
+                // joint demands body1 sit square to body0.
                 let detail = format!(
                     "[usd-avian] joint {} starts violated by {:.3} m / {:.3} rad — seating \
-                     `{}` onto the authored anchor. anchors: localPos0={:?} localPos1={:?}, \
-                     body0 at {:?}, body1 at {:?}. (Check `xformOp:translate`, any \
-                     rotate/orient op, and `physics:velocity` on BOTH bodies against \
-                     `physics:localPos0/1`.)",
+                     `{}` onto the authored joint frame. frame0: localPos0={:?} localRot0={:?}, \
+                     frame1: localPos1={:?} localRot1={:?}, body0 at {:?}, body1 at {:?}. \
+                     (Check `xformOp:translate`, any rotate/orient op, and `physics:velocity` \
+                     on BOTH bodies against `physics:localPos0/1` and `physics:localRot0/1`.)",
                     joint_prim_path.path,
                     delta.length(),
                     angle,
                     pending.body1_path,
                     pending.local_pos0,
+                    pending.local_rot0,
                     pending.local_pos1,
+                    pending.local_rot1,
                     p0,
                     p1,
                 );
@@ -1469,7 +1530,7 @@ fn build_usd_physics_joints(
 
                 if let Ok((mut pos1, mut rot1)) = q_pose.get_mut(b1) {
                     if seat_rot {
-                        rot1.0 = r0;
+                        rot1.0 = r1_target;
                     }
                     if seat_pos {
                         pos1.0 += delta;
@@ -1510,6 +1571,8 @@ fn build_usd_physics_joints(
                 let mut joint = PrismaticJoint::new(b0, b1)
                     .with_local_anchor1(pending.local_pos0)
                     .with_local_anchor2(pending.local_pos1)
+                    .with_local_basis1(pending.local_rot0)
+                    .with_local_basis2(pending.local_rot1)
                     .with_slider_axis(pending.axis)
                     .with_limits(pending.limit_lower, pending.limit_upper);
                 if let Some(d) = pending.drive {
@@ -1527,6 +1590,8 @@ fn build_usd_physics_joints(
                 let mut joint = RevoluteJoint::new(b0, b1)
                     .with_local_anchor1(pending.local_pos0)
                     .with_local_anchor2(pending.local_pos1)
+                    .with_local_basis1(pending.local_rot0)
+                    .with_local_basis2(pending.local_rot1)
                     .with_hinge_axis(pending.axis)
                     .with_angle_limits(pending.limit_lower, pending.limit_upper);
                 if let Some(d) = pending.drive {
@@ -1544,7 +1609,9 @@ fn build_usd_physics_joints(
                 commands.entity(joint_entity).try_insert(joint_bundle(
                     FixedJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
-                        .with_local_anchor2(pending.local_pos1),
+                        .with_local_anchor2(pending.local_pos1)
+                        .with_local_basis1(pending.local_rot0)
+                        .with_local_basis2(pending.local_rot1),
                 ));
             }
             "PhysicsSphericalJoint" => {
@@ -1555,6 +1622,8 @@ fn build_usd_physics_joints(
                 let mut joint = SphericalJoint::new(b0, b1)
                     .with_local_anchor1(pending.local_pos0)
                     .with_local_anchor2(pending.local_pos1)
+                    .with_local_basis1(pending.local_rot0)
+                    .with_local_basis2(pending.local_rot1)
                     .with_twist_axis(pending.axis);
                 if let Some((a0, a1)) = pending.swing_limit {
                     // avian carries a single swing AngleLimit; use the larger

@@ -1,0 +1,284 @@
+// ── Landing-gear test — the sprung legs take the vehicle's weight ───────────
+//
+// TEST-ONLY. Runs against `scenes/sandbox/landing_legs_test.usda`: one airframe,
+// four raked prismatic legs with welded footpads, flat ground, 3 m drop. No
+// guidance, no rover, no mission — so anything this test sees is the LEG
+// MECHANISM and nothing else.
+//
+// WHAT IT GUARDS. A landing leg is the one mechanism in this project whose joint
+// frames are not cardinal: the struts are raked 25° off vertical, so both halves
+// of each `UsdPhysicsJoint` frame (`physics:localRot0` on the hull,
+// `localRot1` on the strut) have to agree, and the pad welds have to carry the
+// inverse rake so the footpads stay flat. Get any of that wrong and the joint
+// starts violated in ORIENTATION — which no amount of position checking sees.
+// The solver then resolves 25° of error impulsively through a 3.5 m lever arm
+// and the vehicle disassembles at several km/s.
+//
+// So the assertions are about the vehicle STILL BEING A VEHICLE after the drop:
+// bodies at finite, bounded positions, the hull level and at rest, and all four
+// struts sharing the load. A silent frame regression fails every one of them.
+//
+// ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
+//
+// `emit("LANDING_LEGS", "PASS"|"FAIL")` — the telemetry verdict `scene_test`
+// reads to set its exit code. The log also carries a per-sample table; a run
+// with no `[legs]` rows proves nothing and is itself a failure.
+
+// ── Local assertion helpers (stateless — `this` is NOT bound in helpers) ────
+
+fn r2(x) { (x * 100.0).round() / 100.0 }
+
+/// A value must sit within [lo, hi].
+///
+/// Phrased POSITIVELY (`v >= lo && v <= hi`), never as `!(v < lo || v > hi)`:
+/// NaN compares false against everything, so the negated form admits exactly the
+/// value this test exists to catch.
+fn t_range(v, lo, hi, what) {
+    if type_of(v) == "()" { return what + ": MISSING"; }
+    if v >= lo && v <= hi { return ""; }
+    return what + ": " + r2(v) + " outside [" + lo + ", " + hi + "]";
+}
+
+fn t_true(cond, what) { if cond { "" } else { what } }
+
+/// A position must be finite and inside the scene. The bound is deliberately
+/// generous — this is the "did the vehicle survive" check, not a placement one.
+fn t_bounded(p, what) {
+    if type_of(p) == "()" { return what + ": MISSING (no world_pos)"; }
+    let l = vlen(p);
+    if l >= 0.0 && l <= 100.0 { return ""; }
+    return what + ": |pos|=" + r2(l) + " m — left the scene (or is not finite)";
+}
+
+fn t_report(fails) {
+    let real = [];
+    for f in fails { if f != "" { real.push(f); } }
+    if real.is_empty() {
+        print("TESTS_OK " + fails.len());
+        print("LANDING LEGS: PASS");
+        return true;
+    }
+    for f in real { print("  LEGS FAIL: " + f); }
+    print("TESTS_FAIL " + real.len() + "/" + fails.len());
+    print("LANDING LEGS: FAIL");
+    false
+}
+
+/// One log row. Built by successive `+=`: rhai caps EXPRESSION complexity and a
+/// single multi-value concatenation chain trips it at compile time.
+fn row(t, y, tilt, f, x) {
+    let s = "[legs] t=" + r2(t) + "s";
+    s += "  hull_y=" + r4(y);
+    s += "  tilt=" + r2(tilt) + "deg";
+    s += "  strut_N=[" + r2(f[0]) + " " + r2(f[1]) + " " + r2(f[2]) + " " + r2(f[3]) + "]";
+    s += "  stroke_m=[" + r4(x[0]) + " " + r4(x[1]) + " " + r4(x[2]) + " " + r4(x[3]) + "]";
+    print(s);
+}
+
+fn r4(v) { (v * 10000.0).round() / 10000.0 }
+
+/// Vertical position of each body in a list, for tracing what is holding the
+/// vehicle up: a pad above the ground is not carrying anything.
+fn ys(ids) {
+    let out = [];
+    for i in ids {
+        let p = world_pos(i);
+        if type_of(p) == "()" { out.push("()"); } else { out.push((p[1] * 10000.0).round() / 10000.0); }
+    }
+    out
+}
+
+// ── Lifecycle ───────────────────────────────────────────────────────────────
+
+fn on_start(me) {
+    this.t = 0.0;
+    this.settle_s = 6.0;    // drop (~0.8 s) + stroke + ring-down
+    this.sample_s = 0.5;
+    this.next_sample = 0.0;
+
+    this.hull = find("/LandingLegsTest/Lander");
+    this.legs = [
+        find("/LandingLegsTest/Lander/LegPX"),
+        find("/LandingLegsTest/Lander/LegNX"),
+        find("/LandingLegsTest/Lander/LegPZ"),
+        find("/LandingLegsTest/Lander/LegNZ"),
+    ];
+    this.pads = [
+        find("/LandingLegsTest/Lander/PadPX"),
+        find("/LandingLegsTest/Lander/PadNX"),
+        find("/LandingLegsTest/Lander/PadPZ"),
+        find("/LandingLegsTest/Lander/PadNZ"),
+    ];
+    this.springs = [
+        find("/LandingLegsTest/Lander/LegPX_Spring"),
+        find("/LandingLegsTest/Lander/LegNX_Spring"),
+        find("/LandingLegsTest/Lander/LegPZ_Spring"),
+        find("/LandingLegsTest/Lander/LegNZ_Spring"),
+    ];
+
+    this.phase = "drop";
+    this.y_prev = ();
+    this.peak_force = 0.0;
+
+    print("[legs] ── landing gear test ──────────────────────────────────");
+    print("[legs] hull gid=" + this.hull + " legs=" + this.legs + " springs=" + this.springs);
+    print("[legs] dropping from 3 m; settling for " + this.settle_s + "s");
+}
+
+/// Strut reaction forces, one per leg, as read from each spring joint's `force`
+/// port. `()` for a joint that does not publish one — reported as MISSING rather
+/// than silently coerced to 0.0, which would read as "the leg carries no load"
+/// and pass the wrong test.
+fn strut_forces(springs) {
+    let out = [];
+    for s in springs {
+        if s == () || s < 0 { out.push(()); } else { out.push(get(s, "force")); }
+    }
+    out
+}
+
+/// Strut travel, one per leg, from each spring joint's `displacement` port.
+/// Negative IS compression — the authored stroke is -0.8 .. 0.0 m.
+fn strut_strokes(springs) {
+    let out = [];
+    for s in springs {
+        if s == () || s < 0 { out.push(()); } else { out.push(get(s, "displacement")); }
+    }
+    out
+}
+
+fn on_tick(me) {
+    if this.phase == "done" { return; }
+
+    // A missing prim is the classic silent no-op: `find` yields -1 and every read
+    // after it is `()`. Fail on the FIRST tick rather than ticking forever.
+    if this.hull == () || this.hull < 0 {
+        print("  LEGS FAIL: hull prim not found — wrong scene? expected " +
+              "scenes/sandbox/landing_legs_test.usda");
+        print("TESTS_FAIL 1/1");
+        print("LANDING LEGS: FAIL");
+        emit("LANDING_LEGS", "FAIL");
+        this.phase = "done";
+        return;
+    }
+
+    this.t += dt();
+    let pos = world_pos(this.hull);
+    let tilt = tilt_deg(this.hull);
+    let f = strut_forces(this.springs);
+    let x = strut_strokes(this.springs);
+
+    let y = ();
+    if type_of(pos) != "()" { y = pos[1]; }
+
+    for v in f {
+        if type_of(v) != "()" && v > this.peak_force { this.peak_force = v; }
+    }
+
+    if this.t >= this.next_sample {
+        let fr = [];
+        for v in f { if type_of(v) == "()" { fr.push(0.0); } else { fr.push(v); } }
+        let xr = [];
+        for v in x { if type_of(v) == "()" { xr.push(0.0); } else { xr.push(v); } }
+        row(this.t, y, tilt, fr, xr);
+        print("[legs]     pad_y=" + ys(this.pads) + "  leg_y=" + ys(this.legs));
+        this.next_sample = this.t + this.sample_s;
+    }
+
+    if this.t >= this.settle_s {
+        this.phase = "done";
+        // An explicit map, NOT `this`: helpers never see `this`, and passing a
+        // plain map keeps the verdict a pure function of the measurements.
+        verdict(#{
+            hull_pos: pos,
+            hull_y: y,
+            tilt: tilt,
+            forces: f,
+            strokes: x,
+            peak_force: this.peak_force,
+            pad_pos: [
+                world_pos(this.pads[0]), world_pos(this.pads[1]),
+                world_pos(this.pads[2]), world_pos(this.pads[3]),
+            ],
+            leg_pos: [
+                world_pos(this.legs[0]), world_pos(this.legs[1]),
+                world_pos(this.legs[2]), world_pos(this.legs[3]),
+            ],
+        });
+    }
+}
+
+// ── The verdict ─────────────────────────────────────────────────────────────
+//
+// BOUNDS — why these numbers.
+//
+//   bodies bounded   |pos| <= 100 m. The vehicle is 11 m across and never leaves
+//                    the pad, so this is not a placement check: it is the
+//                    "still a vehicle" check. A joint-frame regression throws
+//                    parts to hundreds of metres within the first second, so
+//                    any generous finite bound catches it, and a generous one
+//                    cannot false-positive on a bouncy landing.
+//
+//   hull level       tilt <= 5°. The drop is symmetric onto flat ground with
+//                    four identical legs, so the only thing that can tip it is
+//                    an asymmetric strut. Slack enough for the ring-down.
+//
+//   hull height      1.0 .. 8.0 m. Rest height is set by how far the struts
+//                    stroke under the vehicle's weight; the band spans
+//                    fully-compressed to barely-compressed and only excludes
+//                    "sank through the ground" and "never fell".
+//
+//   struts loaded    every leg > 100 N at rest, and they agree within 40% of
+//                    the largest. A leg reading ~0 while its neighbours carry
+//                    the vehicle is a dead joint — the failure that looks most
+//                    like a working scene in a screenshot.
+fn verdict(s) {
+    let f = [];
+
+    f.push(t_bounded(s.hull_pos, "hull"));
+    let names = ["PX", "NX", "PZ", "NZ"];
+    for i in 0..4 {
+        f.push(t_bounded(s.leg_pos[i], "strut " + names[i]));
+        f.push(t_bounded(s.pad_pos[i], "pad " + names[i]));
+    }
+
+    f.push(t_range(s.tilt, 0.0, 5.0, "hull tilt at rest (deg)"));
+    f.push(t_range(s.hull_y, 1.0, 8.0, "hull height at rest (m)"));
+
+    // Load sharing. Read the largest first so a whole-vehicle "nothing is
+    // loaded" reads as one clear failure instead of four vague ones.
+    let fmax = 0.0;
+    let missing = false;
+    for v in s.forces {
+        if type_of(v) == "()" { missing = true; }
+        else { if v > fmax { fmax = v; } }
+    }
+    f.push(t_true(!missing, "a spring joint published no `force` port"));
+    f.push(t_true(fmax > 100.0,
+                  "no strut carries load at rest (max " + r2(fmax) +
+                  " N) — the legs are not taking the vehicle's weight"));
+    if fmax > 100.0 {
+        for i in 0..4 {
+            let v = s.forces[i];
+            if type_of(v) != "()" {
+                f.push(t_range(v, fmax * 0.6, fmax * 1.4,
+                               "strut " + names[i] + " load vs peak " + r2(fmax) + " N"));
+            }
+        }
+    }
+
+    print("[legs] ── results ──────────────────────────────────────────");
+    print("[legs]   hull y      " + r2(s.hull_y) + " m");
+    print("[legs]   hull tilt   " + r2(s.tilt) + " deg");
+    print("[legs]   strut loads " + s.forces);
+    print("[legs]   strut stroke " + s.strokes);
+    print("[legs]   peak strut  " + r2(s.peak_force) + " N");
+
+    let ok = t_report(f);
+    emit("LANDING_LEGS", if ok { "PASS" } else { "FAIL" });
+    if ok {
+        notify_kind("Landing legs: PASS", "success");
+    } else {
+        notify_kind("Landing legs: FAIL — the gear did not take the load", "error");
+    }
+}

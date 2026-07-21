@@ -1,0 +1,87 @@
+#usda 1.0
+(
+    defaultPrim = "LandingLegsTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The landing gear on its own: one airframe, four sprung legs, flat ground.
+#
+# No guidance, no rover, no mission — a lander dropped from 3 m so the legs take
+# the vehicle's weight within the first second and the run is over in two. What
+# it pins down is the LEG MECHANISM: that the raked prismatic joints and the pad
+# welds start satisfied, that the struts stroke and settle instead of diverging,
+# and that the hull ends the drop level and at ride height.
+#
+#   scene_test --scene scenes/sandbox/landing_legs_test.usda --max-ticks 240
+
+def Xform "LandingLegsTest" (
+    kind = "assembly"
+    doc = "A lander dropped onto its legs from 3 m — the landing gear with nothing else attached."
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 0.05
+            float physics:staticFriction = 0.05
+        }
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.13, 0.125, 0.12)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </LandingLegsTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 12000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 3.0, 0.0)
+        double3 xformOp:translate = (14.0, 6.0, 14.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The airframe arc ONLY — no guidance component. The pads sit at y = -5.0 in
+    # the vehicle's own frame, so a hull at y = 8.0 holds them 3 m off the ground.
+    def "Lander" (
+        prepend references = @lunco://vessels/landers/descent_lander.usda@</DescentLander>
+    )
+    {
+        double3 xformOp:translate = (0, 5.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "landing-legs"
+
+        def LunCoProgram "Mission"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/landing_legs_test.rhai@
+        }
+    }
+}
