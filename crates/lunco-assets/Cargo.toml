@@ -23,6 +23,11 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The Twin manifest type — `[usd] scenes` is what says which of a project's
+# `.usda` files are loadable scenes (see `discovery::list_scene_assets`).
+# Manifest-only use: no Bevy feature, no cycle (lunco-twin does not depend on
+# this crate).
+lunco-twin = { path = "../lunco-twin" }
 toml = { workspace = true }
 thiserror = { workspace = true }
 image = { workspace = true }

@@ -286,6 +286,72 @@ pub fn list_usd_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<Asset
     list_assets(manifest, roots, "usda")
 }
 
+/// Every `*.usda` in the project that is a **loadable scene** — what a Scenarios
+/// menu offers, as opposed to the vessels, structures, looks and library layers
+/// that exist to be referenced by one.
+///
+/// **A project says where its scenes are; the engine does not guess.** Each open
+/// Twin answers for itself via `[usd] scenes` in its `twin.toml`
+/// ([`UsdManifest::scenes`](lunco_twin::UsdManifest::scenes)); the
+/// engine library uses its own `scenes/` layout. Undeclared Twins fall back to
+/// [`DEFAULT_SCENE_GLOBS`].
+///
+/// This replaced a `rel.starts_with("scenes/")` test applied to every asset from
+/// every source — the engine library's folder layout imposed on projects that do
+/// not share it. A Twin keeping scenes in `sim/scenes/` had none of them listed:
+/// its own scene could be on screen while the menu said the project had none.
+pub fn list_scene_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<AssetFile> {
+    let mut out = list_assets(manifest, roots, "usda");
+    // One manifest read per Twin, not per asset.
+    let globs: std::collections::HashMap<String, Vec<String>> = roots
+        .names()
+        .into_iter()
+        .map(|name| {
+            let g = roots
+                .root_of(&name)
+                .map(|root| scene_globs_of_twin(&root))
+                .unwrap_or_else(default_scene_globs);
+            (name, g)
+        })
+        .collect();
+
+    out.retain(|asset| match &asset.twin {
+        Some(name) => globs
+            .get(name)
+            .map(|g| g.iter().any(|glob| lunco_twin::glob_matches(glob, &asset.rel)))
+            .unwrap_or(false),
+        // The engine library's own layout, which it is entitled to assert about
+        // itself — it ships the folder.
+        None => asset.rel.starts_with("scenes/"),
+    });
+    out
+}
+
+fn default_scene_globs() -> Vec<String> {
+    lunco_twin::DEFAULT_SCENE_GLOBS
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// The scene globs a Twin declares, or [`DEFAULT_SCENE_GLOBS`] if it declares
+/// none (or has no readable `twin.toml` — a folder opened as a Twin root need
+/// not have been promoted to one).
+#[cfg(not(target_arch = "wasm32"))]
+fn scene_globs_of_twin(root: &Path) -> Vec<String> {
+    lunco_twin::TwinManifest::read(&root.join(lunco_twin::MANIFEST_FILENAME))
+        .ok()
+        .and_then(|m| m.usd.and_then(|u| u.scenes))
+        .unwrap_or_else(default_scene_globs)
+}
+
+/// Web has no Twin folders to read a manifest from — Twin roots are a native
+/// concept (see [`list_assets`]), so this is unreachable there.
+#[cfg(target_arch = "wasm32")]
+fn scene_globs_of_twin(_root: &Path) -> Vec<String> {
+    default_scene_globs()
+}
+
 /// Every catalogued file under `dir`, regardless of extension — the native walk
 /// that produces the manifest. Mirrors what `build_web.sh` writes for the web.
 ///

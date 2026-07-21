@@ -73,6 +73,10 @@ def Xform "Artemis2Mission" (
         int    lunco:trajectory:trackedId = -1024
         int    lunco:trajectory:referenceId = 399
         color4f lunco:trajectory:color = (1.0, 0.2, 0.2, 1.0)
+        # This mission scene exists to REVIEW this path, so it says so. An
+        # unauthored `userVisible` now reads as OFF — a trajectory is drawn
+        # because a prim asked, never because a body was declared.
+        bool   lunco:trajectory:userVisible = true
 
         # `samplingDays` is the window walked around the current epoch;
         # `samplingStep` the step within it. Coarse here because the Earth-relative

@@ -114,9 +114,8 @@ pub struct JournalManifest {
 
 /// The `[usd]` section of `twin.toml`.
 ///
-/// Today carries only the entry-point scene. The Twin's other `.usda`
-/// files are a referenceable asset library — not auto-loaded. Full
-/// resolution rule in `docs/architecture/21-domain-usd.md`
+/// The Twin's `.usda` files are a referenceable asset library — not auto-loaded.
+/// Full resolution rule in `docs/architecture/21-domain-usd.md`
 /// § "Which stage opens".
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
@@ -127,6 +126,72 @@ pub struct UsdManifest {
     /// folder: files indexed, nothing auto-loaded).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_scene: Option<String>,
+
+    /// Which of this Twin's `.usda` files are **loadable scenes** — the ones a
+    /// Scenarios menu offers, as opposed to the vessels, structures, looks and
+    /// library layers that exist to be *referenced* by them.
+    ///
+    /// Glob patterns relative to the Twin root; `*` matches within a path
+    /// segment, `**` across segments.
+    ///
+    /// **Why the Twin answers this.** The question used to be answered by a
+    /// hardcoded `rel.starts_with("scenes/")` in the sandbox's menu — the engine
+    /// library's own folder layout, applied to every project. A Twin that keeps
+    /// its scenes anywhere else (this one's `sim/scenes/`) had *none* of them
+    /// listed: you could have a Twin's scene on screen and not find it in the
+    /// list of scenes you could load. Where a project keeps its scenes is the
+    /// project's business, so the project states it.
+    ///
+    /// `None` falls back to the conventional layouts (`scenes/**`,
+    /// `sim/scenes/**`) so existing Twins keep working undeclared — but a Twin
+    /// that says so is the one that cannot be surprised by a reorganisation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenes: Option<Vec<String>>,
+}
+
+/// The scene globs assumed for a Twin that declares none: the two layouts in
+/// use across this workspace's twins. Kept as a fallback, not a rule — see
+/// [`UsdManifest::scenes`].
+pub const DEFAULT_SCENE_GLOBS: &[&str] = &["scenes/**", "sim/scenes/**"];
+
+/// Match `path` (a `/`-separated Twin-relative path) against one glob, where
+/// `*` matches within a segment and `**` matches across segments.
+///
+/// Deliberately tiny and dependency-free: this matches asset paths in a
+/// manifest, not a filesystem — no character classes, no brace expansion, no
+/// `.` special-casing.
+pub fn glob_matches(glob: &str, path: &str) -> bool {
+    fn seg_match(pat: &[&str], seg: &[&str]) -> bool {
+        match pat.split_first() {
+            None => seg.is_empty(),
+            Some((&"**", rest)) => {
+                // `**` is the tail-anything case: `scenes/**` matches everything
+                // beneath `scenes/`, which is what an author means by it.
+                if rest.is_empty() {
+                    return true;
+                }
+                (0..=seg.len()).any(|i| seg_match(rest, &seg[i..]))
+            }
+            Some((p, rest)) => match seg.split_first() {
+                Some((s, srest)) if star_match(p, s) => seg_match(rest, srest),
+                _ => false,
+            },
+        }
+    }
+    /// `*` within one segment.
+    fn star_match(pat: &str, s: &str) -> bool {
+        match pat.split_once('*') {
+            None => pat == s,
+            Some((head, tail)) => {
+                let Some(s) = s.strip_prefix(head) else { return false };
+                (0..=s.len()).any(|k| star_match(tail, &s[k..]))
+            }
+        }
+    }
+    seg_match(
+        &glob.split('/').collect::<Vec<_>>(),
+        &path.split('/').collect::<Vec<_>>(),
+    )
 }
 
 /// Reference to a sub-Twin. Local for now; remote URLs reserved for
@@ -251,6 +316,7 @@ mod tests {
             ],
             usd: Some(UsdManifest {
                 default_scene: Some("main_scene.usda".into()),
+                scenes: Some(vec!["scenes/**".into()]),
             }),
             journal: Some(JournalManifest { persist: true }),
         };
@@ -377,5 +443,45 @@ uuid = "{id}"
         };
         let minted = bare.ensure_uuid();
         assert!(bare.uuid == Some(minted));
+    }
+
+    #[test]
+    fn scene_globs_match_both_conventional_layouts() {
+        // The engine library's layout and this workspace's twins' layout.
+        assert!(glob_matches("scenes/**", "scenes/sandbox/comms_demo_test.usda"));
+        assert!(glob_matches("sim/scenes/**", "sim/scenes/traverse.usda"));
+        // …and nothing else in the twin: a rover is referenced BY a scene, not
+        // offered as one. This is the whole point of asking the twin.
+        assert!(!glob_matches("sim/scenes/**", "sim/rovers/awful.usda"));
+        assert!(!glob_matches("scenes/**", "vessels/rovers/skid_rover.usda"));
+    }
+
+    #[test]
+    fn glob_star_stays_inside_one_segment() {
+        assert!(glob_matches("sim/scenes/*.usda", "sim/scenes/traverse.usda"));
+        // `*` must not eat the separator, or "scenes/*.usda" would claim every
+        // nested file and the pattern would say less than the author meant.
+        assert!(!glob_matches("sim/scenes/*.usda", "sim/scenes/old/traverse.usda"));
+        assert!(glob_matches("sim/scenes/**", "sim/scenes/old/traverse.usda"));
+        // Prefix/suffix around the star.
+        assert!(glob_matches("sim/scenes/traverse*.usda", "sim/scenes/traverse_apollo15.usda"));
+        assert!(!glob_matches("sim/scenes/traverse*.usda", "sim/scenes/other.usda"));
+    }
+
+    #[test]
+    fn declared_scenes_round_trip_through_toml() {
+        let text = "name = \"t\"\nversion = \"0.1.0\"\n\n[usd]\ndefault_scene = \"sim/scenes/traverse.usda\"\nscenes = [\"sim/scenes/*.usda\"]\n";
+        let parsed: TwinManifest = toml::from_str(text).unwrap();
+        let usd = parsed.usd.expect("[usd] section");
+        assert_eq!(usd.scenes.as_deref(), Some(&["sim/scenes/*.usda".to_string()][..]));
+    }
+
+    #[test]
+    fn a_twin_that_declares_nothing_still_finds_its_scenes() {
+        // Undeclared is the existing state of every twin on disk; the fallback
+        // is what keeps them working until they say so themselves.
+        assert!(DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "sim/scenes/traverse.usda")));
+        assert!(DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "scenes/sandbox/link_test.usda")));
+        assert!(!DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "models/rover.usda")));
     }
 }

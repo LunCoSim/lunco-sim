@@ -118,29 +118,23 @@ impl Plugin for TrajectoryPlugin {
            .register_type::<TrajectoryFrame>()
            .register_type::<TrajectoryPath>();
            
-        // Trajectory views are solar-system objects: they exist only when the SCENE
-        // declares celestial bodies (`LunCoCelestialBodyAPI` → `CelestialBodyDecl`).
+        // NO Rust-spawned trajectory views. An orbit line is CONTENT — a scene
+        // says which paths it wants drawn, with `lunco:trajectory:*` on a prim
+        // (`LunCoMissionTrajectoryAPI` → `MissionTrajectoryDecl` →
+        // `spawn_declared_missions`). The Earth and Moon orbit views now live in
+        // `assets/celestial/solar_system.usda` next to the bodies they belong to,
+        // authored `userVisible = false`.
         //
-        // This used to be an unconditional `Startup` system, so the Earth and Moon
-        // orbit views were spawned into EVERY scene — including the flat sandbox
-        // arena, which asks for no sky at all. The bodies themselves were correctly
-        // absent (their spawn was gated), so the scene got orbit geometry for planets
-        // that did not exist. Nothing celestial may appear that the scene did not
-        // describe — that is the whole point of authoring bodies in USD.
+        // The history is why this matters twice over. First these were an
+        // unconditional `Startup` spawn, so every scene — including the flat
+        // sandbox arena that asks for no sky — got orbit geometry for planets it
+        // had not declared. Gating them on "the scene declared bodies" fixed the
+        // arena but kept the deeper error: a scene could ask for a SKY and get
+        // ORBIT LINES it never mentioned, with no way to say no. Declaring the
+        // Sun is not asking for a 400-day Earth ellipse across your horizon.
         //
-        // Idempotent-guarded (NOT latched): fires while the scene declares bodies and
-        // no orbit views exist yet. A `Local` latch could never be reset, so after a
-        // scene reload (teardown despawns the views) they would never come back;
-        // gating on "do my views exist" makes reload re-create them.
-        app.add_systems(
-            Update,
-            trajectory_setup_system.run_if(
-                |q_decl: Query<(), With<crate::CelestialBodyDecl>>,
-                 q_views: Query<(), With<TrajectoryView>>| {
-                    !q_decl.is_empty() && q_views.is_empty()
-                },
-            ),
-        );
+        // Now the only way an orbit line exists is that a prim asked for it, and
+        // an unauthored `userVisible` reads as OFF — see `MissionTrajectoryDecl`.
 
 
         // CHAINED: a rebuild must be ATOMIC within one frame.
@@ -372,61 +366,6 @@ pub fn trajectory_probe_system(
     }
 }
 
-pub fn trajectory_setup_system(
-    mut commands: Commands,
-) {
-    // Initial spawning. Reference centering handled by alignment system.
-    commands.spawn((
-        Name::new("Earth Orbit View"),
-        // Owned by the celestial subsystem (`CelestialDerived`) so scene reload tears
-        // it down. It IS parented under the body hierarchy by `trajectory_alignment_
-        // system`, but not until it first resolves — the marker covers the gap.
-        crate::big_space_setup::CelestialDerived,
-        TrajectoryView {
-            tracked_id: 399,
-            reference_id: 10,
-            frame: TrajectoryFrame::Inertial,
-            color: LinearRgba::from(Color::srgba(0.0, 0.8, 1.0, 1.0)),
-            is_visible: true,
-            user_visible: true,
-            sampling_days: 400.0,
-            sampling_step: 0.5,
-            start_epoch: None,
-            end_epoch: None,
-        },
-        TrajectoryPath::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        // No CellCoord at spawn: `trajectory_alignment_system` inserts one
-        // when (and only when) it parents the view to a Grid — a cell-entity
-        // anywhere else is invalid per big_space's hierarchy rules.
-    ));
-
-    commands.spawn((
-        Name::new("Moon Orbit View"),
-        crate::big_space_setup::CelestialDerived,
-        TrajectoryView {
-            tracked_id: 301,
-            reference_id: 399,
-            frame: TrajectoryFrame::Inertial,
-            color: LinearRgba::from(Color::srgba(1.0, 0.9, 0.2, 1.0)),
-            is_visible: true,
-            user_visible: true,
-            sampling_days: 30.0,
-            sampling_step: 0.02,
-            start_epoch: None,
-            end_epoch: None,
-        },
-        TrajectoryPath::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        // No CellCoord at spawn: `trajectory_alignment_system` inserts one
-        // when (and only when) it parents the view to a Grid — a cell-entity
-        // anywhere else is invalid per big_space's hierarchy rules.
-    ));
-}
 
 pub fn spawn_trajectory_update_task(
     world: Res<WorldTime>,

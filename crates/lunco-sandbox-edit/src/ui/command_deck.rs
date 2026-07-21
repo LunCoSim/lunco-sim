@@ -222,25 +222,20 @@ impl Panel for CommandDeck {
                 if ui.button("Engage autopilot").clicked() {
                     ctx.defer(move |world| {
                         // Engage with the vessel's OWN behaviour — the patrol this
-                        // panel is displaying. An empty `spec_json` makes
-                        // `on_engage_autopilot` fall back to a constant forward
-                        // setpoint, i.e. the rover would drive blindly straight
-                        // ahead while the deck claimed it was running an N-point
-                        // patrol. Read the spec mirror off the vessel and pass it.
+                        // panel is displaying. Read the spec mirror off the vessel
+                        // and pass it.
                         let spec_json = world
                             .get::<AutopilotBehaviorSpec>(v)
                             .and_then(|s| s.to_json().ok())
                             .unwrap_or_default();
-                        // Throttle from the tunable resource, not a literal (§3).
-                        let throttle = world
-                            .get_resource::<lunco_autopilot::PatrolDefaults>()
-                            .copied()
-                            .unwrap_or_default()
-                            .engage_throttle;
+                        // NO throttle. "Engage autopilot" means "run your route" —
+                        // it never means "drive forward". A vessel with no route
+                        // holds; sending a cruise setpoint from here made a
+                        // routeless rover leave in a straight line.
                         world.trigger(lunco_autopilot::EngageAutopilot {
                             vessel: v,
                             index: 0,
-                            throttle,
+                            throttle: 0.0,
                             spec_json,
                         });
                     });

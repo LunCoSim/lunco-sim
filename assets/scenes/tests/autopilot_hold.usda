@@ -1,0 +1,114 @@
+#usda 1.0
+(
+    defaultPrim = "AutopilotHoldTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# An engaged autopilot with NO waypoints must HOLD, not drive.
+#
+# Two rovers, identical, on flat ground:
+#   Idle    — autopilot engaged with no route at all. Must not move.
+#   Routed  — autopilot engaged on a patrol. Must reach its waypoint.
+#
+# The pair is the point. "The rover didn't move" passes just as well when the
+# whole drive path is dead, so the routed rover is the CONTROL that proves this
+# rig can move a rover at all — without it the headline assertion is vacuous.
+#
+#   cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
+#       --scene scenes/sandbox/autopilot_hold_test.usda
+
+def Xform "AutopilotHoldTest" (
+    kind = "assembly"
+    doc = "Two rovers under autopilot: one with no waypoints, one with a route. Checks that an autopilot with nowhere to go holds still instead of driving off, while a routed one still drives."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Lunar gravity.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material bound with
+    # the purpose-specific `material:binding:physics`, which is how UsdPhysics
+    # (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+    uniform bool lunco:spawnable = false
+
+    # FLAT ground, deliberately. A slope would make "it held" depend on brake
+    # authority and friction as well as on the autopilot's setpoint; here the
+    # only thing that can move a rover is drive.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (400.0, 1.0, 400.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </AutopilotHoldTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
+        double3 xformOp:translate = (14.0, 10.0, 18.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The rover under test: engaged with NO route.
+    def Xform "Idle" (
+        prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
+    )
+    {
+        double3 xformOp:translate = (0, 1.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The control: same rover, same engage path, but WITH waypoints.
+    def Xform "Routed" (
+        prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
+    )
+    {
+        double3 xformOp:translate = (0, 1.0, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "autopilot-hold"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/autopilot_hold_test.rhai@
+        }
+    }
+}

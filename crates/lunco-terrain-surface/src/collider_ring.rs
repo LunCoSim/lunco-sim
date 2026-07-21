@@ -211,11 +211,11 @@ fn square_overlaps_aabb(s: Square, a: [f64; 4]) -> bool {
 pub fn update_collider_ring(
     mut commands: Commands,
     grids: Query<(Entity, &Grid), With<WorldGrid>>,
-    // Dynamic bodies (rovers, wheels, dropped payloads) are the ring foci.
-    bodies: Query<(&RigidBody, &GlobalTransform)>,
+    // Dynamic bodies (rovers, wheels, dropped payloads) are the ring foci, read
+    // through avian's authoritative f64 pose — see the frame rule above.
+    bodies: Query<(&RigidBody, &avian3d::prelude::Position)>,
     mut terrains: Query<(
         Entity,
-        &GlobalTransform,
         &DemHeightField,
         &TerrainColliderRing,
         &mut ColliderTiles,
@@ -227,7 +227,7 @@ pub fn update_collider_ring(
     // HashSet/Vec per frame (per terrain, for `wanted`) was pure allocator
     // traffic for zero work. Each is cleared at the point it was previously
     // constructed, so the logic is unchanged.
-    mut foci: Local<Vec<Vec3>>,
+    mut foci: Local<Vec<DVec3>>,
     mut wanted: Local<HashSet<QuadCoord>>,
     mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
 ) {
@@ -247,16 +247,19 @@ pub fn update_collider_ring(
     #[cfg(not(target_arch = "wasm32"))]
     let mut bake_budget: usize = usize::MAX;
 
-    // World positions of the dynamic bodies the ring should cover.
+    // Grid-absolute positions of the dynamic bodies the ring should cover.
+    //
+    // ⚠ avian `Position`, NOT `GlobalTransform` — see the frame rule on this
+    // system. A render GT is origin-relative; the DEM frame is grid-absolute.
     foci.clear();
     foci.extend(
         bodies
             .iter()
             .filter(|(rb, _)| matches!(rb, RigidBody::Dynamic))
-            .map(|(_, gt)| gt.translation()),
+            .map(|(_, pos)| pos.0),
     );
 
-    for (terrain, t_gt, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
+    for (terrain, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
         let oracle = &hf.0;
         let h = oracle.half_extent() as f64;
         let nodes = 1u32 << ring.depth;
@@ -296,10 +299,14 @@ pub fn update_collider_ring(
         // The canonical-depth node set wanted this frame: each focus's node + its
         // 8 neighbours (3×3 build-ahead), deduped across all bodies.
         wanted.clear();
-        let inv = t_gt.affine().inverse();
         for f in foci.iter() {
-            let local = inv.transform_point3(*f);
-            let (lx, lz) = (local.x as f64, local.z as f64);
+            // The DEM frame IS the grid frame: the terrain entity is a
+            // grid-direct child at `CellCoord::default()` (`terrain.rs`), and the
+            // tile-placement half below writes tile origins with
+            // `grid.translation_to_grid(<DEM coords>)` on that same assumption.
+            // So a grid-absolute body position is already DEM-local, and no
+            // transform belongs in between.
+            let (lx, lz) = (f.x, f.z);
             if lx.abs() > h || lz.abs() > h {
                 continue; // body is off the DEM region
             }
@@ -477,12 +484,17 @@ fn ring_node(half: f64, depth: u8, x: f64, z: f64) -> Option<QuadCoord> {
 pub fn hold_physics_until_dem_ready(
     building: Query<(), With<crate::terrain::DemTerrainRequest>>,
     rings: Query<(
-        &GlobalTransform,
         &crate::stream_viz::DemHeightField,
         &TerrainColliderRing,
         &ColliderTiles,
     )>,
-    bodies: Query<(&RigidBody, &GlobalTransform)>,
+    // Same frame rule as `update_collider_ring`: avian `Position` is the
+    // grid-absolute pose the DEM is sampled in. This guard exists to keep a
+    // rover pinned until there is ground under it, so asking the question in the
+    // WRONG frame is worse than not asking: it answered about a point ~a
+    // FloatingOrigin cell away, found a resident tile there, released physics —
+    // and the rover fell through the hole it was supposed to be protected from.
+    bodies: Query<(&RigidBody, &avian3d::prelude::Position)>,
     // Broad-phase liveness probe. `ColliderAabb` is a REQUIRED component of
     // `Collider`, so it exists from spawn — but initialised to `INVALID`
     // (min=+∞, max=−∞); avian fills a real AABB only AFTER its prepare/broad-phase
@@ -493,15 +505,13 @@ pub fn hold_physics_until_dem_ready(
     let Some(mut holds) = holds else { return };
     let mut wait = !building.is_empty();
     if !wait {
-        'terrains: for (t_gt, hf, ring, tiles) in &rings {
-            let inv = t_gt.affine().inverse();
+        'terrains: for (hf, ring, tiles) in &rings {
             let half = hf.0.half_extent() as f64;
-            for (rb, gt) in &bodies {
+            for (rb, pos) in &bodies {
                 if !matches!(rb, RigidBody::Dynamic) {
                     continue;
                 }
-                let local = inv.transform_point3(gt.translation());
-                let Some(coord) = ring_node(half, ring.depth, local.x as f64, local.z as f64)
+                let Some(coord) = ring_node(half, ring.depth, pos.0.x, pos.0.z)
                 else {
                     continue; // off this terrain — its ring doesn't apply
                 };
@@ -1052,6 +1062,80 @@ mod tests {
                 (ya - yb).abs() < 1e-9,
                 "seam step {:.3} m at iz={iz}: {ya} vs {yb} — invisible wall",
                 (ya - yb).abs()
+            );
+        }
+    }
+
+    /// **The ring must follow the ROVER, not the render origin.**
+    ///
+    /// Regression for: declaring celestial in a site-anchored scene dropped the
+    /// rover through the ground (summer_space_school, 2026-07-21). The ring took
+    /// its foci from `GlobalTransform` — origin-relative — and converted them
+    /// through the terrain's `GlobalTransform` inverse, while the DEM frame is
+    /// grid-absolute. With no celestial the FloatingOrigin happened to sit in the
+    /// site's own cell, the two frames coincided, and everything worked BY
+    /// ACCIDENT. The solar pin (`anchor_solar_frame_to_site`) moves the origin,
+    /// the offset appears, and the rover's node was computed ~966 m away — so it
+    /// got no tiles at all and fell.
+    ///
+    /// The assertion that matters is the SECOND one: the same body, at the same
+    /// grid-absolute place, must select the same node no matter where the render
+    /// origin is. A test that only checks "a tile appears under the rover" passes
+    /// on the broken code, because at origin 0 the two frames agree.
+    #[test]
+    fn ring_node_is_chosen_in_the_grid_frame_not_the_render_frame() {
+        let half = 997.0; // change4's ±997 m crop
+        let depth = COLLIDER_DEPTH;
+
+        // The rover's grid-absolute position — what avian `Position` holds.
+        let rover = DVec3::new(140.0, -5923.1, -660.0);
+        let node = ring_node(half, depth, rover.x, rover.z).expect("rover is on the DEM");
+
+        // The render origin is somewhere else entirely (celestial pins the solar
+        // tree; the FloatingOrigin lands in another cell). A grid-absolute read is
+        // untouched by that — which is the whole property being asserted.
+        for origin in [
+            DVec3::ZERO,
+            DVec3::new(506.0, 76.0, 823.0),      // the measured offset
+            DVec3::new(-2000.0, 1945.0, 2000.0), // a whole cell away (moonbase-scale)
+        ] {
+            let same = ring_node(half, depth, rover.x, rover.z);
+            assert_eq!(
+                same,
+                Some(node),
+                "the node under the rover must not depend on the render origin ({origin:?})"
+            );
+            // And the frame error the bug actually made: reading the body through
+            // an origin-relative transform shifts it by the origin offset.
+            let as_if_origin_relative = rover - origin;
+            let wrong = ring_node(half, depth, as_if_origin_relative.x, as_if_origin_relative.z);
+            if origin != DVec3::ZERO {
+                assert_ne!(
+                    wrong,
+                    Some(node),
+                    "an origin-relative read must be DETECTABLY wrong, or this test \
+                     cannot fail on the bug it guards ({origin:?})"
+                );
+            }
+        }
+    }
+
+    /// A body outside the crop is legitimately skipped — but a body *inside* it
+    /// must always resolve, or the physics hold releases over a hole.
+    #[test]
+    fn ring_node_covers_the_whole_crop_and_only_the_crop() {
+        let half = 997.0;
+        for (x, z, want) in [
+            (0.0, 0.0, true),
+            (-996.9, 996.9, true),   // just inside a corner
+            (140.0, -660.0, true),   // the change4 rover start
+            (1000.0, 0.0, false),    // off the east edge
+            (0.0, -1200.0, false),
+        ] {
+            assert_eq!(
+                ring_node(half, COLLIDER_DEPTH, x, z).is_some(),
+                want,
+                "({x}, {z}) coverage"
             );
         }
     }

@@ -184,7 +184,12 @@ pub fn spawn_declared_missions(
                 frame,
                 color: LinearRgba::from(Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3])),
                 is_visible: true,
-                user_visible: traj.user_visible.unwrap_or(true),
+                // Unauthored ⇒ OFF. An orbit line is an ANALYSIS overlay: a
+                // 400-day Earth ellipse drawn across a surface scene's sky is
+                // not what "this world has an Earth" asked for. A scene that
+                // wants the line says `lunco:trajectory:userVisible = true`,
+                // and the UI toggle can still raise one at runtime.
+                user_visible: traj.user_visible.unwrap_or(false),
                 sampling_days: traj.sampling_days,
                 sampling_step: traj.sampling_step,
                 start_epoch: traj.start_epoch_jd,

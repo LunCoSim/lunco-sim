@@ -1246,10 +1246,13 @@ fn on_start_autopilot(
         };
         registry.release_session(SessionId::LOCAL);
 
+        // Throttle 0: engaging runs the vessel's route (`spec_json`), and a vessel
+        // with no route HOLDS. A constant setpoint here drove routeless rovers
+        // straight off the site.
         commands.trigger(lunco_autopilot::EngageAutopilot {
             vessel,
             index: 0,
-            throttle: 0.5,
+            throttle: 0.0,
             spec_json,
         });
     }
@@ -1290,10 +1293,13 @@ fn on_toggle_autopilot(
         };
         registry.release_session(SessionId::LOCAL);
 
+        // Throttle 0: engaging runs the vessel's route (`spec_json`), and a vessel
+        // with no route HOLDS. A constant setpoint here drove routeless rovers
+        // straight off the site.
         commands.trigger(lunco_autopilot::EngageAutopilot {
             vessel,
             index: 0,
-            throttle: 0.5,
+            throttle: 0.0,
             spec_json,
         });
     }

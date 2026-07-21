@@ -1095,6 +1095,10 @@ fn promote_scenario_to_folder(
     tm.uuid = Some(uuid::Uuid::from_bytes(manifest.scenario_id));
     tm.usd = Some(lunco_twin::UsdManifest {
         default_scene: manifest.default_scene.clone(),
+        // A downloaded scenario's layout is the host's, and the wire manifest
+        // does not carry it — so leave it undeclared and let the conventional
+        // fallback apply, rather than assert a layout we were not told.
+        scenes: None,
     });
 
     let mut twin = match lunco_twin::TwinMode::open(&target) {

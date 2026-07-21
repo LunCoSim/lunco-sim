@@ -48,6 +48,23 @@ def Xform "SolarSystem" (
     )
     {
         uniform int lunco:body = 399
+
+        # Earth's orbit around the Sun, as a drawn line. AUTHORED CONTENT, and
+        # OFF unless a scene asks for it — see the `OrbitView` note under Moon.
+        def Xform "OrbitView" (
+            prepend apiSchemas = ["LunCoMissionTrajectoryAPI"]
+            doc = "Earth's heliocentric orbit. Hidden by default."
+        )
+        {
+            string lunco:trajectory:name = "Earth Orbit View"
+            int    lunco:trajectory:trackedId = 399
+            int    lunco:trajectory:referenceId = 10
+            color4f lunco:trajectory:color = (0.0, 0.8, 1.0, 1.0)
+            bool   lunco:trajectory:userVisible = false
+            double lunco:trajectory:samplingDays = 400.0
+            double lunco:trajectory:samplingStep = 0.5
+            token  lunco:trajectory:frame = "Inertial"
+        }
     }
 
     def Xform "Moon" (
@@ -56,5 +73,31 @@ def Xform "SolarSystem" (
     )
     {
         uniform int lunco:body = 301
+
+        # These two orbit lines used to be spawned in RUST, unconditionally, for
+        # any scene that declared a body. That made "this world has an Earth"
+        # silently also mean "draw a 400-day ellipse through my sky" — with no
+        # attribute anywhere a scene could set to decline. They are content, so
+        # they are authored here, and `userVisible = false` is the default: a
+        # scene (or the user, via the trajectory toggle) opts the line IN.
+        #
+        # An `over` in the referencing scene raises one without copying the file:
+        #
+        #   over "SolarSystem" { over "Moon" { over "OrbitView" {
+        #       bool lunco:trajectory:userVisible = true } } }
+        def Xform "OrbitView" (
+            prepend apiSchemas = ["LunCoMissionTrajectoryAPI"]
+            doc = "The Moon's orbit about Earth. Hidden by default."
+        )
+        {
+            string lunco:trajectory:name = "Moon Orbit View"
+            int    lunco:trajectory:trackedId = 301
+            int    lunco:trajectory:referenceId = 399
+            color4f lunco:trajectory:color = (1.0, 0.9, 0.2, 1.0)
+            bool   lunco:trajectory:userVisible = false
+            double lunco:trajectory:samplingDays = 30.0
+            double lunco:trajectory:samplingStep = 0.02
+            token  lunco:trajectory:frame = "Inertial"
+        }
     }
 }
