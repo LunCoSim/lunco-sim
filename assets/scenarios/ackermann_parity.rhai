@@ -633,11 +633,5 @@ fn verdict(s) {
     print("[ackermann]   front-wheel steer (rad, raycast) " + s.deflect_rc);
     print("[ackermann]   authored ceiling omega_max*r = " + s.v_ceiling + " m/s");
 
-    let ok = report_verdict(f, "ACKERMANN PARITY", "ACKERMANN_PARITY");
-    emit("ACKERMANN_PARITY", if ok { "PASS" } else { "FAIL" });
-    if ok {
-        notify_kind("Ackermann parity: PASS", "success");
-    } else {
-        notify_kind("Ackermann parity: FAIL - steered-axle drivetrains diverged", "error");
-    }
+    report_verdict(f, "ACKERMANN PARITY", "ACKERMANN_PARITY");
 }

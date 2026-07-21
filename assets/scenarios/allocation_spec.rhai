@@ -720,11 +720,5 @@ fn verdict(s) {
     print("[spec]   STILL IN RUST: the exact skid_mix_norm(1,1) = (1, -1/3) inner-side value;");
     print("[spec]     under throttle the ground drags the wheel, so -1/3 is not observable.");
 
-    let ok = report_verdict(f, "ALLOCATION SPEC", "ALLOCATION_SPEC");
-    emit("ALLOCATION_SPEC", if ok { "PASS" } else { "FAIL" });
-    if ok {
-        notify_kind("Allocation spec: PASS", "success");
-    } else {
-        notify_kind("Allocation spec: FAIL - drive allocation changed meaning", "error");
-    }
+    report_verdict(f, "ALLOCATION SPEC", "ALLOCATION_SPEC");
 }

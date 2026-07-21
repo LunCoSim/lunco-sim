@@ -384,11 +384,5 @@ fn verdict(s) {
     print("[parity]   yaw        (deg)  " + s.yaw_rc + "       " + s.yaw_ph);
     print("[parity]   authored ceiling omega_max*r = " + s.v_ceiling + " m/s");
 
-    let ok = report_verdict(f, "DRIVETRAIN PARITY", "DRIVETRAIN_PARITY");
-    emit("DRIVETRAIN_PARITY", if ok { "PASS" } else { "FAIL" });
-    if ok {
-        notify_kind("Drivetrain parity: PASS", "success");
-    } else {
-        notify_kind("Drivetrain parity: FAIL - raycast and joint wheels diverged", "error");
-    }
+    report_verdict(f, "DRIVETRAIN PARITY", "DRIVETRAIN_PARITY");
 }

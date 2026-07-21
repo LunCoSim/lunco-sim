@@ -584,11 +584,5 @@ fn verdict(s) {
     print("[six]   kernel                " + s.kernel);
     print("[six]   authored ceiling omega_max*r = " + s.v_ceiling + " m/s");
 
-    let ok = report_verdict(f, "SIX INDEPENDENT", "SIX_INDEPENDENT");
-    emit("SIX_INDEPENDENT_MOTION", if ok { "PASS" } else { "FAIL" });
-    if ok {
-        notify_kind("Six-wheel independent motion: PASS", "success");
-    } else {
-        notify_kind("Six-wheel independent motion: FAIL - authored driveMix did not drive", "error");
-    }
+    report_verdict(f, "SIX INDEPENDENT MOTION", "SIX_INDEPENDENT_MOTION");
 }
