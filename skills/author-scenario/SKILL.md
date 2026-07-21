@@ -240,6 +240,21 @@ the very authoring the test exists to check.
   you think it moves.
 - **Measure what you claim.** "The node has zero peers" was reported from two
   missing edges without ever calling `neighbours()`. It had one.
+- **Ports live on the PROGRAM prim, not on the vessel.** `get(me, "soc_out")` on
+  a rover whose battery model hangs off `…/SolarRover/PowerSubsystem` returns
+  `()`, and the usual `if soc == () { soc = 1.0 }` fallback then reports a full
+  battery forever. In `solar_rover_demo` that meant the pack never drained, the
+  cinematic's `wait_until(soc < 0.05)` never fired, and the demo hung after the
+  last waypoint looking like a physics bug. Resolve the program prim
+  (`find("/…/PowerSubsystem")`) and read/write there. A *fallback for an absent
+  reading is a lie you will believe* — prefer failing loudly, or at least log
+  which entity you resolved.
+- **A cut is not a camera loan.** `set_camera("RoverCam")` rebinds the viewport
+  until something rebinds it back. Backspace now returns the view to the avatar
+  (see [`51-cinematic-camera.md`](../../docs/architecture/51-cinematic-camera.md)),
+  but a scenario that cuts and then waits forever still leaves the player
+  watching a camera they cannot steer — give every `wait_until` a bound, or a
+  beat that cuts back.
 
 ## 4. Missions & sequencing (two layers, both pure rhai)
 

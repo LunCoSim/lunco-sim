@@ -253,6 +253,14 @@ Activation, pick one:
 - `SetActiveCamera { name: "CraterOrbit" }` — command, API, rhai `set_camera("CraterOrbit")`, or `KeyC` cycle.
 - `token lunco:activeCamera.timeSamples` on a `def Scope "CameraTrack"` — cuts as data, scrubbing with the transport.
 
+**Giving the view back.** A scenario that cuts to a scene camera leaves the
+viewport bound there — the avatar camera still takes WASD but renders nothing,
+which reads as a hard lock-up. `ReleaseVessel` (Backspace) therefore clears
+`SceneViewport.active_camera`; `reconcile_scene_viewport` revalidates every
+frame and falls back to the `LocalAvatar` camera, so Cancel always means "return
+me to my own eye". A cinematic never has to remember to cut back, and a scenario
+that ends mid-shot cannot strand the player.
+
 This is why the answer is **animation, not a behaviour tree**, and the codebase already agrees:
 a BT is a *decision* structure re-evaluated against world state at tick rate — it re-plans, it
 can fail, and doc "BT one-shot leaf" records that Sequence auto-resets children so "one-shot"

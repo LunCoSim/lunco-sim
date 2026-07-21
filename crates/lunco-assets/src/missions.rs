@@ -23,10 +23,11 @@ mod tests {
 
     #[test]
     fn known_mission_present() {
-        // The mission DEFINITION is USD; the sibling `.json` is only the Horizons
-        // fetch spec. Both are embedded, so assert on both shapes.
+        // A mission is USD, and only USD: nothing under `assets/missions/`
+        // describes a download. Obtaining vectors is a declared dataset
+        // (`crates/lunco-celestial-ephemeris/Assets.toml`), owned by
+        // `crate::datasets`.
         assert!(mission_source("artemis_2_mission.usda").is_some());
-        assert!(mission_source("artemis-2.ephemeris.json").is_some());
         assert!(mission_source("DoesNotExist.json").is_none());
     }
 }

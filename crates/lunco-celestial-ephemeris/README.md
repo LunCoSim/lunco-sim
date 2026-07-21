@@ -10,12 +10,27 @@ implementation backed by analytical theories and external mission data.
 
 - **`CelestialEphemerisProvider`** — concrete `EphemerisProvider`. Combines
   built-in analytical modules (VSOP2013 Earth/Sun/EMB, ELP/MPP02 Moon, via the
-  `celestial-ephemeris` / `celestial-time` / `celestial-core` crates) with a
-  local cache of external JPL Horizons CSV mission data (`Arc<RwLock<…>>` so a
-  background fetch can fill it in).
+  `celestial-ephemeris` / `celestial-time` / `celestial-core` crates) with
+  external mission vectors (JPL Horizons CSV) held behind `Arc<RwLock<…>>`, so a
+  dataset downloaded mid-session is visible to `position()` without a restart.
 - **`EphemerisPlugin`** — apps that need real planetary positions add this; it
   **overwrites** the `EphemerisResource` installed by
-  `lunco_celestial::CelestialPlugin` and kicks off the background Horizons fetch.
+  `lunco_celestial::CelestialPlugin`, registers this crate's `Assets.toml` with
+  `lunco_assets::datasets`, and adopts each declared dataset once its file is on
+  disk.
+
+## Mission data is DECLARED, never fetched here
+
+This crate opens no sockets and builds no URLs. `Assets.toml` declares each
+mission dataset — transport (`url`, `dest`) for `lunco-assets`, and an
+`[<key>.ephemeris]` sub-table (`naif_id`, `center`) for us. Downloading happens
+only when a user asks (Settings ▸ Downloadable data); until then the mission
+simply has no trajectory and `position()` answers `None`, which is the honest
+answer offline.
+
+It used to fetch from JPL at startup, driven by a second file
+(`assets/missions/*.ephemeris.json`) that repeated the query. Both are gone —
+see `docs/architecture/56-asset-resolution-and-cache.md`.
 
 ## Platform note
 
@@ -33,5 +48,5 @@ app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin); // overrides the de
 
 ## Status
 
-Working. Analytical positions + Horizons CSV cache; embedded-ephemeris
-constructor (`new_with_embedded_ephemeris`) for bundled mission data.
+Working. Analytical positions + declared mission datasets; embedded-ephemeris
+constructor (`new_with_embedded_ephemeris`) for bundled data on web.

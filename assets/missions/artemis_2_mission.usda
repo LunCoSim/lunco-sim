@@ -28,13 +28,22 @@
     the ephemeris provider where NAIF body `trackedId` was relative to
     `referenceId` at each step. The curve is COMPUTED, not authored.
 
-    The numbers themselves therefore live outside USD entirely, in the ephemeris
-    layer: a JPL Horizons VECTORS query (see `artemis-2.ephemeris.json`, which is
-    the fetch spec — a query, not an ephemeris) cached as CSV under
-    `.cache/ephemeris/`. That split is deliberate and matches how the rest of this
+    The numbers themselves therefore live outside USD entirely: a JPL Horizons
+    VECTORS query, declared as a dataset in
+    `crates/lunco-celestial-ephemeris/Assets.toml` and cached as CSV once a user
+    downloads it (Settings ▸ Downloadable data — nothing is fetched
+    automatically). That split is deliberate and matches how the rest of this
     engine treats domain data: USD assembles and parameterises, the domain file
-    holds the domain numbers, exactly as `info:sourceAsset` points at a
-    `.mo` rather than dissolving Modelica into USD attributes.
+    holds the domain numbers, exactly as `info:sourceAsset` points at a `.mo`
+    rather than dissolving Modelica into USD attributes.
+
+    Note what this prim does NOT author: the ephemeris `CENTER`. That describes
+    the downloaded bytes, so it lives with the query that produced them; two
+    scenes authoring it could disagree about one file and one would silently
+    place the spacecraft around the wrong body. USD names the BODY (a NAIF id —
+    `lunco:spacecraft:ephemerisId` here, `lunco:body` on a celestial prim), and
+    that id is the join key, which is why no path to a CSV appears anywhere in
+    this file.
 
     If real mission kernels are ever committed to the repo rather than fetched,
     the right format for them is CCSDS OEM (502.0-B, KVN text — diffable, carries

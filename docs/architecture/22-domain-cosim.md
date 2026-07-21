@@ -14,7 +14,9 @@ see **[`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md)
 
 Defined in [`01-ontology.md`](01-ontology.md) section 4a:
 
-- **`SimComponent`** — wraps a model instance; exposes named inputs / outputs
+- **`SimComponent`** — wraps a model instance; exposes named inputs / outputs.
+  It is the prim's **port interface**, and it is published from the model's
+  DECLARATION, not from its solution (see *Interface before solution* below).
 - **`SimConnection`** — links a source port to a target port (FMI/SSP Connection)
 - **`SimPort`** — metadata for a connectable interface point
 - **`PortRegistry`** — the unified scalar-port surface (in `lunco-core::ports`) every
@@ -289,7 +291,7 @@ registered by `UsdSimPlugin`) reads:
 
 | Property | What it does |
 |---|---|
-| `uniform asset info:sourceAsset = @models/Balloon.mo@` | Names the program's file. The ENGINE follows from the extension, never from a second attribute: `.mo` opens the source, dispatches `ModelicaCommand::Compile` and populates `ModelicaModel` + `SimComponent` once the worker returns; `.py` registers a `ScriptDocument` and attaches `ScriptedModel` + `SimComponent`, stepped by `lunco-scripting::run_scripted_models` each `FixedUpdate`. |
+| `uniform asset info:sourceAsset = @models/Balloon.mo@` | Names the program's file. The ENGINE follows from the extension, never from a second attribute: `.mo` opens the source, publishes `ModelicaModel` + `SimComponent` from the PARSE and dispatches `ModelicaCommand::Compile`; `.py` registers a `ScriptDocument` and attaches `ScriptedModel` + `SimComponent`, stepped by `lunco-scripting::run_scripted_models` each `FixedUpdate`. |
 | `uniform string info:sourceCode` | The same, for a program authored in place rather than in a file. |
 | `uniform bool lunco:program:realtimeSafe` | The author's promise that the program may drive a force on a client-predicted body (see [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md)). |
 | `float inputs:<port>` / `float outputs:<port>` | The program's ports. A `.connect` makes one a wire; a constant makes it a parameter. A prim is stepped iff it BOTH binds a program AND declares ports. |
@@ -319,6 +321,37 @@ The result: a multi-component, multi-language cosim is a USD edit, not
 a Rust edit. `cross_entity_cosim_test` exercises the canonical chain
 (Modelica oscillator → Python amplifier → Avian sphere) headlessly in
 ~1.3 s.
+
+### Interface before solution
+
+A model's INTERFACE — its `input Real …` and parameters — is a **declaration**
+the parse already yields. Only its SOLUTION (`variables`, the outputs) needs the
+solver. So `wrap_modelica_into_simcomponent` publishes the `SimComponent` as
+soon as `ModelicaModel` exists, carrying the AST's inputs, with
+`SimStatus::Compiling` until variables populate (`can_step()` already refuses to
+step that state). `modelica_status()` is the single place that decides
+Compiling / Running / Paused, so the bind and the per-tick sync cannot disagree.
+
+It used to wait for `variables`. For the few hundred milliseconds until the
+worker answered, the prim existed with **no ports at all** — so every wire into
+it hit `write_port → false` and the propagation master reported a *dangling
+wire*: a diagnostic that means "your wiring is wrong", raised for wiring that was
+correct. On the solar-rover demo that was `sun_azimuth`, `panel_yaw` and
+`vehicle_throttle` on every load.
+
+Two lessons generalise beyond Modelica:
+
+- **A not-yet-ready participant must not look like a misconfigured one.** The
+  fix is to remove the window (publish what is already known), not to teach the
+  master to tolerate it — a tolerance would also swallow the real error.
+- **A deduplicated diagnostic must be scoped to what it describes.** That report
+  is deduped per port NAME in a `Local`, so one load-time false positive
+  silenced the genuine report for that name for the rest of the process. It now
+  clears whenever the fabric rewires.
+
+A **Python** program still declares no ports (`SimComponent.inputs` is empty and
+`ScriptDocument.inputs` is hardcoded), so dangling-wire reports against one are
+genuine — that gap is real, not this race.
 
 ## Runtime scene control
 

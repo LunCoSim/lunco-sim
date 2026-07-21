@@ -22,7 +22,9 @@ cargo run -p lunco-assets -- process  --twin <TWIN> -a <key> --quality coarse|go
 ```
 
 `<TWIN>` = a folder holding `Assets.toml` + `twin.toml`. `-a <key>` = the
-`[section]` name in its Assets.toml. `--quality coarse` quarters
+`[section]` name in its Assets.toml. The same entries appear in-app under
+Settings ▸ Downloadable data once the twin is open (scanned on open); nothing
+downloads without a click there or a CLI run. `--quality coarse` quarters
 `target_resolution` (floor 64) for a seconds-fast quick-start bake; re-run
 with `good` (default) for full res.
 
@@ -33,12 +35,20 @@ with `good` (default) for full res.
   `LUNCOSIM_CACHE` to ONE absolute workspace-level `.cache/` in their
   `.cargo/config.toml`, so every worktree and twin shares a single pool of
   regenerable data (MSL, textures, ephemeris, downloaded sources).
-- **Raw downloads**: entries without `dest` (the norm) land in
-  `<cache>/sources/<sha256(url)[..16]>/<basename>` — one download per URL,
-  reused by every entry, twin, and worktree (`apollo15_dtm` and
-  `apollo15_normal` share one file). Author `dest` only when a file must
-  sit at a specific path (twin-relative under `--twin`, cache-relative
-  otherwise).
+- **Twin cache** — `<TWIN>/.cache`. A twin's downloads land beside the twin
+  by DEFAULT, so the folder is self-contained: copy it and the data travels,
+  delete it and nothing is orphaned. `twin://` reads resolve `<twin>/<rel>`
+  first, then `<twin>/.cache/<rel>`.
+- **`shared = true`** on an entry sends it to the global pool instead
+  (`<cache>/sources/<sha256(url)[..16]>/<basename>`) — one download per URL,
+  reused by every twin and worktree. Use it for multi-GB upstream products
+  several twins reuse: the LROC DTM entries all set it, so `apollo15_dtm` and
+  `apollo15_normal` still share one file.
+- **Raw downloads**: entries without `dest` land in
+  `<owner cache>/sources/<url-hash>/<basename>` — owner being the twin
+  (`--twin`) or the shared cache (crate manifest). Author `dest` only when a
+  file must sit at a specific path; it is then resolved against that same
+  owner cache.
 - **Baked outputs** (`output_root = "twin"`): inside the twin at `output`,
   where the scene's `demSource`/layer attrs expect them. Per-twin, always.
 
@@ -138,9 +148,8 @@ Roadmap (bake nodes, node-graph editor): the twin's
   output; a matching stamp skips the bake before the expensive decode.
   Changing the source, ROI, `--quality`, or bumping `PIPELINE_VERSION`
   (`src/process.rs`) rebakes exactly what changed. Never time-based.
-- Baked artifacts are gitignored in twins by policy
-  (`terrain/*/materials/`, `.bakekey` stamps) — never commit them; raw
-  downloads never enter the twin at all.
+- Baked artifacts and the twin cache are gitignored by policy
+  (`terrain/*/materials/`, `.bakekey` stamps, `.cache/`) — never commit them.
 
 ## Gotchas
 

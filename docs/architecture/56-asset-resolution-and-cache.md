@@ -24,12 +24,18 @@ scheme: naming the mistake legibly would make it permanent.
 | Scheme | Resolves to | For |
 |---|---|---|
 | `lunco://` | `<cwd>/assets`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
-| `twin://<name>/…` | the open Twin's root | Twin-owned content, and downloaded scenarios |
+| `twin://<name>/…` | the Twin's root, then `<twin>/.cache` | Twin-owned content, and downloaded scenarios |
 | `cached_textures://` | texture cache dir | *derived* pipeline outputs |
 
-`lunco://` resolves `assets/` **first**, then the download cache, so a large
-binary pulled by `cargo run -p lunco-assets -- download` is reachable at its
-logical address without any authored file naming the cache.
+Both schemes resolve **authored first, cache second**: `lunco://` tries
+`assets/` then `<cache>`; `twin://` tries `<twin>/<rel>` then
+`<twin>/.cache/<rel>`. So a downloaded binary is reachable at its logical
+address without any authored file naming a cache, and a file the author
+committed always wins over a materialised copy of it.
+
+Both `twin://` readers implement that fallback — the `AssetReader` and the
+`SchemeRegistry` handler — because they must agree: a file the asset server can
+load but scenario-sync cannot see is worse than one neither can.
 
 A **downloaded scenario is just a Twin root** over its cache directory, so it
 needs no scheme of its own: one `twin://<name>/<rel>` names the scene on every
@@ -133,30 +139,103 @@ supplemented with one Bevy `AssetSource` per storage backend.
 
 `Assets.toml` already carries `url`, `dest`, `sha256`. That is a lockfile.
 
-## Open: resolver-driven materialisation
+## Declared datasets: the runtime half of `Assets.toml`
 
-`Assets.toml` is still only a download script's input, not the resolver's.
-The target resolution order for a logical id:
+`crates/lunco-assets/src/datasets.rs` is where a *running* app meets the
+manifest. `download.rs` knows how to fetch one entry; `DatasetRegistry` knows
+what is declared, what is on disk, and what a user has asked for.
 
-1. present under the owning root (`assets/` or the Twin) → serve it
-2. else present in the content-addressed cache (keyed by `sha256`) → serve it
-3. else declared in an `Assets.toml` → **materialise on demand**, verify hash, serve
-4. else → unresolved: report it on the `StatusBus`
+**The app never reaches the network on its own.** Launch, scene load and twin
+open must not open a connection. `DatasetRegistry::request(key)` is the only
+call in the engine that authorises traffic, and it is wired to a click
+(Settings ▸ Downloadable data). This is a rule about trust, not bandwidth: a
+simulator that phones home when you open a file has to be *explained* rather
+than *read*.
 
-Step 3 is the "realtime cache resolution" worth having: a missing declared asset
-is a fetch, not an error. Step 4 matters because a missing payload currently
-yields a prim with no geometry and no error — indistinguishable from a modelling
-mistake. Silence is the expensive part.
+That rule is also why fetching lives in this crate and nowhere else. A domain
+crate owning its own downloader inevitably grows a "just fetch it at startup"
+line — the ephemeris crate had exactly that, `ureq` and all, and the guarantee
+dies one crate at a time.
 
-Content addressing (2) buys what path-keyed caches cannot: two roots requesting
-the same asset share one copy, a changed URL with an unchanged hash is a cache
+| Concern | Owner |
+|---|---|
+| manifest, URL, cache path, task, bytes, status | `lunco-assets` |
+| declaring datasets + reporting what it loaded | the domain crate |
+| listing and requesting | the UI (knows no dataset by name) |
+
+Registration follows what is OPEN, not what exists: a crate registers its
+embedded manifest once, and a Twin's `Assets.toml` is scanned when that Twin
+opens and forgotten when it closes.
+
+### Where a download lands
+
+| Declaration | Destination |
+|---|---|
+| `shared = true` | the global pool `<cache>/sources/<url-hash>/<file>` |
+| authored `dest` | `<owner cache>/<dest>` |
+| neither | `<owner cache>/sources/<url-hash>/<file>` |
+
+*Owner cache* is `<cache>` for a crate manifest and **`<twin>/.cache` for a
+Twin's**. Twin-local is the default, so a Twin is self-contained: copy the
+folder and its data travels, delete it and nothing is orphaned in a global cache
+nobody audits. `shared = true` is the opt-out for a multi-GB upstream product
+several Twins legitimately reuse (the LROC DTM mosaics), trading
+self-containment for one copy on disk.
+
+One resolver — `entry_dest_path` — answers this for the CLI downloader, the
+runtime registry and the process step alike, so a file fetched from the app and
+one fetched from a terminal cannot land in different places.
+
+### Domain metadata rides with the declaration
+
+A dataset's transport (`url`, `dest`, `sha256`) and its *meaning* belong in one
+place, because the meaning describes those exact bytes. `AssetEntry` keeps every
+unrecognised key verbatim and hands it back through `AssetEntry::domain::<T>()`,
+so the owning crate reads a sub-table this crate never interprets:
+
+```toml
+[artemis2_vectors]
+url  = "https://ssd.jpl.nasa.gov/api/horizons.api?…&CENTER='500%40399'&…"
+dest = "ephemeris/target_-1024_….csv"
+
+[artemis2_vectors.ephemeris]      # read by lunco-celestial-ephemeris
+naif_id = -1024
+center  = "500@399"               # the CENTER= of the query above
+```
+
+This replaced `assets/missions/*.ephemeris.json`, which restated the id and
+centre next to a second copy of the Horizons query. Two files describing one
+product is one too many: they drift, and the drift is silent — a mismatched
+`center` places a spacecraft around the wrong body while looking like data.
+
+The split that remains is deliberate: **USD says WHICH body**
+(`lunco:body` / `lunco:spacecraft:ephemerisId`, a NAIF id — the join key the
+schema already documents), the **dataset says what its own numbers mean**. A
+scene does not author `center`, because two scenes could then disagree about the
+same file and one would be wrong. And the prim names no path: unlike a `.mo`
+behind `info:sourceAsset`, an ephemeris body has an identity of its own, so
+binding by id is both stronger and immune to the download's date range changing.
+
+### Still open
+
+1. present under the owning root (`assets/` or the Twin) → serve it — **done**
+2. else present in that owner's cache → serve it — **done**
+3. else declared in an `Assets.toml` → offer it; materialise **on request** — **done**
+4. else → unresolved: report it on the `StatusBus` — **open**
+
+Step 4 still matters: a missing payload yields a prim with no geometry and no
+error, indistinguishable from a modelling mistake. Silence is the expensive
+part. Note step 3 is deliberately *not* automatic materialisation — see the rule
+above; the resolver offers, the user decides.
+
+Content addressing by `sha256` (rather than URL hash) remains open, and buys
+what path-keyed caches cannot: a changed URL with an unchanged hash is a cache
 hit, and a truncated download is detected rather than served.
 
-Per-root manifests compose — the resolver reads the manifest of whichever root
-owns the reference, so a Twin cannot be broken by a workspace rename, and
-neither can shadow the other. The workspace `assets/` dir is just a root with an
-`Assets.toml`, exactly like a Twin; a user's custom Twin gets identical
-behaviour with no extra concepts.
+Per-root manifests compose — whichever root owns the reference owns its
+manifest, so a Twin cannot be broken by a workspace rename and neither can
+shadow the other. The workspace `assets/` dir is just a root with an
+`Assets.toml`, exactly like a Twin.
 
 ## Open: bodies and their textures belong in USD
 

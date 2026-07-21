@@ -61,9 +61,16 @@ because a `.usda` names it, never by scanning.
 ## The `lunco://` scheme
 
 `lunco://<rel>` = `<repo>/assets/<rel>`, with a fallback to the download cache
-(`crates/lunco-assets/src/lunco_source.rs:87`). Schemes are registered in
+(`crates/lunco-assets/src/lunco_source.rs:87`). `twin://<name>/<rel>` is the
+same shape one level down: the Twin root, then that Twin's own `<twin>/.cache`.
+Authored bytes always win over materialised ones. Schemes are registered in
 `crates/lunco-assets/src/asset_sources.rs:20`: `lunco://`, `twin://`,
 `cached_textures://`.
+
+Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
+downloaded only on request (Settings ▸ Downloadable data, or the
+`lunco-assets` CLI) — the engine never fetches on its own, so an asset that is
+merely declared resolves to nothing until someone asks for it.
 
 **A bare relative path is not "wrong" — it is resolved against the anchoring
 document's directory, keeping that document's scheme.** That is why it bites:
