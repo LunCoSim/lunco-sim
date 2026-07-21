@@ -394,12 +394,10 @@ impl Perspective for ViewPerspective {
     }
 }
 
-/// Build mode — Spawn left, 3D centre, Inspector + Entities tabbed right.
+/// Build mode — Spawn + Inspector left, 3D centre, Entities right.
 ///
-/// Spawn lives on the left because it's the primary "add stuff" tool;
-/// Entities + Inspector tab together on the right because the entity
-/// list is rarely the main view (you mostly click in the 3D scene to
-/// select). Bottom dock is empty — fewer rows of chrome.
+/// Spawn and Inspector live on the left side dock;
+/// Entity list is on the right dock. Bottom dock is empty — fewer rows of chrome.
 pub struct BuildPerspective;
 
 impl Perspective for BuildPerspective {
@@ -411,6 +409,7 @@ impl Perspective for BuildPerspective {
         layout.set_activity_bar(false);
         layout.set_side_browser_tabs(vec![
             PanelId("spawn_palette"),
+            PanelId("sandbox_inspector"),
             PanelId("tools_palette"),
             // Capture the current view as a Camera prim (doc 50).
             PanelId("cinematic_tools"),
@@ -420,7 +419,6 @@ impl Perspective for BuildPerspective {
         ]);
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
         layout.set_right_inspector_tabs(vec![
-            PanelId("sandbox_inspector"),
             PanelId("entity_list"),
             // Optional — only renders if the host binary registers a
             // panel with this id (the rover binary does, modelica

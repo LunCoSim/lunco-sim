@@ -183,9 +183,9 @@ physical models.
 | Slot | Default content |
 |------|-----------------|
 | Activity | Scene (active), Subsystems, Assets |
-| Side browser | Scene tree |
-| Right | Inspector (Transform, RigidBody, Modelica attachment, Attributes) |
-| Bottom | Spawn Palette (collapsible) |
+| Side browser | Spawn Palette, Inspector, Tools |
+| Right | Entity List |
+| Bottom | Collapsible |
 
 ### Simulate — run and observe
 
