@@ -134,11 +134,11 @@ is_windows() { [[ "$1" == *windows* ]]; }
 # ── Per-binary cache subdirs ──────────────────────────────────────────────
 # Each binary needs a different subset of the .cache/ tree at runtime.
 #   lunica:   fonts (UI fallback) + msl (Modelica Standard Library) + thermofluidstream
-#   sandbox:  fonts + models (Perseverance rover glTF)
+#   sandbox:  fonts (UI rendering)
 cache_subdirs_for() {
     case "$1" in
         lunica)   echo "fonts msl thermofluidstream" ;;
-        sandbox)  echo "fonts models" ;;
+        sandbox)  echo "fonts" ;;
     esac
 }
 

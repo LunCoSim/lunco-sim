@@ -3275,83 +3275,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             });
             anchor_rects.push(("menu.help", r_help.response.rect));
 
-            // Time — every clock control that is not pause/resume.
-            //
-            // The sim RATE used to sit on the toolbar beside the pause button and
-            // the sky clock floated permanently over the viewport. Both are time
-            // controls, neither is needed on every frame of every session, and
-            // between them they made "what time is it" a two-place question. One
-            // menu answers it; the toolbar keeps only the verb you actually reach
-            // for mid-drive.
-            //
-            // Domain plugins contribute rows via
-            // `WorkbenchLayout::register_time_menu` (the celestial sky clock, the
-            // >8x warp band), so nothing about the sky is hardcoded here.
-            let r_time = ui.menu_button("Time", |ui| {
-                ui.label(egui::RichText::new("Simulation rate").weak().small());
-                let (paused, rate) = world
-                    .get_resource::<lunco_time::TimeTransport>()
-                    .map(|t| {
-                        (
-                            matches!(t.mode, lunco_time::TransportMode::Paused),
-                            t.rate,
-                        )
-                    })
-                    .unwrap_or((false, 1.0));
-
-                // ONLY the physics-real band is offered here. At or below
-                // `MAX_REALTIME_RATE` the rate multiplies the NUMBER of fixed steps
-                // per frame, so bodies genuinely integrate faster — a rover really
-                // does drive 4x faster, with identical solver fidelity. Past that
-                // ceiling `advance_clock` selects `TimeRegime::KinematicWarp` and
-                // returns relative_speed 0: the tick FREEZES and only the epoch
-                // moves. That is a sky-viewing tool, not a fast-forward, so it stays
-                // in the celestial/mission-control panels.
-                ui.horizontal(|ui| {
-                    for m in [1.0_f64, 2.0, 4.0, 8.0] {
-                        let on = !paused && (rate - m).abs() < f64::EPSILON;
-                        if ui
-                            .selectable_label(on, format!("{m:.0}x"))
-                            .on_hover_text("Run the simulation (physics included) at this rate")
-                            .clicked()
-                        {
-                            if let Some(mut t) =
-                                world.get_resource_mut::<lunco_time::TimeTransport>()
-                            {
-                                t.rate = m;
-                                t.mode = lunco_time::TransportMode::Playing;
-                            }
-                        }
-                    }
-                });
-                if rate > lunco_time::MAX_REALTIME_RATE {
-                    // `Res<Theme>`, NOT `lunco_theme::active(ctx)`: the latter reads
-                    // a per-frame copy that only the Modelica canvas ever publishes,
-                    // so everywhere else it silently returns `Theme::dark()`.
-                    let warn = world
-                        .get_resource::<lunco_theme::Theme>()
-                        .map(|t| t.tokens.warning)
-                        .unwrap_or(egui::Color32::YELLOW);
-                    ui.label(
-                        egui::RichText::new(format!("{rate:.0}x sky — tick frozen")).color(warn),
-                    )
-                    .on_hover_text(
-                        "Kinematic warp: the sim tick is frozen. Bodies do not move; \
-                         only the epoch advances.",
-                    );
-                }
-
-                let callbacks = std::mem::take(&mut layout.time_menu);
-                if !callbacks.is_empty() {
-                    ui.separator();
-                    for cb in &callbacks {
-                        cb(ui, world);
-                    }
-                }
-                layout.time_menu = callbacks;
-            });
-            anchor_rects.push(("menu.time", r_time.response.rect));
-
             // Network — Connect / Disconnect. Reads the always-on
             // `lunco_core::NetStatus` and fires the `NetConnectRequest` /
             // `NetDisconnectRequest` bridge events (no lunco-networking dep
@@ -3509,6 +3432,83 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 }
             });
             anchor_rects.push(("menu.network", r_network.response.rect));
+
+            // Time — every clock control that is not pause/resume.
+            //
+            // The sim RATE used to sit on the toolbar beside the pause button and
+            // the sky clock floated permanently over the viewport. Both are time
+            // controls, neither is needed on every frame of every session, and
+            // between them they made "what time is it" a two-place question. One
+            // menu answers it; the toolbar keeps only the verb you actually reach
+            // for mid-drive.
+            //
+            // Domain plugins contribute rows via
+            // `WorkbenchLayout::register_time_menu` (the celestial sky clock, the
+            // >8x warp band), so nothing about the sky is hardcoded here.
+            let r_time = ui.menu_button("Time", |ui| {
+                ui.label(egui::RichText::new("Simulation rate").weak().small());
+                let (paused, rate) = world
+                    .get_resource::<lunco_time::TimeTransport>()
+                    .map(|t| {
+                        (
+                            matches!(t.mode, lunco_time::TransportMode::Paused),
+                            t.rate,
+                        )
+                    })
+                    .unwrap_or((false, 1.0));
+
+                // ONLY the physics-real band is offered here. At or below
+                // `MAX_REALTIME_RATE` the rate multiplies the NUMBER of fixed steps
+                // per frame, so bodies genuinely integrate faster — a rover really
+                // does drive 4x faster, with identical solver fidelity. Past that
+                // ceiling `advance_clock` selects `TimeRegime::KinematicWarp` and
+                // returns relative_speed 0: the tick FREEZES and only the epoch
+                // moves. That is a sky-viewing tool, not a fast-forward, so it stays
+                // in the celestial/mission-control panels.
+                ui.horizontal(|ui| {
+                    for m in [1.0_f64, 2.0, 4.0, 8.0] {
+                        let on = !paused && (rate - m).abs() < f64::EPSILON;
+                        if ui
+                            .selectable_label(on, format!("{m:.0}x"))
+                            .on_hover_text("Run the simulation (physics included) at this rate")
+                            .clicked()
+                        {
+                            if let Some(mut t) =
+                                world.get_resource_mut::<lunco_time::TimeTransport>()
+                            {
+                                t.rate = m;
+                                t.mode = lunco_time::TransportMode::Playing;
+                            }
+                        }
+                    }
+                });
+                if rate > lunco_time::MAX_REALTIME_RATE {
+                    // `Res<Theme>`, NOT `lunco_theme::active(ctx)`: the latter reads
+                    // a per-frame copy that only the Modelica canvas ever publishes,
+                    // so everywhere else it silently returns `Theme::dark()`.
+                    let warn = world
+                        .get_resource::<lunco_theme::Theme>()
+                        .map(|t| t.tokens.warning)
+                        .unwrap_or(egui::Color32::YELLOW);
+                    ui.label(
+                        egui::RichText::new(format!("{rate:.0}x sky — tick frozen")).color(warn),
+                    )
+                    .on_hover_text(
+                        "Kinematic warp: the sim tick is frozen. Bodies do not move; \
+                         only the epoch advances.",
+                    );
+                }
+
+                let callbacks = std::mem::take(&mut layout.time_menu);
+                if !callbacks.is_empty() {
+                    ui.separator();
+                    for cb in &callbacks {
+                        cb(ui, world);
+                    }
+                }
+                layout.time_menu = callbacks;
+            });
+            anchor_rects.push(("menu.time", r_time.response.rect));
 
             // Pause/Resume simulation via the single transport authority
             // (`TimeTransport.mode`, doc 19). The spine maps `Paused` onto

@@ -259,6 +259,71 @@ impl Panel for Inspector {
     }
 }
 
+/// Environment panel — global scene environment, lighting, terrain, LOD & obstacle field settings.
+pub struct EnvironmentPanel;
+
+impl Panel for EnvironmentPanel {
+    fn id(&self) -> PanelId { PanelId("sandbox_environment") }
+    fn title(&self) -> String { "Environment".into() }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
+    fn transparent_background(&self) -> bool { true }
+
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
+        egui::Frame::new()
+            .fill(mantle)
+            .inner_margin(8.0)
+            .corner_radius(4)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| environment_panel_content(self, ui, ctx));
+            });
+    }
+}
+
+fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    ui.heading("Environment");
+
+    // ── Environment (sun + ambient) ──────────────────────────────
+    egui::CollapsingHeader::new("Sun & Ambient")
+        .default_open(true)
+        .show(ui, |ui| environment_section(ui, ctx));
+    ui.separator();
+
+    // ── Animation transport (play/pause/scrub/rate) ──────────────
+    egui::CollapsingHeader::new("Animation")
+        .default_open(true)
+        .show(ui, |ui| animation_transport_section(ui, ctx));
+    ui.separator();
+
+    // ── Camera (exposure + post-process) ─────────────────────────
+    egui::CollapsingHeader::new("Camera")
+        .default_open(true)
+        .show(ui, |ui| camera_section(ui, ctx));
+    ui.separator();
+
+    // ── Terrain Overlay (slope-hazard analysis VIEW) ─────────────
+    egui::CollapsingHeader::new("Terrain Overlay")
+        .default_open(true)
+        .show(ui, |ui| terrain_overlay_section(ui, ctx));
+    ui.separator();
+
+    // ── Terrain LOD (runtime streaming knobs + streaming health) ─
+    egui::CollapsingHeader::new("Terrain LOD")
+        .default_open(true)
+        .show(ui, |ui| terrain_lod_section(ui, ctx));
+    ui.separator();
+
+    // ── Obstacle Field (procedural craters + rocks) ──────────────
+    egui::CollapsingHeader::new("Obstacle Field (Craters & Rocks)")
+        .default_open(true)
+        .show(ui, |ui| obstacle_field_section(ui, ctx));
+}
+
 /// Delete `entity` from the scene — the single delete path for both the Del
 /// hotkey and the Delete button.
 ///
@@ -297,44 +362,6 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         // system (the single mutation path), not here.
 
         ui.heading("Inspector");
-
-        // ── Environment (sun + ambient) ──────────────────────────────
-        egui::CollapsingHeader::new("Environment (Sun & Ambient)")
-            .default_open(false)
-            .show(ui, |ui| environment_section(ui, ctx));
-        ui.separator();
-
-        // ── Animation transport (play/pause/scrub/rate) ──────────────
-        egui::CollapsingHeader::new("Animation")
-            .default_open(false)
-            .show(ui, |ui| animation_transport_section(ui, ctx));
-        ui.separator();
-
-        // ── Camera (exposure + post-process) ─────────────────────────
-        egui::CollapsingHeader::new("Camera")
-            .default_open(false)
-            .show(ui, |ui| camera_section(ui, ctx));
-        ui.separator();
-
-        // ── Terrain Overlay (slope-hazard analysis VIEW) ─────────────
-        egui::CollapsingHeader::new("Terrain Overlay")
-            .default_open(true)
-            .show(ui, |ui| terrain_overlay_section(ui, ctx));
-        ui.separator();
-
-        // ── Terrain LOD (runtime streaming knobs + streaming health) ─
-        // Above the long Obstacle Field section so the health readout is on
-        // screen when an area looks coarse.
-        egui::CollapsingHeader::new("Terrain LOD")
-            .default_open(true)
-            .show(ui, |ui| terrain_lod_section(ui, ctx));
-        ui.separator();
-
-        // ── Obstacle Field (procedural craters + rocks) ──────────────
-        egui::CollapsingHeader::new("Obstacle Field (Craters & Rocks)")
-            .default_open(true)
-            .show(ui, |ui| obstacle_field_section(ui, ctx));
-        ui.separator();
 
         // Get current selection
         let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {

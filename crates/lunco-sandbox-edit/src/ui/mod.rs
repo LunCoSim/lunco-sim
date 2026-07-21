@@ -69,6 +69,7 @@ impl Plugin for SandboxEditUiPlugin {
         );
         app.register_panel(spawn_palette::SpawnPalette)
             .register_panel(inspector::Inspector)
+            .register_panel(inspector::EnvironmentPanel)
             .register_panel(entity_list::EntityList)
             .register_panel(terrain_tools::ToolsPanel)
             .register_panel(cinematic::CinematicPanel)
@@ -394,10 +395,10 @@ impl Perspective for ViewPerspective {
     }
 }
 
-/// Build mode — Spawn + Inspector left, 3D centre, Entities right.
+/// Build mode — Entities + Spawn left, 3D centre, Inspector right.
 ///
-/// Spawn and Inspector live on the left side dock;
-/// Entity list is on the right dock. Bottom dock is empty — fewer rows of chrome.
+/// Entity list and Spawn palette live on the left side dock;
+/// Inspector is on the right dock. Bottom dock is empty — fewer rows of chrome.
 pub struct BuildPerspective;
 
 impl Perspective for BuildPerspective {
@@ -408,8 +409,8 @@ impl Perspective for BuildPerspective {
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser_tabs(vec![
+            PanelId("entity_list"),
             PanelId("spawn_palette"),
-            PanelId("sandbox_inspector"),
             PanelId("tools_palette"),
             // Capture the current view as a Camera prim (doc 50).
             PanelId("cinematic_tools"),
@@ -419,7 +420,8 @@ impl Perspective for BuildPerspective {
         ]);
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
         layout.set_right_inspector_tabs(vec![
-            PanelId("entity_list"),
+            PanelId("sandbox_inspector"),
+            PanelId("sandbox_environment"),
             // Optional — only renders if the host binary registers a
             // panel with this id (the rover binary does, modelica
             // workbench doesn't). The workbench filters unknown ids.
@@ -469,7 +471,10 @@ impl Perspective for ObjectBuilderPerspective {
             PanelId("rhai_editor"),
         ]);
         // The Inspector alone on the right — parameter editing is the point here.
-        layout.set_right_inspector_tabs(vec![PanelId("sandbox_inspector")]);
+        layout.set_right_inspector_tabs(vec![
+            PanelId("sandbox_inspector"),
+            PanelId("sandbox_environment"),
+        ]);
         layout.set_bottom(None);
     }
 }
@@ -488,6 +493,7 @@ impl Perspective for TerrainPerspective {
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
         layout.set_right_inspector_tabs(vec![
             PanelId("sandbox_inspector"),
+            PanelId("sandbox_environment"),
             PanelId("entity_list"),
         ]);
         layout.set_bottom(None);
