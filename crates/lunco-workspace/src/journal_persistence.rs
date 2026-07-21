@@ -1,13 +1,38 @@
-//! Twin edit-journal persistence (B1).
+//! Twin edit-journal persistence.
 //!
 //! Saves the canonical [`Journal`](lunco_twin_journal::Journal) to a visible,
 //! project-local `<twin-root>/history/journal.json` and reloads it when a Twin
 //! opens, so a twin's **current state** (its scene `.usda`, written on Save)
 //! and its **history** (this replayable op log) are persisted side by side.
-//! Edit history (and, later, versions / branches) survives across sessions.
 //! UI-free and headless: the disk I/O goes through [`lunco_storage`], the same
 //! byte-level layer the rest of the app uses — no business logic in the storage
 //! crate.
+//!
+//! # Persistence is opt-in, per Twin
+//!
+//! The journal always records **in memory** — undo, replication and the
+//! history panel read it live, and none of that is affected by this module.
+//! Writing it to disk is a separate decision, and it is **off by default**:
+//! a Twin keeps history across sessions only with
+//!
+//! ```toml
+//! [journal]
+//! persist = true
+//! ```
+//!
+//! in its `twin.toml`. Opening a folder is not consent to start writing a
+//! growing file into it, and most Twins (scenes run headless, scenarios under
+//! test, someone else's folder opened to look at) want a session-only journal.
+//!
+//! The flag gates **both directions**. A non-persisting Twin does not load an
+//! existing `journal.json` either, so what the history panel shows is always
+//! exactly what this session did — a journal that loads but never saves would
+//! silently stop growing halfway down the list.
+//!
+//! Enforcement is by construction rather than by convention: the only routes
+//! to a journal path — [`persisting_root`] and [`persisting_root_for_journal_id`]
+//! — yield `None` for a non-persisting Twin, so a new I/O site cannot forget to
+//! check the flag.
 //!
 //! - **Load** on [`TwinAdded`](crate::session::TwinAdded): read the file and
 //!   swap it into the live [`JournalResource`] *in place*, preserving the
@@ -49,6 +74,20 @@ fn twin_root(workspace: &WorkspaceResource, twin: TwinId) -> Option<PathBuf> {
     workspace.twin(twin).map(|t| t.root.clone())
 }
 
+/// On-disk folder of `twin`, but **only when that Twin persists its journal**
+/// (`[journal] persist = true` in its `twin.toml`).
+///
+/// Journal file I/O is reachable only through this function and
+/// [`persisting_root_for_journal_id`], so the opt-in is enforced by
+/// construction: with the setting off there is no path to write to, rather
+/// than a flag each I/O site is expected to remember to check.
+fn persisting_root(workspace: &WorkspaceResource, twin: TwinId) -> Option<PathBuf> {
+    workspace
+        .twin(twin)
+        .filter(|t| t.persists_journal())
+        .map(|t| t.root.clone())
+}
+
 /// The journal's **stable, cross-session** Twin identity, derived from the
 /// Twin's on-disk root.
 ///
@@ -64,13 +103,19 @@ fn journal_twin_id(root: &Path) -> JournalTwinId {
 }
 
 /// Resolve a journal's stable id back to the on-disk root of the open Twin it
-/// belongs to, or `None` when no currently-open Twin matches (e.g. its Twin
-/// was closed). Routing through the *open* set means a stale journal can never
-/// write into an unrelated Twin's folder.
-fn root_for_journal_id(workspace: &WorkspaceResource, id: &JournalTwinId) -> Option<PathBuf> {
-    workspace
-        .twins()
-        .find_map(|(_, t)| (journal_twin_id(&t.root) == *id).then(|| t.root.clone()))
+/// belongs to — `None` when no currently-open Twin matches (e.g. its Twin was
+/// closed) **or** when that Twin does not persist its journal.
+///
+/// Routing through the *open* set means a stale journal can never write into
+/// an unrelated Twin's folder; routing through the persist flag means a
+/// session-only Twin has no writable destination at all.
+fn persisting_root_for_journal_id(
+    workspace: &WorkspaceResource,
+    id: &JournalTwinId,
+) -> Option<PathBuf> {
+    workspace.twins().find_map(|(_, t)| {
+        (t.persists_journal() && journal_twin_id(&t.root) == *id).then(|| t.root.clone())
+    })
 }
 
 /// Read the persisted journal bytes for `twin_root`, or `None` when there is
@@ -125,13 +170,14 @@ pub(crate) fn on_twin_added_load_journal(
         (j.twin() != &target_id && !j.is_empty()).then(|| (j.twin().clone(), j.to_bytes()))
     });
     if let Some((old_id, bytes)) = outgoing {
-        match (root_for_journal_id(&workspace, &old_id), bytes) {
+        match (persisting_root_for_journal_id(&workspace, &old_id), bytes) {
             (Some(old_root), Ok(bytes)) => {
                 if let Err(err) = write_journal_bytes(&old_root, &bytes) {
                     warn!("[journal] flush of outgoing twin {} failed: {err}", old_id.0);
                 }
             }
-            (None, _) => {} // its Twin is no longer open — nothing to flush to.
+            // Its Twin is closed, or is session-only — nothing to flush to.
+            (None, _) => {}
             (_, Err(err)) => warn!("[journal] serialize of outgoing twin failed: {err}"),
         }
     }
@@ -139,6 +185,20 @@ pub(crate) fn on_twin_added_load_journal(
     // 2. Load this Twin's journal (or start fresh), bound to its stable id.
     //    Re-stamping normalises journals written before the Twin had a stable
     //    id, so subsequent saves route back to this same folder.
+    //
+    //    A Twin that does not persist gets a fresh journal: it is stamped and
+    //    recorded into for the session, but never read from or written to disk.
+    let Some(persisting_root) = persisting_root(&workspace, trigger.event().twin) else {
+        journal.with_write(|j| *j = CanonicalJournal::new(target_id.clone(), AuthorId::local()));
+        info!(
+            "[journal] bound twin {} (session-only; set `[journal] persist = true` in {} to keep history)",
+            target_id.0,
+            root.join(lunco_twin::MANIFEST_FILENAME).display(),
+        );
+        return;
+    };
+    let root = persisting_root;
+
     let loaded = match read_journal_bytes(&root) {
         Some(bytes) => match CanonicalJournal::from_bytes(&bytes) {
             Ok(mut j) => {
@@ -197,10 +257,10 @@ pub(crate) fn on_document_saved_persist_journal(
             return;
         }
     };
-    // Route by the journal's own identity. No matching open Twin (a loose /
-    // untitled doc whose journal is still the default) → nothing twin-scoped
-    // to persist.
-    let Some(root) = root_for_journal_id(&workspace, &id) else {
+    // Route by the journal's own identity. No destination (a loose / untitled
+    // doc whose journal is still the default, or a session-only Twin) →
+    // nothing to persist.
+    let Some(root) = persisting_root_for_journal_id(&workspace, &id) else {
         return;
     };
     if let Err(err) = write_journal_bytes(&root, &bytes) {
@@ -238,8 +298,8 @@ pub(crate) fn persist_journal_periodic(
     if len == *last_saved_len {
         return; // nothing new since the last save
     }
-    let Some(root) = root_for_journal_id(&workspace, &id) else {
-        return; // journal not yet bound to an open twin — nothing to route to
+    let Some(root) = persisting_root_for_journal_id(&workspace, &id) else {
+        return; // no persisting twin to route to — session-only, or unbound
     };
     let bytes = match journal.with_read(|j| j.to_bytes()) {
         Ok(b) => b,
@@ -313,18 +373,28 @@ mod tests {
         assert_ne!(journal_twin_id(a.path()), journal_twin_id(b.path()));
     }
 
-    #[test]
-    fn save_routes_by_journal_identity_not_active_twin() {
-        // Two open Twins, A and B; B is the active one.
-        let dir_a = tempfile::tempdir().unwrap();
-        let dir_b = tempfile::tempdir().unwrap();
-        let open = |p: &Path| match lunco_twin::TwinMode::open(p).unwrap() {
+    /// Open `dir` as a Twin whose manifest opts in (or out) of journal
+    /// persistence, exactly as `twin.toml` on disk would.
+    fn open_twin(dir: &Path, persist: bool) -> lunco_twin::Twin {
+        let mut manifest = lunco_twin::TwinManifest::new("t");
+        manifest.journal = Some(lunco_twin::JournalManifest { persist });
+        manifest
+            .write(&dir.join(lunco_twin::MANIFEST_FILENAME))
+            .unwrap();
+        match lunco_twin::TwinMode::open(dir).unwrap() {
             lunco_twin::TwinMode::Twin(t) | lunco_twin::TwinMode::Folder(t) => t,
             lunco_twin::TwinMode::Orphan(_) => panic!("expected a folder"),
-        };
+        }
+    }
+
+    #[test]
+    fn save_routes_by_journal_identity_not_active_twin() {
+        // Two open Twins, A and B, both persisting; B is the active one.
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
         let mut ws = WorkspaceResource::new();
-        let _a = ws.add_twin(open(dir_a.path()));
-        let b = ws.add_twin(open(dir_b.path()));
+        let _a = ws.add_twin(open_twin(dir_a.path(), true));
+        let b = ws.add_twin(open_twin(dir_b.path(), true));
         ws.active_twin = Some(b); // B active, but the journal belongs to A
 
         // A journal bound to A's identity (as `on_twin_added_load_journal` would
@@ -333,14 +403,54 @@ mod tests {
         j.record_lifecycle(AuthorTag::local_user(), DocumentId::new(1), LifecycleKind::Saved);
 
         // Routing resolves A's folder from the journal's own id, *not* `active_twin`.
-        let root =
-            root_for_journal_id(&ws, j.twin()).expect("journal id resolves to its open twin");
+        let root = persisting_root_for_journal_id(&ws, j.twin())
+            .expect("journal id resolves to its open twin");
         assert_eq!(root, dir_a.path());
         write_journal_bytes(&root, &j.to_bytes().unwrap()).unwrap();
 
-        // A got the journal; B's folder is untouched (the corruption A1 fixed).
+        // A got the journal; B's folder is untouched.
         assert!(journal_path(dir_a.path()).exists());
         assert!(!journal_path(dir_b.path()).exists());
+    }
+
+    /// The default. A Twin that has not opted in offers no destination at all,
+    /// so no I/O site can write history into its folder.
+    #[test]
+    fn a_twin_that_did_not_opt_in_has_no_journal_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = WorkspaceResource::new();
+        let id = ws.add_twin(open_twin(dir.path(), false));
+
+        let j = CanonicalJournal::new(journal_twin_id(dir.path()), AuthorId::local());
+        assert!(persisting_root(&ws, id).is_none());
+        assert!(persisting_root_for_journal_id(&ws, j.twin()).is_none());
+    }
+
+    /// A plain folder — no `twin.toml` whatsoever — inherits the same default.
+    /// This is the common case (`--scene some/file.usda`), and the one where
+    /// writing an unasked-for file into the user's folder would be worst.
+    #[test]
+    fn a_folder_without_a_manifest_does_not_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let twin = match lunco_twin::TwinMode::open(dir.path()).unwrap() {
+            lunco_twin::TwinMode::Folder(t) => t,
+            other => panic!("expected a bare folder, got {other:?}"),
+        };
+        assert!(!twin.persists_journal());
+
+        let mut ws = WorkspaceResource::new();
+        let id = ws.add_twin(twin);
+        assert!(persisting_root(&ws, id).is_none());
+    }
+
+    /// Opting in is what turns the destination on — the flag is the only
+    /// difference between these two Twins.
+    #[test]
+    fn opting_in_yields_a_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = WorkspaceResource::new();
+        let id = ws.add_twin(open_twin(dir.path(), true));
+        assert_eq!(persisting_root(&ws, id).as_deref(), Some(dir.path()));
     }
 
     #[test]

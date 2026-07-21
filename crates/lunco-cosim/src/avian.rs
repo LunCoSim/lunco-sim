@@ -537,7 +537,11 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
 /// (after propagation).
 pub fn apply_pending_forces(
     mut q_pending: Query<(Entity, &mut PendingForces)>,
-    mut forces: Query<Forces>,
+    // Force must land only on a body the solver will integrate. A disabled body
+    // (frozen while its program compiles, say) never has its accumulators
+    // cleared, so force applied to it is stored, not spent, and discharges in
+    // full on the step that eventually runs — see `lunco_physics::Integrable`.
+    mut forces: Query<Forces, lunco_physics::Integrable>,
 ) {
     for (e, mut pf) in &mut q_pending {
         if pf.f != DVec3::ZERO || pf.f_local != DVec3::ZERO || pf.torque != DVec3::ZERO {

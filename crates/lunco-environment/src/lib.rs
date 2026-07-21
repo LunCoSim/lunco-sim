@@ -185,7 +185,11 @@ pub fn compute_local_gravity(
 /// authoritative value with no duplicated work.
 pub fn apply_gravity_to_rigid_bodies(
     q: Query<(Entity, &LocalGravity, &Mass), With<RigidBody>>,
-    mut forces: Query<Forces>,
+    // Force must land only on a body the solver will integrate. A disabled body
+    // (frozen while its program compiles, say) never has its accumulators
+    // cleared, so force applied to it is stored, not spent, and discharges in
+    // full on the step that eventually runs — see `lunco_physics::Integrable`.
+    mut forces: Query<Forces, lunco_physics::Integrable>,
 ) {
     for (entity, gravity, mass) in &q {
         let force = gravity.0 * mass.0 as f64;

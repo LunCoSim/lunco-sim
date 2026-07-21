@@ -10,13 +10,37 @@
 ## Goal
 
 One **edit journal** shared by every editable domain (USD, Modelica, and future
-SysML/Python/mission), owned by the **Twin** as its primary feature, and
-**persisted to a file inside the Twin folder** so a Twin carries its own edit
+SysML/Python/mission), owned by the **Twin**, so a Twin can carry its own edit
 history (undo across sessions, named versions, branches, and — later —
 multi-user replication).
 
-The headline finding of the audit: **the unified journal already exists.** The
-work is *adoption + persistence + wiring*, not a greenfield design.
+## Recording and persisting are separate
+
+The journal **always records in memory**. Undo/redo, the history panel and
+network replication read it live, and nothing about them is optional.
+
+Writing it to `<twin>/history/journal.json` is a second, independent decision,
+and it is **off by default**. A Twin keeps history across sessions only when its
+`twin.toml` says so:
+
+```toml
+[journal]
+persist = true
+```
+
+Opening a folder is not consent to start growing a file inside it, and most
+Twins — scenes run headless, scenarios under test, someone else's folder opened
+to look at — want a session-only journal.
+
+The flag gates **both directions**: a non-persisting Twin does not load an
+existing `journal.json` either. A journal that loaded but never saved would show
+a history that silently stops growing partway down the list, which is worse than
+no history at all.
+
+Enforcement is by construction. In `lunco-workspace::journal_persistence` the
+only two routes to a journal path — `persisting_root` and
+`persisting_root_for_journal_id` — return `None` for a Twin that has not opted
+in, so a new I/O site cannot forget to check the flag.
 
 ---
 
@@ -121,7 +145,7 @@ openusd Stage  --add_sink-->  CommittedChange  --extract_diff-->  Diff
       │                                                            │
       │ EditTarget routes write to an override/session layer       │  record as
       ▼ (base .usda stays pristine)                                ▼  EntryKind::Op{domain:Usd, op:Diff, inverse:Diff}
-  non-destructive                                          lunco-twin-journal  --persist-->  <twin>/.lunco/journal/*
+  non-destructive                                          lunco-twin-journal  --persist-->  <twin>/history/journal.json
 ```
 
 ---
@@ -135,7 +159,7 @@ The development of the journal and source unification system is structured as fo
 - **Auto-bridge:** Added the `OpRecorder` trait to `DocumentHost` (`lunco-doc`) and a Bevy `JournalOpRecorder` wrapper (`lunco-doc-bevy`) to automatically record undo/redo operations.
 
 ### Phase B — Persisting the journal inside the Twin (Implemented)
-- **Twin persistence:** The journal is serialized to `<twin-root>/.lunco/journal/journal.json` using a custom DTO to flatten Lamport clocks and non-string-keyed maps.
+- **Twin persistence:** The journal serializes to `<twin-root>/history/journal.json` (opt-in; see above) using a custom DTO to flatten Lamport clocks and non-string-keyed maps.
 - **Twin identity mapping:** Twin identity is stable and derived from the folder/manifest. The Lamport clock is re-seeded on load from the max persisted value.
 
 ### Phase C — USD non-destructive editing (Implemented)

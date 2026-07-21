@@ -516,7 +516,11 @@ fn apply_wheel_suspension(
         &Transform,
         &ChildOf,
     )>,
-    mut q_chassis: Query<(Forces, &RigidBody), With<DriveMix>>,
+    // Force must land only on a body the solver will integrate. A disabled body
+    // (frozen while its program compiles, say) never has its accumulators
+    // cleared, so force applied to it is stored, not spent, and discharges in
+    // full on the step that eventually runs — see `lunco_physics::Integrable`.
+    mut q_chassis: Query<(Forces, &RigidBody), (With<DriveMix>, lunco_physics::Integrable)>,
     mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<DriveMix>)>,
 ) {
     for (mut wheel, susp, hits, wheel_tf, parent) in q_wheels.iter_mut() {
@@ -657,7 +661,11 @@ fn apply_wheel_drive(
         &ChildOf,
     )>,
     q_ports: Query<&Port>,
-    mut q_chassis: Query<(Forces, &RigidBody, Option<&CommandInputs>), With<DriveMix>>,
+    // Force must land only on a body the solver will integrate. A disabled body
+    // (frozen while its program compiles, say) never has its accumulators
+    // cleared, so force applied to it is stored, not spent, and discharges in
+    // full on the step that eventually runs — see `lunco_physics::Integrable`.
+    mut q_chassis: Query<(Forces, &RigidBody, Option<&CommandInputs>), (With<DriveMix>, lunco_physics::Integrable)>,
 ) {
     for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
@@ -919,7 +927,11 @@ fn differential_lambda(
 /// rings / diverges.
 fn differential_coupling_system(
     q_coupling: Query<&DifferentialCoupling>,
-    mut q_bodies: Query<Forces>,
+    // Force must land only on a body the solver will integrate. A disabled body
+    // (frozen while its program compiles, say) never has its accumulators
+    // cleared, so force applied to it is stored, not spent, and discharges in
+    // full on the step that eventually runs — see `lunco_physics::Integrable`.
+    mut q_bodies: Query<Forces, lunco_physics::Integrable>,
 ) {
     for coupling in q_coupling.iter() {
         let Ok([chassis, mut a, mut b]) =
@@ -994,7 +1006,11 @@ impl Default for Suspension {
 /// opposite pair on the two connected bodies.
 fn suspension_system(
     q_joints: Query<(&PrismaticJoint, &Suspension)>,
-    mut q_bodies: Query<Forces>,
+    // Force must land only on a body the solver will integrate. A disabled body
+    // (frozen while its program compiles, say) never has its accumulators
+    // cleared, so force applied to it is stored, not spent, and discharges in
+    // full on the step that eventually runs — see `lunco_physics::Integrable`.
+    mut q_bodies: Query<Forces, lunco_physics::Integrable>,
 ) {
     for (joint, susp) in q_joints.iter() {
         let e1 = joint.body1;

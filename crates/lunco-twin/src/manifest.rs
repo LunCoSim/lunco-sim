@@ -82,6 +82,34 @@ pub struct TwinManifest {
     /// scene; absent for Twins with no USD content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usd: Option<UsdManifest>,
+
+    /// Edit-journal settings (`[journal]` section). Absent means the
+    /// defaults in [`JournalManifest`] — a session-only journal that
+    /// writes nothing to disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal: Option<JournalManifest>,
+}
+
+/// The `[journal]` section of `twin.toml`.
+///
+/// The edit journal always records in memory — undo, replication and the
+/// history panel read it live. This section governs only whether it is
+/// **written to and read from `<twin>/history/journal.json`**.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct JournalManifest {
+    /// Persist this Twin's edit history across sessions.
+    ///
+    /// **Off by default.** A journal file is a continuously-growing record
+    /// of every authored edit; a Twin gets one only when its author asks
+    /// for one, so merely opening a folder never starts writing into it.
+    ///
+    /// The flag is a single switch over both directions: off means the
+    /// journal is neither loaded at open nor saved, so a session's history
+    /// is always exactly what that session did. (Loading without saving
+    /// would show a history that silently stops growing.)
+    #[serde(default)]
+    pub persist: bool,
 }
 
 /// The `[usd]` section of `twin.toml`.
@@ -138,6 +166,7 @@ impl TwinManifest {
             default_perspective: None,
             children: Vec::new(),
             usd: None,
+            journal: None,
         }
     }
 
@@ -193,6 +222,7 @@ mod tests {
             default_perspective: None,
             children: vec![],
             usd: None,
+            journal: None,
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -222,6 +252,7 @@ mod tests {
             usd: Some(UsdManifest {
                 default_scene: Some("main_scene.usda".into()),
             }),
+            journal: Some(JournalManifest { persist: true }),
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -239,6 +270,7 @@ mod tests {
             default_perspective: None,
             children: vec![],
             usd: None,
+            journal: None,
         };
         let path = std::env::temp_dir().join(format!(
             "lunco_twin_manifest_{}.toml",
@@ -341,6 +373,7 @@ uuid = "{id}"
             default_perspective: None,
             children: vec![],
             usd: None,
+            journal: None,
         };
         let minted = bare.ensure_uuid();
         assert!(bare.uuid == Some(minted));

@@ -67,6 +67,9 @@ avian-validate = ["avian3d/validate"]
 # apps, so it must stay as light as avian + the bevy ECS/time core.
 bevy = { workspace = true }
 avian3d = { workspace = true }
+# The decision half of readiness: what is pending, and what policy says to do
+# about it. This crate is the effector — see `src/readiness.rs`.
+lunco-readiness = { workspace = true }
 
 # This was the ONE crate of 65 without this section, so the workspace
 # `disallowed_methods` ban list — std::fs, std::thread::spawn, Instant::now,

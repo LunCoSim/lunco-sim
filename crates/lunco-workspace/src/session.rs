@@ -176,8 +176,9 @@ impl Plugin for WorkspacePlugin {
             .add_observer(on_register_document)
             .add_observer(on_unregister_document);
         // Twin edit-journal history persistence — load on open, save on
-        // `DocumentSaved` + debounced periodic — to `<twin>/history/journal.json`.
-        // ONE plugin, shared with the headless server (DRY). No-op without a
+        // `DocumentSaved` + debounced periodic — to `<twin>/history/journal.json`,
+        // for twins that opted in with `[journal] persist = true`. ONE plugin,
+        // shared with the headless server (DRY). No-op without a
         // `JournalResource`, so journal-free builds are unaffected.
         app.add_plugins(crate::journal_persistence::WorkspaceJournalPlugin);
     }

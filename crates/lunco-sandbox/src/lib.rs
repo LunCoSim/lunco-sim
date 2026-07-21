@@ -2170,13 +2170,13 @@ impl Plugin for SandboxCorePlugin {
         app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
 
-        // Durable twin history for headless (`lunco-sandbox-server` / any
-        // `--no-ui` host): the SAME twin-folder-scoped persistence the GUI uses
-        // (`<twin>/history/journal.json`) — load on twin open, save on
-        // `DocumentSaved` + debounced periodic — so a running server's
-        // collaborative edit history survives restarts, in the project folder.
-        // One code path for GUI + headless (DRY); the old global
-        // `~/.lunco/journal/` `lunco-doc-bevy` copy is retired.
+        // Twin history for headless (`lunco-sandbox-server` / any `--no-ui`
+        // host): the SAME twin-folder-scoped persistence the GUI uses — load on
+        // twin open, save on `DocumentSaved` + debounced periodic — so a running
+        // server's collaborative edit history survives restarts, in the project
+        // folder. One code path for GUI + headless (DRY). Writing is opt-in per
+        // twin (`[journal] persist = true`); without it the journal is
+        // session-only and nothing touches disk.
         if self.headless {
             // `setup_sandbox`'s twin-load path (and the journal persistence) needs
             // `WorkspaceResource`, which the GUI gets from `lunco-workbench`'s

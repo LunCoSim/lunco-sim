@@ -73,7 +73,9 @@ pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindR
 pub use document_kind_registry::DocumentKindRegistryPlugin;
 pub use error::TwinError;
 pub use file_kind::{DocumentKind, FileEntry, FileKind};
-pub use manifest::{TwinChildRef, TwinManifest, UsdManifest, MANIFEST_FILENAME};
+pub use manifest::{
+    JournalManifest, TwinChildRef, TwinManifest, UsdManifest, MANIFEST_FILENAME,
+};
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
 // to depend on them separately just to use the types Twin hands back.
@@ -302,9 +304,24 @@ impl Twin {
                     default_perspective: None,
                     children: Vec::new(),
                     usd: Some(UsdManifest { default_scene: Some(rel) }),
+                    journal: None,
                 });
             }
         }
+    }
+
+    /// Whether this Twin persists its edit journal to
+    /// `<root>/history/journal.json`.
+    ///
+    /// Off unless the manifest says `[journal] persist = true`. The same
+    /// default covers a folder-Twin with no `twin.toml` at all and a manifest
+    /// with no `[journal]` section, so nothing starts writing history into a
+    /// folder the user merely opened.
+    pub fn persists_journal(&self) -> bool {
+        self.manifest
+            .as_ref()
+            .and_then(|m| m.journal.as_ref())
+            .is_some_and(|j| j.persist)
     }
 
     /// Walk the folder and classify every file by extension.
@@ -576,6 +593,7 @@ version = "0.1.0"
             default_perspective: None,
             children: vec![],
             usd: None,
+            journal: None,
         };
         twin.promote_to_twin(manifest).unwrap();
         assert!(twin.has_manifest());

@@ -36,8 +36,10 @@ use avian3d::prelude::{Physics, PhysicsTime};
 use bevy::prelude::*;
 
 pub mod escape;
+pub mod readiness;
 pub mod spatial;
 pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
+pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::GridSpatialQuery;
 
 /// The set of reasons physics is currently suspended. Empty ⇒ physics integrates.
@@ -54,6 +56,11 @@ impl PhysicsHolds {
     pub const TERRAIN_READY: &'static str = "terrain-ready";
     /// Obstacle-field regeneration settle window (`lunco-obstacle-field`).
     pub const OBSTACLE_FIELD: &'static str = "obstacle-field";
+    /// Something the world needs is not ready yet — a scene still composing, a
+    /// program still compiling. Raised from [`lunco_readiness`] by
+    /// [`readiness::apply_world_readiness_hold`]; the *scope* of a wait (world vs
+    /// one object) is an authored policy decision, not a fact of the wait.
+    pub const READINESS: &'static str = "readiness";
     /// A scripted cutscene / offline recording is choosing when the world moves.
     ///
     /// Held, physics is frozen but `Time<Virtual>` keeps running, so `FixedUpdate` —
@@ -230,7 +237,10 @@ impl Plugin for PhysicsGatePlugin {
             // ready yet; the diagnostic reports the ones that got through anyway.
             // Same owner, same plugin — a hold that fails silently is what cost
             // two sessions of eyeballing rendered frames.
-            .add_plugins(escape::EscapeDiagnosticPlugin);
+            .add_plugins(escape::EscapeDiagnosticPlugin)
+            // Same reasoning: a readiness decision that nothing enforces is a
+            // hold that silently does not hold.
+            .add_plugins(readiness::ReadinessEffectPlugin);
     }
 }
 
