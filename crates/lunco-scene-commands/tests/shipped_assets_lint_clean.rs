@@ -111,3 +111,27 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     );
     assert!(!report.ok, "a file with lint ERRORS must not report ok");
 }
+
+/// The GEOMETRIC rule has teeth too, and it needs its own case.
+///
+/// Every other rule reads schemas, ancestry or joint targets — topology, which is
+/// what a validator normally sees. `sprung-foot-not-lowest` reads composed
+/// transforms and collider extents instead, so it is the one rule that could
+/// silently never fire while every fact it depends on quietly returns "unknown".
+/// The selftest leg is authored with the descent lander's original geometry: a
+/// footpad centred on the strut's tip, clearing its rotated corner by millimetres.
+/// Schema-wise it is impeccable.
+#[test]
+fn a_strut_that_outreaches_its_foot_is_caught_by_geometry_alone() {
+    register_usd_lint_policy();
+
+    let broken = assets_dir().join("scenes/sandbox/lint_selftest.usda");
+    let report = lunco_scene_commands::validate::validate_asset(&broken.to_string_lossy());
+    let lint_errors: Vec<&String> =
+        report.errors.iter().filter(|e| e.starts_with("[usd/")).collect();
+
+    assert!(
+        lint_errors.iter().any(|e| e.contains("sprung-foot-thin-clearance")),
+        "the selftest leg must trip sprung-foot-thin-clearance — got {lint_errors:?}"
+    );
+}

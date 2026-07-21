@@ -30,7 +30,7 @@
 //! #{
 //!   stage: "<identifier>",
 //!   bodies: [ #{ path, type, kinematic, simulated, collider, subtree_collider,
-//!                host_body, jointed } ],
+//!                host_body, jointed, collider_min, collider_max } ],
 //!   joints: [ #{ path, type, bodies: [path, …], missing: [path, …] } ],
 //! }
 //! ```
@@ -38,6 +38,22 @@
 //! `host_body` is the nearest ANCESTOR body (empty when there is none) and
 //! `jointed` says whether any joint names this body — together they are the
 //! nested-body question. `missing` lists joint targets that are not bodies.
+//!
+//! # Topology is not enough
+//!
+//! Everything above except the last two fields is TOPOLOGY — schemas, ancestry,
+//! joint targets — and topology cannot answer the question that actually breaks
+//! mechanisms: which part reaches the ground FIRST. A landing leg can apply every
+//! right schema, name every real body, validate clean, and still ground its strut
+//! instead of its footpad, at which point the spring leaves the load path and
+//! reads 0 N at 0 stroke while carrying the vehicle. Nothing logs it; the vehicle
+//! sits level at a plausible height.
+//!
+//! `collider_min` / `collider_max` are the world-space bounds of everything a body
+//! can touch the world with — the union over its collider subtree, taken through
+//! the composed transform, so a raked strut measures where its corner actually
+//! hangs. `[]` when the subtree states no bounds, which a rule must read as
+//! UNKNOWN and never as zero.
 
 use std::collections::HashSet;
 

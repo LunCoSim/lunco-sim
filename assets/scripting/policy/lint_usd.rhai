@@ -16,9 +16,15 @@
 // `lunco-usd-avian/src/lint.rs`:
 //
 //   facts.bodies[]  #{ path, type, kinematic, simulated, collider,
-//                      subtree_collider, host_body, jointed }
+//                      subtree_collider, host_body, jointed,
+//                      collider_min, collider_max }
 //       every prim applying `PhysicsRigidBodyAPI`. `host_body` is the nearest
 //       ANCESTOR body ("" if none) and `jointed` says whether any joint names it.
+//       `collider_min`/`collider_max` are WORLD-space bounds of everything the
+//       body can touch the world with — `[x,y,z]`, or `[]` when unknown, which is
+//       NOT the same as zero. They are the only geometric facts here, and they
+//       exist because a mechanism can be topologically perfect and still wrong:
+//       see `sprung_foot_not_lowest`.
 //
 //   facts.joints[]  #{ path, type, bodies[], missing[] }
 //       every `Physics*Joint`. `missing` = targets that are not bodies.
@@ -85,6 +91,26 @@ fn lowest_y(facts, path) {
         if b.path != path { continue; }
         if b.collider_min.len() != 3 { return (); }
         return b.collider_min[1];
+    }
+    ()
+}
+
+/// How far `path` reaches — its longest collider dimension, or `()` if unknown.
+///
+/// A proxy for the lever arm between a leg's pivot and its foot, which is what
+/// turns an attitude change into vertical travel at the contact. Using it keeps
+/// clearance rules SCALE-RELATIVE: the same rule has to serve a 7 m landing strut
+/// and a 0.2 m suspension link, and any absolute margin is wrong for one of them.
+fn reach_of(facts, path) {
+    for b in facts.bodies {
+        if b.path != path { continue; }
+        if b.collider_min.len() != 3 { return (); }
+        let r = b.collider_max[0] - b.collider_min[0];
+        let dy = b.collider_max[1] - b.collider_min[1];
+        let dz = b.collider_max[2] - b.collider_min[2];
+        if dy > r { r = dy; }
+        if dz > r { r = dz; }
+        return r;
     }
     ()
 }
@@ -223,15 +249,11 @@ fn mass_outside_any_body(facts) {
 /// well-formed, validate clean, and still land on its shins. That is why
 /// `collider_min` exists.
 ///
-/// Scope is deliberately narrow — a prismatic carrying a linear drive is a SPRING,
-/// and the body it carries through a further joint is that spring's FOOT. Raycast
-/// wheels have no such joint and revolute-driven wheels are not prismatic, so this
-/// cannot fire on a rover.
+/// Scope is deliberately narrow: a prismatic carrying a linear drive IS a spring,
+/// and the body that spring's member carries through a further joint is its FOOT.
+/// Raycast wheels have no such joint and revolute-driven wheels are not prismatic,
+/// so this cannot fire on a rover.
 fn sprung_foot_not_lowest(facts) {
-    // Under one degree of rotation on a metre-scale leg. A margin thinner than
-    // this is closable by a tip too small to see, so it is not a margin.
-    let thin = 0.05;
-
     let out = [];
     for j in facts.joints {
         if j.type != "PhysicsPrismaticJoint" { continue; }
@@ -240,44 +262,71 @@ fn sprung_foot_not_lowest(facts) {
         let strut = j.bodies[1];
         let sy = lowest_y(facts, strut);
         if sy == () { continue; }
-
-        for k in facts.joints {
-            if k.path == j.path { continue; }
-            if k.bodies.len() < 2 { continue; }
-            if k.bodies[0] != strut { continue; }
-            let foot = k.bodies[1];
-            let fy = lowest_y(facts, foot);
-            if fy == () { continue; }
-
-            if fy >= sy {
-                let m = "carries <";
-                m += foot;
-                m += "> as its foot, but the sprung member <";
-                m += strut;
-                m += "> reaches LOWER (";
-                m += sy;
-                m += " vs ";
-                m += fy;
-                m += "). The strut grounds first and carries the vehicle rigidly:";
-                m += " the spring never sees the landing, reads 0 N at 0 stroke, and";
-                m += " the gear settles by bending this joint's angular lock.";
-                m += " Make the foot the only thing that can touch — extend the foot";
-                m += " BELOW the strut's tip rather than centring it on the tip.";
-                out.push(finding("sprung-foot-not-lowest", "error", j.path, m));
-            } else if sy - fy < thin {
-                let gap = sy - fy;
-                let m = "clears its foot <";
-                m += foot;
-                m += "> by only ";
-                m += gap;
-                m += " m. Less than a degree of leg rotation closes that,";
-                m += " and once the strut touches, the contact latches and the spring";
-                m += " is out of the load path. Deepening the foot in place does NOT";
-                m += " help — it demands a larger rotation to reach the ground, which";
-                m += " brings the strut down faster. Move the foot below the tip.";
-                out.push(finding("sprung-foot-thin-clearance", "warn", j.path, m));
-            }
-        }
+        let reach = reach_of(facts, strut);
+        if reach == () { continue; }
+        for f in feet_of(facts, j.path, strut, sy, reach) { out.push(f); }
     }
     out
+}
+
+/// Every finding for the feet `strut` carries. Split out because rhai caps
+/// expression complexity CUMULATIVELY over a function body: the same code inlined
+/// as a second nested loop fails to COMPILE, which takes the whole policy down and
+/// leaves the linter silently registering nothing.
+fn feet_of(facts, jpath, strut, sy, reach) {
+    let out = [];
+    for k in facts.joints {
+        if k.bodies.len() < 2 { continue; }
+        if k.bodies[0] != strut { continue; }
+        let foot = k.bodies[1];
+        let fy = lowest_y(facts, foot);
+        if fy == () { continue; }
+        let r = clearance(jpath, strut, foot, sy, fy, reach);
+        if r != () { out.push(r); }
+    }
+    out
+}
+
+/// Judge one strut/foot pair. `()` when the foot is properly proud of the strut.
+fn clearance(jpath, strut, foot, sy, fy, reach) {
+    if fy >= sy {
+        let m = "carries <";
+        m += foot;
+        m += "> as its foot, but the sprung member <";
+        m += strut;
+        m += "> reaches LOWER (";
+        m += sy;
+        m += " vs ";
+        m += fy;
+        m += "). The strut grounds first and carries the vehicle rigidly:";
+        m += " the spring never sees the landing, reads 0 N at 0 stroke, and the";
+        m += " gear settles by bending this joint's angular lock instead of stroking.";
+        m += " Extend the foot BELOW the strut's tip rather than centring it on the tip.";
+        return finding("sprung-foot-not-lowest", "error", jpath, m);
+    }
+    // ONE DEGREE of attitude, in metres at this leg's own scale: sin(1°)*reach.
+    // A clearance thinner than that is closed by a tip too small to see on a
+    // screenshot, so it is not a margin — it is a coincidence. This is an ERROR
+    // rather than a warning because it is the form the bug actually SHIPPED in:
+    // the foot was lower, by 6.6 mm, and the gear still stood on its shins.
+    let gap = sy - fy;
+    let need = reach * 0.01745;
+    if gap < need {
+        let m = "clears its foot <";
+        m += foot;
+        m += "> by only ";
+        m += gap;
+        m += " m across a reach of ";
+        m += reach;
+        m += " m — under one degree of attitude (";
+        m += need;
+        m += " m). A tip that small puts the strut on the ground, the contact";
+        m += " latches, and the spring leaves the load path: 0 N at 0 stroke while";
+        m += " the vehicle stands on it, level and at a plausible height.";
+        m += " Deepening the foot in place does NOT help — it demands a larger";
+        m += " rotation to reach the ground, which brings the strut down faster.";
+        m += " Move the foot BELOW the strut's tip.";
+        return finding("sprung-foot-thin-clearance", "error", jpath, m);
+    }
+    ()
 }

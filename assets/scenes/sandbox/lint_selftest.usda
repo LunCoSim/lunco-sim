@@ -19,6 +19,8 @@
 #                (this IS the motor bug, in miniature)
 #   BadJoint     a joint naming a prim that is not a body   → joint-target-not-a-body
 #   Ghost        a dynamic body with no collider anywhere   → dynamic-body-no-collider
+#   Leg          a sprung strut that outreaches its own foot → sprung-foot-not-lowest
+#                (geometry, not schema: it would validate clean)
 #
 # and one CORRECT construction that must stay silent:
 #
@@ -152,6 +154,60 @@ def Xform "LintSelftest" (
     {
         rel physics:body0 = </LintSelftest/Anchor>
         rel physics:body1 = </LintSelftest/NotABody>
+    }
+
+    # A SPRUNG LEG whose strut reaches the ground before its foot does — the
+    # descent lander's original authoring, in miniature. The pad is a thin wafer
+    # CENTRED on the strut's tip, so it clears the strut's rotated bottom corner
+    # by millimetres; the strut grounds first and the spring leaves the load path.
+    # Nothing here is malformed: every schema is right, every joint names a real
+    # body, and it would validate clean. Only the GEOMETRY is wrong, which is
+    # exactly the class `collider_min` exists to catch.
+    def Xform "Leg" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        double3 xformOp:translate = (-12.0, 6.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cube "Strut" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:translate = (4.009, -1.807, 0)
+            double3 xformOp:rotateXYZ = (0, 0, 25.0)
+            double3 xformOp:scale = (0.15, 7.05, 0.15)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        }
+
+        def Cylinder "Foot" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.08
+            double3 xformOp:translate = (5.5, -5.0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def PhysicsPrismaticJoint "Strut_Spring" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        )
+        {
+            rel physics:body0 = </LintSelftest/Leg>
+            rel physics:body1 = </LintSelftest/Leg/Strut>
+            uniform token physics:axis = "Y"
+            uniform token drive:linear:physics:type = "force"
+            float drive:linear:physics:stiffness = 4000.0
+        }
+
+        def PhysicsSphericalJoint "Foot_Gimbal"
+        {
+            rel physics:body0 = </LintSelftest/Leg/Strut>
+            rel physics:body1 = </LintSelftest/Leg/Foot>
+        }
     }
 
     # A dynamic body with no collider anywhere under it.
