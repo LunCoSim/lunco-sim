@@ -54,16 +54,27 @@
 # electrical and thermal model — a circuit is one Modelica model, not one per part.
 def Xform "Motor" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "PhysicsMassAPI", "LunCoMotorAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoMotorAPI"]
 )
 {
     uniform bool lunco:spawnable = true
 
     # --- Physics ---
-    # A stand-alone motor on the ground is a rigid body; a motor bolted to a rover is a
-    # child of the chassis body and this is inert. Both are correct, and neither needs
-    # this file to change.
-    bool physics:rigidBodyEnabled = true
+    # NO `PhysicsRigidBodyAPI`, and this is the whole story of a bug that shipped:
+    # this file used to apply it, on the belief that "a motor bolted to a rover is a
+    # child of the chassis body and this is inert". It is not inert. The loader's rule
+    # (`lunco-usd-avian`) is that an APPLIED `PhysicsRigidBodyAPI` makes that prim its
+    # own body — ancestry is not consulted, because nested-body-plus-joint is exactly
+    # how the `physical` drivetrain mounts its wheels. So every mounted motor became a
+    # free dynamic body that no joint held and no collider stopped, and all four fell
+    # out of every rover on the first physics step. Nothing else noticed: the rovers
+    # still drove, still steered, still made their top speed, and only a screenshot of
+    # motors lying on the regolith gave it away. `scenes/sandbox/parts_attached.usda`
+    # is the gate that now catches it.
+    #
+    # An internal part is not a body. It has mass and it renders; the chassis it is
+    # mounted on is the body, and a part that must move relative to its host says so
+    # with a JOINT — the same rule `gearbox.usda` already follows.
     float physics:mass = 8.0 (
         customData = {
             double min = 0.5
