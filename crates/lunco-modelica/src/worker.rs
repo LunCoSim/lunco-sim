@@ -1615,15 +1615,6 @@ pub struct ModelicaModel {
     /// step-hang warning while a compile is legitimately running.
     #[reflect(ignore)]
     pub is_compiling: bool,
-    /// `true` once this model's FIRST compile has settled, whichever way it
-    /// went. Distinct from [`Self::is_compiled`], which says the compile
-    /// SUCCEEDED: a model that fails to build is settled but not compiled.
-    ///
-    /// Read by [`crate::hold_physics_until_models_settle`] to decide when the
-    /// world may start integrating. The distinction is the whole point — gating
-    /// on `is_compiled` would freeze the scene forever behind one broken model.
-    #[reflect(ignore)]
-    pub compile_settled: bool,
     /// `true` after a successful Compile has installed a stepper for
     /// this entity in the Modelica worker. `spawn_modelica_requests`
     /// uses this to dispatch a Compile (instead of a doomed Step) when
@@ -1930,9 +1921,6 @@ pub fn handle_modelica_responses(
             // touch this flag — they were never compile-flagged.
             if result.is_new_model || result.is_parameter_update || result.is_reset {
                 model.is_compiling = false;
-                // Settled either way — a compile that ERRORED has still had its
-                // answer, and must not keep the physics hold raised.
-                model.compile_settled = true;
             }
 
             // Forward log messages to console via bevy_workbench's console system

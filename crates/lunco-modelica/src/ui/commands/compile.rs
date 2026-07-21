@@ -964,7 +964,6 @@ pub fn on_compile_model(
                     document: doc,
                     is_stepping: true,
                     is_compiling: true,
-                    compile_settled: false,
                     is_compiled: false,
                     compiled_generation: 0,
                     pending_generation: doc_generation,

@@ -1237,7 +1237,12 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     } else if let Some(j) = physics::Joint::get(stage, path.clone()).ok().flatten() {
         // Generic/D6 → reduce via per-DOF UsdPhysicsLimitAPI (typed).
         let b = base(&j, &view)?;
-        let (reduced, axis, lo, hi) = reduce_generic_joint_typed(stage, path)?;
+        let (reduced, cardinal, lo, hi, is_rot) = reduce_generic_joint_typed(stage, path)?;
+        // Same two conversions every typed arm applies: the cardinal axis is named
+        // in the STAGE's frame, and an angular limit is authored in degrees.
+        // `to_radians` leaves an infinite (unauthored) bound infinite.
+        let axis = conv.dir_d(cardinal);
+        let (lo, hi) = if is_rot { (lo.to_radians(), hi.to_radians()) } else { (lo, hi) };
         pending_from(b, axis, lo, hi, reduced, None, None)
     } else {
         return None;
@@ -1257,7 +1262,10 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
 /// `UsdPhysicsJoint` (D6) to the avian primitive matching its free DOFs by
 /// reading each per-DOF `UsdPhysicsLimitAPI` (`limit:{transX..rotZ}`) off the
 /// live stage. A DOF is *locked* when `low > high`, *free* when unauthored.
-fn reduce_generic_joint_typed(stage: &Stage, path: &SdfPath) -> Option<(&'static str, DVec3, f64, f64)> {
+fn reduce_generic_joint_typed(
+    stage: &Stage,
+    path: &SdfPath,
+) -> Option<(&'static str, DVec3, f64, f64, bool)> {
     use openusd::schemas::physics;
     const DOFS: [(&str, DVec3, bool); 6] = [
         ("transX", DVec3::X, false), ("transY", DVec3::Y, false), ("transZ", DVec3::Z, false),
@@ -1281,11 +1289,16 @@ fn reduce_generic_joint_typed(stage: &Stage, path: &SdfPath) -> Option<(&'static
             }
         }
     }
+    // The axis is returned CARDINAL and the limits in their AUTHORED units; the
+    // caller converts both, exactly as it does for a natively-typed joint. The
+    // trailing flag says whether the surviving DOF is rotational, which is what
+    // decides whether the limits are degrees (`limit:rot*`) or metres
+    // (`limit:trans*`).
     match (free_trans.len(), free_rot.len()) {
-        (0, 0) => Some(("PhysicsFixedJoint", DVec3::Y, f64::NEG_INFINITY, f64::INFINITY)),
-        (0, 1) => Some(("PhysicsRevoluteJoint", free_rot[0].0, free_rot[0].1, free_rot[0].2)),
-        (1, 0) => Some(("PhysicsPrismaticJoint", free_trans[0].0, free_trans[0].1, free_trans[0].2)),
-        (0, 3) => Some(("PhysicsSphericalJoint", free_rot[0].0, f64::NEG_INFINITY, f64::INFINITY)),
+        (0, 0) => Some(("PhysicsFixedJoint", DVec3::Y, f64::NEG_INFINITY, f64::INFINITY, false)),
+        (0, 1) => Some(("PhysicsRevoluteJoint", free_rot[0].0, free_rot[0].1, free_rot[0].2, true)),
+        (1, 0) => Some(("PhysicsPrismaticJoint", free_trans[0].0, free_trans[0].1, free_trans[0].2, false)),
+        (0, 3) => Some(("PhysicsSphericalJoint", free_rot[0].0, f64::NEG_INFINITY, f64::INFINITY, true)),
         _ => None,
     }
 }

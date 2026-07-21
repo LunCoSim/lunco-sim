@@ -1451,54 +1451,7 @@ impl Plugin for ModelicaWorkbenchPlugin {
 ///
 /// Only models with a source document are waited on: one without a document has
 /// no compile coming and would hold forever.
-/// Whether the world-wide warm-up gate is still armed.
-///
-/// The global hold is a START-UP gate, not a standing policy. Once the scene's
-/// initial models have all answered it disarms, and a model compiled later —
-/// a vessel spawned mid-run, a script edited and rebuilt — must never freeze a
-/// world that is already flying — such a body is held inert on its own instead.
-///
-/// Re-armed on scene load, because a fresh scene is a fresh start-up.
-#[derive(Resource, Debug)]
-pub struct CosimWarmup {
-    /// `true` while the initial batch is still being waited on.
-    pub armed: bool,
-}
-
-impl Default for CosimWarmup {
-    fn default() -> Self {
-        Self { armed: true }
-    }
-}
-
-pub fn hold_physics_until_models_settle(
-    q_models: Query<&worker::ModelicaModel>,
-    mut warmup: ResMut<CosimWarmup>,
-    mut holds: ResMut<lunco_physics::PhysicsHolds>,
-) {
-    if !warmup.armed {
-        return;
-    }
-    let waiting = q_models
-        .iter()
-        .any(|m| m.document != lunco_doc::DocumentId::default() && !m.compile_settled);
-    // Compare before writing so the `ResMut` is dereferenced only on a real
-    // edge, per `PhysicsHolds::set`.
-    if waiting != holds.holds(lunco_physics::PhysicsHolds::COSIM_MODELS) {
-        holds.set(lunco_physics::PhysicsHolds::COSIM_MODELS, waiting);
-    }
-    if !waiting {
-        warmup.armed = false;
-    }
-}
-
 fn build_modelica_core(app: &mut App) {
-    app.init_resource::<CosimWarmup>().add_systems(
-        Update,
-        hold_physics_until_models_settle
-            .run_if(resource_exists::<lunco_physics::PhysicsHolds>),
-    );
-
     let (tx_cmd, rx_cmd) = unbounded();
     let (tx_res, rx_res) = unbounded();
 
