@@ -821,6 +821,47 @@ fn process_usd_avian_prims(
     extract_avian_prim(&cs.view(), entity, &sdf_path, &mut commands);
 }
 
+/// Set the world's gravity from a composed `UsdPhysicsScene` prim.
+///
+/// `physics:gravityMagnitude` is in scene units per second squared and
+/// `physics:gravityDirection` is a vector in the STAGE's frame, so both convert
+/// at this boundary like every other authored quantity — magnitude by
+/// `metersPerUnit`, direction by the up-axis convention.
+///
+/// UsdPhysics gives each attribute a "use the default" sentinel rather than
+/// leaving it unauthored: a NEGATIVE magnitude means "earth gravity", and a ZERO
+/// direction vector means "the stage's down axis". Honouring both is what lets a
+/// scene author only the half it cares about — a lunar scene names 1.62 and says
+/// nothing about direction.
+fn apply_physics_scene_gravity(
+    reader: &StageView<'_>,
+    sdf_path: &SdfPath,
+    commands: &mut Commands,
+) {
+    const EARTH_G: f64 = 9.80665;
+    let conv = lunco_usd_bevy::stage_convention(reader);
+
+    let magnitude = match reader.value::<f32>(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
+        Some(m) if m >= 0.0 => conv.length(m as f64),
+        _ => EARTH_G,
+    };
+    let direction = match reader.value::<[f32; 3]>(sdf_path, ptok::A_GRAVITY_DIRECTION) {
+        Some(d) => {
+            let v = conv.dir_d(DVec3::new(d[0] as f64, d[1] as f64, d[2] as f64));
+            v.try_normalize().unwrap_or(DVec3::NEG_Y)
+        }
+        None => DVec3::NEG_Y,
+    };
+
+    info!(
+        "[usd-avian] {} sets gravity to {:.4} m/s² along {:?}",
+        sdf_path.as_str(),
+        magnitude,
+        direction
+    );
+    commands.insert_resource(lunco_environment::Gravity::flat(magnitude, direction));
+}
+
 /// Map a single composed USD prim to its avian physics components, read off the
 /// live canonical [`StageView`](lunco_usd_bevy::StageView). Split out of the
 /// observer so the read body can be driven directly by tests.
@@ -830,6 +871,16 @@ fn extract_avian_prim(
     sdf_path: &SdfPath,
     commands: &mut Commands,
 ) {
+    // `UsdPhysicsScene` — simulation-wide settings, of which this engine consumes
+    // gravity. It is a SETTINGS prim, not a body: it has no transform and no
+    // collider, so it is handled here and the body/collider reads below are
+    // skipped entirely.
+    if reader.type_name(sdf_path).as_deref() == Some(ptok::T_PHYSICS_SCENE) {
+        apply_physics_scene_gravity(reader, sdf_path, commands);
+        commands.entity(entity).try_insert(UsdAvianProcessed);
+        return;
+    }
+
     // Skip wheel prims — the sim plugin handles those.
     if reader.real_f32(sdf_path, "physxVehicleWheel:radius").is_some() {
         commands.entity(entity).try_insert(UsdAvianProcessed);

@@ -7777,6 +7777,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-core",
+ "lunco-environment",
  "lunco-terrain-globe",
  "lunco-usd-bevy",
  "openusd",

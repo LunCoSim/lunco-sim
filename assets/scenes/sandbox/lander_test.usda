@@ -21,8 +21,8 @@
 # The lander's own cosim chain (altimeter → GNC → force/torque, `piloted` authority
 # gate) travels with its asset — see `descent_lander.usda` for the wiring diagram.
 #
-# Gravity is applied by lunco-environment (sandbox default 9.81 NEG_Y); the model
-# must NOT re-apply it.
+# Gravity is applied by lunco-environment from this scene's `PhysicsScene`
+# (1.62 m/s², NEG_Y); the model must NOT re-apply it.
 #
 # Controls:
 #   Space       — full thrust        (lander, once possessed)
@@ -40,6 +40,16 @@ def Xform "LanderTest" (
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
+
+    # UsdPhysicsScene — simulation-wide settings; bodies name it via
+    # `physics:simulationOwner`. The MOON: the lander's struts, its GNC and its
+    # propellant budget all take their numbers from this, so the scene states it
+    # rather than inherit a terrestrial default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
     # bound with the purpose-specific `material:binding:physics`, which is

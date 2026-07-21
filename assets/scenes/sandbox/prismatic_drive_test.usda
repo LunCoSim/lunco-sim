@@ -36,6 +36,15 @@ def Xform "SandboxScene" (
 )
 {
 
+    # UsdPhysicsScene — simulation-wide settings; bodies name it via
+    # `physics:simulationOwner`. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 9.81
+    }
+
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
     # bound with the purpose-specific `material:binding:physics`, which is
     # how UsdPhysics (and Omniverse) actually spell a surface.

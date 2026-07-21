@@ -22,6 +22,15 @@
 
 def Xform "Artemis2Review"
 {
+
+    # UsdPhysicsScene — simulation-wide settings. Earth gravity: this scene's
+    # vehicles and their tuning are authored against it, so it is stated here
+    # rather than left to the app's start-up value.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 9.81
+    }
     def "SolarSystem" (
         prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
     )

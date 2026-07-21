@@ -20,6 +20,16 @@ def Xform "LandingLegsTest" (
     doc = "A lander dropped onto its legs from 3 m — the landing gear with nothing else attached."
 )
 {
+
+    # UsdPhysicsScene — simulation-wide settings; bodies name it via
+    # `physics:simulationOwner`. The MOON: the lander's struts, its GNC and its
+    # propellant budget all take their numbers from this, so the scene states it
+    # rather than inherit a terrestrial default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
     uniform bool lunco:spawnable = false
 
     def Scope "PhysicsMaterials"
@@ -28,8 +38,8 @@ def Xform "LandingLegsTest" (
             prepend apiSchemas = ["PhysicsMaterialAPI"]
         )
         {
-            float physics:dynamicFriction = 0.05
-            float physics:staticFriction = 0.05
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
         }
     }
 
@@ -71,7 +81,7 @@ def Xform "LandingLegsTest" (
         prepend references = @lunco://vessels/landers/descent_lander.usda@</DescentLander>
     )
     {
-        double3 xformOp:translate = (0, 5.5, 0)
+        double3 xformOp:translate = (0, 8.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

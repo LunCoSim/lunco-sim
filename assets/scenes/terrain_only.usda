@@ -13,6 +13,15 @@ def Xform "TerrainOnly" (
     kind = "assembly"
 )
 {
+
+    # UsdPhysicsScene — simulation-wide settings; bodies name it via
+    # `physics:simulationOwner`. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 9.81
+    }
     uniform bool lunco:spawnable = false
 
     # --- Avatar (Camera) --- freeflight, parked high so a spawned DEM (site
