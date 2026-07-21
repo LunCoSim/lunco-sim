@@ -523,12 +523,31 @@ fn apply_input_defaults_validated(
         .map(String::as_str)
         .collect();
     if !unknown.is_empty() {
-        bevy::log::warn!(
-            "[{ctx}] {} parsed input default(s) not in stepper.input_names(): {:?} (known: {:?})",
-            unknown.len(),
-            unknown,
-            known,
-        );
+        // ALL of them missing is categorically worse than some of them: the model
+        // exposes NO runtime slot at all, so every wire into it is rejected and it
+        // runs on its declared defaults for the whole session — a simulation that
+        // completes, publishes plausible numbers, and simulates nothing. That is
+        // the expensive failure (it renders as usable footage), so it is an ERROR
+        // and it names the two causes worth checking.
+        if known.is_empty() {
+            bevy::log::error!(
+                "[{ctx}] the compiled model exposes NO runtime inputs at all, but the \
+                 source declares {}: {:?}. Every wired value into this model will be \
+                 DISCARDED and it will run on its declared defaults. rumoca demotes a \
+                 bound `input Real x = <default>` to an algebraic, so this means the \
+                 source reaching the compiler was NOT stripped — check that it entered \
+                 through `seat_user_source` / `seat_library_files`.",
+                unknown.len(),
+                unknown,
+            );
+        } else {
+            bevy::log::warn!(
+                "[{ctx}] {} parsed input default(s) not in stepper.input_names(): {:?} (known: {:?})",
+                unknown.len(),
+                unknown,
+                known,
+            );
+        }
     }
     for (name, val) in input_defaults {
         if !known.contains(name) {

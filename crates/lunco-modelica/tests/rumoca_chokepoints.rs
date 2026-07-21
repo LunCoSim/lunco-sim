@@ -150,11 +150,14 @@ fn user_source_is_seated_only_through_the_strip_chokepoint() {
         .map(|(i, l)| format!("lib.rs:{}: {}", i + 1, l.trim()))
         .collect();
 
-    // Exactly two are expected:
-    //   * `seat_user_source` — the chokepoint itself (strips first)
-    //   * `load_source_root_in_memory` — library roots, NOT user model source
-    //     (documented hole: §3 of the workarounds doc — untracked in
-    //     `seated_user_uris`, so it can't be evicted)
+    // Exactly two are expected, and BOTH strip first:
+    //   * `seat_user_source` — the chokepoint for a user model document
+    //   * `load_source_root_in_memory` — library roots, reached only through
+    //     `seat_library_files`, which strips every member. Library members used
+    //     to arrive via rumoca's own source-root loader instead, unstripped —
+    //     that is the bug `library_member_bound_input_survives_as_runtime_slot`
+    //     pins. (Still untracked in `seated_user_uris`, so it can't be evicted:
+    //     §3 of the workarounds doc.)
     assert_eq!(
         seats.len(),
         2,
