@@ -193,6 +193,73 @@ def Xform "PrismaticSpringTest" (
         float drive:linear:physics:maxForce = 20000.0
     }
 
+    # ── The leg convention: two DIFFERENT joint frames ───────────────────────
+    #
+    # The two struts above set `localRot0 == localRot1`, which is the easy case:
+    # both bodies rest at the same orientation, so any error in how the basis is
+    # applied cancels between the frames and is invisible.
+    #
+    # A landing leg is NOT that case. Its strut body carries the 25° rake as its
+    # own `xformOp:rotateXYZ`, so the joint's two frames differ — `localRot0` is
+    # 205° about Z (hull side, taking +Y onto the hull→foot direction) while
+    # `localRot1` is the 180° flip alone (leg side, because the body already
+    # holds the 25°). Their PRODUCT with each body's rest orientation agrees,
+    # which is what a prismatic requires; the individual quaternions do not.
+    #
+    # This strut reproduces that exactly, with the same mass and stiffness as the
+    # other two, so the direction it slides along is measurable in isolation:
+    #
+    #   raked axis, as authored:   axial load = m·g·cos25° = 734.1 N → 0.1835 m
+    #   vertical axis, if the rake is lost:   m·g          = 810.0 N → 0.2025 m
+    #
+    # and the bob's horizontal travel separates them outright: a raked axis moves
+    # it 0.0776 m in X, a vertical one moves it not at all.
+    def Cube "AnchorLegLike" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 10.0, 0)
+        double3 xformOp:scale = (0.6, 0.3, 0.6)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.35, 0.36, 0.4)]
+        bool physics:kinematicEnabled = true
+    }
+
+    # Rotated 25° about Z in its own right — exactly as a leg strut is — so the
+    # joint's two frames must differ to describe the same rest orientation.
+    def Cube "BobLegLike" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.42262, 9.09369, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 25.0)
+        double3 xformOp:scale = (0.5, 0.5, 0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.6, 0.85, 0.4)]
+        float physics:mass = 500.0
+        bool physics:collisionEnabled = true
+    }
+
+    def PhysicsPrismaticJoint "StrutLegLike" (
+        prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+    )
+    {
+        rel physics:body0 = </PrismaticSpringTest/AnchorLegLike>
+        rel physics:body1 = </PrismaticSpringTest/BobLegLike>
+        uniform token physics:axis = "Y"
+        quatf physics:localRot0 = (-0.216440, 0, 0, 0.976296)
+        quatf physics:localRot1 = (0, 0, 0, 1)
+        float physics:lowerLimit = -1.0
+        float physics:upperLimit = 1.0
+        uniform token drive:linear:physics:type = "force"
+        float drive:linear:physics:stiffness = 4000.0
+        float drive:linear:physics:damping = 2200.0
+        float drive:linear:physics:targetPosition = 0.0
+        float drive:linear:physics:maxForce = 20000.0
+    }
+
     def Scope "Scenario"
     {
         custom string lunco:scenario = "prismatic-spring"

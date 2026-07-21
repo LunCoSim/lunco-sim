@@ -2284,6 +2284,94 @@ def PhysicsRevoluteJoint "Hinge" (
         assert_eq!(drive.target_position, None);
     }
 
+    /// Where a raked joint's axis actually POINTS, from the authoring a landing
+    /// leg uses.
+    ///
+    /// `physics:axis` can only name X, Y or Z, so a strut raked 25° off vertical
+    /// carries the rake in `physics:localRot0` and the axis is read IN that
+    /// basis. Everything downstream depends on the resulting direction — most
+    /// sharply the authored travel range, since a leg's `lowerLimit = -0.8,
+    /// upperLimit = 0.0` is only soft if load pushes it toward NEGATIVE
+    /// displacement. Point the axis the other way and the joint is not sprung at
+    /// all: it jams against its upper limit at zero stroke and carries the
+    /// vehicle rigidly, reporting no spring force. That reads, from outside, as
+    /// "the suspension is too stiff".
+    ///
+    /// USD quaternions are authored `(w, x, y, z)`. `(-0.216440, 0, 0, 0.976296)`
+    /// is therefore w = -0.216440, z = 0.976296: a 205° rotation about +Z, which
+    /// takes the frame's +Y onto (0.42262, -0.90631, 0) — outward and DOWN, hull
+    /// toward foot. This test exists because reading those four numbers in the
+    /// other order (x first) is silent, plausible, and yields an axis pointing
+    /// UP instead, inverting every sign the mechanism depends on.
+    #[test]
+    fn a_raked_joint_axis_points_where_the_quaternion_says() {
+        const RAKED: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Hull" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def Xform "Leg" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def PhysicsPrismaticJoint "Spring" (
+    prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+)
+{
+    rel physics:body0 = </Hull>
+    rel physics:body1 = </Leg>
+    uniform token physics:axis = "Y"
+    quatf physics:localRot0 = (-0.216440, 0, 0, 0.976296)
+    quatf physics:localRot1 = (0, 0, 0, 1)
+    float physics:lowerLimit = -0.8
+    float physics:upperLimit = 0.0
+    uniform token drive:linear:physics:type = "force"
+    float drive:linear:physics:stiffness = 4000.0
+}
+"#;
+        let dir = std::env::temp_dir().join("lunco_joint_typed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("raked.usda");
+        std::fs::write(&f, RAKED).unwrap();
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+
+        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Spring").unwrap())
+            .expect("raked prismatic joint reads off the live stage");
+
+        // The axis token itself is cardinal — the rake is not in here.
+        assert_eq!(j.axis, DVec3::Y);
+
+        // …it is here, and this is the direction the mechanism actually slides
+        // along: `free_axis = local_rot0 * axis`, the same product avian forms.
+        let free_axis = j.local_rot0 * j.axis;
+        let want = DVec3::new(0.42262, -0.90631, 0.0);
+        assert!(
+            (free_axis - want).length() < 1e-4,
+            "a 205°-about-Z basis must take +Y to {want:?} (outward and DOWN, \
+             hull toward foot), got {free_axis:?}. An axis pointing UP here means \
+             the quaternion was read in the wrong component order, and every \
+             leg in the fleet is jammed against `upperLimit = 0.0`."
+        );
+        assert!(
+            free_axis.y < 0.0,
+            "the strut axis must point DOWNWARD from the hull, got {free_axis:?}"
+        );
+
+        // `localRot1` is body1's half of the same frame: 180° about Z, which is
+        // what lets a leg body already carrying its own 25° rake agree with a
+        // 205° joint frame.
+        let flipped = j.local_rot1 * DVec3::Y;
+        assert!(
+            (flipped - DVec3::NEG_Y).length() < 1e-4,
+            "localRot1 = (0,0,0,1) is 180° about Z and must take +Y to -Y, got {flipped:?}"
+        );
+
+        // Prismatic limits are METRES and pass through unconverted — unlike a
+        // revolute's degrees. A conversion here would silently scale the leg's
+        // travel by 57.
+        // f32 on the wire, f64 in the joint — compare at f32 precision.
+        assert!((j.limit_lower - -0.8).abs() < 1e-6, "lower {}", j.limit_lower);
+        assert!((j.limit_upper - 0.0).abs() < 1e-6, "upper {}", j.limit_upper);
+    }
+
     #[test]
     fn non_joint_prim_reads_none() {
         let dir = std::env::temp_dir().join("lunco_joint_typed");

@@ -54,6 +54,9 @@ fn on_start(me) {
     this.comp = find("/PrismaticSpringTest/StrutComp");
     this.bob_ext = find("/PrismaticSpringTest/BobExt");
     this.bob_comp = find("/PrismaticSpringTest/BobComp");
+    this.leglike = find("/PrismaticSpringTest/StrutLegLike");
+    this.bob_leglike = find("/PrismaticSpringTest/BobLegLike");
+    this.leglike_x0 = ();
 
     print("[strut] ── raked prismatic springs, isolated ─────────────────");
     print("[strut] extension joint gid=" + this.ext + "  compression gid=" + this.comp);
@@ -76,10 +79,13 @@ fn on_tick(me) {
     let fe = get(this.ext, "force");
     let xc = get(this.comp, "displacement");
     let fc = get(this.comp, "force");
+    let xl = get(this.leglike, "displacement");
+    let pl = world_pos(this.bob_leglike);
+    if this.leglike_x0 == () && pl != () { this.leglike_x0 = pl[0]; }
 
     if this.t >= this.next_sample {
         print("[strut] t=" + r2(this.t) + "s  ext=" + r4(xe) + "m/" + r2(fe) +
-              "N   comp=" + r4(xc) + "m/" + r2(fc) + "N");
+              "N   comp=" + r4(xc) + "m/" + r2(fc) + "N   leglike=" + r4(xl) + "m");
         this.next_sample = this.t + this.sample_s;
     }
 
@@ -90,6 +96,8 @@ fn on_tick(me) {
             comp_stroke: xc, comp_force: fc,
             ext_pos: world_pos(this.bob_ext),
             comp_pos: world_pos(this.bob_comp),
+            leglike_stroke: xl,
+            leglike_dx: if pl == () || this.leglike_x0 == () { () } else { pl[0] - this.leglike_x0 },
         });
     }
 }
@@ -146,7 +154,21 @@ fn verdict(s) {
     if s.ext_pos != () { f.push(t_range(s.ext_pos[1], 8.0, 9.5, "extension bob height (m)")); }
     if s.comp_pos != () { f.push(t_range(s.comp_pos[1], 8.0, 9.5, "compression bob height (m)")); }
 
+    // The leg convention, measured on its own. A raked axis and a vertical one
+    // differ by only 10% in travel — but by EVERYTHING in horizontal motion, so
+    // the sideways displacement is the check that actually distinguishes them.
+    if s.leglike_stroke != () {
+        f.push(t_rel(s.leglike_stroke, EXPECTED_TRAVEL, 0.2,
+            "leg-convention travel (m) — differing localRot0/localRot1"));
+    }
+    if s.leglike_dx != () {
+        f.push(t_rel(s.leglike_dx, 0.0776, 0.25,
+            "leg-convention sideways travel (m) — 0 would mean the 25° rake was " +
+            "lost and the strut slides straight down"));
+    }
+
     print("[strut] ── results ───────────────────────────────────────────");
+    print("[strut]   leg-like     " + r4(s.leglike_stroke) + " m   dx " + r4(s.leglike_dx) + " m");
     print("[strut]   extension    " + r4(s.ext_stroke) + " m  " + r2(s.ext_force) + " N");
     print("[strut]   compression  " + r4(s.comp_stroke) + " m  " + r2(s.comp_force) + " N");
     print("[strut]   expected     +" + EXPECTED_TRAVEL + " / -" + EXPECTED_TRAVEL +
