@@ -245,12 +245,13 @@ fn sprung_foot_not_lowest(facts) {
             if k.path == j.path { continue; }
             if k.bodies.len() < 2 { continue; }
             if k.bodies[0] != strut { continue; }
-            let fy = lowest_y(facts, k.bodies[1]);
+            let foot = k.bodies[1];
+            let fy = lowest_y(facts, foot);
             if fy == () { continue; }
 
             if fy >= sy {
                 let m = "carries <";
-                m += k.bodies[1];
+                m += foot;
                 m += "> as its foot, but the sprung member <";
                 m += strut;
                 m += "> reaches LOWER (";
@@ -266,7 +267,7 @@ fn sprung_foot_not_lowest(facts) {
             } else if sy - fy < thin {
                 let gap = sy - fy;
                 let m = "clears its foot <";
-                m += k.bodies[1];
+                m += foot;
                 m += "> by only ";
                 m += gap;
                 m += " m. Less than a degree of leg rotation closes that,";
