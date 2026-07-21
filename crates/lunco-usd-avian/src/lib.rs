@@ -85,6 +85,15 @@ impl Plugin for UsdAvianPlugin {
         //   it's a deferred state-machine waiting on Avian to admit
         //   both bodies into its island graph (FixedUpdate-driven).
         //   `run_if(any pending)` makes it idle when no joints await.
+        // `PhysicsSceneGravity` records which prim set the world's gravity, which
+        // is only meaningful while that scene is loaded — carried into the next
+        // scene it would make a fresh `PhysicsScene` look like a conflicting
+        // duplicate of a prim that no longer exists.
+        app.add_systems(
+            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            |mut commands: Commands| commands.remove_resource::<PhysicsSceneGravity>(),
+        );
+
         app.register_type::<ShouldBeDynamic>()
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
@@ -853,12 +862,11 @@ fn apply_physics_scene_gravity(
     sdf_path: &SdfPath,
     commands: &mut Commands,
 ) {
-    const EARTH_G: f64 = 9.80665;
     let conv = lunco_usd_bevy::stage_convention(reader);
 
     let magnitude = match reader.value::<f32>(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
         Some(m) if m >= 0.0 => conv.length(m as f64),
-        _ => EARTH_G,
+        _ => lunco_environment::EARTH_SURFACE_GRAVITY,
     };
     let direction = match reader.value::<[f32; 3]>(sdf_path, ptok::A_GRAVITY_DIRECTION) {
         Some(d) => {

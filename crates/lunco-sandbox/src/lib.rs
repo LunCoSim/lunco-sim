@@ -300,6 +300,17 @@ fn run_with_mode(headless: bool) -> AppExit {
 /// Do not "fix" a missing `TwinRoots` by initialising the resource on its own: that
 /// manufactures the resource WITHOUT the asset sources it is meant to accompany, and
 /// trades a loud panic for silent unresolved assets.
+/// The sandbox's gravity before any scene is loaded, and the value scene
+/// teardown restores when one unloads.
+///
+/// Lunar: every vehicle the sandbox ships is sized for 1.62 — the rovers'
+/// drivetrains, the lander's struts and its propellant budget. A scene states
+/// its own through `UsdPhysicsScene`; this is what an empty viewport uses.
+pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravity::flat(
+    lunco_environment::MOON_SURFACE_GRAVITY,
+    bevy::math::DVec3::NEG_Y,
+);
+
 pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco://, twin://, cached_textures://) +
@@ -1963,7 +1974,20 @@ impl Plugin for SandboxCorePlugin {
             .insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)))
             .insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
             .insert_resource(avian3d::prelude::Gravity::ZERO)
-            .insert_resource(lunco_environment::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
+            // The sandbox's gravity BEFORE any scene loads. Lunar, because every
+            // vehicle in it is: the rovers' drivetrains, the lander's struts and
+            // its propellant budget are all sized for 1.62. A scene overrides this
+            // through its own `UsdPhysicsScene`; this is only what an empty
+            // viewport uses, and the value teardown restores when a scene unloads.
+            .insert_resource(SANDBOX_GRAVITY)
+            // A scene SHOULD override gravity — that is what its `UsdPhysicsScene`
+            // is for. What it must not do is leave that override behind: unloading
+            // a lunar scene restores the sandbox's own value, so whatever loads
+            // next starts from the app's baseline rather than the last scene's.
+            .add_systems(
+                lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+                |mut commands: Commands| commands.insert_resource(SANDBOX_GRAVITY),
+            )
             // Studio lighting for the sandbox — a generic editor scene, NOT a
             // calibrated lunar surface (the canonical 128 klx / EV15 `LunarSun`
             // crushes the dark blueprint ground to black). Inserted BEFORE

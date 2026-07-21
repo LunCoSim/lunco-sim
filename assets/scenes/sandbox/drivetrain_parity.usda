@@ -46,7 +46,7 @@ def Xform "DrivetrainParity" (
     def PhysicsScene "PhysicsScene"
     {
         vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 9.81
+        float physics:gravityMagnitude = 1.62
     }
     # A test rig, not a spawnable part.
     uniform bool lunco:spawnable = false

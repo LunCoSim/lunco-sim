@@ -68,6 +68,7 @@ pub mod nurbs;
 pub mod trim;
 pub mod mount;
 pub mod read;
+pub mod scene_lifecycle;
 pub mod units;
 pub mod variants;
 pub use units::{stage_convention, ConventionTransform, StageMetrics, UpAxis};

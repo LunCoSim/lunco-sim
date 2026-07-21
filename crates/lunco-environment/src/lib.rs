@@ -41,7 +41,10 @@ pub const LUNCO_ENVIRONMENT_PRIM_TYPE: &str = "LunCoEnvironment";
 /// `GravityModel`) — environmental-state vocabulary owned here. The gravity
 /// *systems* in `lunco_celestial` import these.
 pub mod gravity_types;
-pub use gravity_types::{Gravity, GravityBody, GravityModel, GravityProvider};
+pub use gravity_types::{
+    Gravity, GravityBody, GravityModel, GravityProvider, EARTH_SURFACE_GRAVITY,
+    MOON_SURFACE_GRAVITY,
+};
 
 /// Physical lighting parameters of the lunar sky (`LunarSun`, `EarthshineParams`)
 /// — environmental state, the lighting analog of gravity. See the module docs.

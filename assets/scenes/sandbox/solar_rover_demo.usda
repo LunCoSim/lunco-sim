@@ -32,7 +32,7 @@ def Xform "SolarRoverTest" (
     def PhysicsScene "PhysicsScene"
     {
         vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 9.81
+        float physics:gravityMagnitude = 1.62
     }
     # UsdPhysicsMaterialAPI
     def Scope "PhysicsMaterials"

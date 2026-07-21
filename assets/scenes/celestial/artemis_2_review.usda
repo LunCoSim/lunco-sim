@@ -23,14 +23,12 @@
 def Xform "Artemis2Review"
 {
 
-    # UsdPhysicsScene — simulation-wide settings. Earth gravity: this scene's
-    # vehicles and their tuning are authored against it, so it is stated here
-    # rather than left to the app's start-up value.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 9.81
-    }
+    # NO `UsdPhysicsScene` HERE, deliberately. That prim states ONE gravity
+    # vector for a whole scene, which is the wrong shape for an orbital scene:
+    # gravity here is per-body and position-dependent, computed by the celestial
+    # subsystem's point-mass model (`Gravity::Surface` + `GravityProvider`).
+    # Authoring a flat vector would override that with a single constant
+    # direction and pin every spacecraft to a fictitious "down".
     def "SolarSystem" (
         prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
     )

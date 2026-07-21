@@ -1432,6 +1432,12 @@ pub struct SceneEntities<'w, 's> {
 }
 
 pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
+    // A scene is its entities AND the resources derived from it. Resources are
+    // restored through the registry rather than named here, so a subsystem that
+    // adds scene-derived state does not also have to edit this function — see
+    // `lunco_usd_bevy::scene_lifecycle`.
+    commands.queue(lunco_usd_bevy::scene_lifecycle::run_scene_teardown);
+
     let (q_grid, q_origin, q_wires) = (&scene.grid, &scene.origin, &scene.wires);
     let mut despawned = 0usize;
 
