@@ -1141,6 +1141,9 @@ fn spawn_tile(
             Visibility::Inherited,
             LodTileOf(terrain),
             Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
+            // Streamed runtime detail, not scene content — hidden from the Entity
+            // list unless the user opts in.
+            lunco_core::SystemManaged,
             ChildOf(grid_entity),
             // Terrain tiles RECEIVE shadows (rovers/objects cast onto them) but must
             // NOT be shadow casters: the ~150-400 live tiles would otherwise be

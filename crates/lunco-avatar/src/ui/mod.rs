@@ -92,6 +92,9 @@ impl Panel for AvatarStatusPanel {
     fn id(&self) -> PanelId { PanelId("avatar_status") }
     fn title(&self) -> String { "Telemetry".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Capture the palette up front: semantic status colours for this

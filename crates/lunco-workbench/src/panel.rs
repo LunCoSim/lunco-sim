@@ -200,6 +200,30 @@ impl<'w> PanelCtx<'w> {
     }
 }
 
+/// Where a panel appears in the menu-bar **View ▸ Panels** list.
+///
+/// The menu used to be one flat alphabetical dump of every registered panel —
+/// scene tools, Modelica tools, dev consoles and dead entries side by side, with
+/// emoji titles sorting into their own block. The panel itself is the only thing
+/// that knows which workflow it belongs to, so it declares that here; the menu is
+/// a pure projection of these declarations and needs no central list to maintain.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+pub enum PanelMenuGroup {
+    /// The 3D scene workflow: hierarchy, prims, inspector, spawn, wiring.
+    Scene,
+    /// Modelica authoring / analysis: models, diagrams, telemetry, console.
+    Design,
+    /// Cross-cutting utilities: consoles, tutorials, command surfaces.
+    Tools,
+    /// Anything that hasn't declared a group. Listed last under "Other".
+    #[default]
+    Other,
+    /// Not listed at all — panels the user cannot meaningfully open on their
+    /// own: fixtures (the viewport), legacy panels kept only for layout
+    /// compatibility, and singletons that are really a facet of an instance tab.
+    Hidden,
+}
+
 /// A dockable workbench panel.
 ///
 /// One implementor per panel kind, registered with [`WorkbenchLayout`] under a
@@ -233,6 +257,15 @@ pub trait Panel: Send + Sync + 'static {
 
     /// Where to dock this panel by default when registered.
     fn default_slot(&self) -> PanelSlot;
+
+    /// Which **View ▸ Panels** group this panel is listed under.
+    ///
+    /// Default [`PanelMenuGroup::Other`] — declare a real group so the entry
+    /// lands next to the panels it is used with, or [`PanelMenuGroup::Hidden`]
+    /// to keep it out of the menu entirely.
+    fn menu_group(&self) -> PanelMenuGroup {
+        PanelMenuGroup::Other
+    }
 
     /// Whether the user can close the panel. Closable panels get an `×`.
     fn closable(&self) -> bool {

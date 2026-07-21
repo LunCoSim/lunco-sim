@@ -18,8 +18,49 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_settings::SettingsSection;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+
+/// Persisted view prefs for the Entity list.
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+pub struct EntityListSettings {
+    /// Show entities a system owns and churns ([`lunco_core::SystemManaged`]:
+    /// streamed LOD tiles, globe tiles, scattered rocks). Off by default — with
+    /// terrain streaming there are hundreds live and they bury the handful of
+    /// authored objects the list exists to show.
+    pub show_system: bool,
+}
+
+impl Default for EntityListSettings {
+    fn default() -> Self {
+        Self { show_system: false }
+    }
+}
+
+impl SettingsSection for EntityListSettings {
+    const KEY: &'static str = "entity_list";
+}
+
+/// Push the Entity-list filter into the workbench **Settings** menu — where every
+/// other persisted view pref lives (theme, perf HUD, terrain). The panel stays a
+/// pure view; it grows no toolbar of its own.
+pub(crate) fn register_settings_menu(world: &mut World) {
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_settings(|ui, world| {
+        ui.label(egui::RichText::new("Entity list").weak().small());
+        let mut settings = world.resource_mut::<EntityListSettings>();
+        ui.checkbox(&mut settings.show_system, "Show system entities")
+            .on_hover_text(
+                "Streamed terrain LOD tiles, globe tiles and scattered rocks — spawned \
+                 and despawned continuously as the camera moves. Hidden by default so \
+                 the list shows authored scene objects only.",
+            );
+    });
+}
 
 /// Render-ready, flattened scene tree for the Entity list panel.
 ///
@@ -79,7 +120,9 @@ fn compute_shown(
 /// now runs ~once per topology change instead of every frame.
 pub(crate) fn populate_entity_tree_view(
     mut view: ResMut<EntityTreeView>,
+    settings: Res<EntityListSettings>,
     named_q: Query<(Entity, &Name)>,
+    system_q: Query<Entity, With<lunco_core::SystemManaged>>,
     child_q: Query<(Entity, &ChildOf)>,
     selectable_q: Query<Entity, With<lunco_core::SelectableRoot>>,
     mesh_q: Query<Entity, With<Mesh3d>>,
@@ -88,8 +131,20 @@ pub(crate) fn populate_entity_tree_view(
     shader_q: Query<(Entity, &Name), With<lunco_materials::ShaderLook>>,
 ) {
     // ── Harvest (read-only).
-    let named: Vec<(Entity, String)> =
-        named_q.iter().map(|(e, n)| (e, n.as_str().to_string())).collect();
+    // System-owned churn (streamed LOD tiles, globe tiles, scatter) is dropped
+    // right here unless the user opted in, so nothing downstream — parenting,
+    // visibility, sort — even sees it. Their children (none today) would simply
+    // re-parent to the nearest surviving named ancestor.
+    let system: HashSet<Entity> = if settings.show_system {
+        HashSet::new()
+    } else {
+        system_q.iter().collect()
+    };
+    let named: Vec<(Entity, String)> = named_q
+        .iter()
+        .filter(|(e, _)| !system.contains(e))
+        .map(|(e, n)| (e, n.as_str().to_string()))
+        .collect();
     let named_set: HashSet<Entity> = named.iter().map(|(e, _)| *e).collect();
     let labels: HashMap<Entity, String> =
         named.iter().map(|(e, full)| (*e, leaf(full))).collect();
@@ -108,8 +163,13 @@ pub(crate) fn populate_entity_tree_view(
 
     // Shader-editable subset (terrain + props with a custom shader look),
     // pinned at the top for quick access to the shader params.
-    let mut shader_rows: Vec<(Entity, String)> =
-        shader_q.iter().map(|(e, n)| (e, leaf(n.as_str()))).collect();
+    // Same system filter: every streamed tile carries a `ShaderLook`, so without
+    // it this "pinned" group is hundreds of `LodTile d3 4,7` rows.
+    let mut shader_rows: Vec<(Entity, String)> = shader_q
+        .iter()
+        .filter(|(e, _)| !system.contains(e))
+        .map(|(e, n)| (e, leaf(n.as_str())))
+        .collect();
     shader_rows.sort_by(|a, b| a.1.cmp(&b.1));
 
     // Build the display tree: each named entity's parent is its nearest named
@@ -176,16 +236,37 @@ pub(crate) fn populate_entity_tree_view(
 /// `Local` flag forces one initial build (a freshly-added system does not see
 /// pre-existing entities as `Changed`). On a quiescent scene this returns
 /// `false` and the harvest is skipped entirely.
+/// System-owned entities are excluded from the gate exactly as they are from the
+/// harvest (unless shown): terrain streaming spawns and despawns tiles every
+/// frame, and counting those as "topology changed" would rebuild the whole tree
+/// every frame to produce an identical result.
 pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
-    changed: Query<(), Or<(Changed<Name>, Changed<ChildOf>)>>,
+    settings: Res<EntityListSettings>,
+    view: Res<EntityTreeView>,
+    changed: Query<(), (Or<(Changed<Name>, Changed<ChildOf>)>, Without<lunco_core::SystemManaged>)>,
+    changed_system: Query<(), (Or<(Changed<Name>, Changed<ChildOf>)>, With<lunco_core::SystemManaged>)>,
     added: Query<
         (),
-        Or<(
-            Added<Mesh3d>,
-            Added<lunco_core::SelectableRoot>,
-            Added<lunco_materials::ShaderLook>,
-        )>,
+        (
+            Or<(
+                Added<Mesh3d>,
+                Added<lunco_core::SelectableRoot>,
+                Added<lunco_materials::ShaderLook>,
+            )>,
+            Without<lunco_core::SystemManaged>,
+        ),
+    >,
+    added_system: Query<
+        (),
+        (
+            Or<(
+                Added<Mesh3d>,
+                Added<lunco_core::SelectableRoot>,
+                Added<lunco_materials::ShaderLook>,
+            )>,
+            With<lunco_core::SystemManaged>,
+        ),
     >,
     mut rm_name: RemovedComponents<Name>,
     mut rm_child: RemovedComponents<ChildOf>,
@@ -194,14 +275,27 @@ pub(crate) fn scene_topology_changed(
     mut rm_shader: RemovedComponents<lunco_materials::ShaderLook>,
 ) -> bool {
     // Drain removal buffers every frame (keeps them from accumulating) and note
-    // whether anything relevant was removed.
-    let removed = rm_name.read().count()
-        + rm_child.read().count()
-        + rm_mesh.read().count()
-        + rm_sel.read().count()
-        + rm_shader.read().count()
-        > 0;
-    let run = !*first || !changed.is_empty() || !added.is_empty() || removed;
+    // whether anything relevant was removed. A removed entity can no longer be
+    // queried, so "was it system-owned?" is answered by the view itself: if the
+    // tree never showed it, its death cannot change the tree.
+    // `fold`, not `any` — `any` short-circuits and would leave the rest of the
+    // buffer undrained.
+    let drained = |it: &mut dyn Iterator<Item = Entity>| {
+        it.fold(false, |acc, e| acc | view.labels.contains_key(&e))
+    };
+    let removed = drained(&mut rm_name.read())
+        | drained(&mut rm_child.read())
+        | drained(&mut rm_mesh.read())
+        | drained(&mut rm_sel.read())
+        | drained(&mut rm_shader.read());
+    let system_churn =
+        settings.show_system && (!changed_system.is_empty() || !added_system.is_empty());
+    let run = !*first
+        || settings.is_changed()
+        || !changed.is_empty()
+        || !added.is_empty()
+        || system_churn
+        || removed;
     *first = true;
     run
 }
@@ -213,6 +307,9 @@ impl Panel for EntityList {
     fn id(&self) -> PanelId { PanelId("entity_list") }
     fn title(&self) -> String { "Entities".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
@@ -307,25 +404,35 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             return;
         };
 
-        // Pinned shader-materials group.
-        if !view.shader_rows.is_empty() {
-            egui::CollapsingHeader::new("🎨 Shader materials")
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.label(egui::RichText::new("Edit params in the Inspector").weak());
-                    for (e, label) in &view.shader_rows {
-                        select_label(ui, *e, label, &selected, &mut to_select, &mut to_focus);
-                    }
-                });
-            ui.separator();
-        }
+        // ONE panel-level ScrollArea owning every row — the shader group included.
+        // With the group outside it, an expanded materials list pushed the tree
+        // past the panel rect with no way to reach the bottom entries.
+        // `auto_shrink([false; 2])` makes the area claim the panel's full height
+        // instead of shrinking to content (a shrunk area never scrolls).
+        egui::ScrollArea::vertical()
+            .id_salt("entity_list_scroll")
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                // Pinned shader-materials group.
+                if !view.shader_rows.is_empty() {
+                    egui::CollapsingHeader::new("🎨 Shader materials")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("Edit params in the Inspector").weak());
+                            for (e, label) in &view.shader_rows {
+                                select_label(
+                                    ui, *e, label, &selected, &mut to_select, &mut to_focus,
+                                );
+                            }
+                        });
+                    ui.separator();
+                }
 
-        // The hierarchy.
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for &root in &view.roots {
-                render_node(ui, root, view, &selected, &mut to_select, &mut to_focus);
-            }
-        });
+                // The hierarchy.
+                for &root in &view.roots {
+                    render_node(ui, root, view, &selected, &mut to_select, &mut to_focus);
+                }
+            });
     }
 
     // Route selection through the same `crate::selection::apply_selection` the

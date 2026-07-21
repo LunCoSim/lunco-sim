@@ -21,6 +21,12 @@ impl Panel for CanvasDiagramPanel {
     fn id(&self) -> PanelId { CANVAS_DIAGRAM_PANEL_ID }
     fn title(&self) -> String { "🧩 Canvas Diagram".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
+    /// Not listed: the canvas users actually work in is embedded in the
+    /// per-document Model view tab. This singleton renders an empty scene when
+    /// no document is active, so a menu entry for it opens a blank panel.
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Hidden
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Scope `CanvasDiagramState` out for the whole body so the

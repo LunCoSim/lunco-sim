@@ -94,6 +94,10 @@ impl Panel for DiagnosticsPanel {
         "⚠ Diagnostics".into()
     }
 
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Design
+    }
+
     fn default_slot(&self) -> PanelSlot {
         // Sit next to Console, which also docks at the Bottom.
         PanelSlot::Bottom

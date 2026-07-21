@@ -551,6 +551,12 @@ impl Panel for ViewportPanel {
         String::new()
     }
 
+    /// Never listed: it is the centre fixture (empty title, not closable), not
+    /// something a user opens.
+    fn menu_group(&self) -> crate::PanelMenuGroup {
+        crate::PanelMenuGroup::Hidden
+    }
+
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center
     }

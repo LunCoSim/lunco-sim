@@ -7440,6 +7440,7 @@ dependencies = [
  "lunco-physics",
  "lunco-render",
  "lunco-scene-commands",
+ "lunco-settings",
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
@@ -7448,6 +7449,7 @@ dependencies = [
  "lunco-usd-sim",
  "lunco-workbench",
  "lunco-workspace",
+ "serde",
  "serde_json",
  "transform-gizmo-bevy",
 ]

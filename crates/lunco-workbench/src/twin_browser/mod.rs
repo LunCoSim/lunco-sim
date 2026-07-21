@@ -406,6 +406,10 @@ impl Panel for TwinBrowserPanel {
         "Twin".to_string()
     }
 
+    fn menu_group(&self) -> crate::PanelMenuGroup {
+        crate::PanelMenuGroup::Design
+    }
+
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::SideBrowser
     }

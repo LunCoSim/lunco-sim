@@ -59,6 +59,9 @@ impl Panel for ModelsPalette {
     fn id(&self) -> PanelId { PanelId("rover_models") }
     fn title(&self) -> String { "🧩 Models".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

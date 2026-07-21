@@ -44,6 +44,10 @@ impl Panel for InspectorPanel {
         "Inspector".into()
     }
 
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Design
+    }
+
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
     }

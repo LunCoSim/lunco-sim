@@ -118,6 +118,9 @@ impl Panel for CommandDeck {
     fn id(&self) -> PanelId { PanelId("command_deck") }
     fn title(&self) -> String { "Command Deck".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Tools
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ui.heading("Command Deck");

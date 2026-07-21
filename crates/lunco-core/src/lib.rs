@@ -296,6 +296,17 @@ pub struct SelectableRoot;
 #[derive(Component)]
 pub struct Ground;
 
+/// Marker for entities a *system* owns and churns: streamed terrain LOD tiles,
+/// the collider ring, scattered rocks — spawned and despawned continuously as
+/// the camera moves, and never authored by a user.
+///
+/// Author-facing lists (the Entity list, pickers) hide these by default: they
+/// are runtime detail, not scene content, and there can be hundreds live at
+/// once. Query for this marker rather than matching on generated names
+/// (`"LodTile d3 4,7"`) — names are display text and will drift.
+#[derive(Component)]
+pub struct SystemManaged;
+
 /// Marker for vessel root bodies that have a meaningful "upright" (rovers,
 /// landers): recovery systems may auto-right the body — and its joint-connected
 /// assembly — when it comes to rest overturned. Plain props and rocks must NOT

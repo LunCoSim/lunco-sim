@@ -14,6 +14,9 @@ pub struct CelestialTimePanel;
 impl Panel for CelestialTimePanel {
     fn id(&self) -> PanelId { PanelId("celestial_time") }
     fn title(&self) -> String { "Time Control".into() }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
     fn default_slot(&self) -> PanelSlot { PanelSlot::Bottom }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
@@ -69,6 +72,9 @@ pub struct CelestialBodiesPanel;
 impl Panel for CelestialBodiesPanel {
     fn id(&self) -> PanelId { PanelId("celestial_bodies") }
     fn title(&self) -> String { "Celestial Bodies".into() }
+    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
+        lunco_workbench::PanelMenuGroup::Scene
+    }
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
