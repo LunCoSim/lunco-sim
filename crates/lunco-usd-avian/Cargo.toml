@@ -13,6 +13,10 @@ lunco-core = { path = "../lunco-core" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
+# The lint seam: this crate gathers USD physics FACTS; the RULES are authored in
+# `assets/scripting/policy/lint_usd.rhai` and reached through the hook registry.
+lunco-lint = { path = "../lunco-lint" }
+lunco-hooks = { path = "../lunco-hooks" }
 
 [features]
 default = ["3d"]

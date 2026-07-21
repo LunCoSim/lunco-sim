@@ -36,6 +36,7 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_hooks::HookValue as H;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_usd_bevy::{CanonicalStage, UsdRead};
 use serde_json::json;
@@ -57,6 +58,12 @@ pub struct ValidationReport {
     /// Kind-specific extras: `model`/`params`/`inputs` (.mo),
     /// `wheel_prims` (.usda), `shader_params` (.wgsl).
     pub info: serde_json::Value,
+    /// Domain-shaped facts handed to the authored lint rules for this kind
+    /// (`apply_lint_policy`). Not part of the API payload — it is the linter's
+    /// input, not the caller's answer — so it is skipped on serialization and
+    /// taken (not cloned) when the rules run.
+    #[serde(skip)]
+    pub(crate) lint_facts: Option<H>,
 }
 
 impl ValidationReport {
@@ -68,6 +75,7 @@ impl ValidationReport {
             errors: Vec::new(),
             warnings: Vec::new(),
             info: json!({}),
+            lint_facts: None,
         }
     }
 
@@ -126,7 +134,7 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
                 .error(format!("cannot read {}: {e}", path.display()))
         }
     };
-    match ext.as_str() {
+    let report = match ext.as_str() {
         "mo" => validate_modelica(reference, &path, &text),
         "usda" => validate_usda(reference, &path, &text),
         "wgsl" => validate_wgsl(reference, &text),
@@ -134,7 +142,54 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
         other => ValidationReport::new(reference, "unknown").error(format!(
             "unsupported extension `.{other}` — supported: .mo, .usda, .wgsl, .rhai"
         )),
+    };
+    apply_lint_policy(report, &text)
+}
+
+/// Consult the DOMAIN's authored lint rules and fold their findings into the
+/// report.
+///
+/// The checks above are what the LOADER itself would refuse — compiled, because
+/// they are the loader's own code paths. This is the other half: rules about what
+/// is merely WRONG, authored in `assets/scripting/policy/lint_<domain>.rhai` and
+/// replaceable on a running sim (`register_hook("lint.usd", …)`). One linter per
+/// domain: a USD rule, a Modelica rule and a script rule share no vocabulary.
+///
+/// The facts are the ones the pre-flight already computed — `report.info` per
+/// kind, plus the source text for the text-shaped domains — so a rule author gets
+/// the same picture the validator has. The USD domain additionally hands over the
+/// full physics projection (see [`usd_lint_facts`]).
+///
+/// Findings never fail a file that the loader would accept: `error` severities
+/// join `errors` (and flip `ok`), everything else joins `warnings`.
+fn apply_lint_policy(mut report: ValidationReport, text: &str) -> ValidationReport {
+    if report.kind == "unknown" {
+        return report;
     }
+    let mut facts = vec![
+        ("path".to_string(), H::str(report.path.clone())),
+        ("kind".to_string(), H::str(report.kind.clone())),
+        ("ok".to_string(), H::Bool(report.ok)),
+        (
+            "errors".to_string(),
+            H::Array(report.errors.iter().cloned().map(H::str).collect()),
+        ),
+        // The source itself, for the text-shaped domains: a rule about a script
+        // ("a test scenario that never emits a verdict") needs the text, and
+        // shipping it costs one clone of a file already in memory.
+        ("source".to_string(), H::str(text.to_string())),
+    ];
+    if let Some(extra) = report.lint_facts.take() {
+        facts.push(("subject".to_string(), extra));
+    }
+
+    for f in lunco_lint::run_lint(&report.kind, H::Map(facts)) {
+        match f.severity {
+            lunco_lint::LintSeverity::Error => report.errors.push(f.line()),
+            _ => report.warnings.push(f.line()),
+        }
+    }
+    report.finish()
 }
 
 // ─── .mo ────────────────────────────────────────────────────────────────────
@@ -285,6 +340,11 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
     };
     let stage = CanonicalStage::from_stage(stage, path.to_string_lossy().to_string());
     let view = stage.view();
+
+    // The physics projection the `lint.usd` rules read — the SAME facts the live
+    // loader hands them (`lunco_usd_avian::physics_facts`), so a rule cannot pass
+    // here and fire at load, or the reverse.
+    report.lint_facts = Some(lunco_usd_avian::physics_facts(&view));
 
     // Every composed wheel must satisfy the ONE reader both wheel kinds spawn
     // through — `Err(missing)` here is exactly the refusal the spawner logs.

@@ -45,6 +45,11 @@ openusd = { workspace = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
+# `ValidateAsset` runs the SAME authored lint rules the live loader runs, over the
+# SAME USD physics facts — one rule set, two entry points (pre-flight and load).
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-lint = { path = "../lunco-lint" }
+lunco-hooks = { path = "../lunco-hooks" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
@@ -83,3 +88,7 @@ ui = ["lunco-usd/ui"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The shipped-asset lint gate registers the authored `lint.usd` policy itself.
+lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }

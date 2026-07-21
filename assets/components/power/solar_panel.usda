@@ -6,8 +6,16 @@
 )
 
 # A solar panel — a frame, a photovoltaic surface, and the mass and colliders the
-# physics engine carries. Per OpenUSD spec the root Xform holds PhysicsRigidBodyAPI and
-# the children hold PhysicsCollisionAPI only.
+# physics engine carries. The root Xform holds the mass; the children hold
+# `PhysicsCollisionAPI` only.
+#
+# NO `PhysicsRigidBodyAPI`, deliberately. Under UsdPhysics a collider belongs to the
+# nearest ancestor BODY, so a panel bolted to a rover contributes its shapes to that
+# rover — but a body applied here is a SECOND body, attached to nothing, and it fell off
+# the vehicle exactly as the drive motors did (`components/mobility/motor.usda` tells
+# that story; `lunco-usd-avian`'s physics linter now reports the shape at load as
+# `nested-body-no-joint`). A panel that must articulate — a tracker, a deployable — is a
+# body AND a joint, authored together.
 #
 # What the panel GENERATES is not here: a source's output is an equation
 # (`LunCo.Electrical.SolarPanel`), and it is one component of a circuit. The vessel that
@@ -16,7 +24,7 @@
 # efficiency there. USD assembles the part; the circuit is the maths.
 def Xform "SolarPanel" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI"]
 )
 {
     uniform bool lunco:spawnable = true

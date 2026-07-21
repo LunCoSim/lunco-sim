@@ -2901,6 +2901,7 @@ register_commands!(
     on_reload_shader,
     on_rescan_shaders,
     on_rescan_spawn_catalog,
+    crate::lint_command::on_run_lint,
     on_set_camera_look_at,
     on_set_object_property,
     on_set_shader_source,
@@ -2925,6 +2926,10 @@ impl Plugin for SpawnCommandPlugin {
         // Parse-only asset pre-flight ("does this file compile?") — pure file
         // checks, so it answers even while no scene is loaded.
         crate::validate::register(app);
+        // `RunLint` + the `LintReport` read-back. Nothing lints on load: the
+        // linter is a verb you call (from rhai, HTTP or MCP), and a scenario that
+        // wants it live simply calls it on a cadence.
+        crate::lint_command::register(app);
         // A spawn whose USD stage hasn't composed yet is parked here, not placed
         // blind — see `RestDepth::StagePending`.
         app.init_resource::<DeferredSpawns>();

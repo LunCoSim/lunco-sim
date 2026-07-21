@@ -61,6 +61,7 @@ members = [
     "crates/lunco-obstacle-field",
     "crates/lunco-physics",
     "crates/lunco-readiness",
+    "crates/lunco-lint",
     "crates/lunco-worker-transport",
     "crates/lunco-terrain-bake",
     "crates/lunco-terrain-surface",
@@ -275,6 +276,7 @@ lunco-terrain-globe = { path = "crates/lunco-terrain-globe" }
 lunco-terrain-core = { path = "crates/lunco-terrain-core" }
 lunco-physics = { path = "crates/lunco-physics" }
 lunco-readiness = { path = "crates/lunco-readiness" }
+lunco-lint = { path = "crates/lunco-lint" }
 lunco-cosim = { path = "crates/lunco-cosim" }
 lunco-environment = { path = "crates/lunco-environment" }
 lunco-theme = { path = "crates/lunco-theme" }
