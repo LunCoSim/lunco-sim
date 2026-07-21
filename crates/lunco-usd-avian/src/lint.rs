@@ -41,6 +41,7 @@
 
 use std::collections::HashSet;
 
+use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
 use lunco_lint::LintFinding;
 use lunco_usd_bevy::{StageView, UsdRead};
@@ -97,6 +98,113 @@ fn subtree_has_collider(reader: &StageView<'_>, sorted: &[String], path: &str) -
         }
     }
     false
+}
+
+/// A gprim's own bounds in its LOCAL frame, before any transform.
+///
+/// The authored `extent` wins when present — it is what USD itself treats as a
+/// boundable's bounds. Otherwise the size is derived from the gprim's defining
+/// attributes, using USD's schema defaults for anything unauthored, so a
+/// hand-written `def Cube "X" {}` measures the same here as it renders.
+///
+/// `None` for a prim with no bounds we can state honestly — a `Mesh` with no
+/// `extent`, or a type this does not know. A rule must treat that as "unknown",
+/// never as "zero-sized", which is why it is an Option rather than a default.
+fn local_bounds(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
+    if let Some(e) = reader.value::<Vec<[f32; 3]>>(p, "extent") {
+        if e.len() == 2 {
+            return Some((Vec3::from(e[0]), Vec3::from(e[1])));
+        }
+    }
+    let f = |name: &str, default: f64| reader.value::<f64>(p, name).unwrap_or(default) as f32;
+    // `uniform token axis` names the axis a Cylinder/Cone/Capsule is built along.
+    let along = |half_axis: f32, half_radial: f32| -> Vec3 {
+        match reader.value_str(p, "axis").as_deref().unwrap_or("Z") {
+            "X" => Vec3::new(half_axis, half_radial, half_radial),
+            "Y" => Vec3::new(half_radial, half_axis, half_radial),
+            _ => Vec3::new(half_radial, half_radial, half_axis),
+        }
+    };
+    let half = match reader.prim_type_name(p)?.as_str() {
+        "Cube" => Vec3::splat(f("size", 2.0) / 2.0),
+        "Sphere" => Vec3::splat(f("radius", 1.0)),
+        "Cylinder" => along(f("height", 2.0) / 2.0, f("radius", 1.0)),
+        "Cone" => along(f("height", 2.0) / 2.0, f("radius", 1.0)),
+        // A capsule's hemispherical caps stand proud of its cylinder by `radius`.
+        "Capsule" => {
+            let r = f("radius", 0.5);
+            along(f("height", 1.0) / 2.0 + r, r)
+        }
+        _ => return None,
+    };
+    Some((-half, half))
+}
+
+/// A gprim's axis-aligned bounds in WORLD space.
+///
+/// The eight local corners are carried through the composed transform and
+/// re-bounded, so a rotated or non-uniformly scaled part measures where it
+/// actually sits — a landing strut raked 25° is exactly the case that matters,
+/// and taking its local box as world would understate how low its corner hangs.
+fn world_aabb(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
+    let (lo, hi) = local_bounds(reader, p)?;
+    let t = crate::world_transform(reader, p);
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for i in 0..8 {
+        let c = Vec3::new(
+            if i & 1 == 0 { lo.x } else { hi.x },
+            if i & 2 == 0 { lo.y } else { hi.y },
+            if i & 4 == 0 { lo.z } else { hi.z },
+        );
+        let w = t.transform_point(c);
+        min = min.min(w);
+        max = max.max(w);
+    }
+    Some((min, max))
+}
+
+/// The union of every collider's world bounds in `path`'s subtree (itself
+/// included) — what the body can actually touch the world with.
+fn collider_world_aabb(
+    reader: &StageView<'_>,
+    sorted: &[String],
+    path: &str,
+) -> Option<(Vec3, Vec3)> {
+    let prefix = format!("{path}/");
+    let start = sorted.partition_point(|s| s.as_str() < prefix.as_str());
+    let subtree = std::iter::once(path.to_string())
+        .chain(sorted[start..].iter().take_while(|s| s.starts_with(&prefix)).cloned());
+    let mut acc: Option<(Vec3, Vec3)> = None;
+    for s in subtree {
+        let Ok(p) = SdfPath::new(&s) else { continue };
+        if !reader.has_api_schema(&p, ptok::API_COLLISION) {
+            continue;
+        }
+        // Collision is opt-OUT: the API applied with `physics:collisionEnabled = 0`
+        // is geometry the solver never sees, so it cannot be what grounds a leg.
+        if reader.value::<bool>(&p, "physics:collisionEnabled") == Some(false) {
+            continue;
+        }
+        let Some((lo, hi)) = world_aabb(reader, &p) else { continue };
+        acc = Some(match acc {
+            None => (lo, hi),
+            Some((a, b)) => (a.min(lo), b.max(hi)),
+        });
+    }
+    acc
+}
+
+/// A world point as `[x, y, z]` for policy, or `[]` when there is none to state.
+fn vec3_h(v: Option<Vec3>) -> H {
+    match v {
+        Some(v) => H::Array(vec![
+            H::Float(v.x as f64),
+            H::Float(v.y as f64),
+            H::Float(v.z as f64),
+        ]),
+        None => H::Array(Vec::new()),
+    }
 }
 
 /// Everything policy needs to judge a stage's physics authoring.
@@ -157,6 +265,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             continue;
         }
         let own_collider = reader.has_api_schema(p, ptok::API_COLLISION);
+        let aabb = collider_world_aabb(reader, &sorted, &path);
         body_facts.push(H::map([
             ("path", H::str(path.clone())),
             ("type", H::str(reader.prim_type_name(p).unwrap_or_default())),
@@ -175,6 +284,14 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ),
             ("host_body", H::str(host_body(&bodies, &path).unwrap_or_default())),
             ("jointed", H::Bool(attached.contains(&path))),
+            // WHERE the body can touch the world, not just whether it can. Every
+            // other fact here is topological — schemas, ancestry, joint targets —
+            // and topology cannot answer the question that actually breaks
+            // mechanisms: which part reaches the ground FIRST. `[]` when nothing
+            // in the subtree has statable bounds, so a rule can tell "no collider"
+            // from "collider of unknown size" instead of reading both as zero.
+            ("collider_min", vec3_h(aabb.map(|b| b.0))),
+            ("collider_max", vec3_h(aabb.map(|b| b.1))),
         ]));
     }
 
@@ -301,6 +418,80 @@ mod tests {
         assert_eq!(field(rover, "collider"), &H::Bool(false));
         assert_eq!(field(rover, "subtree_collider"), &H::Bool(true));
         assert_eq!(field(rover, "host_body"), &H::str(""));
+    }
+
+    /// A RAKED LEG, measured. This is the geometry the descent lander flies and
+    /// the arithmetic a clearance rule stands on, so it is pinned here rather than
+    /// trusted: a 0.15 x 7.05 x 0.15 strut raked 25° about Z, and the footpad that
+    /// has to be the thing which reaches the ground.
+    ///
+    /// The strut's LOCAL box is only 0.075 deep, but rotated its bottom corner
+    /// hangs 0.075*sin25 = 0.032 m below its tip — which is exactly why bounds are
+    /// taken in world space over the eight transformed corners. Take the local box
+    /// as world and the corner disappears, along with the bug.
+    const RAKED_LEG: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+def Xform "Lander" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
+{
+    def Cube "Leg" (prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (4.009, -1.807, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 25.0)
+        double3 xformOp:scale = (0.15, 7.05, 0.15)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+    }
+    def Cylinder "Pad" (prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"])
+    {
+        uniform token axis = "Y"
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (5.5634, -5.1359, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+"#;
+
+    fn low_y(item: &H) -> f32 {
+        match field(item, "collider_min") {
+            H::Array(v) if v.len() == 3 => match v[1] {
+                H::Float(y) => y as f32,
+                _ => panic!("collider_min.y is not a float"),
+            },
+            other => panic!("no collider bounds: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_raked_struts_bounds_include_the_corner_its_rotation_swings_down() {
+        let f = facts(RAKED_LEG);
+        let bodies = entries(&f, "bodies");
+        let leg = low_y(body(&bodies, "/Lander/Leg"));
+        let pad = low_y(body(&bodies, "/Lander/Pad"));
+
+        // centre_y - (half_thickness*sin25 + half_length*cos25)
+        let expected = -1.807 - (0.075 * 25f32.to_radians().sin() + 3.525 * 25f32.to_radians().cos());
+        assert!((leg - expected).abs() < 1e-3, "strut low point {leg}, expected {expected}");
+
+        // The pad's own bottom face — a cylinder is centred on its origin.
+        assert!((pad - (-5.1359 - 0.15)).abs() < 1e-3, "pad low point {pad}");
+
+        // And the fact these two numbers exist to state: the FOOT reaches lower.
+        assert!(pad < leg, "pad {pad} must reach below the strut corner {leg}");
+    }
+
+    /// A body whose subtree has no collider states no bounds — `[]`, so a rule can
+    /// tell "nothing to touch the world with" from "a collider of unknown size".
+    /// Reading either as zero would put a phantom part at the origin.
+    #[test]
+    fn a_body_with_no_collider_states_no_bounds() {
+        let f = facts(ROVER_WITH_LOOSE_MOTOR);
+        let bodies = entries(&f, "bodies");
+        let motor = body(&bodies, "/Rover/Motor_FL");
+        assert_eq!(field(motor, "collider_min"), &H::Array(Vec::new()));
     }
 
     /// A part with no body of its own produces no body fact at all — the shape

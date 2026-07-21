@@ -73,7 +73,20 @@ fn lint_usd(facts) {
     for f in joint_target_not_a_body(facts) { out.push(f); }
     for f in dynamic_body_no_collider(facts) { out.push(f); }
     for f in mass_outside_any_body(facts) { out.push(f); }
+    for f in sprung_foot_not_lowest(facts) { out.push(f); }
     out
+}
+
+/// The lowest world Y of everything `path` can touch the world with, or `()` when
+/// the body states no collider bounds. `()` means UNKNOWN and must not be compared
+/// — a body with no collider is not a body whose foot is too high.
+fn lowest_y(facts, path) {
+    for b in facts.bodies {
+        if b.path != path { continue; }
+        if b.collider_min.len() != 3 { return (); }
+        return b.collider_min[1];
+    }
+    ()
 }
 
 /// A part with its own body, mounted inside another body, held by no joint.
@@ -186,6 +199,84 @@ fn mass_outside_any_body(facts) {
         m += " the authored mass reaches no solver.";
         m += " Mount it under the body it belongs to, or give it a body and a joint.";
         out.push(finding("mass-outside-any-body", "warn", p.path, m));
+    }
+    out
+}
+
+/// A sprung leg whose own structure reaches the ground before its foot does.
+///
+/// THE ONE THAT COST A DAY. The descent lander's footpad cleared its strut's
+/// bottom corner by 6.6 mm on an 11 m vehicle. Touchdown tipped the leg a fraction
+/// of a degree, the strut's corner took the ground, and that rigid contact LATCHED:
+/// the vehicle stood on its shins. Every spring read 0 N at 0 stroke while carrying
+/// a lander, and the gear settled by bending the prismatic's angular lock ~2°
+/// instead of sliding along it. Nothing failed and nothing logged — the vehicle sat
+/// level, at a plausible height, at rest. It reads as a sign error in the joint and
+/// is nothing of the kind.
+///
+/// A suspension has exactly ONE intended load path: foot -> spring -> chassis. Any
+/// second way for the leg to reach the ground wins, because it is rigid and the
+/// spring is not, and it latches on the first frame it grazes.
+///
+/// Why this is decidable here and nowhere else: it is a fact about composed
+/// TRANSFORMS and collider EXTENTS, not about schemas — a leg can be perfectly
+/// well-formed, validate clean, and still land on its shins. That is why
+/// `collider_min` exists.
+///
+/// Scope is deliberately narrow — a prismatic carrying a linear drive is a SPRING,
+/// and the body it carries through a further joint is that spring's FOOT. Raycast
+/// wheels have no such joint and revolute-driven wheels are not prismatic, so this
+/// cannot fire on a rover.
+fn sprung_foot_not_lowest(facts) {
+    // Under one degree of rotation on a metre-scale leg. A margin thinner than
+    // this is closable by a tip too small to see, so it is not a margin.
+    let thin = 0.05;
+
+    let out = [];
+    for j in facts.joints {
+        if j.type != "PhysicsPrismaticJoint" { continue; }
+        if !schemas_of(facts, j.path).contains("PhysicsDriveAPI:linear") { continue; }
+        if j.bodies.len() < 2 { continue; }
+        let strut = j.bodies[1];
+        let sy = lowest_y(facts, strut);
+        if sy == () { continue; }
+
+        for k in facts.joints {
+            if k.path == j.path { continue; }
+            if k.bodies.len() < 2 { continue; }
+            if k.bodies[0] != strut { continue; }
+            let fy = lowest_y(facts, k.bodies[1]);
+            if fy == () { continue; }
+
+            if fy >= sy {
+                let m = "carries <";
+                m += k.bodies[1];
+                m += "> as its foot, but the sprung member <";
+                m += strut;
+                m += "> reaches LOWER (";
+                m += sy;
+                m += " vs ";
+                m += fy;
+                m += "). The strut grounds first and carries the vehicle rigidly:";
+                m += " the spring never sees the landing, reads 0 N at 0 stroke, and";
+                m += " the gear settles by bending this joint's angular lock.";
+                m += " Make the foot the only thing that can touch — extend the foot";
+                m += " BELOW the strut's tip rather than centring it on the tip.";
+                out.push(finding("sprung-foot-not-lowest", "error", j.path, m));
+            } else if sy - fy < thin {
+                let gap = sy - fy;
+                let m = "clears its foot <";
+                m += k.bodies[1];
+                m += "> by only ";
+                m += gap;
+                m += " m. Less than a degree of leg rotation closes that,";
+                m += " and once the strut touches, the contact latches and the spring";
+                m += " is out of the load path. Deepening the foot in place does NOT";
+                m += " help — it demands a larger rotation to reach the ground, which";
+                m += " brings the strut down faster. Move the foot below the tip.";
+                out.push(finding("sprung-foot-thin-clearance", "warn", j.path, m));
+            }
+        }
     }
     out
 }

@@ -1044,7 +1044,7 @@ fn extract_avian_prim(
 /// (translate + rotate + **scale**) of every prim from the stage root down to it, so
 /// an ancestor's scale is baked into a descendant's world position — exactly how the
 /// renderer places it. Missing xform ops compose as identity.
-fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transform {
+pub(crate) fn world_transform(reader: &StageView<'_>, path: &SdfPath) -> Transform {
     let mut chain = Vec::new();
     let mut cur = Some(path.clone());
     while let Some(p) = cur {
