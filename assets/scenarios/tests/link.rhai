@@ -69,6 +69,9 @@ fn on_tick(me) {
     }
 
     let base = find("/LinkTest/MalapertBase");
+    let probe = find("/LinkTest/MalapertHorizonFree");
+    print("[link]   base peers  " + neighbours(g, base).len() +
+          "   probe(no mask) peers " + neighbours(g, probe).len());
     let l1 = find("/LinkTest/L1_Relay");
     let short = find("/LinkTest/ShortRangeSat");
     let earths = link_ids(g, "earth");
