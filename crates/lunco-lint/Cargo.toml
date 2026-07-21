@@ -1,0 +1,17 @@
+[package]
+name = "lunco-lint"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Universal lint substrate: domain crates supply FACTS, authored rhai policy supplies the RULES, findings land in one report"
+
+[dependencies]
+# Substrate only, exactly like `lunco-readiness`: this crate knows what a finding
+# IS and how a domain asks policy for one. It knows nothing about USD, rhai,
+# Modelica or physics — every rule lives in an authored policy, and every fact
+# comes from the domain crate that owns the subject.
+bevy = { workspace = true }
+lunco-hooks = { path = "../lunco-hooks" }
+
+[lints]
+workspace = true

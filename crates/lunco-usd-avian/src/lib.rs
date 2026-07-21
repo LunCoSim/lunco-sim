@@ -68,6 +68,9 @@ use openusd::usd::Stage;
 pub mod big_space_bridge;
 pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 
+pub mod lint;
+pub use lint::{lint_stage, physics_facts, USD_LINT_DOMAIN};
+
 /// Bevy plugin for USD physics mapping.
 ///
 /// Adds an observer for USD prim spawning and a deferred processing system that maps
@@ -89,9 +92,16 @@ impl Plugin for UsdAvianPlugin {
         // is only meaningful while that scene is loaded — carried into the next
         // scene it would make a fresh `PhysicsScene` look like a conflicting
         // duplicate of a prim that no longer exists.
+        // Findings name prims of the scene being replaced, so they go with it.
+        // Note there is NO automatic lint on load: linting is something you RUN
+        // (`RunLint`), not something that runs at you — see `lunco-lint`.
+        app.init_resource::<lunco_lint::LintReport>();
         app.add_systems(
             lunco_usd_bevy::scene_lifecycle::SceneTeardown,
-            |mut commands: Commands| commands.remove_resource::<PhysicsSceneGravity>(),
+            |mut commands: Commands, mut lint: ResMut<lunco_lint::LintReport>| {
+                commands.remove_resource::<PhysicsSceneGravity>();
+                lint.clear_domain(lint::USD_LINT_DOMAIN);
+            },
         );
 
         app.register_type::<ShouldBeDynamic>()
@@ -827,6 +837,7 @@ fn process_usd_avian_prims(
         return;
     };
     bevy::log::debug!("[canonical] avian extract off LIVE stage: {}", prim_path.path);
+
     extract_avian_prim(&cs.view(), entity, &sdf_path, &mut commands);
 }
 

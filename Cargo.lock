@@ -7139,6 +7139,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-lint"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-hooks",
+]
+
+[[package]]
 name = "lunco-materials"
 version = "0.1.0"
 dependencies = [
@@ -7478,6 +7486,9 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
+ "lunco-hooks",
+ "lunco-hooks-rhai",
+ "lunco-lint",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
@@ -7488,6 +7499,7 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-twin-journal",
  "lunco-usd",
+ "lunco-usd-avian",
  "lunco-usd-bevy",
  "lunco-usd-sim",
  "lunco-workspace",
@@ -7791,6 +7803,8 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-environment",
+ "lunco-hooks",
+ "lunco-lint",
  "lunco-terrain-globe",
  "lunco-usd-bevy",
  "openusd",

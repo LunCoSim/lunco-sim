@@ -186,6 +186,12 @@ fn register_builtin_policies() {
             lunco_readiness::READINESS_HOOK,
             "readiness_action",
         ),
+        // LINT policies — one per DOMAIN, because a USD rule, a script rule and a
+        // Modelica rule share no vocabulary and no audience. The domain crate
+        // gathers facts and calls `lunco_lint::run_lint(domain, facts)`; the rules
+        // are entirely here, and `register_hook("lint.usd", …)` replaces them on a
+        // running sim.
+        ("lint_usd", "lint.usd", "lint_usd"),
         // (Link availability is not a builtin policy. The generic link kernel
         // computes the geometry and applies a builtin range+mask+occlusion rule;
         // an authored `link.connected` hook overrides the verdict, and routing is

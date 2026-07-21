@@ -14,10 +14,10 @@
 # there. USD assembles the part; the circuit is the maths.
 #
 # The root is an `Xform` — a component, not a cube — so the visible case is an ordinary
-# child gprim that both renders and collides, and the rigid body is the root.
+# child gprim that both renders and collides.
 def Xform "Battery" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -28,7 +28,14 @@ def Xform "Battery" (
     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
 
     # --- Physics ---
-    bool physics:rigidBodyEnabled = true
+    # NO `PhysicsRigidBodyAPI`. A pack bolted to a hull is not a second body: under
+    # UsdPhysics its case is a COLLIDER of the body it is mounted on, and its mass is
+    # that body's mass. Applying the schema here made it a free body that no joint
+    # held, so it fell out of the vehicle the way the drive motors did — see
+    # `components/mobility/motor.usda` for the full account, and the
+    # `nested-body-no-joint` rule in `lunco-usd-avian`'s physics linter, which now
+    # reports this shape at load. A pack that must be DETACHABLE gets a body and a
+    # joint together, authored by the mount (`AttachSpec`), never a body alone.
     float physics:mass = 50.0
 
     # --- Case: renders and collides ---
