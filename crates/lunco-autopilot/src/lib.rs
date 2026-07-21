@@ -77,6 +77,8 @@ pub struct Autopilot {
     /// engage. It self-clears if the claim is refused (vessel already owned).
     pub engaged: bool,
     /// Constant forward setpoint `[-1, 1]`, used when no [`AutopilotBehavior`].
+    /// **Zero unless a caller explicitly asked to cruise** — an autopilot with no
+    /// route holds, it does not creep forward (see [`Autopilot::holding`]).
     pub throttle: f64,
     /// Constant steer setpoint `[-1, 1]`, used when no [`AutopilotBehavior`].
     pub steer: f64,
@@ -84,9 +86,18 @@ pub struct Autopilot {
 
 impl Autopilot {
     /// An engaged autopilot for `vessel`, actor `index`, driving straight forward
-    /// at `throttle` (no behaviour tree).
+    /// at `throttle` (no behaviour tree). Constant cruise is **opt-in**: it is what
+    /// you get only by naming a non-zero `throttle`, never a default.
     pub fn forward(vessel: Entity, index: u64, throttle: f64) -> Self {
         Self { vessel, session: autopilot_session(index), engaged: true, throttle, steer: 0.0 }
+    }
+
+    /// An engaged autopilot that drives nothing on its own — it holds the vessel
+    /// (zero throttle, brake applied by [`drive_autopilots`]) until a behaviour
+    /// tree gives it somewhere to go. The correct state for "engaged with no
+    /// waypoints": engaging must claim the vessel, not launch it.
+    pub fn holding(vessel: Entity, index: u64) -> Self {
+        Self::forward(vessel, index, 0.0)
     }
 }
 
@@ -1453,7 +1464,7 @@ pub fn drive_autopilots(
                     pos: self_pos.as_vec3(),
                     fwd: xf.forward().as_vec3(),
                     now,
-                    // Idle default = NEUTRAL (no throttle), NOT `ap.throttle`. When a
+                    // Idle default = HOLD (no throttle, brake ON), NOT `ap.throttle`. When a
                     // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
                     // it every active tick, so the only ticks that keep this default are
                     // ones where no leaf drives — an empty/completed route (every waypoint
@@ -1463,7 +1474,11 @@ pub fn drive_autopilots(
                     // because a route whose legs were all marked passed compiles to an
                     // empty sequence that never writes the setpoint. The genuine "no tree,
                     // just cruise" case is the `_ =>` arm below, which still uses ap.throttle.
-                    out: (0.0, 0.0, 0.0),
+                    //
+                    // Brake, not merely zero throttle: neutral only removes drive, and a
+                    // rover parked on a lunar slope with no route then ROLLS. "Stop" has
+                    // to be actively held, the same triple `Hold`/`Wait` write.
+                    out: (0.0, 0.0, 1.0),
                     targets: targets.clone(),
                     clearance,
                     fired: Vec::new(),
@@ -1471,7 +1486,13 @@ pub fn drive_autopilots(
                 tree.0.tick(&mut ctx);
                 (ctx.out.0, ctx.out.1, ctx.out.2, ctx.fired)
             }
-            _ => (ap.throttle, ap.steer, 0.0, Vec::new()),
+            // No behaviour tree: the explicit constant-cruise autopilot. A zero
+            // throttle here is not "coast" but "hold" — an engaged autopilot with
+            // nothing to drive keeps the vessel where it is.
+            _ => {
+                let brake = if ap.throttle == 0.0 && ap.steer == 0.0 { 1.0 } else { 0.0 };
+                (ap.throttle, ap.steer, brake, Vec::new())
+            }
         };
 
         commands.trigger(SetPorts {
@@ -1596,7 +1617,10 @@ pub struct EngageAutopilot {
     #[serde(default)]
     #[reflect(default)]
     pub index: u64,
-    /// Constant forward setpoint used when no behaviour tree is given (default 0.5).
+    /// Constant forward setpoint, honoured ONLY when the vessel has no route —
+    /// i.e. explicit opt-in cruise. Omit it (0) and a routeless autopilot HOLDS
+    /// rather than driving off; with a route the behaviour tree owns the setpoint
+    /// and this is ignored either way.
     #[serde(default)]
     #[reflect(default)]
     pub throttle: f64,
@@ -1614,7 +1638,11 @@ fn on_engage_autopilot(
     q_route: Query<(Has<usd_tree::BehaviorXml>, Has<AutopilotBehaviorSpec>)>,
     mut commands: Commands,
 ) {
-    let throttle = if cmd.throttle != 0.0 { cmd.throttle } else { 0.5 };
+    // NO implicit throttle. An unset `throttle` used to become 0.5, so *every*
+    // engage — including the Command Deck button and Toggle Autopilot on a rover
+    // that has no waypoints at all — drove the rover forward in a straight line.
+    // Cruise is a thing you ask for by name; the default is to hold.
+    let throttle = cmd.throttle;
     // Re-engaging a vessel that ALREADY has an actor must reuse it. Spawning a
     // second one leaves two autopilots driving one vessel — both writing
     // `SetPorts` every tick (e.g. a stale Brake tree fighting a fresh patrol),
@@ -1647,10 +1675,12 @@ fn on_engage_autopilot(
             Err(err) => warn!("[autopilot] EngageAutopilot: bad spec: {err}"),
         }
     } else {
-        // NO ROUTE. Engaging still succeeds — the actor claims the vessel and drives a
-        // CONSTANT forward setpoint — but that is almost never what the user meant when
-        // they pressed Engage, and it is indistinguishable from "the autopilot is
-        // broken". A vessel gets a route from the BT.CPP XML on its `LunCoProgram`
+        // NO ROUTE. Engaging still succeeds — the actor claims the vessel — but it
+        // HOLDS unless the caller explicitly named a `throttle`. Driving forward at a
+        // fabricated setpoint was almost never what the user meant when they pressed
+        // Engage, and it is indistinguishable from "the autopilot is broken": the
+        // rover just leaves, ignoring the waypoints it doesn't have.
+        // A vessel gets a route from the BT.CPP XML on its `LunCoProgram`
         // mission child — `info:sourceCode`, or a `.xml` `info:sourceAsset` (stamped
         // as `usd_tree::BehaviorXml` by the USD projection, then compiled into
         // `AutopilotBehaviorSpec` by `usd_tree::compile_behavior_xml`), which the editor
@@ -1659,13 +1689,21 @@ fn on_engage_autopilot(
         // driving off in a straight line and letting the user guess.
         let (has_xml, has_spec) = q_route.get(cmd.vessel).unwrap_or((false, false));
         if !has_xml && !has_spec {
-            warn!(
-                "[autopilot] vessel {:?} has NO ROUTE (no `LunCoProgram` mission BT.CPP tree and no \
-                 compiled AutopilotBehaviorSpec) — engaging anyway, but it will only hold a \
-                 constant throttle of {throttle} on its current heading. Give it waypoints \
-                 (Alt+LMB the ground with the vessel possessed/selected) or pass `spec_json`.",
-                cmd.vessel
-            );
+            if throttle == 0.0 {
+                warn!(
+                    "[autopilot] vessel {:?} has NO ROUTE (no `LunCoProgram` mission BT.CPP tree \
+                     and no compiled AutopilotBehaviorSpec) — engaged and HOLDING. Give it \
+                     waypoints (Alt+LMB the ground with the vessel possessed/selected) or pass \
+                     `spec_json`; pass a non-zero `throttle` if you really want a blind cruise.",
+                    cmd.vessel
+                );
+            } else {
+                warn!(
+                    "[autopilot] vessel {:?} has NO ROUTE — cruising blind at a constant throttle \
+                     of {throttle} on its current heading, as asked.",
+                    cmd.vessel
+                );
+            }
         }
     }
     info!("[autopilot] engaging on vessel {:?} (index {})", cmd.vessel, cmd.index);
@@ -1850,13 +1888,14 @@ pub struct PatrolDefaults {
     pub radius: f32,
     /// Dwell at each waypoint (s).
     pub dwell: f64,
-    /// Throttle `EngageAutopilot` starts a patrol at.
-    pub engage_throttle: f64,
+    // No `engage_throttle`. Engaging does not pick a speed — the route does, via
+    // `speed` above. A tunable "throttle to engage at" only ever fed the constant
+    // forward setpoint that made routeless rovers drive away.
 }
 
 impl Default for PatrolDefaults {
     fn default() -> Self {
-        Self { speed: 0.6, radius: 3.0, dwell: 0.0, engage_throttle: 0.6 }
+        Self { speed: 0.6, radius: 3.0, dwell: 0.0 }
     }
 }
 
