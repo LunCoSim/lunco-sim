@@ -102,6 +102,24 @@ def Xform "SandboxScene" (
         float physics:mass = 1.0
     }
 
+    # THE WITNESS. A cube exactly like CubeB, at the same height, with NO joint
+    # holding it. If physics is running it lands on the ground within a second or
+    # two; if it is still at y=5 at the end of the run, nothing was simulating and
+    # "CubeB did not fall" would have meant nothing either.
+    #
+    # Without it the whole test passes on a frozen world.
+    def Cube "FreeCube" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (6.0, 5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.9, 0.5, 0.2)]
+        float physics:mass = 1.0
+        bool physics:collisionEnabled = true
+    }
+
     def PhysicsFixedJoint "Hinge"
     {
         rel physics:body0 = </SandboxScene/CubeA>
@@ -109,5 +127,15 @@ def Xform "SandboxScene" (
         # Anchors meet at world (0, 5, 0) — midpoint between the cubes.
         point3f physics:localPos0 = (2.0, 0, 0)
         point3f physics:localPos1 = (-2.0, 0, 0)
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "joint"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/joint.rhai@
+        }
     }
 }

@@ -142,5 +142,20 @@ fn on_tick(me) {
             ", expected the bumper"));
     }
 
+    // A collision group whose collection matches no prim, and whose
+    // `filteredGroups` names a body instead of a group. Both are ERRORs: the
+    // author wrote down protection they do not have, and nothing at runtime says
+    // so — the parts just keep colliding.
+    let ghost_group = by_rule(findings, "collision-group-include-missing");
+    f.push(t_true(ghost_group.len() == 1,
+        "collision-group-include-missing fired " + ghost_group.len() + " time(s), " +
+        "expected exactly 1 (/LintSelftest/GhostGroup groups a prim that is not " +
+        "on this stage)"));
+
+    let bad_filter = by_rule(findings, "collision-group-filter-not-a-group");
+    f.push(t_true(bad_filter.len() == 1,
+        "collision-group-filter-not-a-group fired " + bad_filter.len() + " time(s), " +
+        "expected exactly 1 (/LintSelftest/GhostGroup filters against a body)"));
+
     report_verdict(f, "LINT SELFTEST", "LINT_SELFTEST");
 }

@@ -130,6 +130,27 @@ def Xform "CommsWallTest" (
         }
     }
 
+    # THE CONTROL, and it is in this scene rather than a second one because it
+    # must be the SAME rover, wall and tick: a clear sight-line to an equally
+    # distant mast, off to the side where the wall cannot cover it.
+    #
+    # Rover (0, 20) to here (12, -20) crosses the wall's plane at x = 6, and the
+    # wall spans x = -4..4 — so this line misses it by 2 m. The baseline is 41.8 m
+    # against the blocked one's 40 m, near enough that RANGE cannot be what
+    # separates the two verdicts. Class `base_clear`, so a script can address it.
+    def Xform "MastClear" (
+        prepend references = @lunco://structures/comms_mast.usda@</CommsMast>
+    )
+    {
+        double3 xformOp:translate = (12.0, 0, -20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Antenna"
+        {
+            string lunco:link:class = "base_clear"
+        }
+    }
+
     # The rover, behind the wall. Its antenna (`Comms`, from the shared component)
     # is the other link endpoint; class it as "rover" so scripts can address the
     # role as well as the GID.
@@ -168,5 +189,15 @@ def Xform "CommsWallTest" (
         double3 lunco:cameraLookAt = (0.0, 2.0, 0.0)
         double3 xformOp:translate = (45.0, 18.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "comms-wall"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/comms_wall.rhai@
+        }
     }
 }

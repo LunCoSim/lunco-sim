@@ -175,6 +175,20 @@ def Xform "LintSelftest" (
         rel physics:filteredPairs = </LintSelftest/NoSuchPrim>
     }
 
+    # A collision group that groups NOTHING: its collection names a prim that
+    # does not exist (renamed, most likely), so no collider is ever on the group
+    # and the filter below it protects nobody. At runtime this is silent — the
+    # parts simply keep colliding, which reads as bad tuning. Fixture for
+    # `collision-group-include-missing` and
+    # `collision-group-filter-not-a-group`.
+    def PhysicsCollisionGroup "GhostGroup"
+    {
+        prepend rel collection:colliders:includes = </LintSelftest/NoSuchPart>
+        # …and this names a BODY rather than a group, which is the same mistake
+        # one level up.
+        prepend rel physics:filteredGroups = </LintSelftest/Anchor>
+    }
+
     # A SPRUNG LEG whose strut reaches the ground before its foot does — the
     # descent lander's original authoring, in miniature. The pad is a thin wafer
     # CENTRED on the strut's tip, so it clears the strut's rotated bottom corner

@@ -88,4 +88,14 @@ def Xform "SixWheelTest" (
         double3 xformOp:translate = (0, 1.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "six-wheel"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/six_wheel.rhai@
+        }
+    }
 }
