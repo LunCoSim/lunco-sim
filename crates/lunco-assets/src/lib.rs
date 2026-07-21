@@ -580,18 +580,6 @@ pub fn dejavu_sans_path() -> PathBuf {
     fonts_dir().join("DejaVuSans.ttf")
 }
 
-/// Constructs an ephemeris cache file path for a given target ID.
-///
-/// The filename format matches the JPL Horizons CSV convention:
-/// `target_{id}_{start}_{stop}.csv`
-///
-/// Returns a `PathBuf` within [`ephemeris_dir()`].
-pub fn ephemeris_path_for_target(target_id: &str, date_range_start: &str, date_range_end: &str) -> PathBuf {
-    ephemeris_dir().join(format!(
-        "target_{target_id}_{date_range_start}_{date_range_end}.csv"
-    ))
-}
-
 /// Constructs a Modelica compilation output path for a given entity.
 ///
 /// Returns a `PathBuf` within [`modelica_dir()`].
@@ -666,9 +654,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&test_subdir);
     }
 
+    /// The two caches, and the rule that keeps a twin portable.
     #[test]
-    fn ephemeris_path_format() {
-        let path = ephemeris_path_for_target("-1024", "2026-04-02_0159", "2026-04-11_0001");
-        assert!(path.ends_with("target_-1024_2026-04-02_0159_2026-04-11_0001.csv"));
+    fn a_twins_cache_sits_beside_it_not_in_the_shared_one() {
+        let twin = std::path::Path::new("/tmp/some_twin");
+        assert_eq!(twin_cache_dir(twin), twin.join(".cache"));
+        assert!(!twin_cache_dir(twin).starts_with(cache_dir()));
     }
 }
