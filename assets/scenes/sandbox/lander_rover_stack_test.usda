@@ -26,8 +26,9 @@ def Xform "LanderRoverStack" (
     doc = "A lander with a rover bolted underneath, dropped onto its legs."
 )
 {
-    # UsdPhysicsScene — simulation-wide settings; bodies name it via
-    # `physics:simulationOwner`. The MOON, matching the lander's own sizing.
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. The MOON, matching the lander's own sizing.
     def PhysicsScene "PhysicsScene"
     {
         vector3f physics:gravityDirection = (0, -1, 0)

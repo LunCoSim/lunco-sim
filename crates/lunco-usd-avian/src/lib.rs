@@ -821,6 +821,21 @@ fn process_usd_avian_prims(
     extract_avian_prim(&cs.view(), entity, &sdf_path, &mut commands);
 }
 
+/// Which `UsdPhysicsScene` prim set the world's gravity, and to what.
+///
+/// Kept so a SECOND scene prim asking for something different is reported
+/// instead of silently winning by visit order. Cleared with the rest of the
+/// world on scene teardown, so a reload re-reads whatever the new scene says.
+#[derive(Resource, Clone, Debug)]
+pub struct PhysicsSceneGravity {
+    /// Composed path of the prim that set it.
+    pub prim: String,
+    /// Magnitude in m/s², already converted from scene units.
+    pub magnitude: f64,
+    /// Unit direction in the canonical frame.
+    pub direction: DVec3,
+}
+
 /// Set the world's gravity from a composed `UsdPhysicsScene` prim.
 ///
 /// `physics:gravityMagnitude` is in scene units per second squared and
@@ -853,13 +868,35 @@ fn apply_physics_scene_gravity(
         None => DVec3::NEG_Y,
     };
 
-    info!(
-        "[usd-avian] {} sets gravity to {:.4} m/s² along {:?}",
-        sdf_path.as_str(),
-        magnitude,
-        direction
-    );
-    commands.insert_resource(lunco_environment::Gravity::flat(magnitude, direction));
+    let prim = sdf_path.as_str().to_string();
+    commands.queue(move |world: &mut World| {
+        // A scene has ONE gravity, so two `PhysicsScene` prims that disagree are
+        // an authoring error. Report it, then apply anyway: the write must be
+        // unconditional or a scene RELOAD — whose prims are a different set from
+        // the outgoing scene's — would be refused its own gravity and inherit
+        // the previous scene's.
+        if let Some(existing) = world.get_resource::<PhysicsSceneGravity>() {
+            let disagrees = (existing.magnitude - magnitude).abs() > 1e-9
+                || !existing.direction.abs_diff_eq(direction, 1e-9);
+            if existing.prim != prim && disagrees {
+                error!(
+                    "[usd-avian] two PhysicsScene prims disagree about gravity: `{}` set \
+                     {:.4} m/s² along {:?}, `{}` sets {:.4} m/s² along {:?}. The last one \
+                     read wins, which depends on prim order — a scene has one gravity, so \
+                     author a single PhysicsScene.",
+                    existing.prim,
+                    existing.magnitude,
+                    existing.direction,
+                    prim,
+                    magnitude,
+                    direction
+                );
+            }
+        }
+        info!("[usd-avian] {prim} sets gravity to {magnitude:.4} m/s² along {direction:?}");
+        world.insert_resource(lunco_environment::Gravity::flat(magnitude, direction));
+        world.insert_resource(PhysicsSceneGravity { prim, magnitude, direction });
+    });
 }
 
 /// Map a single composed USD prim to its avian physics components, read off the

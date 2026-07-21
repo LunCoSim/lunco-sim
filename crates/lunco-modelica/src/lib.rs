@@ -1433,24 +1433,6 @@ impl Plugin for ModelicaWorkbenchPlugin {
     }
 }
 
-/// Hold rigid-body integration until every co-simulation model in the scene has
-/// had its first compile answered.
-///
-/// A cosim model is part of the vehicle — a lander's descent guidance, a rover's
-/// motor controller — and its compile is not instant: seconds when MSL has to be
-/// loaded into the session. Until the stepper is installed the model declares no
-/// ports, so `lunco-cosim` drops every wire into it as an unknown input and the
-/// vehicle simulates with its controller outputting nothing. That is not a
-/// delayed start, it is a different vehicle: a powered descent integrates as a
-/// free fall, and the compile lands long after the impact.
-///
-/// The wait is for the compile to SETTLE, not to succeed — see
-/// [`ModelicaModel::compile_settled`]. A model that cannot build reports itself
-/// through [`ModelicaNotice`] and releases the hold; one broken model must not
-/// freeze the world.
-///
-/// Only models with a source document are waited on: one without a document has
-/// no compile coming and would hold forever.
 fn build_modelica_core(app: &mut App) {
     let (tx_cmd, rx_cmd) = unbounded();
     let (tx_res, rx_res) = unbounded();

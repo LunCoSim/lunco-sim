@@ -41,8 +41,9 @@ def Xform "LanderTest" (
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings; bodies name it via
-    # `physics:simulationOwner`. The MOON: the lander's struts, its GNC and its
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. The MOON: the lander's struts, its GNC and its
     # propellant budget all take their numbers from this, so the scene states it
     # rather than inherit a terrestrial default.
     def PhysicsScene "PhysicsScene"
