@@ -102,3 +102,91 @@ fn links_prelude_exposes_the_routing_surface() {
         );
     }
 }
+
+/// Every shipped policy must parse.
+///
+/// A policy that does not compile is registered as *nothing*: the seam falls back
+/// to its Rust built-in and the app runs, quietly, on rules nobody chose. That is
+/// the worst failure mode a policy file has — no crash, no wrong answer, just an
+/// authored decision that silently stopped applying.
+#[test]
+fn policy_files_all_parse() {
+    let engine = runtime_engine();
+    let files = lunco_assets::scripting::policies();
+    assert!(!files.is_empty(), "no policy files found at all");
+
+    for (stem, src) in &files {
+        if let Err(e) = engine.compile(*src) {
+            panic!("policy '{stem}.rhai' does not parse: {e}");
+        }
+    }
+}
+
+/// The readiness policy and `lunco_readiness::Action::builtin` must AGREE.
+///
+/// They are two statements of one rule — the Rust one runs when scripting is
+/// absent or the hook faults, the rhai one runs otherwise — so a scene must not
+/// behave differently depending on which is in force. Nothing but this test
+/// couples them: they are in different languages, in different crates, and a
+/// change to either compiles perfectly well on its own.
+#[test]
+fn readiness_policy_agrees_with_the_engines_builtin() {
+    use lunco_readiness::{kinds, Action, Subject};
+
+    let (_, src) = lunco_assets::scripting::policies()
+        .into_iter()
+        .find(|(stem, _)| *stem == "readiness")
+        .expect("readiness.rhai must be a shipped policy");
+    let engine = runtime_engine();
+    let ast = engine.compile(src).expect("readiness.rhai parses");
+
+    let entity = bevy::prelude::Entity::from_raw_u32(3).unwrap();
+    let cases = [
+        (kinds::SCENE_LOAD, Subject::World, 0.0),
+        (kinds::SCENE_LOAD, Subject::World, Action::DEADLINE_S + 1.0),
+        (kinds::PROGRAM_COMPILE, Subject::Entity(entity), 0.5),
+        (kinds::PROGRAM_COMPILE, Subject::World, 0.5),
+        (kinds::PARTICIPANT_INIT, Subject::Entity(entity), 2.0),
+        (kinds::PARTICIPANT_INIT, Subject::Entity(entity), Action::DEADLINE_S),
+        ("something_nobody_implemented", Subject::World, 0.0),
+    ];
+
+    for (kind, subject, elapsed) in cases {
+        let mut ctx = rhai::Map::new();
+        ctx.insert("kind".into(), rhai::Dynamic::from(kind.to_string()));
+        ctx.insert(
+            "subject".into(),
+            rhai::Dynamic::from(
+                match subject {
+                    Subject::World => "world",
+                    Subject::Entity(_) => "entity",
+                }
+                .to_string(),
+            ),
+        );
+        ctx.insert("entity".into(), rhai::Dynamic::from_int(-1));
+        ctx.insert("label".into(), rhai::Dynamic::from("x".to_string()));
+        ctx.insert("elapsed_s".into(), rhai::Dynamic::from_float(elapsed));
+        ctx.insert(
+            "deadline_s".into(),
+            rhai::Dynamic::from_float(Action::DEADLINE_S),
+        );
+
+        let mut scope = rhai::Scope::new();
+        let answer: rhai::Dynamic = engine
+            .call_fn(&mut scope, &ast, "readiness_action", (ctx,))
+            .unwrap_or_else(|e| panic!("readiness_action({kind}, {subject:?}) failed: {e}"));
+        let answer = answer
+            .into_immutable_string()
+            .expect("the policy must answer with a string");
+
+        let scripted = Action::parse(&answer)
+            .unwrap_or_else(|| panic!("policy returned '{answer}', not a known action"));
+        let native = Action::builtin(kind, subject, elapsed);
+        assert_eq!(
+            scripted, native,
+            "readiness.rhai and Action::builtin disagree for \
+             kind={kind} subject={subject:?} elapsed={elapsed}"
+        );
+    }
+}
