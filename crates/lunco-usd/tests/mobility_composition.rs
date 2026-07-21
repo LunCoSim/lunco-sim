@@ -228,10 +228,21 @@ fn every_rover_wheel_satisfies_the_unified_param_reader() {
                 continue;
             }
             wheels += 1;
-            let params = lunco_usd_sim::wheel_params::WheelParams::read(&view, &p, None, None)
-                .unwrap_or_else(|missing| {
-                    panic!("{rover}: wheel {} is missing {:?}", p.as_str(), missing)
-                });
+            // Torque and no-load speed live on the MOTOR that names this wheel
+            // (`lunco:motor:drivenWheel`), not on the wheel prim — so resolve the
+            // powertrain exactly as the loader does before reading. A driven wheel
+            // with no motor would read zero torque, which the `peak_torque > 0`
+            // assertion below then catches.
+            let powertrain = lunco_usd_sim::powertrain::find_for_wheel(&view, &p);
+            let params = lunco_usd_sim::wheel_params::WheelParams::read(
+                &view,
+                &p,
+                None,
+                powertrain.as_ref(),
+            )
+            .unwrap_or_else(|missing| {
+                panic!("{rover}: wheel {} is missing {:?}", p.as_str(), missing)
+            });
             assert!(params.radius > 0.0, "{rover}: {} radius", p.as_str());
             assert!(params.mass > 0.0, "{rover}: {} mass", p.as_str());
             assert!(params.peak_torque > 0.0, "{rover}: {} peakTorque", p.as_str());

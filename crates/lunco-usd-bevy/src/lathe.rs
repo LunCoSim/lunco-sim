@@ -595,8 +595,11 @@ mod tests {
         assert!(!grid.is_empty(), "generated net must evaluate");
 
         // The exit plane (v = 1) is interpolated, so its radius is known exactly.
+        // `uv[1]` is `f32`, whose ULP at 1.0 is ~6e-8, so a `1e-9` epsilon rounds
+        // to exactly 1.0 and would exclude the endpoint row it means to select.
+        // `1e-4` is far below the previous v-row (0.875) and safely above f32 noise.
         let mut checked = 0;
-        for smp in grid.iter().filter(|g| g.uv[1] > 1.0 - 1e-9) {
+        for smp in grid.iter().filter(|g| g.uv[1] > 1.0 - 1e-4) {
             let r = (smp.position[0].powi(2) + smp.position[2].powi(2)).sqrt();
             assert!(
                 (r - 1.35).abs() < 1e-4,

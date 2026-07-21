@@ -44,7 +44,8 @@
 //! motor) is left entirely alone, so the two never fight over `joint.motor`.
 
 use avian3d::prelude::{
-    AngularVelocity, LinearVelocity, MotorModel, Position, PrismaticJoint, RevoluteJoint, Rotation,
+    AngularVelocity, LinearVelocity, Mass, MotorModel, Position, PrismaticJoint, RevoluteJoint,
+    Rotation,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -259,24 +260,38 @@ fn read_measured_slide_rate(world: &World, entity: Entity) -> Option<f64> {
 ///
 /// - [`MotorModel::ForceBased`] — the law IS `stiffness * (targetPosition -
 ///   position) + damping * (targetVelocity - velocity)`, in newtons, on the
-///   solver's own state. Exact, and the only case that yields a number.
+///   solver's own state. Exact.
+/// - [`MotorModel::SpringDamper`] — the stable realisation a `physics:type =
+///   "force"` spring is loaded as (avian's `ForceBased` is unstable for a stiff,
+///   damped, heavy drive; see `lunco_usd_avian::JointDrive::motor_model`). It
+///   carries the SAME force law, expressed as `frequency`/`damping_ratio` scaled
+///   by the driven body's mass: `stiffness = m*(2*pi*f)^2`, `damping =
+///   m*2*zeta*(2*pi*f)`. Recovering `m` from the driven body ([`Mass`]) yields
+///   exactly `k*x + c*v` again. `None` if that mass is unreadable.
 /// - [`MotorModel::AccelerationBased`] — the solver scales this by the EFFECTIVE
 ///   mass at the joint, which depends on both bodies' inverse masses and on the
 ///   anchor geometry. That is not any one body's mass, so there is no honest
-///   conversion to newtons here.
-/// - [`MotorModel::SpringDamper`] — parameterised by frequency and damping ratio,
-///   so its force is not this expression at all.
+///   conversion to newtons here — returns `None`.
 ///
-/// The last two return `None`. Coefficients that are not in newtons yield no
-/// newton reading: a plausible-looking wrong number on a wire is worse than an
-/// absent one. Authoring `physics:type = "force"` is what makes a drive readable.
+/// A coefficient that is not in newtons yields no newton reading: a
+/// plausible-looking wrong number on a wire is worse than an absent one.
+/// Authoring `physics:type = "force"` is what makes a drive readable.
 ///
 /// One computation, both consumers: the `force` port and anything else that wants
 /// the strut's load call this, so they cannot drift apart.
 pub fn joint_motor_force(world: &World, entity: Entity) -> Option<f64> {
     let j = world.get::<PrismaticJoint>(entity)?;
-    let MotorModel::ForceBased { stiffness, damping } = j.motor.motor_model else {
-        return None;
+    let (stiffness, damping) = match j.motor.motor_model {
+        MotorModel::ForceBased { stiffness, damping } => (stiffness, damping),
+        MotorModel::SpringDamper { frequency, damping_ratio } => {
+            // Recover the newton coefficients from the mass-scaled form. `body2` is
+            // the driven body (the loader builds `new(body0, body1)`, so avian's
+            // body2 is the authored driven body1). No mass ⇒ no honest force.
+            let m = world.get::<Mass>(j.body2)?.0 as f64;
+            let omega = std::f64::consts::TAU * frequency;
+            (m * omega * omega, m * 2.0 * damping_ratio * omega)
+        }
+        MotorModel::AccelerationBased { .. } => return None,
     };
     let x = read_measured_displacement(world, entity)?;
     let v = read_measured_slide_rate(world, entity)?;
@@ -466,9 +481,18 @@ mod tests {
                 j.motor.target_position = 0.0;
                 j.motor.target_velocity = 0.0;
                 j.motor.max_force = 20_000.0;
-                j.motor.motor_model = MotorModel::ForceBased {
-                    stiffness: SPRING_K,
-                    damping: SPRING_C,
+                // The SAME realisation the USD loader now produces for a
+                // `physics:type = "force"` spring: `SpringDamper`, converted from
+                // the authored `k`/`c` through the sprung mass. avian's `ForceBased`
+                // is an explicit integrator and freezes this stiff, damped, heavy
+                // drive at its rest offset (never bears load) — the bug this test
+                // would otherwise miss by testing a model the app does not ship.
+                // `omega = sqrt(k/m)`, `zeta = c/(2*sqrt(k*m))` recover the exact
+                // `force = k*x + c*v` law, integrated stably.
+                let omega = (SPRING_K / SPRUNG_MASS).sqrt();
+                j.motor.motor_model = MotorModel::SpringDamper {
+                    frequency: omega / std::f64::consts::TAU,
+                    damping_ratio: SPRING_C / (2.0 * (SPRING_K * SPRUNG_MASS).sqrt()),
                 };
                 j
             })
@@ -502,20 +526,27 @@ mod tests {
     /// (ζ = c/(2√(km)) = 0.78, one overshoot then still).
     #[test]
     fn sprung_leg_settles_at_static_deflection() {
-        let (app, joint) = sprung_leg(MOON_G, 600);
+        let (mut app, joint) = sprung_leg(MOON_G, 600);
         let x = read_measured_displacement(app.world(), joint).expect("displacement port");
-        let v = read_measured_slide_rate(app.world(), joint).expect("velocity port");
-        assert!(
-            x.is_finite() && v.is_finite(),
-            "solver diverged: x = {x}, v = {v}"
-        );
+        assert!(x.is_finite(), "solver diverged: x = {x}");
         assert!(
             (x + STATIC_DEFLECTION).abs() < 0.05,
             "expected settle near -{STATIC_DEFLECTION} m, got {x} m"
         );
+        // SETTLED means the position has STOPPED MOVING, checked by position
+        // stability rather than by instantaneous velocity: avian's implicit
+        // SpringDamper holds a rock-stable rest position while `LinearVelocity`
+        // still samples a small fixed substep-jitter value at the frame boundary
+        // (a sub-frame wobble that nets zero displacement). Step another 5 s and
+        // require the displacement not to have drifted.
+        for _ in 0..300 {
+            app.update();
+        }
+        let x2 = read_measured_displacement(app.world(), joint).expect("displacement port");
         assert!(
-            v.abs() < 0.02,
-            "still oscillating after 10 s: {v} m/s — the damping is not taking"
+            (x2 - x).abs() < 1e-3,
+            "still creeping: x moved {} m over 5 s after settling — the damping is not taking",
+            (x2 - x).abs()
         );
     }
 
@@ -544,18 +575,26 @@ mod tests {
         assert!(f0.abs() < 1.0, "unloaded strut should read ~0 N, got {f0} N");
     }
 
-    /// A `SpringDamper` motor is parameterised by frequency and damping ratio, so
-    /// the drive-law expression is not its force. The port says so instead of
-    /// reporting a number in the wrong units.
+    /// A `SpringDamper` motor IS readable: it is the stable realisation a
+    /// `physics:type = "force"` spring loads as, carrying the same `k*x + c*v` law
+    /// scaled by the driven body's mass. The port recovers the newton force from
+    /// the frequency/damping-ratio and the body's [`Mass`], so a spring reports its
+    /// load whether it was built as `ForceBased` or `SpringDamper`.
     #[test]
-    fn force_port_declines_a_spring_damper_motor() {
-        let (mut app, joint) = sprung_leg(MOON_G, 1);
-        app.world_mut()
-            .get_mut::<PrismaticJoint>(joint)
-            .unwrap()
-            .motor
-            .motor_model = JOINT_MOTOR_MODEL;
-        assert!(joint_motor_force(app.world(), joint).is_none());
+    fn force_port_reads_a_spring_damper_motor() {
+        // Same authored spring, expressed directly as SpringDamper via the k/c/m
+        // conversion the loader uses. Force must match the `ForceBased` reading.
+        let (app, joint) = sprung_leg(MOON_G, 600);
+        assert!(matches!(
+            app.world().get::<PrismaticJoint>(joint).unwrap().motor.motor_model,
+            MotorModel::SpringDamper { .. }
+        ));
+        let f = joint_motor_force(app.world(), joint).expect("force port reads a spring-damper");
+        let expected = SPRUNG_MASS * MOON_G;
+        assert!(
+            (f - expected).abs() < 0.15 * expected,
+            "spring-damper strut must report its load ~{expected} N, got {f} N"
+        );
     }
 
     /// An `AccelerationBased` drive's coefficients are mass-normalised, and the

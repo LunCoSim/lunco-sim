@@ -71,8 +71,11 @@ fn over_color_override_composes() {
     )
     .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
     .expect("Skid_Raycast_1/Chassis must have composed displayColor");
-    assert!((c[0] - 0.8).abs() < 0.01 && (c[1] - 0.2).abs() < 0.01 && (c[2] - 0.2).abs() < 0.01,
-        "override colour must be (0.8,0.2,0.2), got {c:?}");
+    // The scene's `over "Chassis"` authors crimson; the referenced base is
+    // (0.25, 0.22, 0.18). Matching the override — well clear of the base — is what
+    // proves the opinion composed and won.
+    assert!((c[0] - 0.85).abs() < 0.01 && (c[1] - 0.15).abs() < 0.01 && (c[2] - 0.12).abs() < 0.01,
+        "override colour must be (0.85,0.15,0.12), got {c:?}");
 }
 
 /// apiSchemas compose across the reference: the physical skid rover carries the

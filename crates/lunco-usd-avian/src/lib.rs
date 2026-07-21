@@ -324,29 +324,50 @@ pub struct JointDrive {
     /// `None` = unauthored, and the schema's own fallback for that is
     /// [`DriveType::Force`].
     pub drive_type: Option<DriveType>,
+    /// The driven body's authored `physics:mass` (kg), read alongside a **linear**
+    /// drive. A force-type spring is realised as a stable
+    /// [`MotorModel::SpringDamper`], whose frequency is `sqrt(stiffness / mass)`;
+    /// see [`JointDrive::motor_model`]. `None` when the body authors no explicit
+    /// mass, and always `None` for an angular drive (whose matching inertia is the
+    /// moment about the hinge axis, not the mass) — the drive then stays
+    /// [`MotorModel::ForceBased`] rather than divide by the wrong quantity.
+    pub driven_mass: Option<f64>,
 }
 
 impl JointDrive {
     /// The avian motor model this drive asks for.
     ///
-    /// `UsdPhysicsDriveAPI` already defines the drive law —
+    /// `UsdPhysicsDriveAPI` defines the drive law —
     /// `force = stiffness * (targetPosition - position) + damping * (targetVelocity -
-    /// velocity)` — and already defines its one axis of variation, `physics:type`:
-    /// `"force"` applies that as a force, `"acceleration"` applies it mass-normalised
-    /// so the response does not depend on what the joint is carrying. avian spells
-    /// the same pair [`MotorModel::ForceBased`] and [`MotorModel::AccelerationBased`]
-    /// with the same coefficients in the same SI units, so this is a rename, not a
-    /// conversion: a strut authored at 4000 N/m and 2200 N·s/m is that spring in the
-    /// solver, and nothing has to restate it.
+    /// velocity)` — and its one axis of variation, `physics:type`: `"force"` applies
+    /// that as a force, `"acceleration"` applies it mass-normalised so the response
+    /// does not depend on what the joint is carrying.
+    ///
+    /// `"acceleration"` maps straight onto [`MotorModel::AccelerationBased`], same
+    /// coefficients, same units. `"force"` does NOT map onto
+    /// [`MotorModel::ForceBased`]: avian's `ForceBased` is an EXPLICIT integrator
+    /// that is unstable for a stiff, damped drive on a heavy body at a sim tick —
+    /// the landing leg (k = 4000 N/m, c = 2200 N·s/m, m = 500 kg, 60 Hz) freezes at
+    /// its rest offset and never bears load. avian's own docs say to use
+    /// [`MotorModel::SpringDamper`] (the IMPLICIT form) for stability.
+    ///
+    /// SpringDamper is parameterised by `frequency` and `damping_ratio`, and
+    /// `omega = sqrt(stiffness / mass)`, `zeta = damping / (2*sqrt(stiffness*mass))`
+    /// recover EXACTLY the authored law: SpringDamper's per-substep correction is an
+    /// acceleration `omega^2*pos_err + 2*zeta*omega*vel_err`, so the force it
+    /// develops is `mass * that = stiffness*pos_err + damping*vel_err` — `force =
+    /// k*x + c*v`, unchanged, but integrated stably. The conversion needs the driven
+    /// body's inertia ([`Self::driven_mass`]), which is only the mass for a LINEAR
+    /// drive; without it (an angular drive, or no authored mass) we cannot convert
+    /// and keep `ForceBased` rather than divide by the wrong quantity.
     ///
     /// An unauthored `physics:type` takes the schema's own fallback, `"force"`
-    /// (`usdPhysics` declares `uniform token physics:type = "force"`), so the
-    /// coefficients mean what their SI units say unless a scene asks otherwise.
+    /// (`usdPhysics` declares `uniform token physics:type = "force"`).
     ///
     /// A drive with neither coefficient is not a spring but a positioner: it seeks a
     /// setpoint, and how fast it converges is a tuning choice rather than a property
-    /// of the mechanism. That one gets [`MotorModel::SpringDamper`], which is
-    /// unconditionally stable under XPBD substepping at any mass.
+    /// of the mechanism. That one gets [`MotorModel::SpringDamper`] at a fixed
+    /// frequency, which is unconditionally stable under XPBD substepping at any mass.
     fn motor_model(&self) -> MotorModel {
         if self.stiffness.is_none() && self.damping.is_none() {
             return JOINT_DRIVE_MOTOR_MODEL;
@@ -354,8 +375,19 @@ impl JointDrive {
         let stiffness = self.stiffness.unwrap_or(0.0);
         let damping = self.damping.unwrap_or(0.0);
         match self.drive_type.unwrap_or(DriveType::Force) {
-            DriveType::Force => MotorModel::ForceBased { stiffness, damping },
             DriveType::Acceleration => MotorModel::AccelerationBased { stiffness, damping },
+            DriveType::Force => match self.driven_mass {
+                Some(m) if m > 0.0 && stiffness > 0.0 => {
+                    let omega = (stiffness / m).sqrt();
+                    MotorModel::SpringDamper {
+                        frequency: omega / std::f64::consts::TAU,
+                        damping_ratio: damping / (2.0 * (stiffness * m).sqrt()),
+                    }
+                }
+                // No mass, or a pure damper (no stiffness to blow up): the explicit
+                // form is safe and there is nothing to convert through.
+                _ => MotorModel::ForceBased { stiffness, damping },
+            },
         }
     }
 
@@ -1010,7 +1042,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         };
         Some((b0, b1, lp0, lp1))
     }
-    let read_drive = |ns: &str| -> Option<JointDrive> {
+    let read_drive = |ns: &str, body1: &str| -> Option<JointDrive> {
         let d = physics::DriveAPI::get(stage, path.clone(), ns).ok().flatten()?;
         let tp = d.target_position_attr().get::<f32>().ok().flatten().map(|v| v as f64);
         let tv = d.target_velocity_attr().get::<f32>().ok().flatten().map(|v| v as f64);
@@ -1018,6 +1050,30 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         let k = d.stiffness_attr().get::<f32>().ok().flatten().map(|v| v as f64);
         let c = d.damping_attr().get::<f32>().ok().flatten().map(|v| v as f64);
         let ty = d.type_attr().get::<DriveType>().ok().flatten();
+        // The driven body's authored mass, for the force-spring → SpringDamper
+        // conversion. Read from USD (not avian's computed `Mass`, which does not
+        // exist yet at spec-read time). `None` when the body leaves it to density.
+        //
+        // LINEAR drives only. The conversion divides stiffness by the driven
+        // INERTIA, and for a slider that is the mass (N/m ÷ kg). For an ANGULAR
+        // drive the stiffness is N·m/rad and the inertia is the moment about the
+        // hinge axis (kg·m²) — a different quantity, and one `physics:mass` is not.
+        // Feeding mass in there would be dimensionally wrong, so an angular drive
+        // keeps `ForceBased`: unchanged behaviour for the rocker/differential
+        // couplings that author angular stiffness.
+        let driven_mass = (ns == "linear")
+            .then(|| {
+                SdfPath::new(body1).ok().and_then(|b1| {
+                    stage
+                        .prim(b1)
+                        .attribute("physics:mass")
+                        .get::<f32>()
+                        .ok()
+                        .flatten()
+                        .map(|m| m as f64)
+                })
+            })
+            .flatten();
         (tp.is_some() || tv.is_some() || mf.is_some() || k.is_some() || c.is_some()).then_some(
             JointDrive {
                 target_position: tp,
@@ -1026,6 +1082,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
                 stiffness: k,
                 damping: c,
                 drive_type: ty,
+                driven_mass,
             },
         )
     };
@@ -1037,20 +1094,22 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             .map(|d| (d as f64).to_radians()).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten()
             .map(|d| (d as f64).to_radians()).unwrap_or(f64::INFINITY);
+        let drive = read_drive("angular", &b1);
         PendingUsdJoint {
             body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
             limit_lower: lo, limit_upper: hi, joint_type: "PhysicsRevoluteJoint".into(),
-            swing_limit: None, drive: read_drive("angular"),
+            swing_limit: None, drive,
         }
     } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone()).ok().flatten() {
         let (b0, b1, lp0, lp1) = base(&j, &view)?;
         let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten(), local_rot0_of(&j));
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
+        let drive = read_drive("linear", &b1);
         PendingUsdJoint {
             body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
             limit_lower: lo, limit_upper: hi, joint_type: "PhysicsPrismaticJoint".into(),
-            swing_limit: None, drive: read_drive("linear"),
+            swing_limit: None, drive,
         }
     } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone()).ok().flatten() {
         let (b0, b1, lp0, lp1) = base(&j, &view)?;
@@ -2212,10 +2271,10 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             .join("../../assets/components/mobility/physical_drivetrain.usda");
         let stage = compose_file_to_stage(&f).expect("compose drivetrain");
         for (name, lp0) in [
-            ("Wheel_FL_Hinge", DVec3::new(-0.9, -0.65, -1.225)),
-            ("Wheel_FR_Hinge", DVec3::new(0.9, -0.65, -1.225)),
-            ("Wheel_RL_Hinge", DVec3::new(-0.9, -0.65, 1.225)),
-            ("Wheel_RR_Hinge", DVec3::new(0.9, -0.65, 1.225)),
+            ("Wheel_FL_Hinge", DVec3::new(-1.0, -0.65, -1.225)),
+            ("Wheel_FR_Hinge", DVec3::new(1.0, -0.65, -1.225)),
+            ("Wheel_RL_Hinge", DVec3::new(-1.0, -0.65, 1.225)),
+            ("Wheel_RR_Hinge", DVec3::new(1.0, -0.65, 1.225)),
         ] {
             let j = read_joint_spec_typed(&stage, &SdfPath::new(&format!("/Drivetrain/{name}")).unwrap())
                 .unwrap_or_else(|| panic!("{name} reads"));
