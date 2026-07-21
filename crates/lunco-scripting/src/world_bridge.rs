@@ -641,6 +641,11 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         serde_json::to_string(&v).unwrap_or_else(|_| "null".into()).into()
     });
 
+    // Vector + angle math, in Rust. Scripts pass the same `[x, y, z]` arrays
+    // `world_pos`/`world_forward` return; see `crate::rhai_math` for why this is
+    // not the prelude's job.
+    crate::rhai_math::register(&mut engine);
+
     // world_pos(id) -> [x, y, z] absolute world space, or () on miss.
     engine.register_fn("world_pos", |id: i64| -> Dynamic {
         match bridge_core::world_pos(id as u64) {

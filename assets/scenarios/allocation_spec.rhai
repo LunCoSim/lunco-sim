@@ -210,28 +210,6 @@ fn seg(prev, cur) {
 
 /// Signed heading change in DEGREES between two forward vectors, positive to the
 /// RIGHT. Sign comes from the yaw-plane cross product.
-fn yaw_change_deg(f0, f1) {
-    if f0 == () || f1 == () { return (); }
-    // VALIDATE THE INPUTS, not the result. A forward vector is a unit vector, so a
-    // length outside [0.5, 2.0] means the orientation is degenerate — a NaN or zero
-    // quaternion — and there is no heading to measure this tick. Guarding the RESULT
-    // cannot work: `clamp` (prelude/math.rhai) is built out of `<` and `>`, and NaN
-    // compares false against both, so a NaN dot reaches `acos` unclamped and returns
-    // NaN; `vnorm` likewise passes its argument through untouched when the length is
-    // NaN, because `l <= 0.0` is false.
-    let l0 = vlen(f0);
-    let l1 = vlen(f1);
-    // Phrased POSITIVELY on purpose. `l < 0.5 || l > 2.0` looks equivalent and is
-    // not: NaN compares false against EVERYTHING, so both halves are false and a NaN
-    // slips through. `!(in range)` is false for NaN, so it rejects.
-    if !(l0 >= 0.5 && l0 <= 2.0) { return (); }
-    if !(l1 >= 0.5 && l1 <= 2.0) { return (); }
-    let a = vnorm(f0);
-    let b = vnorm(f1);
-    let mag = clamp(vdot(a, b), -1.0, 1.0).acos() * 57.29577951308232;
-    let cy = vcross(a, b)[1];
-    if cy > 0.0 { -mag } else { mag }
-}
 
 /// Axle spin rate (rad/s) of one raycast wheel, or `()`.
 ///
@@ -358,7 +336,7 @@ fn on_tick(me) {
     let pos = world_pos(this.rover);
     let fwd = world_forward(this.rover);
 
-    let dy = yaw_change_deg(this.fprev, fwd);
+    let dy = yaw_delta_deg(this.fprev, fwd);
     let step = seg(this.pos_prev, pos);
     this.pos_prev = pos;
     this.fprev = fwd;

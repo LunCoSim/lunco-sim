@@ -19,6 +19,7 @@ pub mod doc;
 pub mod source_asset;
 /// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
 #[cfg(feature = "rhai")]
+pub mod rhai_math;
 pub mod world_bridge;
 /// `import` resolution over the asset pipeline. Holds no path logic of its own —
 /// ids come from `lunco_assets::script_source::ScriptSources`.

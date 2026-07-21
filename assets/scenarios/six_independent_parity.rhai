@@ -51,7 +51,7 @@
 // that a reader might mistake for an arbitrary sign convention. The left bank
 // carries `+steer` and the right bank `-steer`, so a positive steer command
 // drives the left wheels forward and the right wheels back; a vehicle whose left
-// side outruns its right side yaws to the RIGHT. `yaw_change_deg` below reports
+// side outruns its right side yaws to the RIGHT. `yaw_delta_deg` below reports
 // right-hand yaw as POSITIVE (the convention in `prelude/nav.rhai`, where +steer
 // yaws right). Therefore `+steer` must produce a positive accumulated yaw. If
 // that check ever fires, either the authored mix's steer column flipped or the
@@ -192,41 +192,6 @@ fn seg(prev, cur) {
 /// comes from the yaw-plane cross product, so a rover that turned the WRONG way
 /// cannot pass by magnitude alone — which is the entire content of assertion (3)
 /// in the header.
-fn yaw_change_deg(f0, f1) {
-    if f0 == () || f1 == () { return (); }
-    // VALIDATE THE INPUTS, not the result. A forward vector is a unit vector, so a
-    // length outside [0.5, 2.0] means the rover's orientation is degenerate — a NaN
-    // or zero quaternion — and there is no heading to measure this tick. Reporting
-    // `()` makes the caller skip the sample and count it as unmeasured, rather than
-    // summing a poisoned value into an accumulator it can never recover from.
-    //
-    // Guarding the RESULT cannot work here. `clamp` (prelude/math.rhai) is built out
-    // of `<` and `>`, and NaN compares false against both, so a NaN dot product is
-    // handed to `acos` unclamped and comes back NaN; `vnorm` likewise returns its
-    // argument untouched when the length is NaN, because `l <= 0.0` is false. By the
-    // time there is a `mag` to test, the damage is upstream and the only honest
-    // answer is "no heading".
-    let l0 = vlen(f0);
-    let l1 = vlen(f1);
-    // Phrased POSITIVELY on purpose. `l < 0.5 || l > 2.0` looks equivalent and is
-    // not: NaN compares false against EVERYTHING, so both halves are false and a NaN
-    // slips through. `!(in range)` is false for NaN, so it rejects. Every NaN guard
-    // in this file must be written this way.
-    if !(l0 >= 0.5 && l0 <= 2.0) { return (); }
-    if !(l1 >= 0.5 && l1 <= 2.0) { return (); }
-    let a = vnorm(f0);
-    let b = vnorm(f1);
-    let mag = clamp(vdot(a, b), -1.0, 1.0).acos() * 57.29577951308232;
-    // Guard the RESULT too, in the same positive form. `clamp` cannot save a NaN
-    // dot: every comparison against NaN is false, so it falls through the clamp
-    // untouched and `acos` returns NaN. A valid angle is in [0, 180], and NaN
-    // fails that test, so an unmeasurable tick is reported as `()` — the caller
-    // skips it — instead of poisoning an accumulator that never recovers.
-    if !(mag >= 0.0 && mag <= 180.0) { return (); }
-    let cy = vcross(a, b)[1];
-    if cy > 0.0 { -mag } else { mag }
-}
-
 /// Find one `DriveMix.entries` term by port name, or `()`.
 ///
 /// `get(rover, "DriveMix.entries")` reflects the live allocation table out of the
@@ -296,7 +261,7 @@ fn on_start(me) {
     this.pos_prev = ();
     this.fprev = ();
 
-    // Heading-sample coverage across the four MEASURED legs. `yaw_change_deg`
+    // Heading-sample coverage across the four MEASURED legs. `yaw_delta_deg`
     // answers `()` when the orientation is degenerate, and the accumulators simply
     // skip those ticks — which means a rover whose heading was NEVER readable would
     // finish with every yaw accumulator still at its initial 0.0 and sail through
@@ -355,12 +320,12 @@ fn on_tick(me) {
     let d_t = dt();
     let v = if d_t > 0.0 { seg(this.pos_prev, pos) / d_t } else { 0.0 };
 
-    // Per-tick swept yaw. ACCUMULATED, never start-vs-end: `yaw_change_deg` is
+    // Per-tick swept yaw. ACCUMULATED, never start-vs-end: `yaw_delta_deg` is
     // an `acos`, so it saturates at 180 degrees and beyond that reads as a turn
     // the OTHER way. This rover passes 180 degrees inside the pivot leg. Per-tick
     // deltas are always far below the wrap, so the running sum is the true swept
     // angle, unbounded.
-    let dy = yaw_change_deg(this.fprev, fwd);
+    let dy = yaw_delta_deg(this.fprev, fwd);
     let step = seg(this.pos_prev, pos);
     this.pos_prev = pos;
     this.fprev = fwd;

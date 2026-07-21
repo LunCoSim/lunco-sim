@@ -167,40 +167,6 @@ fn seg(prev, cur) {
 /// RIGHT (matching the steer-sign convention in `prelude/nav.rhai`, where +steer
 /// yaws right). Sign is taken from the yaw-plane cross product, so a rover that
 /// turned the WRONG way cannot pass by magnitude alone.
-fn yaw_change_deg(f0, f1) {
-    if f0 == () || f1 == () { return (); }
-    // VALIDATE THE INPUTS, not the result. A forward vector is a unit vector, so a
-    // length outside [0.5, 2.0] means the rover's orientation is degenerate — a NaN
-    // or zero quaternion — and there is no heading to measure this tick. Reporting
-    // `()` makes the caller skip the sample rather than sum a poisoned value into an
-    // accumulator it can never recover from.
-    //
-    // Guarding the RESULT cannot work here. `clamp` (prelude/math.rhai) is built out
-    // of `<` and `>`, and NaN compares false against both, so a NaN dot product is
-    // handed to `acos` unclamped and comes back NaN; `vnorm` likewise returns its
-    // argument untouched when the length is NaN, because `l <= 0.0` is false. By the
-    // time there is a `mag` to test, the damage is upstream.
-    let l0 = vlen(f0);
-    let l1 = vlen(f1);
-    // Phrased POSITIVELY on purpose. `l < 0.5 || l > 2.0` looks equivalent and is
-    // not: NaN compares false against EVERYTHING, so both halves are false and a NaN
-    // slips through. `!(in range)` is false for NaN, so it rejects. Every NaN guard
-    // in this file must be written this way.
-    if !(l0 >= 0.5 && l0 <= 2.0) { return (); }
-    if !(l1 >= 0.5 && l1 <= 2.0) { return (); }
-    let a = vnorm(f0);
-    let b = vnorm(f1);
-    let mag = clamp(vdot(a, b), -1.0, 1.0).acos() * 57.29577951308232;
-    // Guard the RESULT too, in the same positive form. `clamp` cannot save a NaN
-    // dot: every comparison against NaN is false, so it falls through the clamp
-    // untouched and `acos` returns NaN. A valid angle is in [0, 180], and NaN
-    // fails that test, so an unmeasurable tick is reported as `()` — the caller
-    // skips it — instead of poisoning an accumulator that never recovers.
-    if !(mag >= 0.0 && mag <= 180.0) { return (); }
-    let cy = vcross(a, b)[1];
-    if cy > 0.0 { -mag } else { mag }
-}
-
 /// Find one `DriveMix.entries` term by port name, or `()`.
 ///
 /// `get(rover, "DriveMix.entries")` reflects the live allocation table out of the
@@ -374,8 +340,8 @@ fn on_tick(me) {
         // ports would show up here as a rover that curves under pure throttle.
         let fs_rc = world_forward(this.rc);
         let fs_ph = world_forward(this.ph);
-        let ds_rc = yaw_change_deg(this.fprev_rc, fs_rc);
-        let ds_ph = yaw_change_deg(this.fprev_ph, fs_ph);
+        let ds_rc = yaw_delta_deg(this.fprev_rc, fs_rc);
+        let ds_ph = yaw_delta_deg(this.fprev_ph, fs_ph);
         if type_of(ds_rc) != "()" { this.ystr_rc += ds_rc; }
         if type_of(ds_ph) != "()" { this.ystr_ph += ds_ph; }
         this.fprev_rc = fs_rc;
@@ -433,13 +399,13 @@ fn on_tick(me) {
 
         // ACCUMULATE the turn tick by tick. Comparing the start forward vector
         // to the current one cannot represent more than half a revolution:
-        // `yaw_change_deg` is an `acos`, so it saturates at 180 degrees and then
+        // `yaw_delta_deg` is an `acos`, so it saturates at 180 degrees and then
         // reads as a turn the OTHER way. Per-tick deltas are always far below
         // the wrap, so the running sum is the true swept angle, unbounded.
         let f_rc = world_forward(this.rc);
         let f_ph = world_forward(this.ph);
-        let dy_rc = yaw_change_deg(this.fprev_rc, f_rc);
-        let dy_ph = yaw_change_deg(this.fprev_ph, f_ph);
+        let dy_rc = yaw_delta_deg(this.fprev_rc, f_rc);
+        let dy_ph = yaw_delta_deg(this.fprev_ph, f_ph);
         if type_of(dy_rc) != "()" { this.yaw_rc += dy_rc; }
         if type_of(dy_ph) != "()" { this.yaw_ph += dy_ph; }
         this.fprev_rc = f_rc;
@@ -508,8 +474,8 @@ fn on_tick(me) {
 
         let f_rc = world_forward(this.rc);
         let f_ph = world_forward(this.ph);
-        let dp_rc = yaw_change_deg(this.fprev_rc, f_rc);
-        let dp_ph = yaw_change_deg(this.fprev_ph, f_ph);
+        let dp_rc = yaw_delta_deg(this.fprev_rc, f_rc);
+        let dp_ph = yaw_delta_deg(this.fprev_ph, f_ph);
         if type_of(dp_rc) != "()" { this.ypiv_rc += dp_rc; }
         if type_of(dp_ph) != "()" { this.ypiv_ph += dp_ph; }
         this.fprev_rc = f_rc;

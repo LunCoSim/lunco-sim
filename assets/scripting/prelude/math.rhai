@@ -1,19 +1,16 @@
 // ── Math on the [x,y,z] arrays world_pos returns ───────────────────────────
-
-fn vsub(a, b) { [a[0]-b[0], a[1]-b[1], a[2]-b[2]] }
-fn vadd(a, b) { [a[0]+b[0], a[1]+b[1], a[2]+b[2]] }
-fn vlen(a)    { (a[0]*a[0] + a[1]*a[1] + a[2]*a[2]).sqrt() }
-fn vdot(a, b) { a[0]*b[0] + a[1]*b[1] + a[2]*b[2] }
-fn vcross(a, b) {
-    [ a[1]*b[2] - a[2]*b[1],
-      a[2]*b[0] - a[0]*b[2],
-      a[0]*b[1] - a[1]*b[0] ]
-}
-fn vnorm(a) {
-    let l = vlen(a);
-    if l <= 0.0 { a } else { [a[0]/l, a[1]/l, a[2]/l] }
-}
-fn clamp(x, lo, hi) { if x < lo { lo } else if x > hi { hi } else { x } }
+//
+// `vadd` `vsub` `vscale` `vlen` `vdot` `vcross` `vnorm` `clamp` `angle_deg`
+// `yaw_delta_deg` are NATIVE — registered from Rust in
+// `lunco_scripting::rhai_math`, on the same `[x, y, z]` float arrays. They are
+// not defined here because `acos` is a partial function: a dot product of two
+// unit vectors leaves its domain by an ulp whenever the vectors are nearly
+// identical, and in rhai that surfaced as a NaN every later comparison read as
+// false — a poisoned accumulator that looks like a passing test. In Rust the
+// domain is handled once, and an unmeasurable angle comes back as `()`.
+//
+// What stays here is composition over those primitives, and the entity-aware
+// helpers that need a world read first.
 
 /// Distance between two entities in metres, or -1.0 if either lacks a position.
 fn distance(a, b) {
@@ -30,19 +27,10 @@ fn arrived(entity, target, radius) {
     vlen(vsub(p, target)) <= radius
 }
 
-fn vscale(a, s) { [a[0]*s, a[1]*s, a[2]*s] }
-
 // ── Orientation, all derived from world_rotation(id) → [x,y,z,w] ────────────
-// The core exposes ONE orientation accessor (the quaternion); every world axis
-// and tilt below is derived here in the prelude, so there is no per-axis Rust.
-
-/// Rotate a local vector `v` ([x,y,z]) by quaternion `q` ([x,y,z,w]) into world
-/// space: v' = v + w·(2·qv×v) + qv×(2·qv×v).
-fn qrot(q, v) {
-    let qv = [q[0], q[1], q[2]];
-    let t = vscale(vcross(qv, v), 2.0);
-    vadd(v, vadd(vscale(t, q[3]), vcross(qv, t)))
-}
+// The core exposes ONE orientation accessor (the quaternion) and one native
+// `qrot`; every world axis and tilt below is a composition of those, which is
+// what the prelude is for.
 
 /// World up-vector of an entity ([x,y,z]), or () if it has no orientation.
 fn world_up(id) {
@@ -63,8 +51,14 @@ fn world_right(id) {
 fn tilt_deg(id) {
     let u = world_up(id);
     if u == () { return -1.0; }
-    // world up is [0,1,0], so dot(u, worldUp) == u[1]; u is unit already.
-    clamp(u[1], -1.0, 1.0).acos() * 57.29577951308232
+    // Through `angle_deg` so the domain of `acos` is enforced in one place. A
+    // body whose orientation is degenerate has no tilt to report, and -1.0 is
+    // this function's existing "unavailable" answer — the same one an entity
+    // with no orientation gets. Returning NaN instead would compare false
+    // against every threshold and read as "not tipped".
+    let deg = angle_deg(u, [0.0, 1.0, 0.0]);
+    if deg == () { return -1.0; }
+    deg
 }
 
 /// True when `entity` has tipped past `max_deg` from upright (a rover on the
