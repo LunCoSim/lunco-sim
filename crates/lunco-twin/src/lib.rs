@@ -74,7 +74,8 @@ pub use document_kind_registry::DocumentKindRegistryPlugin;
 pub use error::TwinError;
 pub use file_kind::{DocumentKind, FileEntry, FileKind};
 pub use manifest::{
-    JournalManifest, TwinChildRef, TwinManifest, UsdManifest, MANIFEST_FILENAME,
+    glob_matches, JournalManifest, TwinChildRef, TwinManifest, UsdManifest,
+    DEFAULT_SCENE_GLOBS, MANIFEST_FILENAME,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -288,7 +289,7 @@ impl Twin {
         match &mut self.manifest {
             Some(manifest) => match &mut manifest.usd {
                 Some(usd) => usd.default_scene = Some(rel),
-                None => manifest.usd = Some(UsdManifest { default_scene: Some(rel) }),
+                None => manifest.usd = Some(UsdManifest { default_scene: Some(rel), scenes: None }),
             },
             None => {
                 self.manifest = Some(TwinManifest {
@@ -303,7 +304,7 @@ impl Twin {
                     uuid: None,
                     default_perspective: None,
                     children: Vec::new(),
-                    usd: Some(UsdManifest { default_scene: Some(rel) }),
+                    usd: Some(UsdManifest { default_scene: Some(rel), scenes: None }),
                     journal: None,
                 });
             }

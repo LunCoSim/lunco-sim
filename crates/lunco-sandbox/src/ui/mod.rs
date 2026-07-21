@@ -698,23 +698,14 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         }
 
-        // Every `*.usda` that lives in a `scenes/` folder — in the engine
-        // library AND in each open Twin.
-        //
-        // This used to be `rel.starts_with("scenes/")`, which is the engine
-        // library's layout and ONLY the engine library's. A Twin keeps its
-        // scenes under `sim/scenes/`, so opening a Twin and looking for its
-        // scenarios in the Scenarios menu found nothing — the twin whose scene
-        // was on screen right then was not in the list of things you could
-        // load. Match on the path SEGMENT instead, so a scene is a scene
-        // wherever its project chooses to keep it.
-        let mut assets = lunco_assets::discovery::list_usd_assets(manifest, roots);
+        // Every loadable scene in the project. WHICH files those are is the
+        // project's answer, not this menu's: each Twin declares `[usd] scenes`
+        // in its `twin.toml`, the engine library uses its own `scenes/` layout.
+        // See `discovery::list_scene_assets` for why the menu stopped deciding.
+        let mut assets = lunco_assets::discovery::list_scene_assets(manifest, roots);
         // Names copied out here: `roots`/`manifest` borrow the world, and every
         // click below needs `&mut World` to trigger the load.
         let twin_names = roots.names();
-        assets.retain(|asset| {
-            asset.rel.split('/').any(|seg| seg == "scenes")
-        });
         assets.sort_by(|a, b| a.stem.cmp(&b.stem));
 
         if assets.is_empty() {
