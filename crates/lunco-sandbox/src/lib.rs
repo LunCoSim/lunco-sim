@@ -2009,7 +2009,15 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(BigSpaceDefaultPlugins)
             // EntityCount is cheap and useful any time we look at perf.
             .add_plugins(bevy::diagnostic::EntityCountDiagnosticsPlugin::default())
-            .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
+            // `with_collision_hooks` installs the ONE pair filter avian allows per
+            // app: authored `PhysicsFilteredPairsAPI` pairs (`lunco-usd-avian`'s
+            // `UsdCollisionFilter`). Anything else that must veto a contact belongs
+            // in that hook rather than in a second one — there is no second slot.
+            .add_plugins(
+                PhysicsPlugins::default()
+                    .with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
+                    .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()),
+            )
             // Whoever installs physics installs its readiness gate: terrain/obstacle
             // subsystems suspend *integration* (avian's `Time<Physics>`) while their
             // colliders bake, instead of pausing the world clock. See `lunco-physics`.

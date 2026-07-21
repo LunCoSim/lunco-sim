@@ -1,0 +1,235 @@
+#usda 1.0
+(
+    defaultPrim = "LanderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Powered-descent lander → rover surface-ops scene.
+#
+# The scene is a CAST list, not a vehicle definition. Every vehicle here arrives by
+# `references` from `assets/vessels/`, and the scene only says where each one starts
+# and how they are bolted together:
+#
+#   Lander      → vessels/landers/descent_lander.usda   (GNC model + sensors + flame)
+#   SkidRover   → vessels/rovers/skid_rover.usda        (+ an autopilot script)
+#   RoverTarget → vessels/markers/waypoint.usda         (×3, the course)
+#
+# What's left in this file is the MISSION: the joint that holds the two together,
+# where the gates are, and the `Scenario` prim that sequences the whole thing.
+#
+# The lander's own cosim chain (altimeter → GNC → force/torque, `piloted` authority
+# gate) travels with its asset — see `descent_lander.usda` for the wiring diagram.
+#
+# Gravity is applied by lunco-environment from this scene's `PhysicsScene`
+# (1.62 m/s², NEG_Y); the model must NOT re-apply it.
+#
+# Controls:
+#   Space       — full thrust        (lander, once possessed)
+#   W/S/A/D     — pitch/roll torque  (lander) · drive/steer (rover)
+#   Q/E         — yaw torque         (lander)
+#   G           — detach rover joint
+#   P           — pause/unpause simulation
+#   Backspace   — release possession
+#
+#   sandbox --scene scenes/sandbox/lander_ops.usda
+
+def Xform "LanderTest" (
+    kind = "assembly"
+    doc = "A lander dropping under gravity with a rocket you can fire to slow and steer it. Hold Space to thrust, WASD to tilt, Q/E to turn, G to release the rover, P to pause."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. The MOON: the lander's struts, its GNC and its
+    # propellant budget all take their numbers from this, so the scene states it
+    # rather than inherit a terrestrial default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        # Bond albedo of mature mare regolith, ~0.12 (Apollo returned-sample
+        # photometry; the Moon's geometric albedo is ~0.12). Very slightly warm —
+        # mare fines are a neutral-to-faintly-brown grey.
+        #
+        # WAS `(0.35, 0.33, 0.38)`, and that was wrong on both axes rather than
+        # merely stylised: ~3x too bright for ANY lunar surface, and tinted VIOLET
+        # (blue > red), which under a white sun reads as an alien world. MEASURED:
+        # episode 01's ground came out at mean luma 135/255 against episode 02's
+        # 63/255 at the identical `exposureEv100 = 15.4` — a near-white slab where
+        # Apollo surface photography is mid-grey.
+        #
+        # Corrected HERE, in the base scene, rather than only as an episode-level
+        # `over`, because this is not a look preference — it is a wrong physical
+        # constant, and every consumer of this scene inherits it. The scene also
+        # doubles as the interactive driving tutorial, which wants flat, legible
+        # lighting; that is a property of its SUN and ambient (unchanged), not of
+        # the ground's albedo. A correctly dark regolith is no less legible.
+        color3f[] primvars:displayColor = [(0.13, 0.125, 0.12)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </LanderTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 30.0, 0.0)
+        double3 xformOp:translate = (18.0, 12.0, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 12000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    # ── The powered-descent lander ────────────────────────────────────────────
+    # TWO arcs, and the second one is the mission. The airframe — engine, altimeter,
+    # flame, legs, avionics — arrives on the first; on its own it flies nowhere,
+    # because an airframe has no reason to want to land. The DESCENT GUIDANCE is a
+    # component this scene bolts on, wiring included (it reads the airframe's own
+    # altimeter and commands its throttle — see the component for the diagram).
+    #
+    # Drop the second arc and you have a lander you must fly yourself. That is the
+    # only difference between a vehicle and a mission.
+    #
+    # The scene overrides only its initial CONDITIONS: where it starts and the
+    # cross-range velocity it carries in. No type on the `def` — the lander's own
+    # `Xform` composes in through the arc.
+    def "Lander" (
+        prepend references = [
+            @lunco://vessels/landers/descent_lander.usda@</DescentLander>,
+            @lunco://components/gnc/descent_guidance.usda@</DescentGuidance>,
+        ]
+    )
+    {
+        double3 xformOp:translate = (0, 60.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 physics:velocity = (-5.0, 0.0, -5.0)
+    }
+
+    # ── The rover attached to the lander ──
+    def Xform "SkidRover" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (0, 58.35, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 physics:velocity = (-5.0, 0.0, -5.0)
+
+        # Autopilot: drives the deployed rover through the waypoint course, and yields
+        # to the player on any key press. Engages on the `rover_deployed` event. A
+        # program the SCENE adds to a stock rover — the same separation the lander's
+        # guidance gets, and for the same reason: a rover asset that patrolled the
+        # moment you spawned it would be a surprise, not a feature.
+        def LunCoProgram "Autopilot"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/rover_autopilot.rhai@
+        }
+    }
+
+    # ── The fixed joint holding the rover and lander together ──
+    def PhysicsFixedJoint "LanderRoverJoint"
+    {
+        rel physics:body0 = </LanderTest/Lander>
+        rel physics:body1 = </LanderTest/SkidRover>
+        point3f physics:localPos0 = (0, -1.5, 0)
+        point3f physics:localPos1 = (0, 0.15, 0)
+    }
+
+    # ── Rover drive-to waypoints ────────────────────────────────────────────
+    # Three translucent glowing domes (the same reusable marker asset) forming a
+    # course, revealed one at a time. Each carries an overlap-only Sensor, but the
+    # rover's raycast-wheel compound collider doesn't reliably trip it, so
+    # `rover_surface_ops.rhai` judges arrival with a distance read and emits its own
+    # `waypoint_reached` event for anything downstream (the tutorial) to wait on.
+    def Xform "RoverTarget1" (
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (14.0, 0.0, 9.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "RoverTarget2" (
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (-11.0, 0.0, 16.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "RoverTarget3" (
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (5.0, 0.0, -15.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Visual touchdown target. The lander's GNC descends on its altimeter, not on a
+    # commanded pad pose, so this marker is a landmark for the player, not a wire.
+    def Xform "LandingLocation" (
+        prepend references = @lunco://vessels/markers/landing_location.usda@</LandingLocationMarker>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # ── Mission scenario (doc 34, Decision 3) ───────────────────────────────
+    # A first-class *scenario*: a non-physical prim that owns the MISSION state
+    # machine. It references the vehicles by path with `find(...)` (never `me`),
+    # so the orchestration is decoupled from any one entity and a scene can host
+    # several scenarios / several vehicle scripts independently. The phases:
+    #   descending → touchdown (the GNC lands it) → deployed (joint detached, rover
+    #   falls clear) → the 3-gate course, driven by the rover's autopilot until the
+    #   player takes over.
+    # Player-task objectives (drive-to-rock, photo, thermal/energy budgets) plug
+    # in as a `fn mission(me)` returning prelude `objective(...)`s — see the
+    # objectives/mission engine in `assets/scripting/prelude/mission.rhai`.
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "rover-surface-ops"
+
+        # Orchestration lives in a dedicated, hot-reloadable .rhai file (loaded via
+        # the AssetServer → RhaiSource → EmbeddedScenarioSource). It's a declarative
+        # prelude `task` — timing from internal sim time (`wait`), advancement from
+        # state predicates (`wait_until`); no tick-counting / dt integration in rhai.
+        def LunCoProgram "Mission"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/rover_surface_ops.rhai@
+        }
+    }
+}

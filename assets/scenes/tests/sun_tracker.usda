@@ -1,0 +1,212 @@
+#usda 1.0
+(
+    defaultPrim = "SunTrackerTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Self-contained scene that verifies the full sun-tracker co-sim fabric
+# (Phase 5). No actuator hack — the chain is entirely the unified wiring
+# fabric:
+#
+#   solar bridge  ──(out sun_azimuth)──┐
+#                                      │  self-wire  sun_azimuth -> sun_azimuth
+#   Controller (SunTracker.mo) ◄───────┘
+#        │  output `yaw` (first-order servo onto sun_az)
+#        │  cross-prim wire  yaw -> angle
+#        ▼
+#   Hinge (PhysicsRevoluteJoint) ── angular motor yaws ──► YawHead + Panel
+#
+# Verify (HTTP API, sandbox running):
+#   - `CosimStatus`  → Controller outputs `sun_azimuth` ≈ `yaw` at steady state.
+#   - `GetPort {api_id:<Hinge>, name:"angle"}` → measured angle tracks `yaw`.
+#   - `SetEnvironmentLight {"sun_yaw":<rad>}` → the panel re-aims to face it.
+#
+#   sandbox --scene scenes/tests/sun_tracker.usda
+
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
+def Xform "SunTrackerTest" (
+    kind = "assembly"
+    doc = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+    uniform bool lunco:spawnable = false
+
+    def Scope "Looks"
+    {
+        def Material "SolarPanel"
+        {
+            token outputs:surface.connect = </SunTrackerTest/Looks/SolarPanel/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
+                color3f inputs:cell_color = (0.05, 0.05, 0.35)
+                color3f inputs:bus_color = (0.85, 0.85, 0.90)
+                color3f inputs:frame_color = (0.35, 0.35, 0.38)
+                float inputs:cell_rows = 8.0
+                float inputs:cell_cols = 12.0
+                float inputs:cell_gap = 0.02
+                float inputs:bus_width = 0.004
+                float inputs:border = 0.04
+                token outputs:surface
+            }
+        }
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </SunTrackerTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    # Camera looking at the tower head from the side, so a yaw change is obvious.
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 4.0, 0.0)
+        double3 xformOp:translate = (10.0, 7.0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The sun. DistantLight emits along local -Z; rotateXYZ aims it. Start
+    # mid-sky so the azimuth is well-defined; move it live with
+    # `SetEnvironmentLight` to watch the panel track.
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    # ── The sun-tracking solar tower ────────────────────────────────────────
+    def Xform "SolarTower"
+    {
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # Mast — the FIXED base body (kinematic: holds station, ignores
+        # gravity/impulses, still anchors the joint). Its own cylinder is the
+        # collider; the Pad is a visual-only child.
+        def Cylinder "Mast" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.18
+            double height = 5.0
+            double3 xformOp:translate = (0, 2.7, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
+            float physics:mass = 100.0
+            bool physics:kinematicEnabled = true
+
+            def Cube "Pad"
+            {
+                double size = 1.0
+                double3 xformOp:translate = (0, -2.6, 0)
+                double3 xformOp:scale = (2.0, 0.2, 2.0)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                color3f[] primvars:displayColor = [(0.32, 0.31, 0.3)]
+                bool physics:collisionEnabled = false
+            }
+        }
+
+        # YawHead — the DYNAMIC rotating body. Its origin sits ON the hinge
+        # axis (world 0,5.3,0) and its cylinder is centred there, so the body's
+        # centre of mass is on the rotation axis → zero gravity torque about Y;
+        # the motor only fights the head's rotational inertia. The Panel is a
+        # visual-only child (no mass, no collider) so its 4 m span never
+        # destabilizes the solver — it just rides the head's rotation.
+        def Cylinder "YawHead" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.5
+            double3 xformOp:translate = (0, 5.3, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            float physics:mass = 50.0
+
+            # Vertical PV panel — thin cube on edge, solar_panel shader.
+            def Cube "Panel"
+            {
+                double size = 1.0
+                double3 xformOp:translate = (0, 1.5, 0)
+                double3 xformOp:scale = (4.0, 3.0, 0.06)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                color3f[] primvars:displayColor = [(0.05, 0.05, 0.35)]
+                bool physics:collisionEnabled = false
+                rel material:binding = </SunTrackerTest/Looks/SolarPanel>
+            }
+        }
+
+        # Yaw hinge — vertical axis. body0 = fixed Mast, body1 = YawHead.
+        # Anchors coincide at world (0, 5.3, 0): the Mast-local point (0,2.6,0)
+        # (2.6 above the mast centre at y=2.7 → y=5.3) and the YawHead origin.
+        # Auto-exposes the `angle` port (lunco-cosim `JointSim`); the YawWire
+        # drives it.
+        def PhysicsRevoluteJoint "Hinge"
+        {
+            rel physics:body0 = </SunTrackerTest/SolarTower/Mast>
+            rel physics:body1 = </SunTrackerTest/SolarTower/YawHead>
+            uniform token physics:axis = "Y"
+            point3f physics:localPos0 = (0, 2.6, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+
+            # Cross-prim wiring — the controller model's `yaw` output drives this
+            # joint's `angle` input (JointSim backend). The joint is a physics
+            # sink: it has a port but no model, so it is not stepped as a model,
+            # only wired.
+            float inputs:angle.connect = </SunTrackerTest/SolarTower/Controller.outputs:yaw>
+        }
+
+        # Controller — the SunTracker.mo co-sim model. Self-loop connection feeds
+        # the solar bridge's `sun_azimuth` output into the model's `sun_azimuth`
+        # input (same name on both sides — one signal).
+        def Xform "Controller"
+        {
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
+            float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
+        }
+    }
+}

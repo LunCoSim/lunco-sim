@@ -13,6 +13,7 @@ use lunco_workbench::{
 pub mod spawn_palette;
 pub mod inspector;
 pub mod entity_list;
+pub mod asset_visibility;
 pub mod terrain_tools;
 pub mod connection_canvas;
 pub mod usd_prim_tree;
@@ -190,6 +191,13 @@ impl Plugin for SandboxEditUiPlugin {
             entity_list::EntityListSettings,
         >(app);
         app.add_systems(Startup, entity_list::register_settings_menu);
+
+        // Same shape for "show test scenes": a persisted pref in the Settings
+        // menu, read by the browsers, off by default.
+        lunco_settings::AppSettingsExt::register_settings_section::<
+            asset_visibility::AssetVisibilitySettings,
+        >(app);
+        app.add_systems(Startup, asset_visibility::register_settings_menu);
         app.init_resource::<entity_list::EntityTreeView>().add_systems(
             Update,
             entity_list::populate_entity_tree_view

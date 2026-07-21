@@ -209,7 +209,7 @@ fn modelica_balloon_asset_wiring_migrated() {
 
 #[test]
 fn sun_tracker_asset_wiring_migrated() {
-    let (app, id) = build_from_source(&asset_src("scenes/sandbox/sun_tracker_test.usda"));
+    let (app, id) = build_from_source(&asset_src("scenes/tests/sun_tracker.usda"));
     // Self-loop on the controller + cross-prim edge onto the hinge.
     assert_eq!(
         conns(
@@ -253,8 +253,8 @@ fn sandbox_scene_asset_wiring_migrated() {
 #[test]
 fn lander_asset_wiring_migrated() {
     let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/scenes/sandbox/lander_test.usda");
-    let stage = lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose lander_test.usda");
+        .join("../../assets/scenes/sandbox/lander_ops.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose lander_ops.usda");
     let view = lunco_usd_bevy::StageView::new(&stage);
     let lander = SdfPath::new("/LanderTest/Lander").unwrap();
     let gnc = SdfPath::new("/LanderTest/Lander/GNC").unwrap();

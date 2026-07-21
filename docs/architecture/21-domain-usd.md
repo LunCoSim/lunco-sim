@@ -281,6 +281,47 @@ wire), `physics:targetVelocity`, `physics:maxForce` (motor saturation). A cosim
 wire on the joint's `angle`/`displacement` port overrides the target per tick. The
 programmatic wheel hinge also lives here (`wheel_revolute_joint`).
 
+### Collision filtering — which pairs never touch
+
+Two mechanisms, and only one of them is automatic.
+
+**Jointed pairs** are filtered by avian: every joint this loader builds carries
+`JointCollisionDisabled` (via `joint_bundle`), so a body never collides with the
+body it is jointed to. That covers parent and child, and stops there.
+
+**Everything else is authored**, through `UsdPhysicsFilteredPairsAPI`:
+
+```usda
+def Cube "Pad" ( prepend apiSchemas = [..., "PhysicsFilteredPairsAPI"] )
+{
+    rel physics:filteredPairs = </Lander/Hull>
+}
+```
+
+Read by `lunco-usd-avian::filtered_pairs`, which resolves each end to the entity
+that actually owns the collider — a collider under a body folds into that body's
+compound shape, so naming either resolves to the body — and hands the pair to
+avian's one `CollisionHooks` slot (`UsdCollisionFilter`, installed by
+`PhysicsPlugins::with_collision_hooks` in `lunco-sandbox`). Filtering is
+symmetric: one opinion is the whole pair.
+
+Two properties worth knowing:
+
+- **Armed before first contact.** Resolution runs in `PhysicsSystems::Prepare`,
+  ahead of the narrow phase, because avian's broad phase skips any pair already
+  in the contact graph. A filter applied later does not remove an existing
+  contact.
+- **Nothing is inferred.** There is no "a vehicle does not collide with itself"
+  rule, because *vehicle* is not a thing the physics knows — a rover on a
+  lander's deck is one or two depending on the minute, and an arm should collide
+  with its own base. MuJoCo, PhysX and URDF/MoveIt each landed in the same
+  place: automatic for adjacency, authored beyond it.
+
+`PhysicsCollisionGroup` (the group-level `physics:filteredGroups` /
+`invertFilteredGroups` / `mergeGroup` form, which maps to avian `CollisionLayers`)
+is **not** read yet. Pairwise authoring is O(n²) in a subassembly, so this is the
+next thing to add if a vehicle ever needs more than a handful of pairs.
+
 ### Sensors
 
 `lunco:sensor:*` markers on a rigid-body prim attach `lunco-cosim` sensors that

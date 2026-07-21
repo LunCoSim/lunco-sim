@@ -155,7 +155,7 @@ fn comms_mast_is_a_link_node_at_dish_height() {
 /// dropped link.
 #[test]
 fn comms_wall_scene_authors_two_nodes_and_a_wall_between_them() {
-    let mut app = load_through_bevy("scenes/sandbox/comms_wall_test.usda", "/CommsWallTest");
+    let mut app = load_through_bevy("scenes/tests/comms_wall.usda", "/CommsWallTest");
 
     // The rover's antenna and the mast's antenna are both endpoints, with distinct
     // roles — so `can_reach(rover, "base")` has something to resolve.

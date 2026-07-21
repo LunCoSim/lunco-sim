@@ -12,7 +12,7 @@
     # onboard GNC) from the base test scene, then ADD a camera rig
     # and swap the orchestration script for a cinematic one. Nothing is copied.
     subLayers = [
-        @lunco://scenes/sandbox/lander_test.usda@
+        @lunco://scenes/sandbox/lander_ops.usda@
     ]
 )
 
@@ -163,7 +163,7 @@ over "LanderTest" (
     # ── Swap the orchestration script for the cut-scene director ──
     # Same prim, same mission structure — the cinematic script adds camera cuts
     # and the animation transport around the existing land→deploy→survey phases.
-    # This layer is stronger than `lander_test.usda`, so re-pointing the mission
+    # This layer is stronger than `lander_ops.usda`, so re-pointing the mission
     # program's source REPLACES the script it runs; it does not add a second one.
     over "Scenario"
     {

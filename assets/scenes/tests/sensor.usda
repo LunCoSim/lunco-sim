@@ -1,0 +1,122 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Verifies USD-authored sensor telemetry ports (lunco-cosim::sensors).
+# A 100 kg box rests on the ground carrying all three sensor kinds:
+#   - lunco:sensor:imu     -> accel_x/y/z   (≈0 at rest; world-frame lin. accel)
+#   - lunco:sensor:range   -> range         (downward altimeter; ≈0.8 m to ground —
+#                                           the SENSOR's height: box centre 0.5 plus its
+#                                           authored lunco:sensor:offset of 0.3)
+#   - lunco:sensor:contact -> contact (=1), contact_force (≈ mass·g ≈ 981 N)
+#
+# Read live:  ListPorts -> the Box entity exposes accel_*, range, contact,
+#   contact_force alongside its rigid-body ports.
+# Loaded by `sandbox --scene scenes/tests/sensor.usda`.
+
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
+def Xform "SandboxScene" (
+    kind = "assembly"
+    doc = "A box resting on the ground carrying simple sensors: one that feels motion, one that measures distance to the ground, and one that feels touch. Checks that each reports sensible numbers."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)
+        double3 xformOp:translate = (0.0, 4.0, 9.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Box resting on the ground (half-size 0.5 → centre at y=0.5).
+    def Cube "Box" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, 0.5, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.9, 0.7, 0.2)]
+        float physics:mass = 100.0
+        bool physics:collisionEnabled = true
+
+        # --- Sensors (mounted 0.3 m above the box centre) ---
+        custom float3 lunco:sensor:offset = (0.0, 0.3, 0.0)
+        custom bool lunco:sensor:imu = true
+        custom bool lunco:sensor:range = true
+        custom token lunco:sensor:rangeAxis = "-Y"
+        custom float lunco:sensor:rangeMax = 10.0
+        custom bool lunco:sensor:contact = true
+    }
+
+    # Second box, 50 kg, far from the first — to check the contact-force ratio
+    # is a constant factor (mass-independent) vs penetration-dependent.
+    def Cube "Box50" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (6.0, 0.5, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.2, 0.8, 0.9)]
+        float physics:mass = 50.0
+        bool physics:collisionEnabled = true
+        custom bool lunco:sensor:contact = true
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "sensors"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/sensor.rhai@
+        }
+    }
+}

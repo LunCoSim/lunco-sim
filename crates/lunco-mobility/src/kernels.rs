@@ -212,10 +212,10 @@ pub fn linear_kernel(cmd: DriveInputs, mix: &DriveMix) -> Vec<(String, f64)> {
         .collect()
 }
 
-/// The allocation SPEC lives in `assets/scenarios/allocation_spec_test.rhai`, not here.
+/// The allocation SPEC lives in `assets/scenarios/tests/allocation_spec.rhai`, not here.
 ///
 /// These kernels are mechanism; what they MEAN is policy, and policy is authored.
-/// The scenario runs `scenes/sandbox/allocation_spec.usda` and asserts the same
+/// The scenario runs `scenes/tests/allocation_spec.usda` and asserts the same
 /// statements as observable consequences on a live rover, so they survive the
 /// kernels moving into authored Modelica programs:
 ///

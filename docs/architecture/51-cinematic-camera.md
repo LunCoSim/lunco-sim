@@ -79,7 +79,7 @@ Moonbase is **a separate repo**, not this one: `/home/rod/Documents/lunco/moonba
 (twin folder `twin/`, manifest `twin.toml` → `default_scene = "moonbase_scene.usda"`).
 The copy under `main/dist/sandbox/assets/twins/moonbase/` is a stale deploy — do not edit it.
 
-Derive exactly as `lander_cinematic.usda` derives from `lander_test.usda`:
+Derive exactly as `lander_cinematic.usda` derives from `lander_ops.usda`:
 
 ```usda
 #usda 1.0

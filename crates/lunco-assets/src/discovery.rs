@@ -96,6 +96,27 @@ impl AssetManifest {
     }
 }
 
+/// Is `rel` a TEST asset — a scene or scenario that exists to be run by
+/// `scene_test`, not opened by a person?
+///
+/// The answer is the path: anything under a `tests/` directory
+/// (`scenes/tests/…`, `scenarios/tests/…`). Not the filename, and not a flag
+/// inside the file — a browser has to decide before it has read anything, and a
+/// `_test` suffix convention is a rule every new file has to remember.
+///
+/// This states the FACT. Whether a given browser shows them is a user setting
+/// (`AssetVisibilitySettings`, off by default): test scenes bury the handful of
+/// scenes a person actually opens, but they must stay one checkbox away —
+/// hiding them from their author is how a broken one goes unnoticed.
+///
+/// Loading is never filtered. A scene referencing `scenarios/tests/x.rhai`
+/// resolves it whether or not any browser lists it.
+pub fn is_test_asset(rel: &str) -> bool {
+    std::path::Path::new(rel)
+        .parent()
+        .is_some_and(|p| p.components().any(|c| c.as_os_str() == "tests"))
+}
+
 /// Loads [`AssetManifest`] at startup — the one place the "which files ship"
 /// question is answered, per platform.
 pub struct AssetDiscoveryPlugin;
@@ -330,6 +351,23 @@ fn stem_of(rel: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test asset is one under a `tests/` DIRECTORY, in any library. The name
+    /// decides nothing: a scene called `something_test.usda` sitting beside the
+    /// scenes a person opens is not one, and a scene called `sensor.usda` under
+    /// `scenes/tests/` is.
+    #[test]
+    fn test_assets_are_identified_by_their_directory_not_their_name() {
+        assert!(is_test_asset("scenes/tests/landing_legs.usda"));
+        assert!(is_test_asset("scenarios/tests/landing_legs.rhai"));
+        assert!(!is_test_asset("scenes/sandbox/lander_cinematic.usda"));
+        assert!(!is_test_asset("scenarios/rover_autopilot.rhai"));
+        // The suffix convention it replaces — a file that merely READS as a test
+        // is still shown, because nothing but its folder makes it one.
+        assert!(!is_test_asset("scenes/sandbox/something_test.usda"));
+        // A file literally named `tests.usda` is a file, not a directory.
+        assert!(!is_test_asset("scenes/tests.usda"));
+    }
 
     /// An unready manifest is "not known yet", not "empty". Nothing may conclude
     /// there are no assets from a listing that has not arrived.

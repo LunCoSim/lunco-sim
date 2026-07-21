@@ -1,0 +1,119 @@
+#usda 1.0
+(
+    defaultPrim = "RockerBogieTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# G5 CONTROL scene — identical to `rocker_bogie_test.usda` but the differential
+# is DISABLED by zeroing the differential gear joint's angular-drive stiffness/damping
+# with a local `over` on the Rover (a local opinion overrides the referenced value).
+# With the coupling off, the step under the left-front corner should ROLL the chassis
+# noticeably more than the coupled case — isolating the differential's leveling effect.
+
+def Xform "RockerBogieTest" (
+    kind = "assembly"
+    doc = "The rocker-bogie rover over a step, but with the body-leveling linkage switched off. The body tips more, showing what the linkage normally does."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </RockerBogieTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    def Cube "Step" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-1.0, 0.0, 1.2)
+        double3 xformOp:scale = (0.7, 0.5, 0.7)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.6, 0.5, 0.4)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </RockerBogieTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.6, 0.0)
+        double3 xformOp:translate = (7.0, 5.0, 8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+    )
+    {
+        # Disable the differential: zero the gear joint's angular drive (a local
+        # `over` opinion wins over the referenced asset's value).
+        over "Differential"
+        {
+            float drive:angular:physics:stiffness = 0.0
+            float drive:angular:physics:damping = 0.0
+        }
+        double3 xformOp:translate = (0, 1.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "rocker-bogie-nodiff"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie.rhai@
+
+            # Which case this stage is — asserted on, not inferred from the
+            # differential this test exists to check.
+            float lunco:param:coupled = 0.0
+        }
+    }
+}

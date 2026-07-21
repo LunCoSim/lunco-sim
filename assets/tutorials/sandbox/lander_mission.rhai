@@ -2,7 +2,7 @@
 //!
 //! ## One source, layered orchestration
 //! The lesson IS this script (run by the launcher on the tutorial host). It loads
-//! `lander_test.usda`, whose OWN embedded scenarios fly the mission:
+//! `lander_ops.usda`, whose OWN embedded scenarios fly the mission:
 //!   • `/LanderTest/Scenario` → `rover_surface_ops.rhai`: powered descent →
 //!     `lander_touchdown` → detach the joint → `rover_deployed` → reveal a 3-gate
 //!     course one dome at a time, announcing `waypoint_N_reached` / `course_complete`.
@@ -30,7 +30,7 @@
 fn on_start(me) {
     // One source: the tutorial loads its own environment. The scene's embedded
     // scenarios do the flying; the mission() below coaches over their events.
-    load_scene("lunco://scenes/sandbox/lander_test.usda");
+    load_scene("lunco://scenes/sandbox/lander_ops.usda");
     hint("A powered descent is landing a rover. Watch it touch down — then you'll take control and drive.");
     notify_kind("Tutorial: Lander & Rover Mission", "info");
 }

@@ -165,7 +165,7 @@ mod compose_tests {
         let dir = std::env::temp_dir().join("lunco_over_ref_test");
         std::fs::create_dir_all(&dir).expect("scratch dir");
 
-        // The base: the shape of `assets/scenes/sandbox/lander_test.usda`.
+        // The base: the shape of `assets/scenes/sandbox/lander_ops.usda`.
         std::fs::write(
             dir.join("base.usda"),
             "#usda 1.0\n\

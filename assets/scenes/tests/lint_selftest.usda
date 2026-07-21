@@ -1,0 +1,250 @@
+#usda 1.0
+(
+    defaultPrim = "LintSelftest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── The linter, linted ───────────────────────────────────────────────────────
+#
+# A scene authored WRONG on purpose, so the rules that are supposed to notice can
+# be shown to notice. Without it "the linter is green" and "the linter is not
+# running" look identical — and a silent linter is worse than none, because it
+# reads as a clean bill of health.
+#
+# Three deliberate faults, one per shipped rule in
+# `assets/scripting/policy/lint_usd.rhai`:
+#
+#   LooseMotor   a body inside a body that no joint names   → nested-body-no-joint
+#                (this IS the motor bug, in miniature)
+#   BadJoint     a joint naming a prim that is not a body   → joint-target-not-a-body
+#   Ghost        a dynamic body with no collider anywhere   → dynamic-body-no-collider
+#   Leg          a sprung strut that outreaches its own foot → sprung-foot-not-lowest
+#                (geometry, not schema: it would validate clean)
+#   Leg/Strut    a body prim that is also its own scaled mesh  → body-is-its-own-scaled-mesh
+#                DELIBERATE. Every other rig in this folder has been converted to
+#                an Xform frame + shape child; this one keeps the old shape because
+#                it is the fixture that proves the rule fires. Do not "fix" it.
+#
+# and one CORRECT construction that must stay silent:
+#
+#   Wheel + WheelJoint   a nested body that IS jointed — the normal wheel mount.
+#                        If a rule ever fires on this, every rover in the
+#                        repository is a false positive.
+#
+# `scenarios/tests/lint_selftest.rhai` runs `RunLint` and reads `LintReport` back, so
+# the whole chain is under test: facts (Rust) → hook → rules (rhai) → report →
+# query. Run:
+#
+#     scene_test --scene scenes/tests/lint_selftest.usda
+
+def Xform "LintSelftest" (
+    kind = "assembly"
+    doc = "Deliberately mis-authored physics, so the USD lint rules can be proven to fire — and one correct nested body they must ignore."
+)
+{
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+    uniform bool lunco:spawnable = false
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (0.0, 5.0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (100.0, 1.0, 100.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+    }
+
+    # A vehicle: one body, its collider on a child, one correctly jointed wheel —
+    # and one part that quietly declared itself a second body.
+    def Xform "Vehicle" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double3 xformOp:translate = (0, 1.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 500.0
+
+        def Cube "Chassis" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:scale = (2.0, 0.4, 3.0)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.2, 0.5, 0.3)]
+        }
+
+        # THE FAULT. Its own body, inside the vehicle's body, named by no joint.
+        def Cylinder "LooseMotor" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            double radius = 0.09
+            double height = 0.14
+            double3 xformOp:translate = (-0.3, -0.35, -1.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float physics:mass = 8.0
+            color3f[] primvars:displayColor = [(0.4, 0.4, 0.4)]
+        }
+
+        # THE CONTROL. Also a body inside the vehicle's body — but jointed, which
+        # is the whole difference and the reason the rule reads `jointed` rather
+        # than `host_body` alone.
+        def Cylinder "Wheel" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "X"
+            double radius = 0.4
+            double height = 0.3
+            double3 xformOp:translate = (1.0, -0.65, -1.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)]
+        }
+
+        def PhysicsRevoluteJoint "WheelJoint"
+        {
+            rel physics:body0 = </LintSelftest/Vehicle>
+            rel physics:body1 = </LintSelftest/Vehicle/Wheel>
+            uniform token physics:axis = "X"
+        }
+    }
+
+    # A joint naming a prim that applies no `PhysicsRigidBodyAPI`.
+    def Cube "NotABody" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (5.0, 0.25, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cube "Anchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (6.0, 0.25, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:kinematicEnabled = true
+    }
+
+    def PhysicsFixedJoint "BadJoint"
+    {
+        rel physics:body0 = </LintSelftest/Anchor>
+        rel physics:body1 = </LintSelftest/NotABody>
+    }
+
+    # An authored never-collide pair that filters NOTHING: the target prim does
+    # not exist. At runtime this is a warning 600 physics ticks in, by which time
+    # the two parts have been colliding for ten seconds; on the stage it is a
+    # typo, visible immediately. Fixture for `filtered-pair-target-missing`.
+    def Cube "Bumper" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (7.0, 0.25, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:kinematicEnabled = true
+        rel physics:filteredPairs = </LintSelftest/NoSuchPrim>
+    }
+
+    # A SPRUNG LEG whose strut reaches the ground before its foot does — the
+    # descent lander's original authoring, in miniature. The pad is a thin wafer
+    # CENTRED on the strut's tip, so it clears the strut's rotated bottom corner
+    # by millimetres; the strut grounds first and the spring leaves the load path.
+    # Nothing here is malformed: every schema is right, every joint names a real
+    # body, and it would validate clean. Only the GEOMETRY is wrong, which is
+    # exactly the class `collider_min` exists to catch.
+    def Xform "Leg" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        double3 xformOp:translate = (-12.0, 6.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cube "Strut" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            double3 xformOp:translate = (4.009, -1.807, 0)
+            double3 xformOp:rotateXYZ = (0, 0, 25.0)
+            double3 xformOp:scale = (0.15, 7.05, 0.15)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        }
+
+        def Cylinder "Foot" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.4
+            double height = 0.08
+            double3 xformOp:translate = (5.5, -5.0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        def PhysicsPrismaticJoint "Strut_Spring" (
+            prepend apiSchemas = ["PhysicsDriveAPI:linear"]
+        )
+        {
+            rel physics:body0 = </LintSelftest/Leg>
+            rel physics:body1 = </LintSelftest/Leg/Strut>
+            uniform token physics:axis = "Y"
+            uniform token drive:linear:physics:type = "force"
+            float drive:linear:physics:stiffness = 4000.0
+        }
+
+        def PhysicsSphericalJoint "Foot_Gimbal"
+        {
+            rel physics:body0 = </LintSelftest/Leg/Strut>
+            rel physics:body1 = </LintSelftest/Leg/Foot>
+        }
+    }
+
+    # A dynamic body with no collider anywhere under it.
+    def Xform "Ghost" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        double3 xformOp:translate = (-6.0, 2.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "lint-selftest"
+
+        def LunCoProgram "LintTest"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/lint_selftest.rhai@
+        }
+    }
+}

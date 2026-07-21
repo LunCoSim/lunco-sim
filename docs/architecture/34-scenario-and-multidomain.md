@@ -172,7 +172,7 @@ def Scope "Scenario" ( kind = "component" )
 
 1. **Now (unblocks play):** legs orientation + footpad/​hull colliders **(done)**;
    `LanderGNC.mo` (flat PID, gravity input, input-gains, manual override); rewire
-   `lander_test.usda` to GNC sub-prim + `gravity_accel:g`; fix embedded script
+   `lander_ops.usda` to GNC sub-prim + `gravity_accel:g`; fix embedded script
    `set_input`→`set`; switch `lander_manual_control` to write `manual`/
    `manual_throttle`.
 2. **Port-path unification (Decision 2):** port-first `apply_set_model_input`.

@@ -37,7 +37,7 @@ each in the language that fits it**. Never blur them.
 
 The reference is the lander: `assets/models/Lander.mo`,
 `assets/scenarios/lander_subsystems.rhai`, `assets/vessels/landers/descent_lander.usda`
-(referenced by `assets/scenes/sandbox/lander_test.usda`).
+(referenced by `assets/scenes/sandbox/lander_ops.usda`).
 
 ## 1. The control law → a Modelica model
 

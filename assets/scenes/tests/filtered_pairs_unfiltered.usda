@@ -1,0 +1,129 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The CONTROL for `filtered_pairs_test.usda`: the same Hull–Arm–Pad rig with the
+# same deliberate overlap, and NO `PhysicsFilteredPairsAPI` on the Pad.
+#
+# It is half the test. "The pad reports no contact" passes trivially on a rig
+# whose parts never touched — a typo in a translate, a joint that never built, a
+# collider that never loaded, and the filtered scene still goes green while
+# proving nothing. This scene is what shows the measurement can tell the
+# difference: with the rel gone, the very same sensor must read a contact.
+#
+# Everything else is IDENTICAL by construction. If the two scenes ever drift
+# apart geometrically, the pair stops being a control and starts being a second
+# experiment.
+#
+# Loaded by `sandbox --scene scenes/tests/filtered_pairs_unfiltered.usda`.
+
+def Xform "SandboxScene" (
+    kind = "assembly"
+    doc = "The never-collide pair test with the pairing removed, so the overlapping parts collide as usual. Shows what the authored pair does by showing what happens without it."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 6.0, 0.0)
+        double3 xformOp:translate = (0.0, 8.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rig"
+    {
+        def Cube "Hull" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            double size = 2.0
+            double3 xformOp:translate = (0.0, 6.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.35, 0.4, 0.5)]
+            float physics:mass = 500.0
+            bool physics:kinematicEnabled = true
+            bool physics:collisionEnabled = true
+        }
+
+        def Cube "Arm" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.4
+            double3 xformOp:translate = (2.0, 6.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.8, 0.6, 0.2)]
+            float physics:mass = 10.0
+            bool physics:collisionEnabled = true
+        }
+
+        # The one difference: no `PhysicsFilteredPairsAPI`, no rel.
+        def Cube "Pad" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.6
+            double3 xformOp:translate = (0.8, 6.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.9, 0.3, 0.3)]
+            float physics:mass = 5.0
+            bool physics:collisionEnabled = true
+
+            custom bool lunco:sensor:contact = true
+        }
+
+        def PhysicsFixedJoint "HullToArm"
+        {
+            rel physics:body0 = </SandboxScene/Rig/Hull>
+            rel physics:body1 = </SandboxScene/Rig/Arm>
+            point3f physics:localPos0 = (2.0, 0.0, 0.0)
+            point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        }
+
+        def PhysicsFixedJoint "ArmToPad"
+        {
+            rel physics:body0 = </SandboxScene/Rig/Arm>
+            rel physics:body1 = </SandboxScene/Rig/Pad>
+            point3f physics:localPos0 = (-1.2, 0.0, 0.0)
+            point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "filtered-pairs"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/filtered_pairs.rhai@
+            custom float lunco:param:filtered = 0.0
+        }
+    }
+}

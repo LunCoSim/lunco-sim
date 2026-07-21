@@ -10,7 +10,7 @@ A rover that drives, a lander that descends, a balloon that rises — when the
 lives in the physics engine, the two run side by side and talk every step. That
 is **co-simulation** (cosim). This walkthrough uses the lander asset
 `vessels/landers/descent_lander.usda` — a real, working cosim vessel, referenced by
-`scenes/sandbox/lander_test.usda` — to show the whole loop, then points at how to
+`scenes/sandbox/lander_ops.usda` — to show the whole loop, then points at how to
 wire your own.
 
 ## The pattern in one paragraph

@@ -72,7 +72,7 @@ or an RCS thruster all need **body-frame force** and **torque**.
   `apply_torque` (avian does the attitude rotation — no manual quat math).
   `propagate.rs` unchanged. Compiles clean.
 - Unlocks gimbaled thrust, thrusters, reaction wheels, any body-frame actuation.
-- **Verified end-to-end** via `Lander.mo` + `lander_test.usda` on the headless
+- **Verified end-to-end** via `Lander.mo` + `lander_ops.usda` on the headless
   `sandbox-server`: lander fell from 12 m, engine arrested it to a soft hover at
   the 6 m set-point — `thrust ≈ 14716 N ≈ mass·g`, `vy ≈ 0`, controller `a_cmd ≈ g`.
 - Booting the lean headless server also required fixing pre-existing headless-safety
@@ -261,7 +261,7 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   throughout. Wheels are unaffected: their revolute joints
   are built in `lunco-mobility`, not the authored-joint path, so the G6
   `drive:angular:maxForce` wheelie cannot recur here.
-- **Proof:** `assets/scenes/sandbox/prismatic_drive_test.usda` — a standard
+- **Proof:** `assets/scenes/tests/prismatic_drive.usda` — a standard
   `PhysicsPrismaticJoint` + `PhysicsDriveAPI:linear` elevator (50 kg platform).
   **Verified live** on the headless `sandbox-server`: (A) the USD load-time drive
   holds at `-1.5276` (target `-1.5`; ~0.027 m droop = spring-damper steady-state
@@ -294,7 +294,7 @@ from standard UsdPhysics prims:
   Prismatic, 3 free rotations→Spherical. A genuinely multi-DOF joint with no
   match still warns. Verified: a D6 with only rotZ free logs `Reduced
   PhysicsD6Joint -> PhysicsRevoluteJoint (axis Z)` and builds.
-- **Verified live** on `assets/scenes/sandbox/g7_joints_test.usda`: both build
+- **Verified live** on `assets/scenes/tests/g7_joints.usda`: both build
   with no "Unsupported" warning; the distance-tethered Weight settles at exactly
   `2.0 m` below its anchor (= `maxDistance`); the ball-jointed arm hangs stable.
   Also note **all programmatic joint construction now lives in `lunco-usd-avian`**
@@ -333,7 +333,7 @@ nothing). Authored in `lunco-usd-sim` from `lunco:sensor:*`:
   from the last substep"*, i.e. the real per-substep contact impulse — and divides
   by the substep duration `dt / SubstepCount` (read at runtime). This is robust to
   substep count and restitution, not a fitted divisor.
-- **Verified live** on `assets/scenes/sandbox/sensor_test.usda` (boxes at rest,
+- **Verified live** on `assets/scenes/tests/sensor.usda` (boxes at rest,
   sensors mounted +0.3 m): `spec_force_y = 9.81` (1 g up), `accel ≈ 0`, `range =
   0.800` (0.5 centre-to-ground + 0.3 offset), `contact = 1`, and **`contact_force
   = 980.8 N` for a 100 kg box / `490.2 N` for 50 kg** (= m·g to within 0.07%).

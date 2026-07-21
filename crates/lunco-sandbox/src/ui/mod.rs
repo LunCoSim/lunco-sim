@@ -698,8 +698,19 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         }
 
+        // Test scenes are hidden unless the user asks for them: they are rigs
+        // `scripts/run_scene_tests.sh` runs for a verdict, and there are more of
+        // them than there are scenes worth opening. The pref is one checkbox in
+        // the Settings menu, so a test scene is never unreachable.
+        let show_tests = world
+            .get_resource::<lunco_sandbox_edit::ui::asset_visibility::AssetVisibilitySettings>()
+            .is_some_and(|s| s.show_test_assets);
+
         let mut assets = lunco_assets::discovery::list_usd_assets(manifest, roots);
-        assets.retain(|asset| asset.rel.starts_with("scenes/"));
+        assets.retain(|asset| {
+            asset.rel.starts_with("scenes/")
+                && (show_tests || !lunco_assets::discovery::is_test_asset(&asset.rel))
+        });
         assets.sort_by(|a, b| a.stem.cmp(&b.stem));
 
         if assets.is_empty() {

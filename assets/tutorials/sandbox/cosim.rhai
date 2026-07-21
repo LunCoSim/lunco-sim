@@ -1,6 +1,6 @@
 //! Cosim — when a Model flies physics. A coach-mark tour over the lander scene.
 //!
-//! The lander in `lander_test.usda` is CO-SIMULATED: a Modelica model
+//! The lander in `lander_ops.usda` is CO-SIMULATED: a Modelica model
 //! (`models/Lander.mo`) holds the guidance law, and a `SimConnection` pipes its
 //! force outputs to the Avian physics body, while physics feeds altitude and
 //! velocity back in. This tour walks that loop — the one pattern behind every
@@ -46,7 +46,7 @@ fn steps() {
 fn on_start(me) {
     // One source: the tutorial loads its own environment so the ideas have a
     // live, cosim-flown lander to look at. (Same load as lander_mission.rhai.)
-    load_scene("lunco://scenes/sandbox/lander_test.usda");
+    load_scene("lunco://scenes/sandbox/lander_ops.usda");
     this.i = 0;
     coach_step(steps(), 0);
     notify_kind("Tutorial: Cosim — Model meets Physics", "info");

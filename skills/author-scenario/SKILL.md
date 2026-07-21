@@ -118,9 +118,24 @@ Add helpers freely — edit the prelude, no rebuild.
 
 ## 3a. Writing a scene TEST
 
-A test scenario is an ordinary scenario whose last act is a verdict. Name the
-file `*_test.rhai`, and take the assertions from `prelude/auto_tests.rhai` — do
-not paste private copies of `r2`/`t_range`/`t_report` into a new test.
+A test scenario is an ordinary scenario whose last act is a verdict. Take the
+assertions from `prelude/auto_tests.rhai` — do not paste private copies of
+`r2`/`t_range`/`t_report` into a new test.
+
+**Where it goes is what makes it a test**, and there is no name convention to
+remember:
+
+| | |
+|---|---|
+| `assets/scenes/tests/<name>.usda` | the rig |
+| `assets/scenarios/tests/<name>.rhai` | its scenario |
+
+`scripts/run_scene_tests.sh` runs everything in `scenes/tests/`, the Scene menu
+hides it (`AssetVisibilitySettings`, one checkbox in Settings), and
+`every_test_scene_carries_a_scenario` fails on any of them that asserts nothing.
+A rig written into `scenes/sandbox/` instead gates nothing however carefully it
+asserts — `no_test_scene_hides_outside_the_tests_directory` is the check that
+says so. Do NOT suffix the file `_test`: the folder already said it.
 
 A check returns `""` on pass and a MESSAGE on failure; collect them so every
 check runs and the report names all of them:
@@ -151,7 +166,7 @@ Run it headlessly:
 
 ```
 cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
-    --scene scenes/sandbox/landing_legs_test.usda --max-ticks 500
+    --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 
 ## 3b. A rig test needs a CONTROL, and an anti-trivial guard
@@ -189,7 +204,7 @@ must be TOLD which:
 
 ```usda
 def LunCoProgram "Test" {
-    uniform asset info:sourceAsset = @lunco://scenarios/rocker_bogie_test.rhai@
+    uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie.rhai@
     float lunco:param:coupled = 1.0        # read: param(me, "coupled", -1.0)
 }
 ```
@@ -314,8 +329,8 @@ Two lessons those last two encode, worth copying into any new gate:
 
 ## Drivetrain parity test
 
-A scenario can also be a **regression test**. `assets/scenarios/drivetrain_parity_test.rhai`
-+ `assets/scenes/sandbox/drivetrain_parity.usda` are the worked example — copy
+A scenario can also be a **regression test**. `assets/scenarios/tests/drivetrain_parity.rhai`
++ `assets/scenes/tests/drivetrain_parity.usda` are the worked example — copy
 their shape when you need a scenario that ASSERTS rather than merely acts.
 
 **What it guards.** Raycast and joint wheels are two realizations of ONE
@@ -335,7 +350,7 @@ rovers being wrong together.
 
 **How to run.**
 ```bash
-cargo run -j2 --bin sandbox -- --scene scenes/sandbox/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
+cargo run -j2 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
 ```
 The `LunCoProgram` prim in the scene auto-runs the script on load; the run takes
 ~21 s of sim time (3 s settle → 12 s straight → 6 s steer). Then:

@@ -191,7 +191,7 @@ occluder, and a wall geometrically between them.
 
 ### Tier 3 — the scene a student drives
 
-**`assets/scenes/sandbox/comms_wall_test.usda`** — rover at z = +20, wall at z = 0, mast at
+**`assets/scenes/tests/comms_wall.usda`** — rover at z = +20, wall at z = 0, mast at
 z = −20. The two nodes are in range the whole time, so a dropped link can only mean
 occlusion. Drive left or right and it returns the moment the rover clears the wall's 8 m
 width: the way out of a radio shadow is to move.

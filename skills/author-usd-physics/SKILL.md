@@ -360,10 +360,31 @@ further. Parts **two joints apart** still collide: a hull and the footpad on the
 end of its leg, a wheel and the rocker its bogie hangs from. Author them close
 enough and the solver spends every step pushing a vehicle apart from itself.
 
-**Say so declaratively — `PhysicsFilteredPairsAPI` is the standard schema for it**
-(`physics:filteredPairs`, a relationship to the prims this one must not collide
-with). It is already in the vendored core schema; adopt it rather than inventing
-a scoping rule.
+**Say so declaratively — `PhysicsFilteredPairsAPI` is the standard schema for it**,
+and it is implemented:
+
+```usda
+def Cube "Pad" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
+)
+{
+    # Filtering is SYMMETRIC — one opinion is the whole pair. The hull authors
+    # nothing.
+    rel physics:filteredPairs = </Lander/Hull>
+}
+```
+
+Two things the rel does not require you to get right, because the loader resolves
+them: the target may name a **body** or a **collider under one** (a collider folds
+into its body's compound, so both resolve to the body), and either end may carry
+the opinion. What it will not do is guess — a target that never spawns is
+reported by path, and a pair inside one compound body is reported as inert rather
+than quietly accepted.
+
+Timing is load-bearing and handled for you: the pair is armed in
+`PhysicsSystems::Prepare`, before the first narrow phase, because avian never
+re-filters a pair already in the contact graph. A filter that arrived a tick late
+would not apply to the contact it was authored to prevent.
 
 There is a strong temptation to make this automatic — "a vehicle never collides
 with itself" — and it should be resisted, because *vehicle* is not a thing the
@@ -383,6 +404,12 @@ PhysX filters adjacent articulation links and takes the rest from filtered pairs
 
 So: parent-child is automatic, everything beyond it is authored, and the linter's
 job is to find the pairs that need authoring — not to guess them.
+
+Proven by `scenes/tests/filtered_pairs.usda` (a pad authored 0.5 m inside a hull
+it is two joints away from, reporting no contact) against its control
+`filtered_pairs_unfiltered.usda` (same rig, rel removed, contact within a
+second). The measurement is the CONTACT itself, off `lunco:sensor:contact` —
+not how far something moved afterwards.
 
 ### Catch it before the screenshot
 
@@ -404,7 +431,7 @@ cmd("RunLint", #{}); query("LintReport");
 
 The rules are authored in `assets/scripting/policy/lint_usd.rhai` — add one there
 rather than in Rust. Two gates hold this: `shipped_assets_lint_clean.rs` (every
-shipped asset lint-clean) and `scenes/sandbox/parts_attached.usda` (nothing
+shipped asset lint-clean) and `scenes/tests/parts_attached.usda` (nothing
 drifts >0.5 m from its vessel over a 12 s drive — the behavioural proof, since a
 lint cannot simulate). See
 [`validate-assets`](../validate-assets/SKILL.md#the-rules-are-authored--the-lint-layer)
@@ -417,7 +444,7 @@ its exit code comes from a telemetry verdict:
 
 ```
 cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
-    --scene scenes/sandbox/landing_legs_test.usda --max-ticks 500
+    --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 
 A physics change is not done until a scene runs clean: **zero** `left the

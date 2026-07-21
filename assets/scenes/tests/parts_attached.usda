@@ -1,0 +1,187 @@
+#usda 1.0
+(
+    defaultPrim = "PartsAttached"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── "Nothing falls off the vehicle" rig ──────────────────────────────────────
+#
+# WHAT IT GUARDS. That every PART of a vessel is still carried by that vessel
+# after it has been simulated and driven. A part that quietly becomes its OWN
+# rigid body — because its component asset applies `PhysicsRigidBodyAPI` and
+# nothing ever joints it to the hull — is not caught by any drivetrain, parity
+# or mission test: the rover still drives, still steers, still reaches top speed,
+# and the only symptom is hardware lying on the regolith behind it.
+#
+# That is exactly how the drive MOTORS came off every rover in the sandbox:
+# `components/mobility/motor.usda` applied `PhysicsRigidBodyAPI`, and the loader
+# (`lunco-usd-avian`, "one spelling of this is a body") makes ANY prim carrying
+# that schema its own body regardless of ancestry. Four motors per rover, no
+# collider, no joint — so they fell through the hull and were left behind.
+#
+# WHY THE MEASUREMENT IS RADIAL DISTANCE. For every descendant prim of a rover
+# root we take |p_part − p_root| once the vehicle has settled, and again after a
+# long straight drive. That distance is invariant under the vehicle's own motion
+# AND its yaw, so a wheel may spin, a knuckle may steer and a suspension may
+# stroke without moving the number, while a part that stays behind on the ground
+# changes it by the whole length of the drive.
+#
+# WHY BOTH DRIVETRAIN VARIANTS OF BOTH ROVERS. The `physical` variant DOES give
+# some children their own bodies on purpose (each wheel, jointed by a revolute).
+# A test that only ran `raycast` could be satisfied by a loader that refused
+# nested bodies outright, which would break the wheels; a test that only ran
+# `physical` could not tell an intended body from an accidental one. Running
+# both means the pass says what it should: nested bodies that are JOINTED are
+# carried, and nested bodies that are not jointed do not exist.
+#
+#     scene_test --scene scenes/tests/parts_attached.usda
+#
+# `scenarios/tests/parts_attached.rhai` walks the ECS children of each rover, so
+# it needs no list of part names and covers parts added to these assets later —
+# motors, gearboxes, headlights, masts, batteries, solar panels, antennae.
+
+def Xform "PartsAttached" (
+    kind = "assembly"
+    doc = "Four rovers driven in a straight line; every descendant part must still be at its authored offset afterwards."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    # The Moon — the gravity every one of these vehicles is sized for, and the
+    # gravity that decides how fast a loose part separates.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+    uniform bool lunco:spawnable = false
+
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+
+    # Flat and level: a slope would make the rovers slide and turn the radial
+    # measurement into a gradeability test.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (500.0, 1.0, 500.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </PartsAttached/PhysicsMaterials/Friction_1_0>
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
+        double3 xformOp:translate = (0.0, 30.0, 175.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Broadside on the whole line-up: a human watching this scene sees parts left
+    # on the ground as the rovers pull away, which is the same event the numbers
+    # report.
+    def Camera "PartsCam"
+    {
+        custom double3 lunco:cameraLookAt = (0.0, 1.0, 90.0)
+        double3 xformOp:translate = (0.0, 40.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 24.0
+        float2 clippingRange = (0.1, 100000.0)
+    }
+
+    # ── The four vehicles ────────────────────────────────────────────────────
+    # Two assets × two drivetrain realizations. Lanes 40 m apart, all driving
+    # along −Z from the same Z, so nothing can collide with anything and a part
+    # left behind is unambiguously ITS rover's.
+
+    def Xform "SkidRaycast" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = {
+            string drivetrain = "raycast"
+        }
+    )
+    {
+        double3 xformOp:translate = (-60.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "SkidPhysical" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = {
+            string drivetrain = "physical"
+        }
+    )
+    {
+        double3 xformOp:translate = (-20.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "AckermannRaycast" (
+        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
+        variants = {
+            string drivetrain = "raycast"
+        }
+    )
+    {
+        double3 xformOp:translate = (20.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "AckermannPhysical" (
+        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
+        variants = {
+            string drivetrain = "physical"
+        }
+    )
+    {
+        double3 xformOp:translate = (60.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # NOT HERE, AND WHY. `vessels/rovers/rucheyok/rucheyok.usda` is the one vessel
+    # that mounts non-mobility parts — a solar panel and a battery, whose component
+    # assets apply `PhysicsRigidBodyAPI` exactly as the motor did — so it is the
+    # obvious fifth instance. It was tried, and it does not move: zero displacement
+    # for the hull and every part over a 12 s full-throttle drive, while the four
+    # rovers above cover tens of metres in the same rig. A vehicle that never
+    # simulates cannot lose a part, so including it would buy a green square that
+    # asserts nothing, and this file's own rule is that a measurement which cannot
+    # fail is not a measurement. Put Rucheyok back the day it drives.
+
+    # ── The test itself ──────────────────────────────────────────────────────
+    # Hosted on a non-physical prim, referencing every rover by path, so no
+    # instance is structurally different from its siblings.
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "parts-attached"
+
+        def LunCoProgram "PartsTest"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/parts_attached.rhai@
+        }
+    }
+}

@@ -23,7 +23,7 @@
 # `--stress` adds a SECOND, clearly separated pass over the same scenes with
 # `--threads 0` (bevy's default multi-threaded pool, as the GUI runs) and
 # `--jitter 0.4` (seeded pseudo-random dt, modelling realtime frame pacing).
-# That pass exists because `scenes/sandbox/drivetrain_parity.usda` passes
+# That pass exists because `scenes/tests/drivetrain_parity.usda` passes
 # headless and explodes under the GUI, and those two flags are the two known
 # differences. Reading the stress pass:
 #
@@ -50,18 +50,25 @@ STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
 #
 # Paths are relative to `assets/`, exactly as `--scene` wants them.
 #
-# TODO: these live under `scenes/sandbox/` for historical reasons — they were
-# written as things to open in the GUI sandbox. They are TESTS, and they should
-# move to `assets/scenes/tests/`. Once they do, replace this array with a glob
-# over `assets/scenes/tests/*.usda` so a new test scene is picked up by existing
-# and needs no edit here.
-SCENES=(
-    "scenes/sandbox/drivetrain_parity.usda"
-    "scenes/sandbox/ackermann_parity.usda"
-    "scenes/sandbox/six_independent_parity.usda"
-    "scenes/sandbox/parts_attached.usda"
-    "scenes/sandbox/lint_selftest.usda"
+# DISCOVERED, never hand-listed: everything in `assets/scenes/tests/` is a test,
+# and this gate runs all of it. A hand-written array is a place tests go to die —
+# eleven scenes with real scenarios sat outside the old list, passing when run by
+# hand and gating nothing.
+#
+# The directory IS the declaration. A scene is a test because of where it lives,
+# not because its name ends in `_test`, and `lunco-assets`'s `is_test_asset` reads
+# the same fact to keep them out of the UI's Scene menu.
+#
+# A test scene that asserts nothing is not skipped-and-forgotten either: it is
+# caught by `lunco-scene-commands`'s `every_test_scene_carries_a_scenario`, which
+# fails naming it. The two halves together leave nowhere for a silent test to sit.
+mapfile -t SCENES < <(
+    ls assets/scenes/tests/*.usda | sed 's|^assets/||' | sort
 )
+if [[ ${#SCENES[@]} -eq 0 ]]; then
+    echo "assets/scenes/tests/ is empty — the discovery glob is wrong" >&2
+    exit 2
+fi
 
 # Args: any `--stress` anywhere enables the diagnostic pass; the first remaining
 # positional is the substring filter.

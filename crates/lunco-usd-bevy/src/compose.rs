@@ -319,7 +319,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         assert_eq!(view.value::<f64>(&fwd, "lunco:scale"), Some(1.0));
     }
 
-    /// The two harder composition paths, on the real `lander_test.usda`, where both
+    /// The two harder composition paths, on the real `lander_ops.usda`, where both
     /// vehicles now arrive by `references`: (a) a lander whose asset references the
     /// shared control profile — a reference nested INSIDE a reference, which must
     /// still land on the composed `/LanderTest/Lander/Controls`; (b) a rover pulled
@@ -328,8 +328,8 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
     #[test]
     fn lander_scene_composes_nested_and_referenced_control_profiles() {
         let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/scenes/sandbox/lander_test.usda");
-        let stage = compose_file_to_stage(&scene).expect("compose lander_test.usda");
+            .join("../../assets/scenes/sandbox/lander_ops.usda");
+        let stage = compose_file_to_stage(&scene).expect("compose lander_ops.usda");
         let view = StageView::new(&stage);
 
         // (a) the lander asset's own Controls reference resolves through the arc

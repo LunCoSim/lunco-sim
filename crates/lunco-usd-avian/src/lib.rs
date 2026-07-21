@@ -71,6 +71,9 @@ pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 pub mod lint;
 pub use lint::{lint_stage, physics_facts, USD_LINT_DOMAIN};
 
+pub mod filtered_pairs;
+pub use filtered_pairs::{FilteredPairs, PendingFilteredPairs, UsdCollisionFilter};
+
 /// Bevy plugin for USD physics mapping.
 ///
 /// Adds an observer for USD prim spawning and a deferred processing system that maps
@@ -171,8 +174,16 @@ impl Plugin for UsdAvianPlugin {
             // still before `PhysicsSchedule`. Correct in both configurations.
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
-                build_usd_physics_joints
-                    .run_if(any_with_component::<PendingUsdJoint>)
+                (
+                    build_usd_physics_joints
+                        .run_if(any_with_component::<PendingUsdJoint>),
+                    // Same window, same reason: avian's broad phase never
+                    // re-filters a pair already in the contact graph, so a filter
+                    // armed after the first narrow phase does not apply to the
+                    // contact it was authored to prevent.
+                    filtered_pairs::resolve_filtered_pairs
+                        .run_if(any_with_component::<PendingFilteredPairs>),
+                )
                     .in_set(avian3d::prelude::PhysicsSystems::Prepare)
                     .after(avian3d::prelude::PhysicsSystems::First)
                     .after(big_space_bridge::PhysicsBridgeSystems::Read)
@@ -955,6 +966,13 @@ fn extract_avian_prim(
     if reader.real_f32(sdf_path, "physxVehicleWheel:radius").is_some() {
         commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
+    }
+
+    // `PhysicsFilteredPairsAPI` applies to a body OR to a collider under one, and
+    // is read before either branch below because it is orthogonal to both: it says
+    // which pairs never collide, not what this prim IS.
+    if let Some(pending) = filtered_pairs::read_filtered_pairs(reader, sdf_path) {
+        commands.entity(entity).try_insert(pending);
     }
 
     let has_rigid_body_api = reader.has_api_schema(sdf_path, ptok::API_RIGID_BODY);

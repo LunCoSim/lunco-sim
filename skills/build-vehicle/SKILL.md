@@ -269,14 +269,14 @@ cargo run -p lunco-sandbox --bin sandbox -- --validate assets/vessels/rovers/my_
 ```
 
 **2. Drivetrain parity regression** — the guard that the two realizations stay
-matched. `assets/scenes/sandbox/drivetrain_parity.usda` instantiates
+matched. `assets/scenes/tests/drivetrain_parity.usda` instantiates
 `skid_rover` twice side by side (`drivetrain = "raycast"` at x = −25,
 `"physical"` at x = +25) and auto-runs
-`assets/scenarios/drivetrain_parity_test.rhai`: settle 3 s → full throttle straight
+`assets/scenarios/tests/drivetrain_parity.rhai`: settle 3 s → full throttle straight
 12 s → throttle + steer 6 s.
 
 ```bash
-cargo run -j2 --bin sandbox -- --scene scenes/sandbox/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
+cargo run -j2 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
 grep -E 'DRIVETRAIN PARITY|PARITY FAIL' /tmp/parity.log
 ```
 

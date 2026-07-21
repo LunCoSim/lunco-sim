@@ -53,7 +53,14 @@ Start here, in order (new to the codebase? the canonical narrative path is **[do
   that). Internal part = mass + geometry, no body; movable part = body **and** joint,
   authored together. Guarded by `nested-body-no-joint`
   (`crates/lunco-scene-commands/tests/shipped_assets_lint_clean.rs`) and, behaviourally,
-  by `scenes/sandbox/parts_attached.usda`.
+  by `scenes/tests/parts_attached.usda`.
+- **A test scene lives in `assets/scenes/tests/`, its scenario in
+  `assets/scenarios/tests/`** — the DIRECTORY is what makes it a test, not an `_test`
+  suffix. `scripts/run_scene_tests.sh` runs that directory, the Scene menu hides it
+  (one checkbox in Settings), and two checks in
+  `crates/lunco-scene-commands/tests/test_scenes_are_tests.rs` catch both failure
+  directions: a test scene that asserts nothing, and a rig named like a test that is
+  sitting outside the directory where anything would run it.
 - **A green gate must be able to go red.** A linter with no broken fixture, or a scene
   test whose subject never moves, reports "clean" and "not running" identically. Ship the
   negative case with the check — `lint_selftest.usda` exists for exactly this, and a

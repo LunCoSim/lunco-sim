@@ -8,7 +8,7 @@ lander's GNC and be able to write your own.
 > Reference (dense): [`skills/authoring-vessel-controllers`](../../skills/authoring-vessel-controllers/SKILL.md).
 > Worked example: `assets/models/Lander.mo` + `scenarios/lander_subsystems.rhai` +
 > `vessels/landers/descent_lander.usda` (the vessel), dropped into a mission by
-> `scenes/sandbox/lander_test.usda` (the scene).
+> `scenes/sandbox/lander_ops.usda` (the scene).
 
 We'll build **`Hover.mo`** — a thruster that holds a target altitude and yields to a
 pilot. Small, but it exercises the whole stack.

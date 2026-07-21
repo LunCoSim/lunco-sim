@@ -1,0 +1,205 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Verifies G7 joint kinds: PhysicsSphericalJoint + PhysicsDistanceJoint
+# (lunco-usd-avian build_usd_physics_joints).
+#   - BallArm hangs off a kinematic anchor via a SPHERICAL joint (3-DOF swing,
+#     45° cone) → swings like a pendulum, constrained to the cone.
+#   - Weight hangs off a second anchor via a DISTANCE joint (max 2 m) → falls
+#     under gravity but is held at ≤2 m from the anchor.
+# Expect server log: "Built USD joint PhysicsSphericalJoint ..." and
+#   "Built USD joint PhysicsDistanceJoint ..." with NO "Unsupported" warning.
+# Loaded by `sandbox --scene scenes/tests/g7_joints.usda`.
+
+# Scene root: an `assembly` — a thing you OPEN, not a part you place (even here,
+# where the rig is authored in-file rather than referenced from part models).
+def Xform "SandboxScene" (
+    kind = "assembly"
+    doc = "Three different joints on display: a ball joint that swings inside a cone, a tether that holds at a fixed distance, and a hinge that only turns around one axis."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
+        double3 xformOp:translate = (0.0, 6.0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # ---- Spherical (ball) joint ----
+    def Cube "BallAnchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.4
+        double3 xformOp:translate = (-2.0, 6.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(1.0, 0.3, 0.3)]
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Xform "BallArm" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
+        double3 xformOp:translate = (-2.0, 5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 2.0
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.3
+            double3 xformOp:scale = (1.0, 3.0, 1.0)
+            color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+
+    def PhysicsSphericalJoint "BallJoint"
+    {
+        rel physics:body0 = </SandboxScene/BallAnchor>
+        rel physics:body1 = </SandboxScene/BallArm>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 1.0, 0.0)
+        float physics:coneAngle0Limit = 0.785
+        float physics:coneAngle1Limit = 0.785
+    }
+
+    # ---- Distance (tether) joint ----
+    def Cube "TetherAnchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.4
+        double3 xformOp:translate = (2.0, 6.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(1.0, 0.3, 0.3)]
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Cube "Weight" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (2.0, 4.5, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.3, 0.9, 0.4)]
+        float physics:mass = 5.0
+    }
+
+    def PhysicsDistanceJoint "Tether"
+    {
+        rel physics:body0 = </SandboxScene/TetherAnchor>
+        rel physics:body1 = </SandboxScene/Weight>
+        point3f physics:localPos0 = (0.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
+        float physics:minDistance = 0.0
+        float physics:maxDistance = 2.0
+    }
+
+    # ---- Generic D6 joint, all DOF locked except rotation about Z ----
+    # Expect: "Reduced PhysicsD6Joint -> PhysicsRevoluteJoint (axis ...Z...)".
+    def Cube "D6Anchor" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 0.4
+        double3 xformOp:translate = (0.0, 6.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(1.0, 0.3, 0.3)]
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Xform "D6Arm" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        # A body prim is a FRAME, not a mesh: the shaping scale lives on the shape
+        # below, so this prim's frame stays usable by anything mounted in it.
+        double3 xformOp:translate = (0.0, 5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 2.0
+
+        def Cube "Shape" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.3
+            double3 xformOp:scale = (1.0, 3.0, 1.0)
+            color3f[] primvars:displayColor = [(0.9, 0.6, 0.2)]
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+        }
+    }
+
+    def PhysicsD6Joint "D6Hinge" (
+        prepend apiSchemas = ["PhysicsLimitAPI:transX", "PhysicsLimitAPI:transY", "PhysicsLimitAPI:transZ", "PhysicsLimitAPI:rotX", "PhysicsLimitAPI:rotY"]
+    )
+    {
+        rel physics:body0 = </SandboxScene/D6Anchor>
+        rel physics:body1 = </SandboxScene/D6Arm>
+        point3f physics:localPos0 = (0.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 1.0, 0.0)
+        # low > high ⇒ DOF locked. rotZ is left unauthored ⇒ free ⇒ Revolute(Z).
+        float limit:transX:physics:low = 1.0
+        float limit:transX:physics:high = -1.0
+        float limit:transY:physics:low = 1.0
+        float limit:transY:physics:high = -1.0
+        float limit:transZ:physics:low = 1.0
+        float limit:transZ:physics:high = -1.0
+        float limit:rotX:physics:low = 1.0
+        float limit:rotX:physics:high = -1.0
+        float limit:rotY:physics:low = 1.0
+        float limit:rotY:physics:high = -1.0
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "g7-joints"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/g7_joints.rhai@
+        }
+    }
+}

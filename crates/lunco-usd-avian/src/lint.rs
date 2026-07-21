@@ -295,6 +295,44 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ]));
     }
 
+    // Authored never-collide pairs. The rel is a promise the loader keeps at
+    // RUNTIME, where a target that never spawns is a warning 10 seconds into a
+    // run; here it is decidable from the stage alone. `owner` is the body each
+    // end resolves to, because a collider under a body folds into that body's
+    // compound and the pair is between BODIES — which is also how a pair that
+    // names two shapes of one body comes to be inert.
+    let known: HashSet<String> = paths.iter().map(|p| p.to_string()).collect();
+    let mut filtered_pairs: Vec<H> = Vec::new();
+    for p in &paths {
+        if !reader.has_api_schema(p, ptok::API_FILTERED_PAIRS) {
+            continue;
+        }
+        let path = p.to_string();
+        let owner_of = |s: &str| {
+            if bodies.contains(s) {
+                s.to_string()
+            } else {
+                host_body(&bodies, s).unwrap_or_default()
+            }
+        };
+        let targets: Vec<String> = reader
+            .rel_targets(p, ptok::A_FILTERED_PAIRS)
+            .into_iter()
+            .map(|t| t.to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let missing: Vec<String> =
+            targets.iter().filter(|t| !known.contains(t)).cloned().collect();
+        let owners: Vec<String> = targets.iter().map(|t| owner_of(t)).collect();
+        filtered_pairs.push(H::map([
+            ("path", H::str(path.clone())),
+            ("owner", H::str(owner_of(&path))),
+            ("targets", H::Array(targets.into_iter().map(H::str).collect())),
+            ("target_owners", H::Array(owners.into_iter().map(H::str).collect())),
+            ("missing", H::Array(missing.into_iter().map(H::str).collect())),
+        ]));
+    }
+
     let mut sorted: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
     sorted.sort();
 
@@ -371,6 +409,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     H::map([
         ("bodies", H::Array(body_facts)),
         ("joints", H::Array(joints)),
+        ("filtered_pairs", H::Array(filtered_pairs)),
         ("prims", H::Array(prims)),
     ])
 }

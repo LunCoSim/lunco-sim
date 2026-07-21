@@ -1,0 +1,113 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Minimal scene to isolate Avian joint behaviour end-to-end.
+# Three prims:
+#   - Ground (static collider)
+#   - CubeA (kinematic, externally controlled — gizmo / `MoveEntity`)
+#   - CubeB (dynamic)
+#   - Hinge (`PhysicsFixedJoint` connecting A and B at the midpoint)
+#
+# With a working FixedJoint they settle to the ground together as a
+# rigid pair; if the joint is broken they fall independently. Drag
+# CubeA via the gizmo (or call the `MoveEntity` API) and CubeB
+# follows rigidly.
+#
+# Loaded by `sandbox --scene scenes/tests/joint.usda`.
+
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
+def Xform "SandboxScene" (
+    kind = "assembly"
+    doc = "Two cubes glued together by a fixed joint. Drag one with the mouse and the other should follow exactly - a basic check that the joint holds."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+    uniform bool lunco:spawnable = false
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
+    }
+
+    # Avatar so the API observer has someone to focus from.
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
+        double3 xformOp:translate = (0.0, 6.0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cube "CubeA" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-2.0, 5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(1.0, 0.2, 0.2)]
+        float physics:mass = 1.0
+        # A is Kinematic from setup — doesn't fall under gravity. With
+        # the joint working, B (Dynamic) hangs at A's level.
+        bool physics:kinematicEnabled = true
+    }
+
+    def Cube "CubeB" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (2.0, 5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
+        float physics:mass = 1.0
+    }
+
+    def PhysicsFixedJoint "Hinge"
+    {
+        rel physics:body0 = </SandboxScene/CubeA>
+        rel physics:body1 = </SandboxScene/CubeB>
+        # Anchors meet at world (0, 5, 0) — midpoint between the cubes.
+        point3f physics:localPos0 = (2.0, 0, 0)
+        point3f physics:localPos1 = (-2.0, 0, 0)
+    }
+}

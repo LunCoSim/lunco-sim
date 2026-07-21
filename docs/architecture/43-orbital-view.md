@@ -143,7 +143,7 @@ Bridged in `process_usd_sim_prim_read` (lunco-usd-sim gains a
 - Moonbase twin: scene-root anchor (Shackleton connecting ridge ≈ 89.45° S,
   136.7° W), antenna flag on `comms_mast`, `RelaySat` + `DSS_Madrid`
   (40.4314° N, −4.2481° E, Earth 399) prims.
-- `assets/scenes/sandbox/comms_demo_test.usda` — minimal headless-testable
+- `assets/scenes/tests/comms_demo.usda` — minimal headless-testable
   scene (anchor + rover antenna + satellite + Earth station).
 
 ### 2.6 Solar-system view in the sandbox
@@ -200,7 +200,7 @@ a settings-menu checkbox. Connectivity itself is doc 49's, not this doc's.
 - USD bridge: `lunco-usd-sim/src/celestial.rs`, called from
   `process_usd_sim_prim_read`.
 - Assets: `components/comms/{antenna,ground_station}.usda`,
-  `vessels/satellites/relay_sat.usda`, `scenes/sandbox/comms_demo_test.usda`;
+  `vessels/satellites/relay_sat.usda`, `scenes/tests/comms_demo.usda`;
   `skid_rover.usda` gained a `Comms` scope; the moonbase twin gained the site
   anchor, mast antenna attrs, `RelaySat_1`, `DSS_Madrid`.
 - Inspector: **Comms & Orbit** section (anchor lat/lon/height/body, Kepler

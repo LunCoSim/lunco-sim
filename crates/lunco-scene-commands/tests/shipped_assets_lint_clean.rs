@@ -12,8 +12,8 @@
 //! asset, the hook registry is global, and a `cargo test` that needs a window is
 //! a `cargo test` nobody runs.
 //!
-//! `scenes/sandbox/lint_selftest.usda` is EXCLUDED by name — it is authored wrong
-//! on purpose so `scenarios/lint_selftest.rhai` can prove the rules fire.
+//! `scenes/tests/lint_selftest.usda` is EXCLUDED by name — it is authored wrong
+//! on purpose so `scenarios/tests/lint_selftest.rhai` can prove the rules fire.
 
 use std::path::{Path, PathBuf};
 
@@ -99,7 +99,7 @@ fn shipped_usd_assets_have_no_lint_errors() {
 fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     register_usd_lint_policy();
 
-    let broken = assets_dir().join("scenes/sandbox/lint_selftest.usda");
+    let broken = assets_dir().join("scenes/tests/lint_selftest.usda");
     let report = lunco_scene_commands::validate::validate_asset(&broken.to_string_lossy());
     let lint_errors: Vec<&String> =
         report.errors.iter().filter(|e| e.starts_with("[usd/")).collect();
@@ -125,7 +125,7 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
 fn a_strut_that_outreaches_its_foot_is_caught_by_geometry_alone() {
     register_usd_lint_policy();
 
-    let broken = assets_dir().join("scenes/sandbox/lint_selftest.usda");
+    let broken = assets_dir().join("scenes/tests/lint_selftest.usda");
     let report = lunco_scene_commands::validate::validate_asset(&broken.to_string_lossy());
     let lint_errors: Vec<&String> =
         report.errors.iter().filter(|e| e.starts_with("[usd/")).collect();

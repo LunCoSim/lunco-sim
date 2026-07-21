@@ -1,11 +1,11 @@
-//! A scene called `*_test.usda` must actually be a test.
+//! A scene in `assets/scenes/tests/` must actually be a test.
 //!
-//! Four of them were not. `differential_rig_test`, `rocker_bogie_test`,
-//! `g7_joints_test`, `prismatic_drive_test` and `revolute_motor_test` carried no
-//! `LunCoProgram` at all, so `scene_test` ran them for 20000 ticks, received no
-//! verdict, and exited 2 — every time, for as long as they had existed. Their
-//! invariants were real and written down; they were written down as instructions
-//! to a HUMAN, in the file header:
+//! Several were not. `differential_rig`, `rocker_bogie`, `g7_joints`,
+//! `prismatic_drive` and `revolute_motor` carried no `LunCoProgram` at all, so
+//! `scene_test` ran them for 20000 ticks, received no verdict, and exited 2 —
+//! every time, for as long as they had existed. Their invariants were real and
+//! written down; they were written down as instructions to a HUMAN, in the file
+//! header:
 //!
 //! ```text
 //! # Verify (ListPorts): HingeR.angle ≈ −HingeL.angle (rocker B mirrors A).
@@ -15,60 +15,91 @@
 //! a test, sits with the tests, is named like a test, and asserts nothing. Nobody
 //! notices, because nothing is red.
 //!
+//! The second half is the reverse direction: a test scene left OUTSIDE
+//! `scenes/tests/` is invisible to `scripts/run_scene_tests.sh`, which discovers
+//! by directory. Both checks live here so neither half can rot alone.
+//!
 //! Scenes that are legitimately NOT automatable are listed below BY NAME with a
 //! reason. An explicit exception is a decision; a silent gap is a bug.
 
 use std::path::{Path, PathBuf};
 
-fn scenes_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/sandbox")
+fn assets_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets")
 }
 
-/// Scenes whose name ends in `_test` that cannot carry a headless verdict.
+/// Scenes under `scenes/tests/` that cannot carry a headless verdict.
 ///
 /// Each needs a reason, and the reason must be about the SCENE, not about the
 /// effort of writing one — "it would be work" is how this list becomes the place
 /// tests go to die.
 const NOT_HEADLESS_TESTABLE: &[(&str, &str)] = &[
-    ("hdri_test", "a render check: the thing under test is the image, and scene_test has no GPU"),
-    ("_shader_fallback_test", "a render check: asserts what a material looks like when its shader is missing"),
+    ("hdri", "a render check: the thing under test is the image, and scene_test has no GPU"),
+    ("shader_fallback", "a render check: asserts what a material looks like when its shader is missing"),
 ];
 
-#[test]
-fn every_scene_named_test_carries_a_scenario() {
-    let dir = scenes_dir();
-    let mut checked = 0;
-    let mut silent = Vec::new();
-
-    for entry in std::fs::read_dir(&dir).expect("assets/scenes/sandbox is missing").flatten() {
+fn usda_files(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("read scenes dir").flatten() {
         let path = entry.path();
         if path.extension().is_none_or(|x| x != "usda") {
             continue;
         }
-        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-        if !stem.ends_with("_test") {
+        out.push((path.file_stem().unwrap().to_string_lossy().to_string(), path));
+    }
+    out
+}
+
+#[test]
+fn every_test_scene_carries_a_scenario() {
+    let dir = assets_dir().join("scenes/tests");
+    let scenes = usda_files(&dir);
+    let mut silent = Vec::new();
+
+    for (stem, path) in &scenes {
+        if NOT_HEADLESS_TESTABLE.iter().any(|(n, _)| n == stem) {
             continue;
         }
-        checked += 1;
-        if NOT_HEADLESS_TESTABLE.iter().any(|(n, _)| *n == stem) {
-            continue;
-        }
-        let src = std::fs::read_to_string(&path).expect("read scene");
+        let src = std::fs::read_to_string(path).expect("read scene");
         // A verdict needs a scenario to emit it, and a scenario reaches the scene
         // through a `LunCoProgram`. Both, so that neither half can rot alone.
         if !src.contains("lunco:scenario") || !src.contains("LunCoProgram") {
-            silent.push(stem);
+            silent.push(stem.clone());
         }
     }
 
-    assert!(checked > 10, "expected the sandbox test scenes, found {checked}");
+    assert!(scenes.len() > 10, "expected the test scenes, found {}", scenes.len());
+    silent.sort();
     assert!(
         silent.is_empty(),
-        "scenes named `_test` that assert nothing ({}):\n  {}\n\n\
+        "test scenes that assert nothing ({}):\n  {}\n\n\
          Give each one a scenario that checks the invariant its header already \
          describes, or add it to NOT_HEADLESS_TESTABLE with a reason. A scene \
          that cannot fail is not a test.",
         silent.len(),
         silent.join("\n  ")
+    );
+}
+
+#[test]
+fn no_test_scene_hides_outside_the_tests_directory() {
+    // `scripts/run_scene_tests.sh` discovers by DIRECTORY. A rig written into
+    // `scenes/sandbox/` runs in nobody's gate however carefully it asserts, and
+    // its name is the only trace that it was ever meant to.
+    let stray: Vec<String> = usda_files(&assets_dir().join("scenes/sandbox"))
+        .into_iter()
+        .filter(|(stem, _)| {
+            stem.contains("_test") || stem.contains("parity") || stem.contains("selftest")
+        })
+        .map(|(stem, _)| stem)
+        .collect();
+
+    assert!(
+        stray.is_empty(),
+        "scene(s) named like tests but living in scenes/sandbox/ ({}):\n  {}\n\n\
+         `scripts/run_scene_tests.sh` runs assets/scenes/tests/ — a rig outside it \
+         gates nothing. Move it there, or rename it to what it actually is.",
+        stray.len(),
+        stray.join("\n  ")
     );
 }

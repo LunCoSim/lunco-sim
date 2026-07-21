@@ -183,7 +183,7 @@ All six tasks are implemented. Deviations from the plan are noted inline.
 - **Data tutorial** — `assets/tutorials/first_drive/` (`.usda` + `.rhai` + this dir's
   `README.md`): possess (advances on `cmd:PossessVessel`) → drive to flag (advances
   on `enter:waypoint`) → `MISSION_COMPLETE`. Second built-in reuses the existing
-  `scenes/sandbox/lander_test.usda`.
+  `scenes/sandbox/lander_ops.usda`.
 
 **Not done (noted follow-up):** the hardcoded lunica `SCREENS`/`PATHS` in
 `lunco-modelica` are left intact — ripping out a working shipped tour without

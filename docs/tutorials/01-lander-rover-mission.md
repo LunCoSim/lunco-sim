@@ -16,7 +16,7 @@ Edit a file, reload the scene, watch it change. That's the whole loop. Let's go.
 
 Everything you create is prefixed `my_` so it sits alongside the shipped assets
 rather than on top of them. The finished article is already in the repo — peek at
-`assets/vessels/landers/descent_lander.usda` and `assets/scenes/sandbox/lander_test.usda`
+`assets/vessels/landers/descent_lander.usda` and `assets/scenes/sandbox/lander_ops.usda`
 whenever you want to see where this is heading, or play it from the 🎓 Tutorials
 menu in the sandbox.
 

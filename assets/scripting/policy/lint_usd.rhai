@@ -32,6 +32,13 @@
 //   facts.joints[]  #{ path, type, bodies[], missing[] }
 //       every `Physics*Joint`. `missing` = targets that are not bodies.
 //
+//   facts.filtered_pairs[]  #{ path, owner, targets[], target_owners[], missing[] }
+//       every prim applying `PhysicsFilteredPairsAPI`. `owner` is the BODY the
+//       prim's collider belongs to (itself, or its nearest ancestor body) and
+//       `target_owners` the same for each target — because the pair avian filters
+//       is between bodies, not between shapes. `missing` = targets that are not
+//       prims on this stage.
+//
 //   facts.prims[]   #{ path, type, parent, schemas[] }
 //       EVERY prim applying any schema at all — the generic projection, so a new
 //       rule about a schema nobody has thought about yet needs no Rust change.
@@ -84,6 +91,7 @@ fn lint_usd(facts) {
     for f in mass_outside_any_body(facts) { out.push(f); }
     for f in sprung_foot_not_lowest(facts) { out.push(f); }
     for f in body_is_its_own_scaled_mesh(facts) { out.push(f); }
+    for f in filtered_pair_is_inert(facts) { out.push(f); }
     out
 }
 
@@ -144,7 +152,7 @@ fn nested_body_no_joint(facts) {
     // neither is "a part held by nothing", so the rule would otherwise fire on
     // every raycast rover we ship — and a rule that fires on everything is read
     // by no one. That wheels STAY ON is checked where it belongs, by simulating
-    // it: `scenes/sandbox/parts_attached.usda`.
+    // it: `scenes/tests/parts_attached.usda`.
     let engine_realized = "PhysxVehicleWheelAPI";
 
     let out = [];
@@ -365,6 +373,49 @@ fn body_is_its_own_scaled_mesh(facts) {
         m += " into a child — or use a Cylinder/Capsule/Sphere, which carry real";
         m += " radius/height and need no scale.";
         out.push(finding("body-is-its-own-scaled-mesh", "warn", b.path, m));
+    }
+    out
+}
+
+/// An authored `physics:filteredPairs` that filters nothing.
+///
+/// Three ways for the rel to be inert, all of them silent at runtime for as long
+/// as anyone watches:
+///
+///   names a prim that is not on the stage  a typo. The loader reports it after
+///       600 physics ticks — ten seconds into a run nobody is reading — and the
+///       pair collides the whole time.
+///   names nothing at all                   the API applied with an empty rel.
+///   names a shape of the SAME body         two colliders of one compound never
+///       collide with each other anyway, so the pair reads as protection and is
+///       not. The pair that needed authoring is still unauthored.
+///
+/// All decidable from the stage alone, and all invisible in a screenshot: the
+/// symptom is a vehicle that pushes itself apart, which reads as bad tuning.
+fn filtered_pair_is_inert(facts) {
+    let out = [];
+    for fp in facts.filtered_pairs {
+        if fp.targets.is_empty() {
+            let m = "applies PhysicsFilteredPairsAPI but names nothing in";
+            m += " physics:filteredPairs — the pair it was meant to protect still";
+            m += " collides. Name the prim it must not touch, or drop the schema.";
+            out.push(finding("filtered-pair-empty", "warn", fp.path, m));
+        }
+        for t in fp.missing {
+            let m = "filters against <" + t + ">, which is not a prim on this stage";
+            m += " — the pair is never filtered and the parts collide. Check the";
+            m += " path.";
+            out.push(finding("filtered-pair-target-missing", "error", fp.path, m));
+        }
+        for i in 0..fp.targets.len() {
+            let own = fp.target_owners[i];
+            if own == "" || own != fp.owner { continue; }
+            let m = "filters against <" + fp.targets[i] + ">, which belongs to the";
+            m += " same body <" + own + "> — both are colliders of one compound";
+            m += " shape, and a body never collides with itself. This filters";
+            m += " nothing; the pair you meant is between two DIFFERENT bodies.";
+            out.push(finding("filtered-pair-same-body", "warn", fp.path, m));
+        }
     }
     out
 }

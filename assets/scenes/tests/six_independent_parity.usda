@@ -1,0 +1,177 @@
+#usda 1.0
+(
+    defaultPrim = "SixIndependentParity"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Six-wheel independent-drive motion rig ───────────────────────────────────
+#
+# ⚠ READ THIS FIRST — THIS IS NOT A RAYCAST-vs-PHYSICAL PARITY RIG.
+#
+# `vessels/rovers/six_wheel_independent.usda` carries NO `drivetrain`
+# variantSet. It is RAYCAST-ONLY by construction, for a structural reason and
+# not an oversight: the shared drivetrain overlays
+# (`components/mobility/raycast_drivetrain.usda` and
+# `physical_drivetrain.usda`) are authored as `over "Wheel_FL"` /
+# `"Wheel_FR"` / `"Wheel_RL"` / `"Wheel_RR"` — a FOUR-wheel prim vocabulary.
+# This rover's wheels are `Wheel_L0..L2` / `Wheel_R0..R2`, so neither overlay
+# would compose onto anything; the `physical` variant in particular would
+# author no joints at all and produce a rover with no drivetrain rather than a
+# joint-driven one. A raycast-vs-physical comparison is therefore not merely
+# unmeasured here, it is UNAUTHORED, and a scenario that pretended to measure it
+# would be comparing a rover against itself.
+#
+# So this rig, and `scenarios/tests/six_independent_parity.rhai` alongside it, is a
+# MOTION-CORRECTNESS gate instead. It is the same kind of safety net and it
+# guards the same refactor, but its contract is absolute rather than relative:
+# instead of "the two realizations agree", it asserts "the authored allocation
+# produces the motion the authored allocation describes".
+#
+# WHAT IT GUARDS. This rover is the only asset in the fleet whose drive
+# allocation is fully AUTHORED rather than inferred from an Omniverse schema:
+#
+#     float outputs:drive_w0 = 0.0   # ... through outputs:drive_w5
+#
+#     def "DriveMix"
+#     {
+#         def "drive_w0" { double lunco:factor:throttle = 1.0
+#                          double lunco:factor:steer    = 1.0 }
+#         # ... w1, w2 the same; w3..w5 with lunco:factor:steer = -1.0
+#     }
+#
+# That is the `linear` kernel over six independent channels: left bank
+# (`w0..w2`) gets `throttle + steer`, right bank (`w3..w5`) gets
+# `throttle - steer`. Three consequences follow directly from those coefficients,
+# and the scenario asserts all three:
+#
+#   1. pure throttle drives all six equally  -> the rover runs STRAIGHT;
+#   2. throttle + steer differentiates the banks -> it TURNS, and the direction
+#      is fixed by the sign of the steer column (left bank faster => yaw right);
+#   3. pure steer at zero throttle gives `+s` left and `-s` right -> it PIVOTS
+#      on the spot, travelling almost nowhere.
+#
+# and the shared no-load axle speed still caps it: the motor's
+# `lunco:motor:noLoadSpeed` divided by the gearbox `lunco:gearbox:ratio`
+# (14400 / 1200 = 12 rad/s) times r = 0.4 m = 4.8 m/s, exactly as for every
+# other rover, because all of them compose the same `components/mobility/wheel.usda`.
+#
+# ONE ROVER, NOT TWO. There is no second instance because there is no second
+# realization to compare against. The scenario gets its contrast from TIME
+# instead of from a second lane: it drives the same rover through straight,
+# steer-right, steer-left and pivot phases and compares those phases against
+# each other. A steer-right leg that is indistinguishable from a steer-left leg
+# is caught by the same logic that a two-lane rig would use, without
+# manufacturing a fake twin.
+#
+#     sandbox --scene scenes/tests/six_independent_parity.usda
+#
+# The rover drives along -Z (its forward axis) from z = +120, with 500 x 500 m
+# of ground under it — enough that a full-lock steer leg cannot run off the pad.
+
+def Xform "SixIndependentParity" (
+    kind = "assembly"
+    doc = "One six-wheel independent-drive rover on flat ground, for the authored-driveMix motion-correctness regression test. Raycast-only: this rover has no physical drivetrain variant."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. The MOON — every vehicle in
+    # this scene is sized for 1.62, so the scene states it rather than inherit it.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+    # A test rig, not a spawnable part.
+    uniform bool lunco:spawnable = false
+
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+
+    # Flat, level, 500 x 500 m. Level matters: the pivot phase asserts that the
+    # rover travels almost NOWHERE while spinning, and on any slope it would
+    # simply slide downhill and fail a check about allocation with a fact about
+    # gravity.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (500.0, 1.0, 500.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </SixIndependentParity/PhysicsMaterials/Friction_1_0>
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
+        double3 xformOp:translate = (0.0, 30.0, 175.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # High and back, so the whole traverse — straight leg, both steer legs, and
+    # the pivot — stays in frame without a follow cam.
+    def Camera "MotionCam"
+    {
+        custom double3 lunco:cameraLookAt = (0.0, 1.0, 60.0)
+        double3 xformOp:translate = (0.0, 60.0, 190.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 24.0
+        float2 clippingRange = (0.1, 100000.0)
+    }
+
+    # ── The rover ────────────────────────────────────────────────────────────
+    # NO variant selection, because the asset declares no variantSet. NO
+    # per-instance overrides: the whole point is that the rover's own authored
+    # `DriveMix` scope is what gets measured. If you find yourself wanting to
+    # `over` a wheel or a mass here, you are about to invalidate the test.
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/six_wheel_independent.usda@</SixWheelIndependent>
+    )
+    {
+        double3 xformOp:translate = (0.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Chassis"
+        {
+            color3f[] primvars:displayColor = [(0.85, 0.55, 0.15)]
+        }
+    }
+
+    # ── The test itself ──────────────────────────────────────────────────────
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "six-independent-motion"
+
+        def LunCoProgram "MotionTest"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/six_independent_parity.rhai@
+        }
+    }
+}

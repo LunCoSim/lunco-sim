@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! timeout 300 cargo run -q -p lunco-sandbox --bin sandbox -j 2 -- \
-//!     --scene scenes/sandbox/drivetrain_parity.usda
+//!     --scene scenes/tests/drivetrain_parity.usda
 //! ```
 //!
 //! That opens a window, brings up wgpu, renders every frame, runs in REALTIME
@@ -26,7 +26,7 @@
 //!
 //! ```text
 //! cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
-//!     --scene scenes/sandbox/drivetrain_parity.usda
+//!     --scene scenes/tests/drivetrain_parity.usda
 //! echo $?   # 0 = PASS, 1 = FAIL, 2 = no verdict (hang / load failure)
 //! ```
 //!
@@ -98,7 +98,7 @@
 //!
 //! The two knobs above are exactly the two ways this runner differs from the
 //! GUI sandbox, and a scene can pass here while failing there. That happened:
-//! `scenes/sandbox/drivetrain_parity.usda` passes 8/8 under `scene_test` and
+//! `scenes/tests/drivetrain_parity.usda` passes 8/8 under `scene_test` and
 //! blows up under the GUI (measured speed 4.5 → 120 → 846 m/s during the steer
 //! phase, heading NaN). Two candidate causes, and "it passes headless" tells
 //! you nothing about WHICH:
@@ -160,7 +160,7 @@ const DEFAULT_SEED: u64 = 0x5EED_1EAF_C0FF_EE01;
 
 #[derive(Clone)]
 struct Cli {
-    /// Asset-root-relative USD scene path, e.g. `scenes/sandbox/drivetrain_parity.usda`.
+    /// Asset-root-relative USD scene path, e.g. `scenes/tests/drivetrain_parity.usda`.
     /// Consumed by `SandboxCorePlugin`, which does its own `--scene` parse off
     /// `std::env::args()`; we parse it too only so we can REQUIRE it and print it.
     scene: String,
@@ -322,7 +322,7 @@ USAGE:
                [--threads N] [--jitter FRAC] [--seed U64]
 
     --scene PATH             REQUIRED. USD scene path relative to assets/, e.g.
-                             scenes/sandbox/drivetrain_parity.usda
+                             scenes/tests/drivetrain_parity.usda
     --max-ticks N            Safety bound on simulated ticks (default {DEFAULT_MAX_TICKS}).
                              Exhausting it with no verdict exits 2.
     --tick-hz HZ             Manual clock step rate (default {hz}, = lunco_core::FIXED_HZ).

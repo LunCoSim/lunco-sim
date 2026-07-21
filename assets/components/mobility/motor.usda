@@ -69,7 +69,7 @@ def Xform "Motor" (
     # free dynamic body that no joint held and no collider stopped, and all four fell
     # out of every rover on the first physics step. Nothing else noticed: the rovers
     # still drove, still steered, still made their top speed, and only a screenshot of
-    # motors lying on the regolith gave it away. `scenes/sandbox/parts_attached.usda`
+    # motors lying on the regolith gave it away. `scenes/tests/parts_attached.usda`
     # is the gate that now catches it.
     #
     # An internal part is not a body. It has mass and it renders; the chassis it is
