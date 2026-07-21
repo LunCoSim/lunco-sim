@@ -428,13 +428,28 @@ fn read_port_event_prims(
 /// frame.
 pub fn dispatch_loaded_modelica_sources(
     mut commands: Commands,
-    q: Query<(Entity, &PendingModelicaSource)>,
+    q: Query<(Entity, &PendingModelicaSource, &UsdPrimPath)>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
     channels: Option<Res<ModelicaChannels>>,
 ) {
     let Some(channels) = channels else { return };
-    for (entity, pending) in q.iter() {
+
+    // ORDER MATTERS, so it must not be luck. The Modelica worker compiles
+    // serially, so whichever model is sent first is the first to become usable
+    // — and a scene where a plume-photometry model happens to be dispatched
+    // ahead of a lander's guidance leaves the vehicle waiting behind a model
+    // nothing depends on. Query iteration follows archetype order, which is not
+    // stable run to run: MEASURED, two runs of `landing_legs_test.usda`
+    // dispatched the same three models in different orders, and the vehicle was
+    // ready at 0.80 s in one and not at all within the test in the other.
+    //
+    // Sorting by prim path makes the order a property of the SCENE rather than
+    // of the ECS, which is what a deterministic runner needs.
+    let mut pending: Vec<_> = q.iter().collect();
+    pending.sort_unstable_by(|(_, _, a), (_, _, b)| a.path.cmp(&b.path));
+
+    for (entity, pending, _) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
