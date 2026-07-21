@@ -144,7 +144,7 @@ anchor pattern in `trajectories.rs`).
   close range ("orbits flicker", "moon offset from its orbit"). Fix: chunk the
   polyline into cell-anchored segments (vertices local to a `CellCoord`d
   chunk origin), or move lines to the doc-44 celestial render rig.
-- **`comms_demo_test.usda` has a 400×400 m flat `Ground` cube at y=0** — it
+- **`comms_demo.usda` has a 400×400 m flat `Ground` cube at y=0** — it
   z-fights/occludes the DEM (georeferenced to the same height) and *is* the
   flat gray "lunar surface" seen in recent captures. The DEM makes it
   redundant; it should be removed (or sunk) once rover spawn placement on the

@@ -6,7 +6,7 @@
 // script drives BOTH from ONE tick loop — same command, same frame — and asserts
 // they behave the same.
 //
-// The sibling of `drivetrain_parity_test.rhai`, which does this for the SKID rover.
+// The sibling of `drivetrain_parity.rhai`, which does this for the SKID rover.
 // Structure, helpers, tolerances and verdict contract are deliberately copied
 // from that file: two gates that measure the same physics should not disagree
 // about how they measure it, and a reader who has understood one has understood
@@ -469,7 +469,7 @@ fn on_stop(me) {
 
 // ── The verdict ─────────────────────────────────────────────────────────────
 //
-// TOLERANCES — why these numbers. They are the ones `drivetrain_parity_test.rhai`
+// TOLERANCES — why these numbers. They are the ones `drivetrain_parity.rhai`
 // arrived at, for the reasons that file records: the two drivetrains are
 // genuinely different SOLVERS (a rolled-off body force at the contact point vs a
 // motorised revolute transmitting through tire slip), so demanding bit-parity

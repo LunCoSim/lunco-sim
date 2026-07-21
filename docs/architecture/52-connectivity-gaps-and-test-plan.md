@@ -58,7 +58,7 @@ panel is not an answer.
 
 ### G3 — Ports that did not exist
 
-Three places promised `comms:*` ports: `skid_rover.usda`, `comms_demo_test.usda`, and a
+Three places promised `comms:*` ports: `skid_rover.usda`, `comms_demo.usda`, and a
 comment in `lunco-sandbox/src/lib.rs`. Grepping `comms:` across `crates/**/*.rs` returned
 exactly one hit — that comment. There was no `PortRegistry` registration for links, so
 `read_port .../comms:route_earth:connected` simply failed. Doc-43-era leftovers that
@@ -88,7 +88,7 @@ starts with a link and loses it on the way down, from geometry. The script only 
 ### G6 — Identity was a label
 
 `node_key` resolved authored `class` → prim `Name` → `node_<index>`. But
-`ground_station.usda` authors `class = "earth"`, and `comms_demo_test.usda` references it
+`ground_station.usda` authors `class = "earth"`, and `comms_demo.usda` references it
 three times (Madrid, Goldstone, Canberra) — so all three collapsed onto the key `"earth"`,
 last-write-wins. The graph showed one Earth node and no individual complex was addressable.
 
@@ -186,7 +186,7 @@ exist, the wall that didn't block. A green kernel says nothing about any of them
 So tier 2 composes real assets through the real USD → ECS pipeline and asserts the contract:
 `props/wall.usda` yields a `LinkOccluder` whose box matches its drawn geometry *and* keeps
 its collider; `comms_mast.usda` has a node at dish height, not at its base;
-`comms_wall_test.usda` authors exactly two endpoints with distinct roles, exactly one
+`comms_wall.usda` authors exactly two endpoints with distinct roles, exactly one
 occluder, and a wall geometrically between them.
 
 ### Tier 3 — the scene a student drives
@@ -208,7 +208,7 @@ smoke surface was the original plan, and it does not work: `sandbox_scene.usda` 
 anchor, so scene-local link nodes get no solar pose and the kernel never sees them. Adding
 one to the default startup scene to gain smoke coverage is a behaviour change to the thing
 everyone opens first, for a scene already crowded with balloons, cosim chains and joint
-demos. `comms_wall_test.usda` covers it without the blast radius.
+demos. `comms_wall.usda` covers it without the blast radius.
 
 ---
 

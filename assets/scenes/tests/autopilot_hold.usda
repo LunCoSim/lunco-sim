@@ -16,7 +16,7 @@
 # rig can move a rover at all — without it the headline assertion is vacuous.
 #
 #   cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
-#       --scene scenes/sandbox/autopilot_hold_test.usda
+#       --scene scenes/tests/autopilot_hold.usda
 
 def Xform "AutopilotHoldTest" (
     kind = "assembly"
@@ -108,7 +108,7 @@ def Xform "AutopilotHoldTest" (
 
         def LunCoProgram "Test"
         {
-            uniform asset info:sourceAsset = @lunco://scenarios/autopilot_hold_test.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/autopilot_hold.rhai@
         }
     }
 }

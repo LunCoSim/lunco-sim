@@ -229,8 +229,8 @@ pub fn linear_kernel(cmd: DriveInputs, mix: &DriveMix) -> Vec<(String, f64)> {
 ///     rover authored with an unresolvable `lunco:driveKernel` does NOT move under
 ///     full throttle (the `apply_drive_mix` fail-safe coast that
 ///     `components/mobility/drive_laws/*.usda` depend on).
-///   * the linear mix projects each entry — in `six_independent_parity_test.rhai` and
-///     `ackermann_parity_test.rhai`, which read `DriveMix.entries` back and pin the
+///   * the linear mix projects each entry — in `six_independent_parity.rhai` and
+///     `ackermann_parity.rhai`, which read `DriveMix.entries` back and pin the
 ///     projection through motion.
 ///
 /// ONE assertion could NOT be restated at scenario level and so stays in Rust

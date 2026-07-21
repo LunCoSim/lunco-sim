@@ -59,7 +59,7 @@
 // neither is observable from a test that only asks "did it turn?".
 //
 // (4) is the sharpest check in the file and the mirror image of the equivalent
-// check in `ackermann_parity_test.rhai`. There, zero throttle with full steer must
+// check in `ackermann_parity.rhai`. There, zero throttle with full steer must
 // produce NO rotation, because an Ackermann rover steers through a dedicated
 // `steering` port and has no drive force without throttle. Here it must produce
 // a LOT of rotation and almost no travel, because this rover steers through the
@@ -365,7 +365,7 @@ fn on_tick(me) {
             this.next_sample = t;
             print("[six] PIVOT leg: throttle 0.0, steer +1.0");
             print("[six]   left bank +1, right bank -1: this rover MUST spin on the spot.");
-            print("[six]   (An Ackermann rover must do the OPPOSITE - see ackermann_parity_test.rhai.)");
+            print("[six]   (An Ackermann rover must do the OPPOSITE - see ackermann_parity.rhai.)");
         }
         return;
     }

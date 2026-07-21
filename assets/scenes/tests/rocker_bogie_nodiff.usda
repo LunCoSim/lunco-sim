@@ -5,7 +5,7 @@
     metersPerUnit = 1
 )
 
-# G5 CONTROL scene — identical to `rocker_bogie_test.usda` but the differential
+# G5 CONTROL scene — identical to `rocker_bogie.usda` but the differential
 # is DISABLED by zeroing the differential gear joint's angular-drive stiffness/damping
 # with a local `over` on the Rover (a local opinion overrides the referenced value).
 # With the coupling off, the step under the left-front corner should ROLL the chassis

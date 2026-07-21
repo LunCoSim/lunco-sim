@@ -440,7 +440,7 @@ pub fn dispatch_loaded_modelica_sources(
     // — and a scene where a plume-photometry model happens to be dispatched
     // ahead of a lander's guidance leaves the vehicle waiting behind a model
     // nothing depends on. Query iteration follows archetype order, which is not
-    // stable run to run: MEASURED, two runs of `landing_legs_test.usda`
+    // stable run to run: MEASURED, two runs of `landing_legs.usda`
     // dispatched the same three models in different orders, and the vehicle was
     // ready at 0.80 s in one and not at all within the test in the other.
     //

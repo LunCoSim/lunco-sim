@@ -181,7 +181,7 @@ joint, so this is a Rust **soft holonomic coupling**.
   each rocker, `−2τ` reaction on the chassis (momentum-conserving). Idle unless a
   `DifferentialCoupling` exists, so it's free for every other vehicle.
 - **Scalar PD law** (`angle_about_axis`, `differential_torque`) is unit-tested.
-- **Verified live** on `differential_rig_test.usda` — a fixed base, a front-heavy
+- **Verified live** on `differential_rig.usda` — a fixed base, a front-heavy
   rocker A + a balanced rocker B on lateral revolutes. A/B via the hinge `angle`
   ports: coupling OFF → A free-falls to the pendulum bottom (`+3.06`), B untouched
   (`+0.06`); coupling ON → A held at `+1.72`, B mirrors to `−1.65`, `θ_A+θ_B ≈ 0.07`.
@@ -195,7 +195,7 @@ joint, so this is a Rust **soft holonomic coupling**.
   pinned by its own two ground feet already self-levels — the coupling has nothing to
   do, so an A/B shows no difference. Demonstrating the differential needs a rig where
   the coupled DOF is otherwise free (the isolated `differential_rig` is that case;
-  `rocker_bogie_test.usda` is the redundant one, kept as a caution).
+  `rocker_bogie.usda` is the redundant one, kept as a caution).
 
 ### G6 — Finish USD-driven dynamics tuning  **[DONE (tuning); maxForce intentionally not honored]**
 Every tuning knob of a dynamic vehicle is a USD attribute, read by **one strict

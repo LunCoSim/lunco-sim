@@ -384,7 +384,7 @@ radius. Ordered by leverage.
   USD connections, read at compose time. Electrical topology (`rel lunco:epsBus`) is a connection like any
   other, not a schema of its own.
 - **Blast radius:** the cosim reader walks USD connections (`lunco-usd-sim/cosim.rs`), and every asset that
-  wires (balloon, `sun_tracker_test.usda`, rover EPS) authors them. **This is the load-bearing form —
+  wires (balloon, `sun_tracker.usda`, rover EPS) authors them. **This is the load-bearing form —
   everything else composes with it.**
 
 ### A2 — Ports: authored USD attributes for identity, `PortRegistry` for values
@@ -731,7 +731,7 @@ arrays don't compose across references"). The USD-native form is *more* composab
    `ApplyUsdOp`; positions via `NodeGraphNodeAPI`.
 
 Under "no legacy" the migration is a **cutover with a verify**: land step 1, re-author one scene
-(`sun_tracker_test.usda`) to use connections in parallel with the old parser, assert the *same*
+(`sun_tracker.usda`) to use connections in parallel with the old parser, assert the *same*
 `SimConnection`s and identical hot-path behavior, then flip the remaining assets and delete. Net: a
 plumbing add (flatten) + a projector swap + deletions — the 60 Hz exchange loop is never in the diff.
 

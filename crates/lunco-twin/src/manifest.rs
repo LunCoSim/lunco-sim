@@ -448,7 +448,7 @@ uuid = "{id}"
     #[test]
     fn scene_globs_match_both_conventional_layouts() {
         // The engine library's layout and this workspace's twins' layout.
-        assert!(glob_matches("scenes/**", "scenes/sandbox/comms_demo_test.usda"));
+        assert!(glob_matches("scenes/**", "scenes/tests/comms_demo.usda"));
         assert!(glob_matches("sim/scenes/**", "sim/scenes/traverse.usda"));
         // …and nothing else in the twin: a rover is referenced BY a scene, not
         // offered as one. This is the whole point of asking the twin.
@@ -481,7 +481,7 @@ uuid = "{id}"
         // Undeclared is the existing state of every twin on disk; the fallback
         // is what keeps them working until they say so themselves.
         assert!(DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "sim/scenes/traverse.usda")));
-        assert!(DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "scenes/sandbox/link_test.usda")));
+        assert!(DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "scenes/tests/link.usda")));
         assert!(!DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "models/rover.usda")));
     }
 }

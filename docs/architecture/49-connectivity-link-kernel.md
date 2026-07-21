@@ -55,7 +55,7 @@ composed path, so it is identical on every peer and stable across a reload.
 
 Names and classes are **labels, not identities**. `components/comms/ground_station.usda`
 authors `class = "earth"`, so a scene referencing it three times (Madrid, Goldstone,
-Canberra — `comms_demo_test.usda` does exactly this) once collapsed all three onto the
+Canberra — `comms_demo.usda` does exactly this) once collapsed all three onto the
 key `"earth"`, last-write-wins: the graph showed one Earth node and no individual
 complex was addressable. Roles are shared by design; identities cannot be.
 
@@ -223,8 +223,8 @@ the standard does not, and namespace it.
 > why `sandbox_scene.usda` carries no link nodes: it has no site anchor, and adding one
 > to the default scene to gain smoke coverage is not worth the behaviour change.
 
-Scenes: `link_test.usda` (orbital smoke), `comms_wall_test.usda` (occlusion — a rover, a
-mast, and a wall between them), `comms_demo_test.usda` (the full DSN demo).
+Scenes: `link.usda` (orbital smoke), `comms_wall.usda` (occlusion — a rover, a
+mast, and a wall between them), `comms_demo.usda` (the full DSN demo).
 
 ## 7. Known issue: scene reload and avian
 

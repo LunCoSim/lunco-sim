@@ -1,6 +1,6 @@
 // ── An autopilot with no waypoints holds ────────────────────────────────────
 //
-// TEST-ONLY. Runs against `scenes/sandbox/autopilot_hold_test.usda`.
+// TEST-ONLY. Runs against `scenes/tests/autopilot_hold.usda`.
 //
 // WHAT IT GUARDS. That engaging an autopilot on a vessel that has NO route
 // claims the vessel and stops there. It used to drive: `EngageAutopilot` with an
@@ -70,7 +70,7 @@ fn on_tick(me) {
 
     if this.idle == () || this.routed == () {
         fail_fast("rover prims not found — wrong scene? expected " +
-                  "scenes/sandbox/autopilot_hold_test.usda",
+                  "scenes/tests/autopilot_hold.usda",
                   "AUTOPILOT HOLD", "AUTOPILOT_HOLD");
         this.phase = "done";
         return;

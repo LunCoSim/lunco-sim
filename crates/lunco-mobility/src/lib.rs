@@ -912,7 +912,7 @@ fn differential_lambda(
 /// torque about the hinge axis (equal on each rocker, `−2τ` reaction on the
 /// chassis). Idle unless a `DifferentialCoupling` exists.
 ///
-/// **Verified** on an isolated rig (`differential_rig_test.usda`, 2026-06-30):
+/// **Verified** on an isolated rig (`differential_rig.usda`, 2026-06-30):
 /// a fixed base carries a front-heavy rocker A and a balanced rocker B on lateral
 /// revolutes. A/B by hinge `angle` ports —
 /// - coupling OFF: A free-falls to the pendulum bottom (`+3.06`), B untouched (`+0.06`);
@@ -922,7 +922,7 @@ fn differential_lambda(
 /// the `r = -1` mirror). NOTE: needs a
 /// non-redundant rig to *show* its effect — a passive two-rocker pair each pinned
 /// by its own two ground feet already self-levels, leaving nothing for the
-/// coupling to do (the original `rocker_bogie_test.usda` is that redundant case).
+/// coupling to do (the original `rocker_bogie.usda` is that redundant case).
 /// And keep `stiffness < I/dt²` and damp the rockers, or the explicit penalty
 /// rings / diverges.
 fn differential_coupling_system(

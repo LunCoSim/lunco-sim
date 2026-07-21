@@ -1277,7 +1277,7 @@ mod tests {
 
     /// The regression this exists for: `components/comms/ground_station.usda`
     /// authors `class = "earth"`, so a scene referencing it three times (Madrid,
-    /// Goldstone, Canberra — `comms_demo_test.usda`) had all three collapse onto
+    /// Goldstone, Canberra — `comms_demo.usda`) had all three collapse onto
     /// the key `"earth"`. Identity is now the GID, so same-class nodes stay
     /// distinct and a rover reports a separate link to each complex.
     #[test]

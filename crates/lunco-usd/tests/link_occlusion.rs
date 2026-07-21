@@ -1,4 +1,4 @@
-//! The connectivity scene contract: `comms_wall_test.usda` and the assets it uses
+//! The connectivity scene contract: `comms_wall.usda` and the assets it uses
 //! must author what the link kernel needs, through the REAL USD → ECS pipeline.
 //!
 //! The kernel's own geometry (range, masks, occlusion, the verdict hook, AOS/LOS,
