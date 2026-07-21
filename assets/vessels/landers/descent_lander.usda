@@ -1336,6 +1336,33 @@ def Xform "DescentLander" (
     # strut's foot, which is what a landing footpad is: it has to meet whatever
     # slope it lands on while the strut points where the airframe points.
     #
+    # THE BALL SITS AT THE PAD'S CENTRE OF MASS, and that coincidence is the
+    # design — do not "improve" it. The anchor is derived, so it lands on this
+    # prim's origin, which for a uniform cylinder is also its centre of mass. The
+    # strut's load therefore passes exactly through the pivot and can exert NO
+    # torque on the foot, however hard the leg pushes or however raked it is.
+    #
+    # The price is that the pad is NEUTRALLY STABLE at every angle inside its
+    # cone: nothing rights it, so it keeps whatever tilt it lands at and wanders a
+    # ~5..24 deg band on flat ground. That is the honest behaviour of a foot
+    # gimballed at its own centre, not a defect, and the three obvious cures are
+    # all worse — each measured:
+    #
+    #   ball moved up to the strut's tip  the pad becomes a pendulum bob whose
+    #                                     contact swings sideways as it tilts;
+    #                                     pads leave the world at 23 km/s
+    #   angular damping on the pad        inert. The wander is not free swinging,
+    #                                     so there is no energy to bleed off
+    #   centre of mass below the ball     WORSE, and this is the one that looks
+    #                                     most right. Offsetting the mass 0.08 m
+    #                                     hands the strut's ~700 N a lever:
+    #                                     0.08*700*sin25 = 23.7 N m of tilting
+    #                                     against 0.44 N m of gravity righting,
+    #                                     53:1. Tilt then reaches the 30 deg cone
+    #
+    # `landing_legs_test` asserts only that the pads are not PINNED on their cone
+    # stop. Anything tighter asserts the wander, which is weather, not a contract.
+    #
     # It is also what makes the gear a MECHANISM rather than a structure. Four
     # raked sliders whose pads are rigidly welded, closed through four ground
     # contacts, is over-constrained — 10 DOF against 12 constraints — so the

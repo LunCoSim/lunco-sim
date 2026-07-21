@@ -129,6 +129,14 @@ fn frame_errors(hull, legs) {
     out
 }
 
+/// Each footpad's tilt from level, in degrees. The pads gimbal freely inside a
+/// 30° cone, so this is how far each has articulated to meet the ground.
+fn pad_tilts(pads) {
+    let out = [];
+    for i in pads { out.push(r2(tilt_deg(i))); }
+    out
+}
+
 fn on_tick(me) {
     if this.phase == "done" { return; }
 
@@ -162,6 +170,7 @@ fn on_tick(me) {
         row(this.t, y, tilt, fr, xr);
         print("[legs]     pad_y=" + ys(this.pads) + "  leg_y=" + ys(this.legs));
         print("[legs]     frame_err_deg=" + frame_errors(this.hull, this.legs));
+        print("[legs]     pad_tilt_deg=" + pad_tilts(this.pads));
         this.next_sample = this.t + this.sample_s;
     }
 
@@ -185,6 +194,7 @@ fn on_tick(me) {
                 world_pos(this.legs[2]), world_pos(this.legs[3]),
             ],
             frame_err: frame_errors(this.hull, this.legs),
+            pad_tilt: pad_tilts(this.pads),
         });
     }
 }
@@ -240,8 +250,9 @@ fn verdict(s) {
     f.push(t_range(s.tilt, 0.0, 5.0, "hull tilt at rest (deg)"));
     f.push(t_range(s.hull_y, 1.0, 8.0, "hull height at rest (m)"));
 
-    // Load sharing. Read the largest first so a whole-vehicle "nothing is
-    // loaded" reads as one clear failure instead of four vague ones.
+    // The gear must be LOADED at all. `force` is the right instrument for this
+    // one question: any leg developing hundreds of newtons proves the springs are
+    // in the load path.
     let fmax = 0.0;
     let missing = false;
     for v in s.forces {
@@ -252,26 +263,31 @@ fn verdict(s) {
     f.push(t_true(fmax > 100.0,
                   "no strut carries load at rest (max " + r2(fmax) +
                   " N) — the legs are not taking the vehicle's weight"));
-    if fmax > 100.0 {
-        for i in 0..4 {
-            let v = s.forces[i];
-            if v != () {
-                f.push(t_range(v, fmax * 0.6, fmax * 1.4,
-                               "strut " + names[i] + " load vs peak " + r2(fmax) + " N"));
-            }
-        }
-    }
 
-    // The struts must have SHORTENED. A leg pinned at a limit stop reports a
-    // reaction it is not developing, so travel is checked separately from load.
+    // Every strut must have SHORTENED, and by a comparable amount.
+    //
+    // SHARING IS JUDGED ON STROKE, NOT ON `force`, and that is not a softer test —
+    // it is the right instrument. The load a spring carries is `k*x`. The port
+    // reports the whole drive law, `k*x + c*v`, and with c = 2200 N·s/m a few tenths
+    // of a m/s of contact jitter swings it by ±600 N against a ~280 N carried load.
+    // Comparing legs on that compares rate noise. Stroke is the state, is what the
+    // load actually is, and still fails hard for a leg carrying nothing — a dead
+    // strut reads ~0 and is caught by the same assertion.
+    //
+    // Sign matters as much as magnitude: the axis points hull→foot, so a loaded leg
+    // reads NEGATIVE. A stroke of ~0 means the vehicle's weight is reaching the
+    // ground through something that is not the spring.
+    let deepest = 0.0;
+    for x in s.strokes {
+        if x != () && -x > deepest { deepest = -x; }
+    }
     for i in 0..4 {
         let x = s.strokes[i];
         if x != () {
             f.push(t_true(x < -0.005,
-                "strut " + names[i] + " did not compress (" + r4(x) + " m). The axis " +
-                "points hull→foot, so a loaded leg reads NEGATIVE; ~0 means the " +
-                "vehicle's weight is reaching the ground through something other " +
-                "than the spring"));
+                "strut " + names[i] + " did not compress (" + r4(x) + " m)"));
+            f.push(t_range(-x, deepest * 0.6, deepest * 1.4,
+                "strut " + names[i] + " travel vs deepest " + r4(deepest) + " m"));
         }
     }
 
@@ -286,12 +302,35 @@ fn verdict(s) {
         }
     }
 
+    // The footpads must still be GIMBALLING — the check is PINNING, nothing finer.
+    //
+    // Each pad hangs on a spherical joint with a 30° cone and nothing centring it,
+    // so it finds its own angle against the ground; that is what a gimbal is for.
+    // Measured on flat ground the four wander a 5..24° band and stay there, because
+    // the raked strut scuffs the foot sideways as it strokes and friction rolls it
+    // back. Asserting any tighter angle would be asserting that wander, which is
+    // not a contract — it is weather.
+    //
+    // What IS a contract: a pad driven onto its cone stop has stopped being a
+    // gimbal. The ball becomes a rigid corner and the leg starts taking ground load
+    // through it as a moment instead of as travel — the same class of failure as a
+    // strut that bends rather than strokes, one joint further out.
+    for i in 0..4 {
+        let a = s.pad_tilt[i];
+        if a >= 0.0 {
+            f.push(t_range(a, 0.0, 29.0,
+                "pad " + names[i] + " tilt (deg) — pinned against its 30° cone " +
+                "limit, so the foot is no longer articulating"));
+        }
+    }
+
     print("[legs] ── results ──────────────────────────────────────────");
     print("[legs]   hull y      " + r2(s.hull_y) + " m");
     print("[legs]   hull tilt   " + r2(s.tilt) + " deg");
     print("[legs]   strut loads " + s.forces);
     print("[legs]   strut stroke " + s.strokes);
     print("[legs]   frame err   " + s.frame_err + " deg");
+    print("[legs]   pad tilt    " + s.pad_tilt + " deg");
     print("[legs]   peak strut  " + r2(s.peak_force) + " N");
 
     report_verdict(f, "LANDING LEGS", "LANDING_LEGS");
