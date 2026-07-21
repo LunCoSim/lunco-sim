@@ -85,6 +85,31 @@ pub struct AssetEntry {
     /// Optional post-processing step (resize, convert).
     #[serde(default)]
     pub process: Option<ProcessConfig>,
+    /// Every other key in the entry's table, kept verbatim.
+    ///
+    /// A dataset's DOMAIN metadata belongs with the declaration that produced
+    /// it — the Horizons query's `CENTER` describes those very bytes, and a
+    /// second file repeating it is a second thing to get wrong. But this crate
+    /// must not learn what a NAIF id is, so domain keys ride in a sub-table
+    /// (`[artemis2_vectors.ephemeris]`) that transport carries and never
+    /// interprets. The owning crate reads it back with
+    /// [`domain`](AssetEntry::domain).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
+}
+
+impl AssetEntry {
+    /// Deserialize this entry's `[<key>]` domain sub-table, if present.
+    ///
+    /// `None` when the entry declares no such sub-table; `Err` when it does but
+    /// the shape is wrong — a typo'd declaration must be loud, not ignored.
+    pub fn domain<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &str,
+    ) -> Option<Result<T, toml::de::Error>> {
+        let raw = self.extra.get(key)?.clone();
+        Some(raw.try_into())
+    }
 }
 
 /// Where a manifest entry's downloaded file lives on disk — the ONE
@@ -810,6 +835,7 @@ mod tests {
             shared: false,
             sha256: None,
             process: None,
+            extra: Default::default(),
         };
         let err = download_asset(&entry, "evil", Some(std::path::Path::new("/tmp")))
             .expect_err("traversal must be rejected");
@@ -829,6 +855,7 @@ mod tests {
             shared: false,
             sha256: None,
             process: None,
+            extra: Default::default(),
         };
 
         // Default: twin-local pool — the Twin stays self-contained.

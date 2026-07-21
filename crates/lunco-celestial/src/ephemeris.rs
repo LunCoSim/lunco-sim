@@ -30,32 +30,6 @@ pub struct CsvDataPoint {
     pub pos_au: EclipticAu,
 }
 
-/// A mission's `assets/missions/*.json`: which external bodies it introduces
-/// and where they belong in the gravitational hierarchy.
-///
-/// **Not a download spec.** Obtaining the vectors is declared in an
-/// `Assets.toml` and executed by `lunco-assets` (see
-/// `docs/architecture/56-asset-resolution-and-cache.md`). This file used to
-/// carry the full JPL-Horizons query too — `command`, `ref_plane`,
-/// `start_time`, `stop_time`, `step_size` — which the ephemeris crate
-/// interpolated into a URL at startup. That was the second copy of a fetch
-/// recipe and the reason the app phoned home on launch; both are gone.
-#[derive(Debug, Deserialize, Clone)]
-pub struct MissionConfig {
-    pub ephemeris_sources: Option<Vec<EphemerisSource>>,
-}
-
-/// One externally-sourced body: its NAIF id, and the centre it orbits.
-#[derive(Debug, Deserialize, Clone)]
-pub struct EphemerisSource {
-    /// NAIF id — the key the cached CSV (`target_<id>_*.csv`) is found by.
-    pub target_id: i32,
-    /// JPL `CENTER` string (`"500@399"`, `"@399"`, `"399"`) → the parent body.
-    /// Astronomy, not transport: without it a downloaded mission would be
-    /// placed heliocentrically.
-    pub center: String,
-}
-
 /// Abstract interface for any system providing spatial state over time.
 pub trait EphemerisProvider: Send + Sync + 'static {
     /// The position of a body relative to its parent.

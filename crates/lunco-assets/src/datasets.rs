@@ -121,6 +121,10 @@ pub struct DatasetEntry {
     pub path: PathBuf,
     /// Live status.
     pub state: DatasetState,
+    /// The full declaration, so the crate that owns this dataset can read its
+    /// own domain sub-table ([`AssetEntry::domain`]) — for an engine manifest
+    /// and a Twin's alike, without either of them re-reading the file.
+    pub spec: AssetEntry,
 }
 
 /// Cross-thread slot a download task writes its progress into.
@@ -133,9 +137,6 @@ type StatusSlot = Arc<Mutex<Option<DatasetState>>>;
 #[derive(Resource, Default)]
 pub struct DatasetRegistry {
     entries: Vec<DatasetEntry>,
-    /// Manifest entries kept alongside, so a download can be started later
-    /// without the registrant hanging on to the manifest.
-    specs: Vec<AssetEntry>,
     /// Per-entry status slot, written by the task, drained in `Update`.
     slots: Vec<StatusSlot>,
 }
@@ -196,8 +197,8 @@ impl DatasetRegistry {
                     DatasetState::Missing
                 },
                 path,
+                spec: entry,
             });
-            self.specs.push(entry);
             self.slots.push(Arc::new(Mutex::new(None)));
             added += 1;
         }
@@ -239,7 +240,6 @@ impl DatasetRegistry {
         while i < self.entries.len() {
             if &self.entries[i].scope == scope {
                 self.entries.remove(i);
-                self.specs.remove(i);
                 self.slots.remove(i);
             } else {
                 i += 1;
@@ -310,12 +310,8 @@ impl DatasetRegistry {
             bytes_total: 0,
         };
         let dest_root = self.entries[i].scope.dest_root();
-        spawn_download(
-            &self.entries[i],
-            &self.specs[i],
-            dest_root,
-            self.slots[i].clone(),
-        );
+        let spec = self.entries[i].spec.clone();
+        spawn_download(&self.entries[i], &spec, dest_root, self.slots[i].clone());
     }
 
     /// Start every missing dataset. Same authorisation rule as [`request`](Self::request).

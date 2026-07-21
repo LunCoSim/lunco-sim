@@ -21,11 +21,10 @@ use celestial_ephemeris::{Vsop2013Earth, Vsop2013Sun, planets::Vsop2013Emb, moon
 use celestial_core::Vector3;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use lunco_celestial::ephemeris::{
-    CsvDataPoint, EphemerisProvider, EphemerisResource, MissionConfig,
+    CsvDataPoint, EphemerisProvider, EphemerisResource,
 };
 
 /// Concrete implementation of the hybrid [`EphemerisProvider`].
@@ -107,118 +106,58 @@ fn parse_ephemeris_csv(text: &str) -> Vec<CsvDataPoint> {
     points
 }
 
-/// Read a mission's cached state vectors, if they are on disk.
+/// The `[<key>.ephemeris]` sub-table of a declared dataset: what the bytes are.
 ///
-/// Looks for `<cache>/ephemeris/target_<naif>_*.csv`. Matching on the NAIF id
-/// alone — rather than reconstructing the full `target_<id>_<start>_<stop>.csv`
-/// name — keeps the loader independent of the download's exact time range:
-/// the range is a property of the declared dataset (`Assets.toml`), not
-/// something the reader must guess. Newest file wins when several ranges are
-/// cached.
+/// Transport (`url`, `dest`, `sha256`) is `lunco-assets`' half of the same
+/// entry; this is ours. Keeping both in ONE declaration is what removed the old
+/// `assets/missions/*.ephemeris.json`, which restated the id and centre beside
+/// a second copy of the Horizons query — two files to keep in step, and the
+/// startup path that read them was where the app phoned home.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EphemerisDatasetMeta {
+    /// NAIF id these vectors describe.
+    pub naif_id: i32,
+    /// JPL `CENTER` of the query that produced them (`"500@399"`, `"@399"`,
+    /// `"399"`) — the body the positions are relative to. It is a property of
+    /// THESE bytes, not a scene choice: read it wrong and the body is placed
+    /// around the wrong parent.
+    pub center: String,
+}
+
+/// Parse a downloaded Horizons response into sorted vectors.
+///
+/// `None` when the file cannot be read or holds no usable rows — a present but
+/// unparseable file is reported, never silently treated as "no data".
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::disallowed_methods)]
-fn load_cached_vectors(target_id: i32) -> Option<Vec<CsvDataPoint>> {
-    let dir = lunco_assets::ephemeris_dir();
-    let prefix = format!("target_{target_id}_");
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension().map(|e| e == "csv").unwrap_or(false)
-                && p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with(&prefix))
-                    .unwrap_or(false)
-        })
-        .collect();
-    candidates.sort();
-    let path = candidates.pop()?;
-    let text = std::fs::read_to_string(&path).ok()?;
+fn read_vectors(path: &std::path::Path) -> Option<Vec<CsvDataPoint>> {
+    let text = std::fs::read_to_string(path).ok()?;
     let points = parse_ephemeris_csv(&text);
     if points.is_empty() {
         warn!(
-            "[ephemeris] {} parsed to zero usable vectors — the file is present but not a \
-             Horizons VECTORS response",
+            "[ephemeris] {} parsed to zero usable vectors — present, but not a Horizons \
+             VECTORS response",
             path.display()
         );
         return None;
     }
-    info!("[ephemeris] loaded {} vectors for NAIF {target_id}", points.len());
     Some(points)
 }
 
 impl CelestialEphemerisProvider {
-    /// Construct from local mission caches only. Never touches the network:
-    /// a mission whose dataset has not been downloaded simply has no
-    /// trajectory (see the crate's `Assets.toml`).
+    /// Analytic bodies only — VSOP/ELP plus the registry's parent tree.
+    ///
+    /// Mission vectors are DECLARED datasets and are added by
+    /// [`adopt_ephemeris_datasets`] once their files are on disk, so
+    /// construction reads no manifests, no JSON, and certainly no network.
     pub fn new() -> Self {
-        Self::load_local()
-    }
-
-    /// Discover missions in `assets/missions` and load whatever mission
-    /// vectors are already cached on disk.
-    ///
-    /// **No network I/O, ever.** Downloading a mission dataset is
-    /// `lunco-assets`' job (declared in this crate's `Assets.toml`, fetched on
-    /// an explicit user request); this crate only reads what is there and
-    /// reports what is not. A mission with no cached vectors is simply absent
-    /// from `custom_data` — `global_position` then answers `None` for it, which
-    /// is the honest result for "we do not have that trajectory".
-    ///
-    /// The mission JSON supplies the ASTRONOMY (which NAIF id, about which
-    /// centre); the download URL is no longer built here.
-    // `disallowed_methods` bans `std::fs` for its wasm failure mode. Unreachable
-    // here: the `read_dir` below returns `Err` on wasm, so the loop that owns
-    // every `read_to_string` never runs. The web target does not use this path at
-    // all — it constructs the provider via `new_with_embedded_ephemeris`, which
-    // takes the CSVs as data instead of reading them off a disk it does not have.
-    #[allow(clippy::disallowed_methods)]
-    fn load_local() -> Self {
-        let mut custom_data: HashMap<i32, Vec<CsvDataPoint>> = HashMap::new();
-        // The tree comes from the registry; missions add their own declared centre below.
-        let mut parents: HashMap<i32, i32> = parents_from_registry();
-        let missions_dir = lunco_assets::assets_dir().join("missions");
-
-        if let Ok(entries) = std::fs::read_dir(missions_dir) {
-            for entry in entries.flatten() {
-                if !entry.path().extension().map(|e| e == "json").unwrap_or(false) {
-                    continue;
-                }
-                let Ok(content) = std::fs::read_to_string(entry.path()) else { continue };
-                let Ok(config) = serde_json::from_str::<MissionConfig>(&content) else { continue };
-                let Some(sources) = config.ephemeris_sources else { continue };
-                for src in sources {
-                    // The centre is astronomy and applies whether or not the
-                    // vectors are cached: without it a later download would
-                    // land in a provider that thinks the mission orbits the Sun.
-                    match parse_center(&src.center) {
-                        Some(parent) => { parents.insert(src.target_id, parent); }
-                        None => warn!(
-                            "[ephemeris] mission {} has an unparseable center '{}' — it \
-                             will be treated as heliocentric, which is almost certainly \
-                             not what you meant",
-                            src.target_id, src.center
-                        ),
-                    }
-                    match load_cached_vectors(src.target_id) {
-                        Some(points) => { custom_data.insert(src.target_id, points); }
-                        None => info!(
-                            "[ephemeris] NAIF {} has no cached vectors — download it from \
-                             Settings ▸ Downloadable data (nothing is fetched automatically)",
-                            src.target_id
-                        ),
-                    }
-                }
-            }
-        }
-
         Self {
             _sun: Vsop2013Sun,
             earth: Vsop2013Earth::new(),
             emb: Vsop2013Emb,
             moon: ElpMpp02Moon::new(),
-            custom_data: Arc::new(RwLock::new(custom_data)),
-            parents: Arc::new(RwLock::new(parents)),
+            custom_data: Arc::new(RwLock::new(HashMap::new())),
+            parents: Arc::new(RwLock::new(parents_from_registry())),
         }
     }
 
@@ -546,25 +485,29 @@ pub struct EphemerisPlugin;
 
 impl Plugin for EphemerisPlugin {
     fn build(&self, app: &mut App) {
-        // Local caches only. Downloading is `lunco-assets`' concern: this crate
-        // DECLARES its datasets (`Assets.toml`) and REPORTS what it managed to
-        // load. It owns no URL, no socket, and no task.
-        let provider = CelestialEphemerisProvider::load_local();
-        // Handle onto the same map the provider reads, so vectors downloaded
-        // mid-session reach `position()` without a restart. The trait is
+        // Analytic bodies now; mission datasets when their files exist.
+        // Downloading is `lunco-assets`' concern — this crate DECLARES
+        // (`Assets.toml`) and REPORTS. It owns no URL, no socket, no task.
+        let provider = CelestialEphemerisProvider::new();
+        // Handle onto the same maps the provider reads, so a dataset that
+        // arrives later reaches `position()` without a restart. The trait is
         // read-only by design (a provider answers questions, it is not a
         // store), so the writable side is held here rather than widened there.
-        app.insert_resource(EphemerisVectors(provider.custom_data.clone()));
+        app.insert_resource(EphemerisVectors {
+            data: provider.custom_data.clone(),
+            parents: provider.parents.clone(),
+        });
         app.insert_resource(EphemerisResource {
             provider: Arc::new(provider),
         });
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // Register the declaration, then adopt the file if a user
-            // downloads it mid-session.
+            // Declare, then adopt: whatever is already cached is picked up on
+            // the first `Update`, and anything downloaded later on the frame
+            // the registry reports it installed. One code path for both.
             app.add_systems(Startup, register_ephemeris_datasets);
-            app.add_systems(Update, adopt_downloaded_ephemeris);
+            app.add_systems(Update, adopt_ephemeris_datasets);
         }
     }
 }
@@ -583,62 +526,95 @@ fn register_ephemeris_datasets(
     registry.register(include_str!("../Assets.toml"), "ephemeris");
 }
 
-/// Pick up mission vectors that arrived after launch.
+/// Adopt every ephemeris dataset whose file is on disk — cached from an earlier
+/// run, downloaded a moment ago, or shipped inside an open Twin.
 ///
-/// The registry reports `Installed`; this reads the file and inserts the parsed
-/// points into the live provider, so a mission's trajectory appears without a
-/// restart. Runs only on the frame a dataset flips state — the guard is the
-/// `Installed`-but-not-yet-loaded pair, not a per-frame directory scan.
+/// Everything it needs is in the ONE declaration: `path` (where transport put
+/// the bytes) and `[<key>.ephemeris]` (what they are). No directory scan, no
+/// filename convention to reverse-engineer, no mission JSON.
+///
+/// The parent is registered even when the file is absent: it is astronomy, and
+/// without it a later download would land in a provider that thinks the
+/// spacecraft orbits the Sun.
 #[cfg(not(target_arch = "wasm32"))]
-fn adopt_downloaded_ephemeris(
+fn adopt_ephemeris_datasets(
     registry: Option<Res<lunco_assets::datasets::DatasetRegistry>>,
     vectors: Option<Res<EphemerisVectors>>,
-    mut adopted: Local<std::collections::HashSet<String>>,
+    mut seen: Local<std::collections::HashSet<String>>,
 ) {
     let (Some(registry), Some(vectors)) = (registry, vectors) else {
         return;
     };
     for entry in registry.entries() {
-        if entry.group != "ephemeris" || !entry.state.is_installed() {
-            continue;
-        }
-        if !adopted.insert(entry.key.clone()) {
-            continue;
-        }
-        // The NAIF id is in the declared destination filename
-        // (`target_<naif>_…csv`) — the same name the loader scans for.
-        let Some(target_id) = naif_from_dataset_path(&entry.path) else {
-            warn!(
-                "[ephemeris] dataset '{}' does not name a NAIF id in its `dest` \
-                 (expected `ephemeris/target_<id>_….csv`) — cannot adopt it",
-                entry.key
-            );
-            continue;
+        let Some(meta) = entry.spec.domain::<EphemerisDatasetMeta>("ephemeris") else {
+            continue; // not ours
         };
-        let Some(points) = load_cached_vectors(target_id) else { continue };
+        let meta = match meta {
+            Ok(m) => m,
+            Err(e) => {
+                // Loud: a typo'd declaration would otherwise mean a body that
+                // silently never appears.
+                if seen.insert(format!("bad:{}", entry.key)) {
+                    error!(
+                        "[ephemeris] dataset '{}' has a malformed [ephemeris] table: {e}",
+                        entry.key
+                    );
+                }
+                continue;
+            }
+        };
+
+        if seen.insert(format!("parent:{}", entry.key)) {
+            match parse_center(&meta.center) {
+                Some(parent) => {
+                    vectors
+                        .parents
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(meta.naif_id, parent);
+                }
+                None => error!(
+                    "[ephemeris] dataset '{}' has an unparseable center '{}' — NAIF {} would \
+                     be placed heliocentrically, so it is left out entirely",
+                    entry.key, meta.center, meta.naif_id
+                ),
+            }
+        }
+
+        if !entry.state.is_installed() {
+            if seen.insert(format!("absent:{}", entry.key)) {
+                info!(
+                    "[ephemeris] NAIF {} has no cached vectors — download '{}' from \
+                     Settings ▸ Downloadable data (nothing is fetched automatically)",
+                    meta.naif_id, entry.key
+                );
+            }
+            continue;
+        }
+        if !seen.insert(format!("loaded:{}", entry.key)) {
+            continue;
+        }
+        let Some(points) = read_vectors(&entry.path) else { continue };
+        info!(
+            "[ephemeris] loaded {} vectors for NAIF {} from dataset '{}'",
+            points.len(),
+            meta.naif_id,
+            entry.key
+        );
         vectors
-            .0
+            .data
             .write()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(target_id, points);
-        info!("[ephemeris] adopted downloaded dataset '{}' (NAIF {target_id})", entry.key);
+            .insert(meta.naif_id, points);
     }
 }
 
-/// Writable handle onto the provider's mission-vector map — the only way a
-/// dataset downloaded after launch becomes visible to `position()`.
+/// Writable handles onto the provider's mission maps — the only way a dataset
+/// that arrives after construction becomes visible to `position()`.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
-struct EphemerisVectors(Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>);
-
-/// `…/target_-1024_2026-04-02_0159_….csv` → `-1024`.
-#[cfg(not(target_arch = "wasm32"))]
-fn naif_from_dataset_path(path: &std::path::Path) -> Option<i32> {
-    path.file_name()?
-        .to_str()?
-        .strip_prefix("target_")?
-        .split('_')
-        .next()?
-        .parse()
-        .ok()
+struct EphemerisVectors {
+    data: Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>,
+    parents: Arc<RwLock<HashMap<i32, i32>>>,
 }
+

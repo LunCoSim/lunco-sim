@@ -22,3 +22,12 @@
 name = "Artemis II state vectors (JPL Horizons, NAIF -1024)"
 url = "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='-1024'&OBJ_DATA='NO'&MAKE_EPHEM='YES'&EPHEM_TYPE='VECTORS'&CENTER='500%40399'&REF_PLANE='ECLIPTIC'&START_TIME='2026-04-02%2001%3A59'&STOP_TIME='2026-04-11%2000%3A01'&STEP_SIZE='10m'&CSV_FORMAT='YES'"
 dest = "ephemeris/target_-1024_2026-04-02_0159_2026-04-11_0001.csv"
+
+# WHAT these bytes are, read by `lunco-celestial-ephemeris` and ignored by the
+# downloader. It lives here because it describes THIS product: `center` is the
+# `CENTER=` of the query above, so the two can never drift. There used to be a
+# second file (`assets/missions/*.ephemeris.json`) repeating the id and centre
+# next to a duplicate copy of the query — deleted.
+[artemis2_vectors.ephemeris]
+naif_id = -1024
+center = "500@399"          # → parent body 399 (Earth)

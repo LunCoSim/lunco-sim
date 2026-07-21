@@ -6999,7 +6999,7 @@ dependencies = [
  "lunco-assets",
  "lunco-celestial",
  "lunco-storage",
- "serde_json",
+ "serde",
 ]
 
 [[package]]
