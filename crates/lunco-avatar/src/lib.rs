@@ -1031,6 +1031,94 @@ fn collect_subtree(root: Entity, q_children: &Query<&Children>, out: &mut Vec<En
     }
 }
 
+/// Every avian joint type as one connectivity view — the spring arm needs to know
+/// what is *attached* to the vessel, not merely what is parented under it.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct VesselJoints<'w, 's> {
+    revolute: Query<'w, 's, &'static avian3d::prelude::RevoluteJoint>,
+    fixed: Query<'w, 's, &'static avian3d::prelude::FixedJoint>,
+    prismatic: Query<'w, 's, &'static avian3d::prelude::PrismaticJoint>,
+    spherical: Query<'w, 's, &'static avian3d::prelude::SphericalJoint>,
+    distance: Query<'w, 's, &'static avian3d::prelude::DistanceJoint>,
+}
+
+impl VesselJoints<'_, '_> {
+    /// Undirected adjacency over every joint edge in the world.
+    ///
+    /// Built once per call and indexed, not rescanned per BFS step — the walk is
+    /// then O(edges + members) instead of O(members × edges).
+    fn adjacency(&self) -> bevy::platform::collections::HashMap<Entity, Vec<Entity>> {
+        let mut adj: bevy::platform::collections::HashMap<Entity, Vec<Entity>> =
+            bevy::platform::collections::HashMap::default();
+        let mut link = |a: Entity, b: Entity| {
+            adj.entry(a).or_default().push(b);
+            adj.entry(b).or_default().push(a);
+        };
+        self.revolute.iter().for_each(|j| link(j.body1, j.body2));
+        self.fixed.iter().for_each(|j| link(j.body1, j.body2));
+        self.prismatic.iter().for_each(|j| link(j.body1, j.body2));
+        self.spherical.iter().for_each(|j| link(j.body1, j.body2));
+        self.distance.iter().for_each(|j| link(j.body1, j.body2));
+        adj
+    }
+}
+
+/// [`vessel_collision_exclusions`] against a `&mut World`, for tests.
+///
+/// The system form takes `SystemParam` queries, which a test would otherwise have
+/// to build a whole schedule to obtain; this runs the identical code path through a
+/// one-shot system so the test pins the real behaviour, not a re-implementation.
+pub fn vessel_collision_exclusions_for_test(world: &mut World, target: Entity) -> Vec<Entity> {
+    let mut sys = bevy::ecs::system::IntoSystem::into_system(
+        move |q_children: Query<&Children>, joints: VesselJoints| {
+            vessel_collision_exclusions(target, &q_children, &joints)
+        },
+    );
+    sys.initialize(world);
+    sys.run((), world).expect("exclusion query cannot fail — it only reads")
+}
+
+/// Everything the spring arm must NOT collide with while following `target`: the
+/// possessed vessel itself, its ECS subtree, and every body joined to it —
+/// transitively — plus each of those bodies' own subtrees.
+///
+/// The subtree alone is not the vessel. A physical rover is a JOINTED ASSEMBLY:
+/// the chassis carries the `RigidBody` the camera follows, and each wheel is its
+/// own dynamic body held on by a revolute + prismatic pair. Whether a wheel ends
+/// up parented under the chassis or as a sibling under the grid is a physics
+/// detail (a dynamic body's `Transform` is a writeback target), and it changed
+/// per drivetrain — so a subtree-only exclusion let the arm's ray hit the
+/// vessel's own wheels. The hit pulled `target_len` to nearly zero and the camera
+/// dropped inside the rover it was meant to be looking at.
+///
+/// Joint connectivity is what "part of this vehicle" actually means, and it is
+/// the same set `rescue_overturned_vessels` moves as a unit for the same reason.
+fn vessel_collision_exclusions(
+    target: Entity,
+    q_children: &Query<&Children>,
+    joints: &VesselJoints,
+) -> Vec<Entity> {
+    let adj = joints.adjacency();
+    // BFS the joint-connected component containing the target.
+    let mut members = vec![target];
+    let mut seen = bevy::platform::collections::HashSet::from([target]);
+    let mut queue = std::collections::VecDeque::from([target]);
+    while let Some(e) = queue.pop_front() {
+        for &n in adj.get(&e).into_iter().flatten() {
+            if seen.insert(n) {
+                members.push(n);
+                queue.push_back(n);
+            }
+        }
+    }
+    // Each member's own descendants carry the actual collider prims.
+    let mut out = members.clone();
+    for m in members {
+        collect_subtree(m, q_children, &mut out);
+    }
+    out
+}
+
 /// Position follows the target; [`FollowAttitude`] selects how orientation is
 /// derived (heading-lock, world-locked survey, or full-attitude cockpit). Shared by
 /// the fixed-step [`spring_arm_system`] (running) and the render-rate
@@ -1053,6 +1141,7 @@ fn update_spring_arm_impl(
     defaults: &CameraDefaults,
     keys: &ButtonInput<KeyCode>,
     spatial_query: &Option<avian3d::prelude::SpatialQuery>,
+    joints: &VesselJoints,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
 
@@ -1153,14 +1242,9 @@ fn update_spring_arm_impl(
         // Mask out the TRIGGER layer so the camera doesn't clip on invisible
         // trigger-zone sensors (waypoints etc.).
         //
-        // The exclusion set is the target's WHOLE SUBTREE, not just its root. On a
-        // USD vessel the root carries the RigidBody but the colliders are child
-        // prims (chassis, wheels), so excluding the root alone left the arm's ray
-        // hitting the rover's own body ~0.5 m out — `target_len` collapsed to ~0 and
-        // the camera sank into/under the rover on possess. Same set autopilot builds
-        // for its own casts (`lunco-autopilot/src/lib.rs:1508`).
-        let mut excluded = vec![arm.target];
-        collect_subtree(arm.target, &q_children, &mut excluded);
+        // The exclusion set is the whole JOINTED VESSEL — see
+        // `vessel_collision_exclusions`.
+        let excluded = vessel_collision_exclusions(arm.target, &q_children, joints);
         let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(excluded);
         filter.mask = avian3d::prelude::LayerMask(!lunco_core::TRIGGER_COLLISION_LAYER);
         let hit = if let Some(ref sq) = spatial_query {
@@ -1232,6 +1316,7 @@ fn spring_arm_system(
     defaults: Res<CameraDefaults>,
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
+    joints: VesselJoints,
 ) {
     update_spring_arm_impl(
         time.delta_secs(),
@@ -1243,6 +1328,7 @@ fn spring_arm_system(
         &defaults,
         &keys,
         &spatial_query,
+        &joints,
     );
 }
 
@@ -1268,6 +1354,7 @@ fn spring_arm_paused_system(
     defaults: Res<CameraDefaults>,
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
+    joints: VesselJoints,
 ) {
     update_spring_arm_impl(
         time_real.delta_secs(),
@@ -1279,6 +1366,7 @@ fn spring_arm_paused_system(
         &defaults,
         &keys,
         &spatial_query,
+        &joints,
     );
 }
 

@@ -153,10 +153,10 @@ impl EngineParams {
                 },
                 EngineParam {
                     name: "hf_size",
-                    ty: ParamType::F32,
+                    ty: ParamType::Vec2,
                     source: Runtime,
                     prop_fillable: false,
-                    doc: "Heightfield extent in metres (terrain shaders).",
+                    doc: "Heightfield extent in metres, X and Z (terrain shaders).",
                 },
                 EngineParam {
                     name: "hf_res",

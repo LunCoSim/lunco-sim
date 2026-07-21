@@ -875,10 +875,9 @@ pub fn draw_waypoint_overlay(
     let cam_world = lunco_core::coords::world_position(cam_entity, &q_parents, &q_grids, &q_spatial)
         .unwrap_or(bevy::math::DVec3::ZERO);
 
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("waypoint_overlay"),
-    ));
+    // Under the chrome, over the 3D — see `billboard_overlay::world_overlay_layer`.
+    let painter =
+        ctx.layer_painter(super::billboard_overlay::world_overlay_layer("waypoint_overlay"));
 
     let primary_selected = selected.primary();
     let possessed_vessel = q_avatar_cam

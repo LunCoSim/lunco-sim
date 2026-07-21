@@ -832,9 +832,10 @@ fn dem_build_from_baked(
 #[cfg(target_arch = "wasm32")]
 fn layer_contributions(
     stack: Option<&crate::terrain_layers::TerrainLayerStack>,
-    half_extent: f32,
+    base: &lunco_obstacle_field::field::HeightGrid,
     curvature_radius: Option<f64>,
 ) -> Vec<crate::oracle::HeightContribution> {
+    let half_extent = base.half_extent;
     let mut contributions: Vec<_> = stack
         .map(|s| {
             s.0.iter()
@@ -844,7 +845,11 @@ fn layer_contributions(
         })
         .unwrap_or_default();
     if let Some(r) = curvature_radius {
-        contributions.push(crate::oracle::curvature_contribution(r, half_extent));
+        contributions.push(crate::oracle::curvature_contribution(
+            r,
+            half_extent,
+            base.border_datum(),
+        ));
     }
     contributions
 }
@@ -1145,7 +1150,10 @@ fn start_dem_builds(
             let mut contributions: Vec<_> =
                 layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
             if let Some(r) = curvature_radius {
-                contributions.push(crate::oracle::curvature_contribution(r, half_extent));
+                // Datum from the pristine raster (`base_grid`), before the stamp
+                // pass above — see `spawn_restamp_task` for why.
+                let datum = base_grid.border_datum();
+                contributions.push(crate::oracle::curvature_contribution(r, half_extent, datum));
             }
             let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
                 std::sync::Arc::new(tile),
@@ -1374,7 +1382,7 @@ fn finish_dem_worker(
         };
         match (reply.stage, reply.grid) {
             (lunco_terrain_bake::BakeStage::Coarse, Ok(grid)) => {
-                let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent, curvature_radius);
+                let contributions = layer_contributions(stacks.get(entity).ok(), &grid, curvature_radius);
                 let baked = BakedGrid {
                     base_grid: grid.clone(),
                     grid,
@@ -1411,7 +1419,7 @@ fn finish_dem_worker(
                     });
                 }
                 // Re-compose the analytic oracle on the worker's full bare grid.
-                let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent, curvature_radius);
+                let contributions = layer_contributions(stacks.get(entity).ok(), &grid, curvature_radius);
                 if let Ok((mut hf, tiles, pending, has_static_mesh)) = swap_q.get_mut(entity) {
                     let base = std::sync::Arc::new(grid);
                     // D9: the ONLY `DemBaseGrid` insert is `assemble_dem_build`, and on
@@ -1623,7 +1631,10 @@ fn spawn_restamp_task(
         let mut contributions: Vec<_> =
             layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
         if let Some(r) = curvature_radius {
-            contributions.push(crate::oracle::curvature_contribution(r, half_extent));
+            // The PRISTINE base decides the datum — a stamped pit or a flattened
+            // pad must not move the plain the apron feathers to.
+            let datum = base_grid.border_datum();
+            contributions.push(crate::oracle::curvature_contribution(r, half_extent, datum));
         }
         let oracle = if layers.iter().any(|l| l.stamps()) {
             // A stamp mutates the raster → a genuinely new grid, so its key must be

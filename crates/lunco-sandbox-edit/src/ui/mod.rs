@@ -274,10 +274,17 @@ impl Plugin for SandboxEditUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (
-                    checkpoint_click::draw_waypoint_overlay,
-                    // USD-authored labels (`lunco:billboard`). Paint-only, same
-                    // pass for the same reason.
-                    billboard_overlay::draw_billboard_overlay,
+                    // The two WORLD overlays paint into `Order::Background` and must
+                    // register their layer BEFORE the workbench builds its chrome in
+                    // that same order — that is what puts the dock in front of them
+                    // instead of a waypoint label in front of the Inspector. See
+                    // `billboard_overlay::world_overlay_layer`.
+                    (
+                        checkpoint_click::draw_waypoint_overlay,
+                        // USD-authored labels (`lunco:billboard`).
+                        billboard_overlay::draw_billboard_overlay,
+                    )
+                        .before(lunco_workbench::WorkbenchRenderSet),
                     checkpoint_click::draw_waypoint_context_menu,
                     // Crosshair + Esc-to-cancel while a placement is armed.
                     checkpoint_click::handle_waypoint_placement_mode,
