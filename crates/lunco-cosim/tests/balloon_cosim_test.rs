@@ -163,7 +163,6 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     ));
 
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
-
     // Co-sim systems (propagate_connections + apply_sim_forces) live in FixedUpdate.
     app.add_plugins(CoSimPlugin);
     // Headless Modelica worker (no UI panels, no bevy_egui).
@@ -205,6 +204,12 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     // a short real-time sleep until the balloon receives its SimComponent
     // (meaning compile result arrived and `setup_balloon_wires` ran), or we
     // hit a timeout.
+    // avian and the Modelica worker both register types/messages in
+    // `finish`/`cleanup`; a hand-driven `app.update()` loop never triggers them,
+    // and the first step then dies on parameter validation inside the compute pool.
+    app.finish();
+    app.cleanup();
+
     let mut compiled = false;
     for i in 0..300 {
         app.update();

@@ -177,7 +177,15 @@ impl Plugin for CoSimPlugin {
                 // locally-derived forces to them fights the snapshot stream.
                 avian::apply_pending_forces
                     .in_set(systems::apply_forces::CosimSet::ApplyForces)
-                    .run_if(lunco_physics::physics_is_live)
+                    // `resource_exists` FIRST, for the same reason the sensors
+                    // below carry it: `physics_is_live` reads `Res<Time<Physics>>`
+                    // unconditionally, so without avian the run condition itself
+                    // hard-errors instead of gating. Headless cosim with no avian
+                    // then skips force application, which is the intent.
+                    .run_if(
+                        resource_exists::<Time<avian3d::prelude::Physics>>
+                            .and(lunco_physics::physics_is_live),
+                    )
                     .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
                         // Absent role (single-player, headless tests) → run.
                         // Only a present `Client` role gates it off.

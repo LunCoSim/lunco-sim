@@ -44,7 +44,9 @@ fn test_rover_loading_physics() {
     // the arcs are satisfying.
     let usda_content = r#"#usda 1.0
 def Xform "Rover" {
-    def Cube "Chassis" {
+    def Cube "Chassis" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    ) {
         bool physics:rigidBodyEnabled = true
         float physics:mass = 500.0
     }

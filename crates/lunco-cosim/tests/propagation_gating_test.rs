@@ -34,8 +34,17 @@ use lunco_cosim::{ports::PORT_NAME, CoSimPlugin, SimConnection};
 fn app_with_role(role: Option<lunco_core::NetworkRole>) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
+        .add_plugins(AssetPlugin::default())
+        // avian's `bevy_diagnostic` feature registers collider-tree diagnostics,
+        // whose resource `DiagnosticsPlugin` owns. `MinimalPlugins` omits it, and
+        // the missing resource kills the run on the first step that moves an AABB.
+        .add_plugins(bevy::diagnostic::DiagnosticsPlugin)
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(CoSimPlugin)
+        // avian's collider cache reads `AssetEvent<Mesh>`; without the asset
+        // registered, `clear_unused_colliders` fails parameter validation on the
+        // first step and the run dies inside the compute pool.
+        .init_asset::<Mesh>()
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         // One update advances well past a single fixed tick.
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -44,6 +53,12 @@ fn app_with_role(role: Option<lunco_core::NetworkRole>) -> App {
     if let Some(role) = role {
         app.insert_resource(role);
     }
+    // avian registers its types, messages and diagnostics resources in
+    // `finish`/`cleanup`, which a hand-driven `app.update()` loop never triggers
+    // on its own. Without them the first step dies on parameter validation inside
+    // the compute pool, which reads as a physics failure rather than a setup one.
+    app.finish();
+    app.cleanup();
     app
 }
 
@@ -85,6 +100,7 @@ fn client_propagates_into_owned_locally_target() {
     );
 
     app.update();
+    app.update();
 
     assert_eq!(
         value_of(&app, target),
@@ -106,6 +122,7 @@ fn client_propagates_into_never_replicated_target() {
     let target = wire_ports(&mut app, ());
 
     app.update();
+    app.update();
 
     assert_eq!(
         value_of(&app, target),
@@ -124,6 +141,7 @@ fn client_skips_replicated_only_target() {
     let mut app = app_with_role(Some(lunco_core::NetworkRole::Client));
     let target = wire_ports(&mut app, lunco_core::NetReplicate);
 
+    app.update();
     app.update();
 
     assert_eq!(
@@ -145,6 +163,7 @@ fn client_propagates_into_predicted_dynamic_target() {
     );
 
     app.update();
+    app.update();
 
     assert_eq!(value_of(&app, target), 7.0);
 }
@@ -156,6 +175,7 @@ fn host_propagates_into_replicated_target() {
     let mut app = app_with_role(Some(lunco_core::NetworkRole::Host));
     let target = wire_ports(&mut app, lunco_core::NetReplicate);
 
+    app.update();
     app.update();
 
     assert_eq!(value_of(&app, target), 7.0);
