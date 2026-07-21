@@ -698,8 +698,23 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         }
 
+        // Every `*.usda` that lives in a `scenes/` folder — in the engine
+        // library AND in each open Twin.
+        //
+        // This used to be `rel.starts_with("scenes/")`, which is the engine
+        // library's layout and ONLY the engine library's. A Twin keeps its
+        // scenes under `sim/scenes/`, so opening a Twin and looking for its
+        // scenarios in the Scenarios menu found nothing — the twin whose scene
+        // was on screen right then was not in the list of things you could
+        // load. Match on the path SEGMENT instead, so a scene is a scene
+        // wherever its project chooses to keep it.
         let mut assets = lunco_assets::discovery::list_usd_assets(manifest, roots);
-        assets.retain(|asset| asset.rel.starts_with("scenes/"));
+        // Names copied out here: `roots`/`manifest` borrow the world, and every
+        // click below needs `&mut World` to trigger the load.
+        let twin_names = roots.names();
+        assets.retain(|asset| {
+            asset.rel.split('/').any(|seg| seg == "scenes")
+        });
         assets.sort_by(|a, b| a.stem.cmp(&b.stem));
 
         if assets.is_empty() {
@@ -708,32 +723,36 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     .weak()
                     .italics(),
             );
-        } else {
-            // Each scene's `lunco:description`, straight from the catalogue's
-            // metadata store — the scan already read and parsed every project
-            // `*.usda`, so re-reading them here would be a second parse of the
-            // same default prim of the same file. (It used to be exactly that:
-            // a `SceneDescCache` that lazily re-parsed on first hover.)
-            //
-            // The store fills asynchronously, so a scene not yet read simply
-            // shows no tooltip this frame and gets one on the next redraw.
-            let descs: Vec<Option<String>> = {
-                let store = world.resource::<lunco_sandbox_edit::catalog::AssetMetaStore>();
-                assets
-                    .iter()
-                    .map(|a| store.description(&a.asset_path).map(str::to_string))
-                    .collect()
-            };
+            return;
+        }
 
-            for (asset, desc) in assets.into_iter().zip(descs) {
+        // Each scene's `lunco:description`, straight from the catalogue's
+        // metadata store — the scan already read and parsed every project
+        // `*.usda`, so re-reading them here would be a second parse of the
+        // same default prim of the same file. (It used to be exactly that:
+        // a `SceneDescCache` that lazily re-parsed on first hover.)
+        //
+        // The store fills asynchronously, so a scene not yet read simply
+        // shows no tooltip this frame and gets one on the next redraw.
+        let descs: Vec<Option<String>> = {
+            let store = world.resource::<lunco_sandbox_edit::catalog::AssetMetaStore>();
+            assets
+                .iter()
+                .map(|a| store.description(&a.asset_path).map(str::to_string))
+                .collect()
+        };
+
+        let mut render = |ui: &mut bevy_egui::egui::Ui,
+                          world: &mut World,
+                          items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
+            for (asset, desc) in items {
                 let label = clean_scene_name(&asset.stem);
                 let resp = ui.button(label);
                 // Show the plain-language "what is this demo" blurb on hover.
                 // `on_hover_text` consumes and returns the `Response` (chaining API).
-                let resp = if let Some(d) = desc {
-                    resp.on_hover_text(d)
-                } else {
-                    resp
+                let resp = match desc {
+                    Some(d) => resp.on_hover_text(d.as_str()),
+                    None => resp,
                 };
                 if resp.clicked() {
                     world.trigger(lunco_usd::LoadScene {
@@ -743,6 +762,33 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     ui.close();
                 }
             }
+        };
+
+        let paired: Vec<(&lunco_assets::discovery::AssetFile, &Option<String>)> =
+            assets.iter().zip(descs.iter()).collect();
+
+        // Open Twins FIRST, one group each, expanded: the twin you have open is
+        // the project you are working in, and its scenarios are what you came to
+        // the menu for. The engine library is the reference collection below it.
+        for name in &twin_names {
+            let group: Vec<_> = paired
+                .iter()
+                .copied()
+                .filter(|(a, _)| a.twin.as_deref() == Some(name.as_str()))
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            bevy_egui::egui::CollapsingHeader::new(format!("🌍 {name}  ({})", group.len()))
+                .default_open(true)
+                .show(ui, |ui| render(ui, world, &group));
+        }
+
+        let library: Vec<_> = paired.iter().copied().filter(|(a, _)| a.twin.is_none()).collect();
+        if !library.is_empty() {
+            bevy_egui::egui::CollapsingHeader::new(format!("📚 Library  ({})", library.len()))
+                .default_open(twin_names.is_empty())
+                .show(ui, |ui| render(ui, world, &library));
         }
     });
 }

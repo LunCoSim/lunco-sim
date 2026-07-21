@@ -312,7 +312,15 @@ impl Plugin for CelestialPlugin {
 
         // Camera-driven cube-sphere LOD: streams each body's tiles (replaces the
         // old fixed 24-tile shell). See `crate::globe_lod`.
-        app.add_systems(Update, globe_lod::update_globe_lod);
+        //
+        // A body's LOOK is content: if the scene bound a Material to the body's
+        // prim, the ordinary USD → `ShaderLook` path authored it there and this
+        // carries it onto the globe. Ordered before the LOD so an adopted look
+        // and the tiles that carry it land in the same frame.
+        app.add_systems(
+            Update,
+            (big_space_setup::adopt_authored_body_look, globe_lod::update_globe_lod).chain(),
+        );
 
         // Site-anchored scenes: hand the DEM terrain the body radius so it
         // curves onto the globe sphere (see `placement::sync_terrain_body_curvature`).

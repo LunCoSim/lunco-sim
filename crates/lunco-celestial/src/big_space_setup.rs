@@ -89,19 +89,68 @@ use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialB
 use crate::gravity::PointMassGravity;
 use lunco_environment::GravityProvider;
 use crate::soi::SOI;
-use lunco_materials::{ParamValue, ShaderLook, TextureLayer};
+use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SceneCamera};
 
-/// Build the blueprint-grid [`ShaderLook`] for a celestial body's tiles: planet
-/// imagery (the `Albedo` layer) tinted by `surface`, with the lat/long grid overlay
-/// (`transition = 0`, the spherical mode of `blueprint.wgsl`).
+/// Earth with no imagery: ocean blue. This is the DEFAULT appearance, not a
+/// degraded one — see the note where the globes are built.
+const EARTH_BODY_COLOR: [f32; 3] = [0.13, 0.32, 0.66];
+/// The Moon with no imagery: regolith grey.
+const MOON_BODY_COLOR: [f32; 3] = [0.5, 0.5, 0.5];
+
+/// Adopt a look AUTHORED on the body's prim onto its globe tiles.
+///
+/// A celestial body is spawned in Rust (its radius, GM and rotation are physics,
+/// not art), but how it LOOKS is content. `lunco_usd_sim::shader` already turns a
+/// `UsdShade` Material binding on any prim into a [`ShaderLook`] — the same path
+/// the terrain layer maps and every prop use. This carries that look from the
+/// declaring prim to the globe it declared, so a scene that wants Earth imagery
+/// binds a Material with an `inputs:albedo_map`, and a scene that does not gets
+/// the body colour. No hardcoded texture path, no missing-file fallback to code.
+pub fn adopt_authored_body_look(
+    q_decl: Query<(&crate::CelestialBodyDecl, &ShaderLook), Changed<ShaderLook>>,
+    mut q_globes: Query<(
+        &crate::registry::CelestialBody,
+        &mut crate::globe_lod::GlobeLod,
+        &mut crate::globe_lod::GlobeTiles,
+    )>,
+    mut commands: Commands,
+) {
+    for (decl, look) in &q_decl {
+        for (body, mut lod, mut tiles) in &mut q_globes {
+            if body.ephemeris_id != decl.naif {
+                continue;
+            }
+            lod.look = look.clone();
+            // Resident tiles carry the OLD look (it is cloned onto each at
+            // spawn). Drop them; `update_globe_lod` re-spawns the same set with
+            // the new one on the next frame.
+            for (_, e) in tiles.resident.drain() {
+                commands.entity(e).try_despawn();
+            }
+            for (e, _) in tiles.retiring.drain(..) {
+                commands.entity(e).try_despawn();
+            }
+            info!("[celestial] body {} adopted the look authored on its prim", decl.naif);
+        }
+    }
+}
+
+/// A celestial body's default tile look: its own colour under the lat/long
+/// graticule (`transition = 0`, the spherical mode of `blueprint.wgsl`), with NO
+/// imagery bound. The shader multiplies `surface_color` by the albedo sample and
+/// an unbound albedo slot reads Bevy's white fallback, so this renders as
+/// `surface_color` exactly — which is why a body with no texture is a blue Earth
+/// or a grey Moon rather than a white ball.
+///
+/// Imagery is not built here at all: a scene that has some binds a Material to
+/// the body prim and [`adopt_authored_body_look`] carries it over.
 ///
 /// Appearance **intent** only — `lunco-render-bevy` turns it into the real
 /// `ShaderMaterial` (see `docs/architecture/render-decoupling.md`). Identical looks
 /// share one material, so a body's whole tile set is still ONE material and one bind
 /// group, exactly as the single hand-threaded handle used to guarantee.
-fn blueprint_tile_look(
-    texture: Handle<Image>,
+fn blueprint_tile_look_untextured(
     surface: [f32; 3],
     line: [f32; 3],
     subdivisions: [f32; 2],
@@ -109,7 +158,6 @@ fn blueprint_tile_look(
     roughness: f32,
 ) -> ShaderLook {
     ShaderLook::new("shaders/blueprint.wgsl")
-        .with_texture(TextureLayer::Albedo, texture)
         .with("surface_color", ParamValue::Vec3(surface))
         .with("roughness", ParamValue::F32(roughness))
         .with("high_line_color", ParamValue::Vec3(line))
@@ -208,7 +256,7 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     config: Res<crate::CelestialConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
-    asset_server: Res<AssetServer>,
+    // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
     // The single world-shell root (WorldShellPlugin) to nest under, and any prior
     // FloatingOrigin holder (the shell's OriginAnchor) the Observer Camera claims.
     q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
@@ -230,27 +278,21 @@ pub fn setup_big_space_hierarchy(
         toggles.set("obstacle-field", false);
         info!("celestial takeover: obstacle-field subsystem defaulted OFF (site-anchored scene)");
     }
-    // Earth/Moon textures load from the `cached_textures://` source on EVERY
-    // platform — NOT baked into the binary. Desktop reads the cache dir; wasm
-    // HTTP-fetches them same-origin (`cache_dir()` = ".cache" on wasm, so the
-    // bevy HTTP reader resolves `<origin>/.cache/textures/<tex>`, staged there by
-    // build_web.sh). A 4K Earth + Moon are tens of MB — far too large to embed.
-    // REPEAT addressing on U is REQUIRED: the quadsphere tile UVs unwrap the
-    // equirectangular longitude around each tile's centre so triangles never
-    // interpolate backwards across the ±180° seam — which legitimately pushes
-    // u outside [0,1] (a seam-centred face sits entirely in u ∈ [-0.5, 0]).
-    // Under the default clamp-to-edge sampler that whole region sampled one
-    // texel column: a face-wide horizontally-streaked "patch" on both globes.
-    let seam_wrap = |s: &mut bevy::image::ImageLoaderSettings| {
-        s.sampler = bevy::image::ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
-            address_mode_u: bevy::image::ImageAddressMode::Repeat,
-            ..bevy::image::ImageSamplerDescriptor::linear()
-        });
-    };
-    let earth_texture: Handle<Image> =
-        asset_server.load_with_settings("lunco://textures/earth.png", seam_wrap);
-    let moon_texture: Handle<Image> =
-        asset_server.load_with_settings("lunco://textures/moon.png", seam_wrap);
+    // NO HARDCODED PLANET IMAGERY.
+    //
+    // This used to `asset_server.load("lunco://textures/earth.png")` (and
+    // moon.png) unconditionally. Those files are CACHE ARTIFACTS — produced by
+    // the asset pipeline from a downloaded source, git-ignored, and absent on a
+    // fresh checkout. A missing texture samples Bevy's white fallback, and the
+    // Earth's `surface_color` was `[1,1,1]`, so the default experience was a
+    // WHITE BALL where Earth should be: the engine asserting an asset it does
+    // not ship and rendering nothing sensible when the assertion failed.
+    //
+    // So the body's own colour is the base state, not a degraded one. Imagery is
+    // then just an ordinary authored look: bind a `UsdShade` Material to the body
+    // prim and the existing USD → `ShaderLook` path picks it up, exactly as it
+    // does for terrain layer maps and for any prop — see
+    // [`adopt_authored_body_look`].
 
     // The blueprint grid shader is named by PATH in the `ShaderLook` (see
     // `blueprint_tile_look`) and loaded by the binder, so it still hot-reloads on
@@ -542,9 +584,12 @@ pub fn setup_big_space_hierarchy(
 
     // Earth terrain: camera-driven cube-sphere LOD (replaces the old fixed 24-tile
     // shell). `update_globe_lod` streams tiles parented to the Earth Surface Grid.
-    let earth_blueprint = blueprint_tile_look(
-        earth_texture.clone(),
-        [1.0, 1.0, 1.0], [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5,
+    // Earth reads as EARTH with no imagery at all: ocean blue under the
+    // graticule. Imagery, if a scene has any, arrives the ordinary way — a
+    // `UsdShade` Material bound to the body prim, adopted by
+    // `adopt_authored_body_look`.
+    let earth_blueprint = blueprint_tile_look_untextured(
+        EARTH_BODY_COLOR, [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5,
     );
     commands.entity(earth_body).insert((
         crate::globe_lod::GlobeLod {
@@ -615,9 +660,8 @@ pub fn setup_big_space_hierarchy(
     )).set_parent_in_place(moon_grid).id();
 
     // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
-    let moon_blueprint = blueprint_tile_look(
-        moon_texture.clone(),
-        [0.5, 0.5, 0.5], [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9,
+    let moon_blueprint = blueprint_tile_look_untextured(
+        MOON_BODY_COLOR, [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9,
     );
     commands.entity(moon_body).insert((
         crate::globe_lod::GlobeLod {
