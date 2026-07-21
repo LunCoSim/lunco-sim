@@ -248,7 +248,19 @@ pub fn propagate_connections(
     // Phase 1: recompile the fabric iff the connection set changed. The compiled
     // fabric is owned by the `Local` (no world borrow), so the phases below keep
     // `&mut World` for the resolver.
-    let compiled = wiring.get_or_rebuild(world, |compiled, world| compiled.rebuild(world));
+    let mut rewired = false;
+    let compiled = wiring.get_or_rebuild(world, |compiled, world| {
+        rewired = true;
+        compiled.rebuild(world)
+    });
+    // A rewire (new scene, edited connection) makes every prior dangling-wire
+    // report stale: the names below belong to THIS fabric. Without the reset the
+    // dedup set — keyed by port name for the process lifetime — would silence a
+    // genuine dangling `angle` in the scene you just loaded because some earlier
+    // scene already had one.
+    if rewired {
+        reported.clear();
+    }
 
     if compiled.targets.is_empty() {
         return;

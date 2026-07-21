@@ -6,9 +6,10 @@
 //!
 //! - **Modelica**: opens the source file, inserts a `ModelicaModel`
 //!   stub, dispatches `ModelicaCommand::Compile` directly to the
-//!   worker channel, and (once `model.variables` populates) wraps the
-//!   result in a `SimComponent` so the propagate / apply-forces
-//!   pipeline can read it.
+//!   worker channel, and publishes the `SimComponent` — the entity's
+//!   port interface — immediately from the parsed declaration, so wires
+//!   into the model resolve before the solver has answered
+//!   (`SimStatus::Compiling` until `model.variables` populates).
 //! - **Python**: opens the script, registers a `ScriptDocument`,
 //!   attaches `ScriptedModel`, and creates the matching `SimComponent`.
 //! - **Wiring**: [`rewire_usd_connections`] derives one `SimConnection`
@@ -581,30 +582,60 @@ pub fn dispatch_loaded_python_sources(
     }
 }
 
-/// On-Modelica-compile-complete: wraps the populated `ModelicaModel`
-/// into a `SimComponent` so propagate/apply systems can pick it up.
-/// Idempotent — only runs for USD-driven entities that don't already
-/// have a `SimComponent` and whose Modelica variables have populated.
+/// On-model-BIND: publish the `SimComponent` — the entity's port interface —
+/// as soon as a `ModelicaModel` exists, i.e. from the parse, not from the
+/// compile.
+///
+/// A model's INTERFACE (`input Real …`, parameters) is a declaration; only its
+/// SOLUTION (`variables`, the outputs) needs the solver. `dispatch_loaded_
+/// modelica_sources` already extracts inputs+parameters from the AST when it
+/// dispatches the compile, so the interface is known several hundred
+/// milliseconds before the worker answers.
+///
+/// This used to wait for `variables` to populate before creating the
+/// `SimComponent` at all. In that window the prim existed with NO ports, so
+/// every wire into it (`sun_azimuth`, `panel_yaw`, `vehicle_throttle` on the
+/// solar rover) hit `write_port` → `false` and the propagation master reported
+/// a *dangling wire* — a diagnostic that means "this wire is wrong", raised for
+/// wiring that was entirely correct. Worse, that master dedups its report per
+/// PORT NAME for the process lifetime, so a load-time false positive
+/// permanently silenced the real report for that name.
+///
+/// Publishing at bind time removes the window instead of tolerating it: the
+/// ports exist for the first propagation tick, values land in
+/// `SimComponent.inputs`, and `sync_modelica_inputs` hands them to the solver
+/// for its first step. `SimStatus::Compiling` marks the interface as declared
+/// but not yet solving, and `can_step()` already refuses to step it.
 pub fn wrap_modelica_into_simcomponent(
     mut commands: Commands,
     q_new: Query<(Entity, &ModelicaModel), (With<UsdSourcedCosim>, Without<SimComponent>)>,
 ) {
     for (entity, model) in q_new.iter() {
-        if model.variables.is_empty() {
-            continue;
-        }
         commands.entity(entity).try_insert(SimComponent {
             model_name: model.model_name.clone(),
             parameters: model.parameters.clone(),
             inputs: model.inputs.clone(),
+            // Outputs are the SOLUTION — empty until the worker answers.
+            // `sync_modelica_outputs` fills them and flips the status.
             outputs: model.variables.clone(),
-            status: if model.paused {
-                SimStatus::Paused
-            } else {
-                SimStatus::Running
-            },
+            status: modelica_status(model),
             is_stepping: model.is_stepping,
         });
+    }
+}
+
+/// The status a `ModelicaModel` projects onto its `SimComponent`.
+///
+/// No solved variables yet ⇒ the interface is declared but the solver has not
+/// produced a state: `Compiling`. One place, so the bind-time insert and the
+/// per-tick sync can never disagree about when a model becomes `Running`.
+fn modelica_status(model: &ModelicaModel) -> SimStatus {
+    if model.variables.is_empty() {
+        SimStatus::Compiling
+    } else if model.paused {
+        SimStatus::Paused
+    } else {
+        SimStatus::Running
     }
 }
 
@@ -636,11 +667,7 @@ pub fn sync_modelica_outputs(
 ) {
     for (model, mut comp) in &mut q {
         upsert_ports(&mut comp.outputs, model.variables.iter());
-        comp.status = if model.paused {
-            SimStatus::Paused
-        } else {
-            SimStatus::Running
-        };
+        comp.status = modelica_status(model);
     }
 }
 
@@ -1979,5 +2006,61 @@ mod tests {
         // Empty override → empty sentinel; resolved downstream against
         // the parsed stage, not here.
         assert_eq!(resolve_root_prim("scene.usda", ""), "");
+    }
+
+    // ── interface published at parse, not at solve ───────────────────
+    //
+    // The contract that killed the "dangling wire" false positive: a bound
+    // model exposes its declared inputs BEFORE the worker has produced any
+    // variables, so a wire into it resolves on the first propagation tick.
+
+    /// A model that has been parsed and dispatched but not yet solved:
+    /// declared inputs, no variables.
+    fn dispatched_but_unsolved() -> ModelicaModel {
+        let mut m = ModelicaModel {
+            model_name: "SolarRoverPower".into(),
+            ..default()
+        };
+        m.inputs.insert("vehicle_throttle".into(), 0.0);
+        m.inputs.insert("sun_azimuth".into(), 0.0);
+        m
+    }
+
+    #[test]
+    fn declared_inputs_are_exposed_before_the_solver_answers() {
+        let model = dispatched_but_unsolved();
+        assert!(model.variables.is_empty(), "precondition: not solved yet");
+
+        let mut app = App::new();
+        let e = app.world_mut().spawn((UsdSourcedCosim, model)).id();
+        app.add_systems(Update, wrap_modelica_into_simcomponent);
+        app.update();
+
+        let comp = app
+            .world()
+            .get::<SimComponent>(e)
+            .expect("the interface must be published at bind, not at compile-complete");
+        assert!(
+            comp.inputs.contains_key("vehicle_throttle")
+                && comp.inputs.contains_key("sun_azimuth"),
+            "a wire into a declared input must resolve while the model still compiles; \
+             got inputs {:?}",
+            comp.inputs.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            comp.status,
+            SimStatus::Compiling,
+            "declared but unsolved is `Compiling` — outputs are not trustworthy yet"
+        );
+    }
+
+    #[test]
+    fn status_becomes_running_once_variables_populate() {
+        let mut model = dispatched_but_unsolved();
+        assert_eq!(modelica_status(&model), SimStatus::Compiling);
+        model.variables.insert("soc_out".into(), 1.0);
+        assert_eq!(modelica_status(&model), SimStatus::Running);
+        model.paused = true;
+        assert_eq!(modelica_status(&model), SimStatus::Paused);
     }
 }
