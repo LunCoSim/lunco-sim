@@ -358,19 +358,31 @@ impl ModelicaCompiler {
     /// already reads; taking the library from anywhere else would make an edited
     /// member compile as its last-built self while the scene loaded the new text.
     /// The embedded copy is for wasm, which has no filesystem to read.
+    ///
+    /// A library member is seated through [`Self::seat_user_source`] like any other
+    /// user model, one document per `.mo`, so the bound-`input` strip applies to it.
+    /// It did not when the disk copy went through rumoca's source-root loader: that
+    /// reads the files itself, the strip never ran, and every `input Real x = <d>` in
+    /// a library class was demoted to an algebraic — `input_names()` came back EMPTY,
+    /// the cosim wire into it was rejected, and the model held its declared default
+    /// for the whole run. `LunCo.Propulsion.PlumePhotometry` took `throttle` that way,
+    /// which is why a descent burn lit no plume.
     pub fn ensure_root_installed(&mut self, root: &str) -> bool {
         if self.installed_roots.contains(root) {
             return true;
         }
         if let Some(dir) = lunco_assets::models_package_root_path(root) {
-            let report = self.load_source_root(root, &dir);
-            log::info!(
-                "[ModelicaCompiler] seated library `{root}` from {} ({} docs)",
-                dir.display(),
-                report.parsed_file_count,
-            );
-            self.installed_roots.insert(root.to_string());
-            return true;
+            let files = Self::read_package_dir(&dir);
+            if !files.is_empty() {
+                let report = self.seat_library_files(root, &dir.display().to_string(), files);
+                log::info!(
+                    "[ModelicaCompiler] seated library `{root}` from {} ({} docs)",
+                    dir.display(),
+                    report.parsed_file_count,
+                );
+                self.installed_roots.insert(root.to_string());
+                return true;
+            }
         }
         let files = lunco_assets::models::package_files(root);
         if files.is_empty() {
@@ -381,9 +393,66 @@ impl ModelicaCompiler {
              ({} docs) — no on-disk `assets/models/{root}`",
             files.len(),
         );
-        let _ = self.load_source_root_in_memory(root, root, files);
+        let _ = self.seat_library_files(root, root, files);
         self.installed_roots.insert(root.to_string());
         true
+    }
+
+    /// Every `.mo` under a shipped library directory, as `(uri, source)` pairs.
+    ///
+    /// The URI is the file's path, which is what rumoca reports diagnostics
+    /// against — the same string `info:sourceAsset` resolution produces, so a
+    /// failure in a library member points at the file the author edits.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_package_dir(dir: &std::path::Path) -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("mo"))
+                {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        out.push((path.display().to_string(), text));
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, &mut out);
+        // Deterministic seating order: rumoca resolves a package from its members'
+        // own `within` clauses, but a stable order keeps diagnostics reproducible.
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn read_package_dir(_dir: &std::path::Path) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    /// Seat a whole library's members as documents, each through the
+    /// bound-`input` strip — see [`Self::ensure_root_installed`].
+    fn seat_library_files(
+        &mut self,
+        id: &str,
+        label: &str,
+        files: Vec<(String, String)>,
+    ) -> rumoca_compile::compile::SourceRootLoadReport {
+        let stripped: Vec<(String, String)> = files
+            .into_iter()
+            .map(|(uri, text)| {
+                let (stripped, _defaults) = crate::ast_extract::strip_input_defaults(&text);
+                (uri, stripped)
+            })
+            .collect();
+        self.load_source_root_in_memory(id, label, stripped)
     }
 
     /// If a process-wide MSL has been installed, preload it into the

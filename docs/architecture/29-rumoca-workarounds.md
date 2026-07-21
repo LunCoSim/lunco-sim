@@ -83,10 +83,26 @@ The strip is idempotent (it blanks the binding bytes in place, so a second pass
 finds nothing), so callers that also need the defaults map — the worker, to
 re-seed values via `set_input` — can still call `strip_input_defaults` themselves.
 
+**A library member is user source too.** A `.mo` declaring `within P;` is compiled
+out of its *package*, not seated as a document (§3), and that path used to hand
+the package directory to rumoca's own source-root loader — which reads the files
+itself, so the strip never ran. Every bound `input` in a library class was
+demoted, `input_names()` came back EMPTY, and each cosim wire into the model was
+rejected: the model held its declared defaults for the whole run while the
+simulation completed and published plausible numbers.
+`LunCo.Propulsion.PlumePhotometry` took `throttle` that way, so a descent burn lit
+no plume. `ensure_root_installed` now reads the members itself and seats them
+through `seat_library_files`, which strips each one.
+
 **Enforced by** `tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
-(fails if a new site seats documents into the compile session directly) and
+(fails if a new site seats documents into the compile session directly),
 `tests/rumoca_api_coverage.rs::compile_str_keeps_bound_input_as_runtime_slot`
-(feeds `compile_str` RAW source and asserts `g` survives as a runtime slot).
+(feeds `compile_str` RAW source and asserts `g` survives as a runtime slot), and
+`tests/library_member_inputs.rs` (same assertion for a `within`-package class).
+
+**Diagnosed by** `worker::apply_input_defaults_validated`: a model whose source
+declares inputs but whose stepper exposes **none** logs at ERROR, because that is
+the shape of a run that simulates nothing and looks fine.
 
 **Probe.** Compile `model M input Real g = 9.81; ... end M;` **unstripped** and
 read `session.input_names()`. Today: `[]` (empty). When it lists `g`, delete
