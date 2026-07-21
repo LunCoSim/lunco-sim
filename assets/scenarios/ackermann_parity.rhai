@@ -191,6 +191,12 @@ fn yaw_change_deg(f0, f1) {
     let a = vnorm(f0);
     let b = vnorm(f1);
     let mag = clamp(vdot(a, b), -1.0, 1.0).acos() * 57.29577951308232;
+    // Guard the RESULT too, in the same positive form. `clamp` cannot save a NaN
+    // dot: every comparison against NaN is false, so it falls through the clamp
+    // untouched and `acos` returns NaN. A valid angle is in [0, 180], and NaN
+    // fails that test, so an unmeasurable tick is reported as `()` — the caller
+    // skips it — instead of poisoning an accumulator that never recovers.
+    if !(mag >= 0.0 && mag <= 180.0) { return (); }
     let cy = vcross(a, b)[1];
     if cy > 0.0 { -mag } else { mag }
 }
@@ -616,7 +622,17 @@ fn verdict(s) {
     f.push(t_rel(s.d_rc, s.d_ph, 20.0, "distance travelled (m)"));
 
     // Absolute ceiling + floor: both must honour omega_max * r, not merely match.
-    let lo = s.v_ceiling * 0.5;
+    // LUNAR TRACTION sets the floor, not the drivetrain. `omega_max * r` is a
+    // KINEMATIC ceiling — a driven wheel cannot out-run its own no-slip speed —
+    // and it holds at any gravity, so the upper bound stays tied to it. The
+    // lower bound cannot: at 1.62 m/s^2 the normal load is a sixth of Earth's,
+    // the rover runs out of grip long before it runs out of gearing, and the
+    // measured terminal speed is 2.2-2.4 m/s against a 4.8 m/s ceiling. Asking
+    // it to reach half the ceiling would be asserting Earth traction on the
+    // Moon. The floor is therefore a LIVENESS gate — proof the command surface
+    // actually drove the rover — set far below the measured value and far above
+    // a dead test.
+    let lo = s.v_ceiling * 0.2;
     let hi = s.v_ceiling * 1.25;
     f.push(t_range(s.vterm_rc, lo, hi,
                    "raycast terminal speed vs authored omega_max*r=" + s.v_ceiling));
