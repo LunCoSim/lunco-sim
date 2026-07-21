@@ -233,6 +233,36 @@ pub struct CloseTab {
     pub instance: u64,
 }
 
+/// Name of the binary actually running, for the Help menu's build line.
+///
+/// This crate is a LIBRARY shared by every workbench app (`sandbox`, `lunica`,
+/// …), so it cannot know at compile time which one linked it — `CARGO_BIN_NAME`
+/// is set for bin targets and would be wrong (or absent) here. The running
+/// executable's own file stem is the one answer that is true in every app, so
+/// the sandbox stops introducing itself as Lunica.
+///
+/// Resolved once: the path cannot change while the process lives.
+fn running_app_name() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                // A stripped/unreadable `/proc/self/exe` is possible; the crate
+                // name is a truthful fallback, unlike a hardcoded app name.
+                .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string())
+        }
+        // On the web there is no executable path; the bundle name is the
+        // closest true answer and is set by the build script per app.
+        #[cfg(target_arch = "wasm32")]
+        {
+            env!("CARGO_PKG_NAME").to_string()
+        }
+    })
+}
+
 fn on_open_tab(trigger: On<OpenTab>, mut layout: ResMut<WorkbenchLayout>) {
     let ev = *trigger.event();
     layout.open_instance(ev.kind, ev.instance);
@@ -3205,7 +3235,8 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             anchor_rects.push(("menu.settings", r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {
                 ui.label(format!(
-                    "Lunica v{} ({})",
+                    "{} v{} ({})",
+                    running_app_name(),
                     env!("CARGO_PKG_VERSION"),
                     env!("LUNCO_GIT_HASH"),
                 ));

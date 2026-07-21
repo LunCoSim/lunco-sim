@@ -24,7 +24,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use lunco_assets::ephemeris_path_for_target;
 use lunco_celestial::ephemeris::{
     CsvDataPoint, EphemerisProvider, EphemerisResource, MissionConfig,
 };
@@ -108,42 +107,76 @@ fn parse_ephemeris_csv(text: &str) -> Vec<CsvDataPoint> {
     points
 }
 
-/// A mission ephemeris source whose CSV cache is missing and must be
-/// fetched from JPL Horizons. Fetching is deferred to a background task
-/// (see [`EphemerisPlugin`]) so a slow / unreachable JPL endpoint can't
-/// stall app launch.
-struct PendingFetch {
-    target_id: i32,
-    url: String,
-    csv_path: PathBuf,
+/// Read a mission's cached state vectors, if they are on disk.
+///
+/// Looks for `<cache>/ephemeris/target_<naif>_*.csv`. Matching on the NAIF id
+/// alone — rather than reconstructing the full `target_<id>_<start>_<stop>.csv`
+/// name — keeps the loader independent of the download's exact time range:
+/// the range is a property of the declared dataset (`Assets.toml`), not
+/// something the reader must guess. Newest file wins when several ranges are
+/// cached.
+#[allow(clippy::disallowed_methods)]
+fn load_cached_vectors(target_id: i32) -> Option<Vec<CsvDataPoint>> {
+    let dir = lunco_assets::ephemeris_dir();
+    let prefix = format!("target_{target_id}_");
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().map(|e| e == "csv").unwrap_or(false)
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with(&prefix))
+                    .unwrap_or(false)
+        })
+        .collect();
+    candidates.sort();
+    let path = candidates.pop()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let points = parse_ephemeris_csv(&text);
+    if points.is_empty() {
+        warn!(
+            "[ephemeris] {} parsed to zero usable vectors — the file is present but not a \
+             Horizons VECTORS response",
+            path.display()
+        );
+        return None;
+    }
+    info!("[ephemeris] loaded {} vectors for NAIF {target_id}", points.len());
+    Some(points)
 }
 
 impl CelestialEphemerisProvider {
-    /// Construct from local mission caches only (no network). Equivalent
-    /// to [`load_local`](Self::load_local) but discards the missing-source
-    /// list — used by `Default` and callers that don't want background
-    /// fetching.
+    /// Construct from local mission caches only. Never touches the network:
+    /// a mission whose dataset has not been downloaded simply has no
+    /// trajectory (see the crate's `Assets.toml`).
     pub fn new() -> Self {
-        Self::load_local().0
+        Self::load_local()
     }
 
-    /// Discover missions in `assets/missions`, load any ephemeris CSV
-    /// caches already on disk, and return the provider plus the list of
-    /// sources whose cache is missing. Performs **no network I/O** — the
-    /// (potentially slow / hanging) JPL Horizons fetches are done off the
-    /// main thread by [`EphemerisPlugin`]. This is the H1 launch-stall fix:
-    /// `build()` no longer blocks on `ureq` while constructing the app.
+    /// Discover missions in `assets/missions` and load whatever mission
+    /// vectors are already cached on disk.
+    ///
+    /// **No network I/O, ever.** Downloading a mission dataset is
+    /// `lunco-assets`' job (declared in this crate's `Assets.toml`, fetched on
+    /// an explicit user request); this crate only reads what is there and
+    /// reports what is not. A mission with no cached vectors is simply absent
+    /// from `custom_data` — `global_position` then answers `None` for it, which
+    /// is the honest result for "we do not have that trajectory".
+    ///
+    /// The mission JSON supplies the ASTRONOMY (which NAIF id, about which
+    /// centre); the download URL is no longer built here.
     // `disallowed_methods` bans `std::fs` for its wasm failure mode. Unreachable
     // here: the `read_dir` below returns `Err` on wasm, so the loop that owns
     // every `read_to_string` never runs. The web target does not use this path at
     // all — it constructs the provider via `new_with_embedded_ephemeris`, which
     // takes the CSVs as data instead of reading them off a disk it does not have.
     #[allow(clippy::disallowed_methods)]
-    fn load_local() -> (Self, Vec<PendingFetch>) {
+    fn load_local() -> Self {
         let mut custom_data: HashMap<i32, Vec<CsvDataPoint>> = HashMap::new();
         // The tree comes from the registry; missions add their own declared centre below.
         let mut parents: HashMap<i32, i32> = parents_from_registry();
-        let mut pending = Vec::new();
         let missions_dir = lunco_assets::assets_dir().join("missions");
 
         if let Ok(entries) = std::fs::read_dir(missions_dir) {
@@ -155,77 +188,38 @@ impl CelestialEphemerisProvider {
                 let Ok(config) = serde_json::from_str::<MissionConfig>(&content) else { continue };
                 let Some(sources) = config.ephemeris_sources else { continue };
                 for src in sources {
-                    let safe_start = src.start_time.replace(' ', "_").replace(':', "");
-                    let safe_stop = src.stop_time.replace(' ', "_").replace(':', "");
-                    let csv_path = ephemeris_path_for_target(
-                        &src.target_id.to_string(),
-                        &safe_start,
-                        &safe_stop,
-                    );
-
-                    if std::path::Path::new(&csv_path).exists() {
-                        if let Ok(text) = std::fs::read_to_string(&csv_path) {
-                            custom_data.insert(src.target_id, parse_ephemeris_csv(&text));
-                            match parse_center(&src.center) {
-                                Some(parent) => { parents.insert(src.target_id, parent); }
-                                None => warn!(
-                                    "[ephemeris] mission {} has an unparseable center '{}' — it \
-                                     will be treated as heliocentric, which is almost certainly \
-                                     not what you meant",
-                                    src.target_id, src.center
-                                ),
-                            }
-                        }
-                    } else {
-                        // Queue for background fetch instead of blocking here.
-                        // CQ-303: percent-encode each interpolated value per
-                        // RFC 3986 (escape everything but the unreserved set).
-                        // The prior `.replace(' ', "%20")` only handled spaces,
-                        // so `& # + ,` in a mission value silently corrupted the
-                        // query. The single quotes stay literal — they're part
-                        // of the Horizons query syntax; only the user value
-                        // inside each pair is encoded.
-                        let enc = |s: &str| -> String {
-                            let mut out = String::with_capacity(s.len());
-                            for &b in s.as_bytes() {
-                                match b {
-                                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-                                    | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
-                                    _ => out.push_str(&format!("%{b:02X}")),
-                                }
-                            }
-                            out
-                        };
-                        let url = format!(
-                            "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='{}'&OBJ_DATA='NO'&MAKE_EPHEM='YES'&EPHEM_TYPE='VECTORS'&CENTER='{}'&REF_PLANE='{}'&START_TIME='{}'&STOP_TIME='{}'&STEP_SIZE='{}'&CSV_FORMAT='YES'",
-                            enc(&src.command),
-                            enc(&src.center),
-                            enc(&src.ref_plane),
-                            enc(&src.start_time),
-                            enc(&src.stop_time),
-                            enc(&src.step_size),
-                        );
-                        pending.push(PendingFetch {
-                            target_id: src.target_id,
-                            url,
-                            csv_path,
-                        });
+                    // The centre is astronomy and applies whether or not the
+                    // vectors are cached: without it a later download would
+                    // land in a provider that thinks the mission orbits the Sun.
+                    match parse_center(&src.center) {
+                        Some(parent) => { parents.insert(src.target_id, parent); }
+                        None => warn!(
+                            "[ephemeris] mission {} has an unparseable center '{}' — it \
+                             will be treated as heliocentric, which is almost certainly \
+                             not what you meant",
+                            src.target_id, src.center
+                        ),
+                    }
+                    match load_cached_vectors(src.target_id) {
+                        Some(points) => { custom_data.insert(src.target_id, points); }
+                        None => info!(
+                            "[ephemeris] NAIF {} has no cached vectors — download it from \
+                             Settings ▸ Downloadable data (nothing is fetched automatically)",
+                            src.target_id
+                        ),
                     }
                 }
             }
         }
 
-        (
-            Self {
-                _sun: Vsop2013Sun,
-                earth: Vsop2013Earth::new(),
-                emb: Vsop2013Emb,
-                moon: ElpMpp02Moon::new(),
-                custom_data: Arc::new(RwLock::new(custom_data)),
-                parents: Arc::new(RwLock::new(parents)),
-            },
-            pending,
-        )
+        Self {
+            _sun: Vsop2013Sun,
+            earth: Vsop2013Earth::new(),
+            emb: Vsop2013Emb,
+            moon: ElpMpp02Moon::new(),
+            custom_data: Arc::new(RwLock::new(custom_data)),
+            parents: Arc::new(RwLock::new(parents)),
+        }
     }
 
     /// Wasm32 constructor that accepts embedded ephemeris CSV data.
@@ -552,151 +546,99 @@ pub struct EphemerisPlugin;
 
 impl Plugin for EphemerisPlugin {
     fn build(&self, app: &mut App) {
-        // Build from local caches only — never block app launch on the
-        // network (H1). Missing mission CSVs are fetched off-thread.
-        let (provider, _pending) = CelestialEphemerisProvider::load_local();
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            app.insert_resource(EphemerisDownloads {
-                data: provider.custom_data.clone(),
-                missing: _pending,
-                requested: false,
-                tasks: Vec::new(),
-            });
-            // NO startup fetch. Launching the app must not open a network
-            // connection on its own: the missing datasets are CATALOGUED here
-            // and downloaded only when the user asks (Settings ▸ Ephemeris
-            // data ▸ Download). `start_requested_ephemeris_fetches` is the sole
-            // place a request turns into traffic.
-            app.add_systems(
-                Update,
-                (start_requested_ephemeris_fetches, poll_ephemeris_fetches),
-            );
-        }
-
+        // Local caches only. Downloading is `lunco-assets`' concern: this crate
+        // DECLARES its datasets (`Assets.toml`) and REPORTS what it managed to
+        // load. It owns no URL, no socket, and no task.
+        let provider = CelestialEphemerisProvider::load_local();
+        // Handle onto the same map the provider reads, so vectors downloaded
+        // mid-session reach `position()` without a restart. The trait is
+        // read-only by design (a provider answers questions, it is not a
+        // store), so the writable side is held here rather than widened there.
+        app.insert_resource(EphemerisVectors(provider.custom_data.clone()));
         app.insert_resource(EphemerisResource {
             provider: Arc::new(provider),
         });
-    }
-}
 
-/// Downloadable ephemeris datasets and their fetch state.
-///
-/// `missing` is the CATALOGUE: mission ephemeris sources declared in
-/// `assets/missions/*.json` whose CSV cache is not on disk. Nothing is fetched
-/// until [`request_download`](Self::request_download) is called — the app never
-/// reaches the network on its own. `data` aliases the live provider's
-/// `custom_data`, so vectors downloaded mid-session become available to
-/// `position()` immediately (no restart).
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Resource)]
-pub struct EphemerisDownloads {
-    data: Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>,
-    missing: Vec<PendingFetch>,
-    requested: bool,
-    tasks: Vec<(i32, PathBuf, bevy::tasks::Task<Option<String>>)>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl EphemerisDownloads {
-    /// NAIF ids of the mission datasets that are declared but not cached.
-    pub fn missing_ids(&self) -> Vec<i32> {
-        self.missing.iter().map(|p| p.target_id).collect()
-    }
-
-    /// How many declared datasets are missing locally.
-    pub fn missing_count(&self) -> usize {
-        self.missing.len()
-    }
-
-    /// How many downloads are currently in flight.
-    pub fn in_flight(&self) -> usize {
-        self.tasks.len()
-    }
-
-    /// Ask for the missing datasets to be downloaded from JPL Horizons.
-    ///
-    /// This is the ONLY thing that authorises network traffic in this crate;
-    /// call it from an explicit user action (a Settings-menu button), never
-    /// from startup or scene load.
-    pub fn request_download(&mut self) {
-        self.requested = true;
-    }
-}
-
-/// Blocking JPL-Horizons fetch with a hard timeout, run on a task-pool
-/// thread. Returns the cleaned CSV body (between `$$SOE`/`$$EOE`), or
-/// `None` on any network / timeout / parse-boundary failure.
-#[cfg(not(target_arch = "wasm32"))]
-fn fetch_horizons(url: &str) -> Option<String> {
-    let resp = ureq::get(url)
-        .config()
-        .timeout_global(Some(std::time::Duration::from_secs(20)))
-        .build()
-        .call()
-        .ok()?;
-    let text = resp.into_body().read_to_string().ok()?;
-    let start = text.find("$$SOE")?;
-    let end = text.find("$$EOE")?;
-    Some(text[start..end].replace("$$SOE", "").replace("$$EOE", ""))
-}
-
-/// Spawn one async fetch per missing mission CSV — but only after the user
-/// asked for it via [`EphemerisDownloads::request_download`]. Cheap no-op
-/// otherwise, which is the normal state.
-#[cfg(not(target_arch = "wasm32"))]
-fn start_requested_ephemeris_fetches(mut fetch: ResMut<EphemerisDownloads>) {
-    if !fetch.requested {
-        return;
-    }
-    fetch.requested = false;
-    if fetch.missing.is_empty() {
-        return;
-    }
-    let pool = bevy::tasks::AsyncComputeTaskPool::get();
-    let pending = std::mem::take(&mut fetch.missing);
-    for p in pending {
-        info!("[ephemeris] fetching mission vectors for NAIF {} (async)", p.target_id);
-        let url = p.url;
-        let task = pool.spawn(async move { fetch_horizons(&url) });
-        fetch.tasks.push((p.target_id, p.csv_path, task));
-    }
-}
-
-/// Update: poll outstanding fetches; on success write the CSV cache and
-/// insert the parsed vectors into the shared map so `position()` sees
-/// them immediately. Cheap no-op once all tasks have drained.
-#[cfg(not(target_arch = "wasm32"))]
-fn poll_ephemeris_fetches(mut fetch: ResMut<EphemerisDownloads>) {
-    use bevy::tasks::{block_on, futures_lite::future};
-    if fetch.tasks.is_empty() {
-        return;
-    }
-    let data = fetch.data.clone();
-    let tasks = std::mem::take(&mut fetch.tasks);
-    let mut still_pending = Vec::new();
-    for (target_id, csv_path, mut task) in tasks {
-        match block_on(future::poll_once(&mut task)) {
-            None => still_pending.push((target_id, csv_path, task)),
-            Some(Some(clean_csv)) => {
-                // Best-effort cache write: a failure here only means the next
-                // launch re-fetches, so it's non-fatal — but it should not be
-                // invisible.
-                if let Err(e) = lunco_storage::write_file_sync(&csv_path, clean_csv.as_bytes()) {
-                    warn!("[ephemeris] could not write CSV cache {}: {e}", csv_path.display());
-                }
-                let points = parse_ephemeris_csv(&clean_csv);
-                if points.is_empty() {
-                    warn!("[ephemeris] NAIF {} fetch returned no usable vectors", target_id);
-                } else {
-                    let n = points.len();
-                    data.write().unwrap_or_else(|e| e.into_inner()).insert(target_id, points);
-                    info!("[ephemeris] loaded {n} mission vectors for NAIF {target_id}");
-                }
-            }
-            Some(None) => warn!("[ephemeris] fetch failed for NAIF {target_id}"),
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Register the declaration, then adopt the file if a user
+            // downloads it mid-session.
+            app.add_systems(Startup, register_ephemeris_datasets);
+            app.add_systems(Update, adopt_downloaded_ephemeris);
         }
     }
-    fetch.tasks = still_pending;
+}
+
+/// The datasets this crate declares, embedded so a packaged binary needs no
+/// source tree. Registered into the engine-wide registry that owns fetching.
+#[cfg(not(target_arch = "wasm32"))]
+fn register_ephemeris_datasets(
+    registry: Option<ResMut<lunco_assets::datasets::DatasetRegistry>>,
+) {
+    let Some(mut registry) = registry else {
+        // No `DatasetsPlugin` in this app (a headless probe, a test harness):
+        // the crate still works, it just has nothing to offer for download.
+        return;
+    };
+    registry.register(include_str!("../Assets.toml"), "ephemeris");
+}
+
+/// Pick up mission vectors that arrived after launch.
+///
+/// The registry reports `Installed`; this reads the file and inserts the parsed
+/// points into the live provider, so a mission's trajectory appears without a
+/// restart. Runs only on the frame a dataset flips state — the guard is the
+/// `Installed`-but-not-yet-loaded pair, not a per-frame directory scan.
+#[cfg(not(target_arch = "wasm32"))]
+fn adopt_downloaded_ephemeris(
+    registry: Option<Res<lunco_assets::datasets::DatasetRegistry>>,
+    vectors: Option<Res<EphemerisVectors>>,
+    mut adopted: Local<std::collections::HashSet<String>>,
+) {
+    let (Some(registry), Some(vectors)) = (registry, vectors) else {
+        return;
+    };
+    for entry in registry.entries() {
+        if entry.group != "ephemeris" || !entry.state.is_installed() {
+            continue;
+        }
+        if !adopted.insert(entry.key.clone()) {
+            continue;
+        }
+        // The NAIF id is in the declared destination filename
+        // (`target_<naif>_…csv`) — the same name the loader scans for.
+        let Some(target_id) = naif_from_dataset_path(&entry.path) else {
+            warn!(
+                "[ephemeris] dataset '{}' does not name a NAIF id in its `dest` \
+                 (expected `ephemeris/target_<id>_….csv`) — cannot adopt it",
+                entry.key
+            );
+            continue;
+        };
+        let Some(points) = load_cached_vectors(target_id) else { continue };
+        vectors
+            .0
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(target_id, points);
+        info!("[ephemeris] adopted downloaded dataset '{}' (NAIF {target_id})", entry.key);
+    }
+}
+
+/// Writable handle onto the provider's mission-vector map — the only way a
+/// dataset downloaded after launch becomes visible to `position()`.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource)]
+struct EphemerisVectors(Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>);
+
+/// `…/target_-1024_2026-04-02_0159_….csv` → `-1024`.
+#[cfg(not(target_arch = "wasm32"))]
+fn naif_from_dataset_path(path: &std::path::Path) -> Option<i32> {
+    path.file_name()?
+        .to_str()?
+        .strip_prefix("target_")?
+        .split('_')
+        .next()?
+        .parse()
+        .ok()
 }

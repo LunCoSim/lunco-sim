@@ -595,57 +595,97 @@ fn init_current_scene_path(
     }
 }
 
-/// Settings ▸ downloadable data. The app never reaches the network on its own;
-/// anything fetchable is listed here and downloaded on an explicit click.
+/// Settings ▸ downloadable data — the generic view over
+/// [`lunco_assets::datasets`].
 ///
-/// Today that is the JPL-Horizons mission ephemeris CSVs (`assets/missions/*.json`
-/// declare them; only the ones already cached load at boot). A mission whose
-/// vectors are missing simply has no trajectory until you download it — that is
-/// the intended offline behaviour, not an error.
-#[cfg(not(target_arch = "wasm32"))]
+/// The app never reaches the network on its own: every fetchable dataset is
+/// DECLARED in an `Assets.toml` (a crate's, or an open Twin's) and downloaded
+/// only from a click here. This panel knows nothing about ephemerides, terrain
+/// or MSL — it renders whatever the registry reports, so a new dataset needs a
+/// manifest entry and no UI change at all.
 fn register_downloadable_assets_settings(world: &mut World) {
     use bevy_egui::egui;
+    use lunco_assets::datasets::{DatasetRegistry, DatasetState};
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
     layout.register_settings(|ui, world| {
         ui.label(egui::RichText::new("Downloadable data").weak().small());
-        let Some(mut dl) =
-            world.get_resource_mut::<lunco_celestial_ephemeris::EphemerisDownloads>()
-        else {
-            ui.label(egui::RichText::new("(ephemeris provider not loaded)").weak().italics());
+        let Some(registry) = world.get_resource::<DatasetRegistry>() else {
+            ui.label(
+                egui::RichText::new("(dataset registry not installed)")
+                    .weak()
+                    .italics(),
+            );
             return;
         };
-        let missing = dl.missing_count();
-        let in_flight = dl.in_flight();
-        if in_flight > 0 {
-            ui.label(format!("Mission ephemeris: downloading {in_flight}…"));
+        if registry.entries().is_empty() {
+            ui.label(
+                egui::RichText::new("(nothing declared — no Assets.toml registered)")
+                    .weak()
+                    .italics(),
+            );
             return;
         }
-        if missing == 0 {
-            ui.label("Mission ephemeris: all declared datasets cached");
-            return;
-        }
-        ui.horizontal(|ui| {
-            ui.label(format!("Mission ephemeris: {missing} dataset(s) missing"));
-            if ui
-                .button("⬇ Download")
-                .on_hover_text(
-                    "Fetches the missing mission vectors from JPL Horizons \
-                     (ssd.jpl.nasa.gov) and caches them on disk. This is the \
-                     only network request the sandbox makes.",
+        // Snapshot: the rows below need `&mut World` to request a download.
+        let rows: Vec<(String, String, String, DatasetState)> = registry
+            .entries()
+            .iter()
+            .map(|e| {
+                (
+                    e.key.clone(),
+                    e.scope.label().to_string(),
+                    e.name.clone(),
+                    e.state.clone(),
                 )
-                .clicked()
-            {
-                dl.request_download();
+            })
+            .collect();
+        let mut requested: Option<String> = None;
+        for (key, scope, name, state) in &rows {
+            ui.horizontal(|ui| {
+                ui.label(format!("{scope} · {name}"));
+                match state {
+                    DatasetState::Installed => {
+                        ui.label(egui::RichText::new("✔ cached").weak());
+                    }
+                    DatasetState::Downloading {
+                        bytes_done,
+                        bytes_total,
+                    } => {
+                        let mb = |b: &u64| *b as f64 / (1024.0 * 1024.0);
+                        ui.label(if *bytes_total > 0 {
+                            format!("⬇ {:.1}/{:.1} MB", mb(bytes_done), mb(bytes_total))
+                        } else {
+                            format!("⬇ {:.1} MB", mb(bytes_done))
+                        });
+                    }
+                    DatasetState::Missing | DatasetState::Failed(_) => {
+                        if let DatasetState::Failed(e) = state {
+                            ui.label(egui::RichText::new("⚠").color(egui::Color32::RED))
+                                .on_hover_text(e.clone());
+                        }
+                        if ui
+                            .button("⬇ Download")
+                            .on_hover_text(
+                                "Fetches this dataset and caches it — engine data in the \
+                                 shared cache, a twin's data in that twin's .cache. \
+                                 Downloads only happen from this button.",
+                            )
+                            .clicked()
+                        {
+                            requested = Some(key.clone());
+                        }
+                    }
+                }
+            });
+        }
+        if let Some(key) = requested {
+            if let Some(mut registry) = world.get_resource_mut::<DatasetRegistry>() {
+                registry.request(&key);
             }
-        });
+        }
     });
 }
-
-/// wasm has no local cache to fill and no `ureq`; nothing to offer.
-#[cfg(target_arch = "wasm32")]
-fn register_downloadable_assets_settings(_world: &mut World) {}
 
 fn register_sandbox_scenarios_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {

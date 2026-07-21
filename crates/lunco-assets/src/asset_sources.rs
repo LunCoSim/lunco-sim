@@ -68,9 +68,28 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         // `twin://<name>/<rel>` — the name selects the root, so this handler is
         // stateful where `lunco://`'s is constant.
         let (name, rel) = crate::split_twin_rel(rest)?;
-        Some(roots.root_of(name)?.join(rel))
+        let root = roots.root_of(name)?;
+        let authored = root.join(rel);
+        if authored.exists() {
+            return Some(authored);
+        }
+        // Same two-step the `twin://` READER uses: a Twin's downloaded assets
+        // live in its own `.cache`. Both sides must agree, or a file the asset
+        // server can load is invisible to scenario sync / shader validation.
+        let cached = crate::twin_cache_dir(&root).join(rel);
+        if cached.exists() {
+            return Some(cached);
+        }
+        Some(authored)
     });
     app.insert_resource(schemes);
+
+    // Declared-dataset registry: owns every download, scans each open Twin's
+    // `Assets.toml`, and is the ONLY thing in the engine that fetches. Lives
+    // here so every app that registers asset sources gets it — a domain crate
+    // that had to remember to add it would eventually forget and grow its own
+    // downloader.
+    app.add_plugins(crate::datasets::DatasetsPlugin);
 
     twin_roots
 }

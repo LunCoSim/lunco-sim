@@ -1,0 +1,24 @@
+# lunco-celestial-ephemeris — declared datasets.
+#
+# Analytic ephemerides (VSOP2013 planets, ELP/MPP02 Moon) are CODE and ship with
+# the crate. A MISSION trajectory cannot be: it is a query answered by JPL
+# Horizons, so it is declared here as a dataset and downloaded only when a user
+# asks (Settings ▸ Downloadable data). The engine never fetches on its own.
+#
+# `dest` is resolved against the shared engine cache (`lunco_assets::cache_dir`),
+# and must match `lunco_assets::ephemeris_path_for_target` — the loader scans
+# `<cache>/ephemeris/target_<naif>_*.csv`, so the date range in the filename is
+# documentation, not a lookup key.
+#
+# The URL is the Horizons VECTORS query for the mission: geocentric
+# (CENTER='500@399'), ECLIPTIC reference plane — the frame `parse_ephemeris_csv`
+# asserts. Changing the frame here silently changes the meaning of the numbers.
+#
+# No `sha256`: Horizons regenerates the response per request (its header carries
+# a timestamp), so a content hash would fail on a re-fetch that is otherwise
+# identical. Integrity for this product is the frame + time range in the query.
+
+[artemis2_vectors]
+name = "Artemis II state vectors (JPL Horizons, NAIF -1024)"
+url = "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND='-1024'&OBJ_DATA='NO'&MAKE_EPHEM='YES'&EPHEM_TYPE='VECTORS'&CENTER='500%40399'&REF_PLANE='ECLIPTIC'&START_TIME='2026-04-02%2001%3A59'&STOP_TIME='2026-04-11%2000%3A01'&STEP_SIZE='10m'&CSV_FORMAT='YES'"
+dest = "ephemeris/target_-1024_2026-04-02_0159_2026-04-11_0001.csv"

@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 pub mod asset_path;
 pub mod asset_read;
 pub mod asset_sources;
+pub mod datasets;
 pub mod discovery;
 pub mod download;
 pub mod font;
@@ -218,6 +219,20 @@ pub fn cache_dir() -> PathBuf {
         }
         PathBuf::from(".cache")
     }
+}
+
+/// Where a **Twin's** downloaded assets live: `<twin_root>/.cache`.
+///
+/// Two caches, one rule: an asset declared by the ENGINE lands in the shared
+/// [`cache_dir`]; an asset declared by a TWIN lands beside that Twin, so the
+/// Twin stays self-contained — copy or move the folder and its data travels
+/// with it, and deleting the Twin takes its downloads with it instead of
+/// orphaning gigabytes in a global cache nobody audits.
+///
+/// This is the ONE place the layout is decided; the downloader, the
+/// `twin://` reader and the dataset registry all ask here.
+pub fn twin_cache_dir(twin_root: &std::path::Path) -> PathBuf {
+    twin_root.join(".cache")
 }
 
 /// Cross-platform temp directory for short-lived scratch files (panic

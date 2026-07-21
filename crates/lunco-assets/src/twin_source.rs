@@ -181,7 +181,10 @@ impl TwinRoots {
         self.overlays.read().ok().and_then(|m| m.get(path).cloned())
     }
 
-    fn root_for(&self, name: &str) -> Option<PathBuf> {
+    /// Absolute root folder of an open Twin, by `twin://` authority. Public
+    /// because a Twin's own `Assets.toml` (scanned on open by
+    /// [`crate::datasets`]) is addressed by filesystem path, not by URI.
+    pub fn root_for(&self, name: &str) -> Option<PathBuf> {
         self.roots.read().ok().and_then(|m| m.get(name).cloned())
     }
 
@@ -263,17 +266,34 @@ impl TwinReader {
     /// local files. Shipped assets are addressed by scheme (`@lunco://…@`), so no
     /// authored ref needs to climb out (verified across the shipped tree and the
     /// twins: zero `@../…@` refs).
+    /// A Twin's DOWNLOADED assets live in its own `.cache/` (see
+    /// [`crate::twin_cache_dir`]), so a reference authored against the Twin
+    /// (`@terrain/apollo15/dtm.tif@`) resolves whether the file is committed in
+    /// the Twin or was fetched from that Twin's `Assets.toml`. Authored files
+    /// win: the cache is a materialisation of a declaration, never an override
+    /// of something the author checked in.
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
         let mut comps = path.components();
         let name = comps.next()?.as_os_str().to_str()?;
-        let mut full = self.roots.root_for(name)?;
+        let root = self.roots.root_for(name)?;
+        let mut rel = PathBuf::new();
         for comp in comps {
             match comp {
-                std::path::Component::Normal(seg) => full.push(seg),
+                std::path::Component::Normal(seg) => rel.push(seg),
                 _ => return None,
             }
         }
-        Some(full)
+        let authored = root.join(&rel);
+        if authored.exists() {
+            return Some(authored);
+        }
+        let cached = crate::twin_cache_dir(&root).join(&rel);
+        if cached.exists() {
+            return Some(cached);
+        }
+        // Neither exists — return the authored path so the error names where
+        // the file was expected, not where it was cached.
+        Some(authored)
     }
 }
 

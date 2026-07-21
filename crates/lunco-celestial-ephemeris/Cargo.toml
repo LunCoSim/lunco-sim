@@ -14,8 +14,5 @@ celestial-ephemeris = "0.1.1-alpha.2"
 celestial-time = "0.1.1-alpha.2"
 celestial-core = "0.1.1-alpha.2"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { workspace = true }
-
 [lints]
 workspace = true
