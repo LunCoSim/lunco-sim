@@ -8,7 +8,9 @@
 # Verifies USD-authored sensor telemetry ports (lunco-cosim::sensors).
 # A 100 kg box rests on the ground carrying all three sensor kinds:
 #   - lunco:sensor:imu     -> accel_x/y/z   (≈0 at rest; world-frame lin. accel)
-#   - lunco:sensor:range   -> range         (downward altimeter; ≈0.5 m to ground)
+#   - lunco:sensor:range   -> range         (downward altimeter; ≈0.8 m to ground —
+#                                           the SENSOR's height: box centre 0.5 plus its
+#                                           authored lunco:sensor:offset of 0.3)
 #   - lunco:sensor:contact -> contact (=1), contact_force (≈ mass·g ≈ 981 N)
 #
 # Read live:  ListPorts -> the Box entity exposes accel_*, range, contact,
@@ -106,5 +108,15 @@ def Xform "SandboxScene" (
         float physics:mass = 50.0
         bool physics:collisionEnabled = true
         custom bool lunco:sensor:contact = true
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "sensors"
+
+        def LunCoProgram "Test"
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/sensor_test.rhai@
+        }
     }
 }

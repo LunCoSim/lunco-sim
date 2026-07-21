@@ -353,6 +353,37 @@ every step until a body leaves the world.
   of a link inside a link attached to nothing. Reflected rotor inertia belongs to
   the joint (`armature`-style), not to a body of its own.
 
+### When two parts that are NOT jointed must not collide
+
+`JointCollisionDisabled` covers the pair a joint names — parent and child, and no
+further. Parts **two joints apart** still collide: a hull and the footpad on the
+end of its leg, a wheel and the rocker its bogie hangs from. Author them close
+enough and the solver spends every step pushing a vehicle apart from itself.
+
+**Say so declaratively — `PhysicsFilteredPairsAPI` is the standard schema for it**
+(`physics:filteredPairs`, a relationship to the prims this one must not collide
+with). It is already in the vendored core schema; adopt it rather than inventing
+a scoping rule.
+
+There is a strong temptation to make this automatic — "a vehicle never collides
+with itself" — and it should be resisted, because *vehicle* is not a thing the
+physics knows and every definition of it breaks:
+
+- a rover parked on a lander's deck is two vehicles or one, depending on the
+  minute;
+- a robotic arm **should** collide with its own base, or it folds through it;
+- filtering the whole joint-graph component silently disables contacts an
+  articulated mechanism depends on.
+
+Every engine that solved this made it explicit rather than inferred. MuJoCo
+filters a body against its parent (which is what `JointCollisionDisabled` is) and
+takes the rest as authored `<exclude>` pairs. URDF/MoveIt *precomputes* a pair
+list by sampling poses — a tool that emits authoring, not a runtime heuristic.
+PhysX filters adjacent articulation links and takes the rest from filtered pairs.
+
+So: parent-child is automatic, everything beyond it is authored, and the linter's
+job is to find the pairs that need authoring — not to guess them.
+
 ### Catch it before the screenshot
 
 ```bash

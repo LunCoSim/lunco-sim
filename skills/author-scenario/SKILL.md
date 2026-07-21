@@ -154,6 +154,59 @@ cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
     --scene scenes/sandbox/landing_legs_test.usda --max-ticks 500
 ```
 
+## 3b. A rig test needs a CONTROL, and an anti-trivial guard
+
+A comparative assertion is only as good as its ability to fail. Two traps, both
+of which produce a confidently green test that measures nothing.
+
+**The anti-trivial guard.** "The two sides mirror" is satisfied perfectly by a rig
+that never moved: `0 ≈ -0` passes. So assert the driven side ACTUALLY MOVED before
+asserting anything about the other one.
+
+```rhai
+f.push(t_true(s.peak_l > 0.02,
+    "the driven rocker never moved — a rig at rest mirrors trivially, so " +
+    "nothing below would mean anything"));
+```
+
+**The control case.** Ship a second scene with the mechanism DISABLED, and assert
+it fails the same check. Without it, "coupled mirrors" might be measuring gravity,
+symmetry, or nothing at all. `differential_rig{,_nodiff}` and
+`rocker_bogie{,_nodiff}` are the worked pair.
+
+**⚠ The control's invariant is not the same on a stand as on a vehicle.** This is
+the part that catches people, and it caught me. On an isolated two-rocker stand
+with the coupling off, the far rocker stays at **0** — nothing drives it. On the
+real rover, *both* rockers carry weight: kill the differential and they simply sag
+together while the chassis rolls 30°. The rover's control is therefore the
+CONTRAPOSITIVE of the coupled claim — `|L+R|` must NOT cancel, and the chassis must
+NOT stay level — not "the far side stays put". Derive the control from what the
+mechanism is *for*, not by copying the stand's assertion.
+
+**Declare which case a stage is; never sniff it.** Both stages reference one rig
+and differ only in whether the drive is live, so one scenario serves both — but it
+must be TOLD which:
+
+```usda
+def LunCoProgram "Test" {
+    uniform asset info:sourceAsset = @lunco://scenarios/rocker_bogie_test.rhai@
+    float lunco:param:coupled = 1.0        # read: param(me, "coupled", -1.0)
+}
+```
+
+Reading it off the coupling's own stiffness would make the expectation depend on
+the very authoring the test exists to check.
+
+### Two ways to write a passing test that is wrong
+
+- **`t_rel(a, b, tol_pct, what)` takes a PERCENTAGE.** `0.2` means 0.2%, not 20%.
+  A shipped test ran a hundred times stricter than its own comment claimed and
+  passed only because the rig happened to be that accurate. Write `5.0`, and say
+  "5%" in the comment beside it.
+- **Helper functions never see `this`.** `on_tick` has it; anything it calls does
+  not. Pass every measurement through the verdict map — which is also what keeps
+  the verdict a pure function of what was measured.
+
 ## 4. Missions & sequencing (two layers, both pure rhai)
 
 - **Layer 1 — imperative steps** (`examples/sequence.rhai`): build a step array
