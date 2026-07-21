@@ -746,6 +746,35 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         },
     );
 
+    // unregister_hook(id) -> bool — drop a rule and fall back to the engine's
+    // own built-in for that seam. The counterpart to `register_hook`: a scenario
+    // that overrode a policy for one shot can put it back without knowing what
+    // the original said, because "no hook" is always a valid, defined state (the
+    // Rust seam's built-in). Returns whether a hook was actually removed.
+    engine.register_fn("unregister_hook", |id: ImmutableString| -> bool {
+        let existed = lunco_hooks::get(id.as_str()).is_some();
+        lunco_hooks::unregister(id.as_str());
+        bevy::log::info!("[rhai] unregister_hook: '{id}' (was registered: {existed})");
+        existed
+    });
+
+    // list_hooks() -> [#{id, backend, deterministic}] — which policy seams are
+    // currently filled, and by what. Discovery, so a script can find the seam it
+    // wants to override instead of hard-coding an id that may have moved.
+    engine.register_fn("list_hooks", || -> Dynamic {
+        let rows: Vec<Dynamic> = lunco_hooks::index()
+            .into_iter()
+            .map(|h| {
+                let mut m = rhai::Map::new();
+                m.insert("id".into(), Dynamic::from(h.id));
+                m.insert("backend".into(), Dynamic::from(h.backend));
+                m.insert("deterministic".into(), Dynamic::from_bool(h.deterministic));
+                Dynamic::from_map(m)
+            })
+            .collect();
+        RhaiBuilder.array(rows)
+    });
+
     // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().
     // The generic reflection read — built native (reflect → Dynamic, one hop).
     engine.register_fn("get", |id: i64, path: ImmutableString| -> Dynamic {

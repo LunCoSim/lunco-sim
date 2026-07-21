@@ -173,12 +173,13 @@ impl Action {
 }
 
 /// Handle to one declared wait. Returned by [`ReadinessRegistry::begin`] and
-/// spent by [`ReadinessRegistry::finish`].
+/// closed by [`ReadinessRegistry::finish`].
 ///
-/// Opaque and non-`Copy` on purpose: a ticket is a resource that must be handed
-/// back exactly once, and a copyable one invites finishing the same wait twice
-/// from two code paths.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Opaque, so the only thing a producer can do with it is give it back. Ids are
+/// never reused, which is what makes [`finish`](ReadinessRegistry::finish)
+/// idempotent: a second call names a wait that is already closed, not somebody
+/// else's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReadinessTicket(u64);
 
 /// One declared, not-yet-finished wait.
@@ -234,8 +235,9 @@ impl ReadinessRegistry {
         ReadinessTicket(id)
     }
 
-    /// Clear a wait. Idempotent in effect: a ticket can only be spent once
-    /// because it is moved in.
+    /// Clear a wait. Idempotent — closing an already-closed wait does nothing,
+    /// so a producer that parks its ticket in a component (the usual shape) can
+    /// close it without first proving it is still open.
     pub fn finish(&mut self, ticket: ReadinessTicket) {
         if let Some(item) = self.items.remove(&ticket.0) {
             debug!(
@@ -243,14 +245,6 @@ impl ReadinessRegistry {
                 item.kind, item.subject, item.label, item.elapsed_s
             );
         }
-    }
-
-    /// Clear every wait declared for `entity` — the despawn path. An entity that
-    /// no longer exists cannot become ready, so its items would otherwise hold
-    /// forever (or until the deadline, which is the same bug with a timer).
-    pub fn finish_all_for(&mut self, entity: Entity) {
-        self.items
-            .retain(|_, item| item.subject != Subject::Entity(entity));
     }
 
     /// Drop every wait. Called on scene teardown: the next scene's readiness is
@@ -349,12 +343,23 @@ fn decide(kind: &str, subject: Subject, label: &str, elapsed_s: f64) -> Action {
 /// paused-or-warped seconds would either never fire or fire immediately.
 pub fn evaluate_readiness(
     time: Res<Time<Real>>,
+    entities: &bevy::ecs::entity::Entities,
     mut registry: ResMut<ReadinessRegistry>,
     mut state: ResMut<ReadinessState>,
 ) {
     let dt = time.delta_secs_f64();
     let mut world_hold = false;
     let mut held: Vec<Entity> = Vec::new();
+
+    // A despawned subject can never report ready, so its waits die with it.
+    // Doing this here rather than asking producers to clean up on despawn is
+    // deliberate: a producer that forgets leaks a permanent hold, and "every
+    // producer must also handle teardown" is exactly the contract that gets
+    // dropped when a scene reload despawns things out from under it.
+    registry.items.retain(|_, item| match item.subject {
+        Subject::Entity(e) => entities.contains(e),
+        Subject::World => true,
+    });
 
     for item in registry.items.values_mut() {
         item.elapsed_s += dt;
@@ -553,9 +558,11 @@ mod tests {
         assert!(state.held_entities.is_empty());
     }
 
-    /// A despawned entity can never report ready, so its waits must go with it.
+    /// A despawned entity can never report ready, so its waits go with it — and
+    /// the registry does that itself, because a producer whose subject vanished
+    /// mid-reload is exactly the producer least likely to be around to clean up.
     #[test]
-    fn despawn_clears_that_entitys_waits() {
+    fn a_despawned_subject_takes_its_waits_with_it() {
         let _guard = policy_lock();
         let mut app = app();
         let e = app.world_mut().spawn_empty().id();
@@ -567,7 +574,7 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<ReadinessRegistry>().len(), 1);
 
-        app.world_mut().resource_mut::<ReadinessRegistry>().finish_all_for(e);
+        app.world_mut().despawn(e);
         app.update();
         assert!(app.world().resource::<ReadinessRegistry>().is_empty());
         assert!(app.world().resource::<ReadinessState>().held_entities.is_empty());

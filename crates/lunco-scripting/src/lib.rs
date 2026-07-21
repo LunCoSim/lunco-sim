@@ -178,6 +178,14 @@ fn register_builtin_policies() {
         // Boot-entry policy: what does the app do at startup? (onboard / load /
         // resume / nothing). Consulted by `lunco_tutorial::consult_boot`.
         ("boot", lunco_core::session::BOOT_HOOK, "boot_entry"),
+        // Readiness policy: does a pending compile / scene load freeze the
+        // world, freeze one object, or cost nothing? Consulted every frame by
+        // `lunco_readiness::evaluate_readiness`.
+        (
+            "readiness",
+            lunco_readiness::READINESS_HOOK,
+            "readiness_action",
+        ),
         // (Link availability is not a builtin policy. The generic link kernel
         // computes the geometry and applies a builtin range+mask+occlusion rule;
         // an authored `link.connected` hook overrides the verdict, and routing is

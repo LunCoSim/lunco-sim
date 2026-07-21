@@ -1853,6 +1853,11 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>();
 
+    // A scene that is still spawning, and an object whose model has not
+    // compiled, are the two things this module knows are not ready. Declaring
+    // them is part of driving them — see `crate::readiness`.
+    app.add_plugins(crate::readiness::UsdReadinessPlugin);
+
     app.add_systems(
         Update,
         // Drain the single-flight guard the frame after the last prim of

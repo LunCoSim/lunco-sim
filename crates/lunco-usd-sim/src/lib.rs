@@ -187,6 +187,7 @@ pub mod billboard;
 pub mod celestial;
 pub mod cosim;
 pub mod powertrain;
+pub mod readiness;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 
 /// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,

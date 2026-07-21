@@ -22,6 +22,8 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # the macros + `Ack`/`OpId`/`CommandResults` substrate in lunco-core. The API
 # discovers them by reflection (AppTypeRegistry) — no direct lunco-api dep.
 lunco-core = { path = "../lunco-core" }
+# For the readiness policy hook id registered in `register_builtin_policies`.
+lunco-readiness = { workspace = true }
 # `fnv1a64` — content-address a scenario's source to a cache key for the
 # compiled-AST memo (Substrate E fast tier; local/ephemeral, never on wire).
 lunco-hash = { path = "../lunco-hash" }
@@ -61,6 +63,7 @@ lunco-tools = { path = "../lunco-tools", optional = true }
 lunco-tools-rhai = { path = "../lunco-tools-rhai", optional = true }
 # `policy→rhai` hooks: compile+register the built-in `assets/scripting/policy/*.rhai`
 # decision functions (spec 034 control-authority) under their hook ids at startup.
+lunco-hooks = { path = "../lunco-hooks", optional = true }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
 # The prelude + built-in tool libraries + example scenarios are authored under
 # `assets/scripting/` and embedded at compile time (wasm has no fs). That embed
@@ -77,7 +80,7 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 # rhai on by default — the browser-capable backend. Turn it off
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
-rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:big_space", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-assets", "dep:lunco-hooks-rhai"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:big_space", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-assets", "dep:lunco-hooks", "dep:lunco-hooks-rhai"]
 # Python pulls the same world-bridge deps as rhai (lunco-api + big_space) so the
 # language-neutral `bridge_core` compiles for a python-only build too.
 python = ["dep:pyo3", "dep:libloading", "dep:serde_json", "dep:lunco-api", "dep:big_space"]
