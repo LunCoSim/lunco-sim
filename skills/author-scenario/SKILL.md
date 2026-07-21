@@ -112,8 +112,47 @@ list. Highlights:
 - **Sensing:** `distance`, `arrived`, `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Selection:** `all_of_type`, `nearest_where`, `count_where`, `min_by`/`max_by`.
 - **Sequencer:** `seq([steps])`, `step`/`once`/`wait`/`wait_until`/`wait_for`; feed events with `seq_note_event` in `on_event`.
+- **Testing** (`prelude/auto_tests.rhai`): `t_range` `t_max` `t_true` `t_rel` `t_present` `t_bounded` `t_moved` `report_verdict` `fail_fast` `seg` `find_or_none` `r2`/`r4`.
 
 Add helpers freely — edit the prelude, no rebuild.
+
+## 3a. Writing a scene TEST
+
+A test scenario is an ordinary scenario whose last act is a verdict. Name the
+file `*_test.rhai`, and take the assertions from `prelude/auto_tests.rhai` — do
+not paste private copies of `r2`/`t_range`/`t_report` into a new test.
+
+A check returns `""` on pass and a MESSAGE on failure; collect them so every
+check runs and the report names all of them:
+
+```rhai
+fn verdict(s) {
+    let f = [];
+    f.push(t_bounded(s.hull_pos, 100.0, "hull"));      // still a vehicle
+    f.push(t_range(s.tilt, 0.0, 5.0, "tilt at rest (deg)"));
+    f.push(t_moved(s.distance, 1.0, "rover travel"));  // and it actually drove
+    report_verdict(f, "LANDING LEGS", "LANDING_LEGS"); // prints, emits, toasts
+}
+```
+
+`report_verdict(fails, title, channel)` prints the greppable `<title>: PASS|FAIL`
+line, emits the verdict on `channel` — which is what sets `scene_test`'s exit
+code — and raises a toast. Call it once, last. Use `fail_fast` for setup
+failures (a `find` that returned -1, the wrong scene) so a broken run stops on
+tick one instead of ticking silently to the limit.
+
+**A silent pass is not a pass.** A scenario fails silently in every direction
+that matters: a hook that never fires, a phase that never advances, a `find`
+that missed. So assert that something was MEASURED (`t_present`) and that
+something MOVED (`t_moved`, or `t_rel`'s both-near-zero rejection), and print a
+per-sample table — a run with no sample rows proves nothing.
+
+Run it headlessly:
+
+```
+cargo run -q -p lunco-sandbox --bin scene_test -j 2 -- \
+    --scene scenes/sandbox/landing_legs_test.usda --max-ticks 500
+```
 
 ## 4. Missions & sequencing (two layers, both pure rhai)
 
@@ -197,7 +236,7 @@ libraries → `<twin>/tools/*.rhai`.
 
 ## Drivetrain parity test
 
-A scenario can also be a **regression test**. `assets/scenarios/drivetrain_parity.rhai`
+A scenario can also be a **regression test**. `assets/scenarios/drivetrain_parity_test.rhai`
 + `assets/scenes/sandbox/drivetrain_parity.usda` are the worked example — copy
 their shape when you need a scenario that ASSERTS rather than merely acts.
 

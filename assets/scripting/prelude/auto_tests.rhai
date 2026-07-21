@@ -1,4 +1,4 @@
-// ── Verdict harness — how a scene test says PASS or FAIL ───────────────────
+// ── Automated tests — how a scene test asserts and reports PASS / FAIL ─────
 //
 // A scenario is a tick hook on a live sim, not a process, so it has no exit
 // code. `scene_test` takes its verdict from TELEMETRY instead: the last thing a

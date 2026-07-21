@@ -7,7 +7,7 @@
 
 # ── Drive-allocation spec rig ────────────────────────────────────────────────
 #
-# The scene `scenarios/allocation_spec.rhai` runs against. It exists because the
+# The scene `scenarios/allocation_spec_test.rhai` runs against. It exists because the
 # allocation spec needs TWO rovers that differ in exactly ONE authored opinion:
 # the name of their drive kernel.
 #
@@ -177,7 +177,7 @@ def Xform "AllocationSpec" (
 
         def LunCoProgram "AllocationSpec"
         {
-            uniform asset info:sourceAsset = @lunco://scenarios/allocation_spec.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/allocation_spec_test.rhai@
         }
     }
 }

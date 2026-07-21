@@ -24,7 +24,7 @@
 // reads to set its exit code. The log also carries a per-sample table; a run
 // with no `[legs]` rows proves nothing and is itself a failure.
 
-// Assertion + verdict helpers come from the prelude (`prelude/verdict.rhai`):
+// Assertion + verdict helpers come from the prelude (`prelude/auto_tests.rhai`):
 // `r2` `r4` `t_range` `t_true` `t_bounded` `report_verdict` `fail_fast` `ys`.
 // Do not paste private copies of them into a new test.
 

@@ -64,13 +64,13 @@
 //       both of this scene's rovers are SKID rovers and have no linear mix to
 //       project. Two scenarios carry it between them, and together they cover
 //       the unit test's mix exactly:
-//         * `six_independent_parity.rhai` reads the six-channel
+//         * `six_independent_parity_test.rhai` reads the six-channel
 //           `DriveMix.entries` back out of the engine, asserts each channel's
 //           `forward`/`steer` coefficients, and then pins the PROJECTION through
 //           motion — straight drive (the `forward` term), each steer direction
 //           (the signed `steer` term), and a zero-throttle pivot that can only
 //           happen if the right bank's `steer = -1` is really applied.
-//         * `ackermann_parity.rhai` covers the unit test's own mix,
+//         * `ackermann_parity_test.rhai` covers the unit test's own mix,
 //           `drive_left=1,0 drive_right=1,0 steering=0,1`, including that the
 //           drive ports carry NO steering term at steer 0 and that the
 //           dedicated `steering` entry reaches a real actuator.
@@ -245,7 +245,7 @@ fn on_start(me) {
     print("[spec] legs: settle -> forward -> reverse -> zero-throttle pivot -> full-throttle steer");
     print("[spec] RoverBogus runs full throttle THROUGHOUT on an unresolvable kernel and must NOT move.");
     print("[spec] NOTE: `linear_kernel_projects_each_entry` is covered by");
-    print("[spec]   six_independent_parity.rhai + ackermann_parity.rhai - both rovers here are SKID rovers.");
+    print("[spec]   six_independent_parity_test.rhai + ackermann_parity_test.rhai - both rovers here are SKID rovers.");
 }
 
 fn on_tick(me) {
@@ -715,8 +715,8 @@ fn verdict(s) {
     let bl = "[spec]   failsafe travel (m)       " + r2(s.d_bogus);
     bl += "  over " + r2(s.bogus_driven_s) + "s at full throttle";
     print(bl);
-    print("[spec]   NOT covered here: linear-mix projection (see six_independent_parity.rhai");
-    print("[spec]     and ackermann_parity.rhai - both rovers in this scene are SKID rovers)");
+    print("[spec]   NOT covered here: linear-mix projection (see six_independent_parity_test.rhai");
+    print("[spec]     and ackermann_parity_test.rhai - both rovers in this scene are SKID rovers)");
     print("[spec]   STILL IN RUST: the exact skid_mix_norm(1,1) = (1, -1/3) inner-side value;");
     print("[spec]     under throttle the ground drags the wheel, so -1/3 is not observable.");
 

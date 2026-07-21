@@ -272,7 +272,7 @@ cargo run -p lunco-sandbox --bin sandbox -- --validate assets/vessels/rovers/my_
 matched. `assets/scenes/sandbox/drivetrain_parity.usda` instantiates
 `skid_rover` twice side by side (`drivetrain = "raycast"` at x = −25,
 `"physical"` at x = +25) and auto-runs
-`assets/scenarios/drivetrain_parity.rhai`: settle 3 s → full throttle straight
+`assets/scenarios/drivetrain_parity_test.rhai`: settle 3 s → full throttle straight
 12 s → throttle + steer 6 s.
 
 ```bash

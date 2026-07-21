@@ -39,7 +39,7 @@
 # omega_max * r = 12 * 0.4 = 4.8 m/s. Parity with each other is necessary but
 # not sufficient, so the scenario also pins both to that ABSOLUTE ceiling.
 #
-# `scenarios/ackermann_parity.rhai` (attached below) drives both from ONE tick
+# `scenarios/ackermann_parity_test.rhai` (attached below) drives both from ONE tick
 # loop and fails LOUDLY if they diverge. Run:
 #
 #     sandbox --scene scenes/sandbox/ackermann_parity.usda
@@ -186,7 +186,7 @@ def Xform "AckermannParity" (
 
         def LunCoProgram "ParityTest"
         {
-            uniform asset info:sourceAsset = @lunco://scenarios/ackermann_parity.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/ackermann_parity_test.rhai@
         }
     }
 }

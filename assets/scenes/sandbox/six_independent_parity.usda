@@ -22,7 +22,7 @@
 # unmeasured here, it is UNAUTHORED, and a scenario that pretended to measure it
 # would be comparing a rover against itself.
 #
-# So this rig, and `scenarios/six_independent_parity.rhai` alongside it, is a
+# So this rig, and `scenarios/six_independent_parity_test.rhai` alongside it, is a
 # MOTION-CORRECTNESS gate instead. It is the same kind of safety net and it
 # guards the same refactor, but its contract is absolute rather than relative:
 # instead of "the two realizations agree", it asserts "the authored allocation
@@ -171,7 +171,7 @@ def Xform "SixIndependentParity" (
 
         def LunCoProgram "MotionTest"
         {
-            uniform asset info:sourceAsset = @lunco://scenarios/six_independent_parity.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/six_independent_parity_test.rhai@
         }
     }
 }

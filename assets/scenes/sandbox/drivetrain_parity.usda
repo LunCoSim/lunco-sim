@@ -24,7 +24,7 @@
 # drive force rolls off toward it. With r = 0.4 m both cap at
 # omega_max * r = 12 * 0.4 = 4.8 m/s.
 #
-# `scenarios/drivetrain_parity.rhai` (attached below) drives both from ONE tick
+# `scenarios/drivetrain_parity_test.rhai` (attached below) drives both from ONE tick
 # loop and fails LOUDLY if they diverge again. Run:
 #
 #     sandbox --scene scenes/sandbox/drivetrain_parity.usda
@@ -166,7 +166,7 @@ def Xform "DrivetrainParity" (
 
         def LunCoProgram "ParityTest"
         {
-            uniform asset info:sourceAsset = @lunco://scenarios/drivetrain_parity.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/drivetrain_parity_test.rhai@
         }
     }
 }

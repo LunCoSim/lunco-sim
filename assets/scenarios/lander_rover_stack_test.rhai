@@ -18,7 +18,7 @@
 // `emit("LANDER_ROVER_STACK", "PASS"|"FAIL")` — the telemetry verdict
 // `scene_test` reads for its exit code, plus a `[stack]` sample table.
 //
-// Assertion + verdict helpers come from the prelude (`prelude/verdict.rhai`).
+// Assertion + verdict helpers come from the prelude (`prelude/auto_tests.rhai`).
 // Do not paste private copies of them into a new test.
 
 /// A body must be finite and inside the scene. The "still an assembly" check.
