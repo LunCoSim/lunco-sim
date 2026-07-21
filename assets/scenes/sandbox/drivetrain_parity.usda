@@ -41,8 +41,8 @@ def Xform "DrivetrainParity" (
 
     # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
     # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
-    # tuning are authored against — stated here rather than left to a default.
+    # would be a second answer to the same question. The MOON — every vehicle in
+    # this scene is sized for 1.62, so the scene states it rather than inherit it.
     def PhysicsScene "PhysicsScene"
     {
         vector3f physics:gravityDirection = (0, -1, 0)
