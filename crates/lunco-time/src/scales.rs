@@ -53,6 +53,42 @@ pub fn utc_now_tdb_jd() -> f64 {
     utc_jd_to_tdb_jd(utc_jd)
 }
 
+/// Parse a civil **UTC** datetime into a master **TDB** Julian Date — the inverse
+/// of [`tdb_jd_to_utc_string`], so what the sky clock PRINTS can be pasted back in
+/// to seek to it.
+///
+/// Accepts `YYYY-MM-DD HH:MM:SS`, the same with a `T` separator, `YYYY-MM-DD HH:MM`,
+/// and a bare `YYYY-MM-DD` (midnight). A trailing `UTC` is tolerated because the
+/// displayed string carries one. `None` on anything else — a caller showing a text
+/// field wants to mark it invalid, not seek the sky to a guess.
+///
+/// Goes through the leap-second-aware UTC→TDB chain, not a subtraction: typing a
+/// date is a civil-time act, and civil time is ~69 s from the ephemeris epoch.
+pub fn utc_string_to_tdb_jd(s: &str) -> Option<f64> {
+    use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+
+    let s = s.trim().trim_end_matches("UTC").trim();
+    let dt: NaiveDateTime = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
+        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M"))
+        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M"))
+        .or_else(|_| {
+            NaiveDate::parse_from_str(s, "%Y-%m-%d").map(|d| d.and_hms_opt(0, 0, 0).unwrap())
+        })
+        .ok()?;
+
+    let utc_jd = JulianDate::from_calendar(
+        dt.year(),
+        dt.month() as u8,
+        dt.day() as u8,
+        dt.hour() as u8,
+        dt.minute() as u8,
+        dt.second() as f64,
+    )
+    .to_f64();
+    Some(utc_jd_to_tdb_jd(utc_jd))
+}
+
 /// Every derived scale at a given master **TDB** epoch. Julian Dates throughout;
 /// GMST in radians `[0, 2π)`. Build with [`TimeScales::from_tdb_jd`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -172,5 +208,43 @@ mod tests {
             (delta - expected).abs() < 1.0e-3,
             "GMST should advance ~{expected} rad/h, got {delta}"
         );
+    }
+}
+
+#[cfg(test)]
+mod seek_parse_tests {
+    use super::*;
+
+    /// **Round trip.** The string the sky clock prints must parse back to the
+    /// epoch it was printed from — that is the whole contract of a seek field
+    /// that shows you the current time and lets you edit it.
+    #[test]
+    fn a_printed_utc_string_parses_back_to_its_own_epoch() {
+        let tdb = 2_461_010.5_f64;
+        let printed = tdb_jd_to_utc_string(tdb);
+        let back = utc_string_to_tdb_jd(&printed).expect("its own output must parse");
+        // Printing rounds to whole seconds, so the round trip is second-exact.
+        let err_secs = (back - tdb).abs() * SECS_PER_DAY;
+        assert!(err_secs < 1.0, "round trip drifted {err_secs} s via '{printed}'");
+    }
+
+    /// Civil time is NOT the ephemeris epoch: a naive parse that skipped the
+    /// UTC→TDB chain lands ~69 s early, which at 1000× sky rate is a visible jump.
+    #[test]
+    fn parsing_applies_the_utc_to_tdb_offset() {
+        let tdb = utc_string_to_tdb_jd("2000-01-01 12:00:00").unwrap();
+        let raw_utc_jd = 2_451_545.0;
+        let offset = (tdb - raw_utc_jd) * SECS_PER_DAY;
+        assert!((offset - 64.184).abs() < 0.5, "TDB−UTC should be ≈64.184 s, got {offset}");
+    }
+
+    #[test]
+    fn shorter_forms_and_a_trailing_utc_are_accepted_and_junk_is_not() {
+        assert!(utc_string_to_tdb_jd("2026-07-22 06:00:06 UTC").is_some());
+        assert!(utc_string_to_tdb_jd("2026-07-22T06:00").is_some());
+        assert!(utc_string_to_tdb_jd("2026-07-22").is_some());
+        assert!(utc_string_to_tdb_jd("").is_none());
+        assert!(utc_string_to_tdb_jd("tomorrow").is_none());
+        assert!(utc_string_to_tdb_jd("2026-13-45 99:99:99").is_none());
     }
 }

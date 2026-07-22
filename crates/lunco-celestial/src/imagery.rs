@@ -29,7 +29,7 @@
 //! `big_space_setup`'s note on why the untextured state is the default.
 
 use bevy::prelude::*;
-use lunco_materials::TextureLayer;
+use lunco_materials::{ParamValue, TextureLayer};
 use serde::Deserialize;
 
 use crate::globe_lod::{GlobeLod, GlobeTiles};
@@ -48,6 +48,26 @@ struct BodyImageryDecl {
 /// frame that finds each one, and a re-bind never churns the tile set.
 #[derive(Resource, Default)]
 pub(crate) struct BoundBodyImagery(Vec<i32>);
+
+/// Bind an albedo map onto a globe's look and NEUTRALISE the body colour.
+///
+/// `surface_color` is the body's untextured appearance (ocean blue, regolith
+/// grey), and `blueprint.wgsl` MULTIPLIES it by the albedo sample. That is what
+/// makes an unbound albedo — Bevy's white fallback — render as the body colour
+/// exactly. Bind real imagery without touching it and the same multiply becomes
+/// a tint: Blue Marble came out through `[0.13, 0.32, 0.66]`, so the oceans went
+/// near-black-blue and every continent lost its warmth ("Earth is too blue").
+///
+/// The colour and the map are two answers to ONE question, so binding a map has
+/// to retire the colour. White is the identity of the multiply, which is the
+/// whole reason the untextured path works — the texture then reproduces its own
+/// pixels. Both binding paths (authored map, dataset default) go through here so
+/// they cannot disagree.
+fn bind_albedo(look: &lunco_materials::ShaderLook, image: Handle<Image>) -> lunco_materials::ShaderLook {
+    look.clone()
+        .with("surface_color", ParamValue::Vec3([1.0, 1.0, 1.0]))
+        .with_texture(TextureLayer::Albedo, image)
+}
 
 /// Adopt a body map AUTHORED on the body prim
 /// (`asset lunco:body:albedoMap = @…@`) onto that body's globe.
@@ -75,7 +95,7 @@ pub(crate) fn adopt_authored_body_albedo(
             continue; // globe not built yet — `Changed` still holds next frame
         };
         let image = asset_server.load(albedo.asset.clone());
-        lod.look = lod.look.clone().with_texture(TextureLayer::Albedo, image);
+        lod.look = bind_albedo(&lod.look, image);
         drop_resident_tiles(&mut tiles, &mut commands);
         if !bound.0.contains(&decl.naif) {
             bound.0.push(decl.naif);
@@ -160,7 +180,7 @@ pub(crate) fn bind_dataset_body_imagery(
         // shared pool in turn, so this one string resolves the same whether the
         // file shipped with the build or was downloaded a moment ago.
         let image = asset_server.load(entry.artifact_uri());
-        lod.look = lod.look.clone().with_texture(TextureLayer::Albedo, image);
+        lod.look = bind_albedo(&lod.look, image);
         drop_resident_tiles(&mut tiles, &mut commands);
         bound.0.push(naif_id);
         info!(

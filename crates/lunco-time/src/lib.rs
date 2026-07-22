@@ -37,7 +37,9 @@ pub use interaction::{
 };
 
 pub mod scales;
-pub use scales::{tdb_jd_to_utc_string, utc_jd_to_tdb_jd, utc_now_tdb_jd, TimeScales};
+pub use scales::{
+    tdb_jd_to_utc_string, utc_jd_to_tdb_jd, utc_now_tdb_jd, utc_string_to_tdb_jd, TimeScales,
+};
 
 /// Seconds in one day — the JD/epoch unit conversion.
 pub const SECS_PER_DAY: f64 = 86_400.0;

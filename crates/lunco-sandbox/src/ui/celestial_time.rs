@@ -54,6 +54,64 @@ fn sky_clock_ui(
             .on_hover_text(format!("JD {epoch_jd:.4} (TDB)"));
     });
 
+    // ── Seek to a date ────────────────────────────────────────────────────
+    //
+    // The buffer lives in egui memory keyed by the widget id, not in a `Local`:
+    // this body is drawn from BOTH the Time menu and the floating pill, and a
+    // per-caller `Local` would give the two surfaces different half-typed text.
+    // Seeded from the displayed time, so opening it shows where you are and the
+    // string is already in the format it accepts.
+    let buf_id = egui::Id::new("sky_clock_seek_buf");
+    let mut buf: String = ui
+        .data(|d| d.get_temp::<String>(buf_id))
+        .unwrap_or_else(|| utc.trim_end_matches(" UTC").to_string());
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Go to").weak().size(11.0));
+        let parsed = lunco_time::utc_string_to_tdb_jd(&buf);
+        let field = egui::TextEdit::singleline(&mut buf)
+            .desired_width(172.0)
+            .font(egui::TextStyle::Monospace)
+            // Invalid text is marked, never silently ignored: a seek that does
+            // nothing and says nothing reads as a broken clock.
+            .text_color_opt(parsed.is_none().then_some(egui::Color32::from_rgb(220, 120, 120)));
+        let resp = ui.add(field).on_hover_text(
+            "UTC date to put the sky at — `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DD HH:MM` \
+             or `YYYY-MM-DD`. Moves the SKY only; the simulation clock is untouched.",
+        );
+        let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let go = ui
+            .add_enabled(parsed.is_some(), egui::Button::new("Set"))
+            .on_disabled_hover_text("Not a date this understands — see the field's tooltip.")
+            .clicked();
+        if let (Some(jd), true) = (parsed, go || entered) {
+            request = Some(SetClock {
+                clock: ClockId::Celestial,
+                epoch_jd: Some(jd),
+                ..default()
+            });
+        }
+        // "Now" is the state the scene starts in when it authors no epoch, so it
+        // has to be reachable after a seek — otherwise the only way back to the
+        // real sky is a restart.
+        if ui
+            .button("Now")
+            .on_hover_text("Jump the sky back to the current wall-clock time.")
+            .clicked()
+        {
+            let now = lunco_time::utc_now_tdb_jd();
+            buf = lunco_time::tdb_jd_to_utc_string(now)
+                .trim_end_matches(" UTC")
+                .to_string();
+            request = Some(SetClock {
+                clock: ClockId::Celestial,
+                epoch_jd: Some(now),
+                ..default()
+            });
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(buf_id, buf));
+
     ui.horizontal(|ui| {
         // Coupling: this is the pause story. "Follow sim" hangs the clock under
         // the tick master (freezes with the world); "Independent" re-parents it
