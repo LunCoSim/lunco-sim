@@ -28,9 +28,9 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   // radius and `l_max` its length. Authored as the prim's own scale in USD, and
   // repeated here because a Modelica `input` can only be fed by a constant or by
   // a wire from another model's port, not by an attribute of the geometry.
-  parameter Real w_max = 0.5 "Plume base radius at full throttle (m)";
-  parameter Real l_max = 2.5 "Plume length at full throttle (m)";
-  parameter Real width_idle = 0.28
+  input Real w_max = 0.5 "Plume base radius at full throttle (m)";
+  input Real l_max = 2.5 "Plume length at full throttle (m)";
+  input Real width_idle = 0.28
     "Base-radius fraction at zero throttle; width blooms fast, then saturates";
 
   // ── Photometry ────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   // (values above 1 are the whole point of an emissive), so this is a relative
   // radiance, not a 0..1 colour. KEEP IT AS `plume.wgsl`'s `core_color`:
   // (6.0, 3.5, 0.9) gives 0.2126*6.0 + 0.7152*3.5 + 0.0722*0.9 = 3.844.
-  parameter Real luminance = 3.844 "Rec.709 luma of the plume's emissive colour";
+  input Real luminance = 3.844 "Rec.709 luma of the plume's emissive colour";
 
   // The ONE authored photometric constant: luminous exitance per unit emissive
   // radiance, in lm/m^2. It is the unit conversion between "how bright the shader
@@ -61,14 +61,14 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   // ~90 lux at the 25 m `lunco:light:range` cap, under 1% of the sun, so it
   // cannot quietly become scene fill. That 680000 figure is the empirically
   // verified one; a derivation landing far from it is wrong, not the target.
-  parameter Real exitance = 44200.0
+  input Real exitance = 44200.0
     "Luminous exitance per unit emissive radiance (lm/m^2)";
 
   // Bevy treats a point light's `radius` as a physical source SIZE, so growing it
   // with the plume softens the terminator of the light pool instead of leaving a
   // hard inverse-square dot.
-  parameter Real r_idle = 0.06 "Source radius at zero throttle (m)";
-  parameter Real r_gain = 0.6 "Additional source radius at full throttle (m)";
+  input Real r_idle = 0.06 "Source radius at zero throttle (m)";
+  input Real r_gain = 0.6 "Additional source radius at full throttle (m)";
 
   output Real width "Plume base radius at this throttle (m)";
   output Real length "Plume length at this throttle (m)";

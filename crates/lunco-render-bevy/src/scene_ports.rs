@@ -56,11 +56,9 @@
 //! contract, so a backend that accepts a name it does not own silently swallows
 //! another layer's write and returns `true`, leaving propagation nothing to
 //! report. Every op here is gated on the COMPONENT that would receive the value:
-//! a prim with no `PointLight` refuses `light_intensity`, so the next backend gets
-//! its turn and a genuinely dangling wire is still reported as dangling. Nothing
 //! is accepted provisionally.
 
-use bevy::light::PointLight;
+use bevy::light::{PointLight, SpotLight};
 use bevy::prelude::*;
 use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
 
@@ -84,18 +82,27 @@ const TRANSFORM_PORTS: [&str; 6] = [
 ];
 
 fn read_light(world: &World, entity: Entity, name: &str) -> Option<f32> {
-    let light = world.get::<PointLight>(entity)?;
-    match name {
-        "light_intensity" => Some(light.intensity),
-        "light_radius" => Some(light.radius),
-        // `Color` is an enum over colour spaces; the port currency is the LINEAR
-        // component, because that is the space a photometric or physical source
-        // publishes in and the only one in which a wired value composes.
-        "light_color_r" => Some(light.color.to_linear().red),
-        "light_color_g" => Some(light.color.to_linear().green),
-        "light_color_b" => Some(light.color.to_linear().blue),
-        _ => None,
+    if let Some(light) = world.get::<PointLight>(entity) {
+        return match name {
+            "light_intensity" => Some(light.intensity),
+            "light_radius" => Some(light.radius),
+            "light_color_r" => Some(light.color.to_linear().red),
+            "light_color_g" => Some(light.color.to_linear().green),
+            "light_color_b" => Some(light.color.to_linear().blue),
+            _ => None,
+        };
     }
+    if let Some(light) = world.get::<SpotLight>(entity) {
+        return match name {
+            "light_intensity" => Some(light.intensity),
+            "light_radius" => Some(light.radius),
+            "light_color_r" => Some(light.color.to_linear().red),
+            "light_color_g" => Some(light.color.to_linear().green),
+            "light_color_b" => Some(light.color.to_linear().blue),
+            _ => None,
+        };
+    }
+    None
 }
 
 fn read_transform(world: &World, entity: Entity, name: &str) -> Option<f32> {
@@ -128,30 +135,47 @@ fn unchanged(world: &World, entity: Entity, name: &str, v: f32) -> bool {
 }
 
 fn write_light(world: &mut World, entity: Entity, name: &str, v: f32) -> bool {
-    if world.get::<PointLight>(entity).is_none() || !LIGHT_PORTS.contains(&name) {
+    if !LIGHT_PORTS.contains(&name) {
         return false;
     }
     if unchanged(world, entity, name, v) {
         return true;
     }
-    let Some(mut light) = world.get_mut::<PointLight>(entity) else {
-        return false;
-    };
-    match name {
-        "light_intensity" => light.intensity = v,
-        "light_radius" => light.radius = v,
-        _ => {
-            let mut lin = light.color.to_linear();
-            match name {
-                "light_color_r" => lin.red = v,
-                "light_color_g" => lin.green = v,
-                "light_color_b" => lin.blue = v,
-                _ => return false,
+    if let Some(mut light) = world.get_mut::<PointLight>(entity) {
+        match name {
+            "light_intensity" => light.intensity = v,
+            "light_radius" => light.radius = v,
+            _ => {
+                let mut lin = light.color.to_linear();
+                match name {
+                    "light_color_r" => lin.red = v,
+                    "light_color_g" => lin.green = v,
+                    "light_color_b" => lin.blue = v,
+                    _ => return false,
+                }
+                light.color = Color::LinearRgba(lin);
             }
-            light.color = Color::LinearRgba(lin);
         }
+        return true;
     }
-    true
+    if let Some(mut light) = world.get_mut::<SpotLight>(entity) {
+        match name {
+            "light_intensity" => light.intensity = v,
+            "light_radius" => light.radius = v,
+            _ => {
+                let mut lin = light.color.to_linear();
+                match name {
+                    "light_color_r" => lin.red = v,
+                    "light_color_g" => lin.green = v,
+                    "light_color_b" => lin.blue = v,
+                    _ => return false,
+                }
+                light.color = Color::LinearRgba(lin);
+            }
+        }
+        return true;
+    }
+    false
 }
 
 fn write_transform(world: &mut World, entity: Entity, name: &str, v: f32) -> bool {
@@ -184,7 +208,7 @@ pub const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
         // `write_input` telling the same story: every name reported here is one a
         // write would be accepted for, and no name is hidden because it currently
         // happens to hold a default.
-        if world.get::<PointLight>(entity).is_some() {
+        if world.get::<PointLight>(entity).is_some() || world.get::<SpotLight>(entity).is_some() {
             for name in LIGHT_PORTS {
                 out.push(PortRef {
                     name: name.to_string(),
@@ -257,6 +281,21 @@ mod tests {
         assert_eq!(light.intensity, 680_000.0);
         assert_eq!(light.radius, 0.66);
         assert_eq!(reg.read_input_port(app.world(), e, "light_intensity"), Some(680_000.0));
+    }
+
+    #[test]
+    fn a_port_write_drives_a_spot_light() {
+        let mut app = app();
+        let e = app.world_mut().spawn(SpotLight { intensity: 0.0, ..default() }).id();
+        let reg = app.world().resource::<PortRegistry>().clone();
+
+        assert!(reg.write_port(app.world_mut(), e, "light_intensity", 500_000.0));
+        assert!(reg.write_port(app.world_mut(), e, "light_radius", 0.5));
+
+        let light = app.world().get::<SpotLight>(e).unwrap();
+        assert_eq!(light.intensity, 500_000.0);
+        assert_eq!(light.radius, 0.5);
+        assert_eq!(reg.read_input_port(app.world(), e, "light_intensity"), Some(500_000.0));
     }
 
     /// A scene property must never resolve as a connection SOURCE — that is what

@@ -667,6 +667,9 @@ pub fn sync_modelica_outputs(
 ) {
     for (model, mut comp) in &mut q {
         upsert_ports(&mut comp.outputs, model.variables.iter());
+        for (k, v) in &model.inputs {
+            comp.inputs.entry(k.clone()).or_insert(*v);
+        }
         comp.status = modelica_status(model);
     }
 }

@@ -48,6 +48,21 @@ fn library_member_bound_input_survives_as_runtime_slot() {
          got {names:?} — the bound-input strip was skipped on the library path, so \
          every wire into this model is rejected and it runs on its defaults"
     );
+    for expected in [
+        "throttle",
+        "w_max",
+        "l_max",
+        "width_idle",
+        "luminance",
+        "exitance",
+        "r_idle",
+        "r_gain",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "PlumePhotometry should expose `{expected}` as a runtime input; got {names:?}"
+        );
+    }
 }
 
 #[test]

@@ -469,9 +469,8 @@ fn collect_inputs_with_defaults_from_classes(
     for class in classes.values() {
         for component in class.components.values() {
             if matches!(component.causality, Causality::Input(_)) {
-                if let Some(value) = extract_numeric_binding(&component.binding) {
-                    inputs.insert(component.name.clone(), value);
-                }
+                let value = extract_numeric_binding(&component.binding).unwrap_or(0.0);
+                inputs.insert(component.name.clone(), value);
             }
         }
         collect_inputs_with_defaults_from_classes(&class.classes, inputs);
