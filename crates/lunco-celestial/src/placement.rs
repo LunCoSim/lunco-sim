@@ -201,6 +201,47 @@ pub fn anchor_solar_frame_to_site(
     // has — the old "compute the translation from the rounded f32 quat"
     // trick is obsolete.
     let align_f32 = align.as_quat();
+    // Site offset in the (rotating) body frame — rotated by the STORED
+    // frame quat inside the walk, matching what tiles/children inherit.
+    let site_in_solar = site_geo_offset
+        .and_then(|(body_id, geo_local)| stored_in_solar(body_id, geo_local))
+        .unwrap_or(site_frame_origin);
+    let translation = -site_in_solar;
+
+    // The site pin is the ONE writer of the scene's ecliptic→world placement, so
+    // it is the one place this has to be checked: everything downstream — every
+    // grid cell, every tile's sample coordinate, every collider — is derived from
+    // the pair written just below, and a non-finite value here is not a bad pose,
+    // it is a poisoned FRAME.
+    //
+    // big_space is what makes it unrecoverable rather than merely wrong.
+    // `Grid::translation_to_grid` converts with `round(x / edge) as GridPrecision`,
+    // and Rust's float→int cast SATURATES: `-inf as i64` is `i64::MIN`, `inf` is
+    // `i64::MAX`. So an infinite translation does not produce an infinite cell that
+    // later maths can carry — it produces an extreme FINITE cell that looks
+    // legitimate to every consumer, while the returned remainder (`x - x_r*edge`
+    // = `inf - inf`) is NaN. From there the damage is silent and total: the cell
+    // magnitude overflows the drift diagnostics, and terrain samples the oracle at
+    // NaN coordinates, baking all-NaN tiles whose AABB half-extent is NaN — which
+    // is what finally trips `Aabb3d::new`'s `half_size >= 0.0` assertion over in
+    // `bevy_picking`, an entire subsystem away from the cause.
+    //
+    // Refusing the write keeps the previous good pin (or the un-anchored
+    // heliocentric default) instead, which is visibly wrong in ONE place rather
+    // than subtly wrong everywhere.
+    if !translation.is_finite() || !align_f32.is_finite() {
+        bevy::log::error!(
+            "[celestial] site pin REFUSED: non-finite site frame \
+             (translation={translation:?}, align={align_f32:?}). \
+             Anchor body {:?}, geodetic {:?}. Leaving the previous pin in place — \
+             writing this would saturate the big_space cell and NaN every \
+             derived frame.",
+            anchor_opt.map(|a| a.body),
+            anchor_opt.map(|a| &a.geodetic),
+        );
+        return;
+    }
+
     if let Ok((align_entity, mut align_tf)) = q_align.single_mut() {
         if align_tf.rotation != align_f32 {
             align_tf.rotation = align_f32;
@@ -213,12 +254,6 @@ pub fn anchor_solar_frame_to_site(
         // ecliptic frame (see `SiteAligned`).
         commands.entity(align_entity).try_insert(crate::big_space_setup::SiteAligned);
     }
-    // Site offset in the (rotating) body frame — rotated by the STORED
-    // frame quat inside the walk, matching what tiles/children inherit.
-    let site_in_solar = site_geo_offset
-        .and_then(|(body_id, geo_local)| stored_in_solar(body_id, geo_local))
-        .unwrap_or(site_frame_origin);
-    let translation = -site_in_solar;
 
     if let Ok(child_of) = q_parents.get(solar_entity) {
         if let Ok(parent_grid) = q_grids.get(child_of.parent()) {

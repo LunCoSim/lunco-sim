@@ -402,9 +402,94 @@ pub fn read_geo_tags<R: Read + Seek>(
     })
 }
 
+/// `GDAL_NODATA` — the ASCII TIFF tag GDAL writes to declare which sample value
+/// means "no measurement here".
+pub const GDAL_NODATA_TAG: u16 = 42113;
+
+/// No body's surface is this far from its datum (metres). Olympus Mons is 22 km;
+/// the deepest lunar basin ~9 km. 10 000 km is four orders of magnitude of
+/// headroom over any real relief, and still ~30 orders below the float sentinels
+/// this rejects — no value is both plausible terrain and beyond this.
+pub const MAX_PLAUSIBLE_ELEVATION_M: f64 = 1.0e7;
+
+/// The raster's declared nodata value, if it states one.
+pub fn read_gdal_nodata<R: Read + Seek>(dec: &mut tiff::decoder::Decoder<R>) -> Option<f64> {
+    dec.get_tag_ascii_string(tiff::tags::Tag::Unknown(GDAL_NODATA_TAG))
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+}
+
+/// Map a raw elevation sample to `NaN` when it is not a measurement.
+///
+/// **Nodata must become `NaN` at decode, because `NaN` is the only spelling of
+/// "no value" the rest of the pipeline recognises.** Every downstream stage —
+/// the nodata fill in `lunco-terrain-bake`, the resampler in `lunco-assets`, the
+/// Catmull-Rom interpolant, the surface oracle — tests `is_finite()`. A sentinel
+/// that is a finite float therefore reads as *terrain* the whole way down, and
+/// nothing further along can distinguish it from a real elevation.
+///
+/// This lives here, in the crate both the writer and the reader already share,
+/// because both decode rasters and each previously carried its own decode loop.
+/// One of them getting this right is not enough.
+///
+/// Two independent tests, because either alone leaves a hole:
+///
+/// - **The declared value** (`GDAL_NODATA`). Authoritative, and the only thing
+///   that catches an in-range sentinel like `-9999`, which is a perfectly
+///   plausible elevation. Compared with a relative epsilon: the tag is ASCII and
+///   rasters are often `f32`, so the stored sample is the tag's value
+///   round-tripped through `f32` and rarely bit-equal.
+/// - **The magnitude bound.** Rasters that omit the tag still use sentinels, and
+///   the failure is silent and severe. `-3.4028226e38` (float `-FLT_MAX`, the
+///   ESRI/GDAL default) survived as a "height": it saturated a big_space cell to
+///   `i64::MIN`, and a terrain tile rebased by it produced vertices at `6.8e38`,
+///   which overflows `f32` to infinity — an all-infinite vertex column whose
+///   AABB half-extent is `NaN`, which is what finally trips `Aabb3d::new`'s
+///   `half_size >= 0.0` assertion inside `bevy_picking`, an entire subsystem
+///   away from the raster that caused it.
+#[inline]
+pub fn nodata_to_nan(v: f64, declared: Option<f64>) -> f64 {
+    if !v.is_finite() || v.abs() > MAX_PLAUSIBLE_ELEVATION_M {
+        return f64::NAN;
+    }
+    match declared {
+        Some(nd) if (v - nd).abs() <= nd.abs().max(1.0) * 1e-6 => f64::NAN,
+        _ => v,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sentinel that actually shipped in a lunar DEM and reached the surface
+    /// oracle as a height. It is finite, so `is_finite()` alone never caught it.
+    #[test]
+    fn float_max_sentinel_is_nodata_even_when_undeclared() {
+        let esri: f64 = -3.4028226550889045e38;
+        assert!(esri.is_finite(), "the whole problem: the sentinel is finite");
+        assert!(nodata_to_nan(esri, None).is_nan());
+        assert!(nodata_to_nan(f64::from(f32::MAX), None).is_nan());
+    }
+
+    /// A declared in-range sentinel is only catchable via the tag, and must
+    /// survive the f32 round-trip the raster stores it through.
+    #[test]
+    fn declared_nodata_matches_through_f32_rounding() {
+        let stored = f64::from(-9999.0f32);
+        assert!(nodata_to_nan(stored, Some(-9999.0)).is_nan());
+        // Undeclared, the same value is a perfectly ordinary elevation.
+        assert_eq!(nodata_to_nan(stored, None), stored);
+    }
+
+    /// Real lunar elevations — including the deepest basin and a high datum —
+    /// must pass through untouched.
+    #[test]
+    fn real_elevations_survive() {
+        for v in [0.0, -9000.0, 1200.0, 22_000.0, -1946.0] {
+            assert_eq!(nodata_to_nan(v, Some(-3.4028226550889045e38)), v, "{v} m");
+        }
+    }
 
     /// Node-based spacing: the extent must span corner to corner, so `res - 1`
     /// intervals cover it. The Apollo 15 crop is the live case — 1002 m over 512

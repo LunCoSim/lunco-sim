@@ -54,6 +54,11 @@ pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemE
     let (w, h) = dec.dimensions().map_err(DemError::Tiff)?;
     let (w, h) = (w as usize, h as usize);
 
+    // Read the nodata declaration BEFORE the pixels: `read_image` advances the
+    // decoder, and the tag is the raster telling us which samples are not
+    // measurements. See `nodata_to_nan` for why this cannot be skipped.
+    let declared_nodata = lunco_geotiff::read_gdal_nodata(&mut dec);
+
     let heights: Vec<f64> = match dec.read_image().map_err(DemError::Tiff)? {
         D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
         D::F64(v) => v,
@@ -68,6 +73,10 @@ pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemE
     if heights.len() != w * h {
         return Err(DemError::SizeMismatch { expected: w * h, got: heights.len() });
     }
+    let heights = heights
+        .into_iter()
+        .map(|v| lunco_geotiff::nodata_to_nan(v, declared_nodata))
+        .collect();
     Ok((w, h, heights))
 }
 
@@ -79,6 +88,11 @@ pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemE
 /// elevation so the collider and mesh have no holes (mirrors the exporter's own
 /// `normalize_array` nodata handling). Heights stay **absolute** (metres of
 /// elevation), so the surface sits at its true lunar datum height.
+///
+/// The fill below tests `is_finite()`, which is sufficient ONLY because
+/// [`decode_geotiff_f64`] has already mapped every sentinel to `NaN` — see
+/// [`nodata_to_nan`]. Do not "simplify" that away: a finite sentinel reaching
+/// here is indistinguishable from terrain and is filled into the surface.
 pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
     let (w, h, mut heights) = decode_geotiff_f64(bytes)?;
     if w != h {

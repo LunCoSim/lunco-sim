@@ -299,7 +299,18 @@ fn dbg_cell_drift(
     }
     let mut worst: Option<(i64, String, CellCoord, bevy::math::Vec3, bool)> = None;
     for (e, c, tf, name, is_origin) in &q {
-        let mag = c.x.abs() + c.y.abs() + c.z.abs();
+        // Saturating, and widened to i64 before summing, because the cells this
+        // is here to CATCH are exactly the ones that break the naive form:
+        // `Grid::translation_to_grid` casts `round(x / edge)` to `GridPrecision`,
+        // and a float→int cast saturates, so a non-finite pose lands on
+        // `GridPrecision::MIN/MAX`. On `MIN`, `abs()` overflows; three large
+        // magnitudes then overflow the sum. A diagnostic that panics on the
+        // pathology it exists to report tells you nothing — and, worse, blames
+        // itself. (`GridPrecision` is feature-selected, i8…i128, so this must
+        // not assume a width.)
+        let mag = (c.x.saturating_abs() as i64)
+            .saturating_add(c.y.saturating_abs() as i64)
+            .saturating_add(c.z.saturating_abs() as i64);
         if mag > 8 && worst.as_ref().is_none_or(|w| mag > w.0) {
             let nm = name.map(|n| n.to_string()).unwrap_or_else(|| format!("{e}"));
             worst = Some((mag, nm, *c, tf.translation, is_origin));
@@ -319,7 +330,7 @@ fn dbg_origin_bracket_first(
 ) {
     if *printed > 120 { return; }
     if let Ok((c, tf)) = q.single() {
-        if c.y.abs() > 3 {
+        if c.y.saturating_abs() > 3 {
             *printed += 1;
             bevy::log::warn!("[BRACKET-First] cell.y={} tf.y={:.1}", c.y, tf.translation.y);
         }
@@ -332,7 +343,7 @@ fn dbg_origin_bracket_last(
 ) {
     if *printed > 120 { return; }
     if let Ok((c, tf)) = q.single() {
-        if c.y.abs() > 3 {
+        if c.y.saturating_abs() > 3 {
             *printed += 1;
             bevy::log::warn!("[BRACKET-Last ] cell.y={} tf.y={:.1}", c.y, tf.translation.y);
         }

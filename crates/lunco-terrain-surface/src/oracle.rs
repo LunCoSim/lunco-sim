@@ -236,9 +236,57 @@ impl HeightSource for SurfaceOracle {
         for m in &self.modifiers {
             h = m.apply(x, z, h);
         }
-        h
+        // The oracle is the surface's SINGLE truth, so it is also the single
+        // place a non-finite height may be caught — downstream (tile bake,
+        // collider ring, obstacle grid) each guarding again would be four
+        // copies of one invariant, and each would hide the origin a little
+        // better than the last.
+        //
+        // A non-finite height is never a terrain fact: it means a non-finite
+        // SAMPLE COORDINATE reached us (a poisoned frame upstream — see
+        // `lunco-celestial`'s site anchor), or a modifier divided by an
+        // authored zero. Substituting 0.0 keeps one bad tile from taking the
+        // frame down, but it is a containment, not a cure: an all-NaN tile
+        // bakes an all-NaN vertex column, whose AABB half-extent is NaN, and
+        // `Aabb3d::new`'s `half_size >= 0.0` assertion then fails inside
+        // `bevy_picking`. So it REPORTS, once, with the coordinate that did
+        // it — the value that actually identifies the upstream culprit.
+        // Absurd-but-finite is reported too, and NOT substituted: it is a real
+        // number the maths produced, so silently replacing it would hide the
+        // modifier that produced it. `1e7` m is ~6× the Moon's radius — no
+        // legitimate surface height reaches it.
+        if h.is_finite() && h.abs() > 1.0e7
+            && !ABSURD_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            bevy::log::error!(
+                "[terrain-oracle] absurd height {h:e} m at sample ({x}, {z}) \
+                 — finite, so no guard catches it, but far outside any real \
+                 surface. A modifier (curvature? over-zoom?) is producing it."
+            );
+        }
+        if h.is_finite() {
+            return h;
+        }
+        if !NON_FINITE_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            bevy::log::error!(
+                "[terrain-oracle] non-finite height at sample ({x}, {z}) — substituting 0.0. \
+                 A non-finite SAMPLE COORDINATE (x/z above) means the terrain's frame was \
+                 poisoned upstream; a finite coordinate means a modifier produced it."
+            );
+        }
+        0.0
     }
 }
+
+/// One-shot latch for the oracle's non-finite report. A poisoned frame makes
+/// EVERY sample non-finite, so an unlatched log would emit once per vertex per
+/// tile per frame and bury the thing it is trying to show.
+static NON_FINITE_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// As [`NON_FINITE_REPORTED`], for the absurd-magnitude report.
+static ABSURD_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// First intersection of a ray with the composed surface, in TERRAIN-LOCAL
 /// space (heights along +Y over local `(x, z)`); `None` when the ray never

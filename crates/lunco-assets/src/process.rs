@@ -639,6 +639,9 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
         .map_err(|e| io_err(format!("reading DTM dimensions: {e}")))?;
     let (src_w, src_h) = (src_w as usize, src_h as usize);
     use tiff::decoder::DecodingResult as D;
+    // Before the pixels: `read_image` advances the decoder, and this states which
+    // samples are not measurements.
+    let declared_nodata = lunco_geotiff::read_gdal_nodata(&mut dec);
     let heights_f64: Vec<f64> = match dec.read_image().map_err(|e| io_err(format!("reading DTM pixels: {e}")))? {
         D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
         D::F64(v) => v,
@@ -649,6 +652,14 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
         D::I32(v) => v.into_iter().map(|x| x as f64).collect(),
         _ => return Err(io_err("unsupported DTM sample format (need numeric Gray)".into())),
     };
+    // Sentinels → `NaN` at decode, so the resampler's `is_finite()` test below
+    // actually means what it says. Shared with the terrain baker's reader: both
+    // decode rasters, and one of them getting this right is not enough
+    // (`lunco_geotiff::nodata_to_nan`).
+    let heights_f64: Vec<f64> = heights_f64
+        .into_iter()
+        .map(|v| lunco_geotiff::nodata_to_nan(v, declared_nodata))
+        .collect();
     Ok(GraySource {
         w: src_w,
         h: src_h,

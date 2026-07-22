@@ -555,7 +555,7 @@ pub fn trajectory_mesh_init_system(
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new());
-        
+
         let mesh_handle = meshes.add(mesh);
         let color = view.color;
         let emissive_color = color * 15.0;
@@ -583,6 +583,7 @@ pub fn trajectory_mesh_init_system(
                 Mesh3d(mesh_handle),
                 look,
                 TrajectoryMeshMarker,
+                bevy::picking::Pickable::IGNORE,
                 Visibility::Visible,
                 NoFrustumCulling,
                 Transform::default(),
