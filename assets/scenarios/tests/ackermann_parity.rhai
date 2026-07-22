@@ -516,9 +516,9 @@ fn verdict(s) {
     let f = [];
 
     // ── Straight-line parity ────────────────────────────────────────────────
-    f.push(t_rel(s.vterm_rc, s.vterm_ph, 15.0, "terminal speed (m/s)"));
-    f.push(t_rel(s.vmax_rc, s.vmax_ph, 15.0, "peak speed (m/s)"));
-    f.push(t_rel(s.d_rc, s.d_ph, 20.0, "distance travelled (m)"));
+    f.push(t_rel(s.vterm_rc, s.vterm_ph, 5.0, "terminal speed (m/s)"));
+    f.push(t_rel(s.vmax_rc, s.vmax_ph, 5.0, "peak speed (m/s)"));
+    f.push(t_rel(s.d_rc, s.d_ph, 5.0, "distance travelled (m)"));
 
     // Absolute ceiling + floor: both must honour omega_max * r, not merely match.
     // LUNAR TRACTION sets the floor, not the drivetrain. `omega_max * r` is a
@@ -559,7 +559,7 @@ fn verdict(s) {
         m_small += "deg, expected > 15deg under steer " + s.steer_cmd + ")";
         f.push(t_true(s.yaw_rc.abs() > 15.0 && s.yaw_ph.abs() > 15.0, m_small));
 
-        f.push(t_rel(s.yaw_rc, s.yaw_ph, 35.0, "heading change (deg)"));
+        f.push(t_rel(s.yaw_rc, s.yaw_ph, 5.0, "heading change (deg)"));
 
         // Steer authority is REAL, not drift: the commanded turn must dominate
         // the same rover's own unsteered wander by a wide margin. Comparing a

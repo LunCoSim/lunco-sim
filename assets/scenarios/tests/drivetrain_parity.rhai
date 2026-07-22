@@ -328,9 +328,9 @@ fn on_stop(me) {
 fn verdict(s) {
     let f = [];
 
-    f.push(t_rel(s.vterm_rc, s.vterm_ph, 15.0, "terminal speed (m/s)"));
-    f.push(t_rel(s.vmax_rc, s.vmax_ph, 15.0, "peak speed (m/s)"));
-    f.push(t_rel(s.d_rc, s.d_ph, 20.0, "distance travelled (m)"));
+    f.push(t_rel(s.vterm_rc, s.vterm_ph, 5.0, "terminal speed (m/s)"));
+    f.push(t_rel(s.vmax_rc, s.vmax_ph, 5.0, "peak speed (m/s)"));
+    f.push(t_rel(s.d_rc, s.d_ph, 5.0, "distance travelled (m)"));
 
     // Absolute ceiling + floor: both must honour omega_max * r, not merely match.
     // LUNAR TRACTION sets the floor, not the drivetrain. `omega_max * r` is a
@@ -373,7 +373,7 @@ fn verdict(s) {
         // 89.7 deg (raycast) against 51.1 deg (joint), 43% apart. The direction
         // and the "did it turn at all" checks above stay INTOLERANT; this one
         // bounds how far the two may drift while both still turning the same way.
-        f.push(t_rel(s.yaw_rc, s.yaw_ph, 50.0, "heading change (deg)"));
+        f.push(t_rel(s.yaw_rc, s.yaw_ph, 5.0, "heading change (deg)"));
     }
 
     print("[parity] ── results ────────────────────────────────────────────");
