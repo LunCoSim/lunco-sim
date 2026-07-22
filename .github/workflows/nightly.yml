@@ -330,30 +330,52 @@ jobs:
             *   **Join our Discord:** Chat with space engineers and creators on [Discord](https://discord.gg/A6U3GdvQum).
             *   **Report Issues:** Found a bug? Open a ticket on [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues).
         run: |
-          # 1. Update the git tag remotely to point to the current commit
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin "+refs/tags/*:refs/tags/*" 2>/dev/null || true
+
+          # 1. If building the rolling 'nightly' tag and an existing 'nightly' release exists,
+          # archive/rename it to 'nightly-YYYY-MM-DD' so historical releases are preserved.
+          if [ "${{ needs.meta.outputs.tag }}" = "nightly" ] && gh release view "nightly" &>/dev/null; then
+            echo "Existing rolling 'nightly' release found. Archiving old release..."
+            
+            # Extract published date (YYYY-MM-DD) from existing release
+            OLD_DATE=$(gh release view "nightly" --json publishedAt -q '.publishedAt[:10]' 2>/dev/null || echo "")
+            if [ -z "$OLD_DATE" ]; then
+              OLD_DATE=$(date -u +'%Y-%m-%d')
+            fi
+            
+            ARCHIVE_TAG="nightly-${OLD_DATE}"
+            
+            # Append timestamp suffix if an archived release for this date already exists
+            if gh release view "$ARCHIVE_TAG" &>/dev/null; then
+              ARCHIVE_TAG="nightly-${OLD_DATE}-$(date -u +'%H%M%S')"
+            fi
+            
+            echo "Archiving existing 'nightly' release as '$ARCHIVE_TAG'..."
+            
+            # Create and push git tag for archived release
+            git tag -f "$ARCHIVE_TAG" "nightly" 2>/dev/null || git tag -f "$ARCHIVE_TAG" "${{ github.sha }}"
+            git push -f origin "$ARCHIVE_TAG"
+            
+            # Update old release tag name, title, and unmark as latest
+            gh release edit "nightly" \
+              --tag "$ARCHIVE_TAG" \
+              --title "Nightly $OLD_DATE" \
+              --latest=false || true
+          fi
+
+          # 2. Update remote tag to current commit
           git tag -f "${{ needs.meta.outputs.tag }}" "${{ github.sha }}"
           git push -f origin "${{ needs.meta.outputs.tag }}"
           
-          # 2. Write the release notes from environment variable
+          # 3. Write the release notes from environment variable
           printf '%s\n' "$RELEASE_BODY" > release_notes.md
           
-          # 3. Check if release exists; update (clobber assets) if yes, create new if no
-          if gh release view "${{ needs.meta.outputs.tag }}" &>/dev/null; then
-            echo "Release exists. Updating release notes..."
-            gh release edit "${{ needs.meta.outputs.tag }}" \
-              --title "Nightly ${{ needs.meta.outputs.date }}" \
-              --notes-file release_notes.md \
-              --latest
-            
-            echo "Uploading assets and overwriting existing ones..."
-            gh release upload "${{ needs.meta.outputs.tag }}" artifacts/* --clobber
-          else
-            echo "Release does not exist. Creating release..."
-            gh release create "${{ needs.meta.outputs.tag }}" \
-              --title "Nightly ${{ needs.meta.outputs.date }}" \
-              --notes-file release_notes.md \
-              --latest \
-              artifacts/*
-          fi
+          # 4. Create fresh release with latest assets
+          echo "Creating new release for ${{ needs.meta.outputs.tag }}..."
+          gh release create "${{ needs.meta.outputs.tag }}" \
+            --title "Nightly ${{ needs.meta.outputs.date }}" \
+            --notes-file release_notes.md \
+            --latest \
+            artifacts/*
