@@ -318,7 +318,6 @@ mod tests {
                 steer_port: port,
                 steer_axis: DVec3::Y,
                 wheel_radius: 0.5,
-                ray_origin_y: 0.0,
                 visual_entity: Some(visual),
                 last_normal_force: 100.0, // ≥1 ⇒ on_ground (with a hit present)
                 spin_angle: 0.0,
@@ -403,7 +402,6 @@ mod tests {
                     steer_port: port,
                     steer_axis: DVec3::Y,
                     wheel_radius: 0.4,
-                    ray_origin_y: 0.0,
                     visual_entity: Some(visual),
                     // AIRBORNE: no normal force, no hit — nothing to push against,
                     // so only the motor curve and bearing drag bound the spin.

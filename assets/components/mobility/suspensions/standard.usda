@@ -30,6 +30,15 @@
 # analytically, the joint wheel realises it as a real prismatic spring-damper. Same
 # authored data, two constructions.
 #
+# WHERE IT TRAVELS FROM. The wheel prim is THE AXLE, in both realizations. The raycast
+# wheel therefore casts not from the prim but from the STRUT TOP, `restLength − radius`
+# above it — derived here, from authored geometry, so that a rover with a longer spring
+# gets a taller strut without anyone re-typing a mount. (It used to be the other way
+# round: the mount itself was authored 0.5 m higher in the raycast drivetrain overlay,
+# which made the prim mean the strut top in one realization and the axle in the other —
+# one rover, two ride heights, and a 0.5 m offset that did not even match this 0.3 m
+# strut.)
+#
 # HOW IT TRAVELS. `Suspension` is a neutral stand-in for the wheel prim that composes
 # it — an `over`, defining nothing of its own, carrying opinions the reference arc
 # path-translates onto the wheel. (Same idiom as `physical_drivetrain.usda`.)
@@ -59,8 +68,10 @@ over "Suspension" (
         uniform token axis = "Y"
         double radius = 0.04
         double height = 0.2
-        # Positioned at the top of the suspension strut
-        double3 xformOp:translate = (0.0, -0.1, 0.0)
+        # The wheel prim is the AXLE, so the strut rises from it: with restLength
+        # 0.7 and wheel radius 0.4 the strut top is 0.3 m above the axle, and the
+        # 0.2 m casing hangs just under it.
+        double3 xformOp:translate = (0.0, 0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.2, 0.2, 0.2)] # Dark grey casing
         bool physics:collisionEnabled = false
@@ -75,8 +86,8 @@ over "Suspension" (
         uniform token axis = "Y"
         double radius = 0.025
         double height = 0.2
-        # Positioned at the bottom of the suspension strut, slides up/down
-        double3 xformOp:translate = (0.0, -0.2, 0.0)
+        # At the bottom of the strut (just above the axle), slides up/down
+        double3 xformOp:translate = (0.0, 0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)] # Shiny metal piston
         bool physics:collisionEnabled = false
@@ -90,11 +101,11 @@ over "Suspension" (
         uniform token lunco:suspensionVisual:role = "spring"
         uniform token axis = "Y"
         double radius = 0.06
-        # Spans the suspension travel between mount and wheel hub. With rest_length
-        # 0.7 and wheel_radius 0.4 the strut occupies 0.3 m at rest; the mobility
+        # Spans the strut, from the axle up to the mount. With rest_length 0.7 and
+        # wheel_radius 0.4 it occupies 0.3 m at rest, centred half-way; the mobility
         # system scales this Y-axis cylinder along with the live compression.
         double height = 0.3
-        double3 xformOp:translate = (0.0, -0.15, 0.0)
+        double3 xformOp:translate = (0.0, 0.15, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)] # Red spring coil
         bool physics:collisionEnabled = false

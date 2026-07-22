@@ -248,6 +248,21 @@ pub struct ProxyWheelMassFolded;
 /// twin at 51° — a 9% gap turned into 29%. Each wheel therefore contributes its
 /// parallel-axis term `m·d²` at its authored mount as well as its mass.
 ///
+/// SO DOES THE CENTRE OF MASS. Four 25 kg wheels hanging at `y = −0.65` genuinely
+/// pull the vehicle's combined centre of mass down — on the physical rover avian
+/// does that arithmetic for free, because those wheels are bodies. Folding only the
+/// mass and the tensor left the raycast rover's mass acting at the chassis centre,
+/// ~5.9 cm too high, and CoM HEIGHT IS LOAD TRANSFER: it is exactly the quantity a
+/// turning comparison is sensitive to. The fold therefore also writes the combined
+/// centre of mass — chassis plus the proxy wheels as point masses at their mounts.
+///
+/// The tensor is taken about that COMBINED centre, not about the body origin: the
+/// authored `physics:diagonalInertia` is about the chassis centre, so once the
+/// combined centre moves, both the chassis and each wheel contribute a parallel-axis
+/// term measured from the NEW centre. (The correction is small but not nothing —
+/// ~3.8 kg·m² on a ~1220 kg·m² skid-rover `I_x`, 0.3% — and getting it right costs
+/// one subtraction, whereas leaving it wrong is a number nobody could later explain.)
+///
 /// THE WHEEL'S OWN SPIN INERTIA IS DELIBERATELY NOT FOLDED. `update_wheel_spin`
 /// already integrates each wheel's ω against `I = ½·m·r²` ([`WheelRaycast::axle_inertia`]),
 /// exactly as the physical wheel's own rigid body does. Adding it to the chassis
@@ -257,6 +272,11 @@ pub struct ProxyWheelMassFolded;
 /// Inertia is folded only when the body carries [`NoAutoAngularInertia`] — i.e. the
 /// tensor is authored. Without it avian recomputes the tensor from colliders every
 /// time the mass properties change, and this addition would be silently discarded.
+/// The centre of mass is written WITH [`NoAutoCenterOfMass`] for the same reason:
+/// avian consults the `CenterOfMass` override only inside `if no_auto_center_of_mass`,
+/// so the marker is what makes the write survive the next recompute — and the
+/// recompute is what publishes it to `ComputedCenterOfMass`, which is the component
+/// the solver integrates against.
 pub fn fold_proxy_wheel_mass(
     mut commands: Commands,
     q_chassis: Query<(Entity, &Children), (With<DriveMix>, Without<ProxyWheelMassFolded>)>,
@@ -265,6 +285,8 @@ pub fn fold_proxy_wheel_mass(
         &mut Mass,
         Option<&mut AngularInertia>,
         Has<NoAutoAngularInertia>,
+        Option<&CenterOfMass>,
+        Option<&ComputedCenterOfMass>,
     )>,
 ) {
     for (chassis, children) in &q_chassis {
@@ -288,29 +310,84 @@ pub fn fold_proxy_wheel_mass(
             continue;
         }
 
-        let Ok((mut mass, inertia, inertia_authored)) = q_body.get_mut(chassis) else {
+        let Ok((mut mass, inertia, inertia_authored, com_override, com_computed)) =
+            q_body.get_mut(chassis)
+        else {
             continue;
         };
 
+        // The chassis's own centre, BEFORE the wheels are folded in. An authored
+        // `physics:centerOfMass` arrives as the override and wins (six_wheel_rover
+        // authors one); otherwise avian's collider-derived value is the truth.
+        let com_chassis = com_override
+            .map(|c| c.0.as_dvec3())
+            .or_else(|| com_computed.map(|c| c.0))
+            .unwrap_or(DVec3::ZERO);
+        let chassis_mass = mass.0 as f64;
+
         let added: f64 = wheels.iter().map(|(m, _)| *m).sum();
+        let total = chassis_mass + added;
         mass.0 += added as f32;
 
-        if let (Some(mut inertia), true) = (inertia, inertia_authored) {
-            let mut principal = DVec3::ZERO;
+        // Combined centre of mass: chassis at its own centre, each proxy wheel a
+        // point mass at its mount. On a symmetric rover the x/z terms cancel and
+        // only the drop survives — which is the whole point.
+        let com_new = if total > 0.0 {
+            let mut moment = com_chassis * chassis_mass;
             for (m, d) in &wheels {
-                // Parallel-axis: a point mass `m` at `d` adds `m·(d_j² + d_k²)`
-                // about each axis `i`.
-                principal += DVec3::new(
+                moment += *d * *m;
+            }
+            moment / total
+        } else {
+            com_chassis
+        };
+
+        if let (Some(mut inertia), true) = (inertia, inertia_authored) {
+            // Parallel-axis about the COMBINED centre: a mass `m` at `d` adds
+            // `m·(d_j² + d_k²)` about each axis `i`, with `d` measured from that
+            // centre. The chassis contributes too, because its authored tensor is
+            // about ITS centre and the centre has just moved.
+            let perp = |m: f64, d: DVec3| {
+                DVec3::new(
                     m * (d.y * d.y + d.z * d.z),
                     m * (d.x * d.x + d.z * d.z),
                     m * (d.x * d.x + d.y * d.y),
-                );
+                )
+            };
+            let mut principal = perp(chassis_mass, com_chassis - com_new);
+            for (m, d) in &wheels {
+                principal += perp(*m, *d - com_new);
             }
             inertia.principal += principal.as_vec3();
         }
 
+        commands
+            .entity(chassis)
+            .try_insert((CenterOfMass(com_new.as_vec3()), NoAutoCenterOfMass));
         commands.entity(chassis).try_insert(ProxyWheelMassFolded);
     }
+}
+
+/// How far ABOVE the axle a raycast wheel's suspension ray starts — the STRUT TOP.
+///
+/// THE WHEEL PRIM IS THE AXLE, in both realizations. A raycast strut hangs the hub
+/// `rest_length` below its cast origin and the tire holds the hub `wheel_radius`
+/// above the ground, so at rest the strut occupies exactly `rest_length −
+/// wheel_radius` and its top sits that far above the authored mount. Casting from
+/// there puts the hub AT the authored mount at rest, which is where the physical
+/// realization's wheel body actually is.
+///
+/// This used to be baked into the asset instead: `raycast_drivetrain.usda` authored
+/// the wheel prims 0.5 m higher than `physical_drivetrain.usda` so the raycast rover
+/// would end up at a plausible ride height. One rover then had two mount heights and
+/// two centre-of-mass heights depending on a variant switch — and 0.5 m was not even
+/// the 0.3 m the authored spring implies. Deriving it here means a suspension swap
+/// (`rocker.usda`, `rigid.usda`) moves the strut with it, and nothing needs re-typing.
+///
+/// A `rigid` mount (`rest_length` 0) returns `−wheel_radius`: the ray starts at the
+/// contact patch, which is where a wheel bolted straight to the hull touches down.
+pub fn strut_offset(rest_length: f64, wheel_radius: f64) -> f64 {
+    rest_length - wheel_radius
 }
 
 /// Upper clamp on the suspension force magnitude (N) applied per spring.
@@ -376,8 +453,6 @@ pub struct WheelRaycast {
     pub steer_port: Entity,
     /// Radius of the tire (effectively the minimum offset from ground).
     pub wheel_radius: f64,
-    /// Used for visual wheel positioning.
-    pub ray_origin_y: f64,
     /// Entity for the visual mesh to be transformed.
     pub visual_entity: Option<Entity>,
     /// Resultant normal force from the last physics tick, used for friction calculations.
@@ -434,7 +509,6 @@ impl Default for WheelRaycast {
             drive_port: Entity::PLACEHOLDER,
             steer_port: Entity::PLACEHOLDER,
             wheel_radius: 0.0,
-            ray_origin_y: 0.0,
             visual_entity: None,
             last_normal_force: 0.0,
             spin_angle: 0.0,
@@ -508,11 +582,12 @@ impl WheelRaycast {
 /// to prevent oscillation. Force is only applied upward (along hit normal)
 /// to avoid pulling the chassis into the ground.
 ///
-/// **Geometry**: The ray origin is at the wheel entity transform (the
-/// suspension mount point on the chassis). The ray points straight down.
-/// `hit_distance` = distance from mount to ground. When `hit_distance <
-/// rest_length` the spring is compressed. The wheel visual is positioned at
-/// `ground_y + wheel_radius` so the tire rests on the terrain surface.
+/// **Geometry**: the wheel entity transform is the AXLE. The ray starts
+/// [`strut_offset`] above it — the strut top — and points straight down, so
+/// `hit_distance` is the distance from the strut top to the ground and the spring
+/// is compressed when `hit_distance < rest_length`. The wheel visual is positioned
+/// at `ground_y + wheel_radius`, which in wheel-local Y is the compression, so an
+/// unloaded wheel draws exactly at its authored mount.
 fn apply_wheel_suspension(
     mut q_wheels: Query<(
         &mut WheelRaycast,
@@ -609,16 +684,16 @@ fn apply_wheel_suspension(
 
             // Position the wheel visual on the ground (or fully extended if airborne).
             //
-            // The visual is now always a CHILD of the wheel entity
-            // (see `setup_raycast_wheel` in lunco-usd-sim) — its
-            // local Y is relative to the wheel mount point, not the
-            // chassis. We want the visual centre at `ground + radius`
-            // in world space; in wheel-local space that's
-            // `wheel_radius - distance` (the suspension extension
-            // below the mount, lifted by the wheel radius).
+            // The visual is always a CHILD of the wheel entity (see
+            // `setup_raycast_wheel` in lunco-usd-sim), so its local Y is relative
+            // to the AXLE mount, not the chassis. We want the visual centre at
+            // `ground + radius`; the ray starts `strut_offset` above the mount and
+            // the ground is `distance` below the ray origin, so in wheel-local
+            // space that is `strut_offset + radius - distance`, i.e. the
+            // COMPRESSION — zero at rest, positive as the strut packs up.
             if let Some(visual_entity) = wheel.visual_entity {
                 if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
-                    visual_tf.translation.y = (wheel.wheel_radius - current_distance) as f32;
+                    visual_tf.translation.y = (susp.rest_length - current_distance) as f32;
                 }
             }
         }
@@ -1205,9 +1280,11 @@ mod proxy_wheel_mass_tests {
     //! wheels. See [`fold_proxy_wheel_mass`].
     use super::*;
 
-    /// Build a skid-rover-shaped chassis with four proxy wheels at the authored
-    /// `raycast_drivetrain.usda` mounts, run the fold, return (mass, inertia).
-    fn fold_a_four_wheel_rover(wheel_mass: f64) -> (f32, Vec3) {
+    /// Build a skid-rover-shaped chassis with four proxy wheels at the mounts
+    /// `skid_rover.usda` authors — (±1.0, −0.65, ±1.225), the SAME mounts the
+    /// `physical` variant's wheel bodies get, because the wheel prim is the axle
+    /// in both realizations. Runs the fold; returns (mass, inertia, centre of mass).
+    fn fold_a_four_wheel_rover(wheel_mass: f64) -> (f32, Vec3, Vec3) {
         let mut app = App::new();
         app.add_systems(Update, fold_proxy_wheel_mass);
 
@@ -1233,7 +1310,7 @@ mod proxy_wheel_mass_tests {
                         wheel_radius: 0.4,
                         ..default()
                     },
-                    Transform::from_translation(Vec3::new(x, -0.15, z)),
+                    Transform::from_translation(Vec3::new(x, -0.65, z)),
                     ChildOf(chassis),
                 ))
                 .id();
@@ -1244,7 +1321,12 @@ mod proxy_wheel_mass_tests {
 
         let mass = app.world().get::<Mass>(chassis).unwrap().0;
         let inertia = app.world().get::<AngularInertia>(chassis).unwrap().principal;
-        (mass, inertia)
+        let com = app
+            .world()
+            .get::<CenterOfMass>(chassis)
+            .map(|c| c.0)
+            .unwrap_or(Vec3::ZERO);
+        (mass, inertia, com)
     }
 
     #[test]
@@ -1253,8 +1335,32 @@ mod proxy_wheel_mass_tests {
         // raycast rover's wheels are kinematic proxies avian never weighs, so
         // without the fold the same USD file massed 1000 kg — a 10% vehicle
         // change caused by nothing but a variant switch.
-        let (mass, _) = fold_a_four_wheel_rover(25.0);
+        let (mass, _, _) = fold_a_four_wheel_rover(25.0);
         assert!((mass - 1100.0).abs() < 1e-3, "expected 1100 kg, got {mass}");
+    }
+
+    #[test]
+    fn the_mass_acts_where_the_wheels_hang_it() {
+        // A physical rover's four wheel bodies hang at the axle and PULL THE
+        // COMBINED CENTRE OF MASS DOWN — avian does that arithmetic for free
+        // because they are bodies. The raycast rover's proxies are not, so its
+        // mass kept acting at the chassis centre: same total, same tensor, wrong
+        // place. CoM height is load transfer, so the two rovers would still have
+        // cornered differently with every other number matched.
+        //
+        //   (1000·0 + 4·25·(−0.65)) / 1100 = −65/1100 = −0.0590909… m
+        let (_, _, com) = fold_a_four_wheel_rover(25.0);
+        assert!(
+            (com.y as f64 + 65.0 / 1100.0).abs() < 1e-6,
+            "expected CoM y = -0.0590909, got {}",
+            com.y
+        );
+        // x and z must cancel: the mounts are symmetric (±1.0, ±1.225), and a
+        // rover whose mass drifted sideways would pull in a straight line.
+        assert!(
+            com.x.abs() < 1e-6 && com.z.abs() < 1e-6,
+            "symmetric mounts must cancel, got {com:?}"
+        );
     }
 
     #[test]
@@ -1263,12 +1369,20 @@ mod proxy_wheel_mass_tests {
         // against a physical twin at 51°): a heavier rover that was no harder to
         // turn. Each wheel must bring its parallel-axis term `m·d²` at its
         // authored mount, which grows the yaw tensor FASTER than the mass.
-        let (mass, inertia) = fold_a_four_wheel_rover(25.0);
+        let (mass, inertia, _) = fold_a_four_wheel_rover(25.0);
 
-        // Per wheel at (±1.0, -0.15, ±1.225): m·(y²+z²), m·(x²+z²), m·(x²+y²)
-        //   = 25·(0.0225 + 1.500625), 25·(1.0 + 1.500625), 25·(1.0 + 0.0225)
-        //   = 38.078, 62.516, 25.5625   → ×4 → 152.31, 250.06, 102.25
-        let expected = Vec3::new(1028.0 + 152.3125, 1354.0 + 250.0625, 341.0 + 102.25);
+        // Measured from the COMBINED centre (y = −0.0590909), not from the body
+        // origin — the authored tensor is about the chassis centre and that centre
+        // has just moved, so the chassis contributes a term of its own.
+        //   chassis: 1000·(0.0590909²) = 3.4917 about x and z, 0 about y
+        //   wheel at (±1.0, −0.5909091, ±1.225): m·(y²+z²), m·(x²+z²), m·(x²+y²)
+        //     = 25·(0.349174 + 1.500625), 25·(1.0 + 1.500625), 25·(1.0 + 0.349174)
+        //     = 46.2450, 62.5156, 33.7293   → ×4 → 184.980, 250.063, 134.917
+        let expected = Vec3::new(
+            1028.0 + 3.4917355 + 184.97986,
+            1354.0 + 250.0625,
+            341.0 + 3.4917355 + 134.91736,
+        );
         assert!(
             (inertia - expected).abs().max_element() < 1e-2,
             "expected {expected:?}, got {inertia:?}"
@@ -1289,9 +1403,10 @@ mod proxy_wheel_mass_tests {
         // `WheelParams::apply_to_raycast` can land a tick after the component. A
         // wheel still reading zero mass means the vehicle is not ready — folding
         // then would permanently pin the rover at a fraction of its real mass.
-        let (mass, inertia) = fold_a_four_wheel_rover(0.0);
+        let (mass, inertia, com) = fold_a_four_wheel_rover(0.0);
         assert_eq!(mass, 1000.0, "folded before the wheel parameters arrived");
         assert_eq!(inertia, Vec3::new(1028.0, 1354.0, 341.0));
+        assert_eq!(com, Vec3::ZERO, "centre of mass moved before the fold was due");
     }
 
     #[test]
@@ -1692,7 +1807,10 @@ fn update_suspension_visuals(
             }
         }
 
-        let visual_y = wheel.wheel_radius - current_distance;
+        // Hub and strut top in WHEEL-LOCAL Y (the wheel prim is the axle): the hub
+        // rises by the compression, the top is fixed at `strut_offset`.
+        let hub_y = susp.rest_length - current_distance;
+        let top_y = strut_offset(susp.rest_length, wheel.wheel_radius);
         let delta_y = susp.rest_length - current_distance;
 
         for child in children.iter() {
@@ -1703,12 +1821,13 @@ fn update_suspension_visuals(
             if let Ok((mut tf, piston)) = q_piston.get_mut(child) {
                 tf.translation.y = (piston.initial_y as f64 + delta_y) as f32;
             } else if let Ok(mut tf) = q_spring.get_mut(child) {
-                let rest_susp_length = susp.rest_length - wheel.wheel_radius;
+                let rest_susp_length = strut_offset(susp.rest_length, wheel.wheel_radius);
                 if rest_susp_length > 1e-4 {
                     let current_susp_length = (current_distance - wheel.wheel_radius).max(0.0);
                     let scale_y = (current_susp_length / rest_susp_length) as f32;
                     tf.scale.y = scale_y;
-                    tf.translation.y = (visual_y / 2.0) as f32;
+                    // The coil spans hub → strut top, so it sits at their midpoint.
+                    tf.translation.y = ((hub_y + top_y) / 2.0) as f32;
                 }
             }
         }
@@ -1748,14 +1867,17 @@ mod suspension_visuals_tests {
         // the real app they are stamped at load by `process_usd_sim_prim_read`
         // (lunco-usd-sim) from the prim's `lunco:suspensionVisual:role` token —
         // this test does not exercise that load path.
+        // Rest positions as `suspensions/standard.usda` authors them: the wheel prim
+        // is the AXLE, so the strut rises from it (restLength 0.7 − radius 0.4 =
+        // 0.3 m of strut) and the piston/spring sit ABOVE the prim, not below.
         let piston = app.world_mut().spawn((
-            SuspensionPiston { initial_y: -0.2 },
-            Transform::from_translation(Vec3::new(0.0, -0.2, 0.0)),
+            SuspensionPiston { initial_y: 0.1 },
+            Transform::from_translation(Vec3::new(0.0, 0.1, 0.0)),
         )).id();
 
         let spring = app.world_mut().spawn((
             SuspensionSpring,
-            Transform::from_translation(Vec3::new(0.0, -0.15, 0.0)),
+            Transform::from_translation(Vec3::new(0.0, 0.15, 0.0)),
         )).id();
 
         let wheel = app.world_mut().spawn((
@@ -1785,21 +1907,27 @@ mod suspension_visuals_tests {
         app.add_systems(Update, (apply_wheel_suspension, update_suspension_visuals).chain());
         app.update(); // Frame 1: animates transforms (markers pre-spawned above)
 
-        // 1. Check wheel visual translation Y = wheel_radius - distance = 0.4 - 0.5 = -0.1
+        // 1. The hub rises by the COMPRESSION, because the prim is the axle: the ray
+        // starts 0.3 m above it and hit at 0.5, so the strut is packed 0.2 m up.
+        // rest_length - distance = 0.7 - 0.5 = 0.2
         let visual_tf = app.world().get::<Transform>(visual).unwrap();
-        assert!((visual_tf.translation.y - (-0.1f32)).abs() < 1e-6);
+        assert!(
+            (visual_tf.translation.y - 0.2f32).abs() < 1e-6,
+            "hub at {} , expected the 0.2 m compression",
+            visual_tf.translation.y
+        );
 
         // 2. Piston translated to initial_y + delta_y.
         // delta_y = rest_length - distance = 0.7 - 0.5 = 0.2
-        // initial_y = -0.2, so current Y = -0.2 + 0.2 = 0.0
+        // initial_y = 0.1, so current Y = 0.1 + 0.2 = 0.3 — it rides with the hub.
         let piston_tf = app.world().get::<Transform>(piston).unwrap();
-        assert!((piston_tf.translation.y - 0.0f32).abs() < 1e-6);
+        assert!((piston_tf.translation.y - 0.3f32).abs() < 1e-6);
 
         // 3. Spring scale Y = (distance - radius) / (rest_length - radius)
         // = (0.5 - 0.4) / (0.7 - 0.4) = 0.1 / 0.3 = 0.3333333
-        // and translation Y = visual_y / 2 = -0.1 / 2 = -0.05
+        // and it sits midway between the hub (0.2) and the fixed strut top (0.3).
         let spring_tf = app.world().get::<Transform>(spring).unwrap();
         assert!((spring_tf.scale.y - 0.3333333f32).abs() < 1e-5);
-        assert!((spring_tf.translation.y - (-0.05f32)).abs() < 1e-6);
+        assert!((spring_tf.translation.y - 0.25f32).abs() < 1e-6);
     }
 }

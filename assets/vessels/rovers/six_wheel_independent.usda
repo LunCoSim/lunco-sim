@@ -113,7 +113,7 @@ def Xform "SixWheelIndependent" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.15, -2.0)
+        double3 xformOp:translate = (-1.0, -0.65, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 0
         float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w0>
@@ -126,7 +126,7 @@ def Xform "SixWheelIndependent" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.15, 0.0)
+        double3 xformOp:translate = (-1.0, -0.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 2
         float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w1>
@@ -139,7 +139,7 @@ def Xform "SixWheelIndependent" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.15, 2.0)
+        double3 xformOp:translate = (-1.0, -0.65, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 4
         float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w2>
@@ -153,7 +153,7 @@ def Xform "SixWheelIndependent" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.15, -2.0)
+        double3 xformOp:translate = (1.0, -0.65, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 1
         float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w3>
@@ -166,7 +166,7 @@ def Xform "SixWheelIndependent" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.15, 0.0)
+        double3 xformOp:translate = (1.0, -0.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 3
         float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w4>
@@ -179,7 +179,7 @@ def Xform "SixWheelIndependent" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.15, 2.0)
+        double3 xformOp:translate = (1.0, -0.65, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int lunco:wheel:index = 5
         float inputs:drive.connect = </SixWheelIndependent.outputs:drive_w5>

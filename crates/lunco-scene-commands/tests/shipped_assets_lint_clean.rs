@@ -53,8 +53,8 @@ fn shipped_usd_assets_have_no_lint_errors() {
     register_usd_lint_policy();
 
     // COMPLETE assets only. `assets/components/` holds parts and composition
-    // OVERLAYS (`raycast_drivetrain.usda` is nothing but `over` opinions onto
-    // wheels that must already exist), and a rule asked about a fragment in
+    // OVERLAYS (`physical_drivetrain.usda` is nothing but an articulation root and
+    // joints targeting wheels that must already exist), and a rule asked about a fragment in
     // isolation answers a question the file cannot be responsible for: its joint
     // targets, its host body and half its prims arrive with the reference arc.
     // Components are covered where they actually run — every vessel below

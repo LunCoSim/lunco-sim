@@ -56,6 +56,65 @@
 /// RIGHT (matching the skid-drive sign convention in `prelude/nav.rhai`, where
 /// +steer yaws right). Sign is taken from the yaw-plane cross product, so a
 /// rover that turned the WRONG way cannot pass by magnitude alone.
+/// THE VEHICLE'S MASS PROPERTIES AS THE SOLVER SEES THEM, both realizations.
+///
+/// Read through the avian cosim ports (`mass`, `com_y`, `inertia_yy`), which
+/// return `ComputedMass` / `ComputedCenterOfMass` / `ComputedAngularInertia` —
+/// the components the integrator actually uses, not the authored overrides. An
+/// override that avian discarded for want of its `NoAuto*` marker reads back
+/// UNCHANGED here, which is the whole reason to sample the computed side.
+///
+/// The physical rover keeps its wheels as four SEPARATE bodies, so its chassis
+/// body alone is not the vehicle: mass and centre of mass are aggregated over
+/// chassis + wheels. That aggregate is exactly what `fold_proxy_wheel_mass`
+/// folds onto the raycast chassis, whose wheels are kinematic proxies avian
+/// never weighs. Comparing chassis to chassis would compare 1100 kg against
+/// 1000 kg and prove nothing.
+///
+/// `mount_y` is the authored wheel mount — one number for both realizations now
+/// that the wheel prim means the axle either way, which is the property under
+/// test. A physical wheel body's own centre sits at its prim origin, so its
+/// height in the rover frame IS the mount.
+fn mass_props(rc, ph, mount_y) {
+    let m_ch = get(ph, "mass");
+    let com_ch = get(ph, "com_y");
+    if m_ch == () { m_ch = 0.0; }
+    if com_ch == () { com_ch = 0.0; }
+
+    let m_w = 0.0;
+    let n = 0;
+    for w in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
+        let e = find("/DrivetrainParity/RoverPhysical/" + w);
+        if e < 0 { continue; }
+        let mw = get(e, "mass");
+        if mw == () { continue; }
+        m_w += mw;
+        n += 1;
+    }
+
+    let total = m_ch + m_w;
+    let com_ph = com_ch;
+    if total > 0.0 { com_ph = (m_ch * com_ch + m_w * mount_y) / total; }
+
+    // A missing port reads `()`. Coerce to 0.0 rather than carrying a unit into
+    // the arithmetic: 0 kg against 1100 kg fails loudly, which is what a rover
+    // that never published its mass properties deserves.
+    let m_rc = get(rc, "mass");
+    let com_rc = get(rc, "com_y");
+    let iyy_rc = get(rc, "inertia_yy");
+    let iyy_ch = get(ph, "inertia_yy");
+    if m_rc == () { m_rc = 0.0; }
+    if com_rc == () { com_rc = 0.0; }
+    if iyy_rc == () { iyy_rc = 0.0; }
+    if iyy_ch == () { iyy_ch = 0.0; }
+
+    return #{
+        m_rc: m_rc, m_ph: total, wheels: n,
+        com_rc: com_rc, com_ph: com_ph,
+        iyy_rc: iyy_rc, iyy_ch: iyy_ch
+    };
+}
+
 /// One log row. The table is the evidence; keep it readable.
 ///
 /// Built by successive `+=` rather than one concatenation chain: rhai caps
@@ -106,6 +165,12 @@ fn on_start(me) {
     this.yaw_rc = 0.0;  this.yaw_ph = 0.0;
     this.fprev_rc = (); this.fprev_ph = ();
 
+    // The authored wheel mount, one number for BOTH realizations — the property
+    // this whole file exists to keep true. Sampled mass properties land here once
+    // the bodies are alive (avian publishes `Computed*` a few ticks after load).
+    this.mount_y = -0.65;
+    this.mp = ();
+
     print("[parity] ── drivetrain parity test ─────────────────────────────");
     print("[parity] raycast rover gid=" + this.rc + "  physical rover gid=" + this.ph);
     print("[parity] contract: omega_max=" + this.omega_max + " rad/s * r=" + this.wheel_r +
@@ -132,6 +197,14 @@ fn on_tick(me) {
 
     this.t += dt();
     let t = this.t;
+
+    // Sample the mass properties once, mid-settle: late enough that avian has
+    // published `Computed*` and `fold_proxy_wheel_mass` has run, early enough
+    // that the run is still standing still and nothing has been driven.
+    if this.mp == () && t > 1.0 {
+        this.mp = mass_props(this.rc, this.ph, this.mount_y);
+    }
+
     let t_drive_end = this.settle_s + this.drive_s;
     let t_steer_end = t_drive_end + this.steer_s;
 
@@ -278,7 +351,8 @@ fn on_tick(me) {
                 vmax_rc:  this.vmax_rc,  vmax_ph:  this.vmax_ph,
                 d_rc:     this.d_rc,     d_ph:     this.d_ph,
                 yaw_rc:   this.yaw_rc,   yaw_ph:   this.yaw_ph,
-                v_ceiling: this.v_ceiling
+                v_ceiling: this.v_ceiling,
+                mp:       this.mp
             });
         }
         return;
@@ -327,6 +401,35 @@ fn on_stop(me) {
 // rover at ~24 m/s; the floor catches a dead command surface.
 fn verdict(s) {
     let f = [];
+
+    // ── The vehicle itself, before any behaviour ────────────────────────────
+    // A rover that masses differently, or acts its mass at a different height,
+    // cannot be made to match by tuning a tire — and CoM HEIGHT IS LOAD
+    // TRANSFER, so it lands squarely on the turning comparison below. These
+    // read the components the SOLVER integrates, so an override avian silently
+    // discarded shows up here as an unchanged number rather than as a mystery.
+    if s.mp == () {
+        f.push("mass properties: NEVER SAMPLED (no `Computed*` on the rovers?)");
+    } else {
+        let mp = s.mp;
+        // Anti-trivial: four wheel bodies, or the physical aggregate is a fiction.
+        f.push(t_true(mp.wheels == 4,
+                      "physical rover exposed " + mp.wheels + " wheel bodies, expected 4"));
+        f.push(t_rel(mp.m_rc, mp.m_ph, 1.0, "vehicle mass (kg)"));
+
+        let m_com = "centre of mass height: raycast " + r2(mp.com_rc);
+        m_com += " m vs physical aggregate " + r2(mp.com_ph);
+        m_com += " m - the same mass acting at two different heights";
+        let dcom = mp.com_rc - mp.com_ph;
+        f.push(t_true(dcom.abs() < 0.01, m_com));
+
+        let mrow = "[parity]   mass (kg)         " + r2(mp.m_rc) + "       " + r2(mp.m_ph);
+        print(mrow);
+        let crow = "[parity]   com_y (m)         " + r2(mp.com_rc) + "       " + r2(mp.com_ph);
+        print(crow);
+        let irow = "[parity]   I_yy chassis      " + r2(mp.iyy_rc) + "       " + r2(mp.iyy_ch);
+        print(irow + "   (raycast folded; physical chassis-only)");
+    }
 
     f.push(t_rel(s.vterm_rc, s.vterm_ph, 5.0, "terminal speed (m/s)"));
     f.push(t_rel(s.vmax_rc, s.vmax_ph, 5.0, "peak speed (m/s)"));

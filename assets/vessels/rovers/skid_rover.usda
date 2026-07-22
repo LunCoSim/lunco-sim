@@ -137,8 +137,20 @@ def Xform "SkidRover" (
     }
 
     # --- Wheels (reference the reusable mobility component) ---
-    # Authored at RAYCAST ride height (y=-0.15). The `physical`
-    # variant drops them to y=-0.65 via `over` opinions.
+    # WHERE A WHEEL SITS IS A PROPERTY OF THE VEHICLE, so it is authored HERE,
+    # once, and NOT in the `drivetrain` variant. It used to be authored twice —
+    # `raycast_drivetrain.usda` put the wheel prim at y=-0.15 and
+    # `physical_drivetrain.usda` at y=-0.65 — because the prim meant two
+    # different points: the strut top in one realization, the axle in the other.
+    # One rover then had two ride heights and two centre-of-mass heights, which
+    # no tire parameter can compensate for.
+    #
+    # The wheel prim IS THE AXLE, in both realizations. y=-0.65 is the physical
+    # rover's authored drop (chassis half-height 0.15 ⇒ bottom at y=-0.15; a
+    # Ø0.8 wheel centred at -0.65 tops out at -0.25 and clears it by 0.10 m).
+    # The raycast realization derives its cast origin — the strut top, at
+    # `restLength − radius` above the axle — from the authored suspension
+    # geometry instead of from a baked-in translate.
     def Cylinder "Wheel_FL" (
         # No local `kind`: a wheel IS a component model, and the kind composes in from
         # the reference along with everything else it brings.
@@ -148,6 +160,7 @@ def Xform "SkidRover" (
         ]
     )
     {
+        double3 xformOp:translate = (-1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 0
@@ -162,6 +175,7 @@ def Xform "SkidRover" (
         ]
     )
     {
+        double3 xformOp:translate = (1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 1
@@ -176,6 +190,7 @@ def Xform "SkidRover" (
         ]
     )
     {
+        double3 xformOp:translate = (-1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 2
@@ -190,6 +205,7 @@ def Xform "SkidRover" (
         ]
     )
     {
+        double3 xformOp:translate = (1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 3
@@ -313,15 +329,21 @@ def Xform "SkidRover" (
     }
 
     # --- Drivetrain variant set ---------------------------------------
-    # Both drivetrains are authored ONCE in shared mobility components and
-    # pulled into the variant by reference; the arc path-translates their
-    # `over`/joint targets onto THIS rover's wheels + root. `raycast` is the
-    # fallback (declared on the root above); `physical` additionally brings
-    # the articulation root + per-wheel revolute joints.
+    # HOW a wheel is simulated, and NOTHING ELSE. Where the wheels sit, what they
+    # mass, how much grip they have and what torque reaches them are properties of
+    # the ROVER and are authored above, outside this variantSet.
+    #
+    # `raycast` (the fallback, declared on the root) is therefore EMPTY: a raycast
+    # wheel is the absence of a joint. It used to reference a
+    # `raycast_drivetrain.usda` whose entire content was a second, different set of
+    # wheel translates — one rover with two ride heights. That file is gone; the
+    # strut geometry the raycast wheel needs is derived from the authored
+    # suspension (`restLength`) instead of being baked into a mount.
+    #
+    # `physical` brings what genuinely only exists in that realization: the
+    # articulation root and the per-wheel revolute joints.
     variantSet "drivetrain" = {
-        "raycast" (
-            prepend references = @lunco://components/mobility/raycast_drivetrain.usda@</Drivetrain>
-        ) {
+        "raycast" {
         }
 
         "physical" (

@@ -1675,7 +1675,17 @@ fn setup_raycast_wheel(
     // Build RayCaster with exclusion filter to prevent wheels from raycasting
     // against their own rover chassis (causes jiggling/jumping bug).
     let rover_entity = maybe_child_of.map(|c| c.parent());
-    let mut ray_caster = RayCaster::new(DVec3::ZERO, Dir3::NEG_Y);
+    // THE RAY STARTS AT THE STRUT TOP, NOT AT THE PRIM. The wheel prim is the AXLE —
+    // the same point the `physical` realization puts its wheel body at — so casting
+    // from the prim itself would hang the hub a whole `rest_length` below the mount
+    // and the two realizations would not share a ride height. `strut_offset` derives
+    // the strut's rest extent (`rest_length − radius`) from the authored suspension,
+    // which is what the drivetrain overlay used to fake with a 0.5 m difference in
+    // the authored mount.
+    let mut ray_caster = RayCaster::new(
+        DVec3::new(0.0, lunco_mobility::strut_offset(susp.rest_length, params.radius), 0.0),
+        Dir3::NEG_Y,
+    );
     // Mask out the non-physical layers so suspension rays ignore trigger-zone
     // sensors (else the wheels ride up on an invisible waypoint sphere) and
     // celestial body spheres (a planet-sized collider that CONTAINS the scene

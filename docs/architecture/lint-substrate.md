@@ -136,7 +136,7 @@ of a link inside a link attached to nothing.
   deliberately broken scene must still fail through the same path. "All clean"
   and "the rules never ran" are the same green square without that second test.
   `assets/components/` is deliberately out of scope: an overlay fragment
-  (`raycast_drivetrain.usda` is nothing but `over` opinions) cannot answer for
+  (`physical_drivetrain.usda` is nothing but joints) cannot answer for
   joint targets that arrive with the reference arc. Components are covered
   through the vessels that compose them.
 - `assets/scenes/tests/lint_selftest.usda` + `scenarios/tests/lint_selftest.rhai` —

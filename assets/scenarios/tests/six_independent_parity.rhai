@@ -5,10 +5,9 @@
 // ⚠ THIS IS NOT A RAYCAST-vs-PHYSICAL PARITY TEST, and it cannot be one.
 //
 // `vessels/rovers/six_wheel_independent.usda` carries NO `drivetrain`
-// variantSet. That is structural, not an oversight: the shared drivetrain
-// overlays (`components/mobility/raycast_drivetrain.usda`,
-// `physical_drivetrain.usda`) are authored as `over "Wheel_FL"` / `"Wheel_FR"` /
-// `"Wheel_RL"` / `"Wheel_RR"` — a FOUR-wheel prim vocabulary — while this
+// variantSet. That is structural, not an oversight: the shared `physical`
+// overlay (`components/mobility/physical_drivetrain.usda`) targets `Wheel_FL` /
+// `Wheel_FR` / `Wheel_RL` / `Wheel_RR` — a FOUR-wheel prim vocabulary — while this
 // rover's wheels are `Wheel_L0..L2` / `Wheel_R0..R2`. A `physical` selection
 // would compose onto nothing, author no joints, and yield a rover with no
 // drivetrain at all rather than a joint-driven twin. Comparing that against the

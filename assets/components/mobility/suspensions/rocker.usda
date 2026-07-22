@@ -46,8 +46,9 @@ over "Suspension" (
         uniform token axis = "Y"
         double radius = 0.04
         double height = 0.07
-        # Positioned at the top of the suspension strut
-        double3 xformOp:translate = (0.0, -0.035, 0.0)
+        # The wheel prim is the AXLE; the strut rises from it (restLength 0.5 −
+        # radius 0.4 = 0.1 m), so the casing hangs just under the 0.1 m top.
+        double3 xformOp:translate = (0.0, 0.065, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.2, 0.2, 0.2)] # Dark grey casing
         bool physics:collisionEnabled = false
@@ -62,8 +63,8 @@ over "Suspension" (
         uniform token axis = "Y"
         double radius = 0.025
         double height = 0.07
-        # Positioned at the bottom of the suspension strut, slides up/down
-        double3 xformOp:translate = (0.0, -0.065, 0.0)
+        # At the bottom of the strut (just above the axle), slides up/down
+        double3 xformOp:translate = (0.0, 0.035, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)] # Shiny metal piston
         bool physics:collisionEnabled = false
@@ -77,11 +78,11 @@ over "Suspension" (
         uniform token lunco:suspensionVisual:role = "spring"
         uniform token axis = "Y"
         double radius = 0.06
-        # Spans the suspension travel between mount and wheel hub: rest_length
-        # 0.5 − wheel_radius 0.4 = 0.1 m at rest; the mobility system scales
-        # this Y-axis cylinder along with the live compression.
+        # Spans the strut, from the axle up to the mount: rest_length 0.5 −
+        # wheel_radius 0.4 = 0.1 m at rest; the mobility system scales this
+        # Y-axis cylinder along with the live compression.
         double height = 0.1
-        double3 xformOp:translate = (0.0, -0.05, 0.0)
+        double3 xformOp:translate = (0.0, 0.05, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)] # Red spring coil
         bool physics:collisionEnabled = false

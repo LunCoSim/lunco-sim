@@ -14,10 +14,12 @@
 # body exactly as it does for the 4-wheel rover — proving a non-2×2 layout is a
 # USD file, not a Rust struct.
 #
-# Self-contained RAYCAST drivetrain: wheels are visual-only at ride height and
-# the raycaster drives the body, so no joints are needed and positions are
-# authored inline (no shared-component variant arc). Each wheel references the
-# reusable motorized wheel component for its shader + spin dynamics.
+# Self-contained RAYCAST drivetrain: the raycaster drives the body, so no joints
+# are needed and the mounts are authored inline (no shared-component variant arc).
+# Each wheel references the reusable motorized wheel component for its shader +
+# spin dynamics. A wheel prim IS THE AXLE — the same meaning it has on the
+# variant-carrying rovers; the raycast strut top sits `restLength − radius` above
+# it and is derived from the authored suspension, never from the mount.
 
 def Xform "SixWheelRover" (
     # An ASSEMBLY: a model built out of other models. Its wheels are component models
@@ -87,7 +89,7 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.15, -2.0)
+        double3 xformOp:translate = (-1.0, -0.65, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 0
@@ -101,7 +103,7 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.15, 0.0)
+        double3 xformOp:translate = (-1.0, -0.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 2
@@ -115,7 +117,7 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        double3 xformOp:translate = (-1.0, -0.15, 2.0)
+        double3 xformOp:translate = (-1.0, -0.65, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 4
@@ -130,7 +132,7 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.15, -2.0)
+        double3 xformOp:translate = (1.0, -0.65, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 1
@@ -144,7 +146,7 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.15, 0.0)
+        double3 xformOp:translate = (1.0, -0.65, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 3
@@ -158,7 +160,7 @@ def Xform "SixWheelRover" (
         ]
     )
     {
-        double3 xformOp:translate = (1.0, -0.15, 2.0)
+        double3 xformOp:translate = (1.0, -0.65, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 5

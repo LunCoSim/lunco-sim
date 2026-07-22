@@ -11,14 +11,12 @@
 #
 # `vessels/rovers/six_wheel_independent.usda` carries NO `drivetrain`
 # variantSet. It is RAYCAST-ONLY by construction, for a structural reason and
-# not an oversight: the shared drivetrain overlays
-# (`components/mobility/raycast_drivetrain.usda` and
-# `physical_drivetrain.usda`) are authored as `over "Wheel_FL"` /
-# `"Wheel_FR"` / `"Wheel_RL"` / `"Wheel_RR"` — a FOUR-wheel prim vocabulary.
-# This rover's wheels are `Wheel_L0..L2` / `Wheel_R0..R2`, so neither overlay
-# would compose onto anything; the `physical` variant in particular would
-# author no joints at all and produce a rover with no drivetrain rather than a
-# joint-driven one. A raycast-vs-physical comparison is therefore not merely
+# not an oversight: the shared `physical` overlay
+# (`components/mobility/physical_drivetrain.usda`) targets `Wheel_FL` /
+# `Wheel_FR` / `Wheel_RL` / `Wheel_RR` — a FOUR-wheel prim vocabulary. This
+# rover's wheels are `Wheel_L0..L2` / `Wheel_R0..R2`, so the overlay would
+# compose onto nothing: the `physical` variant would author no joints at all and
+# produce a rover with no drivetrain rather than a joint-driven one. A raycast-vs-physical comparison is therefore not merely
 # unmeasured here, it is UNAUTHORED, and a scenario that pretended to measure it
 # would be comparing a rover against itself.
 #

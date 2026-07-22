@@ -81,11 +81,14 @@ fn attrs(stage: &CanonicalStage, root: &str) -> std::collections::BTreeMap<Strin
     out
 }
 
-/// Where a wheel sits on the rover. Authored per drivetrain today — which is the
-/// bug: `raycast_drivetrain.usda` places the wheel prim at the strut top
-/// (y = -0.15) and `physical_drivetrain.usda` at the axle (y = -0.65), so the
-/// prim means two different points and the two rovers do not share a ride height.
-/// A wheel's position on the vehicle belongs to the VEHICLE.
+/// Where a wheel sits on the rover — authored ONCE, on the rover.
+///
+/// It used to be authored per drivetrain, which was the bug: `raycast_drivetrain.usda`
+/// placed the wheel prim at the strut top (y = -0.15) and `physical_drivetrain.usda`
+/// at the axle (y = -0.65), so the prim meant two different points and the two rovers
+/// shared neither a ride height nor a centre-of-mass height. The prim is the AXLE in
+/// both realizations now; the raycast wheel derives its strut top from the authored
+/// suspension (`lunco_mobility::strut_offset`).
 const WHEEL_MOUNT_TRANSLATE: &str = "xformOp:translate";
 
 #[test]

@@ -2684,21 +2684,52 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 
     #[test]
     fn physical_drivetrain_derives_all_four_wheel_anchors() {
-        // The shipped retrofit: `physical_drivetrain.usda` now OMITS every
-        // localPos0/1. The reader must reproduce, exactly, the four wheel anchors the
-        // file used to type twice — proving the retrofit preserves the physics.
-        let f = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/components/mobility/physical_drivetrain.usda");
-        let stage = compose_file_to_stage(&f).expect("compose drivetrain");
-        for (name, lp0) in [
-            ("Wheel_FL_Hinge", DVec3::new(-1.0, -0.65, -1.225)),
-            ("Wheel_FR_Hinge", DVec3::new(1.0, -0.65, -1.225)),
-            ("Wheel_RL_Hinge", DVec3::new(-1.0, -0.65, 1.225)),
-            ("Wheel_RR_Hinge", DVec3::new(1.0, -0.65, 1.225)),
-        ] {
-            let j = read_joint_spec_typed(&stage, &SdfPath::new(&format!("/Drivetrain/{name}")).unwrap())
+        // `physical_drivetrain.usda` OMITS every localPos0/1. The reader must
+        // reproduce, exactly, the four wheel anchors the file used to type twice.
+        //
+        // The fixture is a FOUR-WHEEL ROVER, not the overlay: the overlay owns the
+        // joints and the ROVER owns the mounts (the wheel prim is the axle in both
+        // realizations, so where a wheel sits is a property of the vehicle and is
+        // authored once, outside the `drivetrain` variantSet). Asking the overlay in
+        // isolation where its wheels are would derive four anchors at the origin and
+        // call that fine — the fragment cannot answer a question the arc resolves.
+        //
+        // It is synthetic rather than the shipped scene because a wheel hinge on a
+        // real rover carries `PhysxVehicleWheelAPI`, and those joints belong to
+        // `lunco-usd-sim`, which builds them from the wheel's own transform and never
+        // consults `localPos0` at all. This test is about the DERIVATION, so it feeds
+        // the derivation the shape it actually serves: mounts on the wheels, hinges
+        // with no anchors, four of them, on one body.
+        let mut body = String::from(
+            "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n)\n\
+             def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n",
+        );
+        let mounts = [
+            ("Wheel_FL", DVec3::new(-1.0, -0.65, -1.225)),
+            ("Wheel_FR", DVec3::new(1.0, -0.65, -1.225)),
+            ("Wheel_RL", DVec3::new(-1.0, -0.65, 1.225)),
+            ("Wheel_RR", DVec3::new(1.0, -0.65, 1.225)),
+        ];
+        for (w, p) in mounts {
+            body += &format!(
+                "    def Cylinder \"{w}\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n    {{\n\
+                 \x20       double3 xformOp:translate = ({}, {}, {})\n\
+                 \x20       uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }}\n\
+                 \x20   def PhysicsRevoluteJoint \"{w}_Hinge\"\n    {{\n\
+                 \x20       rel physics:body0 = </Rover>\n\
+                 \x20       rel physics:body1 = </Rover/{w}>\n\
+                 \x20       uniform token physics:axis = \"X\"\n    }}\n",
+                p.x, p.y, p.z
+            );
+        }
+        body += "}\n";
+        let stage = write_and_compose("four_wheel_derive.usda", &body);
+
+        for (w, lp0) in mounts {
+            let name = format!("{w}_Hinge");
+            let j = read_joint_spec_typed(&stage, &SdfPath::new(&format!("/Rover/{name}")).unwrap())
                 .unwrap_or_else(|| panic!("{name} reads"));
-            assert!(close(j.local_pos0, lp0), "{name}: anchor derived from the wheel over-translate: {:?}", j.local_pos0);
+            assert!(close(j.local_pos0, lp0), "{name}: anchor derived from the wheel translate: {:?}", j.local_pos0);
             assert_eq!(j.local_pos1, DVec3::ZERO, "{name}: lp1 = origin");
         }
     }

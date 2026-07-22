@@ -93,7 +93,11 @@ def Xform "AckermannRover" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }
 
-    # --- Wheels (authored at RAYCAST ride height; physical variant drops them) ---
+    # --- Wheels ---------------------------------------------------------
+    # The mount is a property of the VEHICLE and is authored here, once, for both
+    # realizations — see `skid_rover.usda` for the full rationale. The wheel prim
+    # IS THE AXLE either way; the raycast realization derives its strut top
+    # (`restLength − radius` above the axle) from the authored suspension.
     def Cylinder "Wheel_FL" (
         prepend references = [
             @lunco://components/mobility/wheel.usda@</Wheel>,
@@ -101,6 +105,7 @@ def Xform "AckermannRover" (
         ]
     )
     {
+        double3 xformOp:translate = (-1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 0
@@ -113,6 +118,7 @@ def Xform "AckermannRover" (
         ]
     )
     {
+        double3 xformOp:translate = (1.0, -0.65, -1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 1
@@ -125,6 +131,7 @@ def Xform "AckermannRover" (
         ]
     )
     {
+        double3 xformOp:translate = (-1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 2
@@ -137,6 +144,7 @@ def Xform "AckermannRover" (
         ]
     )
     {
+        double3 xformOp:translate = (1.0, -0.65, 1.225)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         int lunco:wheel:index = 3
@@ -227,13 +235,11 @@ def Xform "AckermannRover" (
     }
 
     # --- Drivetrain variant set (see skid_rover.usda for the contract) ---
-    # Both drivetrains are authored ONCE in shared mobility components and
-    # pulled in by reference; the arc path-translates their `over`/joint
-    # targets onto THIS rover's wheels + root.
+    # HOW a wheel is simulated, and nothing else — the mounts are authored on this
+    # rover, above, for both realizations. `raycast` is EMPTY: a raycast wheel is
+    # the absence of a joint. `physical` adds the articulation root and the joints.
     variantSet "drivetrain" = {
-        "raycast" (
-            prepend references = @lunco://components/mobility/raycast_drivetrain.usda@</Drivetrain>
-        ) {
+        "raycast" {
         }
 
         "physical" (
