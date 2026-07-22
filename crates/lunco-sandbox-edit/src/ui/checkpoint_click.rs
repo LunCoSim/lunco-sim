@@ -175,6 +175,26 @@ pub fn cancel_waypoint_edit_on_intent(
     }
 }
 
+/// Document resolution bundle for waypoint systems. Bundled into one [`SystemParam`]
+/// to stay under Bevy's 16-argument system limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct WaypointDocContext<'w> {
+    pub usd_registry: Res<'w, DocumentRegistry<UsdDocument>>,
+    pub backed: Res<'w, lunco_usd::twin_projection::DocBackedTwinScenes>,
+    pub asset_server: Res<'w, AssetServer>,
+    pub workspace: Option<Res<'w, lunco_workspace::WorkspaceResource>>,
+}
+
+impl<'w> WaypointDocContext<'w> {
+    pub fn resolve_document(&self, stage_handle: &Handle<lunco_usd_bevy::UsdStageAsset>) -> Option<lunco_doc::DocumentId> {
+        lunco_usd::twin_projection::scene_document_for(
+            &self.backed, &self.asset_server, stage_handle.id(),
+        )
+        .or_else(|| self.workspace.as_ref().and_then(|w| w.0.active_document))
+        .or_else(|| self.usd_registry.ids().next())
+    }
+}
+
 /// Grid-frame conversion bundle for the waypoint click observer. Bundled into one
 /// [`SystemParam`] so the observer stays under Bevy's 16-argument limit, and so the
 /// render→world math lives in one place. `cameras` rides along because it also reads
@@ -224,7 +244,7 @@ impl WaypointClickFrame<'_, '_> {
 fn pick_ground_world(
     frame: &WaypointClickFrame,
     terrains: &TerrainOracles,
-    raycaster: &avian3d::prelude::SpatialQuery,
+    raycaster: &lunco_physics::GridSpatialQuery,
     egui_focus: &EguiFocus,
     pointer: Vec2,
 ) -> Option<DVec3> {
@@ -233,7 +253,7 @@ fn pick_ground_world(
     let origin = ray.origin.as_dvec3();
     let dir = ray.direction.as_dvec3();
     let phys = raycaster
-        .cast_ray(origin, ray.direction, 1.0e6, false, &avian3d::prelude::SpatialQueryFilter::default())
+        .cast_ray_render(origin, ray.direction, 1.0e6, false, &avian3d::prelude::SpatialQueryFilter::default())
         .map(|h| h.distance);
     let terr = terrain_ray_hit(terrains, origin, dir, 1.0e6);
     let hit_render = match (phys, terr) {
@@ -244,7 +264,7 @@ fn pick_ground_world(
         (None, Some((_, tp))) => tp,
         (None, None) => return None,
     };
-    Some(frame.render_to_world(hit_render))
+    Some(raycaster.to_physics(hit_render))
 }
 
 /// Global `Pointer<Click>` observer: Alt+LMB drops a waypoint prim for the selected
@@ -264,20 +284,17 @@ pub fn on_scene_click_checkpoint(
     q_link: Query<&ControllerLink>,
     frame: WaypointClickFrame,
     terrains: TerrainOracles,
-    raycaster: avian3d::prelude::SpatialQuery,
+    raycaster: lunco_physics::GridSpatialQuery,
     q_prim: Query<&UsdPrimPath>,
-    q_xml: Query<&BehaviorXml>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_xml: Query<(Entity, &BehaviorXml)>,
+    doc_ctx: WaypointDocContext,
 
     mut commands: Commands,
 ) {
     if egui_focus.wants_pointer {
-        info!("[waypoint] click ignored: egui wants pointer");
         return;
     }
     if spawn_tool.0 || terrain_tool.0 {
-        info!("[waypoint] click ignored: spawn_tool={} terrain_tool={}", spawn_tool.0, terrain_tool.0);
         return;
     }
     if click.button != PointerButton::Primary {
@@ -291,11 +308,13 @@ pub fn on_scene_click_checkpoint(
     // Now that we are sure this is a Alt+LMB click meant for a waypoint, stop propagation.
     click.propagate(false);
 
-    // Default to the possessed vessel first, then fall back to the selected one
+    // Default to the possessed vessel first, then fall back to the selected one, then fall back to the first vessel with a mission tree in the scene
     let possessed_vessel = avatars.iter().next().and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity));
-    let raw_vessel = possessed_vessel.or_else(|| selected.primary());
+    let raw_vessel = possessed_vessel
+        .or_else(|| selected.primary())
+        .or_else(|| q_xml.iter().next().map(|(e, _)| e));
     let Some(mut vessel) = raw_vessel else {
-        info!("[waypoint] click ignored: no vessel possessed and no vessel selected");
+        info!("[waypoint] click ignored: no vessel found in scene");
         return;
     };
 
@@ -319,16 +338,14 @@ pub fn on_scene_click_checkpoint(
         warn!("[waypoint] target vessel {:?} is not a USD prim; cannot author a mission for it", vessel);
         return;
     };
-    let Some(doc) = workspace
-        .as_ref()
-        .and_then(|w| w.0.active_document)
-        .or_else(|| usd_registry.ids().next())
-    else {
-        info!("[waypoint] click ignored: no active document and USD registry is empty");
+
+    // ── Find the document that OWNS this vessel ──────────────────────────────
+    let Some(doc) = doc_ctx.resolve_document(&vessel_prim.stage_handle) else {
+        info!("[waypoint] click ignored: no document found for vessel");
         return;
     };
-    let Some(host) = usd_registry.host(doc) else {
-        info!("[waypoint] click ignored: no USD host for active document");
+    let Some(host) = doc_ctx.usd_registry.host(doc) else {
+        info!("[waypoint] click ignored: no USD host for document {:?}", doc);
         return;
     };
 
@@ -342,9 +359,19 @@ pub fn on_scene_click_checkpoint(
     info!("[waypoint] dropping waypoint at {:?}", hit);
 
     // ── Where the pin goes ────────────────────────────────────────────────────
-    let root = lunco_usd_bevy::layer_default_prim(host.document().data())
+    // The root comes from the vessel's OWN prim path: the first path component
+    // is the scene's default prim (e.g. "/Traverse" for traverse.usda). This is
+    // more robust than reading defaultPrim from the document layer, which may
+    // differ when the vessel is composed from a referenced twin scene.
+    let root = vessel_prim.path
+        .split('/')
+        .nth(1) // first non-empty component after the leading '/'
         .map(|p| format!("/{p}"))
-        .unwrap_or_else(|| "/".to_string());
+        .unwrap_or_else(|| {
+            lunco_usd_bevy::layer_default_prim(host.document().data())
+                .map(|p| format!("/{p}"))
+                .unwrap_or_else(|| "/".to_string())
+        });
     let scope_path = join_prim(&root, BEHAVIORS_SCOPE);
 
     // Create the `Behaviors` scope on first use. `AddPrim` on an existing prim is a
@@ -366,7 +393,7 @@ pub fn on_scene_click_checkpoint(
     // ── The mission's topology ────────────────────────────────────────────────
     // Append the leaf FIRST: if the tree is a shape the editor must not restructure,
     // bail out.
-    let current = q_xml.get(vessel).ok().map(|x| x.0.as_str());
+    let current = q_xml.get(vessel).ok().map(|(_, x)| x.0.as_str());
     let wp_coord_str = format_coord_target(hit);
     let xml = match append_waypoint_leaf(current, &wp_coord_str) {
         Ok(xml) => xml,
@@ -376,8 +403,10 @@ pub fn on_scene_click_checkpoint(
         }
     };
 
-    // ── Author: only update the mission that names it ────────────────────────
+    // ── Author: update ECS component immediately and persist to USD document ─
+    commands.entity(vessel).insert(BehaviorXml(xml.clone()));
     let mission = ensure_mission_program(&mut commands, host, doc, &vessel_prim.path);
+    info!("[waypoint] writing to doc {:?}, mission prim {:?}", doc, mission);
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::SetAttribute {
@@ -441,10 +470,9 @@ pub fn on_scene_click_place_waypoint(
     mut placement: ResMut<WaypointPlacement>,
     frame: WaypointClickFrame,
     terrains: TerrainOracles,
-    raycaster: avian3d::prelude::SpatialQuery,
+    raycaster: lunco_physics::GridSpatialQuery,
     q_vessel: Query<(&BehaviorXml, &UsdPrimPath)>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    doc_ctx: WaypointDocContext,
     mut commands: Commands,
 ) {
     if placement.0.is_none() || click.button != PointerButton::Primary {
@@ -468,11 +496,8 @@ pub fn on_scene_click_place_waypoint(
         warn!("[waypoint] placement failed: vessel {:?} has no BehaviorXml/UsdPrimPath", pending.vessel);
         return;
     };
-    let Some(doc) = workspace
-        .and_then(|w| w.0.active_document)
-        .or_else(|| usd_registry.ids().next())
-    else {
-        warn!("[waypoint] placement failed: no active document");
+    let Some(doc) = doc_ctx.resolve_document(&vessel_prim.stage_handle) else {
+        warn!("[waypoint] placement failed: no document found for vessel");
         return;
     };
 
@@ -484,6 +509,7 @@ pub fn on_scene_click_place_waypoint(
     match edited {
         Ok(new_xml) => {
             info!("[waypoint] {:?} → {}", pending.mode, new_target);
+            commands.entity(pending.vessel).insert(BehaviorXml(new_xml.clone()));
             commands.trigger(ApplyUsdOp {
                 doc,
                 op: UsdOp::SetAttribute {
@@ -756,7 +782,7 @@ pub struct WaypointVisual {
 /// for all coordinate-based waypoints stored in vessels' BehaviorXml.
 /// This prevents polluting the USD stage with waypoint prims.
 pub fn sync_waypoint_visuals(
-    q_vessels: Query<(Entity, &BehaviorXml, Option<&ReachedWaypoints>)>,
+    q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>, Option<&ReachedWaypoints>)>,
     q_visuals: Query<(Entity, &WaypointVisual)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
@@ -765,20 +791,25 @@ pub fn sync_waypoint_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    // 1. Gather all desired coordinate-based waypoints from ALL vessels.
+    // 1. Gather all desired waypoints (coordinates or resolved USD prim paths) from ALL vessels.
     // Key: (vessel, coord_key) → (index, world_pos, passed).
-    // coord_key is the raw "x;y;z" string — stable across sequence-index shifts.
+    // coord_key is the raw "x;y;z" string or USD prim path — stable across sequence-index shifts.
     // All vessels' waypoints are shown so the full mission map is visible.
     // `passed` is read from the live-only `ReachedWaypoints` set, never the XML.
     let mut desired: std::collections::HashMap<(Entity, String), (usize, DVec3, bool)> =
         std::collections::HashMap::new();
-    for (vessel, xml, reached) in q_vessels.iter() {
+    for (vessel, xml, bindings, reached) in q_vessels.iter() {
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else { continue; };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
         let mut idx = 0usize;
         for target in &targets {
-            let Some(pos) = parse_coord_target(target) else { continue };
+            let pos = parse_coord_target(target).or_else(|| {
+                bindings
+                    .and_then(|b| b.0.get(target))
+                    .and_then(|&entity| lunco_core::coords::world_position(entity, &q_parents, &q_grids_only, &q_spatial))
+            });
+            let Some(pos) = pos else { continue };
             let passed = reached.map(|r| r.0.contains(target)).unwrap_or(false);
             desired.insert((vessel, target.clone()), (idx, pos, passed));
             idx += 1;
@@ -905,7 +936,7 @@ pub fn draw_waypoint_overlay(
 
         let is_possessed = Some(vessel) == possessed_vessel;
         let is_selected = Some(vessel) == primary_selected;
-        if !is_possessed && !is_selected {
+        if (possessed_vessel.is_some() || primary_selected.is_some()) && !is_possessed && !is_selected {
             continue;
         }
 
@@ -1426,7 +1457,7 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
 /// driving ([`catmull_rom_path`]), so the ribbon you see is literally the path the
 /// rover follows. Visited legs drop out of the curve, exactly as they do for driving.
 pub fn sync_waypoint_path_mesh(
-    q_vessels: Query<(Entity, &BehaviorXml, Option<&ReachedWaypoints>)>,
+    q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>, Option<&ReachedWaypoints>)>,
     q_paths: Query<(Entity, &WaypointPathMesh)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
@@ -1447,7 +1478,7 @@ pub fn sync_waypoint_path_mesh(
         existing.insert((path.vessel, path.part), (e, path.signature));
     }
 
-    for (vessel, xml, reached) in q_vessels.iter() {
+    for (vessel, xml, bindings, reached) in q_vessels.iter() {
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else { continue };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
@@ -1458,8 +1489,12 @@ pub fn sync_waypoint_path_mesh(
         let pts: Vec<(DVec3, bool)> = targets
             .iter()
             .filter_map(|t| {
-                parse_coord_target(t)
-                    .map(|p| (p, reached.map(|r| r.0.contains(t)).unwrap_or(false)))
+                let pos = parse_coord_target(t).or_else(|| {
+                    bindings
+                        .and_then(|b| b.0.get(t))
+                        .and_then(|&entity| lunco_core::coords::world_position(entity, &q_parents, &q_grids_only, &q_spatial))
+                });
+                pos.map(|p| (p, reached.map(|r| r.0.contains(t)).unwrap_or(false)))
             })
             .collect();
         // The rover consumes the route in order, so the driven part is a prefix. Split

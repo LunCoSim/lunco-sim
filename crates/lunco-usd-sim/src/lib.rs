@@ -2492,7 +2492,7 @@ fn resolve_behavior_targets(
                 match_path && match_stage && match_inst
             });
             if let Some((e, _)) = found {
-                info!("[resolve_behavior_targets] resolved target {} -> entity {:?}", path, e);
+                debug!("[resolve_behavior_targets] resolved target {} -> entity {:?}", path, e);
                 bindings.0.insert(path, e);
             } else {
                 warn!("[resolve_behavior_targets] failed to resolve target {} for vessel {:?}", path, vessel);

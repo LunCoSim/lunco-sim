@@ -496,10 +496,15 @@ fn parse_coord_target(s: &str) -> Option<DVec3> {
 /// node kinds) is left completely untouched for serde to handle as before.
 fn expand_editor_route_in_place(v: &mut Value) {
     let closed = v.get("kind").and_then(|k| k.as_str()) == Some("forever");
-    let Some(seq) = v
+    let is_top_sequence = v.get("kind").and_then(|k| k.as_str()) == Some("sequence");
+    let seq = if is_top_sequence {
+        v
+    } else if let Some(child) = v
         .get_mut("child")
         .filter(|c| c.get("kind").and_then(|k| k.as_str()) == Some("sequence"))
-    else {
+    {
+        child
+    } else {
         return;
     };
     let Some(children) = seq.get("children").and_then(|c| c.as_array()) else { return };
