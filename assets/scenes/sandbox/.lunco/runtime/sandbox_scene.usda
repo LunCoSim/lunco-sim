@@ -9,7 +9,7 @@ over "SandboxScene"
     {
         def LunCoProgram "Mission"
         {
-            custom string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+            string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Repeat num_cycles="-1">
       <Sequence>
@@ -23,6 +23,13 @@ over "SandboxScene"
         <Action ID="drive_to" target="50.044711;12.793973;-25.310144"/>
         <Action ID="drive_to" target="68.569822;0.000000;-37.687716"/>
         <Action ID="drive_to" target="3.627603;0.000000;-43.911914"/>
+        <Action ID="drive_to" target="-17.994858;-0.061663;-3.685607"/>
+        <Action ID="drive_to" target="-18.814155;0.102093;-3.991221"/>
+        <Action ID="drive_to" target="-17.832426;-0.037380;-5.550806"/>
+        <Action ID="drive_to" target="-17.717872;-0.019949;-5.484871"/>
+        <Action ID="drive_to" target="-19.076130;-0.198864;-5.873784"/>
+        <Action ID="drive_to" target="-20.619507;-0.050787;-5.726975"/>
+        <Action ID="drive_to" target="-8.082772;0.213398;-4.527675"/>
       </Sequence>
     </Repeat>
   </BehaviorTree>
