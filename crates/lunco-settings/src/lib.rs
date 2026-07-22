@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// A slice of `settings.json` owned by one feature.
 ///
@@ -409,6 +409,25 @@ impl Default for TerrainSettings {
 
 impl SettingsSection for TerrainSettings {
     const KEY: &'static str = "terrain";
+}
+
+/// Persistent settings for asset downloading.
+#[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct DownloadSettings {
+    /// Maximum number of concurrent asset downloads (default: 3).
+    pub max_parallel_downloads: usize,
+}
+
+impl Default for DownloadSettings {
+    fn default() -> Self {
+        Self {
+            max_parallel_downloads: 3,
+        }
+    }
+}
+
+impl SettingsSection for DownloadSettings {
+    const KEY: &'static str = "download";
 }
 
 

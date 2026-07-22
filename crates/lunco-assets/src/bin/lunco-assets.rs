@@ -48,6 +48,7 @@ fn main() {
     // effective resolution, so switching quality rebakes exactly the
     // affected outputs and nothing silently serves the wrong tier.
     let mut quality: &str = "good";
+    let mut parallel_limit: Option<usize> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -64,6 +65,12 @@ fn main() {
             "-t" | "--twin" => {
                 i += 1;
                 twin_dir = args.get(i).map(|s| s.as_str());
+            }
+            "-j" | "--parallel" => {
+                i += 1;
+                if let Some(val) = args.get(i).and_then(|s| s.parse::<usize>().ok()) {
+                    parallel_limit = Some(val);
+                }
             }
             "--quality" => {
                 i += 1;
@@ -97,6 +104,8 @@ fn main() {
         return;
     };
 
+    let parallel = parallel_limit.unwrap_or_else(download::load_download_parallel_limit);
+
     // `--twin` selects the Twin download/process/list path, which reads the
     // folder's own Assets.toml and resolves dests against the Twin root.
     // `-a KEY` composes with it: a school twin that lists every candidate
@@ -108,7 +117,7 @@ fn main() {
                 download::download_one_for_twin(&twin_root, key).map_err(|e| e.to_string())
             }
             ("download", None) => {
-                download::download_all_for_twin(&twin_root).map_err(|e| e.to_string())
+                download::download_all_for_twin_with_limit(&twin_root, parallel).map_err(|e| e.to_string())
             }
             ("process", key) => process_for_twin(&twin_root, key, quality),
             ("list", _) => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
@@ -128,7 +137,7 @@ fn main() {
                 // over `-g` (one asset is more specific than one group).
                 download::download_one_engine(key).map_err(|e| e.to_string())
             } else if let Some(g) = group {
-                download::download_all_for_group(g).map_err(|e| e.to_string())
+                download::download_all_for_group_with_limit(g, parallel).map_err(|e| e.to_string())
             } else {
                 download::download_all_engine().map_err(|e| e.to_string())
             }

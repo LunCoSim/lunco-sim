@@ -324,7 +324,21 @@ pub fn download_asset_with_control(
                         return Ok(());
                     }
                 }
+            } else if dest.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+                println!(
+                    "  ✓ {} already exists at {} (file exists)",
+                    key,
+                    dest.display()
+                );
+                return Ok(());
             }
+        } else if dest.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+            println!(
+                "  ✓ {} already exists at {} (file exists)",
+                key,
+                dest.display()
+            );
+            return Ok(());
         }
     }
 
@@ -516,12 +530,23 @@ pub fn download_asset_with_control(
     Ok(())
 }
 
-/// Downloads every asset in one engine manifest group
-/// (`assets/manifests/<group>.toml`). Resolves each `dest` against the shared
-/// cache root — engine declarations are not Twin-owned, so their downloads
-/// belong in the machine-wide pool.
+/// Reads the `max_parallel_downloads` limit from settings.json (default: 3).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_all_for_group(group: &str) -> Result<(), DownloadError> {
+pub fn load_download_parallel_limit() -> usize {
+    let settings_file = crate::user_config_dir().join("settings.json");
+    if let Ok(text) = std::fs::read_to_string(&settings_file) {
+        if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(limit) = raw.get("download").and_then(|d| d.get("max_parallel_downloads")).and_then(|v| v.as_u64()) {
+                return (limit as usize).max(1);
+            }
+        }
+    }
+    3
+}
+
+/// Downloads every asset in one engine manifest group with a parallel download limit.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_all_for_group_with_limit(group: &str, max_parallel: usize) -> Result<(), DownloadError> {
     let path = crate::manifests_dir().join(format!("{group}.toml"));
     let manifest = AssetManifest::from_file(&path)
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
@@ -531,25 +556,47 @@ pub fn download_all_for_group(group: &str) -> Result<(), DownloadError> {
         return Ok(());
     }
 
-    println!("Downloading assets for `{group}`...");
+    let limit = max_parallel.max(1);
+    println!("Downloading assets for `{group}` (parallel limit: {limit})...");
 
-    for (key, entry) in &manifest.assets {
-        download_asset(entry, key, None)?;
+    let entries: Vec<(String, AssetEntry)> = manifest.assets.into_iter().collect();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(limit)
+        .build()
+        .map_err(|e| DownloadError::ManifestFailed(format!("Failed to build thread pool: {e}")))?;
+
+    let errors = std::sync::Mutex::new(Vec::new());
+    pool.scope(|s| {
+        for (key, entry) in entries {
+            let errors = &errors;
+            s.spawn(move |_| {
+                if let Err(e) = download_asset(&entry, &key, None) {
+                    errors.lock().unwrap().push(e);
+                }
+            });
+        }
+    });
+
+    let errs = errors.into_inner().unwrap();
+    if let Some(err) = errs.into_iter().next() {
+        return Err(err);
     }
 
     Ok(())
 }
 
-/// Downloads all assets from a **Twin folder's** `Assets.toml` into that
-/// Twin's own cache ([`crate::twin_cache_dir`]), so a Twin stays
-/// self-contained: its data travels with the folder and dies with it, instead
-/// of orphaning gigabytes in the shared cache. The `twin://` reader resolves
-/// `<twin>/<rel>` then `<twin>/.cache/<rel>`, so a reference authored against
-/// the Twin finds the file either way. This is the path the CLI's
-/// `--twin <DIR>` flag takes; it lets a standalone Twin that is not a
-/// workspace crate (e.g. a school project on disk) self-provision.
+/// Downloads every asset in one engine manifest group
+/// (`assets/manifests/<group>.toml`). Resolves each `dest` against the shared
+/// cache root — engine declarations are not Twin-owned, so their downloads
+/// belong in the machine-wide pool.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_all_for_twin(twin_root: &Path) -> Result<(), DownloadError> {
+pub fn download_all_for_group(group: &str) -> Result<(), DownloadError> {
+    download_all_for_group_with_limit(group, load_download_parallel_limit())
+}
+
+/// Downloads all assets from a Twin folder's `Assets.toml` with a specified parallel limit.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_all_for_twin_with_limit(twin_root: &Path, max_parallel: usize) -> Result<(), DownloadError> {
     let manifest = AssetManifest::from_crate_dir(twin_root)
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
 
@@ -560,15 +607,45 @@ pub fn download_all_for_twin(twin_root: &Path) -> Result<(), DownloadError> {
         );
         return Ok(());
     }
+    let limit = max_parallel.max(1);
     println!(
-        "Downloading assets for twin {}...",
+        "Downloading assets for twin {} (parallel limit: {limit})...",
         twin_root.display()
     );
     let dest_root = crate::twin_cache_dir(twin_root);
-    for (key, entry) in &manifest.assets {
-        download_asset(entry, key, Some(&dest_root))?;
+    let entries: Vec<(String, AssetEntry)> = manifest.assets.into_iter().collect();
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(limit)
+        .build()
+        .map_err(|e| DownloadError::ManifestFailed(format!("Failed to build thread pool: {e}")))?;
+
+    let errors = std::sync::Mutex::new(Vec::new());
+    pool.scope(|s| {
+        for (key, entry) in entries {
+            let dest_root = &dest_root;
+            let errors = &errors;
+            s.spawn(move |_| {
+                if let Err(e) = download_asset(&entry, &key, Some(dest_root)) {
+                    errors.lock().unwrap().push(e);
+                }
+            });
+        }
+    });
+
+    let errs = errors.into_inner().unwrap();
+    if let Some(err) = errs.into_iter().next() {
+        return Err(err);
     }
     Ok(())
+}
+
+/// Downloads all assets from a **Twin folder's** `Assets.toml` into that
+/// Twin's own cache ([`crate::twin_cache_dir`]), using the parallel download limit
+/// configured in settings.json (default: 3).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_all_for_twin(twin_root: &Path) -> Result<(), DownloadError> {
+    download_all_for_twin_with_limit(twin_root, load_download_parallel_limit())
 }
 
 /// Downloads a single asset by key from a **Twin folder's** `Assets.toml` —
