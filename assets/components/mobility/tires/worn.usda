@@ -25,6 +25,10 @@ over "Tire" (
 )
 {
     double lunco:tire:frictionCoefficient = 0.5
+    # The solver's coefficient tracks it — see the block in `regolith.usda` for why a
+    # tyre carries two friction numbers and where the 0.562/0.5 ratio comes from.
+    float physics:dynamicFriction = 0.562
+    float physics:staticFriction = 0.562
 
     # The look states the grip: rounded, flattened lugs under a heavy coat of
     # the hundred klicks that wore them.

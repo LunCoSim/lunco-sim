@@ -21,6 +21,10 @@ over "Tire" (
 )
 {
     double lunco:tire:frictionCoefficient = 1.3
+    # The solver's coefficient tracks it — see the block in `regolith.usda` for why a
+    # tyre carries two friction numbers and where the 1.463/1.3 ratio comes from.
+    float physics:dynamicFriction = 1.463
+    float physics:staticFriction = 1.463
 
     # The look states the grip: fewer, deeper cleats at full relief.
     over "TireLook"

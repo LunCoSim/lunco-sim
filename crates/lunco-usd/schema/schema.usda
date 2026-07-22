@@ -775,24 +775,6 @@ class "LunCoWheelAPI" (
         Authored per wheel by the rover; everything else here comes from
         `wheel.usda`."""
     )
-    double lunco:wheel:contactGripStiffness (
-        customData = {
-            double min = 0
-            double max = 500
-        }
-        doc = """Slope of contact friction vs slip, before the Coulomb cone bites.
-        Read by the wheel loader (lunco-usd-sim)."""
-    )
-    double lunco:wheel:driveForcePerNormal (
-        customData = {
-            double min = 0
-            double max = 10
-            string unit = "×N"
-        }
-        doc = """Drive force as a multiple of the wheel's normal force — traction
-        authority before the friction cone limits it. Per wheel, so a heavy hauler
-        and a light scout can differ."""
-    )
     double3 lunco:wheel:steerAxis (
         doc = """Steering-head axis, wheel-local. `(0, 1, 0)` is a vertical yaw
         axis (cars); a raked fork authors e.g. `(0, 0.91, 0.42)` for ~25°."""
@@ -809,8 +791,10 @@ class "LunCoWheelAPI" (
             double min = 0
             double max = 20
         }
-        doc = """Joint-wheel drive tuning: torque gain as the axle approaches
-        stall."""
+        doc = """Joint-wheel drive tuning: the axle motor's torque ceiling as a
+        multiple of the powertrain's stall torque. It is the joint motor's ONLY
+        torque limit — the motor is a velocity source, so this is what stops it
+        being an infinitely strong one."""
     )
 }
 

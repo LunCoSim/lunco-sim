@@ -85,6 +85,13 @@ impl Plugin for LunCoMobilityPlugin {
            .register_type::<DifferentialCoupling>()
            .register_type::<SuspensionPiston>()
            .register_type::<SuspensionSpring>()
+           .register_type::<ProxyWheelMassFolded>()
+           // A vehicle's mass must not depend on which `drivetrain` variant
+           // realizes its wheels. Ungated: this is a one-shot mass-property
+           // correction per chassis, not a force, so it must land even while
+           // physics is held — a rover that spawns during a cinematic hold is
+           // still the same rover.
+           .add_systems(FixedUpdate, fold_proxy_wheel_mass)
            // G5 rocker-bogie differential — separate set: it doesn't read the
            // control ports, only couples two rocker hinges. Idle unless a
            // `DifferentialCoupling` exists, so it's free for every other vehicle.
@@ -216,9 +223,95 @@ impl Plugin for LunCoMobilityPlugin {
     }
 }
 
-/// `lunco_usd_sim::wheel_params`).
-#[cfg(test)]
-const DEFAULT_DRIVE_FORCE_PER_NORMAL: f64 = 2.0;
+/// Marks a chassis whose proxy wheels' mass has already been folded in, so the
+/// fold happens exactly once per vehicle.
+#[derive(Component, Debug, Reflect)]
+#[reflect(Component)]
+pub struct ProxyWheelMassFolded;
+
+/// Fold the proxy wheels' authored mass onto the chassis rigid body.
+///
+/// A ROVER'S MASS IS A PROPERTY OF THE ROVER, NOT OF HOW ITS WHEELS ARE REALIZED.
+/// The same `skid_rover.usda` composed with `drivetrain = physical` masses 1100 kg
+/// (chassis 1000 + four 25 kg wheel bodies avian integrates in their own right),
+/// and with `drivetrain = raycast` massed 1000 kg — the proxy wheels are kinematic,
+/// so avian never saw their authored `physics:mass` at all. One variant switch
+/// silently changed the vehicle by 10%, which no variant is allowed to do.
+///
+/// That 10% is directly a speed error: `physxRigidBody:linearDamping` drags `c·m·v`,
+/// so terminal speed goes as `F/(c·m)`.
+///
+/// MASS AND INERTIA MOVE TOGETHER, or the fix is worse than the bug. Folding mass
+/// ALONE was measured: the chassis carries an authored `physics:diagonalInertia`
+/// under `NoAutoAngularInertia`, so the rover got harder to push and no harder to
+/// turn, and `drivetrain_parity`'s heading swung 56.3° → 61.7° against a physical
+/// twin at 51° — a 9% gap turned into 29%. Each wheel therefore contributes its
+/// parallel-axis term `m·d²` at its authored mount as well as its mass.
+///
+/// THE WHEEL'S OWN SPIN INERTIA IS DELIBERATELY NOT FOLDED. `update_wheel_spin`
+/// already integrates each wheel's ω against `I = ½·m·r²` ([`WheelRaycast::axle_inertia`]),
+/// exactly as the physical wheel's own rigid body does. Adding it to the chassis
+/// tensor as well would count one physical quantity twice. What the chassis is
+/// missing is only the wheel as a MASS AT A DISTANCE, which is what this adds.
+///
+/// Inertia is folded only when the body carries [`NoAutoAngularInertia`] — i.e. the
+/// tensor is authored. Without it avian recomputes the tensor from colliders every
+/// time the mass properties change, and this addition would be silently discarded.
+pub fn fold_proxy_wheel_mass(
+    mut commands: Commands,
+    q_chassis: Query<(Entity, &Children), (With<DriveMix>, Without<ProxyWheelMassFolded>)>,
+    q_wheels: Query<(&WheelRaycast, &Transform)>,
+    mut q_body: Query<(
+        &mut Mass,
+        Option<&mut AngularInertia>,
+        Has<NoAutoAngularInertia>,
+    )>,
+) {
+    for (chassis, children) in &q_chassis {
+        // The wheel's `mass` arrives from `WheelParams::apply_to_raycast`, which may
+        // land a frame after the component itself. A wheel still reading zero means
+        // the parameters have not been applied yet, so the vehicle is not ready to
+        // fold and must be left for a later tick — never folded at half its mass.
+        let mut wheels = Vec::new();
+        let mut pending = false;
+        for child in children.iter() {
+            let Ok((wheel, tf)) = q_wheels.get(child) else {
+                continue;
+            };
+            if wheel.mass <= 0.0 {
+                pending = true;
+                break;
+            }
+            wheels.push((wheel.mass, tf.translation.as_dvec3()));
+        }
+        if pending || wheels.is_empty() {
+            continue;
+        }
+
+        let Ok((mut mass, inertia, inertia_authored)) = q_body.get_mut(chassis) else {
+            continue;
+        };
+
+        let added: f64 = wheels.iter().map(|(m, _)| *m).sum();
+        mass.0 += added as f32;
+
+        if let (Some(mut inertia), true) = (inertia, inertia_authored) {
+            let mut principal = DVec3::ZERO;
+            for (m, d) in &wheels {
+                // Parallel-axis: a point mass `m` at `d` adds `m·(d_j² + d_k²)`
+                // about each axis `i`.
+                principal += DVec3::new(
+                    m * (d.y * d.y + d.z * d.z),
+                    m * (d.x * d.x + d.z * d.z),
+                    m * (d.x * d.x + d.y * d.y),
+                );
+            }
+            inertia.principal += principal.as_vec3();
+        }
+
+        commands.entity(chassis).try_insert(ProxyWheelMassFolded);
+    }
+}
 
 /// Upper clamp on the suspension force magnitude (N) applied per spring.
 /// Bounds the spring+damping sum so a deeply-compressed strut or a numerical
@@ -307,18 +400,12 @@ pub struct WheelRaycast {
     pub friction_mu: f64,
     /// hard the tire grips toward `v/r` before saturating at the friction limit.
     pub slip_stiffness: f64,
-    /// soft — stiffen it and a rolling wheel is braked by its own grip.
-    pub contact_grip_stiffness: f64,
     /// one number instead of two independently-fudged ones.
     pub tire_force: DVec3,
     /// like ice.
     pub lateral_grip_stiffness: f64,
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,
-    /// Max per-wheel drive force as a multiple of that wheel's normal force
-    /// (`throttle · N · this`). Caps traction to a fraction of contact grip.
-    /// USD: `lunco:wheel:driveForcePerNormal` (required).
-    pub drive_force_per_normal: f64,
     /// Steering rotation axis in the wheel's local frame
     /// (USD `lunco:wheel:steerAxis`, required).
     /// `+Y` (yaw) reproduces a flat-ground car steer; a motorcycle's
@@ -359,11 +446,9 @@ impl Default for WheelRaycast {
             max_rotation_speed: 0.0,
             friction_mu: 0.0,
             slip_stiffness: 0.0,
-            contact_grip_stiffness: 0.0,
             lateral_grip_stiffness: 0.0,
             tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
-            drive_force_per_normal: 0.0,
             steer_axis: DVec3::Y,
         }
     }
@@ -1111,6 +1196,123 @@ fn scripted_drive_mix(hook_id: &str, inputs: &std::collections::HashMap<String, 
             .filter_map(|(k, v)| v.as_f64().map(|f| (k, f.clamp(-1.0, 1.0))))
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod proxy_wheel_mass_tests {
+    //! The vehicle must mass the same whichever `drivetrain` variant realizes its
+    //! wheels. See [`fold_proxy_wheel_mass`].
+    use super::*;
+
+    /// Build a skid-rover-shaped chassis with four proxy wheels at the authored
+    /// `raycast_drivetrain.usda` mounts, run the fold, return (mass, inertia).
+    fn fold_a_four_wheel_rover(wheel_mass: f64) -> (f32, Vec3) {
+        let mut app = App::new();
+        app.add_systems(Update, fold_proxy_wheel_mass);
+
+        let chassis = app
+            .world_mut()
+            .spawn((
+                DriveMix::default(),
+                Mass(1000.0),
+                AngularInertia {
+                    principal: Vec3::new(1028.0, 1354.0, 341.0),
+                    ..default()
+                },
+                NoAutoAngularInertia,
+            ))
+            .id();
+
+        for (x, z) in [(-1.0, -1.225), (1.0, -1.225), (-1.0, 1.225), (1.0, 1.225)] {
+            let wheel = app
+                .world_mut()
+                .spawn((
+                    WheelRaycast {
+                        mass: wheel_mass,
+                        wheel_radius: 0.4,
+                        ..default()
+                    },
+                    Transform::from_translation(Vec3::new(x, -0.15, z)),
+                    ChildOf(chassis),
+                ))
+                .id();
+            let _ = wheel;
+        }
+
+        app.update();
+
+        let mass = app.world().get::<Mass>(chassis).unwrap().0;
+        let inertia = app.world().get::<AngularInertia>(chassis).unwrap().principal;
+        (mass, inertia)
+    }
+
+    #[test]
+    fn a_raycast_rover_masses_the_same_as_its_physical_twin() {
+        // The physical twin is chassis 1000 kg + four 25 kg wheel bodies. The
+        // raycast rover's wheels are kinematic proxies avian never weighs, so
+        // without the fold the same USD file massed 1000 kg — a 10% vehicle
+        // change caused by nothing but a variant switch.
+        let (mass, _) = fold_a_four_wheel_rover(25.0);
+        assert!((mass - 1100.0).abs() < 1e-3, "expected 1100 kg, got {mass}");
+    }
+
+    #[test]
+    fn the_wheels_arrive_at_their_mounts_not_at_the_centre_of_mass() {
+        // Mass alone was measured and made the suite WORSE (heading 56.3° → 61.7°
+        // against a physical twin at 51°): a heavier rover that was no harder to
+        // turn. Each wheel must bring its parallel-axis term `m·d²` at its
+        // authored mount, which grows the yaw tensor FASTER than the mass.
+        let (mass, inertia) = fold_a_four_wheel_rover(25.0);
+
+        // Per wheel at (±1.0, -0.15, ±1.225): m·(y²+z²), m·(x²+z²), m·(x²+y²)
+        //   = 25·(0.0225 + 1.500625), 25·(1.0 + 1.500625), 25·(1.0 + 0.0225)
+        //   = 38.078, 62.516, 25.5625   → ×4 → 152.31, 250.06, 102.25
+        let expected = Vec3::new(1028.0 + 152.3125, 1354.0 + 250.0625, 341.0 + 102.25);
+        assert!(
+            (inertia - expected).abs().max_element() < 1e-2,
+            "expected {expected:?}, got {inertia:?}"
+        );
+
+        // The point of the whole exercise: yaw inertia must rise FASTER than mass,
+        // or the rover gets heavier without getting harder to turn.
+        let mass_ratio = mass / 1000.0;
+        let yaw_ratio = inertia.y / 1354.0;
+        assert!(
+            yaw_ratio > mass_ratio,
+            "yaw inertia grew {yaw_ratio:.4}× but mass grew {mass_ratio:.4}×"
+        );
+    }
+
+    #[test]
+    fn a_wheel_whose_parameters_have_not_landed_yet_defers_the_fold() {
+        // `WheelParams::apply_to_raycast` can land a tick after the component. A
+        // wheel still reading zero mass means the vehicle is not ready — folding
+        // then would permanently pin the rover at a fraction of its real mass.
+        let (mass, inertia) = fold_a_four_wheel_rover(0.0);
+        assert_eq!(mass, 1000.0, "folded before the wheel parameters arrived");
+        assert_eq!(inertia, Vec3::new(1028.0, 1354.0, 341.0));
+    }
+
+    #[test]
+    fn folding_twice_does_not_double_the_rover() {
+        let mut app = App::new();
+        app.add_systems(Update, fold_proxy_wheel_mass);
+        let chassis = app
+            .world_mut()
+            .spawn((DriveMix::default(), Mass(1000.0)))
+            .id();
+        app.world_mut().spawn((
+            WheelRaycast { mass: 25.0, ..default() },
+            Transform::default(),
+            ChildOf(chassis),
+        ));
+
+        app.update();
+        app.update();
+        app.update();
+
+        assert!((app.world().get::<Mass>(chassis).unwrap().0 - 1025.0).abs() < 1e-3);
     }
 }
 

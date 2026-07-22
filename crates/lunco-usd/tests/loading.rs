@@ -78,9 +78,9 @@ def Xform "Rover" {
         float physxVehicleSuspension:springDamperRate = 600.0
 
         double lunco:tire:frictionCoefficient = 0.8
+        float physics:dynamicFriction = 1.6
+        float physics:staticFriction = 1.6
 
-        double lunco:wheel:contactGripStiffness = 50.0
-        double lunco:wheel:driveForcePerNormal = 2.0
         double3 lunco:wheel:steerAxis = (0, 1, 0)
         double lunco:wheel:driveDamping = 30.0
         double lunco:wheel:stallTorqueGain = 6.0

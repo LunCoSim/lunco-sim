@@ -55,29 +55,55 @@ fn mark_actuator_driven_steer(trigger: On<Add, SteeringActuator>, mut commands: 
 
 /// A wheel-hub motor that drives a rover the **physically correct** way: it
 /// commands the wheel's axle [RevoluteJoint] toward a target **spin velocity**
-/// (a velocity-controlled motor, capped at `max_torque`), and the wheel↔ground
-/// friction propels the rover. Nothing is pushed on the chassis — the engine
+/// (a velocity-controlled motor, capped at `max_torque`), and the wheel-ground
+/// friction propels the rover. Nothing is pushed on the chassis - the engine
 /// moves the body entirely through the contact, exactly like a real vehicle.
+/// This component lives on the **joint** entity (not the wheel), alongside the
+/// [RevoluteJoint] it drives.
 ///
-/// Why velocity control, not raw axle torque: a constant axle torque sits in
-/// avian's low-slip friction dead-zone at small magnitudes (the wheel barely
-/// grips and the rover hardly moves) and breaks traction wildly at large ones.
-/// A velocity motor commands the spin rate; the joint applies up to `max_torque`
-/// to reach it, the tyre friction does the rest, and the top speed self-limits
-/// at traction. This component lives on the **joint** entity (not the wheel),
-/// alongside the [RevoluteJoint] it drives.
+/// # Why velocity control, and what was measured against it
+///
+/// A constant axle torque sits in avian's low-slip friction dead-zone at small
+/// magnitudes (the wheel barely grips and the rover hardly moves) and breaks
+/// traction wildly at large ones. A velocity motor commands the spin rate; the
+/// joint applies up to `max_torque` to reach it, the tyre friction does the rest.
+///
+/// The obvious objection is that this has no torque-speed characteristic at all:
+/// with `max_torque = peakTorque x stallTorqueGain` (6x) the motor reaches its
+/// target against any load, and `drivetrain_parity` confirms it - the physical
+/// wheel holds w = 12 rad/s (w.r = 4.8 m/s) while the chassis does 2.2 m/s, a
+/// permanent 2.6 m/s contact slip, where the raycast wheel rolls with centimetres
+/// per second of it. It is also why `lunco:wheel:driveDamping` measures as INERT:
+/// the motor is torque-saturated at every sample, so its regime is never entered.
+///
+/// **Replacing it with the authored curve was tried and MEASURED WORSE.** Setting
+/// `max_torque = tau_stall.(1 - w/w_noload).|throttle|` every tick - the same law
+/// `lunco_mobility::update_wheel_spin` integrates on the raycast side - makes the
+/// joint a torque source, and the physical rover's terminal speed FELL from
+/// 2.21 m/s to 1.46 m/s against a raycast 2.31 (an 8% gap became 37%), with the
+/// skid heading collapsing from 51 deg to 7 deg. Two follow-ups ruled out the
+/// obvious explanations: it is NOT the contact friction (doubling the tyre's
+/// authored `physics:dynamicFriction` moved the result by less than 0.01 m/s) and
+/// NOT swept-CCD interference (`SweptCcd::LINEAR` was byte-identical). Under the
+/// curve the axle settled at w = 9.5 rad/s with the motor capped at ~53 N.m while
+/// the chassis did 1.46 m/s - i.e. still sliding, but no longer able to buy back
+/// the torque, and NOT limited by the cone it was sliding against. The torque
+/// source is right in principle; something between the joint motor and the
+/// contact is eating the difference and has not been identified. Until it is,
+/// this is what parity is measured against. See `WheelParams::drive_motor`.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct MotorActuator {
-    /// Entity of the [Port] providing the throttle command (−1..=1).
+    /// Entity of the [Port] providing the throttle command (-1..=1).
     /// For a skid rover this already carries the per-side differential.
     pub port_entity: Entity,
-    /// Wheel spin (rad/s) commanded at full throttle. With wheel radius `r` the
-    /// free-rolling top speed is ≈ `max_omega · r`.
+    /// No-load axle speed (rad/s) commanded at full throttle -
+    /// `lunco:motor:noLoadSpeed` divided by the gearbox ratio. With wheel radius
+    /// `r` the free-rolling top speed is about `max_omega * r`.
     pub max_omega: f64,
-    /// Sign mapping throttle→spin so a positive (forward) command rolls the rover
-    /// along its chassis −Z. Depends on the joint's `hinge_axis` orientation;
-    /// `-1` for the canonical `axle = rotation·Y` hinge.
+    /// Sign mapping throttle to spin so a positive (forward) command rolls the
+    /// rover along its chassis -Z. Depends on the joint's `hinge_axis`
+    /// orientation; `-1` for the canonical `axle = rotation * Y` hinge.
     pub drive_sign: f64,
 }
 
@@ -93,7 +119,7 @@ impl Default for MotorActuator {
 
 /// Drives each wheel by writing its axle joint's velocity-motor target from the
 /// throttle port. The joint applies up to its `max_torque` to reach the spin;
-/// the tyre↔ground friction moves the rover — pure physics-engine propulsion,
+/// the tyre-ground friction moves the rover - pure physics-engine propulsion,
 /// and a steered front wheel is driven about its steered axle for free (the
 /// hinge axis yaws with the wheel).
 fn motor_actuator_system(

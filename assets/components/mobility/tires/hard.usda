@@ -20,7 +20,7 @@
 # See `regolith.usda` for how the `over` composes onto the wheel that pulls it in.
 
 over "Tire" (
-    prepend apiSchemas = ["PhysxVehicleTireAPI", "LunCoTireAPI"]
+    prepend apiSchemas = ["PhysxVehicleTireAPI", "LunCoTireAPI", "PhysicsMaterialAPI"]
     kind = "component"
 )
 {
@@ -29,6 +29,10 @@ over "Tire" (
     # sooner when it runs out of friction.
     float physxVehicleTire:longitudinalStiffness = 14000.0
     double lunco:tire:frictionCoefficient = 0.55
+    # The solver's coefficient tracks it — see the block in `regolith.usda` for why a
+    # tyre carries two friction numbers and where the 0.619/0.55 ratio comes from.
+    float physics:dynamicFriction = 0.619
+    float physics:staticFriction = 0.619
     # A rigid compound corners as stiffly as it drives — no soil shear to soften
     # it, so the side force is up against the (lower) friction cone almost at
     # once. Stiff and slippery is a real combination: it holds a line precisely

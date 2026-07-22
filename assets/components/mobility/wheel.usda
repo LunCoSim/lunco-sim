@@ -112,27 +112,37 @@ def Cylinder "Wheel" (
     # Steering is NOT here: the max steer angle is a property of the VEHICLE's steering
     # system, not of a wheel (a skid rover's wheels do not steer at all). It is
     # `physxVehicleAckermannSteering:maxSteerAngle` on the rover prim.
-    double lunco:wheel:contactGripStiffness = 50.0  # slope of contact friction vs slip
-    # Traction authority as a multiple of this wheel's normal force.
+    # THREE KNOBS THAT USED TO LIVE HERE ARE GONE, and the reason is the same for
+    # all three: they were calibrations against a model that no longer exists.
     #
-    # It reads like a Coulomb bound and is NOT one: 2.0 against μ = 0.8 looks like
-    # a wheel pushing 2.5× harder than it grips. It is a CALIBRATION. The raycast
-    # longitudinal model is lumped — its drag term resists the full travel speed
-    # rather than the contact slip `v − ω·r` — and 2.0 is the value at which the
-    # raycast rover's acceleration and terminal speed match the PHYSICAL rover's,
-    # which is real avian contact. Dropping it to 0.8 "for physical honesty" cost
-    # 30% of peak speed against the physical twin and failed
-    # `scenes/tests/drivetrain_parity.usda` on three counts.
-    #
-    # Tune it against parity, never against intuition about what a tire can do.
-    double lunco:wheel:driveForcePerNormal = 2.0
+    #   `contactGripStiffness` — read into the component and consumed by nothing.
+    #   `driveForcePerNormal`  — the raycast chassis force used to be
+    #                            `throttle · N · this`, paired with a drag term
+    #                            that resisted the FULL travel speed. Two fudges
+    #                            fitted to cancel: the tire force is now the real
+    #                            contact slip `k·(ω·r − v)` out of the spin solve
+    #                            (`lunco_mobility::update_wheel_spin`), so there is
+    #                            nothing left for a traction multiplier to correct.
     double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
-    # Joint-wheel (rigid-axle) drive tuning — reproduces the verified feel. The axle's
-    # free-spin cap is NOT here and not on this prim at all: it is the motor's
-    # `lunco:motor:noLoadSpeed` divided by the gearbox ratio, the one no-load speed both
-    # wheel realizations obey.
+    # Joint-wheel (rigid-axle) drive tuning. The axle's free-spin cap is NOT here and
+    # not on this prim at all: it is the motor's `lunco:motor:noLoadSpeed` divided by
+    # the gearbox ratio, the one no-load speed both wheel realizations obey.
+    #
+    # `driveDamping` is INERT as things stand, and honestly so: the motor is
+    # torque-saturated at every sample against the `stallTorqueGain` ceiling below,
+    # so the damping's regime (the last approach to no-load) is never entered.
+    # Sweeping it 30 → 60 → 150 produced byte-identical traces. It becomes live the
+    # day the ceiling becomes the motor's own τ(ω) curve.
     double lunco:wheel:driveDamping = 30.0          # axle motor damping
-    double lunco:wheel:stallTorqueGain = 6.0        # torque gain approaching stall
+    # The joint motor's torque ceiling, as a multiple of the powertrain's stall
+    # torque. 6× is deliberately far above the steady traction figure so a skid
+    # turn can enforce its left/right speed split — which also means the motor is
+    # a SPEED source, not a torque source: it reaches `noLoadSpeed` against any
+    # load, and the tyre slides for the whole run. Replacing this cap with the
+    # authored curve `τ(ω)` was tried and measured WORSE (terminal 2.21 → 1.46
+    # against a raycast 2.31); see `lunco_hardware::MotorActuator` for the full
+    # measurement and the two hypotheses it ruled out.
+    double lunco:wheel:stallTorqueGain = 6.0
 
     # A driven wheel has a motor behind it, but the motor is not IN here: it is its own
     # part (`components/mobility/motor.usda`) with its own mass, torque curve, efficiency

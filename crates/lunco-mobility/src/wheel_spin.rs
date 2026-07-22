@@ -330,10 +330,8 @@ mod tests {
                 bearing_damping: 0.0,
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
-                contact_grip_stiffness: 1000.0,
                 lateral_grip_stiffness: 1000.0,
                 brake_torque_max: 0.0,
-                drive_force_per_normal: 2.0,
                 tire_force: DVec3::ZERO,
             },
             Suspension {
@@ -419,10 +417,8 @@ mod tests {
                     bearing_damping: 0.45,
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
-                    contact_grip_stiffness: 50.0,
                     lateral_grip_stiffness: 800.0,
                     brake_torque_max: 1500.0,
-                    drive_force_per_normal: 2.0,
                     tire_force: DVec3::ZERO,
                 },
                 Suspension {

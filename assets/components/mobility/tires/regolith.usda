@@ -27,7 +27,7 @@
 # numbers mean the same thing here as they do in any other PhysX vehicle.
 
 over "Tire" (
-    prepend apiSchemas = ["PhysxVehicleTireAPI", "LunCoTireAPI"]
+    prepend apiSchemas = ["PhysxVehicleTireAPI", "LunCoTireAPI", "PhysicsMaterialAPI"]
     kind = "component"
 )
 {
@@ -58,6 +58,36 @@ over "Tire" (
     # This number no longer has to fight a fake drag term for the friction cone
     # (see `lunco_mobility::update_wheel_spin`), so it now means what it says.
     float physxVehicleTire:lateralStiffness = 100.0
+
+    # --- Contact-solver friction (UsdPhysicsMaterialAPI) ---
+    # THE SAME GRIP, STATED IN THE SOLVER'S UNITS. `lunco:tire:frictionCoefficient`
+    # above is the tyre's real Coulomb μ and the raycast model uses it directly:
+    # it saturates the patch force at exactly μ·N. The PHYSICAL wheel does not get
+    # to do that — its cone is negotiated by avian's XPBD contact solver, which
+    # under sustained sliding delivers well under the nominal cone (measured on
+    # `drivetrain_parity`: a wheel commanded past its traction limit settled at
+    # ~0.45 effective against an authored 0.8, i.e. ~56%). Bending
+    # `lunco:tire:frictionCoefficient` to compensate would be a lie about the tyre
+    # and would silently corrupt the analytic model with it; so the solver gets
+    # its OWN authored coefficient, and the ratio between the two is a property of
+    # the engine, not of the rubber.
+    #
+    # 0.9 against the tyre's own 0.8. It replaces a hard-coded `Friction::new(0.9)`
+    # in `lunco_usd_sim::setup_physical_wheel` — the same number, but now authored
+    # on the tyre it belongs to, so re-shoeing a rover moves BOTH coefficients
+    # instead of only the analytic one.
+    #
+    # Swept on `drivetrain_parity` (physical terminal speed against a raycast twin
+    # at the same authored μ = 0.8):
+    #   0.8  → 1.61 m/s vs 2.31 (the tyre's own μ: 30% short)
+    #   0.9  → 2.21 m/s vs 2.40 (8% short — the closest measured)
+    #   1.6  → no measurable change from 0.8 at the time it was tried
+    # The shortfall is the solver's, not the soil's: avian combines this with the
+    # ground material (default rule: Average) and its XPBD friction under sustained
+    # sliding delivers well under the resulting cone. Re-measure if the substep
+    # count or the avian version changes — those are what it is a function of.
+    float physics:dynamicFriction = 0.9
+    float physics:staticFriction = 0.9
 
     # --- Tread ---
     # Spin-revealing tread + rim, drawn by the wheel shader. The look is a `Material`

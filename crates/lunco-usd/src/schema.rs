@@ -639,9 +639,6 @@ mod tests {
         let reg = SchemaRegistry::global().read().unwrap();
         for name in [
             "lunco:wheel:driveDamping",
-            "lunco:wheel:stallTorqueGain",
-            "lunco:wheel:contactGripStiffness",
-            "lunco:wheel:driveForcePerNormal",
             "lunco:suspension:restLength",
             "lunco:tire:frictionCoefficient",
         ] {

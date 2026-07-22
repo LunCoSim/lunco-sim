@@ -26,12 +26,10 @@
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
 //! | cornering stiffness (lateral) | `physxVehicleTire:lateralStiffness` | no (schema fallback 0.0) |
-//! | Coulomb μ | `lunco:tire:frictionCoefficient` | yes |
-//! | grip stiffness | `lunco:wheel:contactGripStiffness` | yes |
-//! | drive force/normal | `lunco:wheel:driveForcePerNormal` | yes |
+//! | Coulomb μ (analytic) | `lunco:tire:frictionCoefficient` | yes |
+//! | contact μ (solver) | `physics:dynamicFriction` | yes |
 //! | steer axis | `lunco:wheel:steerAxis` | yes |
 //! | motor damping | `lunco:wheel:driveDamping` | yes |
-//! | stall torque gain | `lunco:wheel:stallTorqueGain` | yes |
 //! | suspension | `lunco:suspension:restLength` + `physxVehicleSuspension:springStrength`/`:springDamperRate` | raycast only |
 //!
 //! ## One no-load speed for both realizations
@@ -124,17 +122,21 @@ pub struct WheelParams {
     /// to state a real value is the tire asset, which every shipped tire does.
     pub lateral_stiffness: f64,
     /// Coulomb μ from the wheel's TIRE (`lunco:tire:frictionCoefficient`,
-    /// composed through the `tire` variant).
+    /// composed through the `tire` variant). The ANALYTIC cone: the raycast
+    /// tyre model saturates its patch force at exactly `friction_mu · N`.
     pub friction_mu: f64,
-    /// Contact grip stiffness (`lunco:wheel:contactGripStiffness`).
-    pub contact_grip_stiffness: f64,
-    /// Drive force as a multiple of normal force (`lunco:wheel:driveForcePerNormal`).
-    pub drive_force_per_normal: f64,
+    /// Contact μ for the SOLVER (`physics:dynamicFriction`, `UsdPhysicsMaterialAPI`
+    /// on the same tyre). The coefficient the physical wheel's avian contact is
+    /// given so that it reproduces `friction_mu`'s cone — see the sweep recorded
+    /// in `components/mobility/tires/regolith.usda`. A second number because
+    /// avian's XPBD contact friction under sustained sliding delivers well under
+    /// the nominal cone, and the tyre's real μ must not be bent to hide that.
+    pub contact_friction: f64,
     /// Raked steering-head axis, wheel-local (`lunco:wheel:steerAxis`).
     pub steer_axis: DVec3,
     /// Velocity-tracking aggressiveness, 1/s (`lunco:wheel:driveDamping`).
     pub drive_damping: f64,
-    /// Motor stall torque = peakTorque × this (`lunco:wheel:stallTorqueGain`).
+    /// Motor stall torque = peakTorque x this (`lunco:wheel:stallTorqueGain`).
     pub stall_torque_gain: f64,
     /// Suspension compliance; `None` ⇒ none resolves. A raycast wheel treats
     /// that as a hard asset error, a joint wheel does not need it.
@@ -192,8 +194,7 @@ impl WheelParams {
             .real(wheel, "physxVehicleTire:lateralStiffness")
             .unwrap_or(0.0);
         let friction_mu = req("lunco:tire:frictionCoefficient");
-        let contact_grip_stiffness = req("lunco:wheel:contactGripStiffness");
-        let drive_force_per_normal = req("lunco:wheel:driveForcePerNormal");
+        let contact_friction = req("physics:dynamicFriction");
         let drive_damping = req("lunco:wheel:driveDamping");
         let stall_torque_gain = req("lunco:wheel:stallTorqueGain");
 
@@ -232,8 +233,7 @@ impl WheelParams {
             slip_stiffness,
             lateral_stiffness,
             friction_mu,
-            contact_grip_stiffness,
-            drive_force_per_normal,
+            contact_friction,
             steer_axis,
             drive_damping,
             stall_torque_gain,
@@ -272,9 +272,7 @@ impl WheelParams {
         wheel.friction_mu = self.friction_mu;
         wheel.slip_stiffness = self.slip_stiffness;
         wheel.lateral_grip_stiffness = self.lateral_stiffness;
-        wheel.contact_grip_stiffness = self.contact_grip_stiffness;
         wheel.brake_torque_max = self.brake_torque_max;
-        wheel.drive_force_per_normal = self.drive_force_per_normal;
         wheel.steer_axis = self.steer_axis;
     }
 
@@ -290,18 +288,57 @@ impl WheelParams {
         true
     }
 
-    /// The ONE definition of the physical wheel's axle drive: a
-    /// velocity-controlled motor (stiffness 0 — pure velocity control,
-    /// mass-auto-scaled) whose stall torque is `peakTorque × stallTorqueGain`.
-    /// Stall torque sits well above the steady traction figure so a skid turn
-    /// can enforce its left/right speed split; velocity control self-caps the
-    /// spin, so the high stall torque can't run away.
+    /// The ONE definition of the physical wheel's axle drive: the joint motor
+    /// MODEL (stiffness 0 — pure velocity control, mass-auto-scaled) that
+    /// [`lunco_hardware::MotorActuator`] then drives.
+    ///
+    /// The torque cap is deliberately NOT set here. It is the authored motor
+    /// curve `τ(ω) = τ_stall·(1 − ω/ω_noload)`, which depends on this tick's axle
+    /// rate, so the actuator writes `motor.max_torque` every tick; a constant cap
+    /// authored at build time is exactly the `stallTorqueGain` fudge that made the
+    /// physical wheel a speed source (see `MotorActuator`).
+    ///
+    /// It is built DISABLED, not left at `AngularMotor::new`'s `Scalar::MAX`
+    /// torque. A motor born with unbounded torque and a target velocity of zero is
+    /// an infinitely strong brake, and the physics steps between the joint being
+    /// spawned and the actuator's first write were enough to fire an unbounded
+    /// impulse and throw every body in the rig out of the world
+    /// (`[physics] body left the world`, velocities of ~1e6 m/s). Note that
+    /// `with_max_torque(0.0)` does NOT express "no torque" in avian — zero is a
+    /// sentinel for UNLIMITED, see the warning in `MotorActuator`. Disabled is the
+    /// honest starting point in any case: an axle exerts no torque until something
+    /// commands it, and the actuator enables the motor on the first commanded tick.
+    ///
+    /// `lunco:wheel:driveDamping` is what remains meaningful: with the torque
+    /// capped by the curve the motor is saturated for nearly the whole speed
+    /// range, so the damping only shapes the last approach to no-load, where the
+    /// curve has already fallen to near zero. That is why sweeping it 30 → 150
+    /// produced byte-identical traces — not a broken parameter, a parameter whose
+    /// regime the rover never entered.
     pub fn drive_motor(&self) -> AngularMotor {
         AngularMotor::new(MotorModel::AccelerationBased {
             stiffness: 0.0,
             damping: self.drive_damping,
         })
         .with_max_torque(self.peak_torque * self.stall_torque_gain)
+    }
+
+    /// Axle moment of inertia, kg·m² — authored `physxVehicleWheel:moi` when it
+    /// is stated, otherwise the solid-disk derivation `½·m·r²` from the authored
+    /// mass and radius.
+    ///
+    /// The SAME derivation `WheelRaycast::axle_inertia` applies on the raycast
+    /// side (it cannot be shared as code — `lunco-mobility` does not depend on
+    /// this crate — so it is shared as a rule, and both are fed by this reader).
+    /// The physical wheel's real inertia comes from its cylinder collider at
+    /// `wheel_density()`, which is ½·m·r² about the axle by construction, so this
+    /// is that same number and not a parallel one.
+    pub fn axle_inertia(&self) -> f64 {
+        if self.moment_of_inertia > 0.0 {
+            self.moment_of_inertia
+        } else {
+            0.5 * self.mass * self.radius * self.radius
+        }
     }
 
     /// Collider density realising `physics:mass` on the physical wheel's

@@ -1864,15 +1864,42 @@ fn setup_physical_wheel(
         // (see the `wheel_density` note above) — a forced `Mass` desynced them and
         // the rover sank through the terrain.
         avian3d::prelude::ColliderDensity(wheel_density),
-        // The drive is an axle TORQUE on the wheel (see MotorActuator); wheel↔ground
-        // friction propels the rover. μ is a COMPROMISE: high μ gives traction +
-        // Ackermann cornering grip, but also high LATERAL grip that resists a skid
-        // rover's sideways scrub (skid steering needs the wheels to slide). μ=0.9
-        // lets the skid differential actually yaw the body while still moving + (with
-        // AWD) cornering the Ackermann. `AngularDamping(0.3)` = wheel-bearing drag.
-        Friction::new(0.9),
-        LinearDamping(0.1),
-        AngularDamping(0.3),
+        // THE CONTACT COEFFICIENT IS THE TYRE'S, AND IT IS AUTHORED. This was
+        // `Friction::new(0.9)` — a Rust constant that no tyre asset stated, so
+        // swapping the `tire` variant moved the analytic model's μ and left the
+        // physical wheel sliding on the same surface it always had. The 0.9 is now
+        // `physics:dynamicFriction` on the tyre (`UsdPhysicsMaterialAPI`, core
+        // UsdPhysics), alongside the tyre's own `lunco:tire:frictionCoefficient`.
+        //
+        // TWO friction numbers on one tyre is not a duplication. 0.8 is the tyre's
+        // Coulomb μ and the raycast model applies it exactly — it saturates its
+        // patch force at μ·N. The physical wheel's cone is negotiated by avian's
+        // XPBD contact solver instead, which under sustained sliding delivers well
+        // under nominal: authoring the honest 0.8 here costs the physical rover 30%
+        // of its terminal speed against its raycast twin. So the solver gets its own
+        // authored coefficient, and the gap between the two is a property of the
+        // engine rather than of the rubber. The sweep is recorded in
+        // `components/mobility/tires/regolith.usda`.
+        //
+        // Default combine rule (Average, against the ground material): that is what
+        // the 0.9 was measured against, and `Min` would let the tyre's number be
+        // overridden by any ground softer than it.
+        Friction::new(params.contact_friction),
+        // BEARING DRAG IS AUTHORED, in the wheel's own units. Was
+        // `AngularDamping(0.3)` — again a Rust constant, and again one the raycast
+        // wheel does not share: its spin integrator subtracts
+        // `physxVehicleWheel:dampingRate · ω` (N·m·s, 0.45) from the axle torque.
+        // avian's `AngularDamping` is not a torque coefficient but a per-second
+        // decay applied to ω, i.e. τ ≈ d·I·ω, so the authored N·m·s converts as
+        // `d = dampingRate / I_axle` — 0.45/2.0 = 0.225 for the shipped wheel. One
+        // authored number, two realizations, each in its own units.
+        //
+        // `LinearDamping(0.1)` is GONE with no replacement. A wheel hinged to the
+        // chassis travels at the chassis's speed, so a linear damper on it was a
+        // second, unauthored aerodynamic-style drag on the vehicle (≈22 N at
+        // cruise) that the raycast rover — whose wheels are not bodies — could not
+        // have. Rolling drag is the bearing term above; there is no air on the Moon.
+        AngularDamping(params.bearing_damping / params.axle_inertia().max(1e-6)),
         // Continuous collision detection: a thin, fast-falling wheel cylinder can
         // pass THROUGH the one-sided terrain heightfield in a single step (and once
         // below a one-sided surface, no contact ever pushes it back — it falls
@@ -1880,6 +1907,10 @@ fn setup_physical_wheel(
         // never tunnel, even across a one-frame collider-warmup gap. This is what
         // lets the tunnel-rescue safety net be deleted — the wheel physically
         // cannot end up below the terrain.
+        // (Non-linear by default. `SweptCcd::LINEAR` was tried while hunting the
+        // parity gap — the rotational sweep runs every substep on a permanently
+        // spinning wheel — and measured as a byte-identical no-op, so the stronger
+        // anti-tunneling guard stays.)
         avian3d::prelude::SweptCcd::default(),
         wheel_tf,
     ));
@@ -1941,14 +1972,13 @@ fn setup_physical_wheel(
     // fragile bearing the chassis weight; the fix for vertical travel is the rigid
     // axle + `SubstepCount(12)`. See `project_physical_rover_suspension`.)
 
-    // Velocity-controlled axle drive — THE one drive-motor definition lives in
-    // `WheelParams::drive_motor` (raw torque sat in avian's low-slip friction
-    // dead-zone; commanding spin rate is stable and self-limits top speed at
-    // traction; the high stall torque is what lets a skid turn enforce its
-    // left/right speed split). The no-load speed it targets is
-    // `physxVehicleEngine:maxRotationSpeed` — the SAME attribute the raycast
-    // wheel's torque–speed rolloff uses, so both kinds top out at `ω_max · r`.
-    // Further USD-tunable via `lunco:wheel:driveDamping` / `:stallTorqueGain`.
+    // Axle drive — THE one drive-motor definition lives in
+    // `WheelParams::drive_motor`. The motor's torque cap is re-derived every tick
+    // from the authored torque–speed curve by `MotorActuator` (see its docs for
+    // why the old fixed-cap velocity motor was a permanent burnout); what is built
+    // here is the joint's motor MODEL and its live target, which the actuator then
+    // shapes. Both wheel realizations read the same motor + gearbox, so both top
+    // out at `ω_noload · r` for the same reason.
     let drive_motor = params.drive_motor();
 
     // Joint construction lives in `lunco-usd-avian` (the single home for all
