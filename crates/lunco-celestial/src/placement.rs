@@ -80,13 +80,14 @@ pub fn anchor_solar_frame_to_site(
     // one Solar Grid entity.
     mut q_solar: Query<(Entity, &mut CellCoord, &mut Transform), (With<SolarSystemRoot>, With<Grid>)>,
     mut q_align: Query<
-        &mut Transform,
+        (Entity, &mut Transform),
         (
             With<crate::big_space_setup::SiteAlignGrid>,
             Without<SolarSystemRoot>,
             Without<CelestialReferenceFrame>,
         ),
     >,
+    mut commands: Commands,
     q_frames_stored: Query<
         (Entity, &CelestialReferenceFrame, &CellCoord, &Transform, &ChildOf),
         (With<Grid>, Without<SolarSystemRoot>),
@@ -200,10 +201,17 @@ pub fn anchor_solar_frame_to_site(
     // has — the old "compute the translation from the rounded f32 quat"
     // trick is obsolete.
     let align_f32 = align.as_quat();
-    if let Ok(mut align_tf) = q_align.single_mut() {
+    if let Ok((align_entity, mut align_tf)) = q_align.single_mut() {
         if align_tf.rotation != align_f32 {
             align_tf.rotation = align_f32;
         }
+        // Reaching here means a site anchor RESOLVED (body in the registry, an
+        // ephemeris position for it) — so the rotation now on the grid is the real
+        // ecliptic→world one. Say so on the entity: an identity quat here is
+        // otherwise indistinguishable from the default a celestial-but-unanchored
+        // scene leaves behind, and consumers that cannot tell aim the sun into the
+        // ecliptic frame (see `SiteAligned`).
+        commands.entity(align_entity).try_insert(crate::big_space_setup::SiteAligned);
     }
     // Site offset in the (rotating) body frame — rotated by the STORED
     // frame quat inside the walk, matching what tiles/children inherit.

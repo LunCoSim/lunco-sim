@@ -258,7 +258,7 @@ pub fn update_range_sensors(
             continue;
         };
         let mut filter = SpatialQueryFilter::from_mask(
-            avian3d::prelude::LayerMask(!lunco_core::TRIGGER_COLLISION_LAYER),
+            avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS),
         );
         filter.excluded_entities.insert(e);
         if let Ok(parent) = q_parents.get(e) {

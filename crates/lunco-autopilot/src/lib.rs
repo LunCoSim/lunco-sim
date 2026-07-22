@@ -1577,7 +1577,12 @@ pub fn sense_clearance(
         }
         let mut excluded = Vec::new();
         collect_hierarchy(vessel, &q_children, &mut excluded);
-        let filter = SpatialQueryFilter::from_excluded_entities(excluded);
+        // Trigger volumes and celestial bodies are not obstacles: the former is an
+        // event surface, the latter picking geometry whose sphere can contain the
+        // whole scene (see `NON_PHYSICAL_QUERY_LAYERS`). Unmasked, an obstacle
+        // probe reads "wall at 0 m" in every direction.
+        let mut filter = SpatialQueryFilter::from_excluded_entities(excluded);
+        filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
         let base = pos.0.as_vec3();
         // Cast each lane at every body height, keep the nearest hit across them.
         let lane = |dir: Vec3| -> Option<f32> {

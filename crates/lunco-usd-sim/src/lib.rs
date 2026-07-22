@@ -1676,11 +1676,13 @@ fn setup_raycast_wheel(
     // against their own rover chassis (causes jiggling/jumping bug).
     let rover_entity = maybe_child_of.map(|c| c.parent());
     let mut ray_caster = RayCaster::new(DVec3::ZERO, Dir3::NEG_Y);
-    // Mask out the TRIGGER layer so suspension rays ignore trigger-zone sensors
-    // (else the wheels ride up on an invisible waypoint sphere). Excludes the
+    // Mask out the non-physical layers so suspension rays ignore trigger-zone
+    // sensors (else the wheels ride up on an invisible waypoint sphere) and
+    // celestial body spheres (a planet-sized collider that CONTAINS the scene
+    // returns distance 0 — see `NON_PHYSICAL_QUERY_LAYERS`). Excludes the
     // rover's own chassis by entity as before.
     let mut filter = avian3d::prelude::SpatialQueryFilter::from_mask(
-        avian3d::prelude::LayerMask(!lunco_core::TRIGGER_COLLISION_LAYER),
+        avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS),
     );
     if let Some(rover_ent) = rover_entity {
         filter.excluded_entities.insert(rover_ent);

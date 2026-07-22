@@ -83,7 +83,7 @@
 
 use bevy::prelude::*;
 use big_space::prelude::*;
-use avian3d::prelude::Collider;
+use avian3d::prelude::{Collider, CollisionLayers, LayerMask};
 use bevy::camera::visibility::NoFrustumCulling;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
 use crate::gravity::PointMassGravity;
@@ -193,6 +193,23 @@ pub struct SolarSystemRoot;
 /// heliocentric Solar Grid (see the spawn-site comment).
 #[derive(Component)]
 pub struct SiteAlignGrid;
+
+/// The align rotation on [`SiteAlignGrid`] has actually been ESTABLISHED from a
+/// site anchor — the ecliptic→world rotation is known, not merely defaulted.
+///
+/// `SiteAlignGrid` is spawned unconditionally with the celestial hierarchy, so its
+/// mere presence proves nothing: in a scene that opts into bodies but anchors no
+/// site (the flat sandbox), `anchor_solar_frame_to_site` early-returns and the grid
+/// keeps its IDENTITY rotation, which is indistinguishable from a legitimately
+/// identity alignment. A consumer that reads the rotation anyway gets the RAW
+/// ECLIPTIC frame in place of a world frame — for the sun light that means an
+/// emit direction along the horizon (`Y ≈ 2e-4`), i.e. an unlit arena.
+///
+/// Written by the single writer of the rotation (`anchor_solar_frame_to_site`) and
+/// carried on the same entity, so "the rotation is known" is a fact about state
+/// rather than an inference from two queries agreeing.
+#[derive(Component)]
+pub struct SiteAligned;
 
 /// Marker for the Earth-Moon barycenter grid (genuinely inertial — the EMB is a
 /// barycenter, so it has no IAU rotation model and `body_rotation_system` skips
@@ -431,7 +448,14 @@ pub fn setup_big_space_hierarchy(
             ..default()
         },
         Name::new("Sun Body"),
+        // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
+        // it exists so a click can focus the body. It IS in the spatial-query BVH,
+        // and a body's volume routinely contains the entire local scene (the Sun's
+        // sphere sits on the origin in any scene that anchors no site), so it must be
+        // masked out of suspension/sensor rays or every raycast wheel reports a
+        // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
         Collider::sphere(696_340.0e3),
+        CollisionLayers::new(LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER), LayerMask::ALL),
     )).set_parent_in_place(solar_grid).id();
 
     // ── Sun Light ──────────────────────────────────────────────────────────
@@ -566,7 +590,14 @@ pub fn setup_big_space_hierarchy(
             model: Box::new(PointMassGravity { gm: earth_gm }),
         },
         SOI { radius_m: earth_soi },
+        // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
+        // it exists so a click can focus the body. It IS in the spatial-query BVH,
+        // and a body's volume routinely contains the entire local scene (the Sun's
+        // sphere sits on the origin in any scene that anchors no site), so it must be
+        // masked out of suspension/sensor rays or every raycast wheel reports a
+        // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
         Collider::sphere(6371.0e3),
+        CollisionLayers::new(LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER), LayerMask::ALL),
         Name::new("Earth Body (Rotating)"),
     )).set_parent_in_place(earth_grid).id();
 
@@ -643,7 +674,14 @@ pub fn setup_big_space_hierarchy(
             model: Box::new(PointMassGravity { gm: moon_gm }),
         },
         SOI { radius_m: moon_soi },
+        // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
+        // it exists so a click can focus the body. It IS in the spatial-query BVH,
+        // and a body's volume routinely contains the entire local scene (the Sun's
+        // sphere sits on the origin in any scene that anchors no site), so it must be
+        // masked out of suspension/sensor rays or every raycast wheel reports a
+        // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
         Collider::sphere(1737.0e3),
+        CollisionLayers::new(LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER), LayerMask::ALL),
         Name::new("Moon Body (Rotating)"),
     )).set_parent_in_place(moon_grid).id();
 
@@ -760,7 +798,14 @@ pub fn setup_big_space_hierarchy(
                 ..default()
             },
             Name::new(format!("{} Body", body_desc.name)),
+            // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
+            // it exists so a click can focus the body. It IS in the spatial-query BVH,
+            // and a body's volume routinely contains the entire local scene (the Sun's
+            // sphere sits on the origin in any scene that anchors no site), so it must be
+            // masked out of suspension/sensor rays or every raycast wheel reports a
+            // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
             Collider::sphere(body_desc.radius_m),
+            CollisionLayers::new(LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER), LayerMask::ALL),
         )).set_parent_in_place(solar_grid);
     }
 }

@@ -1246,7 +1246,7 @@ fn update_spring_arm_impl(
         // `vessel_collision_exclusions`.
         let excluded = vessel_collision_exclusions(arm.target, &q_children, joints);
         let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(excluded);
-        filter.mask = avian3d::prelude::LayerMask(!lunco_core::TRIGGER_COLLISION_LAYER);
+        filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
         let hit = if let Some(ref sq) = spatial_query {
             sq.cast_ray(
                 ray_origin,

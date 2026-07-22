@@ -318,3 +318,93 @@ fn test_celestial_startup_and_movement() {
         "Earth's CellCoord must be non-zero: its 4.7e6 m offset cannot live in an f32 Transform"
     );
 }
+
+/// **The sun may only be steered once the site frame is REAL.**
+///
+/// A scene that opts into bodies but anchors no site (the flat sandbox referencing
+/// `solar_system.usda`) has a `SiteAlignGrid` — it is spawned with the hierarchy —
+/// but `anchor_solar_frame_to_site` never writes a rotation to it, so it holds
+/// IDENTITY. Gating `update_sun_light_system` on the grid's PRESENCE therefore read
+/// that identity as a known ecliptic→world rotation and aimed the scene's brightest
+/// `DirectionalLight` down the raw ecliptic vector — along the horizon, arena unlit.
+///
+/// The gate is `SiteAligned`, which only the writer sets. With no anchor, no sun
+/// steering may happen AT ALL — asserted on `SunDirectionWorld`, the system's own
+/// published output, rather than on one light: the steering picks the BRIGHTEST
+/// `DirectionalLight`, so an assertion aimed at a particular light passes for the
+/// irrelevant reason that some other light won the max.
+#[test]
+fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
+    // The ephemeris must be NON-DEGENERATE, or `sun_emit_direction` returns `None`
+    // and the system early-returns before ever reaching the gate — a test that
+    // passes without exercising anything. `StubEphemeris` puts every body at the
+    // same place at JD 0, which is exactly that degenerate case.
+    #[derive(Debug)]
+    struct SunAndMoon;
+    impl EphemerisProvider for SunAndMoon {
+        fn position(&self, body_id: i32, _jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
+            Some(match body_id {
+                301 => lunco_celestial::frames::EclipticAu::new(bevy::math::DVec3::new(1.0, 0.0, 0.0)),
+                _ => lunco_celestial::frames::EclipticAu::ZERO,
+            })
+        }
+    }
+
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource { provider: Arc::new(SunAndMoon) });
+
+    // The sandbox's own light: the brightest `DirectionalLight`, aimed by hand.
+    let authored = Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.7, -0.9, 0.0));
+    let light = app
+        .world_mut()
+        .spawn((DirectionalLight { illuminance: 128_000.0, ..default() }, authored))
+        .id();
+
+    for _ in 0..8 {
+        app.update();
+    }
+
+    // CONTROL for the assertion itself: the celestial hierarchy really did come up,
+    // so this is "the gate held", not "nothing ran".
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(), With<lunco_celestial::SiteAlignGrid>>();
+    assert_eq!(
+        q.iter(app.world()).count(),
+        1,
+        "the align grid must exist — otherwise this test proves nothing about the gate"
+    );
+    let mut q_aligned = app
+        .world_mut()
+        .query_filtered::<(), With<lunco_celestial::SiteAligned>>();
+    assert_eq!(
+        q_aligned.iter(app.world()).count(),
+        0,
+        "no site is anchored, so no align rotation may be claimed as established"
+    );
+
+    // CONTROL for the ephemeris: it must be able to produce a direction, or the
+    // system early-returns and the gate is never reached.
+    let ephem = app.world().resource::<EphemerisResource>();
+    assert!(
+        lunco_celestial::sun_emit_direction(
+            ephem.provider.global_position(10, 0.0).unwrap(),
+            ephem.provider.global_position(301, 0.0).unwrap(),
+        )
+        .is_some(),
+        "the stub ephemeris is degenerate — this test would pass without steering ever \
+         being attempted"
+    );
+
+    assert_eq!(
+        app.world().resource::<lunco_celestial::SunDirectionWorld>().0,
+        Vec3::ZERO,
+        "an unanchored scene has no known ecliptic→world rotation, so the sun must not be \
+         steered at all — a direction here is the raw ecliptic vector aimed along the horizon"
+    );
+    let after = *app.world().entity(light).get::<Transform>().unwrap();
+    assert_eq!(
+        after.rotation, authored.rotation,
+        "an unanchored scene's authored sun must not be re-aimed by the ephemeris"
+    );
+}

@@ -38,6 +38,27 @@ def Xform "SandboxScene" (
     # A whole scene, not a spawnable part — excluded from the spawn catalog.
     uniform bool lunco:spawnable = false
 
+    # ── Where and when this arena is ───────────────────────────────────────
+    #
+    # Hadley Rille / Apollo 15. The site anchor is not decoration: it is the
+    # ONLY thing that gives the ecliptic→world rotation a value, so without it
+    # the solar tree stays heliocentric — every body piles onto the scene origin
+    # (you stand inside the Sun's 696 340 km sphere), the sun cannot be aimed,
+    # and the arena renders unlit. `height` rests the flat ground on the globe
+    # sphere without z-fighting the tangent point, exactly as `comms_demo` does.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.3
+    int lunco:anchor:body = 301
+    # Mid-morning at Hadley: real ephemeris sun at +37.9° elevation (az 115°),
+    # with Earth high and well clear of it at az 199° / el 59° — so the
+    # Earth-tracker antenna has a target that is neither underfoot nor washed
+    # out by the sun, and shadows are long enough to read. Measured with
+    # `cargo run -p lunco-celestial-ephemeris --example sun_at_site -- 26.13 3.63`.
+    # WITHOUT an authored epoch the clock defaults to "now", which lands
+    # anywhere in the ~29.5-day lunar cycle — including night.
+    double lunco:time:epochJd = 2461010.5
+
     # Celestial content — opt-in standard solar set (Sun, Earth, Moon).
     # Trajectories (OrbitViews) are enabled via `lunco:trajectory:userVisible = true` overrides.
     def "SolarSystem" (
@@ -58,6 +79,34 @@ def Xform "SandboxScene" (
                 bool lunco:trajectory:userVisible = true
             }
         }
+    }
+
+    # ── Sky ────────────────────────────────────────────────────────────────
+    #
+    # The Moon has no atmosphere, so the sky is the star field itself. A finite
+    # dome 20 km out, drawn ADDITIVELY (`lunco:surface:additive`): additive
+    # surfaces depth-TEST but never depth-WRITE, so terrain in front still hides
+    # it while the Sun and Earth — which the ephemeris places at 1e8 m and
+    # beyond, far outside this dome — still show through. An opaque dome at any
+    # radius would swallow the whole sky.
+    #
+    # `doubleSided` because it is viewed from INSIDE, and `NotShadowCaster` via
+    # `primvars:doNotCastShadows` so a 20 km shell does not eclipse the arena
+    # the way the Sun's disc once did.
+    def Sphere "SkyDome"
+    {
+        # 800 m, not the 20 km the physical horizon would suggest: a chase camera
+        # built from Bevy's default `PerspectiveProjection` clips at 1000 m, so a
+        # 20 km shell falls entirely beyond the far plane and the sky renders
+        # black from every follow view (the scene's own authored cameras, at
+        # `clippingRange = (0.1, 100000)`, see it fine — which is exactly the
+        # confusing part). Additive + no depth write means the radius carries no
+        # occlusion meaning; it only has to sit inside the nearest far plane.
+        double radius = 800
+        uniform bool doubleSided = true
+        bool primvars:doNotCastShadows = true
+        bool lunco:surface:additive = true
+        rel material:binding = </SandboxScene/Looks/Starfield>
     }
 
     # Looks — the scene's materials. A WGSL shader is bound the way USD binds every
@@ -86,6 +135,24 @@ def Xform "SandboxScene" (
                 float inputs:major_line_width = 1.0
                 float inputs:minor_line_width = 0.5
                 float inputs:minor_line_fade = 0.15
+                token outputs:surface
+            }
+        }
+
+        # The night sky. Every `inputs:` the shader declares carries an
+        # `@default` in `starfield.wgsl`, so only the deviations from it are
+        # authored here — the WGSL stays the single source of truth for the sky.
+        def Material "Starfield"
+        {
+            token outputs:surface.connect = </SandboxScene/Looks/Starfield/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/starfield.wgsl@
+                float inputs:brightness = 0.5
+                float inputs:band_intensity = 0.5
+                float inputs:point_size = 3.0
                 token outputs:surface
             }
         }

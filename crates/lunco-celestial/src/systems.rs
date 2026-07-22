@@ -188,7 +188,7 @@ pub fn body_rotation_system(
 /// The inputs are typed `EclipticAu` on purpose: this is the exact pipe that once carried
 /// EQUATORIAL vectors while claiming to be ecliptic, and put the sun 45° below the horizon at
 /// Shackleton. A raw `DVec3` can no longer be handed to it.
-pub(crate) fn sun_emit_direction(
+pub fn sun_emit_direction(
     p_sun: crate::frames::EclipticAu,
     p_moon: crate::frames::EclipticAu,
 ) -> Option<Vec3> {
@@ -239,12 +239,15 @@ pub fn update_sun_light_system(
         &Transform,
         (
             With<crate::big_space_setup::SiteAlignGrid>,
+            // ESTABLISHED, not merely present — see the gate comment below.
+            With<crate::big_space_setup::SiteAligned>,
             With<big_space::prelude::Grid>,
             Without<DirectionalLight>,
         ),
     >,
 ) {
-    // THE GATE IS THE ALIGN FRAME, NOT THE SITE ANCHOR.
+    // THE GATE IS AN ESTABLISHED ALIGN FRAME — NOT THE SITE ANCHOR, AND NOT THE
+    // MERE EXISTENCE OF THE ALIGN GRID.
     //
     // Steering is meaningful exactly when the ecliptic→world rotation is KNOWN,
     // and that rotation lives on `SiteAlignGrid`, which only exists when the scene
@@ -264,6 +267,16 @@ pub fn update_sun_light_system(
     // With the align rotation as the gate, a scene without one keeps its authored
     // light untouched (the sandbox case the old comment was defending), and a scene
     // with one always gets the real direction.
+    //
+    // …except `SiteAlignGrid` is spawned with the celestial hierarchy whether or not
+    // a site is ever anchored, so gating on its PRESENCE re-opened the first bug in
+    // a new place: the flat sandbox referenced `solar_system.usda` (bodies, no site),
+    // `anchor_solar_frame_to_site` early-returned on the missing anchor, the grid kept
+    // its default IDENTITY rotation, and this system read that identity as a real
+    // ecliptic→world rotation. Result: the raw ecliptic vector again, the sun aimed
+    // along the horizon, and an arena lit by nothing but the Earthshine fill — read as
+    // "the ground shader stopped working". `SiteAligned` is the fact the presence test
+    // was standing in for: the writer sets it only once an anchor has RESOLVED.
     let Some(align_rot) = q_solar.iter().next().map(|tf| tf.rotation) else {
         return;
     };

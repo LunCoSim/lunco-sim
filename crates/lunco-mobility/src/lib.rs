@@ -542,7 +542,21 @@ fn apply_wheel_suspension(
             );
 
             let mut current_distance = susp.rest_length;
-            if let Some(hit) = hits.iter_sorted().next() {
+            // A hit with a DEGENERATE normal is not a contact. avian casts these rays
+            // `solid: true`, so a ray whose origin is INSIDE a collider returns
+            // distance 0 with a ZERO normal — and distance 0 always sorts ahead of the
+            // real ground a few centimetres below. The old code then computed a
+            // saturated `total_force_mag`, applied `zero_normal * mag` (i.e. NO force),
+            // and still published that saturated value as `last_normal_force`. Downstream
+            // `apply_wheel_drive` gates on `normal_force >= 1.0`, so it ran at full
+            // traction authority against a chassis nothing was holding up: the rover
+            // tore itself off the ground and reappeared at the grid origin. Report what
+            // actually happened — no support — rather than what the spring would have
+            // produced had the geometry been real.
+            let contact = hits.iter_sorted().find(|hit| {
+                hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12
+            });
+            if let Some(hit) = contact {
                 let distance = hit.distance;
                 if distance < susp.rest_length {
                     current_distance = distance;
