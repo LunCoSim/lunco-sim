@@ -75,7 +75,7 @@ def Xform "CommsAntenna" (
     # scene that actually points its antennas overrides `xformOp:rotateXYZ`.
     def Xform "DishHead"
     {
-        double3 xformOp:translate = (0, 0.85, 0)
+        double3 xformOp:translate = (0, 0.8, 0)
         double3 xformOp:rotateXYZ = (-30, 0, 0)
         double3 xformOp:scale = (0.6, 0.6, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]

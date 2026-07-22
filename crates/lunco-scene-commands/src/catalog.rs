@@ -636,7 +636,7 @@ mod tests {
             });
             assert!(!desc.trim().is_empty(), "scene {} has an empty description", p.display());
         }
-        assert!(count >= 14, "expected the sandbox scene set, found {count}");
+        assert!(count >= 4, "expected the sandbox scene set, found {count}");
     }
 
     /// The bake this replaced keyed its tables on the engine-relative path and

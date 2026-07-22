@@ -1003,6 +1003,51 @@ pub fn persist_property_to_runtime_layer(
     });
 }
 
+fn default_float_type() -> String {
+    "float".to_string()
+}
+
+/// Author a native USD attribute connection (`connectionPaths`) onto a prim.
+#[Command]
+pub struct SetUsdConnection {
+    /// Target entity or prim root.
+    pub target: Entity,
+    /// Attribute name (e.g. `inputs:angle` or `inputs:earth_azimuth`).
+    pub name: String,
+    /// Attribute type name (e.g. `float`). Defaults to `float`.
+    #[serde(default = "default_float_type")]
+    #[reflect(default)]
+    pub type_name: String,
+    /// Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/EarthTrackerController.outputs:az"]`).
+    pub sources: Vec<String>,
+}
+
+#[on_command(SetUsdConnection)]
+pub fn on_set_usd_connection(
+    trigger: On<SetUsdConnection>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let Some((doc, path)) =
+        authorable_prim(cmd.target, &q_prim, &usd_registry, workspace.as_deref())
+    else {
+        return;
+    };
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetConnection {
+            edit_target: LayerId::runtime(),
+            path,
+            name: cmd.name.clone(),
+            type_name: if cmd.type_name.is_empty() { "float".to_string() } else { cmd.type_name.clone() },
+            sources: cmd.sources.clone(),
+        },
+    });
+}
+
 /// One wheel-dynamics parameter — **the** single source of truth for it.
 ///
 /// A wheel param has exactly three facets and they must never drift apart:
@@ -2905,6 +2950,7 @@ register_commands!(
     on_set_camera_look_at,
     on_set_object_property,
     on_set_shader_source,
+    on_set_usd_connection,
     on_spawn_entity_command,
     on_step_physics,
 );

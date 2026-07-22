@@ -38,6 +38,28 @@ def Xform "SandboxScene" (
     # A whole scene, not a spawnable part — excluded from the spawn catalog.
     uniform bool lunco:spawnable = false
 
+    # Celestial content — opt-in standard solar set (Sun, Earth, Moon).
+    # Trajectories (OrbitViews) are enabled via `lunco:trajectory:userVisible = true` overrides.
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+        over "Earth"
+        {
+            over "OrbitView"
+            {
+                bool lunco:trajectory:userVisible = true
+            }
+        }
+        over "Moon"
+        {
+            over "OrbitView"
+            {
+                bool lunco:trajectory:userVisible = true
+            }
+        }
+    }
+
     # Looks — the scene's materials. A WGSL shader is bound the way USD binds every
     # shader: a `Material` whose surface comes from a `Shader`, whose source is named
     # for its render context (`info:wgsl:sourceAsset`, exactly as an MDL shader is
@@ -281,6 +303,68 @@ def Xform "SandboxScene" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             float focalLength = 28.0
             float2 clippingRange = (0.1, 100000.0)
+        }
+
+        # ── 2-Axis Earth Tracker Antenna (Modelica + Dual Revolute Joints) ──
+        over "Comms"
+        {
+            # YawHead: Azimuth gimbal rotating around Y axis
+            def Cylinder "YawHead" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            )
+            {
+                uniform token axis = "Y"
+                double radius = 0.04
+                double height = 0.08
+                double3 xformOp:translate = (0.0, 0.8, 0.0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+                float physics:mass = 0.5
+
+                # DishGimbal: Elevation gimbal rotating around X axis
+                def Cylinder "DishGimbal" (
+                    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+                )
+                {
+                    uniform token axis = "X"
+                    double radius = 0.03
+                    double height = 0.06
+                    double3 xformOp:translate = (0.0, 0.05, 0.0)
+                    uniform token[] xformOpOrder = ["xformOp:translate"]
+                    color3f[] primvars:displayColor = [(0.5, 0.5, 0.55)]
+                    float physics:mass = 0.5
+                }
+            }
+
+            # Azimuth Joint (Yaw around Y)
+            def PhysicsRevoluteJoint "AzimuthJoint"
+            {
+                rel physics:body0 = </SandboxScene/Skid_Raycast_1>
+                rel physics:body1 = </SandboxScene/Skid_Raycast_1/Comms/YawHead>
+                uniform token physics:axis = "Y"
+                point3f physics:localPos0 = (0, 0.95, -0.5)
+                point3f physics:localPos1 = (0, 0, 0)
+                float inputs:angle.connect = </SandboxScene/Skid_Raycast_1/Comms/EarthTrackerController.outputs:az>
+            }
+
+            # Elevation Joint (Pitch around X)
+            def PhysicsRevoluteJoint "ElevationJoint"
+            {
+                rel physics:body0 = </SandboxScene/Skid_Raycast_1/Comms/YawHead>
+                rel physics:body1 = </SandboxScene/Skid_Raycast_1/Comms/YawHead/DishGimbal>
+                uniform token physics:axis = "X"
+                point3f physics:localPos0 = (0, 0.05, 0)
+                point3f physics:localPos1 = (0, 0, 0)
+                float inputs:angle.connect = </SandboxScene/Skid_Raycast_1/Comms/EarthTrackerController.outputs:el>
+            }
+
+            # Earth Tracker Controller (Modelica co-sim model)
+            def Xform "EarthTrackerController"
+            {
+                uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
+                float inputs:earth_azimuth.connect = </SandboxScene/Skid_Raycast_1/Comms/EarthTrackerController.outputs:earth_azimuth>
+                float inputs:earth_elevation.connect = </SandboxScene/Skid_Raycast_1/Comms/EarthTrackerController.outputs:earth_elevation>
+            }
         }
     }
 

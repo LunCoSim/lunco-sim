@@ -84,6 +84,17 @@ fn sun_tracker_package_member_compiles() {
     assert!(result.is_ok(), "SunTracker: {:?}", result.err());
 }
 
+#[test]
+fn earth_tracker_package_member_compiles() {
+    let mut compiler = ModelicaCompiler::new();
+    let result = compiler.compile_str(
+        "EarthTracker",
+        &package_member("Pointing/EarthTracker.mo"),
+        "lunco://models/LunCo/Pointing/EarthTracker.mo",
+    );
+    assert!(result.is_ok(), "EarthTracker: {:?}", result.err());
+}
+
 /// The library must be seated from the DISK tree, not the `include_dir!` snapshot
 /// baked into the binary.
 ///
