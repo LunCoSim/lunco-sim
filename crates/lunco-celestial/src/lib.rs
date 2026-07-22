@@ -321,10 +321,7 @@ impl Plugin for CelestialPlugin {
             soi_transition_system,
         ).chain().in_set(CelestialEpochSet).after(lunco_time::TimeSpineSet));
 
-        app.add_systems(Update, (
-            celestial_telemetry_system,
-            celestial_visuals_system,
-        ).chain());
+        app.add_systems(Update, celestial_visuals_system);
         // Hide the local scene (its whole subtree) while the orbital world-pin
         // is active — the celestial tree is slid away, so the scene would fill
         // the foreground of the orbital view.

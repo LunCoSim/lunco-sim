@@ -361,20 +361,7 @@ pub fn update_sun_light_system(
     }
 }
 
-pub fn celestial_telemetry_system(
-    world: Res<WorldTime>,
-    q_earth: Query<(&Transform, &big_space::prelude::CellCoord), With<EarthRoot>>,
-    q_moon: Query<(&Transform, &big_space::prelude::CellCoord), With<MoonRoot>>,
-    q_sun: Query<&Transform, With<SolarSystemRoot>>,
-    mut timer: Local<u32>,
-) {
-    if *timer % 60 == 0 {
-        if let Some((tf, cell)) = q_earth.iter().next() { info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", world.epoch_jd, cell, tf.translation); }
-        if let Some((tf, cell)) = q_moon.iter().next() { info!("TELEMETRY: Moon Cell: {:?}, Moon Pos: {:?}", cell, tf.translation); }
-        if let Some(tf) = q_sun.iter().next() { info!("TELEMETRY: Sun Pos: {:?}", tf.translation); }
-    }
-    *timer += 1;
-}
+
 
 /// Force per-frame `GlobalTransform` recomputation for the celestial subtree.
 ///

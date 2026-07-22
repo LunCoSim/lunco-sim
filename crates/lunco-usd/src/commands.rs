@@ -58,6 +58,27 @@ use lunco_doc_bevy::DocumentRegistry;
 /// [`DocumentKindRegistry`].
 pub const USD_DOCUMENT_KIND: &str = "usd";
 
+/// A *reason* the viewport is empty, set at the moment a scene-clearing
+/// action knows one — e.g. opening a folder whose `twin.toml` declares no
+/// `default_scene` (the usual cause: you opened the WRONG FOLDER, one level
+/// too shallow, so the real twin's manifest is not where the engine looked).
+///
+/// Without this, [`update_viewport_placeholder`] only sees `scene.is_empty()`
+/// and falls back to a generic "open a scene" hint — which tells you nothing
+/// about *why* the scene you expected never appeared. This resource carries
+/// that why through to the placeholder for as long as the viewport stays empty,
+/// and is cleared the instant a real scene mounts. Headless-safe: it is a plain
+/// `Resource` with no UI dependency, so test/`scene_test` bins pay nothing.
+#[derive(Resource, Default)]
+pub struct EmptyViewportReason(pub Option<String>);
+
+impl EmptyViewportReason {
+    /// Record a diagnostic message naming why the viewport was just emptied.
+    fn set(&mut self, msg: impl Into<String>) {
+        self.0 = Some(msg.into());
+    }
+}
+
 /// Plugin that registers the USD document kind, the typed-command
 /// observers, and the pending-event drain system.
 ///
@@ -111,6 +132,10 @@ impl Plugin for UsdCommandsPlugin {
         // shell; headless / sandbox / server bins don't add it.
         #[cfg(feature = "ui")]
         app.add_systems(Update, update_viewport_placeholder);
+        // Carries the *reason* a scene is empty through to the placeholder.
+        // Always present (headless too) so the open path can record one without
+        // a UI feature gate.
+        app.init_resource::<EmptyViewportReason>();
         app.add_observer(open_usd_docs_on_twin_added);
         // C5-A: persist/reload the runtime overlay (C4b spawns + moves) to
         // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
@@ -203,6 +228,7 @@ fn open_usd_docs_on_twin_added(
     asset_server: Option<Res<AssetServer>>,
     usd_sources: Option<Res<Assets<lunco_usd_bevy::UsdSourceText>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
+    mut empty_reason: ResMut<EmptyViewportReason>,
     mut commands: Commands,
 ) {
     let twin_id = trigger.event().twin;
@@ -278,13 +304,59 @@ fn open_usd_docs_on_twin_added(
             }
         }
         None => {
+            // A folder with a `twin.toml` that names no `default_scene` is rare;
+            // the usual cause of reaching here is that the folder has NO
+            // `twin.toml` at all (opened as a plain folder), which most often
+            // means the user opened the WRONG DIRECTORY — e.g. the wrapper that
+            // *contains* the twin rather than the twin itself. Distinguish the
+            // two so the placeholder can tell the user which it is, instead of
+            // a generic "nothing to show".
+            let has_manifest = twin.manifest.is_some();
+            let reason = if has_manifest {
+                format!(
+                    "`{}` has a twin.toml but declares no default scene — nothing to load.",
+                    twin.root.display()
+                )
+            } else {
+                format!(
+                    "`{}` has no twin.toml, so there is no scene to load. \
+                     You may have opened the wrong folder — check that you opened the Twin \
+                     root itself (the one containing twin.toml), not a folder above or beside it.",
+                    twin.root.display()
+                )
+            };
             info!(
-                "[twin] `{}` declares no starting scene — clearing viewport",
-                twin.root.display()
+                "[twin] `{}` declares no starting scene — clearing viewport ({})",
+                twin.root.display(),
+                if has_manifest { "manifest present, no default_scene" } else { "no twin.toml" }
             );
+            empty_reason.set(reason);
             commands.trigger(ClearScene {});
         }
     }
+}
+
+/// The generic hint shown when the viewport is empty and no specific cause
+/// was recorded. Public so tests can assert against it without hardcoding the
+/// string in two places.
+pub const GENERIC_EMPTY_HINT: &str = "Nothing to show — open a scene or a Twin.";
+
+/// Pure decision: given whether a scene is mounted and an optional recorded
+/// [`EmptyViewportReason`], what (if anything) should the placeholder show?
+///
+/// - Scene present → `None` (render nothing; a real world is on screen).
+/// - Empty WITH a recorded reason → `Some(reason)` (the diagnostic — e.g.
+///   "opened folder has no twin.toml").
+/// - Empty WITHOUT a reason → `Some(GENERIC_EMPTY_HINT)` (the fallback).
+///
+/// Extracted from [`update_viewport_placeholder`] so the precedence (reason
+/// beats generic; scene beats both) is unit-testable without the `ui` feature
+/// or a workbench resource.
+fn empty_viewport_message(scene_empty: bool, reason: Option<&str>) -> Option<String> {
+    if !scene_empty {
+        return None;
+    }
+    Some(reason.unwrap_or(GENERIC_EMPTY_HINT).to_string())
 }
 
 /// Keep the workbench's [`ViewportPlaceholder`] in sync with whether a
@@ -293,17 +365,34 @@ fn open_usd_docs_on_twin_added(
 /// folder — show an empty-state hint; otherwise clear it so the message
 /// vanishes the instant a scene mounts. No-op in headless binaries that
 /// don't add the workbench (the resource is absent).
+///
+/// When [`EmptyViewportReason`] carries a *specific* reason the viewport was
+/// emptied (e.g. "opened folder has no twin.toml"), prefer it over the generic
+/// hint — the generic one tells you nothing about why the scene you expected
+/// never appeared. The reason is dropped the moment a real scene mounts, so a
+/// subsequent open that succeeds returns to the plain "nothing to show" only
+/// when the viewport is next empty *without* a recorded cause.
 #[cfg(feature = "ui")]
 fn update_viewport_placeholder(
     scene: Query<(), With<UsdPrimPath>>,
+    empty_reason: Res<EmptyViewportReason>,
     placeholder: Option<ResMut<ViewportPlaceholder>>,
 ) {
     let Some(mut placeholder) = placeholder else {
         return;
     };
-    let want = scene
-        .is_empty()
-        .then(|| "Nothing to show — open a scene or a Twin.".to_string());
+    if !scene.is_empty() {
+        // A real scene is on screen — render nothing. NOTE: the reason is NOT
+        // cleared here. Entity despawns from a `ClearScene` are deferred, so on
+        // the same frame a folder-open sets a reason and clears the scene, this
+        // query can still read the OLD scene's `UsdPrimPath` entities as
+        // non-empty — clearing the reason here would wipe the diagnostic the
+        // open just recorded. The reason is cleared authoritatively in
+        // `on_load_scene` when a NEW scene actually mounts.
+        placeholder.message = None;
+        return;
+    }
+    let want = empty_viewport_message(true, empty_reason.0.as_deref());
     if placeholder.message != want {
         placeholder.message = want;
     }
@@ -341,6 +430,13 @@ fn on_load_scene(
     in_flight: Option<Res<SceneLoadInFlight>>,
     registry: Res<DocumentRegistry<UsdDocument>>,
     backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
+    // A real scene is mounting — clear any empty-viewport reason recorded by a
+    // prior clear/folder-open, so it can't haunt the placeholder once this load
+    // despawns/resolves. Done HERE (not in `update_viewport_placeholder`) so a
+    // freshly-set reason is not wiped on the same frame by stale `UsdPrimPath`
+    // entities from the scene being cleared (their despawn is deferred, so the
+    // query would still read non-empty and clobber the reason mid-open).
+    mut empty_reason: ResMut<EmptyViewportReason>,
 ) {
     // Accept an absolute path (Twin manifests join `default_scene` to the Twin
     // root) or an already-relative asset path; bail if an absolute path lies
@@ -351,6 +447,11 @@ fn on_load_scene(
     let Some(mut path) = normalize_scene_asset_path(&cmd.path) else {
         return;
     };
+    // A real scene is committed to mount — drop any empty-viewport reason. This
+    // is the authoritative "scene loaded" signal; see the note on `empty_reason`
+    // above for why this clear lives here and not in the per-frame placeholder
+    // system.
+    empty_reason.0 = None;
 
     // Canonicalize to the document's own source. This also lets the no-op guard
     // below recognise the active scene by asset id, so a redundant load is a true
@@ -1845,6 +1946,60 @@ mod tests {
         assert_eq!(cmds.clears, 1, "empty folder clears the viewport");
     }
 
+    /// Opening a folder with NO `twin.toml` (the "wrong folder" mistake)
+    /// must record a diagnostic reason naming that cause, so the viewport
+    /// placeholder can tell the user WHY it is empty instead of a generic
+    /// hint. Drives the REAL `open_usd_docs_on_twin_added` observer.
+    #[test]
+    fn folder_with_no_manifest_records_wrong_folder_reason() {
+        use lunco_twin::TwinMode;
+        use lunco_workspace::WorkspaceResource;
+
+        let tmp = std::env::temp_dir().join("lunco_usd_no_manifest_reason");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("readme.txt"), "not a twin\n").unwrap();
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<WorkspaceResource>();
+        app.init_resource::<lunco_assets::twin_source::TwinRoots>();
+        app.add_plugins(UsdCommandsPlugin);
+        app.update();
+
+        let twin = match TwinMode::open(&tmp).expect("folder opens") {
+            TwinMode::Folder(t) => t,
+            other => panic!("a folder with no twin.toml is Folder, got {:?}", other),
+        };
+        let twin_id = app
+            .world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(twin);
+        app.world_mut()
+            .trigger(lunco_workspace::TwinAdded { twin: twin_id });
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let reason = app
+            .world()
+            .get_resource::<EmptyViewportReason>()
+            .expect("EmptyViewportReason is always present")
+            .0
+            .as_ref()
+            .expect("a no-twin.toml folder must record a reason");
+        assert!(
+            reason.contains("no twin.toml"),
+            "reason should name the missing manifest, got: {reason}"
+        );
+        assert!(
+            reason.contains("wrong folder"),
+            "reason should hint the likely cause, got: {reason}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn new_document_with_usd_kind_creates_untitled() {
         let mut app = App::new();
@@ -1862,5 +2017,39 @@ mod tests {
         assert_eq!(reg.ids().count(), 1);
         let id = reg.ids().next().unwrap();
         assert!(reg.host(id).unwrap().document().origin().is_untitled());
+    }
+
+    /// A scene present on screen beats every empty-state message — even a
+    /// recorded reason — so a stale reason can't haunt a viewport that now has
+    /// a real world in it. (The UI system clears the reason too; this asserts
+    /// the pure decision agrees.)
+    #[test]
+    fn empty_viewport_message_prefers_a_mounted_scene_over_a_reason() {
+        assert_eq!(
+            empty_viewport_message(false, Some("opened the wrong folder")),
+            None
+        );
+    }
+
+    /// An empty viewport WITH a recorded reason shows that reason — the whole
+    /// point of the channel: tell the user *why* the scene they expected never
+    /// appeared, instead of the generic "open a scene" hint.
+    #[test]
+    fn empty_viewport_message_reason_beats_generic_hint() {
+        let reason = "`/x` has no twin.toml — you may have opened the wrong folder.";
+        assert_eq!(
+            empty_viewport_message(true, Some(reason)).as_deref(),
+            Some(reason)
+        );
+    }
+
+    /// An empty viewport WITHOUT a recorded reason falls back to the generic
+    /// hint — the legacy behaviour, preserved for cold start / cleared scenes.
+    #[test]
+    fn empty_viewport_message_falls_back_to_generic_hint() {
+        assert_eq!(
+            empty_viewport_message(true, None).as_deref(),
+            Some(GENERIC_EMPTY_HINT)
+        );
     }
 }
