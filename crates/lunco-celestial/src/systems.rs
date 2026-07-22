@@ -240,76 +240,48 @@ pub fn update_sun_light_system(
     // The site-ENU alignment now lives on the Site Align Grid (the Solar
     // Grid's rotation is IDENTITY — see `anchor_solar_frame_to_site`).
     q_solar: Query<
-        &Transform,
+        (&Transform, Option<&crate::big_space_setup::SiteAligned>),
         (
             With<crate::big_space_setup::SiteAlignGrid>,
-            // ESTABLISHED, not merely present — see the gate comment below.
-            With<crate::big_space_setup::SiteAligned>,
             With<big_space::prelude::Grid>,
             Without<DirectionalLight>,
         ),
     >,
+    // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
+    q_site: Query<&crate::geo::GeodeticAnchor, With<crate::geo::SiteAnchor>>,
+    orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
 ) {
-    // THE GATE IS AN ESTABLISHED ALIGN FRAME — NOT THE SITE ANCHOR, AND NOT THE
-    // MERE EXISTENCE OF THE ALIGN GRID.
-    //
-    // Steering is meaningful exactly when the ecliptic→world rotation is KNOWN,
-    // and that rotation lives on `SiteAlignGrid`, which only exists when the scene
-    // opted into the celestial hierarchy. Those are two independent opt-ins, and
-    // gating on the anchor got both directions wrong:
-    //
-    // * anchor but no celestial (`comms_wall.usda`) — the old code passed the gate,
-    //   found no align frame, and `unwrap_or`'d to the RAW ECLIPTIC vector. Moon→Sun
-    //   has ecliptic z≈0 and `ecliptic_to_bevy` maps (x,y,z)→(x,z,−y), so the light
-    //   was aimed along the horizon at Y≈2e-4 — epoch-independent, and it clobbered
-    //   the scene's authored `DistantLight`. That is the "no sun" report: the ground
-    //   went black in scenes that had authored a perfectly good sun.
-    // * celestial but no anchor (`artemis_2_review.usda`) — the old gate returned
-    //   early, so the celestial "Sun Light" was never aimed at all and emitted along
-    //   world −Z forever.
-    //
-    // With the align rotation as the gate, a scene without one keeps its authored
-    // light untouched (the sandbox case the old comment was defending), and a scene
-    // with one always gets the real direction.
-    //
-    // …except `SiteAlignGrid` is spawned with the celestial hierarchy whether or not
-    // a site is ever anchored, so gating on its PRESENCE re-opened the first bug in
-    // a new place: the flat sandbox referenced `solar_system.usda` (bodies, no site),
-    // `anchor_solar_frame_to_site` early-returned on the missing anchor, the grid kept
-    // its default IDENTITY rotation, and this system read that identity as a real
-    // ecliptic→world rotation. Result: the raw ecliptic vector again, the sun aimed
-    // along the horizon, and an arena lit by nothing but the Earthshine fill — read as
-    // "the ground shader stopped working". `SiteAligned` is the fact the presence test
-    // was standing in for: the writer sets it only once an anchor has RESOLVED.
-    let Some(align_rot) = q_solar.iter().next().map(|tf| tf.rotation) else {
+    let Some((align_grid_tf, site_aligned)) = q_solar.iter().next() else {
         return;
+    };
+    let align_rot = if site_aligned.is_some() {
+        align_grid_tf.rotation
+    } else {
+        Quat::IDENTITY
     };
     let Some(ephemeris) = ephemeris else { return; };
 
-    // No ephemeris for the Sun or the Moon ⇒ we do not know where the light comes from, so we
-    // leave it under manual control. This used to be an in-band sentinel (`length_squared() <
-    // 0.5`, i.e. "is it suspiciously close to the origin?"), which is exactly the guess the
-    // `Option` now removes.
-    let (Some(p_sun), Some(p_moon)) = (
+    let observer_body = q_site
+        .iter()
+        .next()
+        .map(|a| a.body)
+        .or_else(|| orbital_pin.as_ref().filter(|p| p.active).map(|p| p.body))
+        .unwrap_or(399);
+
+    let (Some(p_sun), Some(p_observer)) = (
         ephemeris.provider.global_position(10, world.epoch_jd),
-        ephemeris.provider.global_position(301, world.epoch_jd),
+        ephemeris.provider.global_position(observer_body, world.epoch_jd),
     ) else {
         return;
     };
-    let Some(dir) = sun_emit_direction(p_sun, p_moon) else {
+    let Some(dir) = sun_emit_direction(p_sun, p_observer) else {
         // NoOp / degenerate ephemeris — leave the light to manual control.
         return;
     };
-    // `dir` is in ECLIPTIC (solar-frame) axes. The rendered world frame is
-    // the Solar Grid's parent frame: identity in luncosim, but the site-ENU
-    // frame in a site-anchored scene (`anchor_solar_frame_to_site` rotates
-    // the Solar Grid by `align`). Re-express the direction, or a Shackleton
-    // scene gets its sun at an arbitrary elevation instead of the real
-    // grazing ~1° — terrain lit from nowhere.
-    // Alignment is MANDATORY, never skipped: the gate above already proved the
-    // rotation exists, so there is no fallback branch left to silently emit an
-    // ecliptic vector into a world frame.
-    let dir = (align_rot * dir).normalize();
+    // `dir` is in ECLIPTIC (solar-frame) axes. `align_rot` on `SiteAlignGrid`
+    // is R_site_to_solar, so transforming from solar to site-ENU world frame
+    // requires align_rot.inverse().
+    let dir = (align_rot.inverse() * dir).normalize();
     let up = if dir.dot(Vec3::Y).abs() > 0.99 { Vec3::X } else { Vec3::Y };
     if sun_dir_out.0 != dir {
         sun_dir_out.0 = dir;
@@ -327,7 +299,7 @@ pub fn update_sun_light_system(
         earth_dir_out.as_mut(),
         ephemeris.provider.global_position(399, world.epoch_jd),
     ) {
-        let to_earth = crate::coords::ecliptic_to_bevy(p_earth - p_moon)
+        let to_earth = crate::coords::ecliptic_to_bevy(p_earth - p_observer)
             .raw()
             .as_vec3()
             .normalize_or_zero();
@@ -335,7 +307,7 @@ pub fn update_sun_light_system(
         // stays ZERO — the resource's documented "not known", which the bridge
         // refuses to publish rather than reporting Earth due north on the horizon.
         let next = if to_earth.length_squared() > 0.5 {
-            (align_rot * to_earth).normalize()
+            (align_rot.inverse() * to_earth).normalize()
         } else {
             Vec3::ZERO
         };
@@ -372,7 +344,7 @@ pub fn update_sun_light_system(
         // sub-percent deltas are invisible and per-frame light mutation is
         // needless render-world churn.
         if let Some(cal) = &sun_cal {
-            let r2 = (p_sun - p_moon).length_squared();
+            let r2 = (p_sun - p_observer).length_squared();
             if r2 > 1.0e-4 {
                 let target = (cal.illuminance_lux as f64 / r2) as f32;
                 if (light.illuminance - target).abs() > target * 5.0e-3 {
