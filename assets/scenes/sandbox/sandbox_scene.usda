@@ -50,14 +50,17 @@ def Xform "SandboxScene" (
     double lunco:anchor:lon = 3.63
     double lunco:anchor:height = 0.3
     int lunco:anchor:body = 301
-    # Mid-morning at Hadley: real ephemeris sun at +37.9° elevation (az 115°),
-    # with Earth high and well clear of it at az 199° / el 59° — so the
-    # Earth-tracker antenna has a target that is neither underfoot nor washed
-    # out by the sun, and shadows are long enough to read. Measured with
-    # `cargo run -p lunco-celestial-ephemeris --example sun_at_site -- 26.13 3.63`.
-    # WITHOUT an authored epoch the clock defaults to "now", which lands
-    # anywhere in the ~29.5-day lunar cycle — including night.
-    double lunco:time:epochJd = 2461010.5
+    # NO authored epoch: the sandbox runs at the WALL CLOCK, so the sun, the
+    # Earth's phase and its position in the sky are whatever they really are
+    # right now at Hadley. That is deliberate — an arena you open to check
+    # something should show today's sky, not a frozen demo moment.
+    #
+    # The cost is that "now" lands anywhere in the ~29.5-day lunar cycle,
+    # including night (~14 days of it). A scene that needs a GUARANTEED lighting
+    # condition authors `double lunco:time:epochJd = <JD>` here instead; measure
+    # the JD with
+    # `cargo run -p lunco-celestial-ephemeris --example sun_at_site -- 26.13 3.63`
+    # (columns: JD, sun az, sun el, earth az, earth el; az = deg CW from north).
 
     # Celestial content — opt-in standard solar set (Sun, Earth, Moon).
     # Trajectories (OrbitViews) are enabled via `lunco:trajectory:userVisible = true` overrides.
@@ -150,9 +153,16 @@ def Xform "SandboxScene" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/starfield.wgsl@
-                float inputs:brightness = 0.5
-                float inputs:band_intensity = 0.5
-                float inputs:point_size = 3.0
+                # Lifted above the shader's own defaults (0.05 / 0.10 / 0.9) so the
+                # sky still reads at the exposure a LUNAR SURFACE scene runs at.
+                # Nothing here is a rendering bug: the dome is `AlphaMode::Add`,
+                # so in daylight the camera is exposed for a 1e5 lux regolith and
+                # stars vanish — exactly as they do to a real camera on the Moon.
+                # They come back as the sun sets. If the sky looks black, check
+                # the sun's elevation before touching these numbers.
+                float inputs:brightness = 0.15
+                float inputs:band_intensity = 0.15
+                float inputs:point_size = 1.2
                 token outputs:surface
             }
         }
