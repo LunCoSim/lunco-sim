@@ -113,7 +113,9 @@ impl Plugin for SandboxUiPlugin {
             // second one panics ("plugin already added"). So all app-level panel
             // registration goes here.
             .add_plugins(|app: &mut App| {
+                use lunco_settings::AppSettingsExt;
                 use lunco_workbench::WorkbenchAppExt;
+                app.register_settings_section::<lunco_settings::DownloadSettings>();
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
                 // Rhai behaviour editor (Object Builder). Its view-model is
@@ -622,6 +624,13 @@ fn register_downloadable_assets_settings(world: &mut World) {
     };
     layout.register_settings(|ui, world| {
         ui.label(egui::RichText::new("Downloadable data").weak().small());
+        if let Some(mut settings) = world.get_resource_mut::<lunco_settings::DownloadSettings>() {
+            ui.horizontal(|ui| {
+                ui.label("Max parallel downloads:");
+                ui.add(egui::Slider::new(&mut settings.max_parallel_downloads, 1..=10));
+            });
+            ui.add_space(8.0);
+        }
         let Some(registry) = world.get_resource::<DatasetRegistry>() else {
             ui.label(
                 egui::RichText::new("(dataset registry not installed)")
