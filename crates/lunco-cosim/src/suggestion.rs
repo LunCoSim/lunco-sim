@@ -65,6 +65,25 @@ pub const SOLAR_AZIMUTH_CONNECTOR: &str = "sun_azimuth";
 /// entity's location. Companion to [`SOLAR_AZIMUTH_CONNECTOR`].
 pub const SOLAR_ELEVATION_CONNECTOR: &str = "sun_elevation";
 
+/// SimComponent **output** connector carrying **Earth's** azimuth (rad) at an
+/// entity's location. Written by lunco-environment's Earth bridge, which takes
+/// the direction from the ephemeris rather than from a scene light — Earth casts
+/// no key light, so there is nothing in the render world to read.
+///
+/// Unlike [`SOLAR_AZIMUTH_CONNECTOR`] this is referenced to the MOUNT, not to the
+/// site: the consumer is a joint, and a joint angle is measured against its
+/// parent body. See `lunco_environment::LocalEarth` for the full argument.
+///
+/// This is what an antenna points at. A dish tracks EARTH; a panel tracks the
+/// SUN; the two are different bodies in different parts of the sky, and giving
+/// them one shared "target" port would have made that indistinguishable.
+pub const EARTH_AZIMUTH_CONNECTOR: &str = "earth_azimuth";
+/// SimComponent **output** connector carrying Earth's elevation (rad) at an
+/// entity's location. Companion to [`EARTH_AZIMUTH_CONNECTOR`]; negative means
+/// Earth is below the local horizon — a real state on the lunar far side, and
+/// the one an authored link budget must be free to call a blackout.
+pub const EARTH_ELEVATION_CONNECTOR: &str = "earth_elevation";
+
 /// Prefix of the SimComponent **output** connectors `lunco-celestial`'s link bridge
 /// writes on every link node, one set per authored peer `class`:
 ///

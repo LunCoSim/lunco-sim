@@ -34,6 +34,30 @@ over "Tire" (
     # --- Grip ---
     float physxVehicleTire:longitudinalStiffness = 8000.0 # N per (m/s) of contact slip
     double lunco:tire:frictionCoefficient = 0.8                # tyre↔regolith friction
+    # Cornering stiffness — side force per m/s of LATERAL slip, capped at μ·N.
+    #
+    # A SECOND NUMBER, because they are two mechanisms. The longitudinal term
+    # stands in for rolling resistance and drive slip and must stay soft, or a
+    # rolling wheel is braked by its own grip; lateral slip is pure sliding and a
+    # tire resists it hard. One shared stiffness could only satisfy the softer of
+    # the two, and did — at ~50 N/(m/s) a rover met a two-tonne-metre side load
+    # with tens of newtons, drifted through every turn, and read as ice.
+    #
+    # TUNED AGAINST PARITY, not picked. The three `*_parity` scenes drive a
+    # raycast and a PHYSICAL rover through identical inputs; the physical one's
+    # side force is avian's real contact, so it is ground truth for this model.
+    # Sweeping the whole range against all three:
+    #   6000 → skid rover swept 5° where the physical swept 51° (it could no
+    #          longer skid at all), and the Ackermann rover over-bit at 86° vs 32°
+    #    600 → drivetrain green, both steering scenes still failing
+    #    150 → within a hair either way (52.2 vs 32.3; yaw 14.4 needing 15.0)
+    #    100 → 8/8, 20/20, 19/19
+    # Soft next to the 8000 longitudinal figure, and that is the soil: the lugs
+    # shear a wedge of regolith sideways long before the rubber lets go.
+    #
+    # This number no longer has to fight a fake drag term for the friction cone
+    # (see `lunco_mobility::update_wheel_spin`), so it now means what it says.
+    float physxVehicleTire:lateralStiffness = 100.0
 
     # --- Tread ---
     # Spin-revealing tread + rim, drawn by the wheel shader. The look is a `Material`

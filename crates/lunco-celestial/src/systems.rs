@@ -232,6 +232,10 @@ pub fn update_sun_light_system(
     world: Res<WorldTime>,
     sun_cal: Option<Res<lunco_environment::LunarSun>>,
     mut sun_dir_out: ResMut<SunDirectionWorld>,
+    // Declared by `lunco-environment` (which cannot depend on this crate) and
+    // filled here — the same shape as `LunarSun` below. `Option` because a build
+    // without `EnvironmentPlugin` has no such resource and must still get a sun.
+    mut earth_dir_out: Option<ResMut<lunco_environment::EarthDirectionWorld>>,
     mut q_light: Query<(&mut Transform, &mut DirectionalLight)>,
     // The site-ENU alignment now lives on the Site Align Grid (the Solar
     // Grid's rotation is IDENTITY — see `anchor_solar_frame_to_site`).
@@ -309,6 +313,35 @@ pub fn update_sun_light_system(
     let up = if dir.dot(Vec3::Y).abs() > 0.99 { Vec3::X } else { Vec3::Y };
     if sun_dir_out.0 != dir {
         sun_dir_out.0 = dir;
+    }
+
+    // …and Earth, the OTHER thing on this body points at. Same gate, same
+    // rotation, same frame — an antenna bridge that recomputed the align rotation
+    // for itself could disagree with the light by a frame, and a dish that lags
+    // the world by a frame is a dish that hunts.
+    //
+    // The direction is TOWARD Earth (a look-at vector), not an emit direction:
+    // Earth is a target here, not a light source, so it never gets the sun's sign
+    // flip. `lunco-environment` turns it into az/el and publishes the ports.
+    if let (Some(earth_dir_out), Some(p_earth)) = (
+        earth_dir_out.as_mut(),
+        ephemeris.provider.global_position(399, world.epoch_jd),
+    ) {
+        let to_earth = crate::coords::ecliptic_to_bevy(p_earth - p_moon)
+            .raw()
+            .as_vec3()
+            .normalize_or_zero();
+        // Degenerate (NoOp provider, or Earth and the observer body coincident)
+        // stays ZERO — the resource's documented "not known", which the bridge
+        // refuses to publish rather than reporting Earth due north on the horizon.
+        let next = if to_earth.length_squared() > 0.5 {
+            (align_rot * to_earth).normalize()
+        } else {
+            Vec3::ZERO
+        };
+        if earth_dir_out.0 != next {
+            earth_dir_out.0 = next;
+        }
     }
 
     // The sun is the brightest `DirectionalLight` (Earthshine fill is far dimmer).

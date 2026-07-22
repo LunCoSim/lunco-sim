@@ -24,7 +24,8 @@
 //! | no-load axle speed | MOTOR `lunco:motor:noLoadSpeed` / gearbox `ratio` | via motor |
 //! | bearing damping | `physxVehicleWheel:dampingRate` | yes |
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
-//! | slip stiffness | `physxVehicleTire:longitudinalStiffness` | yes |
+//! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
+//! | cornering stiffness (lateral) | `physxVehicleTire:lateralStiffness` | no (schema fallback 0.0) |
 //! | Coulomb μ | `lunco:tire:frictionCoefficient` | yes |
 //! | grip stiffness | `lunco:wheel:contactGripStiffness` | yes |
 //! | drive force/normal | `lunco:wheel:driveForcePerNormal` | yes |
@@ -113,6 +114,15 @@ pub struct WheelParams {
     pub brake_torque_max: f64,
     /// Tire longitudinal stiffness (`physxVehicleTire:longitudinalStiffness`).
     pub slip_stiffness: f64,
+    /// Tire CORNERING stiffness (`physxVehicleTire:lateralStiffness`) — side
+    /// force per m/s of lateral slip, before the Coulomb cone.
+    ///
+    /// The PhysX schema's own companion to `longitudinalStiffness`, and read on
+    /// the schema's terms: it declares a `0.0` fallback, so an unauthored tire
+    /// resolves to zero here rather than raising a missing-attribute error. Zero
+    /// is a legal (if unhelpful) tire — no cornering grip at all — and the place
+    /// to state a real value is the tire asset, which every shipped tire does.
+    pub lateral_stiffness: f64,
     /// Coulomb μ from the wheel's TIRE (`lunco:tire:frictionCoefficient`,
     /// composed through the `tire` variant).
     pub friction_mu: f64,
@@ -174,6 +184,13 @@ impl WheelParams {
         let bearing_damping = req("physxVehicleWheel:dampingRate");
         let brake_torque_max = req("physxVehicleWheel:maxBrakeTorque");
         let slip_stiffness = req("physxVehicleTire:longitudinalStiffness");
+        // NOT `req`: the PhysX schema declares this one with a `0.0` fallback, so
+        // it always composes to a value and there is nothing to report missing.
+        // Reading it any other way would invent a required-ness the schema does
+        // not state — see the field doc.
+        let lateral_stiffness = reader
+            .real(wheel, "physxVehicleTire:lateralStiffness")
+            .unwrap_or(0.0);
         let friction_mu = req("lunco:tire:frictionCoefficient");
         let contact_grip_stiffness = req("lunco:wheel:contactGripStiffness");
         let drive_force_per_normal = req("lunco:wheel:driveForcePerNormal");
@@ -213,6 +230,7 @@ impl WheelParams {
             bearing_damping,
             brake_torque_max,
             slip_stiffness,
+            lateral_stiffness,
             friction_mu,
             contact_grip_stiffness,
             drive_force_per_normal,
@@ -253,6 +271,7 @@ impl WheelParams {
         wheel.bearing_damping = self.bearing_damping;
         wheel.friction_mu = self.friction_mu;
         wheel.slip_stiffness = self.slip_stiffness;
+        wheel.lateral_grip_stiffness = self.lateral_stiffness;
         wheel.contact_grip_stiffness = self.contact_grip_stiffness;
         wheel.brake_torque_max = self.brake_torque_max;
         wheel.drive_force_per_normal = self.drive_force_per_normal;

@@ -410,6 +410,32 @@ def Xform "SandboxScene" (
                     uniform token[] xformOpOrder = ["xformOp:translate"]
                     color3f[] primvars:displayColor = [(0.5, 0.5, 0.55)]
                     float physics:mass = 0.5
+
+                    # THE DISH ITSELF. Without it the tracker was two 4 cm
+                    # cylinders: the joints held the right angles the whole time
+                    # (`AzimuthJoint.angle` tracked `EarthTracker.az` to
+                    # milliradians), but there was no reflector to see them do it,
+                    # so a correct antenna read as a broken one. A pointing
+                    # mechanism has to SHOW where it points.
+                    #
+                    # A cone on its axis, scaled flat: 0.6 m across and shallow,
+                    # plausible for a rover this size and — unlike a sphere or a
+                    # cube — it has an obvious face, so the boresight is readable
+                    # at a glance.
+                    #
+                    # No `PhysicsRigidBodyAPI`: this is geometry carried BY the
+                    # gimbal, not a body of its own. A mounted part that declares
+                    # itself a rigid body gets its own free-fall and leaves — see
+                    # the note in `components/mobility/motor.usda`.
+                    def Cone "Dish"
+                    {
+                        uniform token axis = "Y"
+                        double radius = 0.3
+                        double height = 0.12
+                        double3 xformOp:translate = (0, 0.09, 0)
+                        uniform token[] xformOpOrder = ["xformOp:translate"]
+                        color3f[] primvars:displayColor = [(0.86, 0.87, 0.9)]
+                    }
                 }
             }
 

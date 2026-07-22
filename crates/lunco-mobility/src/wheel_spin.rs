@@ -83,11 +83,39 @@ pub(crate) fn update_wheel_spin(
             .get(wheel.drive_port)
             .map(|p| p.value.clamp(-1.0, 1.0))
             .unwrap_or(0.0);
-        let tau_drive = throttle * wheel.drive_torque_max;
+        // THE MOTOR CURVE, ON THE AXLE. `drive_torque_max` is the STALL torque —
+        // what the motor delivers at ω = 0 — and this used to apply it flat, at
+        // every speed. A motor that never falls off has no top speed, so a wheel
+        // that broke traction accelerated until bearing drag alone balanced it:
+        // ω ≈ τ/c_bearing, some twenty times the axle's real no-load speed. That
+        // is the visible "wheels spin far too fast" — and it fired on ANY
+        // throttle, because the drive torque was several times the traction limit
+        // (μ·N·r) so the tire broke loose immediately.
+        //
+        // `τ(ω) = τ_stall · (1 − ω/ω_noload)` is the motor's own authored law
+        // (`lunco:motor:stallTorque` / `:noLoadSpeed`, geared down), and it is the
+        // SAME rolloff `drive_force_mag` applies on the force side. Both halves of
+        // the wheel now obey one torque–speed curve, so a free-spinning wheel
+        // terminates at `max_rotation_speed` instead of running away.
+        //
+        // Signed and clamped at 0 like the force-side rolloff: commanding reverse
+        // while still spinning forwards gives full authority, never a wheel that
+        // cannot be stopped because it is fast.
+        let rolloff = if wheel.max_rotation_speed > 0.0 {
+            (1.0 - (wheel.spin_velocity * throttle.signum()) / wheel.max_rotation_speed)
+                .clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let tau_drive = throttle * wheel.drive_torque_max * rolloff;
 
-        // Longitudinal ground speed at the contact patch, projected onto the
-        // wheel's forward axis. Pulled from the parent chassis rigid body.
+        // Ground speed at the contact patch, split on the wheel's own axes in the
+        // ACTUAL contact plane. Both components are needed here now, not just the
+        // longitudinal one: this system is where the tire force is decided.
         let mut v_long = 0.0;
+        let mut v_lat = 0.0;
+        // The contact basis, kept so the force can be rebuilt in world axes below.
+        let mut basis = (DVec3::NEG_Z, DVec3::X);
         let mut braking = false;
         if let Ok((lin, ang, pos, rot, inputs, body, motion)) = q_chassis.get(parent.parent()) {
             braking = inputs.map(|c| c.brake_active).unwrap_or(false);
@@ -118,8 +146,20 @@ pub(crate) fn update_wheel_spin(
                 local_tf.rotation.as_dquat(),
             );
             let hub_vel = wheel_hub_velocity(vlin, vang, hub_pos, pos.0);
-            let forward = global_tf.rotation().mul_vec3(Vec3::NEG_Z).as_dvec3();
-            v_long = hub_vel.dot(forward);
+            let wheel_rot = global_tf.rotation();
+            let wheel_forward = wheel_rot.mul_vec3(Vec3::NEG_Z).as_dvec3();
+            let wheel_right = wheel_rot.mul_vec3(Vec3::X).as_dvec3();
+            // Decompose in the CONTACT plane (the ray-hit normal), not a flat
+            // wheel basis — the same basis `apply_wheel_drive` applies the force
+            // in, so a leaning or side-sloped wheel splits slip correctly.
+            let normal = hits
+                .iter_sorted()
+                .next()
+                .map(|h| h.normal)
+                .unwrap_or(DVec3::Y);
+            basis = crate::contact_plane_basis(wheel_forward, wheel_right, normal);
+            v_long = hub_vel.dot(basis.0);
+            v_lat = hub_vel.dot(basis.1);
         }
 
         // Brake torque opposes the current spin, clamped to the authored peak.
@@ -134,9 +174,13 @@ pub(crate) fn update_wheel_spin(
 
         let on_ground = wheel.last_normal_force >= 1.0 && hits.iter().next().is_some();
         let mut w = wheel.spin_velocity;
+        let mu_n = friction_mu * wheel.last_normal_force;
+        // Longitudinal tire force, filled by whichever branch below resolves ω so
+        // the axle and the chassis are answered by ONE number. See the block after
+        // the solve for why that mattered.
+        let mut f_long = 0.0;
 
         if on_ground {
-            let mu_n = friction_mu * wheel.last_normal_force;
             // Implicit grip solve assuming traction is unsaturated. Stiff term
             // k_slip is handled implicitly so ω snaps to ~v/r without exploding.
             let denom = inertia / dt + k_slip * r * r + c_bearing;
@@ -144,8 +188,11 @@ pub(crate) fn update_wheel_spin(
             let f_slip = k_slip * (w_grip * r - v_long);
 
             if f_slip.abs() <= mu_n {
-                // Tire grips: rolls at ground speed plus a tiny steady slip.
+                // Tire grips: rolls at ground speed plus a tiny steady slip. The
+                // force the ground feels is that steady slip times the stiffness —
+                // small at cruise, which is the whole point (see below).
                 w = w_grip;
+                f_long = f_slip;
             } else {
                 // Traction broken: kinetic friction saturates at μ·N and opposes
                 // the slip direction. Integrate explicitly — the stiff term is
@@ -154,6 +201,7 @@ pub(crate) fn update_wheel_spin(
                 let slip_sign = (w * r - v_long).signum();
                 let tau_traction = slip_sign * mu_n * r;
                 w += dt * (tau_drive + tau_brake - tau_traction - c_bearing * w) / inertia;
+                f_long = tau_traction / r;
             }
         } else {
             // Airborne: free spin under drive (and any brake) torque vs bearing drag.
@@ -162,6 +210,48 @@ pub(crate) fn update_wheel_spin(
 
         wheel.spin_velocity = w;
         wheel.spin_angle = (wheel.spin_angle + w * dt).rem_euclid(TAU);
+
+        // ── THE TIRE FORCE — ONE number, for the axle AND the chassis ──────────
+        //
+        // The chassis force used to be computed independently, in
+        // `apply_wheel_drive`, from quantities the axle never saw: a drive term
+        // `throttle · N · driveForcePerNormal` and a drag term proportional to the
+        // FULL travel speed. Neither is a contact force. A tire transmits torque by
+        // SLIPPING — the patch force is `k · (ω·r − v)` — so a model that reads
+        // travel speed as slip is claiming a rolling wheel is sliding at road
+        // speed, and has to be given a drive coefficient large enough to overcome
+        // its own invented drag. That is exactly what the authored pair 2.0 / 50
+        // was: two fudges calibrated to cancel.
+        //
+        // They cancelled ONLY at the parameters they were fitted at. Change μ, or
+        // the tire, or the mass, and the cancellation drifts — which is why the
+        // model could not survive a stiffer lateral term (the fake drag was eating
+        // the friction cone at cruise, leaving nothing for cornering) and why every
+        // knob interacted with every other.
+        //
+        // Now both halves read the SAME `f_long` the ω solve just produced, and the
+        // cone is spent on real forces:
+        //   * at cruise ω ≈ v/r, so `f_long` is a few newtons and nearly the whole
+        //     cone is available laterally — a rover holds its line;
+        //   * under wheelspin `f_long` saturates at μ·N, and the surplus torque
+        //     goes where it physically goes: into ω, as visible spin.
+        // Nothing is calibrated against anything else, so μ means μ and a tire
+        // swapped at runtime behaves like the tire it is.
+        let f_lat = if on_ground { -wheel.lateral_grip_stiffness * v_lat } else { 0.0 };
+        // ONE friction cone for the pair: a tire at its lateral limit has no
+        // longitudinal grip left to give, which is what makes hard cornering cost
+        // acceleration. `f_long` is already individually bounded by the solve
+        // above; this bounds the RESULTANT.
+        let (f_long, f_lat) = {
+            let mag = (f_long * f_long + f_lat * f_lat).sqrt();
+            if mag > mu_n && mag > 1.0e-9 {
+                let s = mu_n / mag;
+                (f_long * s, f_lat * s)
+            } else {
+                (f_long, f_lat)
+            }
+        };
+        wheel.tire_force = basis.0 * f_long + basis.1 * f_lat;
 
         // Compose the visual mesh rotation from the canonical spin state: steer
         // yaw (from the wheel entity's local transform) · roll about the axle ·
@@ -241,8 +331,10 @@ mod tests {
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
                 contact_grip_stiffness: 1000.0,
+                lateral_grip_stiffness: 1000.0,
                 brake_torque_max: 0.0,
                 drive_force_per_normal: 2.0,
+                tire_force: DVec3::ZERO,
             },
             Suspension {
                 rest_length: 1.0,
@@ -267,6 +359,99 @@ mod tests {
             .next()
             .unwrap()
             .spin_velocity
+    }
+
+    /// A wheel with nothing to grip must terminate at the MOTOR's no-load speed,
+    /// not at whatever bearing drag happens to balance stall torque.
+    ///
+    /// REGRESSION: `tau_drive` applied the stall torque flat at every ω, so a
+    /// wheel that broke traction ran to `τ_stall / c_bearing` — hundreds of rad/s
+    /// against a real axle limit of 24. Since the drive torque is several times
+    /// the traction limit, that happened on any throttle at all, which is what
+    /// "the wheels spin far too fast" was.
+    #[test]
+    fn a_free_spinning_wheel_stops_at_the_motors_no_load_speed() {
+        let max_omega = 24.0;
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f64(1.0 / 60.0));
+        app.insert_resource(time);
+
+        let port = app
+            .world_mut()
+            .spawn(lunco_core::architecture::Port {
+                value: 1.0,
+                ..default()
+            })
+            .id();
+        let chassis = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Position(DVec3::ZERO),
+                Rotation::default(),
+                LinearVelocity(DVec3::ZERO),
+                AngularVelocity(DVec3::ZERO),
+                DriveMix::default(),
+            ))
+            .id();
+        let visual = app.world_mut().spawn(Transform::default()).id();
+        let wheel = app
+            .world_mut()
+            .spawn((
+                WheelRaycast {
+                    suspension_port: port,
+                    drive_port: port,
+                    steer_port: port,
+                    steer_axis: DVec3::Y,
+                    wheel_radius: 0.4,
+                    ray_origin_y: 0.0,
+                    visual_entity: Some(visual),
+                    // AIRBORNE: no normal force, no hit — nothing to push against,
+                    // so only the motor curve and bearing drag bound the spin.
+                    last_normal_force: 0.0,
+                    spin_angle: 0.0,
+                    spin_velocity: 0.0,
+                    mass: 25.0,
+                    moment_of_inertia: 0.0,
+                    drive_torque_max: 255.0,
+                    max_rotation_speed: max_omega,
+                    bearing_damping: 0.45,
+                    friction_mu: 0.8,
+                    slip_stiffness: 8000.0,
+                    contact_grip_stiffness: 50.0,
+                    lateral_grip_stiffness: 800.0,
+                    brake_torque_max: 1500.0,
+                    drive_force_per_normal: 2.0,
+                    tire_force: DVec3::ZERO,
+                },
+                Suspension {
+                    rest_length: 0.7,
+                    spring_k: 5000.0,
+                    damping_c: 600.0,
+                    local_axis: DVec3::Y,
+                },
+                Transform::default(),
+                GlobalTransform::default(),
+                RayHits(vec![]),
+                ChildOf(chassis),
+            ))
+            .id();
+
+        app.add_systems(Update, update_wheel_spin);
+        // Ten seconds of full throttle with nothing to grip.
+        for _ in 0..600 {
+            app.update();
+        }
+        let w = app.world().get::<WheelRaycast>(wheel).unwrap().spin_velocity;
+        assert!(
+            w <= max_omega + 1e-6,
+            "a free wheel must not pass its motor's no-load speed: {w} > {max_omega}"
+        );
+        assert!(
+            w > max_omega * 0.9,
+            "…and should actually reach it under full throttle: {w}"
+        );
     }
 
     #[test]

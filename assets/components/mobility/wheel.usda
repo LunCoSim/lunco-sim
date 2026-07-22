@@ -113,7 +113,19 @@ def Cylinder "Wheel" (
     # system, not of a wheel (a skid rover's wheels do not steer at all). It is
     # `physxVehicleAckermannSteering:maxSteerAngle` on the rover prim.
     double lunco:wheel:contactGripStiffness = 50.0  # slope of contact friction vs slip
-    double lunco:wheel:driveForcePerNormal = 2.0    # traction authority, ×normal force
+    # Traction authority as a multiple of this wheel's normal force.
+    #
+    # It reads like a Coulomb bound and is NOT one: 2.0 against μ = 0.8 looks like
+    # a wheel pushing 2.5× harder than it grips. It is a CALIBRATION. The raycast
+    # longitudinal model is lumped — its drag term resists the full travel speed
+    # rather than the contact slip `v − ω·r` — and 2.0 is the value at which the
+    # raycast rover's acceleration and terminal speed match the PHYSICAL rover's,
+    # which is real avian contact. Dropping it to 0.8 "for physical honesty" cost
+    # 30% of peak speed against the physical twin and failed
+    # `scenes/tests/drivetrain_parity.usda` on three counts.
+    #
+    # Tune it against parity, never against intuition about what a tire can do.
+    double lunco:wheel:driveForcePerNormal = 2.0
     double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
     # Joint-wheel (rigid-axle) drive tuning — reproduces the verified feel. The axle's
     # free-spin cap is NOT here and not on this prim at all: it is the motor's

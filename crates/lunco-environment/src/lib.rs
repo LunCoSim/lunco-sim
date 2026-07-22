@@ -61,6 +61,18 @@ pub use lighting::{EarthshineParams, LunarSun};
 pub mod solar;
 pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
 
+/// Earth's direction as a co-simulation source (`LocalEarth` + the earth→cosim
+/// bridge) — what a high-gain antenna points at, the twin of [`solar`] for the
+/// other body in a lunar sky.
+///
+/// Unlike the sun there is no scene light to read, so the direction arrives in
+/// the [`earth::EarthDirectionWorld`] resource, written by `lunco-celestial`
+/// from the ephemeris. See the module docs for why the dependency runs that way.
+pub mod earth;
+pub use earth::{
+    compute_local_earth, inject_local_earth_into_cosim, EarthDirectionWorld, LocalEarth,
+};
+
 // Empty-bounds fallbacks for `SetEnvironmentLight`'s cascade rebuild. These
 // mirror `lunco_render::LunarSunShadow`'s defaults but are kept locally so this
 // crate need not depend on `lunco-render` (lighting → render would invert the
@@ -576,7 +588,13 @@ impl Plugin for EnvironmentPlugin {
         // the earthshine fill and the sun→cosim direction feed run headless too
         // (a sun-tracking Modelica model on the `--no-ui` server needs them).
         app.register_type::<LocalSolar>();
+        app.register_type::<LocalEarth>();
         app.register_type::<Earthshine>();
+        // Declared here, WRITTEN by lunco-celestial (which depends on this crate,
+        // so the dependency cannot run the other way). Init'd unconditionally and
+        // left at ZERO — the "not known" state — so a scene with no celestial
+        // hierarchy reads as no-data rather than as a missing resource.
+        app.init_resource::<EarthDirectionWorld>();
 
         // The cool-blue earthshine fill (persistent, shadowless). Skipped
         // on web: WebGL2 supports only ONE `DirectionalLight`, and a second
@@ -592,6 +610,12 @@ impl Plugin for EnvironmentPlugin {
             (
                 compute_local_solar.in_set(EnvironmentSet::Compute),
                 inject_local_solar_into_cosim
+                    .in_set(EnvironmentSet::Apply)
+                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+                // Earth pointing rides the same three-phase ordering: an antenna
+                // model must read the angles the same tick they were computed.
+                compute_local_earth.in_set(EnvironmentSet::Compute),
+                inject_local_earth_into_cosim
                     .in_set(EnvironmentSet::Apply)
                     .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
             ),

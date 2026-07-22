@@ -32,7 +32,6 @@ use lunco_core::ports::{PortBackend, PortDirection, PortRef};
 use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::{ActuatorPorts, CommandInputs};
 
-/// Drive kernels and the command/mix types they consume. Vehicle-domain, so
 /// they live here rather than in core (see the nothing-into-core rule).
 pub mod kernels;
 mod sensing;
@@ -42,9 +41,6 @@ use wheel_spin::update_wheel_spin;
 pub mod wheel_kinematics;
 use wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
 
-/// Drive-actuation chain diagnostic logging — see the `drive-diag` feature in
-/// `Cargo.toml`. Expands to `info!` when the feature is on, and to nothing
-/// (args not evaluated) when off, so it's zero-cost in normal builds. A single
 /// definition keeps the `#[cfg]` out of the physics systems themselves.
 #[cfg(feature = "drive-diag")]
 macro_rules! drive_diag {
@@ -105,9 +101,15 @@ impl Plugin for LunCoMobilityPlugin {
                 suspension_system,
                 apply_wheel_suspension,
                 update_suspension_visuals,
-                apply_wheel_drive,
+                // STEER, then SOLVE THE TIRE, then APPLY IT. Steering first so the
+                // contact basis is this tick's heading; the spin solve produces the
+                // patch force; `apply_wheel_drive` only hands it to the body. The
+                // old order (drive → steer → spin) meant the chassis force was
+                // built from last tick's steer angle and from a spin it could not
+                // see, which is what forced the two independent force fudges.
                 apply_wheel_steering,
                 update_wheel_spin,
+                apply_wheel_drive,
             ).chain()
            // Read the actuator `Port` AFTER wire propagation has carried this
            // tick's command into it (same fixed tick), so actuation isn't
@@ -198,9 +200,15 @@ impl Plugin for LunCoMobilityPlugin {
                 suspension_system,
                 apply_wheel_suspension,
                 update_suspension_visuals,
-                apply_wheel_drive,
+                // STEER, then SOLVE THE TIRE, then APPLY IT. Steering first so the
+                // contact basis is this tick's heading; the spin solve produces the
+                // patch force; `apply_wheel_drive` only hands it to the body. The
+                // old order (drive → steer → spin) meant the chassis force was
+                // built from last tick's steer angle and from a spin it could not
+                // see, which is what forced the two independent force fudges.
                 apply_wheel_steering,
                 update_wheel_spin,
+                apply_wheel_drive,
             )
                 .chain()
                 .after(lunco_core::ControlDacSet),
@@ -208,10 +216,6 @@ impl Plugin for LunCoMobilityPlugin {
     }
 }
 
-/// A representative drive-force-per-normal ratio (`throttle · N · this`), used
-/// by the force-law unit tests below to exercise [`drive_force_mag`] at a
-/// realistic scale. NOT a runtime default — real wheels read
-/// `lunco:wheel:driveForcePerNormal`, which is required (see
 /// `lunco_usd_sim::wheel_params`).
 #[cfg(test)]
 const DEFAULT_DRIVE_FORCE_PER_NORMAL: f64 = 2.0;
@@ -223,55 +227,6 @@ const MAX_SUSPENSION_FORCE_N: f64 = 100_000.0;
 
 // ── Pure force laws (unit-tested; the numerically-sensitive bits live here) ─────
 
-/// Per-wheel drive force from a normalized throttle — a **torque–speed curve**,
-/// not a constant.
-///
-/// ```text
-/// F = throttle · N · force_per_normal · max(0, 1 − ω / ω_max)
-/// ```
-///
-/// The stall term (`throttle · N · force_per_normal`) is the traction budget at
-/// standstill; the rolloff models a real motor's torque falling away toward its
-/// no-load speed, so the wheel **self-limits** at `ω_max · wheel_radius`. Without
-/// it the raycast wheel pushed at full authority at any speed and only stopped
-/// accelerating when drag happened to balance — which is why raycast rovers ran
-/// ~5× faster than the joint rovers built from the same parameters. `ω_max` is
-/// `physxVehicleEngine:maxRotationSpeed`, the SAME attribute the physical wheel's
-/// velocity motor targets, so the two realizations now top out together.
-///
-/// `omega` is derived from the wheel hub's **ground speed** (`v_forward / r`),
-/// NOT from the spin integrator's `spin_velocity`. Both were available; ground
-/// speed is right because the quantity being limited is the vehicle's travel
-/// speed, which is exactly what the joint motor's `ω_max · r` bounds. Integrator
-/// spin is free to diverge from it under wheelspin or a skid, and a wheel
-/// spinning uselessly in place would otherwise have its drive force cut to zero
-/// — the opposite of what a stuck rover needs.
-///
-/// The ratio is **signed** and clamped below at 0: the rolloff applies only when
-/// the throttle pushes the way the wheel is already rolling. Commanding reverse
-/// while still rolling forward gives a NEGATIVE ratio, hence factor 1.0 — full
-/// braking/reversing authority, never a rover that can't stop because it is fast.
-///
-/// NEGATIVE throttle drives in **reverse** — the old `clamp(0.0, 1.0)` silently
-/// dropped reverse even though the differential mix carried the sign.
-fn drive_force_mag(
-    throttle: f64,
-    normal_force: f64,
-    force_per_normal: f64,
-    forward_speed: f64,
-    wheel_radius: f64,
-    max_rotation_speed: f64,
-) -> f64 {
-    let throttle = throttle.clamp(-1.0, 1.0);
-    let stall = throttle * normal_force * force_per_normal;
-    if max_rotation_speed <= 0.0 || wheel_radius <= 0.0 {
-        return stall;
-    }
-    // Signed: positive only while the wheel rolls the way the throttle pushes.
-    let omega = (forward_speed / wheel_radius) * throttle.signum();
-    let rolloff = (1.0 - omega / max_rotation_speed).clamp(0.0, 1.0);
-    stall * rolloff
-}
 
 /// Contact friction opposing the slip *velocity vector*. Continuous through zero
 /// (no dead-band) so a near-stationary wheel is still damped — a slip dead-band
@@ -290,7 +245,7 @@ fn drive_force_mag(
 /// with the lean, so decomposing slip/drive in this basis gives the correct
 /// longitudinal/lateral split instead of assuming a flat patch. Falls back to
 /// the raw vectors if the heading is parallel to the normal (degenerate).
-fn contact_plane_basis(wheel_forward: DVec3, wheel_right: DVec3, normal: DVec3) -> (DVec3, DVec3) {
+pub(crate) fn contact_plane_basis(wheel_forward: DVec3, wheel_right: DVec3, normal: DVec3) -> (DVec3, DVec3) {
     let n = normal.normalize_or_zero();
     if n == DVec3::ZERO {
         return (wheel_forward, wheel_right);
@@ -302,23 +257,6 @@ fn contact_plane_basis(wheel_forward: DVec3, wheel_right: DVec3, normal: DVec3) 
     (forward, right)
 }
 
-fn contact_friction(
-    slip_vec: DVec3,
-    grip_stiffness: f64,
-    max_friction: f64,
-    braking: bool,
-) -> DVec3 {
-    let slip_speed = slip_vec.length();
-    if braking && slip_speed > 1e-6 {
-        -slip_vec * (max_friction / slip_speed)
-    } else if slip_speed * grip_stiffness <= max_friction {
-        // Linear grip; `-k·slip` → 0 continuously as slip → 0 (no division).
-        -slip_vec * grip_stiffness
-    } else {
-        // Saturated at the cone; slip_speed > 0 here.
-        -slip_vec * (max_friction / slip_speed)
-    }
-}
 
 /// Suspension normal-force magnitude: spring `k·x` plus damping `c·v`, with the
 /// DAMPING bounded to ±spring so the total stays in `[0, 2·spring]` without a
@@ -333,10 +271,6 @@ fn suspension_force_mag(compression: f64, spring_k: f64, relative_vel: f64, damp
     (spring + damping).clamp(0.0, MAX_SUSPENSION_FORCE_N)
 }
 
-/// A high-performance wheel model using emulated suspension rays.
-///
-/// **Theory**: Instead of a physical collider, this component projects a ray
-/// downwards. The resulting distance is used to solve the spring-damper
 /// equation, simulating the behavior of a physical tire and strut.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
@@ -349,52 +283,36 @@ pub struct WheelRaycast {
     pub steer_port: Entity,
     /// Radius of the tire (effectively the minimum offset from ground).
     pub wheel_radius: f64,
-    /// Y-offset of the ray origin relative to the wheel transform (meters).
     /// Used for visual wheel positioning.
     pub ray_origin_y: f64,
     /// Entity for the visual mesh to be transformed.
     pub visual_entity: Option<Entity>,
     /// Resultant normal force from the last physics tick, used for friction calculations.
     pub last_normal_force: f64,
-    /// Accumulated rolling angle of the tire about its axle (radians, wrapped to 0..2π).
     /// Drives the visible spin of the wheel mesh.
     pub spin_angle: f64,
-    /// Angular velocity of the tire about its axle (rad/s). State for the spin
-    /// integrator — couples to ground speed when rolling, diverges under
     /// wheelspin/skid, and free-runs (driven by torque vs bearing drag) in the air.
     pub spin_velocity: f64,
-    /// Tire mass in kg (USD `physics:mass`). Sets the rotational inertia
     /// `½·m·r²` that resists changes in spin (unless `moment_of_inertia` is set).
     pub mass: f64,
-    /// Explicit axle moment of inertia in kg·m² (USD `physxVehicleWheel:moi`).
     /// When `> 0` it overrides the mass-derived `½·m·r²`.
     pub moment_of_inertia: f64,
-    /// Peak motor drive torque about the axle in N·m
     /// (USD `physxVehicleEngine:peakTorque`, required).
     pub drive_torque_max: f64,
-    /// Axle bearing/rolling drag in N·m·s: the axle loses `this · ω` of torque
-    /// (USD `physxVehicleWheel:dampingRate`, required). A physical property of
     /// the hub in its own right — never inferred from the drive torque.
     pub bearing_damping: f64,
-    /// No-load axle speed in rad/s (USD `physxVehicleEngine:maxRotationSpeed`).
-    /// The drive force falls to zero as the wheel's rolling speed approaches it
-    /// (see [`drive_force_mag`]), so this wheel tops out at
-    /// `max_rotation_speed · wheel_radius` — the SAME bound the physical
     /// (joint-motor) realization of the same wheel obeys.
     pub max_rotation_speed: f64,
-    /// Tire-ground friction coefficient (USD `lunco:tire:frictionCoefficient`).
     /// Caps the traction torque at `μ·N`, above which the tire breaks loose.
     pub friction_mu: f64,
-    /// Longitudinal slip stiffness in N per m/s of contact slip. Governs how
     /// hard the tire grips toward `v/r` before saturating at the friction limit.
     pub slip_stiffness: f64,
-    /// Chassis-contact grip stiffness in N·s/m: the slope of the contact
-    /// friction force vs slip velocity in `apply_wheel_drive`, before it
-    /// saturates at the Coulomb cone `μ·N`. Distinct from `slip_stiffness`
-    /// (which is the *axle* spin model in `update_wheel_spin`). USD:
-    /// `lunco:wheel:contactGripStiffness` (required).
+    /// soft — stiffen it and a rolling wheel is braked by its own grip.
     pub contact_grip_stiffness: f64,
-    /// Peak brake torque about the axle in N·m. When it exceeds the available
+    /// one number instead of two independently-fudged ones.
+    pub tire_force: DVec3,
+    /// like ice.
+    pub lateral_grip_stiffness: f64,
     /// traction torque the wheel locks and skids.
     pub brake_torque_max: f64,
     /// Max per-wheel drive force as a multiple of that wheel's normal force
@@ -442,6 +360,8 @@ impl Default for WheelRaycast {
             friction_mu: 0.0,
             slip_stiffness: 0.0,
             contact_grip_stiffness: 0.0,
+            lateral_grip_stiffness: 0.0,
+            tire_force: DVec3::ZERO,
             brake_torque_max: 0.0,
             drive_force_per_normal: 0.0,
             steer_axis: DVec3::Y,
@@ -764,32 +684,10 @@ fn apply_wheel_drive(
                     let long_vel = hub_vel.dot(forward); // longitudinal slip
                     let lat_vel = hub_vel.dot(right); // lateral slip
 
-                    // --- Drive force ---
-                    // `port.value` is the wire-scaled throttle; `drive_force_mag`
-                    // clamps it to [-1, 1] (negative = reverse) and rolls the force
-                    // off toward the wheel's no-load speed so this wheel tops out
-                    // at the same `ω_max · r` as its joint-motor counterpart.
-                    let drive_force_vec = forward
-                        * drive_force_mag(
-                            port.value,
-                            normal_force,
-                            wheel.drive_force_per_normal,
-                            long_vel,
-                            wheel.wheel_radius,
-                            wheel.max_rotation_speed,
-                        );
-                    forces.apply_force_at_point(drive_force_vec, hub_pos_world);
-
-                    // --- Friction (longitudinal + lateral) ---
-                    let max_friction = wheel.friction_mu * normal_force;
-                    let slip_vec = long_vel * forward + lat_vel * right;
-                    let friction_force = contact_friction(
-                        slip_vec,
-                        wheel.contact_grip_stiffness,
-                        max_friction,
-                        braking,
-                    );
-                    forces.apply_force_at_point(friction_force, hub_pos_world);
+                    // The tire force was already solved this tick, from the real
+                    // contact slip `ω·r − v` and the wheel's own lateral slip —
+                    // see `update_wheel_spin`. Applying it is all that is left.
+                    forces.apply_force_at_point(wheel.tire_force, hub_pos_world);
                 }
             }
         }
@@ -832,23 +730,6 @@ fn apply_wheel_steering(
 // allocators later). `apply_drive_mix` looks the kernel up and runs it — no
 // per-architecture Rust branch, no component-type taxonomy.
 
-/// G5 — Rocker-bogie **differential** coupling primitive.
-///
-/// A rocker-bogie chassis hangs between two rockers (one per side), each joined
-/// to the body by a lateral-axis revolute. A real rover links the two rockers
-/// through a *differential* — a transverse bar or gear — so that when the left
-/// rocker pitches up, the right pitches down by the same amount and the body
-/// rides at their **average** pitch (keeping the payload level over rough
-/// ground). Avian has no gear/differential joint, so this is a soft holonomic
-/// coupling: a PD law that drives the constraint `θ_a − r·θ_b → rest_offset` with
-/// corrective torques about the hinge axis (reaction on the chassis), where `r`
-/// is the authored `physxGearJoint:gearRatio`; `r = -1` is this mirror case. Everything *else* in a rocker-bogie (the rocker/bogie links) is
-/// already buildable with today's authored `PhysicsRevoluteJoint`s — this fills
-/// the one missing piece. Stiff but compliant: the body still conforms, it just
-/// can't simply fold one rocker flat while the other stays put.
-///
-/// Authored in USD as a standard `PhysxPhysicsGearJoint` over the two chassis↔rocker
-/// hinges (`physxGearJoint:hinge0/1`), softened by the joint's own angular
 /// `PhysicsDriveAPI` (stiffness/damping/targetPosition). `lunco-usd-sim` reads that
 /// into a `PendingDifferential` and `resolve_differential_coupling` attaches this
 /// component; inert until present, so existing vehicles are unaffected.
@@ -1079,16 +960,6 @@ fn suspension_system(
 
 // ── Drive command ports ─────────────────────────────────────────────────────────
 
-/// Port backend exposing a [`CommandInputs`]'s `values` map as writable **input**
-/// ports on any entity carrying the component — the single command sink for every
-/// controllable (rover `throttle`/`steer`/`brake`, avatar `forward`/`side`/`up`, a
-/// lander's `throttle`/`pitch`/`roll`/`yaw`, …). Reachable by `SetPorts`/wires/API/
-/// scripts; the vehicle's actuator ([`apply_drive_mix`], `apply_fly`, a Modelica
-/// bridge) reads its own vocabulary back out.
-///
-/// Strict: only keys the vehicle *seeded* into `values` (its declared command
-/// surface — see [`CommandInputs::new`]) are writable, so an undeclared command
-/// name is rejected and still surfaces as a dangling wire. Replaces the old
 /// per-class `DriveCommand` component — command state has one home, this component.
 const COMMAND_INPUT_BACKEND: PortBackend = PortBackend {
     list: |w, e, out| {
@@ -1332,111 +1203,17 @@ mod force_law_tests {
         lunco_hooks::unregister("test.kernel.tank");
     }
 
-    // ── drive_force_mag: reverse must work ──────────────────────────────────
-    /// Test radius / no-load speed: matches `components/mobility/wheel.usda`
-    /// (ω_max·r = 12 · 0.4 = 4.8 m/s top speed).
-    pub(crate) const TEST_R: f64 = 0.4;
-    pub(crate) const TEST_W_MAX: f64 = 12.0;
 
-    /// `drive_force_mag` at a standstill — the stall force, i.e. the whole of
-    /// the old speed-independent law.
-    pub(crate) fn stall_force(throttle: f64, n: f64, f: f64) -> f64 {
-        drive_force_mag(throttle, n, f, 0.0, TEST_R, TEST_W_MAX)
-    }
 
-    #[test]
-    fn drive_supports_forward_and_reverse() {
-        let n = 1000.0;
-        let f = DEFAULT_DRIVE_FORCE_PER_NORMAL;
-        assert!(stall_force(0.5, n, f) > 0.0, "forward drives forward");
-        // REGRESSION: reverse used to be clamped to 0 (`clamp(0.0, 1.0)`).
-        assert!(stall_force(-0.5, n, f) < 0.0, "negative throttle = reverse");
-        assert!((stall_force(0.5, n, f) + stall_force(-0.5, n, f)).abs() < 1e-9);
-        // throttle clamps to [-1, 1]
-        assert_eq!(stall_force(5.0, n, f), stall_force(1.0, n, f));
-        assert_eq!(stall_force(-5.0, n, f), stall_force(-1.0, n, f));
-        assert_eq!(stall_force(0.0, n, f), 0.0);
-    }
 
-    // ── drive_force_mag: torque–speed curve ─────────────────────────────────
-    /// REGRESSION: the raycast drive force used to be speed-INDEPENDENT, so a
-    /// raycast rover never self-limited and ran ~5× the speed of the joint rover
-    /// built from the same wheel. The force must now fall to zero exactly at the
-    /// no-load speed `ω_max·r`, which is where the joint motor caps.
-    #[test]
-    fn drive_rolls_off_to_zero_at_no_load_speed() {
-        let n = 1000.0;
-        let f = DEFAULT_DRIVE_FORCE_PER_NORMAL;
-        let top_speed = TEST_W_MAX * TEST_R; // 4.8 m/s
-        let full = |v: f64| drive_force_mag(1.0, n, f, v, TEST_R, TEST_W_MAX);
 
-        // Full authority at rest, and that is the old stall value.
-        assert_eq!(full(0.0), n * f);
-        // Linear rolloff: half the no-load speed ⇒ half the force.
-        assert!((full(top_speed * 0.5) - 0.5 * n * f).abs() < 1e-9);
-        // Zero exactly at the no-load speed — this is the top speed.
-        assert!(full(top_speed).abs() < 1e-9);
-        // Never negative (no engine braking) beyond it.
-        assert_eq!(full(top_speed * 2.0), 0.0);
-        // Monotonically falling.
-        assert!(full(1.0) > full(2.0) && full(2.0) > full(4.0));
-    }
 
-    /// Reversing (or braking) while rolling the other way must keep FULL
-    /// authority: the rolloff is signed, so a rover moving forward at any speed
-    /// still gets its whole force budget when commanded backwards.
-    #[test]
-    fn drive_rolloff_does_not_sap_reverse_authority() {
-        let n = 1000.0;
-        let f = DEFAULT_DRIVE_FORCE_PER_NORMAL;
-        let fast = TEST_W_MAX * TEST_R * 2.0; // well past no-load speed
-        // Rolling forward fast, commanded reverse ⇒ undiminished reverse force.
-        assert_eq!(drive_force_mag(-1.0, n, f, fast, TEST_R, TEST_W_MAX), -n * f);
-        // Symmetric: rolling backwards fast, commanded forward.
-        assert_eq!(drive_force_mag(1.0, n, f, -fast, TEST_R, TEST_W_MAX), n * f);
-        // And the same wheel driving WITH its motion is fully rolled off.
-        assert_eq!(drive_force_mag(1.0, n, f, fast, TEST_R, TEST_W_MAX), 0.0);
-    }
 
-    // ── contact_friction: continuous through zero, saturating, brake grips ───
-    #[test]
-    fn friction_zero_at_rest_and_continuous_through_zero() {
-        // REGRESSION: a slip dead-band left sub-threshold motion undamped → a
-        // stiction limit-cycle (the steering jitter). Friction must be exactly
-        // zero at zero slip AND shrink smoothly toward it (no cliff).
-        let (k, max) = (50.0, 1e9); // huge cone → always linear
-        assert_eq!(contact_friction(DVec3::ZERO, k, max, false), DVec3::ZERO);
-        let big = contact_friction(DVec3::new(1e-3, 0.0, 0.0), k, max, false);
-        let small = contact_friction(DVec3::new(1e-4, 0.0, 0.0), k, max, false);
-        assert!((big - DVec3::new(1e-3, 0.0, 0.0) * -k).length() < 1e-12);
-        assert!(small.length() < big.length(), "shrinks continuously toward 0");
-    }
 
-    #[test]
-    fn friction_opposes_slip_saturates_and_is_continuous_at_boundary() {
-        let (k, max) = (50.0, 100.0);
-        let slip = DVec3::new(10.0, 0.0, 0.0); // k*slip = 500 > 100 → saturated
-        let f = contact_friction(slip, k, max, false);
-        assert!((f.length() - max).abs() < 1e-9, "saturates at the cone");
-        assert!(f.dot(slip) < 0.0, "opposes slip");
-        // both branches agree exactly at the linear/saturation boundary
-        let boundary = DVec3::new(max / k, 0.0, 0.0);
-        let fb = contact_friction(boundary, k, max, false);
-        assert!((fb - boundary * -k).length() < 1e-9);
-        assert!((fb.length() - max).abs() < 1e-9);
-    }
 
-    #[test]
-    fn braking_grips_at_full_cone() {
-        // REGRESSION: braking only zeroed the drive ports; the chassis coasted.
-        // A locked wheel must grip at the full cone even when normal grip is weak.
-        let (k, max) = (50.0, 100.0);
-        let slip = DVec3::new(0.1, 0.0, 0.0); // k*slip = 5 ≪ 100 → linear when coasting
-        let coast = contact_friction(slip, k, max, false);
-        let brake = contact_friction(slip, k, max, true);
-        assert!(brake.length() > coast.length(), "brake grips harder");
-        assert!((brake.length() - max).abs() < 1e-9, "full cone");
-    }
+
+
+
 
     // ── suspension_force_mag: bounded, never negative, damps both ways ───────
     #[test]
@@ -1464,11 +1241,6 @@ mod force_law_tests {
     }
 }
 
-/// Step-2 **oracle**: validate the production suspension force law against a
-/// continuous, proper-solver reference — a quarter-car (one sprung mass on one
-/// spring-damper strut over ground). The continuous physics is stated
-/// declaratively in `assets/models/QuarterCar.mo`; an adaptive Modelica solver
-/// integrates it as ground truth. Here we integrate the *same* equations with a
 /// fine RK4 step (≈ the Modelica answer to many digits for this non-stiff system)
 /// and compare against the real `suspension_force_mag`, stepped with the
 /// production scheme (semi-implicit Euler at dt = 1/60). See
@@ -1616,188 +1388,6 @@ mod oracle {
         assert!(sb > 20_000.0, "cliff lets a >20 kN landing transient through");
     }
 
-    // ── Longitudinal 1-DOF: m·v̇ = F_long(v) — friction + drive validation ──────
-    //
-    // A block / chassis on flat ground. Friction (`contact_friction`) opposes its
-    // velocity; drive (`drive_force_mag`) pushes it. The continuous reference and
-    // the production law share the SAME force law, so the gap is integration only —
-    // except for the dead-band contrast, which is the old stiction bug.
-    use bevy::math::DVec3;
-    // The wheel geometry / no-load speed the force-law tests pin — one place.
-    use crate::force_law_tests::{stall_force, TEST_R, TEST_W_MAX};
-
-    const N_NORMAL: f64 = M * G; // contact normal force = weight (2452.5 N)
-
-    /// RK4 fine-step reference for `m·v̇ = net(v)` → ground-truth velocity trace.
-    fn long_reference<F: Fn(f64) -> f64>(net: F, v0: f64, secs: f64) -> Vec<f64> {
-        let n = (secs / DT_FINE) as usize;
-        let d = |v: f64| net(v) / M;
-        let mut v = v0;
-        let mut out = Vec::with_capacity(n);
-        for _ in 0..n {
-            let (k1, k2, k3, k4);
-            k1 = d(v);
-            k2 = d(v + 0.5 * DT_FINE * k1);
-            k3 = d(v + 0.5 * DT_FINE * k2);
-            k4 = d(v + DT_FINE * k3);
-            v += DT_FINE / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
-            out.push(v);
-        }
-        out
-    }
-
-    /// Production scheme: explicit velocity step at dt = 1/60 (how the chassis
-    /// velocity advances under the per-tick contact force).
-    fn long_step<F: Fn(f64) -> f64>(net: F, v0: f64, secs: f64) -> Vec<f64> {
-        let n = (secs / DT_SIM) as usize;
-        let mut v = v0;
-        let mut out = Vec::with_capacity(n);
-        for _ in 0..n {
-            v += DT_SIM * net(v) / M;
-            out.push(v);
-        }
-        out
-    }
-
-    fn sign_flips(s: &[f64]) -> usize {
-        s.windows(2).filter(|w| w[0] * w[1] < 0.0).count()
-    }
-
-    /// Longitudinal component of the production contact friction at speed `v`.
-    fn fric_x(k: f64, mu_n: f64, braking: bool) -> impl Fn(f64) -> f64 {
-        move |v| contact_friction(DVec3::new(v, 0.0, 0.0), k, mu_n, braking).x
-    }
-    /// The OLD dead-band friction: a constant Coulomb force outside a slip
-    /// dead-band, nothing inside it — the stiction limit-cycle (steering jitter).
-    fn fric_deadband(mu_n: f64) -> impl Fn(f64) -> f64 {
-        move |v| if v.abs() > 1e-3 { -mu_n * v.signum() } else { 0.0 }
-    }
-    /// Drive minus contact friction — the longitudinal net force under throttle.
-    /// The drive term is speed-dependent (the torque–speed rolloff), so this is
-    /// the full production law at velocity `v`.
-    fn drive_minus_friction(throttle: f64, k: f64, mu_n: f64) -> impl Fn(f64) -> f64 {
-        move |v| {
-            drive_force_mag(
-                throttle,
-                N_NORMAL,
-                DEFAULT_DRIVE_FORCE_PER_NORMAL,
-                v,
-                TEST_R,
-                TEST_W_MAX,
-            ) + contact_friction(DVec3::new(v, 0.0, 0.0), k, mu_n, false).x
-        }
-    }
-
-    /// No-load ground speed of the test wheel: `ω_max · r`. Both realizations of
-    /// this wheel cap here — the joint motor by velocity control, the raycast
-    /// wheel because its drive force has rolled off to zero.
-    const TEST_TOP_SPEED: f64 = TEST_W_MAX * TEST_R; // 4.8 m/s
-
-    #[test]
-    fn friction_brings_a_sliding_block_to_rest_without_chatter() {
-        // Knee μN/k ≈ 4 m/s, so v0 = 15 starts in the Coulomb (saturated) regime,
-        // decelerates linearly, crosses into the viscous knee, then asymptotes to 0.
-        let (k, mu_n) = (600.0, N_NORMAL);
-        let rust = long_step(fric_x(k, mu_n, false), 15.0, 4.0);
-        let reference = long_reference(fric_x(k, mu_n, false), 15.0, 4.0);
-        let dev = max_abs_dev(&rust, &reference);
-        println!("[oracle] friction: max|v−v_ref| = {dev:.4} m/s, v_end = {:.4}", rust.last().unwrap());
-        assert!(dev < 0.05, "regularized friction diverges from the continuous reference: {dev}");
-        assert!(rust.last().unwrap().abs() < 0.05, "block must come to rest");
-        // REGRESSION: continuous-through-zero friction approaches rest asymptotically,
-        // never overshooting through zero → no stiction chatter.
-        assert_eq!(sign_flips(&rust), 0, "regularized friction must not chatter through zero");
-    }
-
-    #[test]
-    fn deadband_friction_chatters_the_regression_the_fix_removed() {
-        // REGRESSION (the steering jitter): a slip dead-band let sub-threshold motion
-        // overshoot through zero → a stiction limit-cycle. The continuous law settles;
-        // the dead-band law sign-flips forever near rest. The oracle catches exactly this.
-        let mu_n = N_NORMAL;
-        let smooth = long_step(fric_x(600.0, mu_n, false), 15.0, 4.0);
-        let deadband = long_step(fric_deadband(mu_n), 15.0, 4.0);
-        let (fs, fd) = (sign_flips(&smooth), sign_flips(&deadband));
-        println!("[oracle] chatter: regularized {fs} sign-flips, dead-band {fd}");
-        assert_eq!(fs, 0, "regularized law settles");
-        assert!(fd >= 5, "dead-band law limit-cycles near zero (got {fd} flips)");
-    }
-
-    #[test]
-    fn braking_stops_the_block_sooner_than_coasting() {
-        // Dynamic form of the unit test: with weak grip, coasting friction is linear
-        // and slow; full-cone braking decelerates hard, so the block stops far sooner.
-        let (k, mu_n) = (50.0, N_NORMAL);
-        let coast = long_step(fric_x(k, mu_n, false), 10.0, 3.0);
-        let brake = long_step(fric_x(k, mu_n, true), 10.0, 3.0);
-        println!("[oracle] brake: coast v_end {:.3}, brake v_end {:.3}", coast.last().unwrap(), brake.last().unwrap());
-        assert!(brake.last().unwrap().abs() < 0.3, "braking grips the full cone → quick stop");
-        assert!(coast.last().unwrap().abs() > 3.0, "weak coasting grip is still rolling");
-    }
-
-    #[test]
-    fn drive_accelerates_to_a_balanced_terminal_velocity() {
-        // Moderate throttle: stall drive < μN, so the block stays in the viscous
-        // (sub-cone) regime and balances where the ROLLED-OFF drive equals the
-        // grip force:  D·(1 − v/v_top) = k·v  ⇒  v = D / (k + D/v_top).
-        // Validates the stall magnitude (throttle·N·2), the rolloff, and the
-        // balance against the continuous reference.
-        let (throttle, k, mu_n) = (0.2, 50.0, N_NORMAL);
-        let drive = stall_force(throttle, N_NORMAL, DEFAULT_DRIVE_FORCE_PER_NORMAL);
-        let v_term = drive / (k + drive / TEST_TOP_SPEED);
-        assert!(drive < mu_n, "scenario must stay in the sub-cone (balanced) regime");
-        assert!(v_term < TEST_TOP_SPEED, "must settle BELOW the no-load speed");
-        let rust = long_step(drive_minus_friction(throttle, k, mu_n), 0.0, 30.0);
-        let reference = long_reference(drive_minus_friction(throttle, k, mu_n), 0.0, 30.0);
-        let dev = max_abs_dev(&rust, &reference);
-        println!("[oracle] drive: v_term {:.3} (expected {v_term:.3}), max dev {dev:.4}", rust.last().unwrap());
-        assert!(dev < 0.05, "drive+friction diverges from the continuous reference: {dev}");
-        assert!((rust.last().unwrap() - v_term).abs() < 0.3, "must settle at drive/k");
-    }
-
-    #[test]
-    fn reverse_throttle_mirrors_forward() {
-        // REGRESSION: reverse used to be clamped away (`clamp(0.0, 1.0)`). Negative
-        // throttle must produce the mirror-image terminal velocity.
-        let (k, mu_n) = (50.0, N_NORMAL);
-        let fwd = long_step(drive_minus_friction(0.2, k, mu_n), 0.0, 30.0);
-        let rev = long_step(drive_minus_friction(-0.2, k, mu_n), 0.0, 30.0);
-        println!("[oracle] reverse: fwd v {:.3}, rev v {:.3}", fwd.last().unwrap(), rev.last().unwrap());
-        assert!((fwd.last().unwrap() + rev.last().unwrap()).abs() < 1e-6, "reverse mirrors forward");
-    }
-
-    #[test]
-    fn excess_throttle_breaks_traction_but_still_tops_out() {
-        // High throttle: the STALL drive exceeds μN, so contact grip alone can
-        // never balance it — the chassis breaks traction and blows past the cone
-        // knee. Under the old speed-independent law that was the end of the
-        // story and it accelerated without bound (this test used to assert
-        // v > 50 m/s). REGRESSION: the torque–speed rolloff means the drive
-        // itself dies away, so the wheel still tops out at its no-load ground
-        // speed — the same `ω_max · r` the joint-motor rover caps at, which is
-        // the whole point of both realizations sharing one parameter.
-        let (throttle, k, mu_n) = (0.8, 50.0, N_NORMAL);
-        let drive = stall_force(throttle, N_NORMAL, DEFAULT_DRIVE_FORCE_PER_NORMAL);
-        assert!(drive > mu_n, "this scenario must exceed the cone at stall");
-        let rust = long_step(drive_minus_friction(throttle, k, mu_n), 0.0, 60.0);
-        let v_end = *rust.last().unwrap();
-        // Balance point: D·(1 − v/v_top) = k·v, still below the no-load speed.
-        let v_term = drive / (k + drive / TEST_TOP_SPEED);
-        println!("[oracle] wheelspin: v_end {v_end:.3} m/s (balance {v_term:.3}, no-load {TEST_TOP_SPEED:.3})");
-        assert!(v_end < TEST_TOP_SPEED, "must NEVER exceed the no-load speed {TEST_TOP_SPEED}");
-        assert!((v_end - v_term).abs() < 0.1, "settles at the drive/grip balance");
-        // Monotone climb: it does break traction, it just doesn't run away.
-        assert_eq!(sign_flips(&rust), 0, "no chatter on the way up");
-    }
-}
-
-/// Marker component added to an entity representing the suspension piston visual.
-/// Stores the initial Y coordinate so that we can offset it relative to the wheel's
-/// visual displacement.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct SuspensionPiston {
-    pub initial_y: f32,
 }
 
 #[cfg(test)]
@@ -1860,6 +1450,16 @@ mod differential_tests {
         }
     }
 }
+
+/// Marker component added to an entity representing the suspension piston visual.
+/// Stores the initial Y coordinate so that we can offset it relative to the wheel's
+/// visual displacement.
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct SuspensionPiston {
+    pub initial_y: f32,
+}
+
 
 /// Marker component added to an entity representing the suspension spring visual.
 #[derive(Component, Debug, Clone, Reflect)]

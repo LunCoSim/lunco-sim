@@ -84,14 +84,42 @@ def Xform "Motor" (
     )
 
     # --- Motor characteristic (LunCoMotorAPI) ---
-    # SHAFT quantities, before any reduction. Sized as a rover wheel actuator: 0.25 N·m
-    # of shaft torque through a 1200:1 harmonic drive at 0.85 efficiency lands ~255 N·m
-    # at the axle, which is the traction-limited band a lunar wheel actually works in
-    # (μ·N·r ≈ 340 N·m). The no-load speed divides down to 14 400/1200 = 12 rad/s at the
-    # axle — 12 × 0.4 m ≈ 4.8 m/s, the verified rover feel, now derived rather than
-    # authored twice under two names.
+    # SHAFT quantities, before any reduction.
+    #
+    # A MOTOR IS SIZED TO THE TRACTION IT CAN USE. Torque past the friction limit does
+    # not move the vehicle; it spins the wheel. This was authored at 0.25 N·m — ~255 N·m
+    # at the axle through the 1200:1 harmonic drive at 0.85 efficiency — against a real
+    # per-wheel limit of
+    #
+    #   τ_traction = μ·N·r = 0.8 × (1050 kg × 1.62 / 4) × 0.4 m ≈ 136 N·m
+    #
+    # so the drive beat the contact by ~1.9× at ANY throttle: the tire broke loose
+    # immediately, the wheels turned while the rover stood still, and what motion there
+    # was came from sliding. (The old comment justified 0.25 against "μ·N·r ≈ 340 N·m" —
+    # that is μ·N, a FORCE in newtons, used as though it were a torque. The missing
+    # factor of r is exactly the discrepancy.)
+    #
+    # 0.11 N·m lands ~112 N·m at the axle, ~0.8 of the traction limit: it grips in normal
+    # use and still breaks loose on a low-μ patch, which is the behaviour worth having.
+    # Gradeability is unhurt — 4 × 112/0.4 = 1120 N of thrust against ~1700 N of lunar
+    # weight still climbs ~40°.
+    #
+    # The no-load speed divides down to 28 800/1200 = 24 rad/s at the axle — 24 × 0.4 m
+    # ≈ 9.6 m/s, derived rather than authored twice under two names.
+    #
+    # SPEED IS THE MOTOR'S WINDING, NOT THE GEARBOX. Doubled from 14 400 (a 4.8 m/s
+    # ceiling) on 2026-07-22. The alternative — halving the reduction — buys the same top
+    # speed by giving away half the axle torque, and torque is what climbs a crater wall;
+    # a faster-wound motor leaves `stallTorque · ratio · efficiency` alone and only
+    # raises the speed the torque falls away toward.
+    #
+    # The ceiling is not the cruise: drive force rolls off as `1 − v/v_max` while contact
+    # drag grows with v, so a rover settles well short of it.
     float lunco:motor:stallTorque = 0.25
     float lunco:motor:noLoadSpeed = 14400.0
+    # Continuous rating, below stall: what it can hold all day without cooking. ~65% of
+    # stall, the usual margin — it was 0.15 against a 0.11 stall, i.e. a motor rated to
+    # sustain more than it could ever produce.
     float lunco:motor:continuousTorque = 0.15
     float lunco:motor:efficiency = 0.85
     # A small rotor, but through a 1200:1 reduction it reflects to the axle multiplied by

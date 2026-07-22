@@ -29,6 +29,11 @@ over "Tire" (
     # sooner when it runs out of friction.
     float physxVehicleTire:longitudinalStiffness = 14000.0
     double lunco:tire:frictionCoefficient = 0.55
+    # A rigid compound corners as stiffly as it drives — no soil shear to soften
+    # it, so the side force is up against the (lower) friction cone almost at
+    # once. Stiff and slippery is a real combination: it holds a line precisely
+    # right up until it lets go.
+    float physxVehicleTire:lateralStiffness = 1400.0
 
     # --- Tread ---
     rel material:binding = </Tire/TireLook>
