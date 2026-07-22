@@ -40,11 +40,73 @@ def Xform "RockerBogie" (
 {
     uniform bool lunco:spawnable = true
     # --- VEHICLE MASS & DAMPING ---
-    # Edit the chassis mass here (default 300 kg)
+    #
+    # 1.8 m body over a 2.4 m wheelbase and a 2.4 m track, on 0.8 m-diameter ×
+    # 0.4 m-wide wheels. Belly clearance follows from the geometry rather than
+    # being authored: every wheel centre sits 0.6 m below the chassis origin, so a
+    # 0.4 m wheel puts the ground at -1.0 and the hull underside (half-height 0.2)
+    # 0.8 m above it.
+    #
+    # ⚠ THE WHEEL IS BIG ON PURPOSE — IT IS SIZED TO THE TERRAIN, NOT TO A PHOTO.
+    # It was cut to 0.25 m on 2026-07-22 for looks, because 0.8 m wheels under a
+    # 1.8 m body read as a cart on tractor tyres and Curiosity's real wheel is
+    # 0.5 m. That broke the summer-school traverse: the rover stopped being able to
+    # get up the crater walls. Nothing about traction changed (the slope limit is
+    # atan(μ) and μ lives on the tyre) — it was GEOMETRY. That scene's terrain
+    # carries an `overzoom` craterlet layer at 0.4–6 m feature size and a `rocks`
+    # layer at density 25, and a wheel climbs an obstacle roughly its own radius:
+    # 0.4 m rolls over that terrain, 0.25 m catches on it. Ground clearance fell
+    # from 0.8 m to 0.65 m at the same time, so the hull grounded sooner too.
+    #
+    # The WIDTH is where the proportions were fixed instead — 0.3 → 0.4 m, so the
+    # wheel reads as a wide lunar wheel rather than a thin disc, with the radius
+    # left at the size the terrain needs. Curiosity's proportions are not a target
+    # here; Curiosity does not drive on this ground.
+    #
+    # Mass budget: 300 (hull) + 2×50 (rockers) + 2×30 (bogies) + 6×12 (wheels)
+    # + 6×8 (motors) + 6×4 (gearboxes) ≈ 604 kg — between MER's 185 kg and MSL's
+    # 899 kg, and just under Lunokhod's 756 kg.
+    #
+    # ⚠ THE HULL MASS IS NO LONGER PINNED BY THE DIFFERENTIAL — it is simply not yet
+    # PROVEN above 300 kg. The coupling used to fail outright at 400 kg (29%
+    # residual); since it became a mass-independent implicit solve that same 400 kg
+    # mirrors at 8.6%, better than 300 kg ever managed before. What stops the number
+    # moving today is the TEST, not the vehicle: `scenes/tests/rocker_bogie.usda`'s
+    # 0.7 m step cannot hold a heavier rover — it slides off, and the rig then has
+    # nothing to measure. Give that rig a step it can hold and this is free.
+    # Read the `Differential` prim and `RockerL` before moving any of these.
+    # The wheels are the one free mass: they hang off the arms as their own bodies.
+    #
+    # ⚠ Mass is NOT what sets the difficulty ladder. The tiers are traction-limited
+    # (slope limit → atan(μ), mass-free) and nowhere near the ~15 kN of axle thrust
+    # the powertrain can put down, so the μ margins in `variants/rover_*.usda`
+    # survive a mass edit. Do not "rebalance" them against this number.
     float physics:mass = 300.0
     float lunco:spawnLift = 1.5
-    float physxRigidBody:linearDamping = 0.4
-    float physxRigidBody:angularDamping = 2.0
+
+    # ── THERE IS NO AIR. DRAG LIVES IN THE PARTS. ───────────────────────────
+    # Body damping is a fluid model: a force proportional to velocity, applied to
+    # the hull, standing in for air the Moon does not have. This carried 0.4 linear
+    # and 2.0 angular — at 604 kg and 1.4 m/s the linear term alone was ~340 N of
+    # invented headwind, and the angular term was a hand on the steering that no
+    # part accounted for.
+    #
+    # Both are now ~0 and the losses are authored where the hardware loses them:
+    #   · `physxVehicleWheel:dampingRate` = 0.45 N·m·s per wheel — the sealed
+    #     dry-lubricated bearing plus regolith rolling resistance (`wheel.usda`).
+    #   · `lunco:gearbox:efficiency` = 0.85 — a cold multi-stage harmonic drive.
+    #   · tyre μ — lateral friction is what actually resists a yaw, and it does:
+    #     with angular damping gone the rover still turns flat (2.8° peak roll
+    #     under full steer at 0.6 throttle, measured) rather than spinning out.
+    #
+    # 0.05 rather than a hard 0 on the angular term: a rigid body with literally no
+    # rotational damping is a solver liability, and 0.05 is small enough to be lost
+    # in the bearing drag. It is a numerical floor, not a physical claim.
+    #
+    # ⚠ Measured: removing BOTH changed terminal speed by under 2% (3.50 → 3.59 m/s).
+    # The body damping was never the speed limiter — see `Motor_FL` for what is.
+    float physxRigidBody:linearDamping = 0.0
+    float physxRigidBody:angularDamping = 0.05
 
     # The two bank actuator ports, as attributes the motors CONNECT to. Declaring
     # them here gives each `inputs:demand.connect` a real property to resolve to, so
@@ -104,27 +166,43 @@ def Xform "RockerBogie" (
     # connectivity endpoint out of the box — author `lunco:link:class` /
     # `minElevationDeg` on this prim per scene.
     #
-    # s = 0.35 ⇒ a 0.41 m dish: rover scale, and it clears the solar deck.
+    # ⚠ THIS IS THE ROVER'S ONLY ANTENNA. A scene that wants a link node on a
+    # rocker-bogie authors an `over "Antenna"` here — it does NOT add a second
+    # `radio.usda`/`antenna.usda` child. `radio.usda` REFERENCES this same dish, so
+    # a scene-side comms prim draws a whole second reflector beside this one (which
+    # is exactly what the space-school traverse scene used to do, back when this
+    # chassis was `six_wheel_rover` and genuinely had none).
+    #
+    # MOUNTED ON THE REAR DECK, on the centreline-left, clear of the forward
+    # science mast at z = -0.6 (forward is -Z: that is where the headlights point).
+    # s = 0.45 ⇒ a 0.52 m dish on a 0.5 m stalk — big enough to read as a high-gain
+    # at rover scale, short enough to stay inside the roll envelope.
     def "Antenna" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
         string lunco:link:class = "rover"
-        double3 xformOp:translate = (0.3, 0.22, 0.6)
+        double3 xformOp:translate = (-0.35, 0.22, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         over "Mast"
         {
-            double radius = 0.015
-            double height = 0.3
-            double3 xformOp:translate = (0.0, 0.15, 0.0)
+            double radius = 0.02
+            double height = 0.5
+            double3 xformOp:translate = (0.0, 0.25, 0.0)
             color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
         }
         over "DishHead"
         {
-            double3 xformOp:translate = (0.0, 0.3, 0.0)
-            double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
-            double3 xformOp:scale = (0.35, 0.35, 0.35)
+            double3 xformOp:translate = (0.0, 0.5, 0.0)
+            # Parked high-gain: 25 deg off the zenith, tipped REARWARD (+X rotation
+            # swings the boresight toward +Z) and canted outboard away from the
+            # science mast. Rearward matters: the chase camera sits behind and above
+            # a driven rover, so a forward-leaning dish shows that camera nothing but
+            # the back of the reflector — which is what -40 did, and why the antenna
+            # read as a white sliver rather than as a dish.
+            double3 xformOp:rotateXYZ = (25.0, -20.0, 0.0)
+            double3 xformOp:scale = (0.45, 0.45, 0.45)
         }
     }
 
@@ -174,6 +252,19 @@ def Xform "RockerBogie" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        # ⚠ LIGHTENING THE ARMS ONCE MADE THE LINKAGE RING. 25 kg is the honest
+        # structural mass for a 2.4 m titanium rocker, and it was tried (2026-07-22,
+        # bogies at 18 kg to match): the differential never settled, wandering
+        # ±0.03 rad and 1–3 deg of chassis tilt for the full 10 s of
+        # `scenarios/tests/rocker_bogie.usda` instead of holding steady. It PASSED
+        # while visibly shivering, which is the worst kind of green.
+        #
+        # That was measured against the EXPLICIT coupling, whose response scaled as
+        # √(k/I) and so ran into the solver's ringing band as I fell. The coupling is
+        # implicit and inertia-normalised now, which is exactly the mechanism that
+        # made this fail — so lighter arms may well be fine today. It has NOT been
+        # re-measured. Re-run both rocker-bogie scenes and watch the per-second
+        # timeline for wander, not just the verdict, before trusting it.
         float physics:mass = 50.0
         float3 physics:diagonalInertia = (30.0, 30.0, 3.0)
         double3 xformOp:translate = (-0.9, -0.2, 0.0)
@@ -255,9 +346,20 @@ def Xform "RockerBogie" (
         )
         {
             uniform token axis = "X"
+            # 0.5 m diameter × 0.4 m wide — Curiosity's wheel, and the reason this
+            # rover stopped looking like a cart on tractor tyres.
+            #
+            # ⚠ `physxVehicleWheel:radius` IS A SECOND SPELLING OF THE SAME RADIUS
+            # and it is the one the dynamics read (`update_wheel_spin`: I = ½mr²,
+            # τ_traction = F·r). `wheel.usda` defaults it to 0.4, so a geometry-only
+            # resize leaves the physics turning an invisible 0.8 m wheel. Author both.
             double radius = 0.4
-            double height = 0.3
-            double3 xformOp:translate = (-0.25, -0.4, -1.2)
+            double height = 0.4
+            float physxVehicleWheel:radius = 0.4
+            # An aluminium spun wheel with a flexure sidewall, not the 25 kg
+            # placeholder `wheel.usda` ships as its catalogue default.
+            float physics:mass = 12.0
+            double3 xformOp:translate = (-0.3, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
@@ -278,18 +380,73 @@ def Xform "RockerBogie" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            double3 xformOp:translate = (0.3, -0.4, -1.2)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            # ── A DRIVE ACTUATOR LIVES ON THE AXLE IT TURNS ─────────────────────
+            # Both housings are ON THE WHEEL'S AXIS — same y, same z as Wheel_FL —
+            # with the rocker's own structure between them: motor bolted to the
+            # arm's INBOARD face, harmonic drive on the OUTBOARD face driving the
+            # hub. That is the MER/MSL arrangement and it is what the wiring
+            # already claims (`drivenWheel` → this wheel, `Motor.outputs:torque` →
+            # this gearbox).
+            #
+            # They used to sit at x = ±0.3/±0.15 — 0.9 m inboard of the wheel,
+            # floating in the middle of the vehicle, driving a hub they did not
+            # touch.
+            #
+            # ⚠ AND THEY MUST BE TURNED. `motor.usda`/`gearbox.usda` draw `Body` as
+            # a bare `Cylinder` with no `axis`, so it defaults to Z — fore-and-aft,
+            # broadside to the axle. The component cannot fix this: a wheel's axis
+            # is the VESSEL's decision (Rucheyok's wheels are Z-forward), so the
+            # rotation belongs on the instance, here, where `axis = "X"` is known.
+            double3 xformOp:translate = (0.1, -0.4, -1.2)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/RockerL/Wheel_FL>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
+
+            # ── THE SPEED KNOB. THE NO-LOAD FIGURE IS NOT THE ROAD SPEED. ───────
+            # The axle's free-spin cap is `noLoadSpeed / ratio` — the ONE no-load
+            # speed both wheel realizations obey (`wheel.usda`). Here that is
+            # 14 400 / 1200 = 12 rad/s, i.e. 4.8 m/s of WHEEL RIM speed.
+            #
+            # THE ROVER DOES NOT GO 4.8 m/s, AND THAT IS THE POINT. Drive torque
+            # rolls off as (1 − ω/ω_noload) while the parts' friction grows with ω,
+            # so the vehicle settles where the two cross — short of the ceiling, and
+            # NOT in proportion to it. Measured at full throttle on flat ground
+            # (headless `sandbox --api`, position sampled every 2 s), on the
+            # `rover_medium` tier that the summer school actually drives:
+            #
+            #     noLoadSpeed   terminal (r = 0.4 m, worn tyres)
+            #       14 400        2.71 m/s  ≈ 9.8 km/h   ← authored
+            #       23 400        5.72 m/s  ≈ 20.6 km/h
+            #
+            # ⚠ SPEED IS NOT SEPARABLE FROM WHEEL RADIUS — the same 23 400 gave only
+            # 3.59 m/s on the 0.25 m wheels this rover briefly wore, and 1.42 m/s at
+            # 13 200. Every figure above is void if the radius moves. MEASURE, never
+            # derive: the response is non-linear (doubling 13 200 → 26 400 TRIPLED
+            # terminal speed), and deriving "12 rad/s × 0.25 m = 2.75 m/s" from the
+            # arithmetic is exactly the mistake that once shipped a rover doing half
+            # its claimed speed.
+            #
+            # 14 400 is `motor.usda`'s catalogue default — this rover is simply
+            # running the stock motor. It was briefly geared to Lunokhod's real
+            # 2.0 km/h (2 640), which is authentic and unusable: it turned the
+            # school's 2.7 km round trip into a multi-hour wait.
+            #
+            # SPEED ONLY. `stallTorque` is untouched, so axle torque
+            # (stallTorque · 1200 · 0.85) and with it the whole difficulty ladder in
+            # `variants/rover_*.usda` is exactly what it was. Buying speed by
+            # cutting the gearbox ratio instead would throw the torque away with it.
+            float lunco:motor:noLoadSpeed = 14400.0
         }
 
         def Xform "Gearbox_FL" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
         {
-            double3 xformOp:translate = (0.15, -0.4, -1.2)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            # Outboard face of the arm, on the axle, feeding the hub. See Motor_FL.
+            double3 xformOp:translate = (-0.055, -0.4, -1.2)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:torque.connect = </RockerBogie/RockerL/Motor_FL.outputs:torque>
         }
     }
@@ -299,6 +456,19 @@ def Xform "RockerBogie" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        # ⚠ LIGHTENING THE ARMS ONCE MADE THE LINKAGE RING. 25 kg is the honest
+        # structural mass for a 2.4 m titanium rocker, and it was tried (2026-07-22,
+        # bogies at 18 kg to match): the differential never settled, wandering
+        # ±0.03 rad and 1–3 deg of chassis tilt for the full 10 s of
+        # `scenarios/tests/rocker_bogie.usda` instead of holding steady. It PASSED
+        # while visibly shivering, which is the worst kind of green.
+        #
+        # That was measured against the EXPLICIT coupling, whose response scaled as
+        # √(k/I) and so ran into the solver's ringing band as I fell. The coupling is
+        # implicit and inertia-normalised now, which is exactly the mechanism that
+        # made this fail — so lighter arms may well be fine today. It has NOT been
+        # re-measured. Re-run both rocker-bogie scenes and watch the per-second
+        # timeline for wander, not just the verdict, before trusting it.
         float physics:mass = 50.0
         float3 physics:diagonalInertia = (30.0, 30.0, 3.0)
         double3 xformOp:translate = (0.9, -0.2, 0.0)
@@ -375,8 +545,10 @@ def Xform "RockerBogie" (
         {
             uniform token axis = "X"
             double radius = 0.4
-            double height = 0.3
-            double3 xformOp:translate = (0.25, -0.4, -1.2)
+            double height = 0.4
+            float physxVehicleWheel:radius = 0.4
+            float physics:mass = 12.0
+            double3 xformOp:translate = (0.3, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
@@ -388,18 +560,25 @@ def Xform "RockerBogie" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            double3 xformOp:translate = (-0.3, -0.4, -1.2)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            # Mirror of the left arm — on the axle, arm between motor and gearbox,
+            # both turned onto X. See Motor_FL.
+            double3 xformOp:translate = (-0.1, -0.4, -1.2)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/RockerR/Wheel_FR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
+            # 12.9 km/h measured — see Motor_FL. All six must
+            # agree, or the fast wheels drag the slow ones and every wheel scrubs.
+            float lunco:motor:noLoadSpeed = 14400.0
         }
 
         def Xform "Gearbox_FR" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
         {
-            double3 xformOp:translate = (-0.15, -0.4, -1.2)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            double3 xformOp:translate = (0.055, -0.4, -1.2)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:torque.connect = </RockerBogie/RockerR/Motor_FR.outputs:torque>
         }
     }
@@ -409,6 +588,8 @@ def Xform "RockerBogie" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        # The shorter, lighter member of the pair — and, like the rocker, kept heavy
+        # on purpose. See RockerL for what lightening it did to the differential.
         float physics:mass = 30.0
         float3 physics:diagonalInertia = (15.0, 15.0, 1.5)
         double3 xformOp:translate = (-0.9, -0.4, 0.6)
@@ -501,8 +682,10 @@ def Xform "RockerBogie" (
         {
             uniform token axis = "X"
             double radius = 0.4
-            double height = 0.3
-            double3 xformOp:translate = (-0.25, -0.2, -0.4)
+            double height = 0.4
+            float physxVehicleWheel:radius = 0.4
+            float physics:mass = 12.0
+            double3 xformOp:translate = (-0.3, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
@@ -519,8 +702,10 @@ def Xform "RockerBogie" (
         {
             uniform token axis = "X"
             double radius = 0.4
-            double height = 0.3
-            double3 xformOp:translate = (-0.25, -0.2, 0.6)
+            double height = 0.4
+            float physxVehicleWheel:radius = 0.4
+            float physics:mass = 12.0
+            double3 xformOp:translate = (-0.3, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
@@ -532,18 +717,22 @@ def Xform "RockerBogie" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            double3 xformOp:translate = (0.3, -0.2, -0.4)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            # On the axle, arm between motor and gearbox, turned onto X. See Motor_FL.
+            double3 xformOp:translate = (0.1, -0.2, -0.4)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_ML>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
+            float lunco:motor:noLoadSpeed = 14400.0   # 12.9 km/h — see Motor_FL
         }
 
         def Xform "Gearbox_ML" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
         {
-            double3 xformOp:translate = (0.15, -0.2, -0.4)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            double3 xformOp:translate = (-0.055, -0.2, -0.4)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:torque.connect = </RockerBogie/BogieL/Motor_ML.outputs:torque>
         }
 
@@ -551,18 +740,22 @@ def Xform "RockerBogie" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            double3 xformOp:translate = (0.3, -0.2, 0.6)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            # On the axle, arm between motor and gearbox, turned onto X. See Motor_FL.
+            double3 xformOp:translate = (0.1, -0.2, 0.6)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_RL>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
+            float lunco:motor:noLoadSpeed = 14400.0   # 12.9 km/h — see Motor_FL
         }
 
         def Xform "Gearbox_RL" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
         {
-            double3 xformOp:translate = (0.15, -0.2, 0.6)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            double3 xformOp:translate = (-0.055, -0.2, 0.6)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:torque.connect = </RockerBogie/BogieL/Motor_RL.outputs:torque>
         }
     }
@@ -572,6 +765,8 @@ def Xform "RockerBogie" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
+        # The shorter, lighter member of the pair — and, like the rocker, kept heavy
+        # on purpose. See RockerL for what lightening it did to the differential.
         float physics:mass = 30.0
         float3 physics:diagonalInertia = (15.0, 15.0, 1.5)
         double3 xformOp:translate = (0.9, -0.4, 0.6)
@@ -657,8 +852,10 @@ def Xform "RockerBogie" (
         {
             uniform token axis = "X"
             double radius = 0.4
-            double height = 0.3
-            double3 xformOp:translate = (0.25, -0.2, -0.4)
+            double height = 0.4
+            float physxVehicleWheel:radius = 0.4
+            float physics:mass = 12.0
+            double3 xformOp:translate = (0.3, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
@@ -675,8 +872,10 @@ def Xform "RockerBogie" (
         {
             uniform token axis = "X"
             double radius = 0.4
-            double height = 0.3
-            double3 xformOp:translate = (0.25, -0.2, 0.6)
+            double height = 0.4
+            float physxVehicleWheel:radius = 0.4
+            float physics:mass = 12.0
+            double3 xformOp:translate = (0.3, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
@@ -688,18 +887,22 @@ def Xform "RockerBogie" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            double3 xformOp:translate = (-0.3, -0.2, -0.4)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            # On the axle, arm between motor and gearbox, turned onto X. See Motor_FL.
+            double3 xformOp:translate = (-0.1, -0.2, -0.4)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_MR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
+            float lunco:motor:noLoadSpeed = 14400.0   # 12.9 km/h — see Motor_FL
         }
 
         def Xform "Gearbox_MR" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
         {
-            double3 xformOp:translate = (-0.15, -0.2, -0.4)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            double3 xformOp:translate = (0.055, -0.2, -0.4)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:torque.connect = </RockerBogie/BogieR/Motor_MR.outputs:torque>
         }
 
@@ -707,18 +910,22 @@ def Xform "RockerBogie" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            double3 xformOp:translate = (-0.3, -0.2, 0.6)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            # On the axle, arm between motor and gearbox, turned onto X. See Motor_FL.
+            double3 xformOp:translate = (-0.1, -0.2, 0.6)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_RR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
+            float lunco:motor:noLoadSpeed = 14400.0   # 12.9 km/h — see Motor_FL
         }
 
         def Xform "Gearbox_RR" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
         {
-            double3 xformOp:translate = (-0.15, -0.2, 0.6)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
+            double3 xformOp:translate = (0.055, -0.2, 0.6)
+            double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:torque.connect = </RockerBogie/BogieR/Motor_RR.outputs:torque>
         }
     }
@@ -761,9 +968,39 @@ def Xform "RockerBogie" (
     # pitch tracks the rocker average instead of flopping on a free pitch DOF. A rigid
     # gear would fight the terrain and chatter, so the compliance is the joint's own
     # angular PhysicsDriveAPI (a strong spring-damper), not an ideal constraint.
-    #   stiffness — how strongly the rockers mirror each other (default 15000)
-    #   damping   — kills differential oscillation (default 1500)
+    #   stiffness — how strongly the rockers mirror each other
+    #   damping   — kills differential oscillation
     #   targetPosition — symmetric rest sum (0 rad)
+    #
+    # ⚠ SOLVED IMPLICITLY. THIS IS NO LONGER A STABILITY KNOB — BUT IT IS NOT YET
+    #   AN IDEAL GEAR EITHER. Read both halves before changing it.
+    #
+    # `differential_coupling_system` now evaluates the coupling with backward Euler
+    # against the constraint's own inverse inertia (`J·M⁻¹·Jᵀ`), so the solved
+    # torque is bounded by what the step can absorb. Two things follow, both
+    # measured on `scenes/tests/rocker_bogie.usda` (2026-07-22):
+    #
+    #   · NO STIFFNESS DIVERGES ANY MORE. The old EXPLICIT penalty (`λ = k·c + d·ċ`)
+    #     went to NaN inside 10 s at 30 000 and at 60 000. Nothing does now — the
+    #     value below is 6× the old NaN threshold and the rig is steady.
+    #   · MASS NO LONGER SOFTENS IT. `w` scales the response with the inertia it
+    #     acts on. Under the explicit form a 400 kg hull sagged the mirroring to a
+    #     29% residual (a FAILING mechanism); it is 8.6% now. At the shipped 300 kg
+    #     the residual went 20% → 13.4%, back inside the test's original 15% bound.
+    #
+    # ⚠ BUT DO NOT SIMPLY CRANK IT. This is still an EXTERNAL torque applied
+    # alongside avian's solver, not a constraint solved WITH it, so pushing toward
+    # the holonomic limit makes the coupling shove the vehicle around rather than
+    # merely couple it: at 1e6 the gear cancels perfectly (L+R = 0.000) and walks
+    # the rover clean off the test step by t ≈ 4 s; at 1e8 the rig tumbles (168° of
+    # roll). 1e5 is the measured knee — the stiffest setting that still leaves the
+    # rover sitting where it was put.
+    #
+    # A real rocker-bogie differential is a bar or a bevel gearset, with no
+    # compliance at all. Reaching that honestly means solving this INSIDE the
+    # substep loop with the hinges, as a real constraint. Until then this is a very
+    # stiff, mass-independent, unconditionally stable spring — which is a different
+    # and much better thing than what it was, but still a spring.
     def PhysxPhysicsGearJoint "Differential" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )
@@ -772,8 +1009,8 @@ def Xform "RockerBogie" (
         rel physxGearJoint:hinge1 = </RockerBogie/HingeR>
         float physxGearJoint:gearRatio = -1.0
         float drive:angular:physics:targetPosition = 0.0
-        float drive:angular:physics:stiffness = 15000.0
-        float drive:angular:physics:damping = 1500.0
+        float drive:angular:physics:stiffness = 100000.0
+        float drive:angular:physics:damping = 5000.0
     }
 
     # ── Lateral-axis revolute hinges (rocker ↔ bogie) ───────────────────────

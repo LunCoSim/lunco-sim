@@ -93,8 +93,39 @@ fn verdict(s) {
 
     if s.l != () && s.r != () {
         if s.coupled > 0.5 {
+            // ── STILL ON THE STEP AT THE VERDICT ────────────────────────────
+            // `peak_l` is a RUNNING MAXIMUM, so it is satisfied by the landing
+            // transient alone — a rover that settles onto the step and then creeps
+            // OFF it reads "level chassis, L + R ~ 0" at t = 10 and passes for the
+            // same reason a rover with no differential would: nothing is loading
+            // it. That is not hypothetical. It is what the rover did while its hull
+            // carried `linearDamping = 0.4` (invented air drag, since removed): it
+            // slid off at t ~ 8 and this test called it green.
+            //
+            // So assert the load is STILL THERE when the verdict is taken. The
+            // uncoupled branch already has this, in its `tilt > 10` control.
+            // 0.25, not 0.5: `peak_l` includes the LANDING TRANSIENT, which
+            // overshoots the settled angle, so half of it is a bar a genuinely
+            // loaded rover can miss (measured 0.0148 against a 0.0299 peak — off by
+            // 0.00015). The failure this exists to catch is not marginal at all:
+            // an unloaded rover reads |L| ≈ 0.000, i.e. ~2% of peak.
+            f.push(t_true(s.l.abs() > 0.25 * s.peak_l,
+                "coupled: the step must still be loading the suspension at the " +
+                "verdict — |L| = " + r4(s.l.abs()) + " against a peak of " +
+                r4(s.peak_l) + ", so the rover has come off the step and every " +
+                "check below is being read on an unloaded, trivially level rover"));
             // Sum, not ratio: the authored invariant is `L + R ~ 0`, and near zero
-            // a ratio test is noise. 15% of the excursion actually driven.
+            // a ratio test is noise.
+            //
+            // 15% of the excursion actually driven. That figure briefly went to 25%
+            // when removing the hull's invented air drag exposed the EXPLICIT
+            // penalty's true residual (20%), and came back the moment the coupling
+            // was re-solved implicitly: it now measures 13.4% (L+R = 0.004 rad
+            // against a 0.0299 excursion) on a genuinely loaded rover, which is
+            // better than the number this bound was originally written against.
+            //
+            // The control does not cancel AT ALL (L+R = 1.047 against a peak of
+            // 0.5236, i.e. 200%), so the two cases are separated by 15×.
             f.push(t_true((s.l + s.r).abs() < 0.15 * s.peak_l,
                 "coupled: HingeL + HingeR must cancel, got " + r4(s.l + s.r) +
                 " rad against a peak |L| of " + r4(s.peak_l) +
