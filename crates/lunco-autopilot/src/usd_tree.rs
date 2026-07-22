@@ -214,6 +214,40 @@ fn collect_target_paths(v: &Value, out: &mut Vec<String>) {
 /// patrol shape it knows how to extend. A hand-authored tree of any other shape is
 /// left alone (`Err`) — the user edits that in Groot2 or by hand, and the editor does
 /// not get to silently restructure it.
+/// Borrow the leg list of a plain `sequence[...]` or `forever(sequence[…])` patrol,
+/// for the editor helpers below. Shared so every mutation agrees on the shape it
+/// will restructure (and refuses to touch anything else).
+fn legs_mut(root: &mut Value) -> Result<&mut Vec<Value>, String> {
+    let is_sequence = root.get("kind").and_then(|k| k.as_str()) == Some("sequence");
+    if is_sequence {
+        return root
+            .get_mut("children")
+            .and_then(|c| c.as_array_mut())
+            .ok_or_else(|| "mission sequence has no children array".to_string());
+    }
+    root.get_mut("child")
+        .filter(|c| c.get("kind").and_then(|k| k.as_str()) == Some("sequence"))
+        .and_then(|c| c.get_mut("children"))
+        .and_then(|c| c.as_array_mut())
+        .ok_or_else(|| {
+            "mission is not a plain sequence[...] or forever(sequence[…]) patrol; edit its XML directly \
+             (the editor will not restructure a hand-authored tree)"
+                .to_string()
+        })
+}
+
+fn legs_ref(root: &Value) -> Option<&Vec<Value>> {
+    if root.get("kind").and_then(|k| k.as_str()) == Some("sequence") {
+        if let Some(children) = root.get("children").and_then(|c| c.as_array()) {
+            return Some(children);
+        }
+    }
+    root.get("child")
+        .filter(|c| c.get("kind").and_then(|k| k.as_str()) == Some("sequence"))
+        .and_then(|c| c.get("children"))
+        .and_then(|c| c.as_array())
+}
+
 pub fn append_waypoint_leaf(xml: Option<&str>, prim_path: &str) -> Result<String, String> {
     let leaf = serde_json::json!({ "kind": "drive_to", "target": prim_path });
 
@@ -226,17 +260,7 @@ pub fn append_waypoint_leaf(xml: Option<&str>, prim_path: &str) -> Result<String
         Some(text) => crate::btcpp_xml::xml_to_value(text)?,
     };
 
-    // Reach into `forever.child.children` — the leg list of a patrol.
-    let legs = root
-        .get_mut("child")
-        .filter(|c| c.get("kind").and_then(|k| k.as_str()) == Some("sequence"))
-        .and_then(|c| c.get_mut("children"))
-        .and_then(|c| c.as_array_mut())
-        .ok_or_else(|| {
-            "mission is not a plain forever(sequence[…]) patrol; edit its XML directly \
-             (the editor will not restructure a hand-authored tree)"
-                .to_string()
-        })?;
+    let legs = legs_mut(&mut root)?;
     legs.push(leaf);
 
     crate::btcpp_xml::value_to_xml(&root)
@@ -246,17 +270,7 @@ pub fn append_waypoint_leaf(xml: Option<&str>, prim_path: &str) -> Result<String
 /// vessel's mission, returning the new BT.CPP XML.
 pub fn remove_waypoint_leaf(xml: &str, prim_path: &str) -> Result<String, String> {
     let mut root = crate::btcpp_xml::xml_to_value(xml)?;
-
-    // Reach into `forever.child.children` — the leg list of a patrol.
-    let legs = root
-        .get_mut("child")
-        .filter(|c| c.get("kind").and_then(|k| k.as_str()) == Some("sequence"))
-        .and_then(|c| c.get_mut("children"))
-        .and_then(|c| c.as_array_mut())
-        .ok_or_else(|| {
-            "mission is not a plain forever(sequence[…]) patrol"
-                .to_string()
-        })?;
+    let legs = legs_mut(&mut root)?;
 
     legs.retain(|child| {
         child.get("target").and_then(|t| t.as_str()) != Some(prim_path)
@@ -270,17 +284,6 @@ pub fn remove_waypoint_leaf(xml: &str, prim_path: &str) -> Result<String, String
 /// using this so a coord key always round-trips and matches by string.
 pub fn format_coord_target(p: DVec3) -> String {
     format!("{:.6};{:.6};{:.6}", p.x, p.y, p.z)
-}
-
-/// Borrow the leg list of a plain `forever(sequence[…])` patrol, for the editor
-/// helpers below. Shared so every mutation agrees on the shape it will restructure
-/// (and refuses to touch anything else).
-fn legs_mut(root: &mut Value) -> Result<&mut Vec<Value>, String> {
-    root.get_mut("child")
-        .filter(|c| c.get("kind").and_then(|k| k.as_str()) == Some("sequence"))
-        .and_then(|c| c.get_mut("children"))
-        .and_then(|c| c.as_array_mut())
-        .ok_or_else(|| "mission is not a plain forever(sequence[…]) patrol".to_string())
 }
 
 /// Move a waypoint: repoint the first `drive_to` leg matching `old_target` at
@@ -333,10 +336,8 @@ pub fn set_waypoint_dwell(xml: &str, target: &str, dwell: f64) -> Result<String,
 /// Read a waypoint's authored dwell (seconds), if any. `0`/absent → no dwell.
 pub fn waypoint_dwell(xml: &str, target: &str) -> Option<f64> {
     let root = crate::btcpp_xml::xml_to_value(xml).ok()?;
-    root.get("child")?
-        .get("children")?
-        .as_array()?
-        .iter()
+    let legs = legs_ref(&root)?;
+    legs.iter()
         .find(|l| l.get("target").and_then(|t| t.as_str()) == Some(target))
         .and_then(|l| l.get("dwell"))
         .and_then(|d| d.as_f64())
@@ -356,11 +357,8 @@ pub fn route_is_smooth(xml: &str) -> bool {
     crate::btcpp_xml::xml_to_value(xml)
         .ok()
         .and_then(|root| {
-            root.get("child")?
-                .get("children")?
-                .as_array()?
-                .iter()
-                .find_map(|l| l.get("smooth").and_then(|s| s.as_bool()))
+            let legs = legs_ref(&root)?;
+            legs.iter().find_map(|l| l.get("smooth").and_then(|s| s.as_bool()))
         })
         .unwrap_or(false)
 }

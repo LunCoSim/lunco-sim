@@ -253,11 +253,6 @@ pub fn on_scene_click_select(
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
 ) {
-    // `Pointer<Click>` auto-propagates leaf→parent→…→window; a global observer
-    // would otherwise fire at every ancestor and select the wrong (top) one. We
-    // resolve the `SelectableRoot` ourselves via `find_selectable`, so stop the
-    // bubble at the picked leaf — this runs target-first, so we're at the leaf.
-    click.propagate(false);
     // Left button only.
     if click.button != PointerButton::Primary {
         return;
@@ -293,6 +288,12 @@ pub fn on_scene_click_select(
     if !shift_held {
         return;
     }
+
+    // `Pointer<Click>` auto-propagates leaf→parent→…→window; a global observer
+    // would otherwise fire at every ancestor and select the wrong (top) one. We
+    // resolve the `SelectableRoot` ourselves via `find_selectable`, so stop the
+    // bubble at the picked leaf — this runs target-first, so we're at the leaf.
+    click.propagate(false);
 
     let hit_entity = click.entity;
     let prev_selected = selected.primary();

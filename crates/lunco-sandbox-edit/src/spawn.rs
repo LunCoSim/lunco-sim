@@ -479,14 +479,14 @@ pub fn on_scene_click_spawn(
     terrains: TerrainOracles,
 ) {
     use bevy::picking::pointer::PointerButton;
-    // Stop the click bubbling to ancestors (global observer re-fires up the tree).
-    click.propagate(false);
     if click.button != PointerButton::Primary {
         return;
     }
     let SpawnState::Selecting { entry_id } = spawn_state.as_ref() else {
         return;
     };
+    // Stop the click bubbling to ancestors (global observer re-fires up the tree).
+    click.propagate(false);
     let entry_id = entry_id.clone();
     // Shared egui-vs-scene guard + camera ray (same path as possession/selection),
     // then resolve the world point: use bevy_picking's mesh hit when present, else

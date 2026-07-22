@@ -86,6 +86,24 @@ fn a_second_ctrl_click_appends_to_the_existing_route() {
 }
 
 #[test]
+fn append_waypoint_to_top_level_sequence_mission() {
+    use lunco_autopilot::usd_tree::{append_waypoint_leaf, target_paths};
+    let sequence_xml = r#"<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <Action ID="drive_to" target="/Traverse/Route/W1"/>
+    </Sequence>
+  </BehaviorTree>
+</root>"#;
+    let updated = append_waypoint_leaf(Some(sequence_xml), "/Traverse/Route/W2").unwrap();
+    assert_eq!(
+        target_paths(&updated),
+        vec!["/Traverse/Route/W1".to_string(), "/Traverse/Route/W2".to_string()],
+        "must append waypoint leaf to top-level sequence mission"
+    );
+}
+
+#[test]
 fn the_editor_refuses_to_restructure_a_hand_authored_tree() {
     // A mission that isn't the plain forever(sequence[…]) patrol shape — say one a
     // human wrote in Groot2 — must be left alone rather than silently rewritten by a

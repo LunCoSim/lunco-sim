@@ -284,7 +284,7 @@ pub fn on_scene_click_checkpoint(
         return;
     }
     // Alt+LMB only — a plain click possesses, Shift+click selects, Alt+click drops waypoints
-    if !(keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight)) {
+    if !keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
         return;
     }
 
@@ -293,23 +293,37 @@ pub fn on_scene_click_checkpoint(
 
     // Default to the possessed vessel first, then fall back to the selected one
     let possessed_vessel = avatars.iter().next().and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity));
-    let Some(vessel) = possessed_vessel.or_else(|| selected.primary()) else {
+    let raw_vessel = possessed_vessel.or_else(|| selected.primary());
+    let Some(mut vessel) = raw_vessel else {
         info!("[waypoint] click ignored: no vessel possessed and no vessel selected");
         return;
     };
+
+    // If selected entity is a sub-part, climb parents to find the vessel prim carrying BehaviorXml or UsdPrimPath
+    if q_prim.get(vessel).is_err() || (q_xml.get(vessel).is_err() && possessed_vessel.is_none()) {
+        let mut curr = vessel;
+        for _ in 0..16 {
+            if q_xml.get(curr).is_ok() {
+                vessel = curr;
+                break;
+            }
+            if let Ok(parent) = frame.q_parents.get(curr) {
+                curr = parent.parent();
+            } else {
+                break;
+            }
+        }
+    }
+
     let Ok(vessel_prim) = q_prim.get(vessel) else {
         warn!("[waypoint] target vessel {:?} is not a USD prim; cannot author a mission for it", vessel);
         return;
     };
-    let Some(workspace) = workspace else {
-        info!("[waypoint] click ignored: no workspace resource");
-        return;
-    };
-    let Some(doc) = workspace.0.active_document.or_else(|| {
-        let fallback = usd_registry.ids().next();
-        info!("[waypoint] fallback: resolved active document from USD registry: {:?}", fallback);
-        fallback
-    }) else {
+    let Some(doc) = workspace
+        .as_ref()
+        .and_then(|w| w.0.active_document)
+        .or_else(|| usd_registry.ids().next())
+    else {
         info!("[waypoint] click ignored: no active document and USD registry is empty");
         return;
     };
