@@ -763,7 +763,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .get_resource::<CachedTwinsRegistry>()
                 .map(|r| r.entries.clone())
                 .unwrap_or_default();
-            ui.collapsing(format!("📦 Downloaded Twins ({})", entries.len()), |ui| {
+            ui.menu_button(format!("📦 Downloaded Twins ({})", entries.len()), |ui| {
                 if entries.is_empty() {
                     ui.label(
                         bevy_egui::egui::RichText::new("(connect to a server to download one)")
@@ -900,7 +900,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         let paired: Vec<(&lunco_assets::discovery::AssetFile, &Option<String>)> =
             assets.iter().zip(descs.iter()).collect();
 
-        // Open Twins FIRST, one group each, expanded: the twin you have open is
+        // Open Twins FIRST as submenus: the twin you have open is
         // the project you are working in, and its scenarios are what you came to
         // the menu for. The engine library is the reference collection below it.
         for name in &twin_names {
@@ -912,16 +912,16 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             if group.is_empty() {
                 continue;
             }
-            bevy_egui::egui::CollapsingHeader::new(format!("🌍 {name}  ({})", group.len()))
-                .default_open(true)
-                .show(ui, |ui| render(ui, world, &group));
+            ui.menu_button(format!("🌍 {name}  ({})", group.len()), |ui| {
+                render(ui, world, &group);
+            });
         }
 
         let library: Vec<_> = paired.iter().copied().filter(|(a, _)| a.twin.is_none()).collect();
         if !library.is_empty() {
-            bevy_egui::egui::CollapsingHeader::new(format!("📚 Library  ({})", library.len()))
-                .default_open(twin_names.is_empty())
-                .show(ui, |ui| render(ui, world, &library));
+            ui.menu_button(format!("📚 Library  ({})", library.len()), |ui| {
+                render(ui, world, &library);
+            });
         }
     });
 }
