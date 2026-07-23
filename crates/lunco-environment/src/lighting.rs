@@ -68,7 +68,12 @@ impl Default for LunarSun {
         Self {
             illuminance_lux: 128_000.0,
             angular_diameter_deg: 0.53,
-            exposure_ev100: 15.0,
+            // Shared with `lunco-usd-bevy`'s USD camera spawn via the one
+            // constant both crates can reach (`lunco_render::
+            // LUNAR_SUN_EXPOSURE_EV100`). Inlining a literal here would let it
+            // drift from the camera spawn and re-open the load-time blowout
+            // window where the 131 klx sun renders against an EV-9.7 camera.
+            exposure_ev100: lunco_render::LUNAR_SUN_EXPOSURE_EV100,
         }
     }
 }

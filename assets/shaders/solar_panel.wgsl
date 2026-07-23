@@ -115,8 +115,6 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     pbr_input.material.reflectance = vec3(0.5);
 
     var out = pbr_functions::apply_pbr_lighting(pbr_input);
-    // Smooth horizon-shadow terminator fade (engine-written visibility).
-    out = vec4(out.rgb * mat.sun_vis, out.a);
     out = pbr_functions::main_pass_post_lighting_processing(pbr_input, out);
     return out;
 }

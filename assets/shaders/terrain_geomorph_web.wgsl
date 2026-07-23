@@ -280,7 +280,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     albedo = albedo * lunar_k;
 
     let n_geo = normalize(in.world_normal);
-    let fill = base_albedo * (1.2 + 1.0 * max(n_geo.y, 0.0));
+    let fill = base_albedo * (0.02 + 0.03 * max(n_geo.y, 0.0));
 
     let roughness =
         clamp(mix(0.6 + rough_mix * 0.4, map_s.r, 0.35 * mat.weight_ao), 0.05, 1.0);

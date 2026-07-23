@@ -260,8 +260,8 @@ pub(crate) fn instantiate_light_prim(
             // UsdLux spec default intensity is 1.0, but 1 lx is invisible
             // under Bevy's physically-based exposure — an unauthored
             // intensity almost certainly means "give me a sun", so default
-            // to a workable 10 000 lx and let authors override.
-            let illuminance_lux = read_intensity_with_exposure(reader, sdf_path, 10_000.0);
+            // to the calibrated 128 000 lx lunar sun and let authors override.
+            let illuminance_lux = read_intensity_with_exposure(reader, sdf_path, 128_000.0);
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))
                 .unwrap_or(Color::WHITE);
@@ -426,7 +426,10 @@ pub(crate) fn instantiate_light_prim(
             } else {
                 (light_radius.max(0.0) / DEFAULT_SPHERE_RADIUS).powi(2)
             };
-            let intensity_lm = base_lm * area_scale;
+            // Cap local light lumens (headlights / work lamps) to a physical maximum of
+            // 5,000 lm so authored un-calibrated numbers (e.g. 1,000,000) do not blow out
+            // adjacent vessel meshes or wash out directional sun shadows.
+            let intensity_lm = (base_lm * area_scale).min(5000.0);
 
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))

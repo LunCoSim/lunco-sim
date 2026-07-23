@@ -2125,7 +2125,7 @@ impl Plugin for SandboxCorePlugin {
             // Default scene-wide fill for scenes that author no lighting; a
             // scene-authored UsdLux light takes ambient over.
             .insert_resource(bevy::light::GlobalAmbientLight {
-                brightness: 40.0,
+                brightness: 0.0,
                 ..Default::default()
             })
             .add_systems(Startup, setup_sandbox)

@@ -96,13 +96,15 @@ pub fn wire_terrain_materials(
         (
             Entity,
             &GlobalTransform,
-            &HorizonMap,
+            Option<&HorizonMap>,
             Option<&HorizonShadowCache>,
             Option<&MeshMaterial3d<ShaderMaterial>>,
             Option<&MeshMaterial3d<StandardMaterial>>,
         ),
-        // Skip preview-layer terrain (ARC-1) — mirrors `pick_sun`.
-        Without<RenderLayers>,
+        (
+            With<lunco_terrain_surface::DemTerrainSurface>,
+            Without<RenderLayers>,
+        ),
     >,
     // Hysteresis state for the cache↔march handoff, per terrain (see below).
     mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
@@ -137,8 +139,10 @@ pub fn wire_terrain_materials(
             .inverse()
             .transform_vector3(to_sun_world)
             .normalize_or_zero();
-        let hf_size_v = map.field.size();
-        let hf_res = map.field.resolution() as f32;
+        let (hf_size_v, hf_res, height_map_handle) = match map {
+            Some(m) => (m.field.size(), m.field.resolution() as f32, Some(m.image.clone())),
+            None => (Vec2::ONE, 0.0, None),
+        };
 
         // Shadow cache binding + the uniform flag that tells the fragment
         // shader to sample it (`1.0`) instead of ray-marching (`0.0`). The
@@ -148,20 +152,6 @@ pub fn wire_terrain_materials(
         // the horizon or the cache is disabled. Below-horizon sun falls back
         // to the march, which short-circuits to 0 in its first branch.
         let cache_image: Option<Handle<Image>> = shadow_cache.map(|c| c.image.clone());
-        // HYSTERESIS on the cache↔march handoff. A single hard threshold
-        // (`y > 1e-4`) flaps when the real sun sits AT the horizon — exactly
-        // the polar-site situation — because every f32 ULP step of the light
-        // direction or terrain GT crosses it, alternating the ENTIRE terrain
-        // between baked-cache shadows and the ray-march's below-horizon
-        // short-circuit: "the shadow on the moon oscillates back and forth".
-        // Engage above ~0.01° elevation, release below ~0.003° — the band is
-        // wider than any per-frame jitter, so the mode changes at most once
-        // per real sunrise/sunset. The thresholds sit as LOW as possible: a
-        // disengaged cache means every terrain pixel runs the 48-step march
-        // per frame, and with the march now applied at ALL camera distances
-        // (see `csm_far` above) a polar sun parked in a "cache off" band
-        // turned whole sessions into a slideshow. Below the release
-        // threshold the march's own below-horizon short-circuit is cheap.
         let engaged = {
             let prev = cache_engaged.get(&entity).copied().unwrap_or(false);
             let now = if prev { sun_local.y > 5.0e-5 } else { sun_local.y > 2.0e-4 };
@@ -184,8 +174,8 @@ pub fn wire_terrain_materials(
         let hf_size = ParamValue::Vec2([hf_size_v.x, hf_size_v.y]);
         let write_engine = |m: &mut ShaderMaterial| {
             // Handle is a cheap Arc bump, but skip even that when unchanged (MAT-3).
-            if m.height_map.as_ref() != Some(&map.image) {
-                m.height_map = Some(map.image.clone());
+            if m.height_map != height_map_handle {
+                m.height_map = height_map_handle.clone();
             }
             // Shadow cache handle: swap only when the baked image changes
             // (first bind / re-bake finished). Stays bound otherwise.
@@ -224,10 +214,12 @@ pub fn wire_terrain_materials(
             // once every ten seconds, and the direction error it tolerates (~0.006°)
             // is far below anything a shadow direction can show.
             let needs = shader_mats.get(&handle.0).is_some_and(|m| {
-                m.height_map.as_ref() != Some(&map.image)
+                m.height_map != height_map_handle
                     || m.shadow_cache != cache_image
                     || m.get_scalar("shadow_cache_on").is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
                     || m.get_vec3("sun_dir").is_none_or(|v| (v - sun_local).length() > SUN_DIR_EPSILON)
+                    || m.get_vec3("sun_dir_world").is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)
+                    || m.get_scalar("hf_res").is_none_or(|r| (r - hf_res).abs() > 1e-3)
                     || m.get_scalar("csm_far").is_none_or(|c| (c - csm_far).abs() > 1e-3)
             });
             if needs {
@@ -245,7 +237,7 @@ pub fn wire_terrain_materials(
             let a = albedo.to_linear();
             let mut material = ShaderMaterial {
                 shader: asset_server.load("shaders/terrain_shadow.wgsl"),
-                height_map: Some(map.image.clone()),
+                height_map: height_map_handle.clone(),
                 shadow_cache: cache_image.clone(),
                 ..Default::default()
             };
@@ -362,7 +354,7 @@ pub fn shade_dynamic_entities(
     sun: SunQuery,
     terrains: Query<(&GlobalTransform, &HorizonMap), Without<RenderLayers>>,
     mut shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
-    mut std_mats: ResMut<Assets<StandardMaterial>>,
+    _std_mats: ResMut<Assets<StandardMaterial>>,
     mut entities: Query<
         (
             Entity,
@@ -457,56 +449,12 @@ pub fn shade_dynamic_entities(
                     m.set_scalar("sun_vis", q);
                 }
             }
-        } else if let Some(handle) = std_mat {
-            // StandardMaterials (chassis, props): scale the albedo. Cloned
-            // to a unique handle on first shading so glb materials shared
-            // across instances don't darken together.
-            match shade {
-                None => {
-                    if q < 0.999 {
-                        if let Some(mut m) = std_mats.get(&handle.0).cloned() {
-                            let original = m.base_color;
-                            m.base_color = scale_color(original, q.max(HORIZON_FILL_FLOOR));
-                            let unique = std_mats.add(m);
-                            debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-NEW (std)");
-                            commands.entity(entity).try_insert((
-                                MeshMaterial3d(unique),
-                                HorizonShade { original, last_vis: q, shared: handle.0.clone() },
-                            ));
-                        }
-                    }
-                }
-                Some(mut state) => {
-                    if q >= 0.999 {
-                        // Back in full sun: restore the shared authored material.
-                        // Overwriting `MeshMaterial3d` drops the entity's only
-                        // strong handle to the unique darkened clone, so the
-                        // clone is freed rather than kept forever (CPU-4).
-                        commands
-                            .entity(entity)
-                            .try_insert(MeshMaterial3d(state.shared.clone()))
-                            .remove::<HorizonShade>();
-                        debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-CLEAR (std)");
-                    } else if (state.last_vis - q).abs() > 1e-3 {
-                        if let Some(mut m) = std_mats.get_mut(&handle.0) {
-                            m.base_color = scale_color(state.original, q.max(HORIZON_FILL_FLOOR));
-                        }
-                        debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-UPDATE (std)");
-                        state.last_vis = q;
-                    }
-                }
-            }
+        } else if let Some(_handle) = std_mat {
+            // StandardMaterials (chassis, props): retain authored base_color so
+            // textures are not crushed or darkened when horizon maps initialize.
+            // Directional sun light and CSM shadows handle real-time GPU lighting.
         }
 
-        // A body inside terrain shadow receives no sunlight, so it must not
-        // throw a CSM shadow onto lit ground at the terminator either.
-        // Hysteresis avoids flicker; authored `NotShadowCaster`s are never
-        // touched (we only remove what we inserted).
-        if !shadowed && !has_nsc && vis < 0.35 {
-            commands.entity(entity).try_insert((NotShadowCaster, HorizonShadowed));
-        } else if shadowed && vis > 0.65 {
-            commands.entity(entity).remove::<(NotShadowCaster, HorizonShadowed)>();
-        }
     }
 }
 

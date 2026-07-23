@@ -66,9 +66,9 @@ impl WorldLabel {
 pub enum ToneMap {
     None,
     /// Bevy's default.
-    #[default]
     TonyMcMapface,
-    /// Filmic; what the USD scene cameras were using.
+    /// Filmic; default for LunCoSim (high contrast solar/lunar lighting).
+    #[default]
     AgX,
     AcesFitted,
     Reinhard,

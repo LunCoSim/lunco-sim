@@ -18,7 +18,7 @@ pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
 pub use camera::{BloomLook, MsaaLevel, SceneCamera, ToneMap, WorldLabel};
-pub use sun::LunarSunShadow;
+pub use sun::{LunarSunShadow, LUNAR_SUN_EXPOSURE_EV100};
 
 /// The systems that BIND a look intent (`PbrLook`, …) onto an entity as a
 /// concrete render component — everything in `lunco-render-bevy` that queues

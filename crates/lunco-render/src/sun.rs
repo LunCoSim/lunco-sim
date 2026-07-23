@@ -20,6 +20,21 @@ use bevy::light::{
 };
 use bevy::prelude::Color;
 
+/// Camera EV100 matched to the ~128 klx lunar sun — the value
+/// `lunco_environment::LunarSun` defaults to and that the celestial sun
+/// (`update_sun_light_system`) is calibrated against.
+///
+/// Lives in this render-free intent crate because it is the lowest crate on
+/// the graph that BOTH dependents can reach: `lunco-usd-bevy` (which spawns
+/// USD `Camera` prims and must expose them for the real sun from frame one,
+/// not Bevy's `Exposure::default()` = EV 9.7) cannot see
+/// `lunco_environment::LunarSun`, and `lunco-environment` cannot see
+/// `lunco-render-bevy`. Keeping the matched pair's exposure here means a
+/// freshly-spawned camera and the late celestial/`SetEnvironmentLight`
+/// exposure writes all agree on one number, so there is no window in which
+/// the 131 klx sun renders against an EV-9.7 camera (a ~5-stop blowout).
+pub const LUNAR_SUN_EXPOSURE_EV100: f32 = 15.0;
+
 /// How to **render** a lunar sun's shadows — the cascade split, biases and
 /// atlas size. This is render-side *presentation* config only; the sun's
 /// physical identity (illuminance, angular size, matched camera exposure) lives

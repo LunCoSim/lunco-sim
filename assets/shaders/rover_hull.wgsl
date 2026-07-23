@@ -160,9 +160,5 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     let roughness = mix(mix(0.55, 0.3, chip), 0.95, dust);
     let metallic = mix(mix(0.05, 0.75, chip), 0.0, dust);
 
-    var out = lit(input, is_front, color, roughness, metallic, vec3(0.0));
-    // Horizon-shadow terminator fade, floored like wheel.wgsl — a hull in
-    // grazing shadow is dim, never a black hole.
-    let vis = max(mat.sun_vis, HORIZON_AMBIENT_FLOOR);
-    return vec4(out.rgb * vis, out.a);
+    return lit(input, is_front, color, roughness, metallic, vec3(0.0));
 }

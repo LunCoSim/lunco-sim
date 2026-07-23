@@ -374,7 +374,7 @@ fn process_usd_sim_prims(
     // component names `bevy_pbr`.
     query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&PbrLook>, Option<&ShaderLook>, Option<&ChildOf>, Option<&ForceBuildNoVisual>), Without<UsdSimProcessed>>,
     q_all_prims: Query<&UsdPrimPath>,
-    q_grids: Query<(Entity, &Grid)>,
+    q_grids: Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
     q_prior_avatars: Query<Entity, With<Avatar>>,
@@ -577,7 +577,7 @@ fn process_usd_sim_prim_read(
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
     q_prior_avatars: &Query<Entity, With<Avatar>>,
-    q_grids: &Query<(Entity, &Grid)>,
+    q_grids: &Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     active_sun: Option<&lunco_environment::LunarSun>,
     mut commands: &mut Commands,
 ) {
@@ -903,8 +903,12 @@ fn process_usd_sim_prim_read(
             // Because this camera carries the `FloatingOrigin`, that one-frame
             // cell-0 state put the origin — and the whole world composed off it —
             // at the wrong place on the first rendered frame at elevation.
-            let (avatar_cell, avatar_local) = match q_grids.iter().next() {
-                Some((_, grid)) => grid.translation_to_grid(existing_tf.translation.as_dvec3()),
+            let target_grid = q_grids
+                .iter()
+                .find(|(_, _, is_site)| *is_site)
+                .or_else(|| q_grids.iter().next());
+            let (avatar_cell, avatar_local) = match target_grid {
+                Some((_, grid, _)) => grid.translation_to_grid(existing_tf.translation.as_dvec3()),
                 None => (CellCoord::default(), existing_tf.translation),
             };
             let avatar_tf = Transform {
@@ -1044,8 +1048,12 @@ fn process_usd_sim_prim_read(
                     ));
                 }
             }
-            // Parent to Grid so FloatingOrigin works
-            if let Some((g, _)) = q_grids.iter().next() {
+            // Parent to Grid (preferring SiteAlignGrid when present) so FloatingOrigin works
+            let target_grid = q_grids
+                .iter()
+                .find(|(_, _, is_site)| *is_site)
+                .or_else(|| q_grids.iter().next());
+            if let Some((g, _, _)) = target_grid {
                 commands.entity(entity).try_insert(ChildOf(g));
             }
         }

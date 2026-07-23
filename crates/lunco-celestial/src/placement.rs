@@ -372,6 +372,12 @@ pub fn place_celestial_bound_entities(
         ),
     >,
     q_added: Query<(), Or<(Added<GeodeticAnchor>, Added<KeplerOrbit>)>>,
+    // Descendant walk for the `LowPrecisionRoot` stamp below — same shape as
+    // `orbital_pin_scene_visibility`'s `q_children` in this file.
+    q_children: Query<&Children>,
+    // Only spatial descendants (Transform + GlobalTransform) need the marker;
+    // a non-spatial child is already a valid `AnyNonSpatial` archetype.
+    q_spatial: Query<(), (With<Transform>, With<GlobalTransform>)>,
     mut commands: Commands,
     mut last_jd: Local<f64>,
 ) {
@@ -437,10 +443,56 @@ pub fn place_celestial_bound_entities(
             lunco_core::GridAnchor,
             ChildOf(grid_entity),
         ));
+        // The reparent above turns THIS prim into a high-precision cell entity
+        // (CellCoord + ChildOf(grid)), but its USD-spawned descendants (mesh /
+        // material / shader children) are untouched: they keep their plain
+        // Transform + GlobalTransform + ChildOf(this prim) and so become
+        // INVALID children of a "Non-root high precision spatial entity"
+        // (big_space validation: a child of an HP entity must be a
+        // `LowPrecisionRoot` subtree or a non-spatial entity). big_space's own
+        // `tag_low_precision_roots` does NOT fix this — it only fires on the
+        // CHILD's `Changed<ChildOf>`/`Added<Transform>`, and reparenting the
+        // parent changes neither on the children. Same spawn-order window the
+        // trajectory/mission/link-beam spawn paths hit and fix the same way
+        // (trajectories.rs, missions.rs, link_beams.rs): explicitly stamp the
+        // marker on every spatial descendant here.
+        stamp_low_precision_roots(entity, &q_children, &q_spatial, &mut commands);
         if let Some(mut vis) = visibility {
             if *vis != Visibility::Inherited {
                 *vis = Visibility::Inherited;
             }
+        }
+    }
+}
+
+/// Stamp [`LowPrecisionRoot`](big_space::grid::propagation::LowPrecisionRoot)
+/// on every spatial descendant of `root`.
+///
+/// Called after `place_celestial_bound_entities` reparents an anchor/orbit
+/// prim under a body `Grid` (writing `CellCoord` + `ChildOf(grid)` onto the
+/// prim itself). That reparent makes the prim a high-precision cell entity but
+/// leaves its USD-spawned mesh/material descendants as plain
+/// `Transform`+`GlobalTransform` children — an invalid big_space child
+/// archetype until tagged. `try_insert` is idempotent on the marker, so this
+/// is safe to call on every epoch-change reparent.
+fn stamp_low_precision_roots(
+    root: Entity,
+    q_children: &Query<&Children>,
+    q_spatial: &Query<(), (With<Transform>, With<GlobalTransform>)>,
+    commands: &mut Commands,
+) {
+    let mut stack: Vec<Entity> = Vec::new();
+    if let Ok(children) = q_children.get(root) {
+        stack.extend(children.iter());
+    }
+    while let Some(e) = stack.pop() {
+        if q_spatial.get(e).is_ok() {
+            commands
+                .entity(e)
+                .try_insert(big_space::grid::propagation::LowPrecisionRoot);
+        }
+        if let Ok(children) = q_children.get(e) {
+            stack.extend(children.iter());
         }
     }
 }

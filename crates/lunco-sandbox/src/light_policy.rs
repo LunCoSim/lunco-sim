@@ -192,6 +192,24 @@ fn reapply_on_settings_change(
     );
 }
 
+fn project_on_light_added(
+    _trigger: On<Add, SpotLight>,
+    settings: Res<ShadowCastingSettings>,
+    links: Query<&ControllerLink>,
+    parents: Query<&ChildOf>,
+    mut q_spot: Query<(Entity, &mut SpotLight)>,
+    mut q_point: Query<(Entity, &mut PointLight)>,
+) {
+    let possessed: Vec<Entity> = links.iter().map(|l| l.vessel_entity).collect();
+    apply_projection(
+        settings.local_lights,
+        &possessed,
+        &parents,
+        &mut q_spot,
+        &mut q_point,
+    );
+}
+
 /// Registers the [`ShadowCastingSettings`] simulation setting and the reactive
 /// observers/system that project it onto local lights.
 pub(crate) struct LightPolicyPlugin;
@@ -201,6 +219,7 @@ impl Plugin for LightPolicyPlugin {
         app.register_settings_section::<ShadowCastingSettings>();
         app.add_observer(project_on_possess);
         app.add_observer(project_on_release);
+        app.add_observer(project_on_light_added);
         app.add_systems(
             Update,
             reapply_on_settings_change.run_if(resource_changed::<ShadowCastingSettings>),

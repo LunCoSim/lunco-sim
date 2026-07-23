@@ -450,7 +450,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // GEOMETRIC normal, not the bump-perturbed one: driving it with `n` turned
     // every shadowed slope into high-contrast micro-speckle static.
     let n_geo = normalize(in.world_normal);
-    let fill = base_albedo * (1.2 + 1.0 * max(n_geo.y, 0.0));
+    let fill = base_albedo * (0.02 + 0.03 * max(n_geo.y, 0.0));
 
     // Regolith is rough and non-metallic; rough_mix nudges it, and the baked
     // slope-derived roughness (surface_tex R) leans in where the maps are live.

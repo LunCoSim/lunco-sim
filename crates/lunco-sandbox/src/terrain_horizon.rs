@@ -90,9 +90,11 @@ pub(crate) fn start_streamed_horizon_bakes(
             // oracle and is thrown away. Arming coalesces build + regenerate into
             // ONE bake; any further layer change inside the window pushes the
             // deadline out, exactly as it does for edits.
+            // No map and nothing armed → start the initial bake immediately on Frame 1!
             None => {
-                commands.entity(entity).try_insert(StreamedHorizonStale { since: now });
-                continue;
+                commands.entity(entity).try_insert(StreamedHorizonStale {
+                    since: now - REBAKE_DEBOUNCE_SECS,
+                });
             }
         }
         let oracle = hf.0.clone();

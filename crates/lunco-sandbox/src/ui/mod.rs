@@ -353,7 +353,7 @@ fn mode_exposure(
         (
             &mut bevy::camera::Exposure,
             Option<&CellCoord>,
-            &Transform,
+            &GlobalTransform,
             Option<&bevy::ecs::hierarchy::ChildOf>,
         ),
         With<lunco_core::Avatar>,
@@ -366,59 +366,39 @@ fn mode_exposure(
         return;
     }
     let orbital = pin.is_some_and(|p| p.active);
-    let alpha = 1.0 - (-2.0 * time.delta_secs()).exp();
-    for (mut exposure, cell, tf, child_of) in &mut q_exposure {
-        // Camera position in its parent grid's frame (site-ENU on the
-        // surface) via exact cell math — the camera's own GlobalTransform is
-        // floating-origin-relative (≈ zero) and useless for geography.
-        //
-        // NO FALLBACK. This resolves only for a camera whose own `ChildOf` is the
-        // `Grid`; possess a vessel and the camera reparents to it, losing both its
-        // `CellCoord` and that direct edge. The old `_ => tf.translation` arm then
-        // silently substituted a metres-scale offset from the vessel for a
-        // grid-absolute geographic position — `local_up` collapsed to +Y and the
-        // sun elevation jumped to whatever it is at the site origin. At a polar
-        // site (moonbase is lat -89.46°) the elevation sits INSIDE the 0.02 rad
-        // ramp band permanently, so that jump lands mid-ramp and moves EV. A
-        // wrong frame is not a degraded answer here, it is a different question;
-        // hold the last exposure instead and let the mount fix the parenting.
-        let Some(cam_pos) = cell
-            .zip(child_of.and_then(|c| q_grids.get(c.parent()).ok()))
-            .map(|(cell, grid)| grid.grid_position_double(cell, tf).as_vec3())
-        else {
+    for (mut exposure, cell, _gtf, child_of) in &mut q_exposure {
+        // The camera must be mounted under a celestial `Grid` before its
+        // geographic placement settles. Hold exposure until mounted.
+        let mounted = cell.is_some()
+            && child_of
+                .and_then(|c| q_grids.get(c.parent()).ok())
+                .is_some();
+        if !mounted {
             warn_once!(
                 "mode_exposure: avatar camera has no CellCoord/Grid parent — holding \
-                 exposure. Sun elevation needs a grid-absolute position; the camera's \
-                 local Transform is not one."
+                 exposure until the mount settles."
             );
             continue;
-        };
+        }
         let target = if orbital {
             // Orbital views frame a sunlit globe: the calibrated EV is correct.
             sun.exposure_ev100
         } else {
             // Surface: expose for the ACTUAL light level, decided by the sun
-            // elevation AT THE CAMERA'S LOCATION on the body — not at the
-            // site. The scroll-through exit can land the camera anywhere on
-            // the globe: with a site-referenced elevation, fully-sunlit
-            // ground elsewhere rendered ~3 stops open ("still overexposed").
-            // Local up = away from the body centre, which sits ~1 body
-            // radius below the site origin in the site-ENU frame.
-            // CRITICAL: a low sun does NOT mean dim surfaces — grazing
-            // incidence shrinks the LIT AREA, not the luminance of a
-            // sun-facing slope under the full ~124 klx. Any geometric
-            // daylight needs the full calibrated EV; the ramp down to the
-            // earthshine EV 9 spans ONLY the just-below-horizon band.
-            const MOON_RADIUS_M: f32 = 1.7374e6;
-            let to_sun = sun_dir.as_ref().map(|d| -d.0).unwrap_or(Vec3::Y);
-            let local_up = (cam_pos + Vec3::Y * MOON_RADIUS_M)
-                .try_normalize()
-                .unwrap_or(Vec3::Y);
-            let elev = to_sun.dot(local_up).clamp(-1.0, 1.0).asin();
+            // elevation above the GEOGRAPHIC surface horizon at the site.
+            //
+            // GEOGRAPHIC HORIZON: `sun_dir` is in site-ENU (East-North-Up) axes
+            // where `-d.0` is the direction vector from the site to the Sun.
+            // The geographic surface normal at the site is `Vec3::Y` (Up in site-ENU).
+            // We MUST NOT dot with `gtf.up()` (the camera's viewport orientation up),
+            // because `gtf.up()` tilts as the user rotates or pitches the camera, which
+            // previously caused scene brightness to depend on view direction.
+            let to_sun_site_enu = sun_dir.as_ref().map(|d| -d.0).unwrap_or(Vec3::Y);
+            let elev = to_sun_site_enu.y.clamp(-1.0, 1.0).asin();
             let sunlit = ((elev + 0.02) / 0.02).clamp(0.0, 1.0);
             9.0 + (sun.exposure_ev100 - 9.0) * sunlit
         };
-        exposure.ev100 += (target - exposure.ev100) * alpha;
+        exposure.ev100 = target;
     }
 }
 
@@ -466,7 +446,17 @@ fn spawn_fallback_avatar(
         // The `Camera3d` below is redundant in a render build — the `SceneCamera`
         // binder inserts it — but harmless, and it keeps this spawn readable.
         // See docs/architecture/render-decoupling.md.
-        lunco_render::SceneCamera::default(),
+        //
+        // `agx()` (NOT `default()`): this fallback and the USD avatar camera
+        // (`lunco-usd-sim/src/lib.rs`, `SceneCamera::agx()`) MUST share the SAME
+        // tone curve. `SceneCamera::default()` is TonyMcMapface; the avatar is
+        // AgX. While the active window camera flips between the two (provisional
+        // → USD takeover, stage recompose re-instantiating the avatar prim), a
+        // mismatch re-grades the whole frame through a different curve — a
+        // uniform global lift that reads as "brightness jumps after load" even
+        // with EV and sun lux flat. `agx()` keeps the grade identical across a
+        // switch.
+        lunco_render::SceneCamera::agx(),
         Camera3d::default(),
         // NO SMAA on this (workbench) camera: SMAA's post-process resolve does
         // not survive the full-window-3D + egui-overlay compositing, so it

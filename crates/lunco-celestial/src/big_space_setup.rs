@@ -749,7 +749,7 @@ pub fn setup_big_space_hierarchy(
         // bloom without HDR is exactly the bug `SceneCamera` exists to make
         // unrepresentable.
         //
-        // Tonemapping stays `TonyMcMapface` (`ToneMap::default()`). SMAA was already
+        // Tonemapping uses AgX (`ToneMap::default()`). SMAA was already
         // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
         // fix on main).
         SceneCamera::default(),

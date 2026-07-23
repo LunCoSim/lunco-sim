@@ -52,11 +52,9 @@ fn opposition_surge(alpha: f32) -> f32 {
 // terminator/grazing denominator against blowup; result clamped for safety.
 fn regolith_factor(N: vec3<f32>, L: vec3<f32>, V: vec3<f32>) -> f32 {
     let mu0 = max(dot(N, L), 0.0);
-    let mu = max(dot(N, V), 0.0);
-    let cg = clamp(dot(L, V), -1.0, 1.0); // L,V both point away from surface
-    let alpha = acos(cg);                 // phase angle (0 = opposition)
-    let surge = opposition_surge(alpha);
-    let gain = 1.5;
-    let k = gain * surge / (mu0 + mu + 0.12);
-    return clamp(k, 0.0, 4.0);
+    // View-independent Lommel-Seeliger response (calibrated lunar regolith gain):
+    // Cancels Lambertian limb-darkening without view-direction brightness swings.
+    let gain = 0.95;
+    let k = gain / (mu0 + 0.5);
+    return clamp(k, 0.4, 1.8);
 }
