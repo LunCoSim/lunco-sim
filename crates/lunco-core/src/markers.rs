@@ -22,6 +22,12 @@ use big_space::prelude::CellCoord;
 #[reflect(Component)]
 pub struct GridAnchor;
 
+/// Tag component for utility visual entities (e.g. RF link beams, orbital trajectory lines, grid lines)
+/// that must be excluded from selection bounding box (AABB) calculations and hierarchy bounds traversal.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
+#[reflect(Component)]
+pub struct NoSelectionBounds;
+
 /// WHO IS FLYING — `true` while a session holds the stick, `false` when the
 /// vessel's own guidance law has it.
 ///

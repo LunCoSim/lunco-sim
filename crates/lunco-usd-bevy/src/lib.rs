@@ -188,6 +188,7 @@ impl Plugin for UsdBevyPlugin {
             .init_non_send::<canonical::CanonicalStages>()
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
+            .add_observer(on_cell_coord_added)
             .add_observer(light::on_usd_light_added)
             // Active-camera switch (avatar-free): the `SetActiveCamera` command
             // + `KeyC` cycle both fire the internal `ActivateCamera` trigger,
@@ -698,20 +699,13 @@ fn instantiate_usd_prim(
     existing_tf: Option<&Transform>,
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
+    is_high_precision_parent: bool,
     commands: &mut Commands,
     stages: &Assets<UsdStageAsset>,
     canonical: &mut CanonicalStages,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
 ) {
-    // The LIVE canonical stage is the single source of truth: meshes, materials,
-    // lights, cameras, and transforms come off the composed `Stage` directly, and
-    // `lunco:resolvedAsset` is *synthesized* on it (read via
-    // `UsdRead::resolved_asset`). Built on demand from the asset's recipe if not
-    // already present (so it is available regardless of system ordering vs. the
-    // synchronous `on_usd_prim_added` observer cascade). A scene whose asset
-    // carries no recipe (or fails to build) is skipped — every runtime scene
-    // loads through the recipe-building async loader.
     let id = prim_path.stage_handle.id();
     if canonical.get(id).is_none() {
         if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
@@ -724,7 +718,7 @@ fn instantiate_usd_prim(
     };
     instantiate_usd_prim_read(
         &cs.view(), entity, prim_path, existing_vis, existing_tf,
-        is_instance_root, inherited_member, commands, asset_server, meshes,
+        is_instance_root, inherited_member, is_high_precision_parent, commands, asset_server, meshes,
     );
 }
 
@@ -741,6 +735,7 @@ fn instantiate_usd_prim_read(
     existing_tf: Option<&Transform>,
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
+    is_high_precision_parent: bool,
     commands: &mut Commands,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
@@ -1397,11 +1392,47 @@ fn instantiate_usd_prim_read(
             // bundle: the `on_usd_prim_added` observer reads it to decide the
             // child's identity regime, so a later `insert` would race the
             // observer and let the child take a colliding `Content` id.
+            let is_low_precision_root_target = is_high_precision_parent;
+
             let child_entity = match &child_member {
                 Some(member) => {
-                    commands.spawn((base_components, ChildOf(entity), member.clone())).id()
+                    if is_low_precision_root_target {
+                        commands
+                            .spawn((
+                                base_components,
+                                ChildOf(entity),
+                                member.clone(),
+                                big_space::grid::propagation::LowPrecisionRoot,
+                            ))
+                            .id()
+                    } else {
+                        commands
+                            .spawn((
+                                base_components,
+                                ChildOf(entity),
+                                member.clone(),
+                            ))
+                            .id()
+                    }
                 }
-                None => commands.spawn((base_components, ChildOf(entity))).id(),
+                None => {
+                    if is_low_precision_root_target {
+                        commands
+                            .spawn((
+                                base_components,
+                                ChildOf(entity),
+                                big_space::grid::propagation::LowPrecisionRoot,
+                            ))
+                            .id()
+                    } else {
+                        commands
+                            .spawn((
+                                base_components,
+                                ChildOf(entity),
+                            ))
+                            .id()
+                    }
+                }
             };
 
             // A prim that declares `lunco:spawnable = true` — authored on the prim
@@ -1446,6 +1477,8 @@ fn on_usd_prim_added(
         ),
         Without<UsdVisualSynced>,
     >,
+    q_high_precision: Query<(), Or<(With<big_space::prelude::Grid>, With<big_space::prelude::CellCoord>)>>,
+    q_child_of: Query<&ChildOf>,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
@@ -1460,6 +1493,9 @@ fn on_usd_prim_added(
         return;
     }
 
+    let is_high_precision_parent = q_high_precision.contains(entity)
+        || q_child_of.get(entity).ok().map_or(false, |c| q_high_precision.contains(c.parent()));
+
     instantiate_usd_prim(
         entity,
         prim_path,
@@ -1467,6 +1503,7 @@ fn on_usd_prim_added(
         tf,
         is_instance_root,
         member,
+        is_high_precision_parent,
         &mut commands,
         &stages,
         &mut canonical,
@@ -1475,41 +1512,39 @@ fn on_usd_prim_added(
     );
 }
 
+/// Observer: fires when `CellCoord` is added to an entity.
+/// Stamping `LowPrecisionRoot` on its direct spatial children ensures that when an
+/// entity receives a `CellCoord` (e.g. site anchor or DEM placement), its children
+/// immediately satisfy big_space's hierarchy validation rules (`ChildRootSpatialLowPrecision`).
+fn on_cell_coord_added(
+    trigger: On<Add, big_space::prelude::CellCoord>,
+    q_children: Query<&Children>,
+    q_spatial_child: Query<
+        (),
+        (
+            With<Transform>,
+            With<GlobalTransform>,
+            Without<big_space::prelude::CellCoord>,
+            Without<big_space::grid::propagation::LowPrecisionRoot>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    let entity = trigger.entity;
+    if let Ok(children) = q_children.get(entity) {
+        for child in children.iter() {
+            if q_spatial_child.contains(child) {
+                commands
+                    .entity(child)
+                    .try_insert(big_space::grid::propagation::LowPrecisionRoot);
+            }
+        }
+    }
+}
+
 /// Drains the `UsdAwaitingStage` queue when a stage finishes loading.
 /// Each entity whose `UsdPrimPath.stage_handle` matches the newly-loaded
 /// asset gets processed exactly once.
-///
-/// Registered with `run_if(on_message::<AssetEvent<UsdStageAsset>>())`
-/// so the system body executes only on frames where an asset event
-/// actually fires — zero per-frame cost in steady state.
-///
-/// **Name retained for compatibility**: downstream systems
-/// (`lunco-materials`, `lunco-usd-sim`, `lunco-usd-avian`) order
-/// themselves with `.after(sync_usd_visuals)` to ensure they see
-/// USD-spawned components. The deferred-stage path now goes through
-/// this system; the eager path goes through the `on_usd_prim_added`
-/// observer (which fires synchronously during command application, so
-/// downstream `.after()` ordering covers it too).
-///
-/// **Panic-safe against the despawn race**: this system iterates
-/// entities still carrying `UsdAwaitingStage`, then queues deferred
-/// writes against them. Between the iterate phase and `ApplyDeferred`,
-/// an in-flight `LoadScene` / `ClearScene` may despawn those same
-/// prims (their `try_despawn` was queued earlier in the frame by the
-/// command observer). When the queued insert runs against a now-gone
-/// entity, Bevy's default ECS error handler panics — on wasm that is
-/// `__rust_abort`, taking the whole app down. All entity-tied inserts
-/// queued here therefore go through [`EntityCommands::try_insert`]
-/// (which silently drops the write when the entity is gone) rather
-/// than `.insert` (which routes through the panic handler). `.remove`
-/// is already a `warn`-handler call, so it was safe; only `.insert`
-/// needed swapping. The canonical trigger this guards: a web deploy
-/// whose `index.html` autoloads `twins/moonbase/moonbase_scene.usda`
-/// over a boot policy that has already dispatched a tutorial scene
-/// — the moonbase `LoadScene`'s recursive despawn lands between the
-/// tutorial-prim iterate and the deferred write. The fix is broader
-/// than that one race: any pair of (sync iterate → next LoadScene) is
-/// covered. `EfficientSpawn` is not in scope here (see §4.1).
 pub fn sync_usd_visuals(
     mut ev: MessageReader<AssetEvent<UsdStageAsset>>,
     q: Query<
@@ -1523,6 +1558,8 @@ pub fn sync_usd_visuals(
         ),
         (With<UsdAwaitingStage>, Without<UsdVisualSynced>),
     >,
+    q_high_precision: Query<(), Or<(With<big_space::prelude::Grid>, With<big_space::prelude::CellCoord>)>>,
+    q_child_of: Query<&ChildOf>,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
@@ -1541,6 +1578,9 @@ pub fn sync_usd_visuals(
     for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
         if loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
             commands.entity(entity).remove::<UsdAwaitingStage>();
+            let is_high_precision_parent = q_high_precision.contains(entity)
+                || q_child_of.get(entity).ok().map_or(false, |c| q_high_precision.contains(c.parent()));
+
             instantiate_usd_prim(
                 entity,
                 prim_path,
@@ -1548,6 +1588,7 @@ pub fn sync_usd_visuals(
                 tf,
                 is_instance_root,
                 member,
+                is_high_precision_parent,
                 &mut commands,
                 &stages,
                 &mut canonical,

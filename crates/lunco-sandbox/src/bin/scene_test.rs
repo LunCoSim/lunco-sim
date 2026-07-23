@@ -175,6 +175,8 @@ struct Cli {
     jitter: f64,
     /// Seed for the jitter PRNG. Irrelevant when `jitter == 0.0`.
     seed: u64,
+    /// Optional prim path to select and measure selection AABB bounds for.
+    select_prim: Option<String>,
 }
 
 /// `xorshift64*` — a seeded, dependency-free PRNG.
@@ -232,6 +234,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut threads: usize = 1;
     let mut jitter = 0.0f64;
     let mut seed = DEFAULT_SEED;
+    let mut select_prim: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -295,6 +298,10 @@ fn parse_args() -> Result<Cli, String> {
                     .map_err(|_| format!("--seed expects an unsigned integer, got {v:?}"))?;
                 i += 2;
             }
+            "--select-prim" => {
+                select_prim = Some(need(i, "--select-prim")?);
+                i += 2;
+            }
             // Answer help and leave with a SUCCESS code — asking for usage is
             // not a test failure, and a `2` here would poison a wrapper script.
             "-h" | "--help" => {
@@ -309,7 +316,7 @@ fn parse_args() -> Result<Cli, String> {
     }
 
     let scene = scene.ok_or_else(|| format!("--scene is required\n\n{}", usage()))?;
-    Ok(Cli { scene, max_ticks, tick_hz, verdict_channel, threads, jitter, seed })
+    Ok(Cli { scene, max_ticks, tick_hz, verdict_channel, threads, jitter, seed, select_prim })
 }
 
 fn usage() -> String {
@@ -507,6 +514,52 @@ fn main() -> std::process::ExitCode {
         app.update();
         ticks += 1;
         sim_seconds += step.as_secs_f64();
+
+        if ticks == 10 {
+            if let Some(ref target_prim) = cli.select_prim {
+                use lunco_usd_bevy::UsdPrimPath;
+                use lunco_sandbox_edit::selection::{compute_selection_aabb, Selected};
+
+                let target_ent = {
+                    let mut q = app.world_mut().query::<(Entity, &UsdPrimPath)>();
+                    q.iter(app.world()).find_map(|(e, p)| if p.path == *target_prim { Some(e) } else { None })
+                };
+
+                if let Some(e) = target_ent {
+                    app.world_mut().entity_mut(e).insert(Selected);
+                    let mut state_aabb = app.world_mut().query_filtered::<(&GlobalTransform, &bevy::camera::primitives::Aabb), (
+                        With<Mesh3d>,
+                        Without<lunco_celestial::TrajectoryMeshMarker>,
+                        Without<lunco_core::programs::ProgramDriverId>,
+                        Without<lunco_core::NoSelectionBounds>,
+                    )>();
+                    let mut state_children = app.world_mut().query::<&Children>();
+                    let mut state_skip = app.world_mut().query_filtered::<(), Or<(
+                        With<big_space::prelude::Grid>,
+                        With<big_space::prelude::CellCoord>,
+                        With<lunco_celestial::TrajectoryMeshMarker>,
+                        With<lunco_core::programs::ProgramDriverId>,
+                        With<lunco_core::NoSelectionBounds>,
+                    )>>();
+                    let mut queue = Vec::new();
+                    if let Some((min, max)) = compute_selection_aabb(
+                        e,
+                        &state_aabb.query(app.world()),
+                        &state_children.query(app.world()),
+                        &state_skip.query(app.world()),
+                        &mut queue,
+                    ) {
+                        let size = max - min;
+                        let center = (min + max) * 0.5;
+                        info!("[selection-aabb] Prim '{target_prim}' ({e:?}) bounds: min={min} max={max} center={center} size={size} max_extent={:.3}m", size.max_element());
+                    } else {
+                        warn!("[selection-aabb] Prim '{target_prim}' ({e:?}) has no mesh AABB");
+                    }
+                } else {
+                    warn!("[selection-aabb] Target prim '{target_prim}' not found in stage");
+                }
+            }
+        }
         if app.world().resource::<Verdict>().result.is_some() {
             break;
         }

@@ -41,9 +41,9 @@ const DEF_STUB: f64 = 20.0;
 /// Tags a spawned beam with its peer and the state it currently shows, so the reconciler
 /// can re-aim it, recolour it on a flip, or despawn it when the peer drops out.
 #[derive(Component)]
-struct LinkBeamInstance {
-    peer: u64,
-    up: bool,
+pub struct LinkBeamInstance {
+    pub peer: u64,
+    pub up: bool,
 }
 
 type Look = (Mesh3d, MeshMaterial3d<StandardMaterial>);
@@ -225,6 +225,7 @@ fn drive_link_beams(
                         bevy::light::NotShadowCaster,
                         big_space::grid::propagation::LowPrecisionRoot,
                         LinkBeamInstance { peer: peer_gid, up: is_up },
+                        lunco_core::NoSelectionBounds,
                         ChildOf(node),
                     ));
                 }

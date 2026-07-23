@@ -358,10 +358,101 @@ pub fn handle_deselect_keys(
 }
 
 /// Draws an AABB highlight for selected objects using Bevy Gizmos.
+///
+/// **Subtree Filtering**:
+/// To prevent non-body utility subtrees (such as orbital trajectory lines, RF link
+/// beams, or nested spatial grids) from corrupting the selection box:
+/// 1. `q_aabb` filters for entities with `Mesh3d`, excluding `TrajectoryMeshMarker` lines
+///    and program-driven beam markers (`ProgramDriverId`).
+/// 2. `q_skip_tree` prevents `queue` from stepping into child grids, trajectory paths, or
+///    program drivers during hierarchy traversal.
+/// Computes the global axis-aligned bounding box (min, max) for a selected entity tree,
+/// excluding non-body subtrees (link beams, trajectory lines, sub-grids, program drivers).
+pub fn compute_selection_aabb(
+    selected_ent: Entity,
+    q_aabb: &Query<
+        (&GlobalTransform, &Aabb),
+        (
+            With<Mesh3d>,
+            Without<lunco_celestial::TrajectoryMeshMarker>,
+            Without<lunco_core::programs::ProgramDriverId>,
+            Without<lunco_core::NoSelectionBounds>,
+        ),
+    >,
+    q_children: &Query<&Children>,
+    q_skip_tree: &Query<
+        (),
+        Or<(
+            With<big_space::prelude::Grid>,
+            With<big_space::prelude::CellCoord>,
+            With<lunco_celestial::TrajectoryMeshMarker>,
+            With<lunco_core::programs::ProgramDriverId>,
+            With<lunco_core::NoSelectionBounds>,
+        )>,
+    >,
+    queue: &mut Vec<Entity>,
+) -> Option<(Vec3, Vec3)> {
+    let mut min = Vec3::splat(f32::MAX);
+    let mut max = Vec3::splat(f32::MIN);
+    let mut has_aabb = false;
+
+    queue.clear();
+    queue.push(selected_ent);
+    while let Some(e) = queue.pop() {
+        if let Ok((gtf, aabb)) = q_aabb.get(e) {
+            let ext = Vec3::from(aabb.half_extents);
+            let center = Vec3::from(aabb.center);
+            for x in [-ext.x, ext.x] {
+                for y in [-ext.y, ext.y] {
+                    for z in [-ext.z, ext.z] {
+                        let local_p = center + Vec3::new(x, y, z);
+                        let global_p = gtf.transform_point(local_p);
+                        min = min.min(global_p);
+                        max = max.max(global_p);
+                    }
+                }
+            }
+            has_aabb = true;
+        }
+        if let Ok(children) = q_children.get(e) {
+            for child in children.iter() {
+                if !q_skip_tree.contains(child) {
+                    queue.push(child);
+                }
+            }
+        }
+    }
+
+    if has_aabb {
+        Some((min, max))
+    } else {
+        None
+    }
+}
+
+/// Draws an AABB highlight for selected objects using Bevy Gizmos.
 pub fn draw_selection_bounds(
     q_selected: Query<Entity, With<Selected>>,
-    q_aabb: Query<(&GlobalTransform, &Aabb)>,
+    q_aabb: Query<
+        (&GlobalTransform, &Aabb),
+        (
+            With<Mesh3d>,
+            Without<lunco_celestial::TrajectoryMeshMarker>,
+            Without<lunco_core::programs::ProgramDriverId>,
+            Without<lunco_core::NoSelectionBounds>,
+        ),
+    >,
     q_children: Query<&Children>,
+    q_skip_tree: Query<
+        (),
+        Or<(
+            With<big_space::prelude::Grid>,
+            With<big_space::prelude::CellCoord>,
+            With<lunco_celestial::TrajectoryMeshMarker>,
+            With<lunco_core::programs::ProgramDriverId>,
+            With<lunco_core::NoSelectionBounds>,
+        )>,
+    >,
     mut gizmos: Gizmos,
     theme: Res<lunco_theme::Theme>,
     mut queue: Local<Vec<Entity>>,
@@ -376,36 +467,7 @@ pub fn draw_selection_bounds(
     );
     
     for selected_ent in q_selected.iter() {
-        let mut min = Vec3::splat(f32::MAX);
-        let mut max = Vec3::splat(f32::MIN);
-        let mut has_aabb = false;
-
-        queue.clear();
-        queue.push(selected_ent);
-        while let Some(e) = queue.pop() {
-            if let Ok((gtf, aabb)) = q_aabb.get(e) {
-                // To properly calculate the AABB, we take the 8 corners of the local AABB,
-                // transform them to global space, and expand our min/max.
-                let ext = Vec3::from(aabb.half_extents);
-                let center = Vec3::from(aabb.center);
-                for x in [-ext.x, ext.x] {
-                    for y in [-ext.y, ext.y] {
-                        for z in [-ext.z, ext.z] {
-                            let local_p = center + Vec3::new(x, y, z);
-                            let global_p = gtf.transform_point(local_p);
-                            min = min.min(global_p);
-                            max = max.max(global_p);
-                        }
-                    }
-                }
-                has_aabb = true;
-            }
-            if let Ok(children) = q_children.get(e) {
-                queue.extend(children.iter());
-            }
-        }
-
-        if has_aabb {
+        if let Some((min, max)) = compute_selection_aabb(selected_ent, &q_aabb, &q_children, &q_skip_tree, &mut queue) {
             let center = (min + max) * 0.5;
             let size = max - min;
             gizmos.primitive_3d(
@@ -420,10 +482,104 @@ pub fn draw_selection_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::camera::primitives::Aabb;
 
     #[test]
     fn test_selected_entities_default() {
         let selected = SelectedEntities::default();
         assert!(selected.primary().is_none());
+    }
+
+    #[test]
+    fn test_draw_selection_bounds_excludes_link_beams() {
+        let mut app = App::new();
+        
+        let rover = app.world_mut().spawn((Selected, Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
+        let chassis = app.world_mut().spawn((
+            Mesh3d(Handle::default()),
+            Aabb { center: Vec3A::ZERO, half_extents: Vec3A::new(1.0, 0.5, 1.5) },
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            ChildOf(rover),
+        )).id();
+
+        let beam = app.world_mut().spawn((
+            Mesh3d(Handle::default()),
+            Aabb { center: Vec3A::ZERO, half_extents: Vec3A::new(10.0, 10.0, 50000.0) },
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            lunco_core::NoSelectionBounds,
+            ChildOf(rover),
+        )).id();
+
+        app.world_mut().entity_mut(rover).add_child(chassis);
+        app.world_mut().entity_mut(rover).add_child(beam);
+
+        let mut q = app.world_mut().query_filtered::<Entity, (
+            With<Mesh3d>,
+            Without<lunco_celestial::TrajectoryMeshMarker>,
+            Without<lunco_core::programs::ProgramDriverId>,
+            Without<lunco_core::NoSelectionBounds>,
+        )>();
+
+        let matched: Vec<Entity> = q.iter(app.world()).collect();
+        assert_eq!(matched, vec![chassis]);
+        assert!(!matched.contains(&beam));
+    }
+
+    #[test]
+    fn test_compute_selection_aabb_returns_tight_vehicle_bounds() {
+        let mut app = App::new();
+        
+        let rover = app.world_mut().spawn((Selected, Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
+        let chassis = app.world_mut().spawn((
+            Mesh3d(Handle::default()),
+            Aabb { center: Vec3A::ZERO, half_extents: Vec3A::new(1.0, 0.5, 1.5) },
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            ChildOf(rover),
+        )).id();
+
+        let beam = app.world_mut().spawn((
+            Mesh3d(Handle::default()),
+            Aabb { center: Vec3A::ZERO, half_extents: Vec3A::new(10.0, 10.0, 50000.0) },
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            lunco_core::NoSelectionBounds,
+            ChildOf(rover),
+        )).id();
+
+        app.world_mut().entity_mut(rover).add_child(chassis);
+        app.world_mut().entity_mut(rover).add_child(beam);
+
+        let mut state_aabb = app.world_mut().query_filtered::<(&GlobalTransform, &Aabb), (
+            With<Mesh3d>,
+            Without<lunco_celestial::TrajectoryMeshMarker>,
+            Without<lunco_core::programs::ProgramDriverId>,
+            Without<lunco_core::NoSelectionBounds>,
+        )>();
+        let mut state_children = app.world_mut().query::<&Children>();
+        let mut state_skip = app.world_mut().query_filtered::<(), Or<(
+            With<big_space::prelude::Grid>,
+            With<big_space::prelude::CellCoord>,
+            With<lunco_celestial::TrajectoryMeshMarker>,
+            With<lunco_core::programs::ProgramDriverId>,
+            With<lunco_core::NoSelectionBounds>,
+        )>>();
+
+        let mut queue = Vec::new();
+        let (min, max) = compute_selection_aabb(
+            rover,
+            &state_aabb.query(app.world()),
+            &state_children.query(app.world()),
+            &state_skip.query(app.world()),
+            &mut queue,
+        ).expect("Selection AABB should exist for rover chassis");
+
+        let size = max - min;
+        assert!((size.x - 2.0).abs() < 1e-4);
+        assert!((size.y - 1.0).abs() < 1e-4);
+        assert!((size.z - 3.0).abs() < 1e-4);
+        assert!(size.max_element() < 5.0, "Selection AABB must be tight (< 5m), got {size}");
     }
 }

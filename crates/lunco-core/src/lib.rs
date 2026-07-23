@@ -57,6 +57,7 @@ pub use architecture::*;
 pub use derived::RebuildOnChange;
 pub use pacing::KeepAwake;
 pub use mobility::Mobility;
+pub use markers::NoSelectionBounds;
 pub use mocks::*;
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
