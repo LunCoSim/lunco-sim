@@ -95,13 +95,22 @@ def Xform "SolarRoverTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # The Sun - starts at standard elevation and azimuth
+    # ── Sun Orbit Modelica Model (continuous solar orbit) ──
+    def Xform "SunOrbit"
+    {
+        uniform asset info:sourceAsset = @lunco://models/SunOrbit.mo@
+    }
+
+    # The Sun - connected to SunOrbit modelica output via USD wire
     def DistantLight "Sun"
     {
         float inputs:intensity = 128000
         float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-30.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+
+        # USD connection: SunOrbit Modelica output -> Sun light input
+        float inputs:sun_azimuth.connect = </SolarRoverTest/SunOrbit.outputs:sun_azimuth>
     }
 
     # Static camera: Wide establishing shot looking at the starting region
@@ -181,6 +190,8 @@ def Xform "SolarRoverTest" (
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
             # Self-wire sun azimuth from environment solar bridge
             float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_azimuth>
+            # Fast tracking speed so panel rotation is crisp and visible
+            float inputs:tau = 0.2
         }
 
         # ── Power Subsystem Model (Modelica) ──

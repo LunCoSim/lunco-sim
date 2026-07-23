@@ -65,7 +65,7 @@ fn __stand_down(me) {
 }
 
 fn on_tick(me) {
-    if this.active != true { return; }   // not deployed yet
+    if this.active == () { this.active = true; }   // active by default
     if this.manual == true { return; }   // player took over
     // The player possessed the rover themselves (clicked it / pressed F). Yield —
     // and possess nothing: they already own it.
@@ -91,7 +91,7 @@ fn on_event(me, evt) {
         return;
     }
     if !evt.name.starts_with("key:") { return; }
-    if this.active != true || this.manual == true { return; }
+    if this.manual == true { return; }
     // Keys meant for the lander stay with the lander.
     if __player_flies_elsewhere(me) { return; }
     // Nothing else is possessed: the key IS the takeover request. Hand the rover

@@ -77,7 +77,95 @@ pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::sensors::IMU_SENSOR_GROUP,
     crate::sensors::RANGE_SENSOR_GROUP,
     crate::sensors::CONTACT_SENSOR_GROUP,
+    DIRECTIONAL_LIGHT_GROUP,
 ];
+
+/// The directional light port group: exposes sun angles for reading and driving.
+pub const DIRECTIONAL_LIGHT_GROUP: AvianGroup = AvianGroup {
+    present: |w, e| w.get::<DirectionalLight>(e).is_some(),
+    ports: &[
+        AvianPort {
+            name: "sun_azimuth",
+            dir: PortDirection::InOut,
+            read: Some(read_sun_azimuth),
+            write: Some(write_sun_azimuth),
+        },
+        AvianPort {
+            name: "sun_elevation",
+            dir: PortDirection::InOut,
+            read: Some(read_sun_elevation),
+            write: Some(write_sun_elevation),
+        },
+        AvianPort {
+            name: "azimuth",
+            dir: PortDirection::InOut,
+            read: Some(read_sun_azimuth),
+            write: Some(write_sun_azimuth),
+        },
+        AvianPort {
+            name: "elevation",
+            dir: PortDirection::InOut,
+            read: Some(read_sun_elevation),
+            write: Some(write_sun_elevation),
+        },
+        AvianPort {
+            name: "sun_yaw",
+            dir: PortDirection::InOut,
+            read: Some(read_sun_azimuth),
+            write: Some(write_sun_azimuth),
+        },
+        AvianPort {
+            name: "sun_pitch",
+            dir: PortDirection::InOut,
+            read: Some(read_sun_elevation),
+            write: Some(write_sun_elevation),
+        },
+    ],
+};
+
+fn read_sun_azimuth(world: &World, entity: Entity) -> Option<f64> {
+    let tf = world.get::<Transform>(entity)?;
+    let (yaw, _, _) = tf.rotation.to_euler(EulerRot::YXZ);
+    Some(yaw as f64)
+}
+
+fn write_sun_azimuth(world: &mut World, entity: Entity, value: f64) -> bool {
+    let Some(mut tf) = world.get_mut::<Transform>(entity) else {
+        return false;
+    };
+    if !value.is_finite() {
+        return true;
+    }
+    let (_, cur_pitch, cur_roll) = tf.rotation.to_euler(EulerRot::YXZ);
+    tf.rotation = Quat::from_euler(EulerRot::YXZ, value as f32, cur_pitch, cur_roll);
+    let new_tf = *tf;
+    if let Some(mut gt) = world.get_mut::<GlobalTransform>(entity) {
+        *gt = GlobalTransform::from(new_tf);
+    }
+    true
+}
+
+fn read_sun_elevation(world: &World, entity: Entity) -> Option<f64> {
+    let tf = world.get::<Transform>(entity)?;
+    let (_, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+    Some(-pitch as f64)
+}
+
+fn write_sun_elevation(world: &mut World, entity: Entity, value: f64) -> bool {
+    let Some(mut tf) = world.get_mut::<Transform>(entity) else {
+        return false;
+    };
+    if !value.is_finite() {
+        return true;
+    }
+    let (cur_yaw, _, cur_roll) = tf.rotation.to_euler(EulerRot::YXZ);
+    tf.rotation = Quat::from_euler(EulerRot::YXZ, cur_yaw, -value as f32, cur_roll);
+    let new_tf = *tf;
+    if let Some(mut gt) = world.get_mut::<GlobalTransform>(entity) {
+        *gt = GlobalTransform::from(new_tf);
+    }
+    true
+}
 
 fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
     for group in AVIAN {
