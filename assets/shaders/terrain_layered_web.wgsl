@@ -199,7 +199,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let uv = in.uv;
     if (mat.weight_albedo > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
-        albedo = mix(albedo, albedo * a * 3.0, mat.weight_albedo);
+        albedo = mix(albedo, albedo * a, mat.weight_albedo);
     }
     // (Mineral/classification composites UNLIT after lighting below — see the
     // native variant and doc 18 §4; tinting albedo here would shadow the drape.)

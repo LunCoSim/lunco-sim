@@ -89,7 +89,7 @@ over "Suspension" (
         # At the bottom of the strut (just above the axle), slides up/down
         double3 xformOp:translate = (0.0, 0.1, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)] # Shiny metal piston
+        color3f[] primvars:displayColor = [(0.35, 0.35, 0.37)] # Chrome metal piston
         bool physics:collisionEnabled = false
     }
 

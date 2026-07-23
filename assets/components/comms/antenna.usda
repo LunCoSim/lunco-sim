@@ -63,7 +63,7 @@ def Xform "CommsAntenna" (
         double height = 0.8
         double3 xformOp:translate = (0, 0.4, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.7, 0.7, 0.72)]
+        color3f[] primvars:displayColor = [(0.35, 0.35, 0.37)]
         bool physics:collisionEnabled = false
     }
 
@@ -97,7 +97,7 @@ def Xform "CommsAntenna" (
             float lunco:lathe:focalLength = 0.35
             # White thermal-control paint — what a high-gain reflector is actually
             # finished in.
-            color3f[] primvars:displayColor = [(0.95, 0.95, 0.93)]
+            color3f[] primvars:displayColor = [(0.35, 0.36, 0.38)]
             bool physics:collisionEnabled = false
         }
 
@@ -110,7 +110,7 @@ def Xform "CommsAntenna" (
             double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
             point3f[] points = [(0.56, 0.25, 0), (0.44, 0.44, 0), (0.16, 0.47, 0), (0.0, 0.38, 0)]
             float[] widths = [0.03]
-            color3f[] primvars:displayColor = [(0.75, 0.75, 0.78)]
+            color3f[] primvars:displayColor = [(0.35, 0.35, 0.37)]
             bool physics:collisionEnabled = false
         }
 

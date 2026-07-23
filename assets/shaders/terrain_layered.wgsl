@@ -217,7 +217,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Albedo: real colour mosaic mixed over the procedural albedo.
     if (mat.weight_albedo > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
-        albedo = mix(albedo, albedo * a * 3.0, mat.weight_albedo);
+        albedo = mix(albedo, albedo * a, mat.weight_albedo);
     }
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a

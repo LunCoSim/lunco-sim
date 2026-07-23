@@ -426,7 +426,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // baked ortho is a 1–99 percentile stretch, so a plain multiply would render
     // the real photograph as near-black mud.
     if (mat.weight_albedo > 0.0) {
-        albedo = mix(albedo, albedo * map_a * 3.0, mat.weight_albedo);
+        albedo = mix(albedo, albedo * map_a, mat.weight_albedo);
     }
 
     // --- Lunar photometry: the actual realism lever -----------------------

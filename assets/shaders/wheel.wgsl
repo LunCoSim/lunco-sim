@@ -33,9 +33,9 @@ const TAU: f32 = 6.28318530718;
 const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 
 //!@ui      rim_color   color "Rim / spoke colour"
-//!@default rim_color   0.35,0.36,0.38
+//!@default rim_color   0.12,0.13,0.14
 //!@ui      tire_color  color "Tire colour"
-//!@default tire_color  0.10,0.10,0.11
+//!@default tire_color  0.05,0.05,0.06
 //!@ui      spoke_count 1 16   "Spoke count"
 //!@default spoke_count 6
 //!@ui      tread_lugs  4 48   "Tread lugs"
@@ -86,6 +86,7 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     let n_local = normalize(transpose(R) * normalize(input.world_normal));
 
     var color: vec3<f32>;
+    var is_metal: f32 = 0.0;
     if (abs(n_local.y) > 0.5) {
         // ---- Circular face: the wheel disc (UV-polar) ----
         // Bevy maps each cap to a UV disc centred at (0.5,0.5), radius 0.5.
@@ -96,17 +97,21 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
             // Black tire ring — smooth sidewall (a tire's side has no tread).
             // The rolling tread lives on the barrel branch below.
             color = rubber;
+            is_metal = 0.0;
         } else if (r > 0.60) {
             color = metal;                                // rim ring
+            is_metal = 1.0;
         } else if (r > 0.22) {
             // Radial spokes — all bright metal. Rotation stays legible from
             // the tread lugs streaming past on the barrel.
             let s = fract(ang * spoke_count);
             let is_spoke = s < spoke_w;
             color = select(rubber, metal, is_spoke);
+            is_metal = select(0.0, 1.0, is_spoke);
         } else {
             // Hubcap: bright metal centre.
             color = metal;
+            is_metal = 1.0;
         }
     } else {
         // ---- Barrel: the rolling tread surface ----
@@ -122,6 +127,7 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
             * (1.0 - mat.wear * 0.85);                         // wear flattens contrast
         color = mix(rubber, tread, lug_m);
         color *= 1.0 - mat.lug_depth * 0.35 * (1.0 - lug_m);   // valley AO
+        is_metal = 0.0;
     }
 
     // Regolith dust coating — noise-masked in OBJECT space so it spins with
@@ -133,6 +139,7 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
         let dust_n = fbm(p_local * 7.0, 3, 0.5);
         let dust_m = mat.dust_amount * smoothstep(0.30, 0.75, dust_n);
         color = mix(color, mat.dust_color, dust_m);
+        is_metal = mix(is_metal, 0.0, dust_m);
     }
 
     // Full scene lighting (real sun direction, shadow maps, ambient) over
@@ -148,8 +155,8 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     pbr_input.N = pbr_input.world_normal;
     pbr_input.V = pbr_functions::calculate_view(input.world_position, pbr_input.is_orthographic);
     pbr_input.material.base_color = vec4(color, 1.0);
-    pbr_input.material.perceptual_roughness = 0.7;
-    pbr_input.material.metallic = 0.0;
+    pbr_input.material.perceptual_roughness = mix(0.85, 0.35, is_metal);
+    pbr_input.material.metallic = mix(0.0, 0.80, is_metal);
     pbr_input.material.reflectance = vec3(0.5);
 
     var out = pbr_functions::apply_pbr_lighting(pbr_input);

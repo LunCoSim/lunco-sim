@@ -380,23 +380,13 @@ fn mode_exposure(
             );
             continue;
         }
-        let target = if orbital {
-            // Orbital views frame a sunlit globe: the calibrated EV is correct.
-            sun.exposure_ev100
+        let (target, sunlit_val) = if orbital {
+            (sun.exposure_ev100, 1.0)
         } else {
-            // Surface: expose for the ACTUAL light level, decided by the sun
-            // elevation above the GEOGRAPHIC surface horizon at the site.
-            //
-            // GEOGRAPHIC HORIZON: `sun_dir` is in site-ENU (East-North-Up) axes
-            // where `-d.0` is the direction vector from the site to the Sun.
-            // The geographic surface normal at the site is `Vec3::Y` (Up in site-ENU).
-            // We MUST NOT dot with `gtf.up()` (the camera's viewport orientation up),
-            // because `gtf.up()` tilts as the user rotates or pitches the camera, which
-            // previously caused scene brightness to depend on view direction.
             let to_sun_site_enu = sun_dir.as_ref().map(|d| -d.0).unwrap_or(Vec3::Y);
             let elev = to_sun_site_enu.y.clamp(-1.0, 1.0).asin();
             let sunlit = ((elev + 0.02) / 0.02).clamp(0.0, 1.0);
-            9.0 + (sun.exposure_ev100 - 9.0) * sunlit
+            (9.0 + (sun.exposure_ev100 - 9.0) * sunlit, sunlit)
         };
         exposure.ev100 = target;
     }
