@@ -1256,6 +1256,10 @@ pub struct StreamScratch {
     coarse: Vec<Selected>,
     /// Scratch for the disjointness pass over `draw`.
     drop_covered: Vec<QuadCoord>,
+    /// Dynamic-body footprints (terrain-local XZ) for the current frame — used
+    /// to prioritise baking the forced-refined tiles under a moving rover ahead
+    /// of mid-field camera tiles. See `WHEEL_SINKING_ANALYSIS_v3` §5(3).
+    body_footprints: Vec<[f64; 2]>,
 }
 
 /// Freeze this terrain's LOD selection once its tiles are up: authored
@@ -1290,7 +1294,16 @@ pub fn update_lod_tiles(
     // stand on must be drawn at matching detail even when the camera-driven
     // selection would keep it coarse (far chase cam, budget-coarsened metric)
     // — otherwise wheels visibly hover on collider bumps the mesh doesn't show.
-    bodies: Query<(&avian3d::prelude::RigidBody, &GlobalTransform)>,
+    //
+    // ⚠ avian `Position`, NOT `GlobalTransform` — the SAME pose source
+    // `update_collider_ring` reads (see the frame rule there). Both systems ask
+    // "which node is under this rover"; a render GT is origin-relative f32 and
+    // can disagree with the grid-absolute f64 `Position` transiently around a
+    // floating-origin recentring, moving the forced-refined VISUAL tile one node
+    // away from the COLLIDER tile at exactly a seam — the wheel then sits on the
+    // boundary between a pinned full-detail leaf and its coarse neighbour. One
+    // pose source, one mapping. See `WHEEL_SINKING_ANALYSIS_v3.md` §4a.
+    bodies: Query<(&avian3d::prelude::RigidBody, &avian3d::prelude::Position)>,
     // The big_space world grid each tile anchors into (its own `CellCoord`).
     grids: Query<(Entity, &Grid), With<WorldGrid>>,
     mut terrains: Query<(
@@ -1322,7 +1335,7 @@ pub fn update_lod_tiles(
     let overlay = overlay_params.uniforms();
     *stream_status = TerrainStreamStatus::default();
     // Split-borrow the per-frame scratch buffers (see [`StreamScratch`]).
-    let StreamScratch { swaps, done, keyed, wanted, draw, coarse, drop_covered } =
+    let StreamScratch { swaps, done, keyed, wanted, draw, coarse, drop_covered, body_footprints } =
         &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     // The ACTIVE 3D camera is the focus — the one being rendered, hence the one
@@ -1449,17 +1462,21 @@ pub fn update_lod_tiles(
             // signature is independent of query (archetype) order — an entity
             // moving between archetypes must not read as world-state change.
             let mut body_sig = 0u64;
-            for (rb, gt) in &bodies {
+            for (rb, pos) in &bodies {
                 if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
                     continue;
                 }
-                let lb = inv_t.transform_point3(gt.translation());
-                if (lb.x as f64).abs() > h || (lb.z as f64).abs() > h {
+                // Grid-absolute avian `Position` IS DEM-local (the terrain is a
+                // grid-direct child at `CellCoord::default`), so no terrain
+                // transform belongs in between — same mapping the collider ring
+                // uses. See §4a and `update_collider_ring`.
+                let (bx, bz) = (pos.x, pos.z);
+                if bx.abs() > h || bz.abs() > h {
                     continue; // off this DEM — doesn't affect its selection
                 }
                 let mut b = lunco_precompute::Fnv1a::new();
-                b.write_u64(q(lb.x as f64));
-                b.write_u64(q(lb.z as f64));
+                b.write_u64(q(bx));
+                b.write_u64(q(bz));
                 body_sig ^= b.finish();
             }
             sig.write_u64(body_sig);
@@ -1598,16 +1615,33 @@ pub fn update_lod_tiles(
         // relief a coarse camera-driven tile doesn't, and the rover visibly
         // hovers on the undrawn bumps. A handful of forced splits per body,
         // outside the budget (the budget bounds the broad view, not this).
-        for (rb, gt) in &bodies {
+        // Collect the body footprints (terrain-local XZ) so the bake-order sort
+        // below can prioritise tiles under a moving rover — its forced-refined
+        // tile must bake before mid-field camera tiles, or the rover drives
+        // correct physics over a temporarily coarse visual (§5(3)).
+        body_footprints.clear();
+        for (rb, pos) in &bodies {
             if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
                 continue;
             }
-            let local_b = inv_t.transform_point3(gt.translation());
-            let (bx, bz) = (local_b.x as f64, local_b.z as f64);
+            // Grid-absolute avian `Position` IS DEM-local (terrain is grid-direct
+            // at `CellCoord::default`) — the SAME pose source and mapping the
+            // collider ring uses, so the forced-refined visual tile lands on the
+            // exact node the collider tile does, not one seam away. See §4a.
+            let (bx, bz) = (pos.x, pos.z);
             if bx.abs() > h || bz.abs() > h {
                 continue; // off this DEM
             }
-            qt.refine_selection_at(&mut sel, [bx, bz], &node_error);
+            body_footprints.push([bx, bz]);
+            // `pin_morph: true` — the geomorph shader morphs purely on camera
+            // distance, so without this a force-refined leaf under a far chase
+            // cam fully collapses onto its coarse parent lattice while the
+            // collider keeps the real relief: the rover drops into a dip the eye
+            // can't see (wheel-sinking). Pinning the body leaf's morph window to
+            // ∞ holds it at full detail from any viewpoint; split-off siblings
+            // keep their band so the LOD seam sits one ring away. See
+            // WHEEL_SINKING_ANALYSIS_v3 §4.4.
+            qt.refine_selection_at_with(&mut sel, [bx, bz], &node_error, true);
         }
         wanted.clear();
         wanted.extend(sel.iter().map(|s| s.coord));
@@ -1669,9 +1703,18 @@ pub fn update_lod_tiles(
         // Decorate-sort-undecorate: `dist2`/`benefit` pay a sqrt/dot per call and
         // the comparator re-ran them on BOTH sides of every comparison
         // (O(n log n) evaluations) — compute each tile's key once, sort on the
-        // cached key.
+        // cached key. The FIRST key byte is a body-proximity bucket (0 = a
+        // dynamic body stands on this tile, 1 = otherwise): a moving rover's
+        // forced-refined tile bakes before mid-field camera tiles, so the rover
+        // never drives correct physics over a temporarily coarse visual. See
+        // `WHEEL_SINKING_ANALYSIS_v3` §5(3).
         keyed.clear();
-        keyed.extend(sel.drain(..).map(|s| (0u8, 0u8, benefit(&s), s)));
+        keyed.extend(sel.drain(..).map(|s| {
+            let under_body = body_footprints
+                .iter()
+                .any(|fp| s.region.distance_to(*fp) <= 1e-6) as u8;
+            (under_body, 0u8, benefit(&s), s)
+        }));
         keyed.sort_by(|a, b| {
             (a.0, a.1)
                 .cmp(&(b.0, b.1))

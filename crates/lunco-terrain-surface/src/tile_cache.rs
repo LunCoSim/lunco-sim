@@ -17,6 +17,7 @@ use std::path::Path;
 
 use lunco_terrain_core::{HeightSource, QuadCoord, Square};
 
+use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
 use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 
@@ -70,13 +71,15 @@ impl lunco_precompute::Bake for TileBake<'_> {
     }
 
     fn bake(&self) -> TileMesh {
-        // Band-limit at TRUE Nyquist for this tile's vertex spacing (2 samples
-        // per shortest wavelength — the collider path's convention). Morph
-        // targets live on the parent's 2×-spaced lattice, so they sample a
-        // 2×-coarser gate again: the fully-morphed tile IS the parent surface.
+        // Band-limit via the shared filter policy ([`SurfaceBand`]) — the same
+        // definitions the collider ring and derived-layer bakes use, so what
+        // this tile DRAWS is the same band the others sample. The visual band
+        // keeps features ≥ 2·step (Nyquist for this tile's vertex spacing); the
+        // morph-target band lives on the parent's 2×-spaced lattice so it gates
+        // at 4·step (a fully-morphed tile IS the parent surface).
         let step = self.region.side() / (self.res.max(2) - 1) as f64;
-        let limited = self.oracle.detail_limited(2.0 * step);
-        let parent_limited = self.oracle.detail_limited(4.0 * step);
+        let limited = SurfaceBand::visual(step).limited(self.oracle);
+        let parent_limited = SurfaceBand::visual_parent(step).limited(self.oracle);
         // Anchor Y at the FULL-oracle surface height under the tile centre — the same
         // value `spawn_tile`/the collider ring use to place the tile's `CellCoord`, so
         // mesh geometry and entity origin agree. (Full oracle, not `limited`, so the

@@ -53,6 +53,7 @@ use lunco_terrain_core::{
     slope_map, Square,
 };
 
+use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
 
@@ -372,9 +373,10 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     let region = Square { center: [0.0, 0.0], half };
     let res = LAYER_RES;
     let texel = 2.0 * half / res as f64;
-    // Gate over-zoom synthesis at the map's texel size (the map is far coarser
-    // than the synthetic detail — skip it, don't alias it).
-    let limited = oracle.detail_limited(2.0 * texel);
+    // Gate over-zoom synthesis at the map's texel size via the shared filter
+    // policy (the map is far coarser than the synthetic detail — skip it, don't
+    // alias it).
+    let limited = SurfaceBand::visual(texel).limited(oracle);
 
     let normals = normal_map(&limited, &region, res);
     let slope = slope_map(&limited, &region, res);
@@ -382,7 +384,8 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // the extent) — bake the hemisphere march at HALF res (¼ the cost; this was
     // the whole cold-bake wait) and bilinear-expand to pack resolution.
     let ao_res = (res / 2).max(1);
-    let ao_limited = oracle.detail_limited(2.0 * (2.0 * half / ao_res as f64));
+    let ao_texel = 2.0 * half / ao_res as f64;
+    let ao_limited = SurfaceBand::visual(ao_texel).limited(oracle);
     let ao_small =
         ao_map(&ao_limited, &region, ao_res, half * AO_RADIUS_FRAC, AO_DIRS, AO_STEPS);
     let ao = lunco_terrain_core::upsample_bilinear(&ao_small, ao_res, res);
@@ -390,7 +393,13 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     // The old 1-texel stencil on the 2-texel-limited source sat exactly AT
     // Nyquist → per-texel checker noise → the hard texel mosaic at mid range.
     const TONE_STENCIL_TEXELS: f64 = 3.0;
-    let tone_limited = oracle.detail_limited(2.0 * TONE_STENCIL_TEXELS * texel);
+    // A stencil wider than the texel — a custom Nyquist multiple, not the plain
+    // `visual(texel)` band. Named inline rather than given a constructor, since
+    // the stencil width is a property of this one bake.
+    let tone_limited = SurfaceBand {
+        min_wavelength: 2.0 * TONE_STENCIL_TEXELS * texel,
+    }
+    .limited(oracle);
     let albedo = albedo_map(&tone_limited, &region, res, TONE_STENCIL_TEXELS);
 
     let roughness: Vec<f32> =

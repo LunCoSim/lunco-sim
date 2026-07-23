@@ -239,6 +239,37 @@ impl Quadtree {
         focus_xz: [f64; 2],
         node_error: impl Fn(QuadCoord, Square) -> f64,
     ) {
+        self.refine_selection_at_with(sel, focus_xz, &node_error, false)
+    }
+
+    /// As [`refine_selection_at`], but when `pin_morph` is true the max-depth
+    /// leaves covering the body's 3×3 footprint are emitted with
+    /// `morph_start = morph_end = ∞` — they never collapse onto the parent
+    /// lattice, so the ground a rover stands on renders at full detail from
+    /// **any** camera distance, not just when the camera is near.
+    ///
+    /// This is the fix for the wheel-sinking artifact's dominant cause: the
+    /// geomorph shader (`terrain_geomorph.wgsl`) morphs purely on camera
+    /// distance, so a force-refined leaf under a far chase cam fully collapses
+    /// onto its coarse parent lattice while the collider keeps the real relief —
+    /// the rover drops into a dip the eye can't see. Pinning the morph window
+    /// to ∞ makes the shader's `smoothstep(start, end, dist)` return 0 for
+    /// those tiles regardless of `dist` (the same no-morph convention root tiles
+    /// use). The whole 3×3 footprint (centre + 8 neighbours) is pinned, since
+    /// all nine are body-coverage tiles; the LOD seam therefore lands at the
+    /// footprint BOUNDARY — where these max-depth leaves meet the coarser cover
+    /// outside — one ring away from the rover's wheels, not under them.
+    ///
+    /// The shader is untouched: this is a CPU-side window assignment, not a
+    /// per-tile morph factor (which `terrain_geomorph.wgsl`'s header warns would
+    /// crack same-depth seams). See `WHEEL_SINKING_ANALYSIS_v3.md` §4.4.
+    pub fn refine_selection_at_with(
+        &self,
+        sel: &mut Vec<Selected>,
+        focus_xz: [f64; 2],
+        node_error: &impl Fn(QuadCoord, Square) -> f64,
+        pin_morph: bool,
+    ) {
         let nodes = 1i64 << self.max_depth;
         let centre = self.node_containing(self.max_depth, focus_xz);
         let (cx, cz) = (centre.x as i64, centre.z as i64);
@@ -250,18 +281,23 @@ impl Quadtree {
                 }
                 let target =
                     QuadCoord { depth: self.max_depth, x: nx as u32, z: nz as u32 };
-                self.force_refine(sel, target, &node_error);
+                self.force_refine(sel, target, node_error, pin_morph);
             }
         }
     }
 
     /// Split the selected ancestor of `target` (if coarser) down to
-    /// `target.depth`, pushing the split-off siblings at each level.
+    /// `target.depth`, pushing the split-off siblings at each level. When
+    /// `pin_morph` is true, the final target-depth leaf is emitted with an
+    /// infinite morph window (never collapses onto its parent); split-off
+    /// siblings at every level keep the normal error-derived band, so the LOD
+    /// seam lands one ring away from the body rather than under it.
     fn force_refine(
         &self,
         sel: &mut Vec<Selected>,
         target: QuadCoord,
         node_error: &impl Fn(QuadCoord, Square) -> f64,
+        pin_morph: bool,
     ) {
         fn covers(anc: QuadCoord, target: QuadCoord) -> bool {
             anc.depth <= target.depth
@@ -272,7 +308,12 @@ impl Quadtree {
             return; // not covered (shouldn't happen for an exact cover)
         };
         if sel[i].coord.depth >= target.depth {
-            return; // already fine enough
+            // Already at target depth. If pinning, ensure its morph window is ∞.
+            if pin_morph {
+                sel[i].morph_start = f64::INFINITY;
+                sel[i].morph_end = f64::INFINITY;
+            }
+            return;
         }
         let mut cur = sel.swap_remove(i);
         while cur.coord.depth < target.depth {
@@ -288,19 +329,42 @@ impl Quadtree {
             let mut next: Option<Selected> = None;
             for (ox, oz) in [(0u32, 0u32), (1, 0), (0, 1), (1, 1)] {
                 let cc = QuadCoord { depth: d, x: cur.coord.x * 2 + ox, z: cur.coord.z * 2 + oz };
-                let s = Selected {
-                    coord: cc,
-                    region: self.region(cc),
-                    morph_start,
-                    morph_end: refine_range,
+                // The child that covers `target` is the path further down; it
+                // inherits the pinned window only when it IS the final leaf and
+                // pin_morph is set. Siblings always take the error-derived band.
+                let is_target_path = covers(cc, target);
+                let is_pinned_leaf = pin_morph && is_target_path && d == target.depth;
+                let s = if is_pinned_leaf {
+                    Selected {
+                        coord: cc,
+                        region: self.region(cc),
+                        morph_start: f64::INFINITY,
+                        morph_end: f64::INFINITY,
+                    }
+                } else {
+                    Selected {
+                        coord: cc,
+                        region: self.region(cc),
+                        morph_start,
+                        morph_end: refine_range,
+                    }
                 };
-                if covers(cc, target) {
+                if is_target_path {
                     next = Some(s);
                 } else {
                     sel.push(s);
                 }
             }
             cur = next.expect("exactly one child covers the target");
+        }
+        // `cur` is the target leaf (loop exited at `cur.coord.depth == target.depth`).
+        // When the original cover already had it at target depth the early-return
+        // branch above handled pinning; here the loop's last iteration either
+        // produced a pinned leaf (d == target.depth case) or `cur` is a non-pinned
+        // leaf from a cover that was already fine. Only re-pin if requested.
+        if pin_morph && cur.coord.depth == target.depth {
+            cur.morph_start = f64::INFINITY;
+            cur.morph_end = f64::INFINITY;
         }
         sel.push(cur);
     }
@@ -448,6 +512,98 @@ mod tests {
         let n = sel.len();
         q.refine_selection_at(&mut sel, rover, flat);
         assert_eq!(sel.len(), n);
+    }
+
+    /// `refine_selection_at_with(.., pin_morph: true)` emits the max-depth
+    /// leaves covering the body's 3×3 footprint with `morph_end = ∞`, so the
+    /// geomorph shader never collapses them onto the parent lattice regardless
+    /// of camera distance — the fix for wheels sinking into invisible physics
+    /// relief. SPLIT-OFF SIBLINGS (max-depth tiles that are neighbours of, but
+    /// not under, the body) keep the normal error-derived band, so the LOD seam
+    /// sits one ring away rather than cracking under the wheels. See
+    /// `WHEEL_SINKING_ANALYSIS_v3.md` §4.4.
+    #[test]
+    fn pinned_refinement_freezes_morph_on_body_tiles_only() {
+        let q = qt();
+        let flat = |_c: QuadCoord, _r: Square| 0.05;
+        let rover = [1234.5, -2345.6];
+
+        // Unpinned baseline: the max-depth leaf under the rover gets a finite
+        // morph window inherited from its parent's refine range (the bug).
+        let mut unpinned = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
+        q.refine_selection_at(&mut unpinned, rover, flat);
+        let unpinned_under = unpinned
+            .iter()
+            .find(|s| s.region.distance_to(rover) <= 1e-6)
+            .expect("cover contains the rover");
+        assert!(unpinned_under.morph_end.is_finite(), "unpinned leaf morphs as usual");
+
+        // Pinned: same cover shape, but the body leaf is frozen.
+        let mut pinned = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
+        q.refine_selection_at_with(&mut pinned, rover, &flat, true);
+        assert_eq!(pinned.len(), unpinned.len(), "pinning changes windows, not cover shape");
+        let pinned_under = pinned
+            .iter()
+            .find(|s| s.region.distance_to(rover) <= 1e-6)
+            .expect("cover contains the rover");
+        assert_eq!(pinned_under.coord, unpinned_under.coord);
+        assert!(
+            pinned_under.morph_end.is_infinite() && pinned_under.morph_start.is_infinite(),
+            "pinned body leaf must never morph (start={:?}, end={:?})",
+            pinned_under.morph_start,
+            pinned_under.morph_end
+        );
+
+        // The 3×3 footprint (centre node + 8 neighbours) is pinned — all nine
+        // are body-coverage tiles and must hold full detail. Compute the
+        // footprint's node coords the same way `refine_selection_at_with` does,
+        // then check exactly those leaves are frozen.
+        let nodes = 1i64 << q.max_depth;
+        let centre = q.node_containing(q.max_depth, rover);
+        let (ccx, ccz) = (centre.x as i64, centre.z as i64);
+        let in_footprint = |s: &Selected| {
+            s.coord.depth == q.max_depth
+                && (s.coord.x as i64 - ccx).abs() <= 1
+                && (s.coord.z as i64 - ccz).abs() <= 1
+        };
+        let footprint: Vec<_> = pinned.iter().filter(|s| in_footprint(s)).collect();
+        assert_eq!(footprint.len(), 9, "3×3 footprint → exactly 9 max-depth leaves");
+        for s in &footprint {
+            assert!(
+                s.morph_end.is_infinite() && s.morph_start.is_infinite(),
+                "footprint leaf {:?} must be pinned (end={:?})",
+                s.coord,
+                s.morph_end
+            );
+        }
+        // Max-depth leaves OUTSIDE the footprint are split-off siblings created
+        // by force-refining a coarse ancestor down to a footprint target — they
+        // are NOT body coverage and must keep their normal error-derived band.
+        // That band is where the morph seam sits, away from the rover's wheels.
+        let split_siblings: Vec<_> = pinned
+            .iter()
+            .filter(|s| s.coord.depth == q.max_depth && !in_footprint(s))
+            .collect();
+        assert!(!split_siblings.is_empty(), "split-off max-depth siblings exist (the seam)");
+        for s in &split_siblings {
+            assert!(
+                s.morph_end.is_finite(),
+                "split-off sibling {:?} must keep its morph band, got end={:?}",
+                s.coord,
+                s.morph_end
+            );
+        }
+        let _ = nodes;
+
+        // The same invariant holds when the cover ALREADY had the leaf at max
+        // depth (the early-return branch): re-pinning an existing finest leaf
+        // still freezes it.
+        q.refine_selection_at_with(&mut pinned, rover, &flat, true);
+        let re_under = pinned
+            .iter()
+            .find(|s| s.region.distance_to(rover) <= 1e-6)
+            .expect("cover still contains the rover");
+        assert!(re_under.morph_end.is_infinite(), "re-pinning an existing leaf freezes it too");
     }
 
     /// [`REFINE_HYSTERESIS`] is consumed by `lunco-terrain-surface`'s `evolve_cover`,

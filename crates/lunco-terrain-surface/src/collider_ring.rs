@@ -29,6 +29,7 @@ use big_space::prelude::Grid;
 use lunco_core::WorldGrid;
 use lunco_terrain_core::{prepare_collider_heights, HeightSource};
 
+use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
 use crate::quadtree::{QuadCoord, Quadtree, Square};
 use crate::stream_viz::DemHeightField;
@@ -61,11 +62,48 @@ pub struct TerrainColliderRing {
     pub depth: u8,
     /// Heightfield samples per tile side.
     pub res: usize,
+    /// The shared contact-band filter policy — the surface a wheel touches,
+    /// floored so it agrees with what the drawn visual leaf carries. Built once
+    /// at spawn from the terrain's viz config (see [`Self::for_viz`]), so the
+    /// collider and the visual leaf provably sample one band. See
+    /// `WHEEL_SINKING_ANALYSIS_v3.md` §4.1/§5(2).
+    pub contact_band: SurfaceBand,
+}
+
+impl TerrainColliderRing {
+    /// Construct from the terrain's visual LOD config + half-extent. The contact
+    /// band's floor is the visual leaf's gate: the leaf is at `viz.max_depth`
+    /// with `viz.tile_res` samples, so its step is
+    /// `(2·half_extent) / 2^max_depth / (tile_res − 1)` and its gate is `2·step`.
+    /// The collider's own native gate (`2·collider_step`) is finer, so the floor
+    /// picks the coarser visual gate — what the rover touches is what the eye
+    /// sees, not a finer band the mesh flattens out.
+    pub fn for_viz(viz: &crate::stream_viz::TerrainLodViz, half_extent: f64) -> Self {
+        let viz_leaf_side = (2.0 * half_extent) / (1u32 << viz.max_depth) as f64;
+        let viz_leaf_step = viz_leaf_side / (viz.tile_res.max(2) - 1) as f64;
+        let collider_side = (2.0 * half_extent) / (1u32 << COLLIDER_DEPTH) as f64;
+        let collider_step = collider_side / (COLLIDER_RES.max(2) - 1) as f64;
+        TerrainColliderRing {
+            depth: COLLIDER_DEPTH,
+            res: COLLIDER_RES,
+            contact_band: SurfaceBand::contact(viz_leaf_step, collider_step),
+        }
+    }
 }
 
 impl Default for TerrainColliderRing {
     fn default() -> Self {
-        TerrainColliderRing { depth: COLLIDER_DEPTH, res: COLLIDER_RES }
+        // Without a viz config we cannot know the visual leaf step, so default
+        // to the collider's own native gate (no contact floor). Real terrains
+        // construct via [`Self::for_viz`] at spawn; this default exists only for
+        // reflection / tests that don't drive the contact invariant.
+        let collider_side_factor = 1.0 / (1u32 << COLLIDER_DEPTH) as f64;
+        let collider_step = collider_side_factor / (COLLIDER_RES.max(2) - 1) as f64;
+        TerrainColliderRing {
+            depth: COLLIDER_DEPTH,
+            res: COLLIDER_RES,
+            contact_band: SurfaceBand::visual(collider_step),
+        }
     }
 }
 
@@ -126,21 +164,27 @@ const COLLIDER_HALO_CELLS: usize = 16;
 /// it sees. Heights are conditioned through the core collider firewall
 /// (slope-limit + quantize) on a halo-padded grid (see [`COLLIDER_HALO_CELLS`])
 /// for contact stability, peer determinism, and seam-exact neighbours.
-fn sample_heights_xz(oracle: &SurfaceOracle, region: Square, res: usize, origin_y: f64) -> Vec<Vec<f64>> {
+fn sample_heights_xz(
+    oracle: &SurfaceOracle,
+    region: Square,
+    res: usize,
+    origin_y: f64,
+    band: SurfaceBand,
+) -> Vec<Vec<f64>> {
     let res = res.max(2);
     let step = region.side() / (res as f64 - 1.0);
     let halo = COLLIDER_HALO_CELLS;
     let padded = res + 2 * halo;
     let x0 = region.center[0] - region.half - halo as f64 * step;
     let z0 = region.center[1] - region.half - halo as f64 * step;
-    // Row-major [z*padded + x] flat grid for the conditioning pass…
-    // Gate detail at TWICE the collider's sample spacing: sub-sample features
-    // would rasterise as contact-flipping noise, and the extra octave rounds
-    // the sharp crater rim LIP (the σ≈0.14·r Gaussian) into a rollable bump —
-    // a chassis nosing over an un-rounded lip stopped dead on a ~60° face
-    // ("stuck on a wall inside the crater"). The visual/physics gap this opens
-    // is bounded by the lip sharpening between 1× and 2× step: centimetres.
-    let limited = oracle.detail_limited(2.0 * step);
+    // The contact band — the shared filter policy floored at the visual leaf's
+    // gate, so what the rover TOUCHES is the band the drawn leaf CARRIES (not a
+    // finer band the mesh flattens out → wheel-sinking). Sub-sample features
+    // below the gate would rasterise as contact-flipping noise anyway, and the
+    // gate rounds the sharp crater rim LIP into a rollable bump — a chassis
+    // nosing over an un-rounded lip stopped dead on a ~60° face ("stuck on a
+    // wall inside the crater"). See `WHEEL_SINKING_ANALYSIS_v3.md` §4.1/§5(2).
+    let limited = band.limited(oracle);
     let mut flat = vec![0.0f64; padded * padded];
     for iz in 0..padded {
         let wz = z0 + iz as f64 * step;
@@ -400,6 +444,7 @@ pub fn update_collider_ring(
             bake_budget -= 1;
             let region = qt.region(*coord);
             let res = ring.res;
+            let band = ring.contact_band;
             let oracle_arc: Arc<SurfaceOracle> = hf.0.clone();
             let task = pool.spawn(async move {
                 // Off-thread body → own Tracy zone.
@@ -413,7 +458,7 @@ pub fn update_collider_ring(
                 // through the visual surface. The `origin_y` travels back out so
                 // the spawn site anchors the CellCoord at the same height.
                 let origin_y = oracle_arc.height_at(region.center[0], region.center[1]);
-                let heights = sample_heights_xz(&oracle_arc, region, res, origin_y);
+                let heights = sample_heights_xz(&oracle_arc, region, res, origin_y, band);
                 (heightfield_collider(heights, side), origin_y)
             });
             pending.0.insert(*coord, task);
@@ -830,6 +875,14 @@ mod tests {
     /// any hidden Y-recentering in the heightfield build would show up.
     const BASE_H: f64 = 1945.0;
 
+    /// The collider's native band (`2·step`) for tests that exercise the
+    /// heightfield build in isolation, with no viz config to floor against.
+    /// Matches the pre-`SurfaceBand` behaviour (`detail_limited(2.0 * step)`).
+    fn native_band(region: Square) -> SurfaceBand {
+        let step = region.side() / (COLLIDER_RES as f64 - 1.0);
+        SurfaceBand::visual(step)
+    }
+
     /// Downward parry ray in TILE-LOCAL coordinates → ABSOLUTE surface altitude at
     /// (lx, lz). The heightfield is rebased by `origin_y` (see `sample_heights_xz`),
     /// so it sits near its own entity origin: the ray is cast in that local frame
@@ -888,7 +941,7 @@ mod tests {
             // The datum the runtime bake uses (`update_collider_ring`): the tile-centre
             // surface height — which at this probe point IS `oracle_center`.
             let origin_y = oracle_center;
-            let heights = sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y);
+            let heights = sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y, native_band(region));
             let collider = heightfield_collider(heights, side);
             let collider_center = surface_y(&collider, 0.0, 0.0, origin_y);
             let collider_bowl = BASE_H - collider_center;
@@ -946,7 +999,7 @@ mod tests {
         // EXACTLY the runtime bake: the tile-centre datum, then sample + condition,
         // then the same collider constructor call as `update_collider_ring`.
         let origin_y = HeightSource::height_at(&oracle, region.center[0], region.center[1]);
-        let heights = sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y);
+        let heights = sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y, native_band(region));
 
         // (c) The rebase itself: sampled heights are LOCAL offsets from `origin_y`.
         // The tile corner is flat base, so it must read ~0 — NOT ~1945. Asserted on
@@ -988,10 +1041,10 @@ mod tests {
         // so tolerate slope-limit slack of one cell's max step there).
         let step = side / (COLLIDER_RES as f64 - 1.0);
         let slack = COLLIDER_MAX_SLOPE * step + 2.0 * COLLIDER_QUANT_STEP;
-        // The collider samples the oracle GATED at twice its step (rim-lip
-        // rounding — see `sample_heights_xz`) — compare against that same
+        // The collider samples the oracle through the same band
+        // (`native_band(region)` above, = `2·step`) — compare against that same
         // band-limited surface.
-        let gated = oracle.detail_limited(2.0 * step);
+        let gated = native_band(region).limited(&oracle);
         for iz in (0..COLLIDER_RES).step_by(8) {
             for ix in (0..COLLIDER_RES).step_by(8) {
                 let lx = -region.half + ix as f64 * step;
@@ -1052,8 +1105,8 @@ mod tests {
         // geometry would read as an `origin_a - origin_b` step.
         let oya = HeightSource::height_at(&oracle, ra.center[0], ra.center[1]);
         let oyb = HeightSource::height_at(&oracle, rb.center[0], rb.center[1]);
-        let ha = sample_heights_xz(&oracle, ra, COLLIDER_RES, oya);
-        let hb = sample_heights_xz(&oracle, rb, COLLIDER_RES, oyb);
+        let ha = sample_heights_xz(&oracle, ra, COLLIDER_RES, oya, native_band(ra));
+        let hb = sample_heights_xz(&oracle, rb, COLLIDER_RES, oyb, native_band(rb));
         // Tile A's last x-column and tile B's first x-column sample the same
         // world positions — they must agree once each is lifted back to absolute.
         for iz in 0..COLLIDER_RES {

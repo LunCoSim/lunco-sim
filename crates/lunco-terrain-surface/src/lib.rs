@@ -40,6 +40,7 @@
 //!   tile streaming + LOD + per-rover collider ring land in M7.
 
 pub mod collider_ring;
+pub mod band;
 pub mod derived_layers;
 pub mod georef;
 pub mod oracle;
@@ -67,6 +68,10 @@ pub use lunco_terrain_core::{
     Selected, Square, TileCoord, TileGrid, TransferFn,
 };
 pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
+/// The shared filter policy for band-limited surface products — the DRY seam
+/// between what a wheel touches and what an eye sees. See [`band`] and
+/// `WHEEL_SINKING_ANALYSIS_v3.md` §4.1.
+pub use band::SurfaceBand;
 /// The base raster [`SurfaceOracle`] composes over.
 ///
 /// Re-exported because it is already part of this crate's PUBLIC surface —

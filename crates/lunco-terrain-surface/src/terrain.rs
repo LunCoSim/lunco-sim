@@ -1275,6 +1275,9 @@ fn assemble_dem_build(
         // tiles (static mesh suppressed); `collider_ring` streams physics tiles
         // (static collider suppressed above). Both sample the retained `DemHeightField`.
         if let Some(oracle) = built.oracle {
+            // Read the half-extent before the Arc moves into `DemHeightField` —
+            // the collider ring's contact band is derived from it + the viz config.
+            let half_extent = oracle.half_extent() as f64;
             e.try_insert(crate::stream_viz::DemHeightField(oracle));
             if lod_viz {
                 e.try_insert((
@@ -1287,8 +1290,15 @@ fn assemble_dem_build(
                 ));
             }
             if collider_ring {
+                // Construct the ring's contact band from the SAME viz config the
+                // visual tiles use (`TerrainLodViz::default()`), so the collider's
+                // gate is floored at the visual leaf's gate — what the rover
+                // touches is what the eye sees. See `WHEEL_SINKING_ANALYSIS_v3`
+                // §4.1/§5(2) and `SurfaceBand::contact`.
+                let viz = crate::stream_viz::TerrainLodViz::default();
+                let ring = crate::collider_ring::TerrainColliderRing::for_viz(&viz, half_extent);
                 e.try_insert((
-                    crate::collider_ring::TerrainColliderRing::default(),
+                    ring,
                     crate::collider_ring::ColliderTiles::default(),
                     crate::collider_ring::PendingColliderBakes::default(),
                 ));
