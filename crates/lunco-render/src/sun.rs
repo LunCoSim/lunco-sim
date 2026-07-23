@@ -33,7 +33,7 @@ use bevy::prelude::Color;
 /// freshly-spawned camera and the late celestial/`SetEnvironmentLight`
 /// exposure writes all agree on one number, so there is no window in which
 /// the 131 klx sun renders against an EV-9.7 camera (a ~5-stop blowout).
-pub const LUNAR_SUN_EXPOSURE_EV100: f32 = 15.0;
+pub const LUNAR_SUN_EXPOSURE_EV100: f32 = 16.0;
 
 /// How to **render** a lunar sun's shadows — the cascade split, biases and
 /// atlas size. This is render-side *presentation* config only; the sun's

@@ -29,7 +29,7 @@
 const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 
 //!@engine  display_color
-//!@default display_color 0.78,0.78,0.80
+//!@default display_color 0.25,0.26,0.28
 //!@ui      accent_color  color "Accent stripe"
 //!@default accent_color  0.85,0.45,0.10
 //!@ui      dust_color    color "Regolith dust"

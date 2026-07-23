@@ -1995,8 +1995,8 @@ impl Plugin for SandboxCorePlugin {
             // spawn AND every camera's exposure read this one resource, so lux
             // and EV stay matched. Tunable live via `SetEnvironmentLight`.
             .insert_resource(lunco_environment::LunarSun {
-                illuminance_lux: 10_000.0,
-                exposure_ev100: 9.7,
+                illuminance_lux: 128_000.0,
+                exposure_ev100: 16.0,
                 ..Default::default()
             })
             // Persistent world shell: one BigSpace root + `WorldGrid` + one

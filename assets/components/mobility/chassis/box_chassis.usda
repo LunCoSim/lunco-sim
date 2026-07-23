@@ -36,7 +36,7 @@ def Cube "Chassis" (
 
     # Default hull grey — a rover overrides this one attribute to get its own
     # livery. The hull shader consumes it as the base paint.
-    color3f[] primvars:displayColor = [(0.78, 0.78, 0.8)]
+    color3f[] primvars:displayColor = [(0.25, 0.26, 0.28)]
 
     rel material:binding = </Chassis/HullLook>
 

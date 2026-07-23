@@ -104,7 +104,7 @@ over "Tire" (
         {
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:wgsl:sourceAsset = @lunco://shaders/wheel.wgsl@
-            color3f inputs:rim_color = (0.98, 0.98, 1.00)   # spoke / rim (bright metal)
+            color3f inputs:rim_color = (0.35, 0.36, 0.38)   # spoke / rim (bright metal)
             color3f inputs:tire_color = (0.10, 0.10, 0.11)  # rubber
             float inputs:spoke_count = 6.0
             float inputs:tread_lugs = 24.0                  # deep, widely-spaced lugs — soil
