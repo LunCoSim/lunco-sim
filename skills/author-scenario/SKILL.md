@@ -243,7 +243,7 @@ the very authoring the test exists to check.
 - **Ports live on the PROGRAM prim, not on the vessel.** `get(me, "soc_out")` on
   a rover whose battery model hangs off `…/SolarRover/PowerSubsystem` returns
   `()`, and the usual `if soc == () { soc = 1.0 }` fallback then reports a full
-  battery forever. In `solar_rover_demo` that meant the pack never drained, the
+  battery forever. In the solar rover demo that meant the pack never drained, the
   cinematic's `wait_until(soc < 0.05)` never fired, and the demo hung after the
   last waypoint looking like a physics bug. Resolve the program prim
   (`find("/…/PowerSubsystem")`) and read/write there. A *fallback for an absent

@@ -191,13 +191,17 @@ def Xform "SolarRoverTest" (
             float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/PowerSubsystem.outputs:sun_azimuth>
             # Connect actual panel yaw from SunTracker's yaw output
             float inputs:panel_yaw.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
-            # Throttle will be set programmatically by the autopilot script
+            # Wire throttle from the rover's OBC so the battery drains based on
+            # actual drive commands — no script intermediary.
+            float inputs:vehicle_throttle.connect = </SolarRoverTest/SolarRover/Avionics.outputs:throttle>
         }
 
         # ── Autopilot Script (Rhai) ──
+        # Reuses the scene-agnostic rover_autopilot which discovers waypoints
+        # via parent(me) and yields to the player on any key press.
         def LunCoProgram "Autopilot"
         {
-            uniform asset info:sourceAsset = @lunco://scenarios/solar_rover_demo.rhai@
+            uniform asset info:sourceAsset = @lunco://scenarios/rover_autopilot.rhai@
         }
 
         # ── Chase camera riding behind the rover ──
