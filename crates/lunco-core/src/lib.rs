@@ -72,7 +72,7 @@ pub use commands::{
 };
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
-    CinematicCameraLock, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene, RestoreFallbackLights, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
+    CinematicCameraLock, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
     CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
@@ -665,7 +665,6 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<ActionStatus>()
            .register_type::<GlobalEntityId>()
            .register_type::<Provenance>()
-           .register_type::<RestoreFallbackLights>()
            .register_type::<CameraFollow>()
            .register_type::<SimTick>();
 

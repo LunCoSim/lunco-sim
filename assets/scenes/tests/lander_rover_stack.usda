@@ -63,7 +63,7 @@ def Xform "LanderRoverStack" (
 
     def DistantLight "Sun"
     {
-        float inputs:intensity = 12000
+        float inputs:intensity = 128000
         float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]

@@ -143,9 +143,19 @@ fn any_unwrapped_modelica(
 /// browser) proceeds via the normal clear+respawn path instead of being
 /// suppressed. Runs every `Update` but is a single `is_empty` query when no
 /// guard is set.
+///
+/// At the moment the in-flight guard drops — the single authoritative "scene
+/// finished spawning" edge — this also enforces the lighting invariant: a
+/// scene that is meant to be seen must provide at least one `DirectionalLight`
+/// (a UsdLux `DistantLight`, the celestial bootstrap sun, or both). The sun is
+/// scene content, authored in USD like every other light, so an absent sun is a
+/// real authoring defect, not a missing default — and it fails LOUD here rather
+/// than rendering dark and silent. `bevy_light`'s `DirectionalLight` is
+/// render-free, so this check is layer-appropriate in this render-free crate.
 fn clear_scene_load_in_flight(
     in_flight: Option<Res<SceneLoadInFlight>>,
     q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
+    q_lights: Query<&bevy::light::DirectionalLight>,
     mut commands: Commands,
 ) {
     let Some(g) = in_flight else { return };
@@ -155,9 +165,26 @@ fn clear_scene_load_in_flight(
     let still_awaiting = q_awaiting
         .iter()
         .any(|upp| upp.stage_handle.id() == g.stage_id);
-    if !still_awaiting {
-        commands.remove_resource::<SceneLoadInFlight>();
+    if still_awaiting {
+        return;
     }
+    // Scene fully spawned — enforce the lighting invariant before dropping the
+    // guard. The celestial bootstrap sun (`lunco_celestial::big_space_setup`)
+    // spawns on site-anchor detection during this same load window and is a
+    // `DirectionalLight`, so its presence satisfies the check; only a scene
+    // that authors NEITHER a `DistantLight` NOR triggers the celestial sun is
+    // flagged.
+    if q_lights.is_empty() {
+        error!(
+            "[scene] `{}` finished loading with no DirectionalLight — the scene \
+             will render dark. Author a UsdLux `DistantLight` (the sun) in the \
+             scene, or ensure a celestial site anchor is present so the solar \
+             bootstrap provides one. There is no Rust fallback sun: scene \
+             lighting is scene content.",
+            g.path
+        );
+    }
+    commands.remove_resource::<SceneLoadInFlight>();
 }
 
 pub fn process_usd_cosim_prims(
@@ -1524,7 +1551,6 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         "[scene] cleanup: {} entities despawned",
         despawned
     );
-    commands.trigger(lunco_core::RestoreFallbackLights);
     // Every scene clear resets the whole clock tree to defaults (doc 19 §11b): a sky
     // left detached at 100 000×, a scrubbed animation, a paused transport — none of it
     // may survive into the next scene. This is the single choke point all three reload

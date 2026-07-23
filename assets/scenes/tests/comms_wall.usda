@@ -170,7 +170,7 @@ def Xform "CommsWallTest" (
     # Low sun from the east, so the wall reads as a solid object on the ground.
     def DistantLight "Sun"
     {
-        float inputs:intensity = 10000
+        float inputs:intensity = 128000
         float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-15.0, 90.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]

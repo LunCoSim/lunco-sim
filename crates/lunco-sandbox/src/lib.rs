@@ -2129,7 +2129,6 @@ impl Plugin for SandboxCorePlugin {
                 ..Default::default()
             })
             .add_systems(Startup, setup_sandbox)
-            .add_observer(on_restore_fallback_lights)
             // Fail loud if the requested `--scene` never loads (e.g. a wrong
             // path that resolves to a missing asset). Without this the app
             // silently boots a scene-less world (only procedural terrain /
@@ -3089,55 +3088,25 @@ pub struct ScenePath(pub String);
 
 // `set_parent_in_place` is `disallowed_methods`-banned for its atomicity
 // hazard (a `GridAnchor`/`RigidBody` parented after spawn can be mis-tagged
-// `RigidBody::Static`). The two uses here parent the big_space root → Grid
-// and a `DirectionalLight` → Grid — neither is a rigid body / GridAnchor, so
-// that hazard doesn't apply. Locally allowed.
+// `RigidBody::Static`). `ensure_world_root` may parent the big_space root →
+// Grid internally; it is not a rigid body / GridAnchor, so that hazard doesn't
+// apply. Locally allowed.
 #[allow(clippy::disallowed_methods)]
 fn setup_sandbox(world: &mut World) {
     let scene_path: String = world.resource::<ScenePath>().0.clone();
 
     // The persistent world shell (BigSpace root + `WorldGrid` + the single
-    // `FloatingOrigin`) is owned by `WorldShellPlugin`. `ensure_world_root` is
-    // create-or-get, so the Sun hangs off the canonical grid regardless of which
-    // Startup system ran first.
-    let grid = lunco_core::ensure_world_root(world);
-
-    // --- Sun (directional light) on the world grid ---
+    // `FloatingOrigin`) is owned by `WorldShellPlugin`. `ensure_world_root` is a
+    // defensive create-or-get so the shell exists before any scene loads.
     //
-    // Real lunar shadows: hard-edged, jet-black, and long. Canonical lunar-sun
-    // cascade split + 4096² atlas from the single source of truth
-    // (`lunco_render::LunarSunShadow`), shared with the celestial and USD paths.
-    // The biases are overridden for this binary's hard-shadow look: with
-    // `Hardware2x2` filtering (see `force_hard_shadow_filtering`) the normal bias
-    // must stay small or it detaches/softens the contact edge — unlike the
-    // terrain-acne-tuned default (0.06/2.5) used under PCF.
-    let sun = lunco_render::LunarSunShadow {
-        depth_bias: 0.02,
-        normal_bias: 0.8,
-        ..Default::default()
-    };
-    // Illuminance + angular size from the active-scene `LunarSun` resource (every
-    // camera's exposure reads the same resource, so sun lux and camera EV can't
-    // drift apart).
-    let ls = *world.resource::<lunco_environment::LunarSun>();
-    world.insert_resource(sun.shadow_map());
-    world.spawn((
-        sun.directional_light(Color::WHITE, ls.illuminance_lux),
-        sun.cascade_config(),
-        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
-        // Low sun (~11° above horizon, yaw 0.5 rad) for long raking lunar
-        // shadows — same YXZ convention as `SetEnvironmentLight` and the
-        // Inspector → Environment controls.
-        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.5, -0.2, 0.0)),
-        GlobalTransform::default(),
-        CellCoord::default(),
-        Name::new("Sun"),
-        // Default sun for scenes that author no lighting. A scene that authors a
-        // UsdLux `DistantLight` (e.g. the moonbase Twin) replaces it: the loader
-        // despawns every `FallbackSceneLight` and takes over ambient too.
-        lunco_usd::FallbackSceneLight,
-        ChildOf(grid),
-    ));
+    // The scene's SUN is no longer spawned here. It is a UsdLux `DistantLight`
+    // authored in the scene itself (`sandbox_scene.usda`), instantiated by the
+    // same USD loader as every other light — so a scene clear despawns it and a
+    // scene load recreates it as ordinary scene content. There is no
+    // Rust-spawned fallback sun and no restore-on-switch machinery; see
+    // `lunco_usd_bevy::light` for the single light path and the
+    // post-load light-existence check that errors if a scene ships without one.
+    let _grid = lunco_core::ensure_world_root(world);
 
     // ── Boot-entry policy (GUI only) ─────────────────────────────────────────
     // Before loading the default scene, consult the shared boot policy
@@ -3146,8 +3115,8 @@ fn setup_sandbox(world: &mut World) {
     // environment — so we skip the default load and there's no load-then-replace
     // race. Explicit `--scene` / `--api` → the policy stands down and we load
     // normally. Headless (no `ui`, no tutorial engine) never onboards → loads.
-    // The world shell (grid + Sun) above is set up regardless, so a taking-over
-    // tutorial scene still has it.
+    // The world shell above is set up regardless, so a taking-over tutorial scene
+    // still has it.
     #[cfg(feature = "ui")]
     {
         let has_scene_arg = std::env::args().any(|a| a == "--scene");
@@ -3295,39 +3264,3 @@ fn startup_scene_failguard(
 //  actuator on the normal intent→port machinery — the `Release` intent (KeyG) → the
 //  `release` port → `lunco_scene_commands::commands::ReleaseActuator` → DetachJoint.
 //  See the joint-as-actuator refactor. Works for any possessed vessel + dock joint.)
-
-fn on_restore_fallback_lights(
-    _trigger: On<lunco_core::RestoreFallbackLights>,
-    mut commands: Commands,
-    fallbacks: Query<Entity, With<lunco_core::FallbackSceneLight>>,
-    grid_q: Query<Entity, With<lunco_core::WorldGrid>>,
-    ls: Res<lunco_environment::LunarSun>,
-) {
-    if !fallbacks.is_empty() {
-        return;
-    }
-    let Some(grid) = grid_q.iter().next() else {
-        warn!("[restore-fallback-lights] No WorldGrid found to parent sandbox fallback light");
-        return;
-    };
-
-    let sun = lunco_render::LunarSunShadow {
-        depth_bias: 0.02,
-        normal_bias: 0.8,
-        ..Default::default()
-    };
-    commands.insert_resource(sun.shadow_map());
-    commands.spawn((
-        sun.directional_light(Color::WHITE, ls.illuminance_lux),
-        sun.cascade_config(),
-        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
-        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.5, -0.2, 0.0)),
-        GlobalTransform::default(),
-        CellCoord::default(),
-        Name::new("Sun"),
-        lunco_core::FallbackSceneLight,
-        ChildOf(grid),
-    ));
-    info!("[restore-fallback-lights] restored sandbox fallback light");
-}
-

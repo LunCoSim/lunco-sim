@@ -30,7 +30,7 @@ def Xform "ShaderFallbackTest" (
     }
     def DistantLight "Sun"
     {
-        float inputs:intensity = 8000
+        float inputs:intensity = 128000
         double3 xformOp:rotateXYZ = (-40.0, 30.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
