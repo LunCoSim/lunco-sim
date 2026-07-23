@@ -373,7 +373,6 @@ impl Plugin for CelestialPlugin {
         // corrupt the f32 cascade-shadow matrices) and therefore inherits no
         // orientation from the site-anchored hierarchy.
         app.add_systems(Update, update_sun_light_system);
-        app.add_observer(on_restore_fallback_lights);
     }
 }
 
@@ -463,37 +462,5 @@ impl Plugin for GravityPlugin {
         // `lunco-environment`'s `EnvironmentPlugin` and consumes `LocalGravity`.
         // Add EnvironmentPlugin alongside GravityPlugin for full gravity behavior.
     }
-}
-
-fn on_restore_fallback_lights(
-    _trigger: On<lunco_core::RestoreFallbackLights>,
-    mut commands: Commands,
-    fallbacks: Query<Entity, With<lunco_core::FallbackSceneLight>>,
-    solar_grid_q: Query<Entity, With<SolarSystemRoot>>,
-) {
-    if !fallbacks.is_empty() {
-        return;
-    }
-    let Some(_solar_grid) = solar_grid_q.iter().next() else {
-        // No SolarSystemRoot found, so we're not running in a celestial/heliocentric context
-        return;
-    };
-
-    let sun = lunco_render::LunarSunShadow::default();
-    let ls = lunco_environment::LunarSun::default();
-    commands.insert_resource(sun.shadow_map());
-    // Top-level, NOT under the Solar Grid — see the matching spawn in
-    // `big_space_setup`: a heliocentric-magnitude translation corrupts the
-    // f32 cascade-shadow matrices (whole-ground lit/black strobe).
-    commands.spawn((
-        sun.directional_light(Color::WHITE, ls.illuminance_lux),
-        sun.cascade_config(),
-        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
-        Transform::default(),
-        GlobalTransform::default(),
-        Name::new("Sun Light"),
-        lunco_core::FallbackSceneLight,
-    ));
-    info!("[restore-fallback-lights] restored celestial fallback light");
 }
 

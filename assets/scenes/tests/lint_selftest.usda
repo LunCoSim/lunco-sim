@@ -52,7 +52,7 @@ def Xform "LintSelftest" (
 
     def DistantLight "Sun"
     {
-        float inputs:intensity = 10000
+        float inputs:intensity = 128000
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

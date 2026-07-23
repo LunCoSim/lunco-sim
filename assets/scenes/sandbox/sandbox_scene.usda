@@ -112,6 +112,30 @@ def Xform "SandboxScene" (
         rel material:binding = </SandboxScene/Looks/Starfield>
     }
 
+    # ── Sun ────────────────────────────────────────────────────────────────
+    #
+    # The scene's light, authored the standard USD way: a UsdLux `DistantLight`.
+    # This is the ONE light path — the same `instantiate_light_prim` loader every
+    # other scene's lights use — so a scene clear despawns it and a scene load
+    # recreates it as part of normal USD prim instantiation. No Rust-spawned
+    # "fallback" sun, no restore-on-switch machinery: the sun is scene content,
+    # full stop.
+    #
+    # `inputs:intensity` is the calibrated lunar solar constant (128 000 lx); the
+    # celestial system (`update_sun_light_system`) refines it to the live 1/r²
+    # value and STEERS the orientation from the ephemeris once the site anchor +
+    # solar tree resolve, so the `xformOp:rotateXYZ` below is only the pre-aim
+    # default before that first steer (and the manual orientation when no
+    # ephemeris is mounted). `inputs:angle` 0.53° is Sol's angular diameter,
+    # driving physically-scaled penumbra width in the horizon-shadow march.
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 128000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
     # Looks — the scene's materials. A WGSL shader is bound the way USD binds every
     # shader: a `Material` whose surface comes from a `Shader`, whose source is named
     # for its render context (`info:wgsl:sourceAsset`, exactly as an MDL shader is

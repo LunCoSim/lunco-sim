@@ -90,7 +90,7 @@ def Xform "SlopeTest" (
 
     def DistantLight "Sun"
     {
-        float inputs:intensity = 11000
+        float inputs:intensity = 128000
         float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-16.0, 60.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
