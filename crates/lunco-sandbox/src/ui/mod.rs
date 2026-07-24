@@ -558,11 +558,17 @@ fn init_current_scene_path(
 fn register_downloadable_assets_settings(world: &mut World) {
     use bevy_egui::egui;
     use lunco_assets::datasets::{DatasetRegistry, DatasetState};
+    use std::collections::BTreeMap;
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
     layout.register_settings(|ui, world| {
-        ui.label(egui::RichText::new("Downloadable data").weak().small());
+        // The preference is application-wide; Twin-declared datasets are not.
+        // Keep the former in the ordinary Settings flow and put every open
+        // Twin's potentially long asset list behind its own nested menu. This
+        // keeps Settings usable for a Twin such as SummerSpaceSchool, which
+        // declares dozens of terrain products.
+        ui.label(egui::RichText::new("General").weak().small());
         if let Some(mut settings) = world.get_resource_mut::<lunco_settings::DownloadSettings>() {
             ui.horizontal(|ui| {
                 ui.label("Max parallel downloads:");
@@ -590,72 +596,35 @@ fn register_downloadable_assets_settings(world: &mut World) {
             return;
         }
         // Snapshot: the rows below need `&mut World` to request a download.
-        //
-        // The heading is WHO declared it — the LunCo library that owns the
-        // dataset ("celestial", "ephemeris", "modelica") or the twin's own
-        // name. `scope.label()` says "engine" for every engine dataset, which
-        // is true and useless: a user looking for Earth imagery is looking for
-        // the celestial library, not for the fact that it isn't a twin's.
-        let rows: Vec<(String, String, String, DatasetState)> = registry
-            .entries()
-            .iter()
-            .map(|e| {
-                let owner = match &e.scope {
-                    lunco_assets::datasets::DatasetScope::Engine => e.group.clone(),
-                    lunco_assets::datasets::DatasetScope::Twin { name, .. } => name.clone(),
-                };
-                (e.key.clone(), owner, e.name.clone(), e.state.clone())
-            })
-            .collect();
-        // Registration order already groups by owner; sorting makes that a
-        // guarantee rather than a coincidence, so the headings below can be
-        // emitted on change instead of buffering the whole list.
-        let mut rows = rows;
-        rows.sort_by(|a, b| a.1.cmp(&b.1));
-        let mut requested: Option<String> = None;
-        let mut heading: Option<&str> = None;
-        for (key, owner, name, state) in &rows {
-            if heading != Some(owner.as_str()) {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new(owner).weak().small());
-                heading = Some(owner.as_str());
-            }
-            ui.horizontal(|ui| {
-                ui.label(name.as_str());
-                match state {
-                    DatasetState::Installed => {
-                        ui.label(egui::RichText::new("✔ cached").weak());
-                    }
-                    DatasetState::Downloading {
-                        bytes_done,
-                        bytes_total,
-                    } => {
-                        let mb = |b: &u64| *b as f64 / (1024.0 * 1024.0);
-                        ui.label(if *bytes_total > 0 {
-                            format!("⬇ {:.1}/{:.1} MB", mb(bytes_done), mb(bytes_total))
-                        } else {
-                            format!("⬇ {:.1} MB", mb(bytes_done))
-                        });
-                    }
-                    DatasetState::Missing | DatasetState::Failed(_) => {
-                        if let DatasetState::Failed(e) = state {
-                            ui.label(egui::RichText::new("⚠").color(egui::Color32::RED))
-                                .on_hover_text(e.clone());
-                        }
-                        if ui
-                            .button("⬇ Download")
-                            .on_hover_text(
-                                "Fetches this dataset and caches it — engine data in the \
-                                 shared cache, a twin's data in that twin's .cache. \
-                                 Downloads only happen from this button.",
-                            )
-                            .clicked()
-                        {
-                            requested = Some(key.clone());
-                        }
-                    }
+        // Keep engine data inline, grouped by its owning library. A Twin's
+        // manifest belongs to that Twin, so its rows get a nested menu instead
+        // of stretching the global Settings menu to a full-screen list.
+        type DatasetRow = (String, String, DatasetState);
+        let mut engine_rows: BTreeMap<String, Vec<DatasetRow>> = BTreeMap::new();
+        let mut twin_rows: BTreeMap<String, Vec<DatasetRow>> = BTreeMap::new();
+        for entry in registry.entries() {
+            let row = (entry.key.clone(), entry.name.clone(), entry.state.clone());
+            match &entry.scope {
+                lunco_assets::datasets::DatasetScope::Engine => {
+                    engine_rows.entry(entry.group.clone()).or_default().push(row);
                 }
-            });
+                lunco_assets::datasets::DatasetScope::Twin { name, .. } => {
+                    twin_rows.entry(name.clone()).or_default().push(row);
+                }
+            }
+        }
+        let mut requested: Option<String> = None;
+        for (owner, rows) in &engine_rows {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(owner).weak().small());
+            render_dataset_rows(ui, rows, &mut requested);
+        }
+        if !twin_rows.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new("Twin data").weak().small());
+            for (twin, rows) in &twin_rows {
+                ui.menu_button(twin, |ui| render_dataset_rows(ui, rows, &mut requested));
+            }
         }
         if let Some(key) = requested {
             if let Some(mut registry) = world.get_resource_mut::<DatasetRegistry>() {
@@ -663,6 +632,56 @@ fn register_downloadable_assets_settings(world: &mut World) {
             }
         }
     });
+}
+
+/// Render one owner-scoped set of datasets. The caller decides whether that
+/// scope belongs inline under General (engine data) or in a Twin submenu.
+fn render_dataset_rows(
+    ui: &mut bevy_egui::egui::Ui,
+    rows: &[(String, String, lunco_assets::datasets::DatasetState)],
+    requested: &mut Option<String>,
+) {
+    use bevy_egui::egui;
+    use lunco_assets::datasets::DatasetState;
+
+    for (key, name, state) in rows {
+        ui.horizontal(|ui| {
+            ui.label(name);
+            match state {
+                DatasetState::Installed => {
+                    ui.label(egui::RichText::new("✔ cached").weak());
+                }
+                DatasetState::Downloading {
+                    bytes_done,
+                    bytes_total,
+                } => {
+                    let mb = |b: &u64| *b as f64 / (1024.0 * 1024.0);
+                    ui.label(if *bytes_total > 0 {
+                        format!("⬇ {:.1}/{:.1} MB", mb(bytes_done), mb(bytes_total))
+                    } else {
+                        format!("⬇ {:.1} MB", mb(bytes_done))
+                    });
+                }
+                DatasetState::Missing | DatasetState::Failed(_) => {
+                    if let DatasetState::Failed(error) = state {
+                        ui.label(egui::RichText::new("⚠").color(egui::Color32::RED))
+                            .on_hover_text(error);
+                    }
+                    if ui
+                        .button("⬇ Download")
+                        .on_hover_text(
+                            "Fetches this dataset and caches it — engine data in the \
+                             shared cache, a twin's data in that twin's .cache. \
+                             Downloads only happen from this button.",
+                        )
+                        .clicked()
+                    {
+                        *requested = Some(key.clone());
+                    }
+                }
+            }
+        });
+    }
 }
 
 fn register_sandbox_scenarios_menu(world: &mut World) {

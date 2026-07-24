@@ -84,9 +84,11 @@ impl Default for LunarSunShadow {
             first_cascade_far_bound: 40.0,
             maximum_distance: 1500.0,
             overlap_proportion: 0.1,
-            // Favour acne-free terrain over the last centimetres of contact
-            // tightness — grazing sun makes self-shadow acne the dominant
-            // artifact. Live-tunable via `SetEnvironmentLight`.
+            // The terrain needs a conservative bias under grazing lunar light:
+            // smaller values turn its dense DEM triangles into visible shadow
+            // acne. Small wheel-to-ground gaps are instead closed by Bevy's
+            // screen-space ContactShadows on SceneCamera (the correct native
+            // complement to a coarse CSM depth map).
             depth_bias: 0.06,
             normal_bias: 2.5,
             // WEB: 2048² shadow atlas — a quarter of the shadow-pass fill +
@@ -123,6 +125,9 @@ impl LunarSunShadow {
             color,
             illuminance: illuminance_lux,
             shadow_maps_enabled: true,
+            // CSM handles terrain-scale occlusion; ContactShadows on the
+            // viewing camera supplies the stable sub-texel contact detail.
+            contact_shadows_enabled: true,
             shadow_depth_bias: self.depth_bias,
             shadow_normal_bias: self.normal_bias,
             ..Default::default()

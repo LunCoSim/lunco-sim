@@ -8,6 +8,7 @@
 
 use bevy::camera::Hdr;
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::pbr::ContactShadows;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use lunco_render::camera::{MsaaLevel, SceneCamera, ToneMap};
@@ -45,6 +46,11 @@ fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera) {
     let mut ec = commands.entity(e);
     ec.try_insert((
         Camera3d::default(),
+        // Native screen-space contact shadows fill the sub-texel gap left by
+        // the Sun's terrain-safe CSM bias. `ContactShadows::default()` is the
+        // maintained Bevy policy (including its depth prepass requirement),
+        // rather than a LunCo-specific wheel-darkening shader.
+        ContactShadows::default(),
         tonemapping_of(cam.tone_map),
         msaa_of(cam.msaa),
     ));
@@ -118,6 +124,7 @@ mod tests {
             .id();
         a.update();
         assert!(a.world().entity(e).contains::<Camera3d>());
+        assert!(a.world().entity(e).contains::<ContactShadows>());
         assert_eq!(
             a.world().entity(e).get::<Tonemapping>(),
             Some(&Tonemapping::AgX)
