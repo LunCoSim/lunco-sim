@@ -25,6 +25,7 @@ def Xform "Battery" (
     float inputs:capacity = 83.33
     float inputs:R_internal = 0.05
     float inputs:soc_init = 1.0
+    float outputs:soc_out
     custom token connectors:p
 
     double3 xformOp:translate = (0, 0, 0)

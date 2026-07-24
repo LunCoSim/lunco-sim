@@ -108,6 +108,8 @@ fn lint_usd(facts) {
     for f in filtered_pair_is_inert(facts) { out.push(f); }
     for f in collision_group_is_inert(facts) { out.push(f); }
     for f in empty_component_network(facts) { out.push(f); }
+    for f in disconnected_component_network(facts) { out.push(f); }
+    for f in dangling_network_connector(facts) { out.push(f); }
     out
 }
 
@@ -123,6 +125,33 @@ fn empty_component_network(facts) {
         m += " Add the Modelica component facets to";
         m += " collection:components:includes or remove the empty network scope.";
         out.push(finding("empty-component-network", "error", scope.path, m));
+    }
+    out
+}
+
+/// One compiler scope must describe exactly one independently solved acausal
+/// network. Separate failure/scheduling domains belong in separate USD scopes.
+fn disconnected_component_network(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        if scope.island_count <= 1 { continue; }
+        let m = "contains " + scope.island_count + " disconnected acausal networks —";
+        m += " author one Scope with CollectionAPI:components per independently solved network.";
+        out.push(finding("disconnected-component-network", "error", scope.path, m));
+    }
+    out
+}
+
+/// A connector outside the collection would otherwise be omitted from the
+/// generated Modelica wrapper, changing Kirchhoff topology silently.
+fn dangling_network_connector(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        for connector in scope.dangling_connectors {
+            let m = "targets a connector outside its CollectionAPI:components working set —";
+            m += " include the target component or move the connection into the correct network scope.";
+            out.push(finding("dangling-network-connector", "error", connector, m));
+        }
     }
     out
 }

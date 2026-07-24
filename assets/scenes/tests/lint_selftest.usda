@@ -260,6 +260,54 @@ def Xform "LintSelftest" (
         uniform token collection:components:expansionRule = "explicitOnly"
     }
 
+    # Two independent pins in one compiler scope are ambiguous failure domains.
+    def Xform "IslandA" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+    def Xform "IslandB" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+    def Scope "DisconnectedElectrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </LintSelftest/IslandA>,
+            </LintSelftest/IslandB>,
+        ]
+    }
+
+    def Xform "DanglingLoad" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
+        custom token connectors:p.connect = </LintSelftest/OutsideBattery.connectors:p>
+    }
+    def Xform "OutsideBattery" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+    def Scope "DanglingElectrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [</LintSelftest/DanglingLoad>]
+    }
+
     def Scope "Scenario"
     {
         custom string lunco:scenario = "lint-selftest"

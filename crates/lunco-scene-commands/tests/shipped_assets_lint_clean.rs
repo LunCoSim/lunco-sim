@@ -116,6 +116,20 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
         "lint_selftest.usda must prove empty domain networks are rejected — \
          got {lint_errors:?}"
     );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("disconnected-component-network")),
+        "lint_selftest.usda must prove disconnected domain networks are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("dangling-network-connector")),
+        "lint_selftest.usda must prove out-of-network connectors are rejected — \
+         got {lint_errors:?}"
+    );
     assert!(!report.ok, "a file with lint ERRORS must not report ok");
 }
 

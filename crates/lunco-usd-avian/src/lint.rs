@@ -55,7 +55,7 @@
 //! hangs. `[]` when the subtree states no bounds, which a rule must read as
 //! UNKNOWN and never as zero.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
@@ -63,7 +63,7 @@ use lunco_lint::LintFinding;
 use lunco_usd_bevy::{StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
-use openusd::usd::{Collection, PrimPredicate, compute_included_paths};
+use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
 
 /// The lint domain these facts belong to: hook `lint.usd`, policy
 /// `assets/scripting/policy/lint_usd.rhai`.
@@ -211,8 +211,12 @@ fn collider_world_aabb(
 ) -> Option<(Vec3, Vec3)> {
     let prefix = format!("{path}/");
     let start = sorted.partition_point(|s| s.as_str() < prefix.as_str());
-    let subtree = std::iter::once(path.to_string())
-        .chain(sorted[start..].iter().take_while(|s| s.starts_with(&prefix)).cloned());
+    let subtree = std::iter::once(path.to_string()).chain(
+        sorted[start..]
+            .iter()
+            .take_while(|s| s.starts_with(&prefix))
+            .cloned(),
+    );
     let mut acc: Option<(Vec3, Vec3)> = None;
     for s in subtree {
         let Ok(p) = SdfPath::new(&s) else { continue };
@@ -227,7 +231,9 @@ fn collider_world_aabb(
         if reader.value::<bool>(&p, "physics:collisionEnabled") == Some(false) {
             continue;
         }
-        let Some((lo, hi)) = world_aabb(reader, &p) else { continue };
+        let Some((lo, hi)) = world_aabb(reader, &p) else {
+            continue;
+        };
         acc = Some(match acc {
             None => (lo, hi),
             Some((a, b)) => (a.min(lo), b.max(hi)),
@@ -285,14 +291,26 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 }
             }
         }
-        let missing: Vec<String> =
-            targets.iter().filter(|t| !bodies.contains(*t)).cloned().collect();
+        let missing: Vec<String> = targets
+            .iter()
+            .filter(|t| !bodies.contains(*t))
+            .cloned()
+            .collect();
         attached.extend(targets.iter().cloned());
         joints.push(H::map([
             ("path", H::str(jp.to_string())),
-            ("type", H::str(reader.prim_type_name(jp).unwrap_or_default())),
-            ("bodies", H::Array(targets.into_iter().map(H::str).collect())),
-            ("missing", H::Array(missing.into_iter().map(H::str).collect())),
+            (
+                "type",
+                H::str(reader.prim_type_name(jp).unwrap_or_default()),
+            ),
+            (
+                "bodies",
+                H::Array(targets.into_iter().map(H::str).collect()),
+            ),
+            (
+                "missing",
+                H::Array(missing.into_iter().map(H::str).collect()),
+            ),
         ]));
     }
 
@@ -322,15 +340,27 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .map(|t| t.to_string())
             .filter(|t| !t.is_empty())
             .collect();
-        let missing: Vec<String> =
-            targets.iter().filter(|t| !known.contains(*t)).cloned().collect();
+        let missing: Vec<String> = targets
+            .iter()
+            .filter(|t| !known.contains(*t))
+            .cloned()
+            .collect();
         let owners: Vec<String> = targets.iter().map(|t| owner_of(t)).collect();
         filtered_pairs.push(H::map([
             ("path", H::str(path.clone())),
             ("owner", H::str(owner_of(&path))),
-            ("targets", H::Array(targets.into_iter().map(H::str).collect())),
-            ("target_owners", H::Array(owners.into_iter().map(H::str).collect())),
-            ("missing", H::Array(missing.into_iter().map(H::str).collect())),
+            (
+                "targets",
+                H::Array(targets.into_iter().map(H::str).collect()),
+            ),
+            (
+                "target_owners",
+                H::Array(owners.into_iter().map(H::str).collect()),
+            ),
+            (
+                "missing",
+                H::Array(missing.into_iter().map(H::str).collect()),
+            ),
         ]));
     }
 
@@ -363,22 +393,48 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         // it — an include naming a prim that was renamed matches nothing at all.
         let missing_includes: Vec<String> = includes
             .iter()
-            .filter(|t| !known.iter().any(|k| k == *t || k.starts_with(&format!("{t}/"))))
+            .filter(|t| {
+                !known
+                    .iter()
+                    .any(|k| k == *t || k.starts_with(&format!("{t}/")))
+            })
             .cloned()
             .collect();
-        let missing_filtered: Vec<String> =
-            filtered.iter().filter(|t| !group_paths.contains(*t)).cloned().collect();
+        let missing_filtered: Vec<String> = filtered
+            .iter()
+            .filter(|t| !group_paths.contains(*t))
+            .cloned()
+            .collect();
         collision_groups.push(H::map([
             ("path", H::str(path)),
-            ("merge", H::str(reader.text(p, ptok::A_MERGE_GROUP).unwrap_or_default())),
+            (
+                "merge",
+                H::str(reader.text(p, ptok::A_MERGE_GROUP).unwrap_or_default()),
+            ),
             (
                 "invert",
-                H::Bool(reader.scalar::<bool>(p, ptok::A_INVERT_FILTERED_GROUPS).unwrap_or(false)),
+                H::Bool(
+                    reader
+                        .scalar::<bool>(p, ptok::A_INVERT_FILTERED_GROUPS)
+                        .unwrap_or(false),
+                ),
             ),
-            ("includes", H::Array(includes.into_iter().map(H::str).collect())),
-            ("filtered", H::Array(filtered.into_iter().map(H::str).collect())),
-            ("missing_includes", H::Array(missing_includes.into_iter().map(H::str).collect())),
-            ("missing_filtered", H::Array(missing_filtered.into_iter().map(H::str).collect())),
+            (
+                "includes",
+                H::Array(includes.into_iter().map(H::str).collect()),
+            ),
+            (
+                "filtered",
+                H::Array(filtered.into_iter().map(H::str).collect()),
+            ),
+            (
+                "missing_includes",
+                H::Array(missing_includes.into_iter().map(H::str).collect()),
+            ),
+            (
+                "missing_filtered",
+                H::Array(missing_filtered.into_iter().map(H::str).collect()),
+            ),
         ]));
     }
 
@@ -398,18 +454,29 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ("type", H::str(reader.prim_type_name(p).unwrap_or_default())),
             (
                 "kinematic",
-                H::Bool(reader.scalar::<bool>(p, ptok::A_KINEMATIC_ENABLED).unwrap_or(false)),
+                H::Bool(
+                    reader
+                        .scalar::<bool>(p, ptok::A_KINEMATIC_ENABLED)
+                        .unwrap_or(false),
+                ),
             ),
             (
                 "simulated",
-                H::Bool(reader.scalar::<bool>(p, ptok::A_RIGID_BODY_ENABLED).unwrap_or(true)),
+                H::Bool(
+                    reader
+                        .scalar::<bool>(p, ptok::A_RIGID_BODY_ENABLED)
+                        .unwrap_or(true),
+                ),
             ),
             ("collider", H::Bool(own_collider)),
             (
                 "subtree_collider",
                 H::Bool(own_collider || subtree_has_collider(reader, &sorted, &path)),
             ),
-            ("host_body", H::str(host_body(&bodies, &path).unwrap_or_default())),
+            (
+                "host_body",
+                H::str(host_body(&bodies, &path).unwrap_or_default()),
+            ),
             ("jointed", H::Bool(attached.contains(&path))),
             // WHERE the body can touch the world, not just whether it can. Every
             // other fact here is topological — schemas, ancestry, joint targets —
@@ -450,15 +517,94 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .any(|name| name.starts_with("collection:components:"))
         {
             let members = reader.rel_targets(p, "collection:components:includes");
+            let member_names: HashSet<String> = members.iter().map(ToString::to_string).collect();
+            let mut acausal_members = HashSet::new();
+            let mut adjacency: HashMap<String, HashSet<String>> = HashMap::new();
+            let mut dangling_connectors = Vec::new();
+            for member in &members {
+                if !reader.has_api_schema(member, "LunCoProgramAPI") {
+                    continue;
+                }
+                let member_name = member.to_string();
+                for attr in reader.attr_names(member) {
+                    let Some(connector) = attr.strip_prefix("connectors:") else {
+                        continue;
+                    };
+                    acausal_members.insert(member_name.clone());
+                    adjacency.entry(member_name.clone()).or_default();
+                    for target in reader.connections(member, &attr) {
+                        let target_string = target.to_string();
+                        let Some((target_prim, target_connector)) =
+                            target_string.split_once(".connectors:")
+                        else {
+                            dangling_connectors
+                                .push(format!("{member_name}.connectors:{connector}"));
+                            continue;
+                        };
+                        if !member_names.contains(target_prim) {
+                            dangling_connectors
+                                .push(format!("{member_name}.connectors:{connector}"));
+                            continue;
+                        }
+                        let target_exists = SdfPath::new(target_prim).ok().is_some_and(|path| {
+                            reader
+                                .attr_names(&path)
+                                .iter()
+                                .any(|name| name == &format!("connectors:{target_connector}"))
+                        });
+                        if !target_exists {
+                            dangling_connectors
+                                .push(format!("{member_name}.connectors:{connector}"));
+                            continue;
+                        }
+                        adjacency
+                            .entry(member_name.clone())
+                            .or_default()
+                            .insert(target_prim.to_string());
+                        adjacency
+                            .entry(target_prim.to_string())
+                            .or_default()
+                            .insert(member_name.clone());
+                    }
+                }
+            }
+            let mut unseen = acausal_members;
+            let mut island_count = 0_i64;
+            while let Some(seed) = unseen.iter().next().cloned() {
+                island_count += 1;
+                let mut pending = vec![seed];
+                while let Some(current) = pending.pop() {
+                    if !unseen.remove(&current) {
+                        continue;
+                    }
+                    if let Some(neighbors) = adjacency.get(&current) {
+                        pending.extend(neighbors.iter().cloned());
+                    }
+                }
+            }
             network_scopes.push(H::map([
                 ("path", H::str(p.to_string())),
                 (
                     "parent",
-                    H::str(p.parent().map(|parent| parent.to_string()).unwrap_or_default()),
+                    H::str(
+                        p.parent()
+                            .map(|parent| parent.to_string())
+                            .unwrap_or_default(),
+                    ),
                 ),
                 (
                     "members",
-                    H::Array(members.into_iter().map(|member| H::str(member.to_string())).collect()),
+                    H::Array(
+                        members
+                            .into_iter()
+                            .map(|member| H::str(member.to_string()))
+                            .collect(),
+                    ),
+                ),
+                ("island_count", H::Int(island_count)),
+                (
+                    "dangling_connectors",
+                    H::Array(dangling_connectors.into_iter().map(H::str).collect()),
                 ),
             ]));
         }
@@ -491,12 +637,21 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 ("path", H::str(p.to_string())),
                 (
                     "parent",
-                    H::str(p.parent().map(|parent| parent.to_string()).unwrap_or_default()),
+                    H::str(
+                        p.parent()
+                            .map(|parent| parent.to_string())
+                            .unwrap_or_default(),
+                    ),
                 ),
                 ("name", H::str(name)),
                 (
                     "members",
-                    H::Array(members.into_iter().map(|member| H::str(member.to_string())).collect()),
+                    H::Array(
+                        members
+                            .into_iter()
+                            .map(|member| H::str(member.to_string()))
+                            .collect(),
+                    ),
                 ),
             ]));
         }
@@ -511,7 +666,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ("path", H::str(p.to_string())),
             ("type", H::str(reader.prim_type_name(p).unwrap_or_default())),
             ("parent", H::str(parent)),
-            ("schemas", H::Array(schemas.into_iter().map(H::str).collect())),
+            (
+                "schemas",
+                H::Array(schemas.into_iter().map(H::str).collect()),
+            ),
             (
                 "attributes",
                 H::Array(attributes.into_iter().map(H::str).collect()),
@@ -555,7 +713,10 @@ mod tests {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join("lunco_usd_lint_facts");
         std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join(format!("fixture_{}.usda", N.fetch_add(1, Ordering::Relaxed)));
+        let f = dir.join(format!(
+            "fixture_{}.usda",
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::write(&f, usda).unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
         let view = StageView::new(&stage);
@@ -563,7 +724,9 @@ mod tests {
     }
 
     fn entries(facts: &H, key: &str) -> Vec<H> {
-        let H::Map(m) = facts else { panic!("facts is not a map: {facts:?}") };
+        let H::Map(m) = facts else {
+            panic!("facts is not a map: {facts:?}")
+        };
         match m.iter().find(|(k, _)| k == key).map(|(_, v)| v) {
             Some(H::Array(a)) => a.clone(),
             other => panic!("facts.{key} is {other:?}"),
@@ -571,8 +734,13 @@ mod tests {
     }
 
     fn field<'a>(item: &'a H, key: &str) -> &'a H {
-        let H::Map(m) = item else { panic!("not a map: {item:?}") };
-        m.iter().find(|(k, _)| k == key).map(|(_, v)| v).expect("field present")
+        let H::Map(m) = item else {
+            panic!("not a map: {item:?}")
+        };
+        m.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+            .expect("field present")
     }
 
     fn body<'a>(facts: &'a [H], path: &str) -> &'a H {
@@ -683,14 +851,21 @@ def Xform "Lander" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
         let pad = low_y(body(&bodies, "/Lander/Pad"));
 
         // centre_y - (half_thickness*sin25 + half_length*cos25)
-        let expected = -1.807 - (0.075 * 25f32.to_radians().sin() + 3.525 * 25f32.to_radians().cos());
-        assert!((leg - expected).abs() < 1e-3, "strut low point {leg}, expected {expected}");
+        let expected =
+            -1.807 - (0.075 * 25f32.to_radians().sin() + 3.525 * 25f32.to_radians().cos());
+        assert!(
+            (leg - expected).abs() < 1e-3,
+            "strut low point {leg}, expected {expected}"
+        );
 
         // The pad's own bottom face — a cylinder is centred on its origin.
         assert!((pad - (-5.1359 - 0.15)).abs() < 1e-3, "pad low point {pad}");
 
         // And the fact these two numbers exist to state: the FOOT reaches lower.
-        assert!(pad < leg, "pad {pad} must reach below the strut corner {leg}");
+        assert!(
+            pad < leg,
+            "pad {pad} must reach below the strut corner {leg}"
+        );
     }
 
     /// A body whose subtree has no collider states no bounds — `[]`, so a rule can
@@ -768,7 +943,13 @@ def Xform "Lander" (prepend apiSchemas = ["PhysicsRigidBodyAPI"])
              }\n",
         );
         let bodies = entries(&f, "bodies");
-        assert_eq!(field(body(&bodies, "/Rig/Anchor"), "kinematic"), &H::Bool(true));
-        assert_eq!(field(body(&bodies, "/Rig/Prop"), "simulated"), &H::Bool(false));
+        assert_eq!(
+            field(body(&bodies, "/Rig/Anchor"), "kinematic"),
+            &H::Bool(true)
+        );
+        assert_eq!(
+            field(body(&bodies, "/Rig/Prop"), "simulated"),
+            &H::Bool(false)
+        );
     }
 }

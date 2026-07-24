@@ -19,6 +19,8 @@ When building any vehicle assembly in LunCoSim:
    - The collection includes the actual assembled part prims; it does not create proxy
      copies below the Scope.
    - Runtime Rust projection reads the composed stage and emits the transient Modelica wrapper. Rhai does not synthesize equations.
+   - One collection must contain one connected acausal island. A disconnected island
+     is another compilation and failure domain, so it gets another named Scope.
 
 3. **Vehicle Assembly Defines Topology**:
    - The vehicle assembly layer authors the Kirchhoff pin connections between components:

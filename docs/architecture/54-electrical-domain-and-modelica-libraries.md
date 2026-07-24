@@ -50,8 +50,10 @@ end Pin;
 ```
 
 At runtime `lunco-usd-sim` asks OpenUSD to compute the collection's included prims, then
-projects those connector-bearing components into one generated Modelica wrapper. The
-wrapper instantiates the qualified classes and emits `connect()` equations. It exists
+projects every included Modelica program facet into one generated Modelica wrapper.
+Acausal facets contribute `connect()` equations; causal-only blocks participate through
+their `inputs:`/`outputs:` connections. The wrapper instantiates the qualified classes
+and emits the equations. It exists
 only at runtime; USD remains the authored source of assembly truth and Modelica remains
 the equation language.
 
@@ -89,6 +91,17 @@ vehicle assembly needs them; the collection groups them without duplicating them
 network proxy hierarchy. Separate electrical islands use separate Scopes and collections.
 Their path namespaces give generated instances stable unique names even when the same
 component appears more than once.
+
+The projector rejects, and `lint.usd` reports, a scope containing multiple disconnected
+acausal islands or a connector targeting a component outside the collection. This is
+intentional failure isolation: one independently compiled network has one explicit USD
+scope. USD multi-target connections remain multi-way Modelica `connect()` equations;
+the projector never selects only the first target.
+
+When the `.mo` contains one conventionally named class, its package-qualified class is
+derived from the path. When a source contains several definitions, author the standard
+`info:sourceAsset:subIdentifier` property on the program facet; it is the authoritative
+Modelica class name.
 
 ## 3. Why library loading looks the way it does
 
