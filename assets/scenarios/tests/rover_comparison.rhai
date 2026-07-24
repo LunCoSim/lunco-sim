@@ -3,9 +3,15 @@
 // command timeline: the scene compares vehicle properties, never driver timing.
 
 fn on_start(me) {
+    // Keep the comparison readable by default.  Attachment diagnostics remain
+    // available through Settings > Debug Visualization when investigating a
+    // particular rover.
+    cmd("ToggleJointViz", #{ show_joints: false, show_wheel_forces: false });
     this.t = 0.0;
     this.settle_s = 4.0;
-    this.run_s = 28.0;
+    // This is deliberately long enough to exercise the sequence rather than
+    // merely reaching its first obstacle.  Headless scene tests run uncapped.
+    this.run_s = 64.0;
     this.next_sample = 0.0;
     this.names = ["Easy", "Medium", "Awful", "Conventional", "Skid4", "AckermannRaycast4", "AckermannJoint4"];
     this.rovers = [
@@ -20,8 +26,9 @@ fn on_start(me) {
     this.prev = [(), (), (), (), (), (), ()];
     this.distance = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     this.max_tilt = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    this.max_grade = [0, 0, 0, 0, 0, 0, 0];
     this.phase = "settle";
-    print("[rover-comparison] identical primitive terrain: cylinders, blocks, 6/12/18/40 deg ramps");
+    print("[rover-comparison] identical continuous terrain: stepped wall, then 5/10/15/20/25/30/35/40 deg grades");
     print("[rover-comparison] all tiers launch simultaneously after settling");
 }
 
@@ -43,35 +50,46 @@ fn on_tick(me) {
         for rover in this.rovers { brake(rover); }
         if this.t >= this.settle_s {
             for i in 0..7 { this.prev[i] = world_pos(this.rovers[i]); }
+            // Every rover carries a BT.CPP mission whose spatial leaves target
+            // the USD waypoint prims under /RoverComparison/Routes.  Engaging
+            // without a JSON spec lets that authored program be the single
+            // control source.
+            for i in 0..7 {
+                cmd("EngageAutopilot", #{ vessel: this.rovers[i], index: i });
+            }
             this.phase = "drive";
             this.next_sample = this.t;
-            print("[rover-comparison] DRIVE: throttle=1.0, steer=0.0, all tiers");
+            print("[rover-comparison] DRIVE: terrain-following autopilot routes, all tiers");
         }
         return;
     }
 
     for i in 0..7 {
         let rover = this.rovers[i];
-        drive(rover, 1.0, 0.0);
         let pos = world_pos(rover);
         this.distance[i] += seg(this.prev[i], pos);
         this.prev[i] = pos;
         let tilt = tilt_deg(rover).abs();
         if tilt > this.max_tilt[i] { this.max_tilt[i] = tilt; }
+        let grade = grade_reached(pos[2]);
+        if grade > this.max_grade[i] { this.max_grade[i] = grade; }
     }
 
     if this.t >= this.next_sample {
         let line = "[rover-comparison] t=" + r2(this.t);
         for i in 0..7 {
             line += "  " + this.names[i] + " d=" + r2(this.distance[i]);
-            line += " tilt=" + r2(this.max_tilt[i]);
+            line += " tilt=" + r2(this.max_tilt[i]) + " grade=" + this.max_grade[i];
         }
         print(line);
         this.next_sample = this.t + 1.0;
     }
 
     if this.t >= this.settle_s + this.run_s {
-        for rover in this.rovers { brake(rover); }
+        for rover in this.rovers {
+            brake(rover);
+            cmd("DisengageAutopilot", #{ vessel: rover });
+        }
         let checks = [];
         for i in 0..7 {
             let rover = this.rovers[i];
@@ -87,13 +105,50 @@ fn on_tick(me) {
             "Easy lost its stability margin (peak tilt " + r2(this.max_tilt[0]) + " deg)"));
         checks.push(t_true(this.max_tilt[1] < 80.0,
             "Medium overturned (peak tilt " + r2(this.max_tilt[1]) + " deg)"));
+        // A distance-only gate can turn green before a rover ever enters the
+        // grade ladder.  Keep two representative capability floors so a
+        // physics or control regression cannot masquerade as a comparison.
+        checks.push(t_true(this.max_grade[0] >= 10,
+            "Easy did not reach the 10 deg grade (max " + this.max_grade[0] + " deg)"));
+        checks.push(t_true(this.max_grade[6] >= 5,
+            "AckermannJoint4 did not reach the 5 deg grade (max " + this.max_grade[6] + " deg)"));
         print("[rover-comparison] ── final comparison ─────────────────────");
         for i in 0..7 {
             print("[rover-comparison] " + this.names[i] +
                 " distance=" + r2(this.distance[i]) + " m" +
-                " peak_tilt=" + r2(this.max_tilt[i]) + " deg");
+                " peak_tilt=" + r2(this.max_tilt[i]) + " deg" +
+                " max_grade=" + this.max_grade[i] + " deg");
         }
         report_verdict(checks, "ROVER COMPARISON", "ROVER_COMPARISON");
+        // Only the comparison vehicles stop.  Do not pause the global world:
+        // avatar/UI input must remain live after a pass or failure so the user
+        // can inspect the result and continue navigating the scene.
         this.phase = "done";
+    }
+}
+
+// The grade boundaries are authored course stations, not a control law.  This
+// scenario test records the highest actual ramp entered by each rover.
+fn grade_reached(z) {
+    if z <= -89.49 { return 40; }
+    if z <= -76.39 { return 35; }
+    if z <= -62.53 { return 30; }
+    if z <= -48.03 { return 25; }
+    if z <= -32.99 { return 20; }
+    if z <= -17.53 { return 15; }
+    if z <= -1.77 { return 10; }
+    if z <= 14.17 { return 5; }
+    return 0;
+}
+
+// A reload or manual stop can interrupt the run before its terminal pause.
+// Release the command surface in that case too, so no vehicle inherits a
+// previous full-throttle command into the next scenario.
+fn on_stop(me) {
+    for rover in this.rovers {
+        if rover != () && rover >= 0 {
+            brake(rover);
+            cmd("DisengageAutopilot", #{ vessel: rover });
+        }
     }
 }

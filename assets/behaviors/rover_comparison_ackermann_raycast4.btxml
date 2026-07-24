@@ -1,0 +1,9 @@
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree"><Sequence>
+    <Action ID="drive_to" target="/RoverComparison/Routes/AckermannRaycast4/P0" speed="1.5" radius="2.5"/>
+    <Action ID="drive_to" target="/RoverComparison/Routes/AckermannRaycast4/P1" speed="1.5" radius="2.5"/>
+    <Action ID="drive_to" target="/RoverComparison/Routes/AckermannRaycast4/P2" speed="1.5" radius="2.5"/>
+    <Action ID="drive_to" target="/RoverComparison/Routes/AckermannRaycast4/P3" speed="1.5" radius="2.5"/>
+    <Action ID="drive_to" target="/RoverComparison/Routes/AckermannRaycast4/P4" speed="1.5" radius="2.5"/>
+  </Sequence></BehaviorTree>
+</root>

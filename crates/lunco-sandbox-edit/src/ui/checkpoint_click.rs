@@ -828,17 +828,24 @@ pub fn sync_waypoint_visuals(
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
     q_grids_only: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+    // A rover's hull is a direct child with a PbrLook projected from its
+    // USD-authored `primvars:displayColor`.  Route visuals borrow that resolved
+    // livery instead of carrying a second, hand-maintained palette.
+    q_hull_looks: Query<(&PbrLook, &ChildOf)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
     // 1. Gather all desired waypoints (coordinates or resolved USD prim paths) from ALL vessels.
-    // Key: (vessel, coord_key) → (index, world_pos, passed).
+    // Key: (vessel, coord_key) → (index, world_pos, passed, USD-derived livery).
     // coord_key is the raw "x;y;z" string or USD prim path — stable across sequence-index shifts.
-    // All vessels' waypoints are shown so the full mission map is visible.
     // `passed` is read from the live-only `ReachedWaypoints` set, never the XML.
-    let mut desired: std::collections::HashMap<(Entity, String), (usize, DVec3, bool)> =
+    let mut desired: std::collections::HashMap<(Entity, String), (usize, DVec3, bool, LinearRgba)> =
         std::collections::HashMap::new();
     for (vessel, xml, bindings, reached) in q_vessels.iter() {
+        let livery = q_hull_looks
+            .iter()
+            .find_map(|(look, child)| (child.parent() == vessel).then_some(look.base_color))
+            .unwrap_or(LinearRgba::WHITE);
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
             continue;
         };
@@ -858,7 +865,7 @@ pub fn sync_waypoint_visuals(
             });
             let Some(pos) = pos else { continue };
             let passed = reached.map(|r| r.0.contains(target)).unwrap_or(false);
-            desired.insert((vessel, target.clone()), (idx, pos, passed));
+            desired.insert((vessel, target.clone()), (idx, pos, passed, livery));
             idx += 1;
         }
     }
@@ -883,9 +890,13 @@ pub fn sync_waypoint_visuals(
             .unwrap_or(DVec3::ZERO);
 
     // 3. Spawn or update desired visuals.
-    for ((vessel, coord_key), (index, pos, passed)) in desired {
+    for ((vessel, coord_key), (index, pos, passed, livery)) in desired {
         let (cell, local_pos) = lunco_core::coords::world_to_grid_local(pos, grid_world, grid);
 
+        let mut base_color = livery;
+        base_color.alpha = if passed { 0.12 } else { 0.28 };
+        let mut emissive = livery;
+        emissive.alpha = 1.0;
         if let Some((entity, existing_passed)) = existing.remove(&(vessel, coord_key.clone())) {
             if existing_passed == passed {
                 // Same colour: just update position. `try_insert`, not `insert`: a scene
@@ -893,24 +904,23 @@ pub fn sync_waypoint_visuals(
                 // application, and a bare `insert` on the dead entity panics the schedule.
                 commands
                     .entity(entity)
-                    .try_insert((cell, Transform::from_translation(local_pos)));
+                    .try_insert((
+                        PbrLook {
+                            base_color,
+                            emissive,
+                            alpha: SurfaceAlpha::Blend,
+                            unlit: true,
+                            no_shadow_cast: true,
+                            ..default()
+                        },
+                        cell,
+                        Transform::from_translation(local_pos),
+                    ));
                 continue;
             }
             // Passed state changed (green → grey): despawn and fall through to re-spawn.
             commands.entity(entity).despawn();
         }
-        // Colour: green = active target, grey = already visited.
-        let (base_color, emissive) = if passed {
-            (
-                LinearRgba::new(0.45, 0.45, 0.45, 0.18),
-                LinearRgba::new(0.3, 0.3, 0.3, 1.0),
-            )
-        } else {
-            (
-                LinearRgba::new(0.2, 0.95, 0.5, 0.28),
-                LinearRgba::new(0.12, 0.85, 0.42, 1.0),
-            )
-        };
         commands.spawn((
             Mesh3d(meshes.add(Sphere::new(2.5).mesh().ico(5).unwrap())),
             PbrLook {

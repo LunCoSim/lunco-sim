@@ -1,0 +1,9 @@
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree"><Sequence>
+    <Action ID="drive_to" target="/RoverComparison/Routes/Awful/P0" speed="1.5" radius="2.5"/>
+    <Action ID="drive_to" target="/RoverComparison/Routes/Awful/P1" speed="1.5" radius="2.5"/>
+    <Action ID="drive_to" target="/RoverComparison/Routes/Awful/P2" speed="1.5" radius="2.5"/>
+    <Action ID="drive_to" target="/RoverComparison/Routes/Awful/P3" speed="1.5" radius="2.5"/>
+    <Action ID="drive_to" target="/RoverComparison/Routes/Awful/P4" speed="1.5" radius="2.5"/>
+  </Sequence></BehaviorTree>
+</root>
