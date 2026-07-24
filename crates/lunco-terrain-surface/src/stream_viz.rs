@@ -655,7 +655,11 @@ fn evolve_cover_for_foci_with_retention(
     //    and unlike a global metric change this only touches the quads it drops.
     if cover.len() > budget {
         for retained in [false, true] {
-            for &(_, p) in merges.iter().rev() {
+            // `merges` is sorted farthest-first (largest slack first). Preserve
+            // that order here: the reverse iterator used to drop the nearest
+            // non-retained quad before an available far one, producing a fine →
+            // coarse → fine pulse as a moving camera crossed successive tiles.
+            for &(_, p) in &merges {
                 if cover.len() <= budget {
                     break;
                 }
@@ -3207,6 +3211,7 @@ mod draw_partition_tests {
     fn budget_pressure_sheds_far_cover_before_a_retained_quad() {
         let qt = test_qt();
         let retained = c(1, 0, 0);
+        let farthest = c(1, 1, 1);
         let mut cover = (0..4)
             .flat_map(|z| (0..4).map(move |x| c(2, x, z)))
             .collect::<HashSet<_>>();
@@ -3217,7 +3222,7 @@ mod draw_partition_tests {
         evolve_cover_for_foci_with_retention(
             &qt,
             &mut cover,
-            &[([0.0, 0.0], 5.0)],
+            &[([-700.0, -700.0], 5.0)],
             &err,
             13,
             &|coord, _| coord == retained,
@@ -3233,6 +3238,14 @@ mod draw_partition_tests {
         assert!(
             cover.len() <= 13,
             "non-retained quads should absorb the budget cut"
+        );
+        assert!(cover.contains(&farthest));
+        assert!(
+            farthest
+                .children()
+                .iter()
+                .all(|child| !cover.contains(child)),
+            "the farthest eligible quad must merge before nearer non-retained cover"
         );
     }
 
