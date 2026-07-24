@@ -50,7 +50,7 @@ fn sample_physics_step(
     // missing, behave as if the perf HUD is off.
     settings: Option<Res<PerfHudSettings>>,
     // Same rationale: optional so the system tolerates a missing
-    // workbench (joint_minimal etc.).
+    // workbench.
     stats: Option<ResMut<PerfStats>>,
 ) {
     let Some(mut stats) = stats else {

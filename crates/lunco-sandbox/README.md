@@ -32,15 +32,10 @@ GUI = `SandboxCorePlugin + SandboxUiPlugin`; headless =
 `sandbox-server` bin lives in the sibling `lunco-sandbox-server` crate and calls
 `run_headless()`.
 
-Physics test harnesses live in `src/bin/` — run with
-`cargo run -p lunco-sandbox --bin <name>`:
-
 | Name | Purpose |
 |---|---|
 | `sandbox` | The windowed GUI app |
-| `rover_jitter` | Headless probe — chassis buzz under drive torque (no `ui`) |
-| `rover_turn` | Headless turning/steering probe (no `ui`) |
-| `joint_minimal` | Minimal windowed joint test (needs `ui`) |
+| `scene_test` | The single headless runner for authored USD + Rhai scene tests (`scripts/run_scene_tests.sh`) |
 
 ## Project Hierarchy
 

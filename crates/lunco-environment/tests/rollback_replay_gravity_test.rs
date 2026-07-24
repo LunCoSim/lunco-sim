@@ -18,10 +18,9 @@
 //! calling the system as a bare function would assert nothing about the
 //! registration, which is the thing that was missing.
 //!
-//! Note why the existing probes never caught this: `rollback_rover_probe` /
-//! `rollback_probe` insert `avian3d::prelude::Gravity(-9.81)` directly, so their
-//! gravity is applied INSIDE `PhysicsSchedule` and is present during replay by
-//! construction. They are green on a path the shipped app does not take.
+//! A hand-built probe with gravity inserted directly into `PhysicsSchedule` would
+//! miss this: gravity would be present during replay by construction. This test
+//! instead exercises the shipped schedule ordering.
 
 use avian3d::prelude::*;
 use bevy::math::DVec3;

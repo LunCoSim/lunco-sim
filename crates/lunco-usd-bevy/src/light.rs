@@ -363,7 +363,7 @@ pub(crate) fn instantiate_light_prim(
                 return true;
             };
 
-            info!(
+            debug!(
                 "[usd-bevy] {} DomeLight HDRI intensity={} skybox={}",
                 sdf_path.as_str(),
                 env.intensity,
@@ -490,7 +490,7 @@ pub(crate) fn instantiate_light_prim(
                     outer_angle,
                     ..default()
                 });
-                info!(
+                debug!(
                     "[usd-bevy] {} SphereLight (SpotLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m, cone={} deg",
                     sdf_path.as_str(),
                     intensity_lm,
@@ -513,7 +513,7 @@ pub(crate) fn instantiate_light_prim(
                     shadow_maps_enabled,
                     ..default()
                 });
-                info!(
+                debug!(
                     "[usd-bevy] {} SphereLight (PointLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m",
                     sdf_path.as_str(),
                     intensity_lm,
@@ -559,7 +559,7 @@ pub(crate) fn instantiate_light_prim(
                 width,
                 height,
             });
-            info!(
+            debug!(
                 "[usd-bevy] {} RectLight intensity={} lm, {}x{} m, range={} m",
                 sdf_path.as_str(),
                 intensity_lm,

@@ -2131,7 +2131,7 @@ fn setup_physical_wheel(
     // INJECTS energy (the idle rover spins and drifts metres with zero throttle);
     // a knuckle light enough to be stable can't hold the steer and the response
     // is pure noise. Verified across mass, inertia, motor stiffness and drive
-    // mode with the headless `rover_turn` probe.
+    // mode with the authored Ackermann parity scene.
     //
     // Instead every wheel hangs off the chassis by a SINGLE revolute (stable,
     // like the rigid rear axle). The drive is a velocity-controlled motor on that

@@ -763,8 +763,8 @@ pub fn maintain_owned_locally(
     tick: Res<lunco_core::SimTick>,
     input_log: Res<lunco_core::OwnedInputLog>,
     // Freshest authoritative snapshot per gid — the seed for a newly-promoted
-    // predicted body (see the promote arm). avian is deterministic
-    // (`determinism_probe`), so aligning the prediction's START to authority makes
+    // predicted body (see the promote arm). The deterministic replay contract means
+    // aligning the prediction's START to authority makes
     // its trajectory track the host instead of running a constant INTERP_DELAY
     // behind (the offset the reconcile keeps chasing → the drive-fighting wobble).
     buffers: Res<InterpBuffers>,
@@ -1159,14 +1159,13 @@ pub fn record_predicted_state(
 //
 // Rollback instead RE-DERIVES the present from the authoritative past: snap the
 // rover to the state the host actually had at the acked tick, then deterministically
-// re-simulate every input we've sent since. avian is deterministic (`determinism_probe`),
+// re-simulate every input we've sent since. The replay schedule is deterministic,
 // so the replay reproduces the host's trajectory exactly — the rover responds
 // immediately to local input AND carries no accumulating error, at any ping.
 //
-// Validated headlessly by `rollback_probe` before wiring: on the real solver, a
-// public-state-only restore + input replay reconverges to 0.24 mm steady-state
-// (vs 102 m free-running). Crucially it needs NO solver warm-start/contact-cache
-// restoration — which is what makes it implementable from a network snapshot.
+// Covered by the headless rollback-replay integration tests. A public-state-only
+// restore deliberately needs no solver warm-start/contact-cache restoration,
+// which is what makes it implementable from a network snapshot.
 
 /// Enable deterministic rollback (`LUNCO_ROLLBACK=1`). Default OFF: the shipped
 /// path stays the current reconcile, so this cannot regress anything until chosen.

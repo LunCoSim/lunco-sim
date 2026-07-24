@@ -14,8 +14,7 @@
 //! (~25 s of wall clock for ~25 s of sim), never self-exits, and reports its
 //! verdict only as a line in the log — so the harness needs an external
 //! `timeout` and a human (or a grep) to decide pass/fail. It is also the reason
-//! this crate grew a drawer of one-off probe binaries (`rover_turn`,
-//! `rover_jitter`, `determinism_probe`): each one hand-built a headless world
+//! this crate grew a drawer of one-off probes: each one hand-built a headless world
 //! because there was no way to headlessly run a REAL authored scene.
 //!
 //! `scene_test` is that missing thing: it composes the **same app the `--no-ui`
@@ -47,7 +46,7 @@
 //!    than going faster. Manual stepping sidesteps the rate limiter entirely
 //!    because there is no "realtime" to be a multiple of.
 //!
-//! 2. **A single-threaded compute pool.** `determinism_probe` measured it:
+//! 2. **A single-threaded compute pool.** The deterministic scene-test contract
 //!    avian's parallel solver reorders island/contact work across threads, so a
 //!    multi-threaded run is NOT run-to-run reproducible, while the same scene on
 //!    one compute thread is bit-identical. A test runner that can't reproduce
@@ -383,15 +382,10 @@ EXIT CODES:
 
 /// Pin the compute task pool to exactly `threads` threads.
 ///
-/// Same shape `determinism_probe::compute_pool` uses for both its single- and
-/// its multi-thread run, so the two binaries' configurations are comparable.
-///
-/// `determinism_probe` is the receipt for why 1 is the default: avian's
-/// parallel solver produces run-to-run position drift on a multi-threaded pool
-/// and is bit-identical on one. A regression test that cannot reproduce itself
-/// cannot bisect a regression, so the gate trades throughput for
-/// reproducibility. The scenes under test are single-rover, so the loss is
-/// small.
+/// The deterministic headless test runner uses one compute worker: a regression
+/// gate must reproduce its own result before it can meaningfully diagnose a
+/// scenario failure. The scenes under test are single-rover, so the throughput
+/// trade-off is small.
 ///
 /// `threads == 0` is handled by the CALLER, which skips this override entirely
 /// rather than asking for a zero-sized pool.

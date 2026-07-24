@@ -128,7 +128,7 @@ Primary entry points and simulation assembly targets.
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
 | **`luncosim`** | `luncosim` | The flagship windowed simulator: celestial bodies + ephemeris, solar-system-scale `big_space`, orbital camera, and the full FSW/hardware/mobility/robotics/avatar stack under the workbench. |
-| **`lunco-sandbox`** | `sandbox`, `joint_minimal` | Ground-physics test bed (ground mobility + physics, loaded from USD): USD scene + Avian physics + the sandbox edit tools. A composition root (`SandboxCorePlugin` + optional `SandboxUiPlugin`/`SandboxHeadlessPlugin`) shared by the `sandbox` GUI and `sandbox-server` headless binaries. |
+| **`lunco-sandbox`** | `sandbox`, `scene_test` | Ground-physics test bed (ground mobility + physics, loaded from USD): USD scene + Avian physics + the sandbox edit tools. A composition root (`SandboxCorePlugin` + optional `SandboxUiPlugin`/`SandboxHeadlessPlugin`) shared by the `sandbox` GUI and `sandbox-server` headless binaries; `scene_test` executes authored USD + Rhai scenario assertions headlessly. |
 | **`lunco-sandbox-server`** | `sandbox-server` | Headless launcher for the sandbox (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
 | **`lunco-modelica`** | `lunica`, `lunica_worker`, `msl_indexer` | The Modelica workbench app + its wasm worker and MSL index builder. |
 

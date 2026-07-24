@@ -2102,7 +2102,7 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
             // 12 solver substeps (avian default 6): joint-based rovers buzz the
             // chassis under drive torque at 6 substeps. Quantified in the headless
-            // `rover_jitter` probe. See `project_physical_rover_suspension`.
+            // authored physical-rover scene tests. See `project_physical_rover_suspension`.
             //
             // WEB: 8 substeps — the single wasm thread runs the whole solver inline,
             // so 12 substeps is a third of the physics budget per frame. 8 keeps the

@@ -65,7 +65,8 @@ cargo run --bin lunica
 (headless Modelica CLI → CSV), `msl_indexer` (rebuild the MSL search index — re-run
 after an MSL change), `lunica_worker` (wasm compile worker, bundled not run),
 `build_msl_assets` (`lunco-assets`), `net_smoke` (`lunco-networking`, transport smoke
-test), `joint_minimal` (`lunco-sandbox`, single-joint physics repro). Details:
+test). Authored sandbox behavior tests run through `scene_test` plus their Rhai scenarios.
+Details:
 [`docs/apps/README.md`](../../docs/apps/README.md).
 
 ## Talking to a running app (agents)

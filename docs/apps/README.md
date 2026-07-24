@@ -27,7 +27,6 @@ full CLI flags, controls, and workflows.
 | `lunica_worker` | `lunco-modelica` | (wasm only) | Off-thread rumoca compile worker for the web build. Not run directly — bundled by `scripts/build_web.sh`. |
 | `build_msl_assets` | `lunco-assets` | `cargo run -p lunco-assets --bin build_msl_assets` | Bundles the MSL into shippable assets. |
 | `net_smoke` | `lunco-networking` | `scripts/net_smoke.sh` | Networking transport smoke test. |
-| `joint_minimal` | `lunco-sandbox` | `cargo run -p lunco-sandbox --bin joint_minimal -- --api 3001` | Minimal single-joint physics repro for debugging. |
 
 `lunco-modelica` also carries bench/test bins (`modelica_tester`, `msl_parse_bench`, `test_within`) used during development.
 

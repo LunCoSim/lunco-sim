@@ -21,14 +21,6 @@ path = "src/bin/sandbox.rs"
 # `run()` (via this bin) for `wasm32` — `#[cfg(target_arch = "wasm32")]` blocks
 # in the lib handle platform differences. Served at `dist/sandbox/`.
 
-# Physics test harnesses in `src/bin/` — `cargo run -p lunco-sandbox --bin <name>`.
-# `rover_jitter` / `rover_turn` are headless probes (auto-discovered, build
-# without `ui`); `joint_minimal` opens a window, so it needs `ui`.
-[[bin]]
-name = "joint_minimal"
-path = "src/bin/joint_minimal.rs"
-required-features = ["ui"]
-
 [dependencies]
 # Render ASSET-STORE features (always on, even headless): `bevy_pbr` pulls
 # `bevy_render`, which registers `Assets<Mesh>`/`Assets<StandardMaterial>` —

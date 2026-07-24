@@ -905,7 +905,7 @@ pub(crate) fn check_camera_invariants(
         let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
         if targets_window {
             // Warn loudly but don't panic — tooling binaries
-            // (model_viewer, joint_minimal) deliberately want a
+            // (model_viewer) deliberately wants a
             // full-window 3D camera and don't use ViewportPanel. The
             // warning identifies workbench-using binaries that forgot
             // the tag, without breaking the legitimate cases.
@@ -915,7 +915,7 @@ pub(crate) fn check_camera_invariants(
                  scene will bleed across the egui chrome on pass skip — spawn via \
                  `WorkbenchSceneCamera` or insert `WorkbenchViewportCamera`. If this \
                  binary intentionally uses a full-window 3D camera (model_viewer, \
-                 joint_minimal, …) this warning is benign."
+                 …) this warning is benign."
             );
         }
     }
@@ -927,7 +927,7 @@ pub(crate) fn check_camera_invariants(
 /// [`check_camera_invariants`].
 ///
 /// This is **opt-in** rather than part of [`WorkbenchViewportPlugin`]:
-/// tooling binaries (`model_viewer`, `joint_minimal`) deliberately want a
+/// tooling binaries (`model_viewer`) deliberately want a
 /// bare full-window 3D camera and never register a [`ViewportPanel`], so
 /// auto-tagging is the host app's choice. Workbench apps that DO show the
 /// 3D scene inside a [`ViewportPanel`] (sandbox, luncosim) add this in

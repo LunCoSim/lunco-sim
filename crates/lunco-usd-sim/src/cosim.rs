@@ -111,6 +111,13 @@ pub struct PendingModelicaSource {
 pub struct PendingPythonSource {
     pub handle: Handle<PythonSource>,
     pub asset_path: String,
+    /// The program interface is declared by the standard USD `inputs:` / `outputs:`
+    /// attributes on the program prim.  Python is dynamically typed, so unlike
+    /// Modelica there is no source AST from which to recover this contract later.
+    /// Preserve it across the asynchronous source load rather than inventing a
+    /// second, per-script interface declaration.
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
 }
 
 /// Reads cosim attributes from USD prims and dispatches model
@@ -283,10 +290,16 @@ fn process_usd_cosim_prim_read(
         Some(None) => return,
         None => return,
     };
-    let has_ports = reader
-        .attr_names(sdf_path)
+    let attrs = reader.attr_names(sdf_path);
+    let inputs: Vec<String> = attrs
         .iter()
-        .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
+        .filter_map(|name| name.strip_prefix("inputs:").map(str::to_owned))
+        .collect();
+    let outputs: Vec<String> = attrs
+        .iter()
+        .filter_map(|name| name.strip_prefix("outputs:").map(str::to_owned))
+        .collect();
+    let has_ports = !inputs.is_empty() || !outputs.is_empty();
     if !has_ports {
         return;
     }
@@ -346,6 +359,8 @@ fn process_usd_cosim_prim_read(
         commands.entity(entity).try_insert(PendingPythonSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
+            inputs,
+            outputs,
         });
     }
 
@@ -576,8 +591,8 @@ pub fn dispatch_loaded_python_sources(
                 language: ScriptLanguage::Python,
                 source: src.text.clone(),
                 origin: DocumentOrigin::untitled(format!("Python-{}", doc_id.raw())),
-                inputs: vec!["height".to_string(), "velocity".to_string()],
-                outputs: vec!["netForce".to_string()],
+                inputs: pending.inputs.clone(),
+                outputs: pending.outputs.clone(),
                 params: String::new(),
                 // No asset id: this source is SYNTHESIZED from a USD prim's inline
                 // script, so it has no location for a relative `import` to anchor
@@ -603,8 +618,18 @@ pub fn dispatch_loaded_python_sources(
         commands.entity(entity).try_insert(SimComponent {
             model_name: format!("Python:{}", pending.asset_path),
             parameters: Default::default(),
-            inputs: Default::default(),
-            outputs: Default::default(),
+            inputs: pending
+                .inputs
+                .iter()
+                .cloned()
+                .map(|name| (name, 0.0))
+                .collect(),
+            outputs: pending
+                .outputs
+                .iter()
+                .cloned()
+                .map(|name| (name, 0.0))
+                .collect(),
             status: SimStatus::Running,
             is_stepping: false,
         });

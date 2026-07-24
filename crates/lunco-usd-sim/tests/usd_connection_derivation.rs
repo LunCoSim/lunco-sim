@@ -193,9 +193,9 @@ fn modelica_balloon_asset_wiring_migrated() {
         conns(&app, id, "/ModelicaBalloon", "inputs:force_y"),
         ["/ModelicaBalloon.outputs:netForce"]
     );
-    assert_eq!(
-        conns(&app, id, "/ModelicaBalloon", "inputs:collider"),
-        ["/ModelicaBalloon.outputs:volume"]
+    assert!(
+        conns(&app, id, "/ModelicaBalloon", "inputs:collider").is_empty(),
+        "the collider synchronizer consumes `outputs:volume` directly; `collider` is not a port"
     );
     assert_eq!(
         conns(&app, id, "/ModelicaBalloon", "inputs:height"),

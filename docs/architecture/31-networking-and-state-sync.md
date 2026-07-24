@@ -201,8 +201,8 @@ The shipped reconcile is **state-sync + smoothing**, not rollback — see
 full statement. In one line: compare prediction-at-the-acked-seq against
 authority-at-that-seq, ease a genuine divergence into the present, snap on gross
 desync. **Deterministic input replay is built and opt-in** (`LUNCO_ROLLBACK=1`,
-`rollback_owned_prediction` + the `RollbackReplay` schedule), validated by the
-`rollback_probe` bin.
+`rollback_owned_prediction` + the `RollbackReplay` schedule), covered by the
+headless rollback-replay integration tests.
 
 **Desync is observable** (it was not, before): every client reconcile feeds
 `lunco_core::DivergenceStats` — per-body live error, worst-ever, and a rebaseline
