@@ -86,9 +86,9 @@ impl Default for LunarSunShadow {
             overlap_proportion: 0.1,
             // The terrain needs a conservative bias under grazing lunar light:
             // smaller values turn its dense DEM triangles into visible shadow
-            // acne. Small wheel-to-ground gaps are instead closed by Bevy's
-            // screen-space ContactShadows on SceneCamera (the correct native
-            // complement to a coarse CSM depth map).
+            // acne. Contact detail remains with the native shadow maps: Bevy
+            // 0.19 cannot safely switch a custom material pipeline to its
+            // contact-shadow view layout after specialization.
             depth_bias: 0.06,
             normal_bias: 2.5,
             // WEB: 2048² shadow atlas — a quarter of the shadow-pass fill +
@@ -125,9 +125,6 @@ impl LunarSunShadow {
             color,
             illuminance: illuminance_lux,
             shadow_maps_enabled: true,
-            // CSM handles terrain-scale occlusion; ContactShadows on the
-            // viewing camera supplies the stable sub-texel contact detail.
-            contact_shadows_enabled: true,
             shadow_depth_bias: self.depth_bias,
             shadow_normal_bias: self.normal_bias,
             ..Default::default()

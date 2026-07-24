@@ -300,8 +300,9 @@ The existing penumbra term `(ray_height - terrain_height) / (distance * tan(sun_
 refinement: the occluded fraction of a uniform disc is the circular-segment area, not linear —
 `f(x) = (1/π)(acos(x) − x√(1−x²))`, `x = Δh/w⊥`. `smoothstep` approximates it; linear is
 visibly wrong at the edges. Also worth calibrating: measured PSR illumination is **2–3 orders
-of magnitude** below sunlit terrain ⇒ 0.1–1% fill; `SHADOW_FILL = 0.26` and
-`HORIZON_FILL_FLOOR = 0.22` are not in physical units.
+of magnitude** below sunlit terrain ⇒ 0.1–1% fill. Any future indirect-light term must be
+physical and scene-authored; the former terrain-only display fill was removed because it made
+terrain disagree with dynamic PBR objects.
 
 ---
 

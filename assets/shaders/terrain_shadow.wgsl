@@ -21,7 +21,7 @@
     mesh_view_bindings::view,
     mesh_view_bindings::lights,
 }
-#import lunco::horizon::{sun_visibility_resolved, shadow_fill}
+#import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
 
 // Dynamic, self-describing parameters (reflected from this file). Only the
@@ -103,11 +103,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius, mat.hf_size, mat.hf_res);
         color = vec4(color.rgb * mix(1.0, vis, march_blend), color.a);
     }
-    // Shadow fill — see `shadow_fill` (lunco::horizon), which gates itself on
-    // `csm_far` so it fires only where the march machinery is actually wired.
-    // Applied outside the march branch so near (CSM) and far (march) pixels get the
-    // SAME lift; a branch-local fill painted a bright ring at the handoff.
-    color = vec4(color.rgb + shadow_fill(albedo, in.uv, mat.hf_res), color.a);
 #endif
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);

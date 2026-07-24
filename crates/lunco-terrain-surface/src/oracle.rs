@@ -325,7 +325,26 @@ pub fn raycast_surface(
     let inside = |p: bevy::math::DVec3| p.x.abs() <= half && p.z.abs() <= half;
     let above = |p: bevy::math::DVec3| p.y >= oracle.height_at(p.x, p.z);
 
-    let mut t = 0.0_f64;
+    // Intersect the ray with the finite DEM footprint before marching. Besides
+    // avoiding pointless samples in the empty space before/after a terrain,
+    // this makes an unbounded placement ray safe: the work is bounded by the
+    // actual authored surface, not an arbitrary UI distance around a rover.
+    let slab = |origin: f64, direction: f64| -> Option<(f64, f64)> {
+        if direction.abs() <= f64::EPSILON {
+            (origin.abs() <= half).then_some((f64::NEG_INFINITY, f64::INFINITY))
+        } else {
+            let a = (-half - origin) / direction;
+            let b = (half - origin) / direction;
+            Some((a.min(b), a.max(b)))
+        }
+    };
+    let (x_near, x_far) = slab(origin.x, dir.x)?;
+    let (z_near, z_far) = slab(origin.z, dir.z)?;
+    let mut t = x_near.max(z_near).max(0.0);
+    let max_t = x_far.min(z_far).min(max_t);
+    if t > max_t {
+        return None;
+    }
     // `Some(t)` = the last sample inside the footprint AND above the surface —
     // the near end of a potential bracket. Reset when the ray leaves the
     // footprint so a re-entry can't bracket across the gap.
@@ -443,5 +462,20 @@ mod tests {
         let a = SurfaceOracle::new(flat(5, 10.0), vec![crater_contribution()]);
         let b = SurfaceOracle::new(flat(5, 10.0), vec![crater_contribution()]);
         assert_eq!(a.content_key(), b.content_key());
+    }
+
+    #[test]
+    fn raycast_surface_reaches_a_distant_finite_dem_with_an_unbounded_ray() {
+        let oracle = SurfaceOracle::bare(flat(5, 10.0));
+        // The ray starts a kilometre before the DEM window and crosses the
+        // flat surface at its centre. This is the placement-ghost case that
+        // previously stopped at a fixed near-rover distance.
+        let origin = DVec3::new(-1_000.0, 100.0, 0.0);
+        let direction = DVec3::new(1.0, -0.1, 0.0).normalize();
+
+        let hit = raycast_surface(&oracle, origin, direction, f64::INFINITY)
+            .expect("the finite terrain footprint bounds an unbounded ray");
+        assert!(hit.x.abs() < 0.1, "expected centre hit, got {hit:?}");
+        assert!(hit.y.abs() < 1e-6, "expected flat ground, got {hit:?}");
     }
 }

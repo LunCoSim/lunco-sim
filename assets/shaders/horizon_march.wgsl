@@ -113,27 +113,3 @@ fn sun_visibility_resolved(
     }
     return sun_visibility(height_tex, uv, sun_local, tan_sun_r, size, res);
 }
-
-// Additive shadow fill applied by every consumer AFTER the march multiply:
-// display-referred, shaped by the surface albedo so texture/relief survive.
-// A multiplicative visibility floor CANNOT light a polar scene — at grazing
-// sun even fully LIT flat ground shades to a few percent, so any fraction of
-// it is black. This is the deliberate artistic stand-in for the scattered
-// light the march cannot model, and it exists ONLY to rescue the marched
-// polar case.
-//
-// It is DISPLAY-REFERRED and EXPOSURE-BLIND: a constant added after
-// `apply_pbr_lighting`, i.e. after the camera exposure has already scaled the
-// physical lighting down. Its "negligible +2% on sunlit ground" claim is
-// therefore true only at the EV the polar moonbase is metered for. Under a
-// studio scene's much higher EV the same constant can exceed the sun term
-// outright, and because it is added EQUALLY to lit and shadowed pixels it
-// sets a floor under the whole image — a uniform contrast crush, which is
-// exactly how it presents: hard shadows turn into flat grey smudges.
-const SHADOW_FILL: f32 = 0.08;
-
-fn shadow_fill(albedo: vec3<f32>, uv: vec2<f32>, wired: f32) -> vec3<f32> {
-    let m = length(uv - vec2(0.5)) * 2.0; // 0 centre → 1 at inscribed-disc edge
-    let weight = 1.0 - smoothstep(0.6, 1.0, m);
-    return albedo * SHADOW_FILL * weight;
-}

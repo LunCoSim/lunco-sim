@@ -291,16 +291,22 @@ pub fn update_spawn_ghost(
     // Physics colliders (props, structures, rocks) AND the analytic terrain
     // surface, nearest wins. The terrain must come from the oracle, not the
     // collider ring — see `terrain_ray_hit`.
-    let phys = raycaster
-        .cast_ray_render(
-            origin,
-            direction,
-            1000.0,
-            false,
-            &avian3d::prelude::SpatialQueryFilter::default(),
-        )
-        .map(|h| h.distance);
-    let terr = terrain_ray_hit(&terrains, origin, direction.as_dvec3(), 1000.0);
+    // The analytic terrain is finite, so it safely bounds an otherwise
+    // unbounded cursor ray to the full authored DEM footprint. The old fixed
+    // 1 km cap made the ghost work only around the rover/collider ring on
+    // large sites or elevated camera views.
+    let terr = terrain_ray_hit(&terrains, origin, direction.as_dvec3(), f64::INFINITY);
+    let phys = terr.as_ref().and_then(|(terrain_distance, _)| {
+        raycaster
+            .cast_ray_render(
+                origin,
+                direction,
+                *terrain_distance,
+                false,
+                &avian3d::prelude::SpatialQueryFilter::default(),
+            )
+            .map(|h| h.distance)
+    });
     let (hit, terrain_primary) = match (phys, terr) {
         (Some(pt), Some((tt, tp))) => {
             if tt <= pt {
@@ -563,16 +569,21 @@ pub fn on_scene_click_spawn(
     // then orders the per-corner slope-fit probes below.
     let origin = ray.origin.as_dvec3();
     let dir = ray.direction.as_dvec3();
-    let phys = raycaster
-        .cast_ray_render(
-            origin,
-            ray.direction,
-            1.0e6,
-            false,
-            &avian3d::prelude::SpatialQueryFilter::default(),
-        )
-        .map(|h| h.distance);
-    let terr = terrain_ray_hit(&terrains, origin, dir, 1.0e6);
+    let terr = terrain_ray_hit(&terrains, origin, dir, f64::INFINITY);
+    // A terrain hit is the full-map bound for the physics query too, so props
+    // sitting on that terrain still win when nearer without retaining a magic
+    // million-metre placement range.
+    let phys = terr.as_ref().and_then(|(terrain_distance, _)| {
+        raycaster
+            .cast_ray_render(
+                origin,
+                ray.direction,
+                *terrain_distance,
+                false,
+                &avian3d::prelude::SpatialQueryFilter::default(),
+            )
+            .map(|h| h.distance)
+    });
     let (point_d, terrain_primary) = match (phys, terr) {
         (Some(pd), Some((td, tp))) => {
             if td <= pd {

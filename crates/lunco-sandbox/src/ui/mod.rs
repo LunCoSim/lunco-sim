@@ -606,7 +606,10 @@ fn register_downloadable_assets_settings(world: &mut World) {
             let row = (entry.key.clone(), entry.name.clone(), entry.state.clone());
             match &entry.scope {
                 lunco_assets::datasets::DatasetScope::Engine => {
-                    engine_rows.entry(entry.group.clone()).or_default().push(row);
+                    engine_rows
+                        .entry(entry.group.clone())
+                        .or_default()
+                        .push(row);
                 }
                 lunco_assets::datasets::DatasetScope::Twin { name, .. } => {
                     twin_rows.entry(name.clone()).or_default().push(row);

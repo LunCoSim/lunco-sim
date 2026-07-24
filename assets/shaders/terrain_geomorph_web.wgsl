@@ -9,7 +9,6 @@
 }
 #import lunco::pbr_lit::{lit_n, sun_to_light}
 #import lunco::noise::fbm2d
-#import lunco::horizon::{shadow_fill}
 #import lunco::lunar::regolith_factor
 #import lunco::transfer::{slope_hazard_color, slope_of}
 
@@ -297,25 +296,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         }
         if (blend > 0.0) {
             let vis = textureSampleLevel(shadow_cache, shadow_cache_sampler, in.uv, 0.0).r;
-            // Floor at 0.15 — post-lit multiply would crush the fill too.
-            color = vec4(color.rgb * mix(1.0, max(vis, 0.15), blend), color.a);
+            color = vec4(color.rgb * mix(1.0, vis, blend), color.a);
         }
     }
 #endif
-    // Display-referred shadow fill, shared with every marched terrain shader
-    // (see `shadow_fill`, lunco::horizon, which gates on `wired` — explicitly NOT
-    // on `csm_far`, which reads 0 under a shadowless sun and would strip the fill
-    // from exactly the polar terrain it exists to rescue — so it
-    // fires only where the march machinery is actually wired). The emissive-slot hemispheric fill
-    // above is scene-referred cd/m2 tuned for the old studio exposure — at the
-    // calibrated lunar EV it vanishes and near tiles crushed to black next to
-    // the fill-lifted heightfield.
-    // `wired` = 1.0: this shader is bound by the engine to globe/terrain tiles
-    // ONLY — it is never reachable from a scene's `material:binding`, so "is this
-    // a horizon surface?" is answered at authoring time rather than by a uniform.
-    // (It carries no `hf_res`: geomorph tiles sample the shadow cache, not a DEM.)
-    color = vec4(color.rgb + shadow_fill(base_albedo, in.uv, 1.0), color.a);
-
     // --- Analysis overlay (see terrain_geomorph.wgsl) -------------------------
     // Blend the Transfer's colour over the lit surface; the ramp itself is the
     // shared `lunco::transfer`, uniform-driven (live critical angle). Slope comes

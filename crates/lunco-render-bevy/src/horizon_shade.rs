@@ -99,15 +99,11 @@ pub fn wire_terrain_materials(
     // native — `lunco-sandbox/src/terrain_horizon.rs` samples the oracle
     // into a `HorizonMap` and mirrors the cache to tiles — but the cache
     // fades in on the same `csm_far` boundary.) The cost of the fade is
-    // that the CSM volume (~1.5 km) cannot contain multi-km ridge
-    // occluders, so near terrain reads slightly lighter than the same
-    // ground seen from altitude; the `shadow_fill` term in the terrain
-    // shaders keeps that difference subtle. That fill gates itself on
-    // `hf_res` being non-zero — i.e. on THIS function having wired the surface,
-    // which it does only for entities carrying a `HorizonMap`. So the fill
-    // reaches horizon terrain only and can never leak onto a plain mesh that
-    // merely shares the shader family (`regolith.wgsl` is also bound directly
-    // by scenes as a studio ground material).
+    // that the CSM volume (~1.5 km) cannot contain multi-km ridge occluders,
+    // so near terrain can read slightly lighter than the same ground seen from
+    // altitude. We deliberately do not compensate with a terrain-only fill:
+    // it would make the terrain obey a different illumination model from every
+    // dynamic PBR object and would incorrectly look like bounced light.
     let to_sun_world: Vec3 = sun_gt.back().into();
 
     for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {
