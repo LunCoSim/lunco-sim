@@ -1,17 +1,19 @@
 //! Avatar UI panels — camera mode display and surface coordinates.
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, tutorial_overlay::TutorialHud};
+use lunco_workbench::{
+    tutorial_overlay::TutorialHud, Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt,
+};
 
-use lunco_core::{Avatar, GlobalEntityId, SessionProfiles, SessionRegistry};
 use crate::RoverNameTagSettings;
-use lunco_celestial::{CelestialBody, LocalGravityField, LeaveSurface};
 use big_space::prelude::{CellCoord, Grid};
+use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
 use lunco_controller::ControllerLink;
+use lunco_core::{Avatar, GlobalEntityId, SessionProfiles, SessionRegistry};
 
-use crate::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend};
+use crate::{FrameBlend, FreeFlightCamera, OrbitCamera, SpringArmCamera};
 
 /// Semantic colour bucket for the camera-mode label.
 ///
@@ -33,7 +35,9 @@ impl ModeColor {
     /// Resolve to a concrete colour from the active palette, or
     /// `PLACEHOLDER` (egui's default text colour) when headless / no theme.
     fn resolve(self, palette: Option<&lunco_theme::ColorPalette>) -> egui::Color32 {
-        let Some(p) = palette else { return egui::Color32::PLACEHOLDER };
+        let Some(p) = palette else {
+            return egui::Color32::PLACEHOLDER;
+        };
         match self {
             ModeColor::Yellow => p.yellow,
             ModeColor::Maroon => p.maroon,
@@ -89,9 +93,15 @@ pub struct AvatarStatusView {
 pub struct AvatarStatusPanel;
 
 impl Panel for AvatarStatusPanel {
-    fn id(&self) -> PanelId { PanelId("avatar_status") }
-    fn title(&self) -> String { "Telemetry".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn id(&self) -> PanelId {
+        PanelId("avatar_status")
+    }
+    fn title(&self) -> String {
+        "Telemetry".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
@@ -100,7 +110,9 @@ impl Panel for AvatarStatusPanel {
         // Capture the palette up front: semantic status colours for this
         // panel come from the active Theme (falls back to plain white when
         // headless / no theme registered).
-        let palette = ctx.resource::<lunco_theme::Theme>().map(|t| t.colors.clone());
+        let palette = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| t.colors.clone());
         if let Some(theme) = ctx.resource::<lunco_theme::Theme>() {
             let raised = theme.tokens.surface_raised;
             ui.style_mut().visuals.widgets.inactive.weak_bg_fill = raised;
@@ -123,7 +135,9 @@ impl Panel for AvatarStatusPanel {
 
         // The panel is a pure reader of the change-driven view-model; if it
         // hasn't been produced yet there's nothing to draw.
-        let Some(view) = ctx.resource::<AvatarStatusView>() else { return };
+        let Some(view) = ctx.resource::<AvatarStatusView>() else {
+            return;
+        };
 
         // ── Possession readout ──
         // Step 6: surface "Driving: <vessel>" when the avatar's `ControllerLink`
@@ -234,7 +248,10 @@ pub fn populate_avatar_status_view(
         Some(av) => match q_link.get(av) {
             Ok(link) => {
                 let v = link.vessel_entity;
-                let label = q_name.get(v).ok().map(|n| n.as_str().to_string())
+                let label = q_name
+                    .get(v)
+                    .ok()
+                    .map(|n| n.as_str().to_string())
                     .or_else(|| q_gid.get(v).ok().map(|g| format!("vessel #{}", g.get())))
                     .unwrap_or_else(|| format!("{:?}", v));
                 (Some(v), label)
@@ -247,9 +264,8 @@ pub fn populate_avatar_status_view(
     // ── Surface readout ──
     view.surface = gravity.as_ref().and_then(|gf| {
         let body = gf.body_entity?;
-        let lat_lon_height = avatar_ent.and_then(|ae| {
-            compute_lat_lon_height(ae, body, &avatar_pos, &grids, &bodies)
-        });
+        let lat_lon_height = avatar_ent
+            .and_then(|ae| compute_lat_lon_height(ae, body, &avatar_pos, &grids, &bodies));
         Some(SurfaceInfo {
             body: Some(body),
             surface_g: gf.surface_g,
@@ -260,11 +276,23 @@ pub fn populate_avatar_status_view(
     // ── Camera mode ──
     let (color, label, detail) = if let Ok(blend) = blends.single() {
         let progress = (blend.t / blend.duration * 100.0).min(100.0) as i32;
-        (ModeColor::Yellow, format!("TRANSITION ({}%)", progress), String::new())
+        (
+            ModeColor::Yellow,
+            format!("TRANSITION ({}%)", progress),
+            String::new(),
+        )
     } else if let Ok(arm) = spring.single() {
-        (ModeColor::Maroon, "SPRING ARM".to_string(), format!("Distance: {:.1} m", arm.distance))
+        (
+            ModeColor::Maroon,
+            "SPRING ARM".to_string(),
+            format!("Distance: {:.1} m", arm.distance),
+        )
     } else if let Ok(o) = orbit.single() {
-        (ModeColor::Blue, "ORBIT".to_string(), format!("Distance: {:.1} m", o.distance))
+        (
+            ModeColor::Blue,
+            "ORBIT".to_string(),
+            format!("Distance: {:.1} m", o.distance),
+        )
     } else if free_flight.single().is_ok() {
         (ModeColor::Peach, "FREE FLIGHT".to_string(), String::new())
     } else {
@@ -297,7 +325,11 @@ fn compute_lat_lon_height(
 
     let body_comp = bodies.get(body).ok()?;
     let height = dist - body_comp.radius_m;
-    let body_local_norm = if dist > 1e-6 { body_local / dist } else { DVec3::Y };
+    let body_local_norm = if dist > 1e-6 {
+        body_local / dist
+    } else {
+        DVec3::Y
+    };
     let lat = body_local_norm.y.asin().to_degrees();
     let lon = body_local_norm.x.atan2(body_local_norm.z).to_degrees();
     Some((lat, lon, height))
@@ -338,10 +370,18 @@ fn check_tutorial_keyboard_progress(
     hud: Option<Res<TutorialHud>>,
     mut commands: Commands,
 ) {
-    let Some(keys) = keys else { return; };
-    let Some(hud) = hud else { return; };
-    let Some(tour) = &hud.tour else { return; };
-    let Some(require) = &tour.require else { return; };
+    let Some(keys) = keys else {
+        return;
+    };
+    let Some(hud) = hud else {
+        return;
+    };
+    let Some(tour) = &hud.tour else {
+        return;
+    };
+    let Some(require) = &tour.require else {
+        return;
+    };
 
     let mut done = false;
     match require.as_str() {
@@ -374,7 +414,13 @@ pub struct AvatarUiPlugin;
 impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AvatarStatusView>();
-        app.add_systems(Update, (populate_avatar_status_view, check_tutorial_keyboard_progress));
+        app.add_systems(
+            Update,
+            (
+                populate_avatar_status_view,
+                check_tutorial_keyboard_progress,
+            ),
+        );
         app.register_panel(AvatarStatusPanel);
         app.add_observer(on_possess_progress);
         app.add_observer(on_release_progress);
@@ -409,7 +455,9 @@ pub fn draw_rover_name_tags(
 
     // The avatar camera is the one rendering this client's viewport. Without it
     // (e.g. headless / pre-spawn) there is nothing to project against.
-    let Some((camera, cam_gtf)) = q_camera.iter().next() else { return };
+    let Some((camera, cam_gtf)) = q_camera.iter().next() else {
+        return;
+    };
 
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
 
@@ -423,7 +471,9 @@ pub fn draw_rover_name_tags(
     ));
 
     for (gid, gtf) in q_rovers.iter() {
-        let Some(session) = registry.owner_of(gid.get()) else { continue };
+        let Some(session) = registry.owner_of(gid.get()) else {
+            continue;
+        };
 
         // Distance from the camera drives both size and fade. Cull past the
         // max so we don't paint a swarm of pinpoint tags across the horizon.
@@ -453,11 +503,12 @@ pub fn draw_rover_name_tags(
             .unwrap_or_else(|| format!("Player {}", session.0));
 
         let world = gtf.translation() + Vec3::Y * settings.vertical_offset;
-        let Ok(viewport) = camera.world_to_viewport(cam_gtf, world) else { continue };
+        let Ok(viewport) = camera.world_to_viewport(cam_gtf, world) else {
+            continue;
+        };
         let pos = egui::pos2(viewport.x, viewport.y) + origin;
 
-        let text_color =
-            egui::Color32::from_rgba_unmultiplied(tr, tg, tb, (255.0 * fade) as u8);
+        let text_color = egui::Color32::from_rgba_unmultiplied(tr, tg, tb, (255.0 * fade) as u8);
         let font = egui::FontId::proportional(font_size);
 
         // Anchor the text centered just above the projected point, with a
@@ -469,7 +520,11 @@ pub fn draw_rover_name_tags(
         // TODO(theme): migrate to lunco-theme once the token set covers this.
         // Distance/idle-faded backing behind a player name tag over the 3D scene.
         // Blocked on the dep, as with the toasts below.
-        painter.rect_filled(bg, 3.0, egui::Color32::from_black_alpha((150.0 * fade) as u8));
+        painter.rect_filled(
+            bg,
+            3.0,
+            egui::Color32::from_black_alpha((150.0 * fade) as u8),
+        );
         painter.galley(top_left, galley, text_color);
     }
 }
@@ -480,10 +535,7 @@ pub fn draw_rover_name_tags(
 /// ui-gated screen-space overlay (the scene has only a `Camera3d`, so a
 /// world-anchored `Text2d` HUD never renders) — registered in the egui pass by
 /// [`crate::LunCoAvatarPlugin`]. Mission scripts drive it through rhai `notify`.
-pub fn draw_notifications(
-    mut egui_ctx: EguiContexts,
-    notes: Res<crate::ScreenNotifications>,
-) {
+pub fn draw_notifications(mut egui_ctx: EguiContexts, notes: Res<crate::ScreenNotifications>) {
     if notes.toasts.is_empty() {
         return;
     }

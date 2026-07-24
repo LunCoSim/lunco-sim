@@ -30,9 +30,9 @@ use std::sync::Arc;
 use bevy::prelude::Entity;
 use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
+use lunco_canvas::scene::Node;
 use lunco_canvas::{visual::DrawCtx, NodeVisual};
 use lunco_theme::ColorAlpha;
-use lunco_canvas::scene::Node;
 use serde::{Deserialize, Serialize};
 
 /// Stable kind identifier — use this when registering with the
@@ -222,8 +222,12 @@ pub fn queue_input_write(ctx: &egui::Context, name: &str, value: f64) {
 pub fn drain_input_writes(ctx: &egui::Context) -> Vec<(String, f64)> {
     let queue: Option<Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>>> =
         ctx.data(|d| d.get_temp(input_writes_id()));
-    let Some(queue) = queue else { return Vec::new() };
-    let Ok(mut guard) = queue.lock() else { return Vec::new() };
+    let Some(queue) = queue else {
+        return Vec::new();
+    };
+    let Ok(mut guard) = queue.lock() else {
+        return Vec::new();
+    };
     guard.drain().collect()
 }
 
@@ -282,12 +286,11 @@ impl NodeVisual for PlotNodeVisual {
             // anchored at the world centre so the user can still
             // see the plot exists and zoom in to operate on it.
             let centre = egui_rect.center();
-            let marker = egui::Rect::from_center_size(
-                centre,
-                egui::vec2(2.0, 2.0),
-            );
+            let marker = egui::Rect::from_center_size(centre, egui::vec2(2.0, 2.0));
             let theme = lunco_theme::active(ctx.ui.ctx());
-            ctx.ui.painter().rect_filled(marker, 1.0, theme.colors.surface2);
+            ctx.ui
+                .painter()
+                .rect_filled(marker, 1.0, theme.colors.surface2);
             return;
         }
 
@@ -306,7 +309,9 @@ impl NodeVisual for PlotNodeVisual {
         // Card fill comes from the canvas theme so the plot matches
         // the rest of the diagram nodes (no jarring near-black box
         // when the active theme is light or mid-grey).
-        ctx.ui.painter().rect_filled(egui_rect, 6.0, theme.colors.surface0);
+        ctx.ui
+            .painter()
+            .rect_filled(egui_rect, 6.0, theme.colors.surface0);
         // `Inside` so the stroke stays *within* the node's rect —
         // `Outside` would visually extend the plot 1-2 px past
         // node.rect on every side, decoupling the apparent size
@@ -370,8 +375,12 @@ impl NodeVisual for PlotNodeVisual {
             // no child UI.
             if !points.is_empty() {
                 let color = crate::signal::color_for_signal(&theme, &self.data.signal_path);
-                let (mut tmin, mut tmax, mut vmin, mut vmax) =
-                    (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+                let (mut tmin, mut tmax, mut vmin, mut vmax) = (
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                );
                 for p in points.iter() {
                     tmin = tmin.min(p[0]);
                     tmax = tmax.max(p[0]);
@@ -384,10 +393,8 @@ impl NodeVisual for PlotNodeVisual {
                     .iter()
                     .map(|p| {
                         egui::pos2(
-                            egui_rect.min.x
-                                + ((p[0] - tmin) / dt) as f32 * card_w,
-                            egui_rect.max.y
-                                - ((p[1] - vmin) / dv) as f32 * card_h,
+                            egui_rect.min.x + ((p[0] - tmin) / dt) as f32 * card_w,
+                            egui_rect.max.y - ((p[1] - vmin) / dv) as f32 * card_h,
                         )
                     })
                     .collect();
@@ -423,12 +430,8 @@ impl NodeVisual for PlotNodeVisual {
             // the inspector. egui's `Label::sense(hover)` lets us
             // attach a tooltip without affecting layout.
             let label_resp = child.add(
-                egui::Label::new(
-                    egui::RichText::new(title)
-                        .small()
-                        .color(theme.tokens.text),
-                )
-                .sense(egui::Sense::hover()),
+                egui::Label::new(egui::RichText::new(title).small().color(theme.tokens.text))
+                    .sense(egui::Sense::hover()),
             );
             if label_resp.hovered() {
                 label_resp.on_hover_ui(|ui| {
@@ -511,7 +514,12 @@ impl NodeVisual for PlotNodeVisual {
                         egui_plot::HoverPosition::NearDataPoint { position, .. }
                         | egui_plot::HoverPosition::Elsewhere { position } => position,
                     };
-                    Some(format!("t: {} s\n{}: {}", format_axis_value(p.x), var, format_axis_value(p.y)))
+                    Some(format!(
+                        "t: {} s\n{}: {}",
+                        format_axis_value(p.x),
+                        var,
+                        format_axis_value(p.y)
+                    ))
                 }
             });
         plot.show(&mut child, |plot_ui| {
@@ -521,9 +529,7 @@ impl NodeVisual for PlotNodeVisual {
                 } else {
                     self.data.title.as_str()
                 };
-                plot_ui.line(
-                    Line::new(line_label, PlotPoints::from(points.to_vec())).color(color),
-                );
+                plot_ui.line(Line::new(line_label, PlotPoints::from(points.to_vec())).color(color));
             }
         });
 
@@ -548,13 +554,19 @@ impl NodeVisual for PlotNodeVisual {
             for f in [0.25, 0.5, 0.75] {
                 let y = plot_rect.min.y + plot_rect.height() * f;
                 painter.line_segment(
-                    [egui::pos2(plot_rect.min.x, y), egui::pos2(plot_rect.max.x, y)],
+                    [
+                        egui::pos2(plot_rect.min.x, y),
+                        egui::pos2(plot_rect.max.x, y),
+                    ],
                     grid_stroke,
                 );
             }
             let mid_x = plot_rect.min.x + plot_rect.width() * 0.5;
             painter.line_segment(
-                [egui::pos2(mid_x, plot_rect.min.y), egui::pos2(mid_x, plot_rect.max.y)],
+                [
+                    egui::pos2(mid_x, plot_rect.min.y),
+                    egui::pos2(mid_x, plot_rect.max.y),
+                ],
                 grid_stroke,
             );
 

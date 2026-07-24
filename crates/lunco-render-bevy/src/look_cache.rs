@@ -62,7 +62,9 @@ pub struct LookCache<L: CachedLook> {
 // Manual: `derive(Default)` would demand `L: Default`, which a Component need not be.
 impl<L: CachedLook> Default for LookCache<L> {
     fn default() -> Self {
-        Self { map: HashMap::default() }
+        Self {
+            map: HashMap::default(),
+        }
     }
 }
 
@@ -103,10 +105,7 @@ impl<L: CachedLook> LookCache<L> {
 /// A twin reload or scene swap leaves a dead scene's whole look set behind, each
 /// entry pinning its textures. Runs only once the cache is implausibly large, so a
 /// steady scene never pays for the `HashSet` build.
-pub(crate) fn sweep_look_cache<L: CachedLook>(
-    mut cache: ResMut<LookCache<L>>,
-    looks: Query<&L>,
-) {
+pub(crate) fn sweep_look_cache<L: CachedLook>(mut cache: ResMut<LookCache<L>>, looks: Query<&L>) {
     if cache.map.len() <= CACHE_SWEEP_AT {
         return;
     }

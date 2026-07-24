@@ -55,8 +55,8 @@
 //! time, and where a centre sits *is* a function of the ephemeris. That is why this is a struct
 //! you build per query, not a set of free functions.
 
-use bevy::math::DVec3;
 use bevy::math::DQuat;
+use bevy::math::DVec3;
 use bevy::prelude::{Component, Reflect, ReflectComponent};
 
 use crate::coords::ecliptic_to_bevy;
@@ -113,7 +113,11 @@ pub struct LibrationAnchor {
 impl Default for LibrationAnchor {
     /// Earth–Moon L1 — the pair this simulator is about.
     fn default() -> Self {
-        Self { primary: 399, secondary: 301, point: LPoint::L1 }
+        Self {
+            primary: 399,
+            secondary: 301,
+            point: LPoint::L1,
+        }
     }
 }
 
@@ -128,8 +132,16 @@ pub struct FrameTree<'a> {
 }
 
 impl<'a> FrameTree<'a> {
-    pub fn new(jd: f64, registry: &'a CelestialBodyRegistry, ephemeris: &'a dyn EphemerisProvider) -> Self {
-        Self { jd, registry, ephemeris }
+    pub fn new(
+        jd: f64,
+        registry: &'a CelestialBodyRegistry,
+        ephemeris: &'a dyn EphemerisProvider,
+    ) -> Self {
+        Self {
+            jd,
+            registry,
+            ephemeris,
+        }
     }
 
     // ── The hub: where is a centre, in Solar? ────────────────────────────────────────────────
@@ -151,19 +163,23 @@ impl<'a> FrameTree<'a> {
             // SSB differs from the Sun's centre by roughly a solar radius — under a thousandth
             // of an AU — and the provider does not model it; saying so beats pretending.)
             Center::Ssb => Some(Pos::<Solar>::ZERO),
-            Center::Body(id) => {
-                self.ephemeris.global_position(id, self.jd).map(ecliptic_to_bevy)
-            }
-            Center::Libration { primary, secondary, point } => {
-                self.libration_in_solar(primary, secondary, point)
-            }
+            Center::Body(id) => self
+                .ephemeris
+                .global_position(id, self.jd)
+                .map(ecliptic_to_bevy),
+            Center::Libration {
+                primary,
+                secondary,
+                point,
+            } => self.libration_in_solar(primary, secondary, point),
             // A site's position needs its geodetic anchor, which lives in the scene, not here.
             // Returning the body centre is honest (the site is *on* that body) and wrong by at
             // most a body radius — but a caller that needs site precision must go through
             // `geo::solar_position_of_geodetic`, which has the anchor.
-            Center::Site { body, .. } => {
-                self.ephemeris.global_position(body, self.jd).map(ecliptic_to_bevy)
-            }
+            Center::Site { body, .. } => self
+                .ephemeris
+                .global_position(body, self.jd)
+                .map(ecliptic_to_bevy),
         }
     }
 
@@ -220,7 +236,11 @@ impl<'a> FrameTree<'a> {
             // normal, which we take from the pair's own motion rather than assuming the ecliptic.
             LPoint::L4 | LPoint::L5 => {
                 let normal = self.pair_orbit_normal(primary, secondary)?;
-                let sign = if matches!(point, LPoint::L4) { 1.0 } else { -1.0 };
+                let sign = if matches!(point, LPoint::L4) {
+                    1.0
+                } else {
+                    -1.0
+                };
                 let rot = DQuat::from_axis_angle(normal, sign * std::f64::consts::FRAC_PI_3);
                 p + Pos::<Solar>::new(rot * r.raw())
             }
@@ -380,7 +400,9 @@ mod tests {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
 
-        let moon_solar = tree.center_in_solar(Center::Body(301)).expect("stub has the Moon");
+        let moon_solar = tree
+            .center_in_solar(Center::Body(301))
+            .expect("stub has the Moon");
 
         let heliocentric = tree.relative_to(moon_solar, Center::Body(10)).unwrap();
         let geocentric = tree.relative_to(moon_solar, Center::Body(399)).unwrap();
@@ -403,7 +425,9 @@ mod tests {
     fn the_triangular_points_are_equilateral() {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
-        let l4 = tree.libration_in_solar(10, 399, LPoint::L4).expect("Sun+Earth are known");
+        let l4 = tree
+            .libration_in_solar(10, 399, LPoint::L4)
+            .expect("Sun+Earth are known");
 
         let sun = tree.center_in_solar(Center::Body(10)).unwrap();
         let earth = tree.center_in_solar(Center::Body(399)).unwrap();
@@ -411,8 +435,14 @@ mod tests {
         let d_earth = (l4 - earth).length();
         let d_pair = (earth - sun).length();
 
-        assert!((d_sun - d_pair).abs() / d_pair < 1.0e-6, "L4 is one leg from the primary");
-        assert!((d_earth - d_pair).abs() / d_pair < 1.0e-6, "…and one leg from the secondary");
+        assert!(
+            (d_sun - d_pair).abs() / d_pair < 1.0e-6,
+            "L4 is one leg from the primary"
+        );
+        assert!(
+            (d_earth - d_pair).abs() / d_pair < 1.0e-6,
+            "…and one leg from the secondary"
+        );
     }
 
     /// The synodic frame is where L-points hold still — round-tripping through it must be
@@ -421,14 +451,22 @@ mod tests {
     fn synodic_round_trips() {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
-        let pair = Pair { primary: 10, secondary: 399 };
+        let pair = Pair {
+            primary: 10,
+            secondary: 399,
+        };
 
         let original = Pos::<Solar>::new(DVec3::new(1.4e11, 3.0e9, -2.0e9));
-        let syn = tree.solar_to_synodic(original, pair).expect("Sun+Earth are known");
+        let syn = tree
+            .solar_to_synodic(original, pair)
+            .expect("Sun+Earth are known");
         let back = tree.synodic_to_solar(syn).expect("Sun+Earth are known");
 
         let err = (back - original).length();
-        assert!(err < 1.0, "round-trip error {err} m — the basis is not orthonormal");
+        assert!(
+            err < 1.0,
+            "round-trip error {err} m — the basis is not orthonormal"
+        );
     }
 
     /// An unknown body yields `None`, never a position.
@@ -441,7 +479,10 @@ mod tests {
     fn an_unknown_body_is_none_not_the_origin() {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
-        assert!(tree.center_in_solar(Center::Body(499)).is_none(), "Mars is not in the stub");
+        assert!(
+            tree.center_in_solar(Center::Body(499)).is_none(),
+            "Mars is not in the stub"
+        );
         // …and an L-point needs BOTH bodies: half a pair is not a point.
         assert!(tree.libration_in_solar(399, 499, LPoint::L1).is_none());
         assert!(tree.libration_in_solar(499, 301, LPoint::L2).is_none());
@@ -474,9 +515,15 @@ mod tests {
             l1_from_moon / 1000.0
         );
         // L1 is BETWEEN them: closer to Earth than the Moon is.
-        assert!((l1 - earth).length() < d_pair, "L1 must lie inside the pair");
+        assert!(
+            (l1 - earth).length() < d_pair,
+            "L1 must lie inside the pair"
+        );
         // L2 is beyond: farther from Earth than the Moon is, by the same offset.
-        assert!((l2 - earth).length() > d_pair, "L2 must lie outside the pair");
+        assert!(
+            (l2 - earth).length() > d_pair,
+            "L2 must lie outside the pair"
+        );
         assert!(
             (l1_from_moon - l2_from_moon).abs() < 1.0,
             "collinear L1/L2 are symmetric about the secondary in this first-order series"

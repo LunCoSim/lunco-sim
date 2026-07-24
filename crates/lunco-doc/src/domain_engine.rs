@@ -31,8 +31,7 @@ use crate::{DocumentId, DocumentOp, SymbolPath};
 /// Stability across re-parses is what lets the [`DomainEngine::Index`]
 /// reconcile incrementally instead of rebuilding from scratch.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord,
-    serde::Serialize, serde::Deserialize,
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 pub struct NodeId(pub String);
 

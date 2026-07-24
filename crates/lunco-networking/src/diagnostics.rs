@@ -57,7 +57,9 @@ impl Plugin for NetDiagnosticsPlugin {
     fn build(&self, app: &mut App) {
         // Active unless explicitly silenced (the feature being compiled in is the
         // opt-in; the env var is just a per-run mute).
-        let enabled = std::env::var("LUNCO_NET_DIAG").map(|v| v != "0").unwrap_or(true);
+        let enabled = std::env::var("LUNCO_NET_DIAG")
+            .map(|v| v != "0")
+            .unwrap_or(true);
         if !enabled {
             info!("[net-diag] compiled in but muted (LUNCO_NET_DIAG=0)");
             return;

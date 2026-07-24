@@ -42,11 +42,18 @@ fn on_set_environment_light_bloom(
     mut cams: Query<&mut SceneCamera>,
 ) {
     let cmd = trigger.event();
-    let Some(intensity) = cmd.bloom_intensity else { return };
+    let Some(intensity) = cmd.bloom_intensity else {
+        return;
+    };
     for mut cam in &mut cams {
-        let low_frequency_boost =
-            cam.bloom.map(|b| b.low_frequency_boost).unwrap_or(BloomLook::default().low_frequency_boost);
-        let next = BloomLook { intensity, low_frequency_boost };
+        let low_frequency_boost = cam
+            .bloom
+            .map(|b| b.low_frequency_boost)
+            .unwrap_or(BloomLook::default().low_frequency_boost);
+        let next = BloomLook {
+            intensity,
+            low_frequency_boost,
+        };
         // Change-guarded: `SceneCamera` is `Changed`-driven on the binder side, so a
         // blind write would re-run `apply` (and re-log the no-hdr warning) on every
         // slider frame even when the value is identical.

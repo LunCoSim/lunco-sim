@@ -29,7 +29,6 @@ use bevy_egui::{egui, EguiContexts};
 use lunco_core::session::ControlPathRegistry;
 use lunco_core::GlobalEntityId;
 
-
 /// Draws the control-blackout badge described in the module docs.
 ///
 /// Adds a single `Update` system; holds no state of its own, because the badge

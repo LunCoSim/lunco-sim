@@ -73,8 +73,19 @@ pub use lunco_twin::{DocumentKind, FileKind, Twin, TwinMode};
 ///
 /// `0` is reserved as "no Twin" (matches other id types across the
 /// codebase that use `0` for the unassigned sentinel).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct TwinId(u64);
 
 impl TwinId {
@@ -321,7 +332,9 @@ impl Workspace {
     /// Documents this Twin claims, per [`twin_for`](Self::twin_for).
     /// Iteration order follows the documents list.
     pub fn documents_in_twin(&self, id: TwinId) -> impl Iterator<Item = &DocumentEntry> {
-        self.documents.iter().filter(move |d| self.twin_for(d) == Some(id))
+        self.documents
+            .iter()
+            .filter(move |d| self.twin_for(d) == Some(id))
     }
 
     /// Documents not claimed by any Twin. Shown under the "Loose"
@@ -401,9 +414,12 @@ mod tests {
     fn twin_for_persistent_doc_finds_enclosing_twin() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        write(&root.join("twin.toml"), r#"name = "t"
+        write(
+            &root.join("twin.toml"),
+            r#"name = "t"
 version = "0.1.0"
-"#);
+"#,
+        );
         let model_path = root.join("Rover.mo");
         write(&model_path, "model Rover end Rover;");
 
@@ -479,7 +495,10 @@ version = "0.1.0"
     #[test]
     fn close_twin_orphans_docs_but_keeps_them_open() {
         let tmp = tempfile::tempdir().unwrap();
-        write(&tmp.path().join("twin.toml"), "name=\"t\"\nversion=\"0.1.0\"\n");
+        write(
+            &tmp.path().join("twin.toml"),
+            "name=\"t\"\nversion=\"0.1.0\"\n",
+        );
         let model = tmp.path().join("m.mo");
         write(&model, "");
 
@@ -519,4 +538,3 @@ version = "0.1.0"
         assert_eq!(ws.active_document, None);
     }
 }
-

@@ -55,7 +55,9 @@ impl SurfaceBand {
     /// samples per shortest wavelength).
     #[inline]
     pub fn visual(step: f64) -> Self {
-        Self { min_wavelength: 2.0 * step }
+        Self {
+            min_wavelength: 2.0 * step,
+        }
     }
 
     /// The morph-target band: morph targets sample the parent's 2×-spaced
@@ -63,7 +65,9 @@ impl SurfaceBand {
     /// `4·step` (one more 2× on top of [`Self::visual`]).
     #[inline]
     pub fn visual_parent(step: f64) -> Self {
-        Self { min_wavelength: 4.0 * step }
+        Self {
+            min_wavelength: 4.0 * step,
+        }
     }
 
     /// The **contact band** — the surface a wheel touches, floored so it agrees
@@ -79,7 +83,9 @@ impl SurfaceBand {
     /// contact-flipping noise.)
     #[inline]
     pub fn contact(visual_leaf_step: f64, collider_step: f64) -> Self {
-        Self { min_wavelength: (2.0 * visual_leaf_step).max(2.0 * collider_step) }
+        Self {
+            min_wavelength: (2.0 * visual_leaf_step).max(2.0 * collider_step),
+        }
     }
 
     /// Apply this band to an oracle, returning a gated view that suppresses
@@ -113,8 +119,13 @@ mod tests {
         // leaf's (2·0.407 = 0.814). The contact floor must pick the coarser one,
         // so the rover touches the band the leaf draws — not a finer band the
         // mesh flattens out (the wheel-sinking gap).
-        let band = SurfaceBand::contact(/* visual_leaf_step */ 0.407, /* collider_step */ 0.305);
-        assert!((band.min_wavelength - 0.814).abs() < 1e-3, "contact floor = coarser gate");
+        let band = SurfaceBand::contact(
+            /* visual_leaf_step */ 0.407, /* collider_step */ 0.305,
+        );
+        assert!(
+            (band.min_wavelength - 0.814).abs() < 1e-3,
+            "contact floor = coarser gate"
+        );
         // Symmetric: whichever input is coarser wins.
         let band2 = SurfaceBand::contact(0.305, 0.407);
         assert_eq!(band.min_wavelength, band2.min_wavelength);

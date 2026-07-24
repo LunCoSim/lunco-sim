@@ -114,8 +114,8 @@ pub fn install_fallback_fonts_with_bytes(ctx: &egui::Context, dejavu: Vec<u8>) {
 /// egui with default fonts (math/arrow glyphs will tofu).
 #[cfg(target_arch = "wasm32")]
 pub fn spawn_wasm_font_fetch(ctx: egui::Context, url: String) {
-    use wasm_bindgen_futures::JsFuture;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
     wasm_bindgen_futures::spawn_local(async move {
         let win = match web_sys::window() {
             Some(w) => w,

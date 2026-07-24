@@ -71,7 +71,10 @@ pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemE
     };
 
     if heights.len() != w * h {
-        return Err(DemError::SizeMismatch { expected: w * h, got: heights.len() });
+        return Err(DemError::SizeMismatch {
+            expected: w * h,
+            got: heights.len(),
+        });
     }
     let heights = heights
         .into_iter()
@@ -114,7 +117,10 @@ pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemE
 pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
     let (w, h, mut heights) = decode_geotiff_f64(bytes)?;
     if w != h {
-        return Err(DemError::NonSquare { width: w, height: h });
+        return Err(DemError::NonSquare {
+            width: w,
+            height: h,
+        });
     }
 
     // The raster states its own extent. No fallback: a raster with no
@@ -141,7 +147,11 @@ pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
     // be re-derived from the NEW sample count, not scaled from the old one.
     let half_extent = (geo.pixel_size_m * (res as f64 - 1.0) * 0.5) as f32;
 
-    Ok(HeightGrid { res, half_extent, heights })
+    Ok(HeightGrid {
+        res,
+        half_extent,
+        heights,
+    })
 }
 
 /// Side length of the largest **centred** square window containing no nodata.
@@ -222,8 +232,9 @@ fn crop_centred(heights: &[f64], w: usize, n: usize) -> Vec<f64> {
 /// being a pure function of the raster.
 fn fill_nodata_from_nearest(heights: &mut [f64], w: usize, h: usize) {
     // Seed the frontier with every measured cell that touches a hole.
-    let mut queue: std::collections::VecDeque<usize> =
-        (0..heights.len()).filter(|&i| heights[i].is_finite()).collect();
+    let mut queue: std::collections::VecDeque<usize> = (0..heights.len())
+        .filter(|&i| heights[i].is_finite())
+        .collect();
     if queue.is_empty() || queue.len() == heights.len() {
         return;
     }
@@ -258,8 +269,14 @@ pub enum DemError {
     Tiff(tiff::TiffError),
     /// The TIFF sample format isn't a supported numeric height type.
     UnsupportedSamples,
-    SizeMismatch { expected: usize, got: usize },
-    NonSquare { width: usize, height: usize },
+    SizeMismatch {
+        expected: usize,
+        got: usize,
+    },
+    NonSquare {
+        width: usize,
+        height: usize,
+    },
     /// Every sample was nodata/NaN — no surface to build.
     AllNoData,
     /// The raster carries no usable georeferencing, so its ground extent is
@@ -276,7 +293,10 @@ impl fmt::Display for DemError {
                 write!(f, "decoded {got} samples, expected {expected} (w*h)")
             }
             DemError::NonSquare { width, height } => {
-                write!(f, "non-square DEM {width}x{height}; only square tiles are supported")
+                write!(
+                    f,
+                    "non-square DEM {width}x{height}; only square tiles are supported"
+                )
             }
             DemError::AllNoData => write!(f, "DEM is entirely nodata"),
             DemError::NoGeoreferencing(m) => write!(
@@ -311,7 +331,10 @@ mod tests {
         assert_eq!(side, 2, "must shrink about the CENTRE, not slide left");
         let cropped = crop_centred(&g, 6, side);
         assert_eq!(cropped.len(), side * side);
-        assert!(cropped.iter().all(|v| v.is_finite()), "trimmed grid is hole-free");
+        assert!(
+            cropped.iter().all(|v| v.is_finite()),
+            "trimmed grid is hole-free"
+        );
         g.clear();
     }
 
@@ -339,7 +362,10 @@ mod tests {
         assert!(g.iter().all(|v| v.is_finite()), "no holes left");
         // Every filled cell took its neighbouring plateau value, NOT the -4000 min.
         for (i, v) in g.iter().enumerate() {
-            assert!(*v >= 1000.0 || i == 0, "cell {i} = {v}: fill must not import the pit");
+            assert!(
+                *v >= 1000.0 || i == 0,
+                "cell {i} = {v}: fill must not import the pit"
+            );
         }
         // The seam is C0: the filled cell equals the measured one beside it.
         assert_eq!(g[3], g[2]);
@@ -352,11 +378,7 @@ mod tests {
         {
             let mut enc = TiffEncoder::new(&mut buf).unwrap();
             let geo = lunco_geotiff::GeoTransform::centred_square(
-                size_m,
-                w as usize,
-                1737.0e3,
-                26.0371,
-                3.6584,
+                size_m, w as usize, 1737.0e3, 26.0371, 3.6584,
             );
             let mut img = enc.new_image::<colortype::Gray32Float>(w, w).unwrap();
             lunco_geotiff::write_geo_tags(img.encoder(), &geo, "Moon 2000").unwrap();
@@ -372,7 +394,8 @@ mod tests {
         let mut buf = Cursor::new(Vec::new());
         {
             let mut enc = TiffEncoder::new(&mut buf).unwrap();
-            enc.write_image::<colortype::Gray32Float>(2, 2, &[0.0f32; 4]).unwrap();
+            enc.write_image::<colortype::Gray32Float>(2, 2, &[0.0f32; 4])
+                .unwrap();
         }
         let err = height_grid_from_geotiff(&buf.into_inner()).unwrap_err();
         assert!(matches!(err, DemError::NoGeoreferencing(_)), "{err}");
@@ -418,10 +441,9 @@ mod tests {
         let mut buf = Cursor::new(Vec::new());
         {
             let mut enc = TiffEncoder::new(&mut buf).unwrap();
-            let geo = lunco_geotiff::GeoTransform::centred_square(
-                2.0, 2, 1737.0e3, 26.0371, 3.6584,
-            )
-            .with_frame(LunarFrame::MoonMe);
+            let geo =
+                lunco_geotiff::GeoTransform::centred_square(2.0, 2, 1737.0e3, 26.0371, 3.6584)
+                    .with_frame(LunarFrame::MoonMe);
             let mut img = enc.new_image::<colortype::Gray32Float>(2, 2).unwrap();
             lunco_geotiff::write_geo_tags(img.encoder(), &geo, "Moon 2000").unwrap();
             img.write_data(&[0.0f32; 4]).unwrap();

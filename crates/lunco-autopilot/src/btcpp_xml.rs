@@ -91,19 +91,39 @@ struct KindMap {
 }
 
 const fn ctrl(kind: &'static str, tag: &'static str) -> KindMap {
-    KindMap { kind, elem: Elem::Tag(tag), shape: Shape::Control }
+    KindMap {
+        kind,
+        elem: Elem::Tag(tag),
+        shape: Shape::Control,
+    }
 }
 const fn deco(kind: &'static str, tag: &'static str) -> KindMap {
-    KindMap { kind, elem: Elem::Tag(tag), shape: Shape::Decorator }
+    KindMap {
+        kind,
+        elem: Elem::Tag(tag),
+        shape: Shape::Decorator,
+    }
 }
 const fn leaf(kind: &'static str, tag: &'static str) -> KindMap {
-    KindMap { kind, elem: Elem::Tag(tag), shape: Shape::Leaf }
+    KindMap {
+        kind,
+        elem: Elem::Tag(tag),
+        shape: Shape::Leaf,
+    }
 }
 const fn action(kind: &'static str) -> KindMap {
-    KindMap { kind, elem: Elem::Action, shape: Shape::Leaf }
+    KindMap {
+        kind,
+        elem: Elem::Action,
+        shape: Shape::Leaf,
+    }
 }
 const fn cond(kind: &'static str) -> KindMap {
-    KindMap { kind, elem: Elem::Condition, shape: Shape::Leaf }
+    KindMap {
+        kind,
+        elem: Elem::Condition,
+        shape: Shape::Leaf,
+    }
 }
 
 /// Every `BehaviorSpec` kind, exactly once. `repeat` precedes `forever` because both
@@ -196,7 +216,9 @@ fn by_kind(kind: &str) -> Option<&'static KindMap> {
 }
 
 fn by_tag(tag: &str) -> Option<&'static KindMap> {
-    TABLE.iter().find(|k| matches!(k.elem, Elem::Tag(t) if t == tag))
+    TABLE
+        .iter()
+        .find(|k| matches!(k.elem, Elem::Tag(t) if t == tag))
 }
 
 // ── JSON → XML ───────────────────────────────────────────────────────────────
@@ -214,7 +236,8 @@ pub fn value_to_xml(root: &Value) -> Result<String, String> {
     write_node(&mut w, root, 0)?;
     w.write_event(Event::End(BytesEnd::new("BehaviorTree")))
         .map_err(se)?;
-    w.write_event(Event::End(BytesEnd::new("root"))).map_err(se)?;
+    w.write_event(Event::End(BytesEnd::new("root")))
+        .map_err(se)?;
     String::from_utf8(w.into_inner().into_inner()).map_err(|e| e.to_string())
 }
 
@@ -222,7 +245,9 @@ type Xw = Writer<Cursor<Vec<u8>>>;
 
 fn write_node(w: &mut Xw, node: &Value, depth: usize) -> Result<(), String> {
     if depth > MAX_DEPTH {
-        return Err(format!("behaviour tree is nested deeper than {MAX_DEPTH} nodes"));
+        return Err(format!(
+            "behaviour tree is nested deeper than {MAX_DEPTH} nodes"
+        ));
     }
     let obj = node.as_object().ok_or("tree node is not an object")?;
     let kind = obj
@@ -236,7 +261,12 @@ fn write_node(w: &mut Xw, node: &Value, depth: usize) -> Result<(), String> {
 }
 
 /// Write a node whose kind has a [`TABLE`] row.
-fn write_known(w: &mut Xw, km: &KindMap, obj: &Map<String, Value>, depth: usize) -> Result<(), String> {
+fn write_known(
+    w: &mut Xw,
+    km: &KindMap,
+    obj: &Map<String, Value>,
+    depth: usize,
+) -> Result<(), String> {
     let kind = km.kind;
     // Spec fields that are renamed on the wire. `consumed` keys are not re-emitted raw.
     let (extra, consumed): (Vec<(&str, String)>, &[&str]) = match kind {
@@ -251,13 +281,22 @@ fn write_known(w: &mut Xw, km: &KindMap, obj: &Map<String, Value>, depth: usize)
             (vec![("success_count", count.into())], &["require"])
         }
         "forever" => (vec![("num_cycles", "-1".into())], &[]),
-        "repeat" => (vec![("num_cycles", whole_field(obj, "times", kind)?)], &["times"]),
-        "retry" => (vec![("num_attempts", whole_field(obj, "times", kind)?)], &["times"]),
+        "repeat" => (
+            vec![("num_cycles", whole_field(obj, "times", kind)?)],
+            &["times"],
+        ),
+        "retry" => (
+            vec![("num_attempts", whole_field(obj, "times", kind)?)],
+            &["times"],
+        ),
         "timeout" => (
             vec![("msec", num_text(secs_field(obj, kind)? * 1000.0))],
             &["seconds"],
         ),
-        "cooldown" => (vec![("sec", num_text(secs_field(obj, kind)?))], &["seconds"]),
+        "cooldown" => (
+            vec![("sec", num_text(secs_field(obj, kind)?))],
+            &["seconds"],
+        ),
         _ => (Vec::new(), &[]),
     };
 
@@ -318,7 +357,12 @@ fn write_known(w: &mut Xw, km: &KindMap, obj: &Map<String, Value>, depth: usize)
 /// that uses an element this crate has no spec for. A `children` key means it came in
 /// as an element (`<Delay>`), so it goes back out as that element; without one it came
 /// in as a custom `<Action ID="…"/>`.
-fn write_foreign(w: &mut Xw, kind: &str, obj: &Map<String, Value>, depth: usize) -> Result<(), String> {
+fn write_foreign(
+    w: &mut Xw,
+    kind: &str,
+    obj: &Map<String, Value>,
+    depth: usize,
+) -> Result<(), String> {
     let attrs: Vec<(&str, String)> = obj
         .iter()
         .filter(|(k, _)| !RESERVED.contains(&k.as_str()))
@@ -374,7 +418,9 @@ fn whole_field(obj: &Map<String, Value>, key: &str, kind: &str) -> Result<String
         .and_then(Value::as_f64)
         .ok_or_else(|| format!("`{kind}` needs a numeric `{key}`"))?;
     if !n.is_finite() || n < 0.0 || n.fract() != 0.0 {
-        return Err(format!("`{kind}`: `{key}` must be a whole, non-negative number (got {n})"));
+        return Err(format!(
+            "`{kind}`: `{key}` must be a whole, non-negative number (got {n})"
+        ));
     }
     Ok((n as i64).to_string())
 }
@@ -499,7 +545,9 @@ pub fn xml_to_value(xml: &str) -> Result<Value, String> {
             .ok_or_else(|| format!("main_tree_to_execute=\"{id}\" names no <BehaviorTree>"))?,
         None if trees.len() == 1 => &trees[0].1,
         None => {
-            return Err("several <BehaviorTree> elements but no main_tree_to_execute on <root>".into())
+            return Err(
+                "several <BehaviorTree> elements but no main_tree_to_execute on <root>".into(),
+            )
         }
     };
     expand(entry, &by_id, &mut Vec::new(), 0)
@@ -544,7 +592,11 @@ fn close(
     Ok(())
 }
 
-fn frame_to_value(tag: &str, attrs: &[(String, String)], children: Vec<Value>) -> Result<Value, String> {
+fn frame_to_value(
+    tag: &str,
+    attrs: &[(String, String)],
+    children: Vec<Value>,
+) -> Result<Value, String> {
     let get = |k: &str| attrs.iter().find(|(a, _)| a == k).map(|(_, v)| v.as_str());
     let mut m = Map::new();
 
@@ -558,7 +610,9 @@ fn frame_to_value(tag: &str, attrs: &[(String, String)], children: Vec<Value>) -
     if tag == "Action" || tag == "Condition" {
         let kind = get("ID").ok_or_else(|| format!("<{tag}> is missing its ID"))?;
         if !children.is_empty() {
-            return Err(format!("<{tag} ID=\"{kind}\"> is a leaf but holds child elements"));
+            return Err(format!(
+                "<{tag} ID=\"{kind}\"> is a leaf but holds child elements"
+            ));
         }
         m.insert("kind".into(), kind.into());
         put_attrs(&mut m, attrs, tag)?;
@@ -577,8 +631,13 @@ fn frame_to_value(tag: &str, attrs: &[(String, String)], children: Vec<Value>) -
     let mut kind = km.kind;
     match km.kind {
         "parallel" => {
-            let count: i64 = get("success_count").and_then(|s| s.parse().ok()).unwrap_or(-1);
-            m.insert("require".into(), if count == 1 { "one" } else { "all" }.into());
+            let count: i64 = get("success_count")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(-1);
+            m.insert(
+                "require".into(),
+                if count == 1 { "one" } else { "all" }.into(),
+            );
         }
         "repeat" => {
             let cycles: i64 = get("num_cycles").and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -589,7 +648,9 @@ fn frame_to_value(tag: &str, attrs: &[(String, String)], children: Vec<Value>) -
             }
         }
         "retry" => {
-            let n: i64 = get("num_attempts").and_then(|s| s.parse().ok()).unwrap_or(1);
+            let n: i64 = get("num_attempts")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
             m.insert("times".into(), Value::from(n.max(0)));
         }
         "timeout" => {
@@ -630,7 +691,11 @@ fn frame_to_value(tag: &str, attrs: &[(String, String)], children: Vec<Value>) -
 }
 
 /// Copy an element's attributes into the node, rejecting the structural names.
-fn put_attrs(m: &mut Map<String, Value>, attrs: &[(String, String)], tag: &str) -> Result<(), String> {
+fn put_attrs(
+    m: &mut Map<String, Value>,
+    attrs: &[(String, String)],
+    tag: &str,
+) -> Result<(), String> {
     for (k, v) in attrs {
         if k == "ID" {
             continue;
@@ -669,7 +734,9 @@ fn expand(
     depth: usize,
 ) -> Result<Value, String> {
     if depth > MAX_DEPTH {
-        return Err(format!("behaviour tree is nested deeper than {MAX_DEPTH} nodes"));
+        return Err(format!(
+            "behaviour tree is nested deeper than {MAX_DEPTH} nodes"
+        ));
     }
     let obj = node.as_object().ok_or("tree node is not an object")?;
 
@@ -764,34 +831,85 @@ mod tests {
         let every: Vec<B> = vec![
             B::Sequence { children: vec![] },
             B::Selector { children: vec![] },
-            B::Parallel { require: crate::ParallelRequire::All, children: vec![] },
+            B::Parallel {
+                require: crate::ParallelRequire::All,
+                children: vec![],
+            },
             B::ReactiveSequence { children: vec![] },
             B::ReactiveSelector { children: vec![] },
             B::Forever { child: child() },
-            B::Repeat { times: 1, child: child() },
-            B::Retry { times: 1, child: child() },
+            B::Repeat {
+                times: 1,
+                child: child(),
+            },
+            B::Retry {
+                times: 1,
+                child: child(),
+            },
             B::Invert { child: child() },
             B::ForceSuccess { child: child() },
             B::ForceFailure { child: child() },
-            B::Timeout { seconds: 1.0, child: child() },
-            B::Cooldown { seconds: 1.0, child: child() },
-            B::DriveTo { target: [0.0; 3], speed: 0.6, radius: 2.0 },
-            B::Patrol { waypoints: vec![], speed: 0.6, radius: 2.0, dwell: 0.0 },
-            B::Arrived { target: [0.0; 3], radius: 2.0 },
+            B::Timeout {
+                seconds: 1.0,
+                child: child(),
+            },
+            B::Cooldown {
+                seconds: 1.0,
+                child: child(),
+            },
+            B::DriveTo {
+                target: [0.0; 3],
+                speed: 0.6,
+                radius: 2.0,
+            },
+            B::Patrol {
+                waypoints: vec![],
+                speed: 0.6,
+                radius: 2.0,
+                dwell: 0.0,
+            },
+            B::Arrived {
+                target: [0.0; 3],
+                radius: 2.0,
+            },
             B::Wait { seconds: 1.0 },
-            B::Cruise { throttle: 0.0, steer: 0.0 },
+            B::Cruise {
+                throttle: 0.0,
+                steer: 0.0,
+            },
             B::Brake,
-            B::Face { target: [0.0; 3], tolerance: 8.0 },
-            B::Facing { target: [0.0; 3], tolerance: 8.0 },
+            B::Face {
+                target: [0.0; 3],
+                tolerance: 8.0,
+            },
+            B::Facing {
+                target: [0.0; 3],
+                tolerance: 8.0,
+            },
             B::Succeed,
             B::Fail,
-            B::Follow { target: 0, speed: 0.6, radius: 5.0 },
-            B::Intercept { target: 0, speed: 0.6, radius: 2.0, lead: 1.0 },
-            B::ObstacleAhead { distance: 6.0, cone: 40.0 },
+            B::Follow {
+                target: 0,
+                speed: 0.6,
+                radius: 5.0,
+            },
+            B::Intercept {
+                target: 0,
+                speed: 0.6,
+                radius: 2.0,
+                lead: 1.0,
+            },
+            B::ObstacleAhead {
+                distance: 6.0,
+                cone: 40.0,
+            },
             B::PathBlocked { distance: 6.0 },
             B::Hold,
             B::SteerClear { speed: 0.6 },
-            B::RunTool { tool: "science::take_photo".into(), args: String::new() },
+            B::RunTool {
+                tool: "science::take_photo".into(),
+                args: String::new(),
+            },
         ];
         for spec in &every {
             let kind = spec_kind(spec);

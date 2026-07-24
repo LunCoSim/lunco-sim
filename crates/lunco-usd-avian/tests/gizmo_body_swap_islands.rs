@@ -96,9 +96,9 @@
 
 use avian3d::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
-use bevy::prelude::*;
 
 mod support;
 
@@ -394,7 +394,10 @@ fn stacked_bodies_are_actually_touching() {
     let touching = graph
         .contact_pairs_with(a)
         .any(|p| (p.body1 == Some(b) || p.body2 == Some(b)) && p.is_touching());
-    assert!(touching, "A<->B never formed a touching contact — any test built on this proves nothing");
+    assert!(
+        touching,
+        "A<->B never formed a touching contact — any test built on this proves nothing"
+    );
     let _ = &mut app;
 }
 
@@ -416,7 +419,9 @@ fn joint_collision_disabled_added_after_joint_is_registered() {
     app.update();
 
     // Frame 2: NOW disable collision on it, with the A<->B contact live.
-    app.world_mut().entity_mut(joint).insert(JointCollisionDisabled);
+    app.world_mut()
+        .entity_mut(joint)
+        .insert(JointCollisionDisabled);
 
     for _ in 0..240 {
         app.update();
@@ -719,9 +724,14 @@ fn probe_island_shape_before_despawn() {
         .sum();
     let islands: Vec<String> = bodies
         .iter()
-        .map(|&b| match world.entity(b).get::<avian3d::dynamics::solver::islands::BodyIslandNode>() {
-            Some(n) => format!("{:?}", n.island_id()),
-            None => "NO-NODE".into(),
+        .map(|&b| {
+            match world
+                .entity(b)
+                .get::<avian3d::dynamics::solver::islands::BodyIslandNode>()
+            {
+                Some(n) => format!("{:?}", n.island_id()),
+                None => "NO-NODE".into(),
+            }
         })
         .collect();
     let asleep = bodies

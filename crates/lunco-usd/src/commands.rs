@@ -31,28 +31,28 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{DocumentId, DocumentOrigin};
-use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_doc_bevy::{
     DocumentChanged, DocumentClosed, DocumentOpened, NewDocument, OpenFile, RedoDocument,
     SaveDocument, UndoDocument,
 };
+use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 // The empty-viewport placeholder is a workbench (egui shell) concept; the
 // document/file command surface below is headless-safe. Gate only this.
+use lunco_usd_bevy::UsdPrimPath;
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
 use lunco_workspace::{TwinAdded, WorkspaceResource};
-use lunco_usd_bevy::UsdPrimPath;
 
 use crate::document::{LayerId, UsdOp};
+use lunco_doc::OpenOutcome;
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_sim::cosim::{
     clear_scene_entities, normalize_scene_asset_path, resolve_root_prim, spawn_scene_root_world,
     ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
 };
-use lunco_doc::OpenOutcome;
-use lunco_doc_bevy::DocumentRegistry;
 
 /// Stable id for the USD document kind in
 /// [`DocumentKindRegistry`].
@@ -125,8 +125,7 @@ impl Plugin for UsdCommandsPlugin {
         // without a journal never run it.
         app.add_systems(
             Update,
-            wire_usd_journal_handle
-                .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+            wire_usd_journal_handle.run_if(resource_added::<lunco_doc_bevy::JournalResource>),
         );
         // Workbench-only: the empty-viewport placeholder lives in the egui
         // shell; headless / sandbox / server bins don't add it.
@@ -248,7 +247,11 @@ fn open_usd_docs_on_twin_added(
         .as_ref()
         .map(|m| m.name.clone())
         .filter(|n| !n.is_empty())
-        .or_else(|| twin.root.file_name().map(|f| f.to_string_lossy().into_owned()))
+        .or_else(|| {
+            twin.root
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+        })
         .unwrap_or_else(|| "twin".to_string());
     // Register the OPENED FOLDER as this Twin's resolve root — unconditionally,
     // before any scene decision. This is what routes `twin://<name>/…` AND what
@@ -287,9 +290,15 @@ fn open_usd_docs_on_twin_added(
                     scene,
                     twin.root.display()
                 );
-                let handle = asset_server
-                    .load::<lunco_usd_bevy::UsdSourceText>(lunco_assets::twin_uri(&twin_name, &scene));
-                pending_twin.push(handle, twin_name.clone(), scene.to_string(), twin.root.join(scene));
+                let handle = asset_server.load::<lunco_usd_bevy::UsdSourceText>(
+                    lunco_assets::twin_uri(&twin_name, &scene),
+                );
+                pending_twin.push(
+                    handle,
+                    twin_name.clone(),
+                    scene.to_string(),
+                    twin.root.join(scene),
+                );
             } else {
                 info!(
                     "[twin] loading starting scene `twin://{}/{}` (twin `{}`)",
@@ -328,7 +337,11 @@ fn open_usd_docs_on_twin_added(
             info!(
                 "[twin] `{}` declares no starting scene — clearing viewport ({})",
                 twin.root.display(),
-                if has_manifest { "manifest present, no default_scene" } else { "no twin.toml" }
+                if has_manifest {
+                    "manifest present, no default_scene"
+                } else {
+                    "no twin.toml"
+                }
             );
             empty_reason.set(reason);
             commands.trigger(ClearScene {});
@@ -425,7 +438,11 @@ fn on_load_scene(
     asset_server: Option<Res<AssetServer>>,
     stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
     mut commands: Commands,
-    q_usd: Query<(Entity, &UsdPrimPath, Has<lunco_usd_sim::cosim::UsdSceneRoot>)>,
+    q_usd: Query<(
+        Entity,
+        &UsdPrimPath,
+        Has<lunco_usd_sim::cosim::UsdSceneRoot>,
+    )>,
     scene: SceneEntities,
     in_flight: Option<Res<SceneLoadInFlight>>,
     registry: Res<DocumentRegistry<UsdDocument>>,
@@ -458,7 +475,10 @@ fn on_load_scene(
     // no-op instead of a destructive remount.
     if let Some(backed) = backed.as_deref() {
         if let Some(composed) = doc_backed_scene_source(&path, &registry, backed) {
-            info!("[load-scene] `{}` → `{}` (mounting the document's composed source)", path, composed);
+            info!(
+                "[load-scene] `{}` → `{}` (mounting the document's composed source)",
+                path, composed
+            );
             path = composed;
         }
     }
@@ -482,12 +502,21 @@ fn on_load_scene(
     // Deliberately NOT "any prim from this stage": one stage legitimately mounts
     // at two different roots (additive `OpenFile` import), and that would silently
     // drop the second mount.
-    let new_id = asset_server.load::<lunco_usd_bevy::UsdStageAsset>(&path).id();
+    let new_id = asset_server
+        .load::<lunco_usd_bevy::UsdStageAsset>(&path)
+        .id();
     if q_usd.iter().any(|(_, upp, is_scene_root)| {
         upp.stage_handle.id() == new_id
-            && if root_prim.is_empty() { is_scene_root } else { upp.path == root_prim }
+            && if root_prim.is_empty() {
+                is_scene_root
+            } else {
+                upp.path == root_prim
+            }
     }) {
-        info!("[load-scene] `{}` @ `{}` already loaded — no-op", path, root_prim);
+        info!(
+            "[load-scene] `{}` @ `{}` already loaded — no-op",
+            path, root_prim
+        );
         return;
     }
 
@@ -527,7 +556,10 @@ fn on_load_scene(
 
     // Record the in-flight load so a concurrent `LoadScene` (different path) is
     // suppressed until this scene's prims have all spawned.
-    commands.insert_resource(SceneLoadInFlight { path: path.clone(), stage_id: new_id });
+    commands.insert_resource(SceneLoadInFlight {
+        path: path.clone(),
+        stage_id: new_id,
+    });
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).
     clear_scene_entities(&mut commands, &scene);
@@ -711,7 +743,10 @@ pub(crate) fn spawn_usd_load(world: &mut World, abs_path: PathBuf) {
     world
         .resource_mut::<PendingUsdLoads>()
         .tasks
-        .push(PendingUsdLoad { path: abs_path, task });
+        .push(PendingUsdLoad {
+            path: abs_path,
+            task,
+        });
 }
 
 /// Poll outstanding [`PendingUsdLoads`] and finish the open once each
@@ -845,17 +880,11 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
                 return;
             }
             DocumentOrigin::Untitled { .. } => {
-                bevy::log::warn!(
-                    "[SaveUsd] {} is Untitled — Save-As required",
-                    doc_id
-                );
+                bevy::log::warn!("[SaveUsd] {} is Untitled — Save-As required", doc_id);
                 return;
             }
             DocumentOrigin::Bundled { .. } => {
-                bevy::log::warn!(
-                    "[SaveUsd] {} is a bundled example — read-only",
-                    doc_id
-                );
+                bevy::log::warn!("[SaveUsd] {} is a bundled example — read-only", doc_id);
                 return;
             }
         };
@@ -867,7 +896,12 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
         let storage = lunco_storage::FileStorage::new();
         let handle = lunco_storage::StorageHandle::File(path.clone());
         if let Err(e) = storage.write_sync(&handle, source.as_bytes()) {
-            bevy::log::error!("[SaveUsd] {} write to {} failed: {:?}", doc_id, path.display(), e);
+            bevy::log::error!(
+                "[SaveUsd] {} write to {} failed: {:?}",
+                doc_id,
+                path.display(),
+                e
+            );
             return;
         }
         // Borrow mut to mark saved. `host_mut` doesn't bump the
@@ -957,10 +991,15 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 /// No-ops for a `doc` this registry doesn't own, per the `UndoDocument` ownership
 /// convention.
 #[on_command(UndoDocument)]
-pub fn on_undo_usd_document(trigger: On<UndoDocument>, mut registry: ResMut<DocumentRegistry<UsdDocument>>) {
+pub fn on_undo_usd_document(
+    trigger: On<UndoDocument>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+) {
     let doc = trigger.event().doc;
     let outcome = {
-        let Some(host) = registry.host_mut(doc) else { return };
+        let Some(host) = registry.host_mut(doc) else {
+            return;
+        };
         host.undo()
     };
     match outcome {
@@ -979,10 +1018,15 @@ pub fn on_undo_usd_document(trigger: On<UndoDocument>, mut registry: ResMut<Docu
 /// Per-domain [`RedoDocument`] handler for **USD** documents. The mirror of
 /// [`on_undo_usd_document`]; same ownership rules.
 #[on_command(RedoDocument)]
-pub fn on_redo_usd_document(trigger: On<RedoDocument>, mut registry: ResMut<DocumentRegistry<UsdDocument>>) {
+pub fn on_redo_usd_document(
+    trigger: On<RedoDocument>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+) {
     let doc = trigger.event().doc;
     let outcome = {
-        let Some(host) = registry.host_mut(doc) else { return };
+        let Some(host) = registry.host_mut(doc) else {
+            return;
+        };
         host.redo()
     };
     match outcome {
@@ -1179,11 +1223,7 @@ fn on_set_dome_light(
         Some(doc) => doc,
         None => {
             let Some(doc) = backed.as_ref().and_then(|b| {
-                crate::twin_projection::scene_document_for(
-                    b,
-                    &asset_server,
-                    root.stage_handle.id(),
-                )
+                crate::twin_projection::scene_document_for(b, &asset_server, root.stage_handle.id())
             }) else {
                 bevy::log::warn!(
                     "[SetDomeLight] the running scene is a raw-file scene (not doc-backed), so it \
@@ -1312,10 +1352,7 @@ fn drain_usd_pending_events(
     mut commands: Commands,
 ) {
     let pending = registry.drain_pending();
-    if pending.opened.is_empty()
-        && pending.changed.is_empty()
-        && pending.closed.is_empty()
-    {
+    if pending.opened.is_empty() && pending.changed.is_empty() && pending.closed.is_empty() {
         return;
     }
     for doc in pending.opened {
@@ -1359,7 +1396,8 @@ mod change_set_tests {
     use lunco_doc_bevy::JournalResource;
     use lunco_twin_journal::{AuthorTag, UndoManager, UndoScope};
 
-    const RIG: &str = "#usda 1.0\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
+    const RIG: &str =
+        "#usda 1.0\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
 
     fn wheel_spec() -> AttachSpec {
         AttachSpec::new(
@@ -1393,11 +1431,17 @@ mod change_set_tests {
         let spec = wheel_spec();
         let ops = attach_component_ops(&spec);
         let n = ops.len();
-        assert!(n > 1, "the attach lowering is multi-op — that is the whole finding");
+        assert!(
+            n > 1,
+            "the attach lowering is multi-op — that is the whole finding"
+        );
 
-        let (applied, total) =
-            apply_ops_as_change_set(&mut world, doc, "Attach Wheel", ops);
-        assert_eq!((applied, total), (n, n), "every op applies onto a valid host");
+        let (applied, total) = apply_ops_as_change_set(&mut world, doc, "Attach Wheel", ops);
+        assert_eq!(
+            (applied, total),
+            (n, n),
+            "every op applies onto a valid host"
+        );
 
         journal.with_read(|j| {
             let entries: Vec<_> = j.entries_for_doc(doc).collect();
@@ -1428,7 +1472,10 @@ mod change_set_tests {
                 n,
                 "one undo must peel off the WHOLE attach, not 1-of-{n}"
             );
-            assert!(!um.can_undo(), "nothing left behind — the attach was one unit");
+            assert!(
+                !um.can_undo(),
+                "nothing left behind — the attach was one unit"
+            );
         });
     }
 
@@ -1585,7 +1632,9 @@ mod tests {
         app.add_plugins(UsdCommandsPlugin);
         app.update();
 
-        assert!(app.world().contains_resource::<DocumentRegistry<UsdDocument>>());
+        assert!(app
+            .world()
+            .contains_resource::<DocumentRegistry<UsdDocument>>());
         let kinds = app.world().resource::<DocumentKindRegistry>();
         let meta = kinds
             .meta(&DocumentKindId::new(USD_DOCUMENT_KIND))
@@ -1620,7 +1669,11 @@ mod tests {
         }
 
         let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        assert_eq!(reg.ids().count(), 1, "exactly one USD doc opened (no duplicate)");
+        assert_eq!(
+            reg.ids().count(),
+            1,
+            "exactly one USD doc opened (no duplicate)"
+        );
 
         let _ = std::fs::remove_file(&tmp_path);
     }
@@ -1655,7 +1708,9 @@ mod tests {
 
         // Allocate a blank document.
         let doc_id = {
-            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n".to_string(),
                 lunco_doc::PathlessOrigin::untitled("UntitledRover.usda"),
@@ -1709,11 +1764,26 @@ mod tests {
         let data = host.document().data();
         // `UsdDataExt` on purpose: this asserts what the ops AUTHORED into the
         // document layer, not what a stage composes out of it.
-        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover").unwrap()).as_deref(), Some("Xform"));
-        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover/Body").unwrap()).as_deref(), Some("Cube"));
-        assert_eq!(data.prim_type_name(&SdfPath::new("/Rover/WheelFL").unwrap()).as_deref(), Some("Cube"));
         assert_eq!(
-            data.prim_attribute_value::<[f64; 3]>(&SdfPath::new("/Rover/WheelFL").unwrap(), "xformOp:translate"),
+            data.prim_type_name(&SdfPath::new("/Rover").unwrap())
+                .as_deref(),
+            Some("Xform")
+        );
+        assert_eq!(
+            data.prim_type_name(&SdfPath::new("/Rover/Body").unwrap())
+                .as_deref(),
+            Some("Cube")
+        );
+        assert_eq!(
+            data.prim_type_name(&SdfPath::new("/Rover/WheelFL").unwrap())
+                .as_deref(),
+            Some("Cube")
+        );
+        assert_eq!(
+            data.prim_attribute_value::<[f64; 3]>(
+                &SdfPath::new("/Rover/WheelFL").unwrap(),
+                "xformOp:translate"
+            ),
             Some([1.0, 0.0, 1.0])
         );
         // Generation advanced once per op.
@@ -1738,7 +1808,9 @@ mod tests {
         app.update();
 
         let doc_id = {
-            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n".to_string(),
                 lunco_doc::PathlessOrigin::untitled("UntitledJournal.usda"),
@@ -1771,9 +1843,11 @@ mod tests {
             let ops: Vec<_> = j
                 .entries_for_doc(doc_id)
                 .filter_map(|e| match &e.kind {
-                    EntryKind::Op { domain, op, inverse } => {
-                        Some((domain.clone(), op.clone(), inverse.clone()))
-                    }
+                    EntryKind::Op {
+                        domain,
+                        op,
+                        inverse,
+                    } => Some((domain.clone(), op.clone(), inverse.clone())),
                     _ => None,
                 })
                 .collect();
@@ -1830,7 +1904,11 @@ mod tests {
         std::fs::write(tmp.join("twin.toml"), toml_body).unwrap();
         std::fs::write(tmp.join("scene_a.usda"), "#usda 1.0\ndef Xform \"A\" {}\n").unwrap();
         std::fs::write(tmp.join("scene_b.usda"), "#usda 1.0\ndef Xform \"B\" {}\n").unwrap();
-        std::fs::write(tmp.join("controller.mo"), "model Controller end Controller;\n").unwrap();
+        std::fs::write(
+            tmp.join("controller.mo"),
+            "model Controller end Controller;\n",
+        )
+        .unwrap();
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -1922,7 +2000,10 @@ mod tests {
             "the declared starting scene, got {:?}",
             cmds.loads
         );
-        assert_eq!(cmds.clears, 0, "LoadScene clears internally — no extra ClearScene");
+        assert_eq!(
+            cmds.clears, 0,
+            "LoadScene clears internally — no extra ClearScene"
+        );
     }
 
     #[test]
@@ -1933,7 +2014,11 @@ mod tests {
             "name = \"t\"\nversion = \"0.1.0\"\n",
             "lunco_usd_twin_no_scene_test",
         );
-        assert!(cmds.loads.is_empty(), "no scene loaded, got {:?}", cmds.loads);
+        assert!(
+            cmds.loads.is_empty(),
+            "no scene loaded, got {:?}",
+            cmds.loads
+        );
         assert_eq!(cmds.clears, 1, "viewport cleared to empty");
     }
 
@@ -1942,7 +2027,11 @@ mod tests {
         // Folder with no `.usda` and no `twin.toml`: clear to empty,
         // load nothing — the viewport must show nothing.
         let cmds = scene_cmds_for_empty_folder("lunco_usd_empty_folder_test");
-        assert!(cmds.loads.is_empty(), "nothing to load, got {:?}", cmds.loads);
+        assert!(
+            cmds.loads.is_empty(),
+            "nothing to load, got {:?}",
+            cmds.loads
+        );
         assert_eq!(cmds.clears, 1, "empty folder clears the viewport");
     }
 

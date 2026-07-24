@@ -186,7 +186,10 @@ pub fn sample_nurbs_patch_at(
     // of a session on the HAB-1 dome. Each path therefore names itself.
     if u_order < 2 || v_order < 2 || u_count < u_order || v_count < v_order {
         warn!(
-            u_count, v_count, u_order, v_order,
+            u_count,
+            v_count,
+            u_order,
+            v_order,
             "NurbsPatch skipped: order/count invalid (need order >= 2 and count >= order)"
         );
         return Vec::new();
@@ -228,7 +231,11 @@ pub fn sample_nurbs_patch_at(
         for iv in 0..v_count {
             let idx = iv * u_count + iu;
             let p = points[idx];
-            let w = if weights.is_empty() { 1.0 } else { weights[idx] };
+            let w = if weights.is_empty() {
+                1.0
+            } else {
+                weights[idx]
+            };
             // Homogeneous: PRE-MULTIPLY. Raw xyz with a weight is a different
             // surface, and a plausible-looking one.
             col.push(Vector4::new(
@@ -266,8 +273,8 @@ pub fn sample_nurbs_patch_at(
         || v1 <= v0
     {
         warn!(
-            u0, u1, v0, v1,
-            "NurbsPatch skipped: degenerate parameter range (non-finite or zero-width)"
+            u0,
+            u1, v0, v1, "NurbsPatch skipped: degenerate parameter range (non-finite or zero-width)"
         );
         return Vec::new();
     }
@@ -281,7 +288,11 @@ pub fn sample_nurbs_patch_at(
             let n = surface.normal(u, v);
             if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
                 warn!(
-                    u, v, x = p.x, y = p.y, z = p.z,
+                    u,
+                    v,
+                    x = p.x,
+                    y = p.y,
+                    z = p.z,
                     "NurbsPatch skipped: non-finite point evaluated (check for zero weights)"
                 );
                 return Vec::new();
@@ -347,7 +358,10 @@ mod tests {
             let r = ((p[0] as f64).powi(2) + (p[1] as f64).powi(2)).sqrt();
             worst = worst.max((r - 1.0).abs());
         }
-        assert!(worst < 1e-6, "quarter-circle radius error {worst:e} (want exact)");
+        assert!(
+            worst < 1e-6,
+            "quarter-circle radius error {worst:e} (want exact)"
+        );
     }
 
     /// The companion: without weights the same control net sags off the circle.
@@ -485,7 +499,10 @@ mod tests {
             let r = ((smp.position[0] as f64).powi(2) + (smp.position[2] as f64).powi(2)).sqrt();
             worst = worst.max((r - 1.0).abs());
         }
-        assert!(worst < 1e-5, "cylindrical radius error {worst:e} (want exact)");
+        assert!(
+            worst < 1e-5,
+            "cylindrical radius error {worst:e} (want exact)"
+        );
     }
 
     #[test]
@@ -511,10 +528,22 @@ mod tests {
     fn malformed_curves_are_refused_not_guessed() {
         let pts = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
         let knots = [0.0, 0.0, 1.0, 1.0];
-        assert!(sample_nurbs_curve(&pts, &[], 1, &knots, 4).is_empty(), "order < 2");
-        assert!(sample_nurbs_curve(&pts, &[], 4, &knots, 4).is_empty(), "cv < order");
-        assert!(sample_nurbs_curve(&pts, &[], 2, &[0.0, 0.0], 4).is_empty(), "short knots");
-        assert!(sample_nurbs_curve(&pts, &[1.0], 2, &knots, 4).is_empty(), "weight mismatch");
+        assert!(
+            sample_nurbs_curve(&pts, &[], 1, &knots, 4).is_empty(),
+            "order < 2"
+        );
+        assert!(
+            sample_nurbs_curve(&pts, &[], 4, &knots, 4).is_empty(),
+            "cv < order"
+        );
+        assert!(
+            sample_nurbs_curve(&pts, &[], 2, &[0.0, 0.0], 4).is_empty(),
+            "short knots"
+        );
+        assert!(
+            sample_nurbs_curve(&pts, &[1.0], 2, &knots, 4).is_empty(),
+            "weight mismatch"
+        );
     }
 
     /// Builds the HAB-1 dome net: a half-ellipsoid, springline to apex, as a
@@ -524,7 +553,7 @@ mod tests {
     /// Returns (points, weights) in USD's v-major order.
     fn hab1_dome_net(a: f32, b: f32) -> (Vec<[f32; 3]>, Vec<f64>) {
         const C: f64 = std::f64::consts::FRAC_1_SQRT_2; // cos 45
-        // 4 quarter spans: on-circle points at 0/90/180/270, corners between.
+                                                        // 4 quarter spans: on-circle points at 0/90/180/270, corners between.
         let ring = |r: f32, y: f32| -> Vec<[f32; 3]> {
             vec![
                 [r, y, 0.0],
@@ -562,9 +591,7 @@ mod tests {
         let u_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
         let v_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
-        let g = sample_nurbs_patch(
-            &points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8,
-        );
+        let g = sample_nurbs_patch(&points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8);
         assert!(
             !g.is_empty(),
             "dome patch produced no samples — read the warn to see which guard fired"
@@ -622,9 +649,7 @@ mod tests {
         let u_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
         let v_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
-        let g = sample_nurbs_patch(
-            &points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8,
-        );
+        let g = sample_nurbs_patch(&points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8);
         assert!(!g.is_empty(), "dome patch produced no samples");
 
         let mut checked = 0;
@@ -652,7 +677,10 @@ mod tests {
             );
             checked += 1;
         }
-        assert!(checked > 100, "expected many non-apex samples, got {checked}");
+        assert!(
+            checked > 100,
+            "expected many non-apex samples, got {checked}"
+        );
     }
 
     /// The mid-latitude ring must lie ON the ellipse, not inside or outside it.
@@ -663,13 +691,15 @@ mod tests {
         let (points, weights) = hab1_dome_net(7.345, 4.300);
         let u_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
         let v_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        let g = sample_nurbs_patch(
-            &points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8,
-        );
+        let g = sample_nurbs_patch(&points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8);
         assert!(!g.is_empty());
 
         for s in &g {
-            let (x, y, z) = (s.position[0] as f64, s.position[1] as f64, s.position[2] as f64);
+            let (x, y, z) = (
+                s.position[0] as f64,
+                s.position[1] as f64,
+                s.position[2] as f64,
+            );
             let r = (x * x + z * z).sqrt();
             // (r/a)^2 + (y/b)^2 == 1 everywhere on a true half-ellipsoid.
             let f = (r / 7.345).powi(2) + (y / 4.300).powi(2);

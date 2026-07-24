@@ -234,7 +234,9 @@ fn read_measured_slide_rate(world: &World, entity: Entity) -> Option<f64> {
     // carries no velocity components, so a missing one reads as zero rather than
     // failing the whole port — a strut hung off the world frame still has a rate.
     let anchor_vel = |body: Entity, local_anchor: DVec3| -> DVec3 {
-        let lin = world.get::<LinearVelocity>(body).map_or(DVec3::ZERO, |v| v.0);
+        let lin = world
+            .get::<LinearVelocity>(body)
+            .map_or(DVec3::ZERO, |v| v.0);
         let ang = world
             .get::<AngularVelocity>(body)
             .map_or(DVec3::ZERO, |v| v.0);
@@ -283,7 +285,10 @@ pub fn joint_motor_force(world: &World, entity: Entity) -> Option<f64> {
     let j = world.get::<PrismaticJoint>(entity)?;
     let (stiffness, damping) = match j.motor.motor_model {
         MotorModel::ForceBased { stiffness, damping } => (stiffness, damping),
-        MotorModel::SpringDamper { frequency, damping_ratio } => {
+        MotorModel::SpringDamper {
+            frequency,
+            damping_ratio,
+        } => {
             // Recover the newton coefficients from the mass-scaled form. `body2` is
             // the driven body (the loader builds `new(body0, body1)`, so avian's
             // body2 is the authored driven body1). No mass ⇒ no honest force.
@@ -572,7 +577,10 @@ mod tests {
         // report. A non-zero reading here is a spring publishing an input.
         let (unloaded, joint) = sprung_leg(0.0, 60);
         let f0 = joint_motor_force(unloaded.world(), joint).expect("force port");
-        assert!(f0.abs() < 1.0, "unloaded strut should read ~0 N, got {f0} N");
+        assert!(
+            f0.abs() < 1.0,
+            "unloaded strut should read ~0 N, got {f0} N"
+        );
     }
 
     /// A `SpringDamper` motor IS readable: it is the stable realisation a
@@ -586,7 +594,11 @@ mod tests {
         // conversion the loader uses. Force must match the `ForceBased` reading.
         let (app, joint) = sprung_leg(MOON_G, 600);
         assert!(matches!(
-            app.world().get::<PrismaticJoint>(joint).unwrap().motor.motor_model,
+            app.world()
+                .get::<PrismaticJoint>(joint)
+                .unwrap()
+                .motor
+                .motor_model,
             MotorModel::SpringDamper { .. }
         ));
         let f = joint_motor_force(app.world(), joint).expect("force port reads a spring-damper");

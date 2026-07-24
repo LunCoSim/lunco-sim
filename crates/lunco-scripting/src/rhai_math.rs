@@ -26,7 +26,9 @@ use rhai::{Dynamic, Engine};
 
 /// One numeric element of a script array.
 fn scalar(d: &Dynamic) -> Option<f64> {
-    d.as_float().ok().or_else(|| d.as_int().ok().map(|i| i as f64))
+    d.as_float()
+        .ok()
+        .or_else(|| d.as_int().ok().map(|i| i as f64))
 }
 
 /// Read an `[x, y, z]` script value as a vector.
@@ -64,9 +66,9 @@ fn to_array(v: DVec3) -> Dynamic {
 }
 
 /// Lift a binary vector op, returning `()` on degenerate input.
-fn binary(f: impl Fn(DVec3, DVec3) -> DVec3 + Send + Sync + 'static)
-    -> impl Fn(Dynamic, Dynamic) -> Dynamic + Send + Sync + 'static
-{
+fn binary(
+    f: impl Fn(DVec3, DVec3) -> DVec3 + Send + Sync + 'static,
+) -> impl Fn(Dynamic, Dynamic) -> Dynamic + Send + Sync + 'static {
     move |a, b| match (to_vec3(&a), to_vec3(&b)) {
         (Some(a), Some(b)) => to_array(f(a, b)),
         _ => Dynamic::UNIT,
@@ -96,9 +98,11 @@ pub fn register(engine: &mut Engine) {
         None => Dynamic::UNIT,
     });
 
-    engine.register_fn("vdot", |a: Dynamic, b: Dynamic| match (to_vec3(&a), to_vec3(&b)) {
-        (Some(a), Some(b)) => Dynamic::from_float(a.dot(b)),
-        _ => Dynamic::UNIT,
+    engine.register_fn("vdot", |a: Dynamic, b: Dynamic| {
+        match (to_vec3(&a), to_vec3(&b)) {
+            (Some(a), Some(b)) => Dynamic::from_float(a.dot(b)),
+            _ => Dynamic::UNIT,
+        }
     });
 
     // A zero-length vector has no direction, so it is returned unchanged rather
@@ -112,9 +116,16 @@ pub fn register(engine: &mut Engine) {
     // directly on script-computed scalars, so it is written to reject rather
     // than pass through: `x < lo || x > hi` is false for NaN and would return it
     // untouched.
-    engine.register_fn("clamp", |x: f64, lo: f64, hi: f64| {
-        if x.is_nan() { lo } else { x.clamp(lo, hi) }
-    });
+    engine.register_fn(
+        "clamp",
+        |x: f64, lo: f64, hi: f64| {
+            if x.is_nan() {
+                lo
+            } else {
+                x.clamp(lo, hi)
+            }
+        },
+    );
 
     // qrot(q, v) — rotate a local vector by an `[x, y, z, w]` quaternion into
     // world space. The prelude derives every world axis (up, right, …) from this
@@ -125,8 +136,12 @@ pub fn register(engine: &mut Engine) {
     // float tolerance, and rejecting it would make the axis helpers report "no
     // orientation" for a body that plainly has one.
     engine.register_fn("qrot", |q: Dynamic, v: Dynamic| {
-        let Some(v) = to_vec3(&v) else { return Dynamic::UNIT };
-        let Some(qa) = q.read_lock::<rhai::Array>() else { return Dynamic::UNIT };
+        let Some(v) = to_vec3(&v) else {
+            return Dynamic::UNIT;
+        };
+        let Some(qa) = q.read_lock::<rhai::Array>() else {
+            return Dynamic::UNIT;
+        };
         if qa.len() != 4 {
             return Dynamic::UNIT;
         }
@@ -185,7 +200,9 @@ mod tests {
     }
 
     fn eval(src: &str) -> Dynamic {
-        engine().eval::<Dynamic>(src).expect("script should evaluate")
+        engine()
+            .eval::<Dynamic>(src)
+            .expect("script should evaluate")
     }
 
     /// The case that poisoned a whole test run: a body holding its heading, so
@@ -195,8 +212,14 @@ mod tests {
     fn identical_headings_measure_zero_not_nan() {
         let d = eval("yaw_delta_deg([0.0, 0.0, 1.0], [0.0, 0.0, 1.0])");
         let v = d.as_float().expect("a measurable angle");
-        assert!(v.is_finite(), "identical headings must not produce NaN, got {v}");
-        assert!(v.abs() < 1e-9, "identical headings are zero rotation, got {v}");
+        assert!(
+            v.is_finite(),
+            "identical headings must not produce NaN, got {v}"
+        );
+        assert!(
+            v.abs() < 1e-9,
+            "identical headings are zero rotation, got {v}"
+        );
     }
 
     /// The sign is taken from the yaw-plane cross product, so reversing the turn

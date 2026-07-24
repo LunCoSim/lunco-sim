@@ -191,7 +191,10 @@ impl ShaderLook {
     /// A look for `shader` (an asset path) with no parameters set — every value
     /// falls back to the shader's own declared default.
     pub fn new(shader: impl Into<String>) -> Self {
-        Self { shader: shader.into(), ..Default::default() }
+        Self {
+            shader: shader.into(),
+            ..Default::default()
+        }
     }
 
     /// Set one parameter. The name must exist in the shader's `struct Material`;
@@ -312,7 +315,10 @@ mod tests {
     #[test]
     fn alpha_mode_is_part_of_material_identity() {
         let opaque = ShaderLook::new("plume.wgsl");
-        let blended = ShaderLook { alpha: SurfaceAlpha::Blend, ..ShaderLook::new("plume.wgsl") };
+        let blended = ShaderLook {
+            alpha: SurfaceAlpha::Blend,
+            ..ShaderLook::new("plume.wgsl")
+        };
         assert_ne!(opaque.key(), blended.key());
     }
 

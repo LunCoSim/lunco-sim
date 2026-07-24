@@ -35,7 +35,7 @@ use lunco_behavior::{
     ReactiveSequence, Repeat, Retry, Selector, Sequence, Status,
 };
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
-use lunco_core::{Ack, Command, OpId, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 
 /// BehaviorTree.CPP v4 XML ⇄ tree-JSON codec (Groot2 / ROS interop).
 pub mod btcpp_xml;
@@ -89,7 +89,13 @@ impl Autopilot {
     /// at `throttle` (no behaviour tree). Constant cruise is **opt-in**: it is what
     /// you get only by naming a non-zero `throttle`, never a default.
     pub fn forward(vessel: Entity, index: u64, throttle: f64) -> Self {
-        Self { vessel, session: autopilot_session(index), engaged: true, throttle, steer: 0.0 }
+        Self {
+            vessel,
+            session: autopilot_session(index),
+            engaged: true,
+            throttle,
+            steer: 0.0,
+        }
     }
 
     /// An engaged autopilot that drives nothing on its own — it holds the vessel
@@ -232,7 +238,11 @@ pub struct PatrolWaypoint {
 impl PatrolWaypoint {
     /// A bare waypoint at `pos` with no actions and no per-waypoint dwell.
     pub fn at(pos: [f32; 3]) -> Self {
-        Self { pos, dwell: None, on_arrival: Vec::new() }
+        Self {
+            pos,
+            dwell: None,
+            on_arrival: Vec::new(),
+        }
     }
 }
 
@@ -284,7 +294,11 @@ impl<'de> serde::Deserialize<'de> for PatrolWaypoint {
             return Ok(PatrolWaypoint::at(p));
         }
         let f: Full = serde_json::from_value(v).map_err(D::Error::custom)?;
-        Ok(PatrolWaypoint { pos: f.pos, dwell: f.dwell, on_arrival: f.on_arrival })
+        Ok(PatrolWaypoint {
+            pos: f.pos,
+            dwell: f.dwell,
+            on_arrival: f.on_arrival,
+        })
     }
 }
 
@@ -620,17 +634,23 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         BehaviorSpec::Selector { children } => {
             Box::new(Selector::new(children.iter().map(build_tree).collect()))
         }
-        BehaviorSpec::Parallel { require, children } => {
-            Box::new(Parallel::new((*require).into(), children.iter().map(build_tree).collect()))
-        }
+        BehaviorSpec::Parallel { require, children } => Box::new(Parallel::new(
+            (*require).into(),
+            children.iter().map(build_tree).collect(),
+        )),
         BehaviorSpec::Forever { child } => Box::new(Repeat::forever(build_tree(child))),
         BehaviorSpec::Repeat { times, child } => Box::new(Repeat::times(*times, build_tree(child))),
-        BehaviorSpec::DriveTo { target, speed, radius } => {
-            leaf_drive_to(Vec3::from_array(*target), *speed, *radius)
-        }
-        BehaviorSpec::Patrol { waypoints, speed, radius, dwell } => {
-            build_patrol(waypoints, *speed, *radius, *dwell)
-        }
+        BehaviorSpec::DriveTo {
+            target,
+            speed,
+            radius,
+        } => leaf_drive_to(Vec3::from_array(*target), *speed, *radius),
+        BehaviorSpec::Patrol {
+            waypoints,
+            speed,
+            radius,
+            dwell,
+        } => build_patrol(waypoints, *speed, *radius, *dwell),
         BehaviorSpec::Arrived { target, radius } => {
             leaf_arrived(Vec3::from_array(*target), *radius)
         }
@@ -645,9 +665,9 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         BehaviorSpec::ReactiveSequence { children } => {
             Box::new(ReactiveSequence::new(build_sequence_children(children)))
         }
-        BehaviorSpec::ReactiveSelector { children } => {
-            Box::new(ReactiveSelector::new(children.iter().map(build_tree).collect()))
-        }
+        BehaviorSpec::ReactiveSelector { children } => Box::new(ReactiveSelector::new(
+            children.iter().map(build_tree).collect(),
+        )),
         BehaviorSpec::Invert { child } => Box::new(Invert::new(build_tree(child))),
         BehaviorSpec::ForceSuccess { child } => Box::new(Force::succeed(build_tree(child))),
         BehaviorSpec::ForceFailure { child } => Box::new(Force::fail(build_tree(child))),
@@ -655,10 +675,17 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         BehaviorSpec::Timeout { seconds, child } => {
             Box::new(TimeoutNode::new(*seconds, build_tree(child)))
         }
-        BehaviorSpec::Follow { target, speed, radius } => leaf_follow(*target, *speed, *radius),
-        BehaviorSpec::Intercept { target, speed, radius, lead } => {
-            leaf_intercept(*target, *speed, *radius, *lead)
-        }
+        BehaviorSpec::Follow {
+            target,
+            speed,
+            radius,
+        } => leaf_follow(*target, *speed, *radius),
+        BehaviorSpec::Intercept {
+            target,
+            speed,
+            radius,
+            lead,
+        } => leaf_intercept(*target, *speed, *radius, *lead),
         BehaviorSpec::ObstacleAhead { distance, cone } => leaf_obstacle_ahead(*distance, *cone),
         BehaviorSpec::Facing { target, tolerance } => {
             leaf_facing(Vec3::from_array(*target), *tolerance)
@@ -698,7 +725,12 @@ const PROBE_HEIGHTS: [f32; 3] = [-0.2, 0.4, 1.0];
 /// so a waypoint like `{pos:[...], on_arrival:[run_tool("take_photo")]}` compiles
 /// to `sequence[drive_to, wait?, run_tool]` — the declarative home for
 /// "fire a tool at a patrol waypoint" (no rhai tree-composition needed).
-fn build_patrol(waypoints: &[PatrolWaypoint], speed: f64, radius: f32, dwell: f64) -> BoxNode<DriveCtx> {
+fn build_patrol(
+    waypoints: &[PatrolWaypoint],
+    speed: f64,
+    radius: f32,
+    dwell: f64,
+) -> BoxNode<DriveCtx> {
     let legs: Vec<BoxNode<DriveCtx>> = waypoints
         .iter()
         .map(|wp| {
@@ -709,8 +741,7 @@ fn build_patrol(waypoints: &[PatrolWaypoint], speed: f64, radius: f32, dwell: f6
             // ARMED so the first arrival fires even if the rover is engaged while
             // already standing on the waypoint.
             let arm = (!wp.on_arrival.is_empty()).then(|| Arc::new(AtomicBool::new(true)));
-            let drive =
-                leaf_drive_to_arming(Vec3::from_array(wp.pos), speed, radius, arm.clone());
+            let drive = leaf_drive_to_arming(Vec3::from_array(wp.pos), speed, radius, arm.clone());
             // Per-waypoint dwell overrides the patrol's top-level default.
             let wp_dwell = wp.dwell.unwrap_or(dwell);
             let mut steps: Vec<BoxNode<DriveCtx>> = vec![drive];
@@ -757,7 +788,11 @@ fn build_sequence_children(children: &[BehaviorSpec]) -> Vec<BoxNode<DriveCtx>> 
     let mut arm: Option<Arc<AtomicBool>> = None;
     for child in children {
         match child {
-            BehaviorSpec::DriveTo { target, speed, radius } => {
+            BehaviorSpec::DriveTo {
+                target,
+                speed,
+                radius,
+            } => {
                 // Starts ARMED so the first arrival fires even when the vessel is
                 // already standing on the target.
                 let a = Arc::new(AtomicBool::new(true));
@@ -801,7 +836,8 @@ fn leaf_drive_to_arming(
     arm: Option<Arc<AtomicBool>>,
 ) -> BoxNode<DriveCtx> {
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
-        let (throttle, steer, brake, arrived) = nav_setpoint(ctx.pos, ctx.fwd, target, speed, radius);
+        let (throttle, steer, brake, arrived) =
+            nav_setpoint(ctx.pos, ctx.fwd, target, speed, radius);
         ctx.out = (throttle, steer, brake);
         if arrived {
             Status::Success
@@ -908,7 +944,11 @@ fn leaf_steer_clear(speed: f64) -> BoxNode<DriveCtx> {
         // Steer toward the more open side. Recompute that probe's world direction and
         // reuse the nav yaw-cross so the steer sign is consistent with drive_to.
         let fwd = ctx.fwd.normalize_or_zero();
-        let open = if left >= right { PROBE_SPREAD } else { -PROBE_SPREAD };
+        let open = if left >= right {
+            PROBE_SPREAD
+        } else {
+            -PROBE_SPREAD
+        };
         let to = Quat::from_rotation_y(open) * fwd;
         let cy = fwd.z * to.x - fwd.x * to.z;
         let steer = (-cy * 2.5).clamp(-1.0, 1.0) as f64;
@@ -945,17 +985,20 @@ fn leaf_facing(target: Vec3, tolerance_deg: f64) -> BoxNode<DriveCtx> {
 /// while the target resolves and returns `Failure` (braking) if it drops out of the
 /// map (despawned / out of scope), letting a fallback branch take the wheel.
 fn leaf_follow(target_gid: u64, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
-    Box::new(Action::new(move |ctx: &mut DriveCtx| match ctx.targets.get(&target_gid) {
-        Some(st) => {
-            // Reuse the drive math; within `radius` it returns brake+arrived, which
-            // for a follow means "hold station here", so we stay Running regardless.
-            let (throttle, steer, brake, _arrived) = nav_setpoint(ctx.pos, ctx.fwd, st.pos, speed, radius);
-            ctx.out = (throttle, steer, brake);
-            Status::Running
-        }
-        None => {
-            ctx.out = (0.0, 0.0, 1.0); // target lost → brake and let a fallback take over
-            Status::Failure
+    Box::new(Action::new(move |ctx: &mut DriveCtx| {
+        match ctx.targets.get(&target_gid) {
+            Some(st) => {
+                // Reuse the drive math; within `radius` it returns brake+arrived, which
+                // for a follow means "hold station here", so we stay Running regardless.
+                let (throttle, steer, brake, _arrived) =
+                    nav_setpoint(ctx.pos, ctx.fwd, st.pos, speed, radius);
+                ctx.out = (throttle, steer, brake);
+                Status::Running
+            }
+            None => {
+                ctx.out = (0.0, 0.0, 1.0); // target lost → brake and let a fallback take over
+                Status::Failure
+            }
         }
     }))
 }
@@ -966,21 +1009,24 @@ fn leaf_follow(target_gid: u64, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
 /// `radius` of the target's *actual* position — a catch-it pursuit that finishes,
 /// unlike open-ended [`leaf_follow`]); `Failure` (braking) if the target vanishes.
 fn leaf_intercept(target_gid: u64, speed: f64, radius: f32, lead: f64) -> BoxNode<DriveCtx> {
-    Box::new(Action::new(move |ctx: &mut DriveCtx| match ctx.targets.get(&target_gid) {
-        Some(st) => {
-            let aim = st.pos + st.vel * lead as f32; // predicted lead point
-            let (throttle, steer, brake, _) = nav_setpoint(ctx.pos, ctx.fwd, aim, speed, radius);
-            ctx.out = (throttle, steer, brake);
-            // Done when we reach the TARGET itself (not the lead point) within radius.
-            if (st.pos - ctx.pos).length() < radius {
-                Status::Success
-            } else {
-                Status::Running
+    Box::new(Action::new(move |ctx: &mut DriveCtx| {
+        match ctx.targets.get(&target_gid) {
+            Some(st) => {
+                let aim = st.pos + st.vel * lead as f32; // predicted lead point
+                let (throttle, steer, brake, _) =
+                    nav_setpoint(ctx.pos, ctx.fwd, aim, speed, radius);
+                ctx.out = (throttle, steer, brake);
+                // Done when we reach the TARGET itself (not the lead point) within radius.
+                if (st.pos - ctx.pos).length() < radius {
+                    Status::Success
+                } else {
+                    Status::Running
+                }
             }
-        }
-        None => {
-            ctx.out = (0.0, 0.0, 1.0); // target lost → brake, let a fallback take over
-            Status::Failure
+            None => {
+                ctx.out = (0.0, 0.0, 1.0); // target lost → brake, let a fallback take over
+                Status::Failure
+            }
         }
     }))
 }
@@ -1007,7 +1053,11 @@ fn leaf_face(target: Vec3, tolerance_deg: f64) -> BoxNode<DriveCtx> {
         }
         let cy = fwd.z * to.x - fwd.x * to.z;
         let steer: f32 = if dot < 0.0 {
-            if cy >= 0.0 { -1.0 } else { 1.0 } // target behind → hard pivot toward it
+            if cy >= 0.0 {
+                -1.0
+            } else {
+                1.0
+            } // target behind → hard pivot toward it
         } else {
             (-cy * 2.5).clamp(-1.0, 1.0)
         };
@@ -1031,7 +1081,10 @@ pub struct WaitNode {
 impl WaitNode {
     /// A wait leaf that holds for `seconds` of mission time.
     pub fn new(seconds: f64) -> Self {
-        Self { seconds, deadline: None }
+        Self {
+            seconds,
+            deadline: None,
+        }
     }
 }
 
@@ -1085,7 +1138,12 @@ impl RunToolNode {
     /// every activation — use [`armed_by`](Self::armed_by) for the patrol path,
     /// where "activation" can recur at tick rate.
     pub fn new(tool: String, args: String) -> Self {
-        Self { tool, args, fired: false, arm: None }
+        Self {
+            tool,
+            args,
+            fired: false,
+            arm: None,
+        }
     }
 
     /// Gate firing on the shared arrival latch of the waypoint's `drive_to` leaf,
@@ -1142,7 +1200,11 @@ pub struct TimeoutNode {
 impl TimeoutNode {
     /// A watchdog that fails `child` if it runs longer than `seconds` of mission time.
     pub fn new(seconds: f64, child: BoxNode<DriveCtx>) -> Self {
-        Self { seconds, child, deadline: None }
+        Self {
+            seconds,
+            child,
+            deadline: None,
+        }
     }
 }
 
@@ -1184,7 +1246,11 @@ pub struct CooldownNode {
 impl CooldownNode {
     /// A rate limiter that locks `child` out for `seconds` after each success.
     pub fn new(seconds: f64, child: BoxNode<DriveCtx>) -> Self {
-        Self { seconds, child, ready_at: 0.0 }
+        Self {
+            seconds,
+            child,
+            ready_at: 0.0,
+        }
     }
 }
 
@@ -1278,7 +1344,13 @@ impl AutopilotBehaviorSpec {
 /// aligned so it pivots onto the goal instead of arcing past; brake + `arrived`
 /// within `radius`. COMPUTATION, so it lives in Rust — rhai is glue-only. Steering
 /// is a *relative* direction, so it's invariant to the floating-origin offset.
-pub fn nav_setpoint(pos: Vec3, fwd: Vec3, target: Vec3, speed: f64, radius: f32) -> (f64, f64, f64, bool) {
+pub fn nav_setpoint(
+    pos: Vec3,
+    fwd: Vec3,
+    target: Vec3,
+    speed: f64,
+    radius: f32,
+) -> (f64, f64, f64, bool) {
     let to = target - pos;
     let dist = to.length();
     if dist < radius {
@@ -1292,7 +1364,11 @@ pub fn nav_setpoint(pos: Vec3, fwd: Vec3, target: Vec3, speed: f64, radius: f32)
     let cy = fwd.z * to.x - fwd.x * to.z;
     let dot = fwd.dot(to);
     let steer: f32 = if dot < 0.0 {
-        if cy >= 0.0 { -1.0 } else { 1.0 } // goal behind → hard turn toward its side
+        if cy >= 0.0 {
+            -1.0
+        } else {
+            1.0
+        } // goal behind → hard turn toward its side
     } else {
         (-cy * 2.5).clamp(-1.0, 1.0)
     };
@@ -1323,22 +1399,31 @@ pub fn setup_autopilot_session(
     for mut ap in &mut q {
         // Register the autopilot exactly like a connecting user: authenticated, with
         // a host-issued token so `SessionRbac::is_authorized` treats it as trusted.
-        rbac.sessions.entry(ap.session.0).or_insert_with(|| UserSession {
-            session_id: ap.session,
-            username: format!("autopilot-{}", ap.session.0),
-            role: AuthorityRole::AiAgent,
-            authenticated: true,
-            token: Some("autopilot-local".to_string()),
-        });
+        rbac.sessions
+            .entry(ap.session.0)
+            .or_insert_with(|| UserSession {
+                session_id: ap.session,
+                username: format!("autopilot-{}", ap.session.0),
+                role: AuthorityRole::AiAgent,
+                authenticated: true,
+                token: Some("autopilot-local".to_string()),
+            });
         let Ok(gid) = q_gid.get(ap.vessel) else {
-            warn!("[autopilot] vessel {:?} has no GlobalEntityId; cannot engage", ap.vessel);
+            warn!(
+                "[autopilot] vessel {:?} has no GlobalEntityId; cannot engage",
+                ap.vessel
+            );
             ap.engaged = false;
             continue;
         };
         match registry.claim(ap.session, gid.get()) {
             Ok(()) => {
                 ap.engaged = true;
-                info!("[autopilot] session {} engaged, owns entity {}", ap.session, gid.get());
+                info!(
+                    "[autopilot] session {} engaged, owns entity {}",
+                    ap.session,
+                    gid.get()
+                );
                 // Fire the SAME possession signal a human does (the avatar mirrors
                 // native possession to `cmd:PossessVessel`), so scenario waits like
                 // `wait_for("cmd:PossessVessel")` / `requires_event:"cmd:PossessVessel"`
@@ -1410,10 +1495,10 @@ pub fn drive_autopilots(
         return; // no autopilots → skip the per-tick target snapshot entirely
     }
     let now = world_time.sim_secs; // the one clock — waits freeze under pause/warp
-    // One snapshot of every identifiable entity's world pose + a finite-difference
-    // velocity (this pos minus last tick's, over the mission-clock delta), shared
-    // (cheap Arc clone) into each autopilot's ctx so `follow`/`intercept` can track a
-    // mover. Velocity is zero on first sighting and under pause (dt == 0).
+                                   // One snapshot of every identifiable entity's world pose + a finite-difference
+                                   // velocity (this pos minus last tick's, over the mission-clock delta), shared
+                                   // (cheap Arc clone) into each autopilot's ctx so `follow`/`intercept` can track a
+                                   // mover. Velocity is zero on first sighting and under pause (dt == 0).
     let dt = (now - prev.now).max(0.0);
     let states: TargetStates = q_targets
         .iter()
@@ -1427,7 +1512,10 @@ pub fn drive_autopilots(
         })
         .map(|(gid, pos)| {
             let vel = if dt > 1e-6 {
-                prev.poses.get(&gid.get()).map(|&p| (pos - p) / dt as f32).unwrap_or(Vec3::ZERO)
+                prev.poses
+                    .get(&gid.get())
+                    .map(|&p| (pos - p) / dt as f32)
+                    .unwrap_or(Vec3::ZERO)
             } else {
                 Vec3::ZERO
             };
@@ -1441,7 +1529,9 @@ pub fn drive_autopilots(
         if !ap.engaged {
             continue;
         }
-        let Ok(gid) = q_gid.get(ap.vessel) else { continue };
+        let Ok(gid) = q_gid.get(ap.vessel) else {
+            continue;
+        };
         if !registry.owns(ap.session, gid.get()) {
             continue; // lost the vessel → stop driving (one writer per tick)
         }
@@ -1452,9 +1542,12 @@ pub fn drive_autopilots(
                     .as_ref()
                     .and_then(|c| c.0.get(&ap.vessel).copied())
                     .unwrap_or_default();
-                let Some(self_pos) =
-                    lunco_core::coords::world_position(ap.vessel, &q_parents, &q_grids_only, &q_spatial)
-                else {
+                let Some(self_pos) = lunco_core::coords::world_position(
+                    ap.vessel,
+                    &q_parents,
+                    &q_grids_only,
+                    &q_spatial,
+                ) else {
                     continue; // no spatial components → nothing to navigate from
                 };
                 let mut ctx = DriveCtx {
@@ -1490,7 +1583,11 @@ pub fn drive_autopilots(
             // throttle here is not "coast" but "hold" — an engaged autopilot with
             // nothing to drive keeps the vessel where it is.
             _ => {
-                let brake = if ap.throttle == 0.0 && ap.steer == 0.0 { 1.0 } else { 0.0 };
+                let brake = if ap.throttle == 0.0 && ap.steer == 0.0 {
+                    1.0
+                } else {
+                    0.0
+                };
                 (ap.throttle, ap.steer, brake, Vec::new())
             }
         };
@@ -1591,7 +1688,9 @@ pub fn sense_clearance(
                 .iter()
                 .filter_map(|h| {
                     let origin = (base + Vec3::Y * *h).as_dvec3();
-                    spatial.cast_ray(origin, d, SENSOR_RANGE as f64, true, &filter).map(|hit| hit.distance as f32)
+                    spatial
+                        .cast_ray(origin, d, SENSOR_RANGE as f64, true, &filter)
+                        .map(|hit| hit.distance as f32)
                 })
                 .reduce(f32::min)
         };
@@ -1652,7 +1751,10 @@ fn on_engage_autopilot(
     // second one leaves two autopilots driving one vessel — both writing
     // `SetPorts` every tick (e.g. a stale Brake tree fighting a fresh patrol),
     // last-writer-wins. Reachable from the Command Deck, rhai and the API.
-    let existing = q.iter().find(|(_, ap)| ap.vessel == cmd.vessel).map(|(e, _)| e);
+    let existing = q
+        .iter()
+        .find(|(_, ap)| ap.vessel == cmd.vessel)
+        .map(|(e, _)| e);
     let mut e = match existing {
         Some(actor) => {
             let mut ec = commands.entity(actor);
@@ -1711,7 +1813,10 @@ fn on_engage_autopilot(
             }
         }
     }
-    info!("[autopilot] engaging on vessel {:?} (index {})", cmd.vessel, cmd.index);
+    info!(
+        "[autopilot] engaging on vessel {:?} (index {})",
+        cmd.vessel, cmd.index
+    );
 }
 
 /// Set (or hot-swap) an autopilot's behaviour tree from a JSON [`BehaviorSpec`].
@@ -1749,7 +1854,10 @@ fn on_set_autopilot_behavior(
             }
             info!("[autopilot] behaviour updated for vessel {:?}", cmd.vessel);
         }
-        None => warn!("[autopilot] SetAutopilotBehavior: no autopilot owns vessel {:?}", cmd.vessel),
+        None => warn!(
+            "[autopilot] SetAutopilotBehavior: no autopilot owns vessel {:?}",
+            cmd.vessel
+        ),
     }
 }
 
@@ -1780,14 +1888,22 @@ fn on_clear_patrol(
         Some((entity, _)) => {
             commands.entity(entity).try_insert(brake);
         }
-        None => warn!("[autopilot] ClearPatrol: no autopilot owns vessel {:?}", cmd.vessel),
+        None => warn!(
+            "[autopilot] ClearPatrol: no autopilot owns vessel {:?}",
+            cmd.vessel
+        ),
     }
     // Remove the source-spec mirror so the UI/gizmo stop showing checkpoints.
     // `try_remove`: ClearPatrol can legitimately arrive for an already-despawned
     // vessel (the panel defers the trigger a frame), and a plain `remove` would
     // panic at flush.
-    commands.entity(cmd.vessel).try_remove::<AutopilotBehaviorSpec>();
-    info!("[autopilot] ClearPatrol: vessel {:?} cleared + braked", cmd.vessel);
+    commands
+        .entity(cmd.vessel)
+        .try_remove::<AutopilotBehaviorSpec>();
+    info!(
+        "[autopilot] ClearPatrol: vessel {:?} cleared + braked",
+        cmd.vessel
+    );
 }
 
 /// Disengage the autopilot on `vessel` WITHOUT clearing its patrol: replaces
@@ -1828,7 +1944,10 @@ fn on_disengage_autopilot(
                 freed.len()
             );
         }
-        None => warn!("[autopilot] DisengageAutopilot: no autopilot owns vessel {:?}", cmd.vessel),
+        None => warn!(
+            "[autopilot] DisengageAutopilot: no autopilot owns vessel {:?}",
+            cmd.vessel
+        ),
     }
 }
 
@@ -1900,7 +2019,11 @@ pub struct PatrolDefaults {
 
 impl Default for PatrolDefaults {
     fn default() -> Self {
-        Self { speed: 0.6, radius: 3.0, dwell: 0.0 }
+        Self {
+            speed: 0.6,
+            radius: 3.0,
+            dwell: 0.0,
+        }
     }
 }
 

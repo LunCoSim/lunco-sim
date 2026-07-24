@@ -12,12 +12,12 @@
 //! returns zero). That's fine for the Modelica workbench and any sandbox
 //! scene that places bodies explicitly; orbital sims add the heavy crate.
 
-use bevy::prelude::*;
-use bevy::math::DVec3;
 use crate::frames::EclipticAu;
+use bevy::math::DVec3;
+use bevy::prelude::*;
 
-use std::sync::Arc;
 use serde::Deserialize;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct CsvDataPoint {
@@ -72,7 +72,9 @@ pub trait EphemerisProvider: Send + Sync + 'static {
 
         // Walk up to the Sun (NAIF 10), which IS the origin of this frame.
         for _ in 0..10 {
-            let Some(parent_id) = self.parent_id(current_id) else { break };
+            let Some(parent_id) = self.parent_id(current_id) else {
+                break;
+            };
             if parent_id == SUN_NAIF_ID {
                 break;
             }
@@ -106,7 +108,6 @@ impl EphemerisProvider for NoOpEphemerisProvider {
         None
     }
 }
-
 
 #[cfg(test)]
 mod p8_tests {
@@ -157,8 +158,13 @@ mod p8_tests {
     #[test]
     fn a_known_body_still_resolves_through_the_parent_chain() {
         // Earth = Earth-rel-EMB + EMB-rel-Sun.
-        let earth = Partial.global_position(399, 2_451_545.0).expect("Earth is known");
-        assert!((earth.raw().x - 1.00001).abs() < 1.0e-9, "the parent walk must still compose");
+        let earth = Partial
+            .global_position(399, 2_451_545.0)
+            .expect("Earth is known");
+        assert!(
+            (earth.raw().x - 1.00001).abs() < 1.0e-9,
+            "the parent walk must still compose"
+        );
     }
 
     /// P8(c). The parent tree is asked for, not hardcoded. A provider that declines to describe
@@ -176,6 +182,10 @@ mod p8_tests {
         // positions (3.0). With the tree supplied by the provider — and this one supplies
         // none — it is just the body's own position.
         let p = Flat.global_position(399, 0.0).unwrap();
-        assert_eq!(p.raw().x, 1.0, "no tree ⇒ no parent walk; the match no longer exists");
+        assert_eq!(
+            p.raw().x,
+            1.0,
+            "no tree ⇒ no parent walk; the match no longer exists"
+        );
     }
 }

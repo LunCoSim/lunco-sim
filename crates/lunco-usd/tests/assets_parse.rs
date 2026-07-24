@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 
 /// Every `.usda` under the engine asset library.
 fn usda_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in rd.flatten() {
         let p = entry.path();
         if p.is_dir() {

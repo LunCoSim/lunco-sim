@@ -31,24 +31,6 @@ pub mod connect_link;
 /// without the `networking` feature (every system self-guards on `NetworkRole`).
 pub mod prediction;
 
-#[cfg(feature = "networking")]
-mod protocol;
-#[cfg(feature = "networking")]
-mod shared;
-/// Transport-agnostic networking wire: codec, command capture/apply, and state
-/// snapshots (no lightyear dep). Driven by this crate's lightyear adapter.
-#[cfg(feature = "networking")]
-pub mod sync;
-/// Scenario distribution: the server publishes its scenario manifest (CID-
-/// addressed assets + a Merkle revision), clients fetch the assets they're
-/// missing over the same WebTransport. IPFS-CID interop. Phase 1 ships the
-/// manifest; asset chunk transfer is Phase 3.
-#[cfg(feature = "networking")]
-pub mod scenario;
-/// Scenario asset transfer (Phase 3): one-way host→client byte streaming of the
-/// CID-addressed assets a manifest advertises, into `<cache_dir>/scenarios/<id>/`.
-#[cfg(feature = "networking")]
-pub mod scenario_sync;
 /// The **bytes plane**: fetch a scenario's CID-addressed assets over HTTP rather
 /// than streaming them through the reliable QUIC channel (which queues without
 /// bound and stalls on multi-MB twins). Used whenever the host advertises an
@@ -60,42 +42,60 @@ pub mod http_fetch;
 /// (see module docs); the transport ferry only routes to it.
 #[cfg(feature = "networking")]
 pub mod journal_plane;
+#[cfg(feature = "networking")]
+mod protocol;
+/// Scenario distribution: the server publishes its scenario manifest (CID-
+/// addressed assets + a Merkle revision), clients fetch the assets they're
+/// missing over the same WebTransport. IPFS-CID interop. Phase 1 ships the
+/// manifest; asset chunk transfer is Phase 3.
+#[cfg(feature = "networking")]
+pub mod scenario;
+/// Scenario asset transfer (Phase 3): one-way host→client byte streaming of the
+/// CID-addressed assets a manifest advertises, into `<cache_dir>/scenarios/<id>/`.
+#[cfg(feature = "networking")]
+pub mod scenario_sync;
 /// The scripted-policy plane: distribute + activate rhai policies (merge /
 /// authorization / drive-kernel) host→client so every peer runs the identical one.
 #[cfg(feature = "networking")]
 pub mod scripted_policy;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod server;
+#[cfg(feature = "networking")]
+mod shared;
+/// Transport-agnostic networking wire: codec, command capture/apply, and state
+/// snapshots (no lightyear dep). Driven by this crate's lightyear adapter.
+#[cfg(feature = "networking")]
+pub mod sync;
 // The scenario manifest needs USD's reference closure (native only — it reads
 // scene files off the host filesystem). That walk is USD domain knowledge and
 // lives once, in `lunco_usd_bevy::closure`; this crate used to carry a
 // near-identical copy, which is why it talked to `openusd` directly.
 #[cfg(feature = "networking")]
 mod client;
-/// Native single-instance deep-link forwarding: route a clicked `luncosim://`
-/// link into the already-running app over a local socket (else become primary).
-/// (OS *scheme registration* is a desktop-integration concern and lives in the
-/// app crate `lunco-sandbox`, not here — this crate only parses + dials.)
-#[cfg(all(feature = "networking", not(target_family = "wasm")))]
-pub mod single_instance;
-/// Browser-only WebTransport client IO that dials a **hostname URL**
-/// (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
-/// digest — lightyear's built-in `WebTransportClientIo` only dials
-/// `https://{SocketAddr}` (IP-only). Native keeps lightyear's IO.
-#[cfg(feature = "networking")]
-mod wt_client;
-/// Layer-4 UI: the in-sim *Connect* panel (address field + Connect/Disconnect),
-/// which dispatches the `JoinServer`/`LeaveServer` commands, plus the egui
-/// presence-cursor / tutorial overlays. Behind the `ui` feature (which implies
-/// `networking`) so headless servers never link egui (CQ-601).
-#[cfg(feature = "ui")]
-pub mod ui;
 /// Client-prediction diagnostics (render-jitter / velocity / correction census).
 /// Compiled only under the `net-diag` feature (off by default — not in normal
 /// builds); silence a net-diag build at runtime with `LUNCO_NET_DIAG=0`. See
 /// `diagnostics.rs`.
 #[cfg(feature = "net-diag")]
 mod diagnostics;
+/// Native single-instance deep-link forwarding: route a clicked `luncosim://`
+/// link into the already-running app over a local socket (else become primary).
+/// (OS *scheme registration* is a desktop-integration concern and lives in the
+/// app crate `lunco-sandbox`, not here — this crate only parses + dials.)
+#[cfg(all(feature = "networking", not(target_family = "wasm")))]
+pub mod single_instance;
+/// Layer-4 UI: the in-sim *Connect* panel (address field + Connect/Disconnect),
+/// which dispatches the `JoinServer`/`LeaveServer` commands, plus the egui
+/// presence-cursor / tutorial overlays. Behind the `ui` feature (which implies
+/// `networking`) so headless servers never link egui (CQ-601).
+#[cfg(feature = "ui")]
+pub mod ui;
+/// Browser-only WebTransport client IO that dials a **hostname URL**
+/// (`https://lunica.lunco.space:5888`) so a real CA cert validates with no
+/// digest — lightyear's built-in `WebTransportClientIo` only dials
+/// `https://{SocketAddr}` (IP-only). Native keeps lightyear's IO.
+#[cfg(feature = "networking")]
+mod wt_client;
 
 /// How this process participates in the session.
 #[derive(Clone, Debug)]
@@ -182,16 +182,13 @@ impl NetworkMode {
     pub fn from_url() -> Option<Self> {
         let window = web_sys::window()?;
         let search = window.location().search().ok()?;
-        let raw = search
-            .trim_start_matches('?')
-            .split('&')
-            .find_map(|pair| {
-                let mut it = pair.splitn(2, '=');
-                match (it.next(), it.next()) {
-                    (Some("connect"), Some(v)) if !v.is_empty() => Some(v.to_string()),
-                    _ => None,
-                }
-            })?;
+        let raw = search.trim_start_matches('?').split('&').find_map(|pair| {
+            let mut it = pair.splitn(2, '=');
+            match (it.next(), it.next()) {
+                (Some("connect"), Some(v)) if !v.is_empty() => Some(v.to_string()),
+                _ => None,
+            }
+        })?;
         Some(NetworkMode::Connect {
             server: normalize_addr(&raw),
             client_id: browser_client_id(),

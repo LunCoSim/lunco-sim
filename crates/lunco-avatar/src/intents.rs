@@ -1,1 +1,1 @@
-pub use lunco_core::{UserIntent, IntentState, IntentAnalogState};
+pub use lunco_core::{IntentAnalogState, IntentState, UserIntent};

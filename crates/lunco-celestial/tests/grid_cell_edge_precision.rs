@@ -16,8 +16,8 @@
 //! "lunar surface jitters / Earth jitters / orbit lines jump" report. With 2 km
 //! cells it is sub-millimetre.
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 use big_space::plugin::BigSpaceMinimalPlugins;
 use big_space::prelude::*;
 
@@ -90,8 +90,9 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
         )
     };
     // Site position in the Solar frame, composed from the STORED chain.
-    let site_in_solar =
-        stored(&solar, emb_cell, emb_tf) + stored(&emb, moon_cell, moon_tf) + stored(&body, surf_cell, surf_tf);
+    let site_in_solar = stored(&solar, emb_cell, emb_tf)
+        + stored(&emb, moon_cell, moon_tf)
+        + stored(&body, surf_cell, surf_tf);
 
     // The pin: slide the Solar Grid so the site lands on the root origin.
     let (solar_cell, solar_tf) = root.translation_to_grid(-site_in_solar);
@@ -109,7 +110,10 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
             .id();
 
         probe = world
-            .spawn((Transform::from_translation(PROBE_LOCAL), CellCoord::default()))
+            .spawn((
+                Transform::from_translation(PROBE_LOCAL),
+                CellCoord::default(),
+            ))
             .id();
         let surface_e = world
             .spawn((surface, Transform::from_translation(surf_tf), surf_cell))

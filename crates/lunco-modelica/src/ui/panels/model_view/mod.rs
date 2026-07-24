@@ -14,10 +14,10 @@ pub mod render;
 pub use context::sync_active_tab_to_doc;
 pub use render::ModelViewPanel;
 
-use bevy::prelude::*;
-use lunco_workbench::WorkbenchAppExt;
 use crate::model_tabs::ModelTabs;
 use crate::model_tabs_types::TabRenderContext;
+use bevy::prelude::*;
+use lunco_workbench::WorkbenchAppExt;
 
 pub struct ModelViewPlugin;
 

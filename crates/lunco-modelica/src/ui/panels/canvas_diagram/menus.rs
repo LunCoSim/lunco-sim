@@ -13,7 +13,7 @@ use crate::document::ModelicaOp;
 
 use super::ops::{component_headers, op_remove_component, op_remove_edge};
 use super::palette::{self, PaletteSettings};
-use super::{CanvasDiagramState, active_doc_from_world_ctx};
+use super::{active_doc_from_world_ctx, CanvasDiagramState};
 use crate::model_tabs_types::TabRenderContext;
 
 /// Build a `SetConnectionLine` op from the current edge's waypoints
@@ -53,9 +53,7 @@ fn op_modify_waypoints(
 /// callers fall back to first-tab semantics in that case via
 /// `CanvasDiagramState::get_for_render`.
 fn render_tab_id(ctx: &PanelCtx) -> Option<crate::model_tabs_types::TabId> {
-    ctx
-        .resource::<TabRenderContext>()
-        .and_then(|c| c.tab_id)
+    ctx.resource::<TabRenderContext>().and_then(|c| c.tab_id)
 }
 
 pub(super) fn render_node_menu(
@@ -79,9 +77,7 @@ pub(super) fn render_node_menu(
             .node(id)
             .map(|n| n.kind.to_string())
     };
-    if node_kind.as_deref()
-        == Some(lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND)
-    {
+    if node_kind.as_deref() == Some(lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND) {
         render_plot_node_menu(ui, ctx, state, id);
         return;
     }
@@ -91,7 +87,11 @@ pub(super) fn render_node_menu(
         ui.label(egui::RichText::new(&type_name).weak().small());
     }
     ui.separator();
-    if ui.button("✂ Delete").on_hover_text("Remove this component from the diagram").clicked() {
+    if ui
+        .button("✂ Delete")
+        .on_hover_text("Remove this component from the diagram")
+        .clicked()
+    {
         if let Some(class) = editing_class {
             if let Some(op) = op_remove_component(ctx, state, id, class) {
                 out.push(op);
@@ -106,14 +106,26 @@ pub(super) fn render_node_menu(
         }
         ui.close();
     }
-    if ui.button("📋 Duplicate").on_hover_text("Create a copy of this component").clicked() {
+    if ui
+        .button("📋 Duplicate")
+        .on_hover_text("Create a copy of this component")
+        .clicked()
+    {
         ui.close();
     }
     ui.separator();
-    if ui.button("↧ Open class").on_hover_text("Open this component's class definition").clicked() {
+    if ui
+        .button("↧ Open class")
+        .on_hover_text("Open this component's class definition")
+        .clicked()
+    {
         ui.close();
     }
-    if ui.button("🔧 Parameters…").on_hover_text("Edit this component's parameters").clicked() {
+    if ui
+        .button("🔧 Parameters…")
+        .on_hover_text("Edit this component's parameters")
+        .clicked()
+    {
         ui.close();
     }
 }
@@ -124,9 +136,7 @@ pub(super) fn render_node_menu(
 /// document's [`crate::index::ModelicaIndex`] (variability /
 /// causality on each `ComponentEntry`), so this is a free lookup —
 /// no DAE introspection or runtime variance heuristic required.
-fn collect_varying_signals(
-    ctx: &PanelCtx,
-) -> Vec<(bevy::prelude::Entity, String)> {
+fn collect_varying_signals(ctx: &PanelCtx) -> Vec<(bevy::prelude::Entity, String)> {
     use bevy::prelude::Entity;
     // A document's variables are registered in `SignalRegistry` under TWO
     // entities: the live cosim entity (`ModelicaDocumentRegistry`) and the
@@ -163,8 +173,7 @@ fn collect_varying_signals(
     let mut v: Vec<_> = signals
         .into_iter()
         .filter(|(entity, path)| {
-            ctx
-                .get::<crate::ModelicaModel>(*entity)
+            ctx.get::<crate::ModelicaModel>(*entity)
                 .map(|m| !m.parameters.contains_key(path) && !m.inputs.contains_key(path))
                 .unwrap_or(true)
         })
@@ -194,18 +203,9 @@ pub(super) fn render_plot_node_menu(
     };
     ui.label(egui::RichText::new("Plot").strong());
     if !current.signal_path.is_empty() {
-        ui.label(
-            egui::RichText::new(&current.signal_path)
-                .weak()
-                .small(),
-        );
+        ui.label(egui::RichText::new(&current.signal_path).weak().small());
     } else {
-        ui.label(
-            egui::RichText::new("(unbound)")
-                .weak()
-                .small()
-                .italics(),
-        );
+        ui.label(egui::RichText::new("(unbound)").weak().small().italics());
     }
     ui.separator();
 
@@ -237,13 +237,20 @@ pub(super) fn render_plot_node_menu(
     });
 
     if !current.signal_path.is_empty()
-        && ui.button("Unbind").on_hover_text("Clear this plot's signal binding").clicked()
+        && ui
+            .button("Unbind")
+            .on_hover_text("Clear this plot's signal binding")
+            .clicked()
     {
         rebind_plot_node(ctx, state, id, 0, "");
         ui.close();
     }
     ui.separator();
-    if ui.button("✂ Delete").on_hover_text("Remove this plot node from the diagram").clicked() {
+    if ui
+        .button("✂ Delete")
+        .on_hover_text("Remove this plot node from the diagram")
+        .clicked()
+    {
         let active_doc = active_doc_from_world_ctx(ctx);
         let tab = render_tab_id(ctx);
         let docstate = state.get_mut_for_render(tab, active_doc);
@@ -292,43 +299,39 @@ pub(super) fn render_edge_menu(
     if let Some(class) = editing_class {
         match hit {
             lunco_canvas::EdgeHitKind::Corner(idx) => {
-                if ui.button("✕ Delete bend").on_hover_text("Remove this waypoint from the connection").clicked() {
-                    if let Some(op) = op_modify_waypoints(
-                        ctx,
-                        state,
-                        id,
-                        class,
-                        |pts| {
-                            if idx < pts.len() {
-                                pts.remove(idx);
-                            }
-                        },
-                    ) {
+                if ui
+                    .button("✕ Delete bend")
+                    .on_hover_text("Remove this waypoint from the connection")
+                    .clicked()
+                {
+                    if let Some(op) = op_modify_waypoints(ctx, state, id, class, |pts| {
+                        if idx < pts.len() {
+                            pts.remove(idx);
+                        }
+                    }) {
                         out.push(op);
                     }
                     ui.close();
                 }
             }
             lunco_canvas::EdgeHitKind::Segment(seg_idx) => {
-                if ui.button("➕ Add bend here").on_hover_text("Insert a waypoint at the clicked point").clicked() {
-                    if let Some(op) = op_modify_waypoints(
-                        ctx,
-                        state,
-                        id,
-                        class,
-                        |pts| {
-                            // Segment seg_idx spans (seg_idx-1, seg_idx)
-                            // within the interior list, where indices
-                            // outside that span correspond to the port
-                            // endpoints. Insert the click position as
-                            // a fresh interior bend at position seg_idx.
-                            let insert_at = seg_idx.min(pts.len());
-                            pts.insert(
-                                insert_at,
-                                lunco_canvas::Pos::new(click_world.x, click_world.y),
-                            );
-                        },
-                    ) {
+                if ui
+                    .button("➕ Add bend here")
+                    .on_hover_text("Insert a waypoint at the clicked point")
+                    .clicked()
+                {
+                    if let Some(op) = op_modify_waypoints(ctx, state, id, class, |pts| {
+                        // Segment seg_idx spans (seg_idx-1, seg_idx)
+                        // within the interior list, where indices
+                        // outside that span correspond to the port
+                        // endpoints. Insert the click position as
+                        // a fresh interior bend at position seg_idx.
+                        let insert_at = seg_idx.min(pts.len());
+                        pts.insert(
+                            insert_at,
+                            lunco_canvas::Pos::new(click_world.x, click_world.y),
+                        );
+                    }) {
                         out.push(op);
                     }
                     ui.close();
@@ -338,7 +341,11 @@ pub(super) fn render_edge_menu(
         }
         ui.separator();
     }
-    if ui.button("✂ Delete").on_hover_text("Remove this connection from the diagram").clicked() {
+    if ui
+        .button("✂ Delete")
+        .on_hover_text("Remove this connection from the diagram")
+        .clicked()
+    {
         if let Some(class) = editing_class {
             if let Some(op) = op_remove_edge(ctx, state, id, class) {
                 out.push(op);
@@ -350,30 +357,26 @@ pub(super) fn render_edge_menu(
         }
         ui.close();
     }
-    if ui.button("↺ Reverse direction").on_hover_text("Swap the connection's start and end ports").clicked() {
+    if ui
+        .button("↺ Reverse direction")
+        .on_hover_text("Swap the connection's start and end ports")
+        .clicked()
+    {
         if let Some(class) = editing_class {
             let active_doc = active_doc_from_world_ctx(ctx);
             let tab = render_tab_id(ctx);
             let scene = &state.get_for_render(tab, active_doc).canvas.scene;
             if let Some(edge) = scene.edge(id) {
-                if let (Some(from_node), Some(to_node)) = (
-                    scene.node(edge.from.node),
-                    scene.node(edge.to.node),
-                ) {
-                    if let (Some(from_inst), Some(to_inst)) = (
-                        from_node.origin.clone(),
-                        to_node.origin.clone(),
-                    ) {
+                if let (Some(from_node), Some(to_node)) =
+                    (scene.node(edge.from.node), scene.node(edge.to.node))
+                {
+                    if let (Some(from_inst), Some(to_inst)) =
+                        (from_node.origin.clone(), to_node.origin.clone())
+                    {
                         out.push(ModelicaOp::ReverseConnection {
                             class: class.to_string(),
-                            from: crate::pretty::PortRef::new(
-                                &from_inst,
-                                edge.from.port.as_str(),
-                            ),
-                            to: crate::pretty::PortRef::new(
-                                &to_inst,
-                                edge.to.port.as_str(),
-                            ),
+                            from: crate::pretty::PortRef::new(&from_inst, edge.from.port.as_str()),
+                            to: crate::pretty::PortRef::new(&to_inst, edge.to.port.as_str()),
                         });
                     }
                 }
@@ -391,10 +394,18 @@ pub(super) fn render_edge_menu(
     let tab = render_tab_id(ctx);
     let scene = &state.get_for_render(tab, active_doc).canvas.scene;
     let Some(edge) = scene.edge(id) else { return };
-    let Some(from_node) = scene.node(edge.from.node) else { return };
-    let Some(to_node) = scene.node(edge.to.node) else { return };
-    let Some(from_instance) = from_node.origin.clone() else { return };
-    let Some(to_instance) = to_node.origin.clone() else { return };
+    let Some(from_node) = scene.node(edge.from.node) else {
+        return;
+    };
+    let Some(to_node) = scene.node(edge.to.node) else {
+        return;
+    };
+    let Some(from_instance) = from_node.origin.clone() else {
+        return;
+    };
+    let Some(to_instance) = to_node.origin.clone() else {
+        return;
+    };
     let from_port = edge.from.port.as_str().to_string();
     let to_port = edge.to.port.as_str().to_string();
     // Pull seed values from the live edge data. Color: ConnectionEdge
@@ -403,9 +414,7 @@ pub(super) fn render_edge_menu(
     // Modelica default (0.25). The surgical writer preserves any
     // existing thickness in source until the user actively drags
     // the slider, so a wrong seed doesn't lose user data.
-    let data = edge
-        .data
-        .downcast_ref::<super::edge::ConnectionEdgeData>();
+    let data = edge.data.downcast_ref::<super::edge::ConnectionEdgeData>();
     let (mut color_rgb, mut smooth, default_thickness) = match data {
         Some(d) => {
             let c = d
@@ -426,9 +435,7 @@ pub(super) fn render_edge_menu(
         .unwrap_or(default_thickness);
     ui.separator();
     ui.label(egui::RichText::new("Properties").strong());
-    let mk_op = |color: Option<[u8; 3]>,
-                 thickness: Option<f64>,
-                 smooth_bezier: Option<bool>| {
+    let mk_op = |color: Option<[u8; 3]>, thickness: Option<f64>, smooth_bezier: Option<bool>| {
         ModelicaOp::SetConnectionLineStyle {
             class: class.to_string(),
             from: crate::pretty::PortRef::new(&from_instance, &from_port),
@@ -446,9 +453,7 @@ pub(super) fn render_edge_menu(
     });
     ui.horizontal(|ui| {
         ui.label("Thickness");
-        let r = ui.add(
-            egui::Slider::new(&mut thickness, 0.05..=2.0).step_by(0.05),
-        );
+        let r = ui.add(egui::Slider::new(&mut thickness, 0.05..=2.0).step_by(0.05));
         if r.changed() {
             ui.ctx()
                 .data_mut(|d| d.insert_temp(thickness_id, thickness));
@@ -457,10 +462,7 @@ pub(super) fn render_edge_menu(
             out.push(mk_op(None, Some(thickness), None));
         }
     });
-    if ui
-        .checkbox(&mut smooth, "Smooth (Bezier)")
-        .changed()
-    {
+    if ui.checkbox(&mut smooth, "Smooth (Bezier)").changed() {
         out.push(mk_op(None, None, Some(smooth)));
     }
 }
@@ -521,7 +523,11 @@ pub(super) fn render_empty_menu(
         let max_h = (ui.ctx().content_rect().height() * 0.7).max(180.0);
         let wanted = ((sigs.len() + 3) as f32 * ROW_PX).min(max_h);
         ui.set_min_height(wanted);
-        if ui.button("Empty plot (bind later)").on_hover_text("Add a blank plot node — bind a signal to it later").clicked() {
+        if ui
+            .button("Empty plot (bind later)")
+            .on_hover_text("Add a blank plot node — bind a signal to it later")
+            .clicked()
+        {
             insert_plot_node(ctx, state, click_world, 0, "");
             ui.close();
         }
@@ -553,7 +559,11 @@ pub(super) fn render_empty_menu(
             });
     });
     ui.separator();
-    if ui.button("⎚ Fit all (F)").on_hover_text("Zoom and pan to fit the whole diagram in view").clicked() {
+    if ui
+        .button("⎚ Fit all (F)")
+        .on_hover_text("Zoom and pan to fit the whole diagram in view")
+        .clicked()
+    {
         let active_doc = active_doc_from_world_ctx(ctx);
         let tab = render_tab_id(ctx);
         let docstate = state.get_mut_for_render(tab, active_doc);
@@ -567,7 +577,11 @@ pub(super) fn render_empty_menu(
         }
         ui.close();
     }
-    if ui.button("⟲ Reset zoom").on_hover_text("Return to 100% zoom").clicked() {
+    if ui
+        .button("⟲ Reset zoom")
+        .on_hover_text("Return to 100% zoom")
+        .clicked()
+    {
         let active_doc = active_doc_from_world_ctx(ctx);
         let tab = render_tab_id(ctx);
         let docstate = state.get_mut_for_render(tab, active_doc);

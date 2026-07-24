@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use rumoca_sim::SimulationSession;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use lunco_assets::modelica_dir;
 
@@ -177,14 +177,9 @@ pub enum ModelicaCommand {
         source: String,
     },
     /// Reset the stepper to initial conditions using the cached DAE (instant, no recompilation).
-    Reset {
-        entity: Entity,
-        session_id: u64,
-    },
+    Reset { entity: Entity, session_id: u64 },
     /// Remove the stepper and cached DAE (entity despawned).
-    Despawn {
-        entity: Entity,
-    },
+    Despawn { entity: Entity },
     /// Load a Modelica source root into the rumoca compile session
     /// so subsequent Compile commands can resolve types from it.
     /// Sent by the main-thread pre-Compile gate
@@ -327,10 +322,7 @@ impl ModelicaResult {
     /// compile result onto this message. Single source of the
     /// `DaeCompilationResult` → `experiment_*` field mapping, which was
     /// copy-pasted at both worker compile sites (native + inline-worker).
-    fn with_experiment(
-        mut self,
-        comp_res: &rumoca_compile::compile::DaeCompilationResult,
-    ) -> Self {
+    fn with_experiment(mut self, comp_res: &rumoca_compile::compile::DaeCompilationResult) -> Self {
         self.experiment_start_time = comp_res.experiment_start_time;
         self.experiment_stop_time = comp_res.experiment_stop_time;
         self.experiment_tolerance = comp_res.experiment_tolerance;
@@ -515,8 +507,7 @@ fn apply_input_defaults_validated(
     if input_defaults.is_empty() {
         return;
     }
-    let known: std::collections::HashSet<String> =
-        stepper.input_names().iter().cloned().collect();
+    let known: std::collections::HashSet<String> = stepper.input_names().iter().cloned().collect();
     let unknown: Vec<&str> = input_defaults
         .keys()
         .filter(|n| !known.contains(*n))
@@ -595,7 +586,9 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
     while let Ok(first_cmd) = rx.recv() {
         let mut pending = vec![first_cmd];
-        while let Ok(cmd) = rx.try_recv() { pending.push(cmd); }
+        while let Ok(cmd) = rx.try_recv() {
+            pending.push(cmd);
+        }
 
         let mut to_process = Vec::new();
         for cmd in pending {
@@ -638,20 +631,36 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
                         if let Some(cached) = cached_models.get(&entity) {
                             // Strip input defaults from cached source and set them via set_input
-                            let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
+                            let (stripped_source, input_defaults) =
+                                strip_input_defaults(&cached.source);
 
                             // Recompile stripped source to get a fresh stepper with input slots
                             let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                            match compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
+                            match compiler.compile_str(
+                                &cached.model_name,
+                                &stripped_source,
+                                &cached.doc_uri,
+                            ) {
                                 Ok(comp_res) => {
                                     match build_stepper(&comp_res) {
                                         Ok(mut stepper) => {
-                                            apply_input_defaults_validated(&mut stepper, &input_defaults, "Init");
-                                            let input_names: Vec<String> = stepper.input_names().to_vec();
+                                            apply_input_defaults_validated(
+                                                &mut stepper,
+                                                &input_defaults,
+                                                "Init",
+                                            );
+                                            let input_names: Vec<String> =
+                                                stepper.input_names().to_vec();
                                             let symbols = collect_stepper_observables(&stepper);
-                                            steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
+                                            steppers.insert(
+                                                entity,
+                                                (session_id, cached.model_name.clone(), stepper),
+                                            );
                                             let _ = tx_inner.send(reset_ok(
-                                                entity, session_id, symbols, input_names,
+                                                entity,
+                                                session_id,
+                                                symbols,
+                                                input_names,
                                                 "Reset complete.",
                                             ));
                                         }
@@ -662,7 +671,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             // diagnostics (click-to-source for solver
                                             // lowering failures).
                                             r.compile_diagnostics =
-                                                crate::diagnostics_from_sim_error(&e, &stripped_source);
+                                                crate::diagnostics_from_sim_error(
+                                                    &e,
+                                                    &stripped_source,
+                                                );
                                             r.is_reset = true;
                                             let _ = tx_inner.send(r);
                                         }
@@ -672,8 +684,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     let mut r = result_ok(entity, session_id);
                                     // `e` is rumoca's formatted compile summary string.
                                     r.error = Some(format!("Reset compile error: {e}"));
-                                    r.compile_diagnostics =
-                                        compiler.compile_diagnostics(&cached.model_name, &cached.doc_uri);
+                                    r.compile_diagnostics = compiler
+                                        .compile_diagnostics(&cached.model_name, &cached.doc_uri);
                                     r.is_reset = true;
                                     let _ = tx_inner.send(r);
                                 }
@@ -681,12 +693,20 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         } else {
                             steppers.remove(&entity);
                             let _ = tx_inner.send(reset_ok(
-                                entity, session_id, Vec::new(), Vec::new(),
+                                entity,
+                                session_id,
+                                Vec::new(),
+                                Vec::new(),
                                 "Reset complete (no cached model).",
                             ));
                         }
                     }
-                    ModelicaCommand::UpdateParameters { entity, session_id, model_name, source } => {
+                    ModelicaCommand::UpdateParameters {
+                        entity,
+                        session_id,
+                        model_name,
+                        source,
+                    } => {
                         if session_id < *current_sessions.get(&entity).unwrap_or(&0) {
                             let _ = tx_inner.send(result_ok(entity, session_id));
                             return;
@@ -713,38 +733,49 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
                         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         match compiler.compile_str(&model_name, &stripped_source, &doc_uri) {
-                            Ok(comp_res) => {
-                                match build_stepper(&comp_res) {
-                                    Ok(mut stepper) => {
-                                        apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
-                                        let input_names: Vec<String> = stepper.input_names().to_vec();
-                                        let symbols = collect_stepper_observables(&stepper);
-                                        cached_models.insert(entity, CachedModel {
+                            Ok(comp_res) => match build_stepper(&comp_res) {
+                                Ok(mut stepper) => {
+                                    apply_input_defaults_validated(
+                                        &mut stepper,
+                                        &input_defaults,
+                                        "Compile",
+                                    );
+                                    let input_names: Vec<String> = stepper.input_names().to_vec();
+                                    let symbols = collect_stepper_observables(&stepper);
+                                    cached_models.insert(
+                                        entity,
+                                        CachedModel {
                                             model_name: model_name.clone(),
                                             source: Arc::from(source),
                                             doc_uri: doc_uri.clone(),
-                                        });
-                                        steppers.insert(entity, (session_id, model_name.clone(), stepper));
-                                        let _ = tx_inner.send(ModelicaResult {
-                                            entity, session_id, new_time: 0.0,
-                                            outputs: Vec::new(),
-                                            detected_symbols: symbols, error: None,
-                                            log_message: Some("Parameters applied.".to_string()),
-                                            is_new_model: false, is_parameter_update: true, is_reset: false,
-                                            detected_input_names: input_names,
-                                            ..Default::default()
-                                        });
-                                    }
-                                    Err(e) => {
-                                        let mut r = result_ok(entity, session_id);
-                                        r.error = Some(format!("Stepper Init Error: {e}"));
-                                        r.compile_diagnostics =
-                                            crate::diagnostics_from_sim_error(&e, &stripped_source);
-                                        r.is_parameter_update = true;
-                                        let _ = tx_inner.send(r);
-                                    }
+                                        },
+                                    );
+                                    steppers
+                                        .insert(entity, (session_id, model_name.clone(), stepper));
+                                    let _ = tx_inner.send(ModelicaResult {
+                                        entity,
+                                        session_id,
+                                        new_time: 0.0,
+                                        outputs: Vec::new(),
+                                        detected_symbols: symbols,
+                                        error: None,
+                                        log_message: Some("Parameters applied.".to_string()),
+                                        is_new_model: false,
+                                        is_parameter_update: true,
+                                        is_reset: false,
+                                        detected_input_names: input_names,
+                                        ..Default::default()
+                                    });
                                 }
-                            }
+                                Err(e) => {
+                                    let mut r = result_ok(entity, session_id);
+                                    r.error = Some(format!("Stepper Init Error: {e}"));
+                                    r.compile_diagnostics =
+                                        crate::diagnostics_from_sim_error(&e, &stripped_source);
+                                    r.is_parameter_update = true;
+                                    let _ = tx_inner.send(r);
+                                }
+                            },
                             Err(e) => {
                                 let mut r = result_ok(entity, session_id);
                                 r.error = Some(format!("Re-compile Error: {e}"));
@@ -755,7 +786,15 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             }
                         }
                     }
-                    ModelicaCommand::Compile { entity, session_id, model_name, source, doc_uri, extra_sources, stream } => {
+                    ModelicaCommand::Compile {
+                        entity,
+                        session_id,
+                        model_name,
+                        source,
+                        doc_uri,
+                        extra_sources,
+                        stream,
+                    } => {
                         current_sessions.insert(entity, session_id);
                         if let Some(stream) = stream {
                             // Register the new lock-free publish target
@@ -792,51 +831,87 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         }
                         bevy::log::info!(
                             "[worker] calling compile_str for `{}` ({} bytes)",
-                            model_name, stripped_source.len(),
+                            model_name,
+                            stripped_source.len(),
                         );
                         let t_compile = web_time::Instant::now();
                         let _compile_outcome = if extra_sources.is_empty() {
                             compiler.compile_str(&model_name, &stripped_source, &doc_uri)
                         } else {
-                            compiler.compile_str_multi(&model_name, &stripped_source, &doc_uri, &extra_sources)
+                            compiler.compile_str_multi(
+                                &model_name,
+                                &stripped_source,
+                                &doc_uri,
+                                &extra_sources,
+                            )
                         };
                         bevy::log::info!(
                             "[worker] compile_str returned for `{}` in {:.2}s ({})",
                             model_name,
                             t_compile.elapsed().as_secs_f64(),
-                            if _compile_outcome.is_ok() { "OK" } else { "ERR" },
+                            if _compile_outcome.is_ok() {
+                                "OK"
+                            } else {
+                                "ERR"
+                            },
                         );
                         match _compile_outcome {
                             Ok(comp_res) => {
                                 match build_stepper(&comp_res) {
                                     Ok(mut stepper) => {
                                         // Set input defaults via set_input so they're runtime-changeable
-                                        apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
-                                        let input_names: Vec<String> = stepper.input_names().to_vec();
+                                        apply_input_defaults_validated(
+                                            &mut stepper,
+                                            &input_defaults,
+                                            "Compile",
+                                        );
+                                        let input_names: Vec<String> =
+                                            stepper.input_names().to_vec();
                                         let symbols = collect_stepper_observables(&stepper);
-                                        let temp_dir = modelica_dir().join(format!("{}_{}", entity.index(), entity.generation()));
+                                        let temp_dir = modelica_dir().join(format!(
+                                            "{}_{}",
+                                            entity.index(),
+                                            entity.generation()
+                                        ));
                                         let _ = std::fs::create_dir_all(&temp_dir);
                                         let temp_path = temp_dir.join("model.mo");
                                         let _ = std::fs::write(&temp_path, &source);
 
-                                        cached_models.insert(entity, CachedModel {
-                                            model_name: model_name.clone(),
-                                            source: Arc::from(source),
-                                            doc_uri: doc_uri.clone(),
-                                        });
-                                        steppers.insert(entity, (session_id, model_name.clone(), stepper));
-                                        let _ = tx_inner.send(ModelicaResult {
-                                            entity, session_id, new_time: 0.0,
-                                            outputs: Vec::new(),
-                                            detected_symbols: symbols, error: None,
-                                            log_message: Some(format!("Model '{}' compiled.", model_name)),
-                                            is_new_model: true, is_parameter_update: false, is_reset: false,
-                                            detected_input_names: input_names,
-                                            compiled_model_name: Some(model_name.clone()),
-                                            loaded_source_root_id: None,
-                                            compile_diagnostics: Vec::new(),
-                                            ..Default::default()
-                                        }.with_experiment(&comp_res));
+                                        cached_models.insert(
+                                            entity,
+                                            CachedModel {
+                                                model_name: model_name.clone(),
+                                                source: Arc::from(source),
+                                                doc_uri: doc_uri.clone(),
+                                            },
+                                        );
+                                        steppers.insert(
+                                            entity,
+                                            (session_id, model_name.clone(), stepper),
+                                        );
+                                        let _ = tx_inner.send(
+                                            ModelicaResult {
+                                                entity,
+                                                session_id,
+                                                new_time: 0.0,
+                                                outputs: Vec::new(),
+                                                detected_symbols: symbols,
+                                                error: None,
+                                                log_message: Some(format!(
+                                                    "Model '{}' compiled.",
+                                                    model_name
+                                                )),
+                                                is_new_model: true,
+                                                is_parameter_update: false,
+                                                is_reset: false,
+                                                detected_input_names: input_names,
+                                                compiled_model_name: Some(model_name.clone()),
+                                                loaded_source_root_id: None,
+                                                compile_diagnostics: Vec::new(),
+                                                ..Default::default()
+                                            }
+                                            .with_experiment(&comp_res),
+                                        );
                                     }
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
@@ -873,7 +948,14 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             }
                         }
                     }
-                    ModelicaCommand::Step { entity, session_id, model_path, model_name, inputs, dt } => {
+                    ModelicaCommand::Step {
+                        entity,
+                        session_id,
+                        model_path,
+                        model_name,
+                        inputs,
+                        dt,
+                    } => {
                         if session_id < *current_sessions.get(&entity).unwrap_or(&0) {
                             let _ = tx_inner.send(result_ok(entity, session_id));
                             return;
@@ -888,39 +970,67 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             // Try cached DAE first — recompile stripped source for input slots
                             if let Some(cached) = cached_models.get(&entity) {
                                 if cached.model_name == model_name {
-                                    let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
-                                    let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                                    if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
+                                    let (stripped_source, input_defaults) =
+                                        strip_input_defaults(&cached.source);
+                                    let compiler =
+                                        compiler.get_or_insert_with(ModelicaCompiler::new);
+                                    if let Ok(comp_res) = compiler.compile_str(
+                                        &cached.model_name,
+                                        &stripped_source,
+                                        &cached.doc_uri,
+                                    ) {
                                         if let Ok(mut s) = build_stepper(&comp_res) {
-                                            apply_input_defaults_validated(&mut s, &input_defaults, "Compile");
+                                            apply_input_defaults_validated(
+                                                &mut s,
+                                                &input_defaults,
+                                                "Compile",
+                                            );
                                             // Then apply any user-provided input overrides
                                             for (name, val) in &inputs {
                                                 let _ = s.set_input(name, *val);
                                             }
-                                            steppers.insert(entity, (session_id, model_name.clone(), s));
+                                            steppers.insert(
+                                                entity,
+                                                (session_id, model_name.clone(), s),
+                                            );
                                         }
                                     }
                                 }
                             }
                             // Fallback: compile from file on disk
                             if !steppers.contains_key(&entity) {
-                                let source = std::fs::read_to_string(&model_path).unwrap_or_default();
+                                let source =
+                                    std::fs::read_to_string(&model_path).unwrap_or_default();
                                 let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                                match compiler.compile_str(&model_name, &source, &model_path.to_string_lossy()) {
+                                match compiler.compile_str(
+                                    &model_name,
+                                    &source,
+                                    &model_path.to_string_lossy(),
+                                ) {
                                     Ok(comp_res) => {
                                         if let Ok(mut s) = build_stepper(&comp_res) {
-                                            for (name, val) in &inputs { let _ = s.set_input(name, *val); }
-                                            cached_models.insert(entity, CachedModel {
-                                                model_name: model_name.clone(),
-                                                // Reuse the `source` already read from disk
-                                                // for this compile — re-reading `model_path`
-                                                // here was a second blocking read of bytes we
-                                                // hold (CQ-213).
-                                                source: Arc::from(source.clone()),
-                                                doc_uri: model_path.to_string_lossy().into_owned(),
-                                            });
+                                            for (name, val) in &inputs {
+                                                let _ = s.set_input(name, *val);
+                                            }
+                                            cached_models.insert(
+                                                entity,
+                                                CachedModel {
+                                                    model_name: model_name.clone(),
+                                                    // Reuse the `source` already read from disk
+                                                    // for this compile — re-reading `model_path`
+                                                    // here was a second blocking read of bytes we
+                                                    // hold (CQ-213).
+                                                    source: Arc::from(source.clone()),
+                                                    doc_uri: model_path
+                                                        .to_string_lossy()
+                                                        .into_owned(),
+                                                },
+                                            );
 
-                                            steppers.insert(entity, (session_id, model_name.clone(), s));
+                                            steppers.insert(
+                                                entity,
+                                                (session_id, model_name.clone(), s),
+                                            );
                                         }
                                     }
                                     Err(e) => {
@@ -989,10 +1099,16 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         stream.store(Arc::new(next));
                                     }
                                     let _ = tx_inner.send(ModelicaResult {
-                                        entity, session_id, new_time,
-                                        outputs, error: None, log_message: None,
-                                        is_new_model: false, detected_symbols: Vec::new(),
-                                        is_parameter_update: false, is_reset: false,
+                                        entity,
+                                        session_id,
+                                        new_time,
+                                        outputs,
+                                        error: None,
+                                        log_message: None,
+                                        is_new_model: false,
+                                        detected_symbols: Vec::new(),
+                                        is_parameter_update: false,
+                                        is_reset: false,
                                         detected_input_names: Vec::new(),
                                         ..Default::default()
                                     });
@@ -1015,8 +1131,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         sim_streams.remove(&entity);
                     }
                     ModelicaCommand::LoadSourceRoot { id, payload } => {
-                        let compiler = compiler
-                            .get_or_insert_with(ModelicaCompiler::new);
+                        let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         let t0 = web_time::Instant::now();
                         let report = match payload {
                             LoadSourceRootPayload::Disk { root_dir } => {
@@ -1082,10 +1197,15 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             if let Err(_) = result {
                 let _ = tx.send(ModelicaResult {
                     entity: Entity::PLACEHOLDER,
-                    session_id: 0, new_time: 0.0,
-                    outputs: Vec::new(), detected_symbols: Vec::new(),
-                    error: Some("Internal Worker Panic!".to_string()), log_message: None,
-                    is_new_model: false, is_parameter_update: false, is_reset: false,
+                    session_id: 0,
+                    new_time: 0.0,
+                    outputs: Vec::new(),
+                    detected_symbols: Vec::new(),
+                    error: Some("Internal Worker Panic!".to_string()),
+                    log_message: None,
+                    is_new_model: false,
+                    is_parameter_update: false,
+                    is_reset: false,
                     detected_input_names: Vec::new(),
                     ..Default::default()
                 });
@@ -1099,13 +1219,19 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 /// a stall can be pinned to a specific source.
 fn command_label(cmd: &ModelicaCommand) -> String {
     match cmd {
-        ModelicaCommand::Step { model_name, entity, .. } => {
+        ModelicaCommand::Step {
+            model_name, entity, ..
+        } => {
             format!("Step model={model_name} entity={entity:?}")
         }
-        ModelicaCommand::Compile { model_name, entity, .. } => {
+        ModelicaCommand::Compile {
+            model_name, entity, ..
+        } => {
             format!("Compile model={model_name} entity={entity:?}")
         }
-        ModelicaCommand::UpdateParameters { model_name, entity, .. } => {
+        ModelicaCommand::UpdateParameters {
+            model_name, entity, ..
+        } => {
             format!("UpdateParameters model={model_name} entity={entity:?}")
         }
         ModelicaCommand::Reset { entity, .. } => format!("Reset entity={entity:?}"),
@@ -1159,8 +1285,14 @@ fn cmd_session(cmd: &ModelicaCommand) -> u64 {
 /// the `dt`s** — never by dropping one.
 fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
     match (last, next) {
-        (ModelicaCommand::UpdateParameters { entity: e1, .. }, ModelicaCommand::UpdateParameters { entity: e2, .. }) => e1 == e2,
-        (ModelicaCommand::Compile { entity: e1, .. }, ModelicaCommand::Compile { entity: e2, .. }) => e1 == e2,
+        (
+            ModelicaCommand::UpdateParameters { entity: e1, .. },
+            ModelicaCommand::UpdateParameters { entity: e2, .. },
+        ) => e1 == e2,
+        (
+            ModelicaCommand::Compile { entity: e1, .. },
+            ModelicaCommand::Compile { entity: e2, .. },
+        ) => e1 == e2,
         _ => false,
     }
 }
@@ -1255,7 +1387,9 @@ pub(crate) fn inline_worker_process(
         return;
     }
     // Process one command per frame to avoid blocking the main thread.
-    let Ok(cmd) = channels.rx_cmd.try_recv() else { return };
+    let Ok(cmd) = channels.rx_cmd.try_recv() else {
+        return;
+    };
     let tx = channels.tx_res.clone();
     process_inline_command(&mut worker.inner, cmd, |r| {
         let _ = tx.send(r);
@@ -1283,20 +1417,34 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 ) {
     let w = state;
     match cmd {
-        ModelicaCommand::Step { entity, session_id, model_name, inputs, dt, model_path: _ } => {
-
+        ModelicaCommand::Step {
+            entity,
+            session_id,
+            model_name,
+            inputs,
+            dt,
+            model_path: _,
+        } => {
             // Auto-init: compile if stepper doesn't exist
             if !w.steppers.contains_key(&entity) {
                 // Try cached DAE first
                 if let Some(cached) = w.cached_models.get(&entity) {
                     if cached.model_name == model_name {
-                        let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
+                        let (stripped_source, input_defaults) =
+                            strip_input_defaults(&cached.source);
                         let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-                        if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
+                        if let Ok(comp_res) = compiler.compile_str(
+                            &cached.model_name,
+                            &stripped_source,
+                            &cached.doc_uri,
+                        ) {
                             if let Ok(mut s) = build_stepper(&comp_res) {
                                 apply_input_defaults_validated(&mut s, &input_defaults, "Compile");
-                                for (name, val) in &inputs { let _ = s.set_input(name, *val); }
-                                w.steppers.insert(entity, (session_id, model_name.clone(), s));
+                                for (name, val) in &inputs {
+                                    let _ = s.set_input(name, *val);
+                                }
+                                w.steppers
+                                    .insert(entity, (session_id, model_name.clone(), s));
                             }
                         }
                     }
@@ -1307,27 +1455,42 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
-                    for (name, val) in &inputs { let _ = stepper.set_input(name, *val); }
+                    for (name, val) in &inputs {
+                        let _ = stepper.set_input(name, *val);
+                    }
                     // Same macro-step ladder as the native worker (A3/A4).
                     let step_err = integrate_macro_step(stepper, dt).err();
 
                     if let Some(e) = step_err {
                         send(ModelicaResult {
-                            entity, session_id, new_time: stepper.time(),
+                            entity,
+                            session_id,
+                            new_time: stepper.time(),
                             outputs: Vec::new(),
-                            detected_symbols: Vec::new(), error: Some(format!("Solver Error: {e}")),
-                            log_message: None, is_new_model: false, is_parameter_update: false,
-                            is_reset: false, detected_input_names: Vec::new(),
+                            detected_symbols: Vec::new(),
+                            error: Some(format!("Solver Error: {e}")),
+                            log_message: None,
+                            is_new_model: false,
+                            is_parameter_update: false,
+                            is_reset: false,
+                            detected_input_names: Vec::new(),
                             ..Default::default()
                         });
                         w.steppers.remove(&entity);
                     } else {
                         let outputs = collect_stepper_observables(stepper);
                         send(ModelicaResult {
-                            entity, session_id, new_time: stepper.time(),
-                            outputs, error: None,
-                            log_message: None, is_new_model: false, detected_symbols: Vec::new(),
-                            is_parameter_update: false, is_reset: false, detected_input_names: Vec::new(),
+                            entity,
+                            session_id,
+                            new_time: stepper.time(),
+                            outputs,
+                            error: None,
+                            log_message: None,
+                            is_new_model: false,
+                            detected_symbols: Vec::new(),
+                            is_parameter_update: false,
+                            is_reset: false,
+                            detected_input_names: Vec::new(),
                             ..Default::default()
                         });
                     }
@@ -1344,27 +1507,39 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 // what to do next instead of "Sim engine failed to
                 // start." which doesn't.
                 send(ModelicaResult {
-                    entity, session_id, new_time: 0.0,
+                    entity,
+                    session_id,
+                    new_time: 0.0,
                     outputs: Vec::new(),
                     detected_symbols: Vec::new(),
                     error: Some(
                         "No compiled model. Click Compile (or Run will compile + start)."
                             .to_string(),
                     ),
-                    log_message: None, is_new_model: false, is_parameter_update: false,
-                    is_reset: false, detected_input_names: Vec::new(),
+                    log_message: None,
+                    is_new_model: false,
+                    is_parameter_update: false,
+                    is_reset: false,
+                    detected_input_names: Vec::new(),
                     ..Default::default()
                 });
             }
         }
-        ModelicaCommand::Compile { entity, session_id, model_name, source, doc_uri, extra_sources, stream: _stream } => {
+        ModelicaCommand::Compile {
+            entity,
+            session_id,
+            model_name,
+            source,
+            doc_uri,
+            extra_sources,
+            stream: _stream,
+        } => {
             // NB: the wasm inline worker runs on the Bevy main thread
             // today and does not publish to a lock-free SimStream.
             // Phase A lands on desktop first; TODO(arch-phase-b) wire
             // the wasm path once the inline worker moves off-thread.
             w.current_sessions.insert(entity, session_id);
             let (stripped_source, input_defaults) = strip_input_defaults(&source);
-
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             let compile_outcome = if extra_sources.is_empty() {
@@ -1373,53 +1548,79 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 compiler.compile_str_multi(&model_name, &stripped_source, &doc_uri, &extra_sources)
             };
             match compile_outcome {
-                Ok(comp_res) => {
-                    match build_stepper(&comp_res) {
-                        Ok(mut stepper) => {
-                            apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
-                            let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let symbols = collect_stepper_observables(&stepper);
-                            w.cached_models.insert(entity, CachedModel {
-                                model_name: model_name.clone(), source: Arc::from(source.clone()),
+                Ok(comp_res) => match build_stepper(&comp_res) {
+                    Ok(mut stepper) => {
+                        apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
+                        let input_names: Vec<String> = stepper.input_names().to_vec();
+                        let symbols = collect_stepper_observables(&stepper);
+                        w.cached_models.insert(
+                            entity,
+                            CachedModel {
+                                model_name: model_name.clone(),
+                                source: Arc::from(source.clone()),
                                 doc_uri: doc_uri.clone(),
-                            });
+                            },
+                        );
 
-                            w.steppers.insert(entity, (session_id, model_name.clone(), stepper));
-                            send(ModelicaResult {
-                                entity, session_id, new_time: 0.0,
+                        w.steppers
+                            .insert(entity, (session_id, model_name.clone(), stepper));
+                        send(
+                            ModelicaResult {
+                                entity,
+                                session_id,
+                                new_time: 0.0,
                                 outputs: Vec::new(),
-                                detected_symbols: symbols, error: None,
+                                detected_symbols: symbols,
+                                error: None,
                                 log_message: Some("Compiled successfully.".to_string()),
-                                is_new_model: true, is_parameter_update: false, is_reset: false,
+                                is_new_model: true,
+                                is_parameter_update: false,
+                                is_reset: false,
                                 detected_input_names: input_names,
                                 compiled_model_name: Some(model_name.clone()),
                                 loaded_source_root_id: None,
                                 compile_diagnostics: Vec::new(),
                                 ..Default::default()
-                            }.with_experiment(&comp_res));
-                        }
-                        Err(e) => {
-                            send(ModelicaResult {
-                                entity, session_id, new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {e}")),
-                                log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
-                                detected_input_names: Vec::new(),
-                                compile_diagnostics: crate::diagnostics_from_sim_error(&e, &stripped_source),
-                                ..Default::default()
-                            });
-                        }
+                            }
+                            .with_experiment(&comp_res),
+                        );
                     }
-                }
+                    Err(e) => {
+                        send(ModelicaResult {
+                            entity,
+                            session_id,
+                            new_time: 0.0,
+                            outputs: Vec::new(),
+                            detected_symbols: Vec::new(),
+                            error: Some(format!("Stepper Init Error: {e}")),
+                            log_message: None,
+                            is_new_model: true,
+                            is_parameter_update: false,
+                            is_reset: false,
+                            detected_input_names: Vec::new(),
+                            compile_diagnostics: crate::diagnostics_from_sim_error(
+                                &e,
+                                &stripped_source,
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                },
                 Err(e) => {
                     // Structured, located diagnostics so the Diagnostics
                     // panel can make compile errors click-to-source.
                     let diags = compiler.compile_diagnostics(&model_name, &doc_uri);
                     send(ModelicaResult {
-                        entity, session_id, new_time: 0.0,
+                        entity,
+                        session_id,
+                        new_time: 0.0,
                         outputs: Vec::new(),
-                        detected_symbols: Vec::new(), error: Some(format!("Compile Error: {e}")),
-                        log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
+                        detected_symbols: Vec::new(),
+                        error: Some(format!("Compile Error: {e}")),
+                        log_message: None,
+                        is_new_model: true,
+                        is_parameter_update: false,
+                        is_reset: false,
                         detected_input_names: Vec::new(),
                         compile_diagnostics: diags,
                         ..Default::default()
@@ -1436,48 +1637,75 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 match compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
                     Ok(comp_res) => {
                         if let Ok(mut stepper) = build_stepper(&comp_res) {
-                            apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
+                            apply_input_defaults_validated(
+                                &mut stepper,
+                                &input_defaults,
+                                "Compile",
+                            );
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
-                            w.steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
+                            w.steppers
+                                .insert(entity, (session_id, cached.model_name.clone(), stepper));
                             send(reset_ok(
-                                entity, session_id, symbols, input_names,
+                                entity,
+                                session_id,
+                                symbols,
+                                input_names,
                                 "Reset complete.",
                             ));
-
-                                } else {
-                                send(ModelicaResult {
-                                entity, session_id, new_time: 0.0,
+                        } else {
+                            send(ModelicaResult {
+                                entity,
+                                session_id,
+                                new_time: 0.0,
                                 outputs: Vec::new(),
-                                detected_symbols: Vec::new(), error: Some("Stepper init failed".to_string()),
-                                log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
+                                detected_symbols: Vec::new(),
+                                error: Some("Stepper init failed".to_string()),
+                                log_message: None,
+                                is_new_model: false,
+                                is_parameter_update: false,
+                                is_reset: true,
                                 detected_input_names: Vec::new(),
                                 ..Default::default()
-                                });
-                                }
-                                }
-                                Err(e) => {
-                                send(ModelicaResult {
-                                entity, session_id, new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: Vec::new(), error: Some(format!("Reset compile error: {e}")),
-                                log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
-                                detected_input_names: Vec::new(),
-                                compile_diagnostics: compiler.compile_diagnostics(&cached.model_name, &cached.doc_uri),
-                                ..Default::default()
-                                });
-                                }
-                                }
-                                } else {
-                                w.steppers.remove(&entity);
-                                send(reset_ok(
-                                entity, session_id, Vec::new(), Vec::new(),
-                                "Reset complete (no cached model).",
-                                ));
-                                }
-
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        send(ModelicaResult {
+                            entity,
+                            session_id,
+                            new_time: 0.0,
+                            outputs: Vec::new(),
+                            detected_symbols: Vec::new(),
+                            error: Some(format!("Reset compile error: {e}")),
+                            log_message: None,
+                            is_new_model: false,
+                            is_parameter_update: false,
+                            is_reset: true,
+                            detected_input_names: Vec::new(),
+                            compile_diagnostics: compiler
+                                .compile_diagnostics(&cached.model_name, &cached.doc_uri),
+                            ..Default::default()
+                        });
+                    }
+                }
+            } else {
+                w.steppers.remove(&entity);
+                send(reset_ok(
+                    entity,
+                    session_id,
+                    Vec::new(),
+                    Vec::new(),
+                    "Reset complete (no cached model).",
+                ));
+            }
         }
-        ModelicaCommand::UpdateParameters { entity, session_id, model_name, source } => {
+        ModelicaCommand::UpdateParameters {
+            entity,
+            session_id,
+            model_name,
+            source,
+        } => {
             if session_id < *w.current_sessions.get(&entity).unwrap_or(&0) {
                 send(result_ok(entity, session_id));
                 return;
@@ -1487,54 +1715,78 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 
             // Re-seat under the model's original session URI (see the threaded
             // handler) so the reused session never holds it under two filenames.
-            let doc_uri = w.cached_models
+            let doc_uri = w
+                .cached_models
                 .get(&entity)
                 .map(|c| c.doc_uri.clone())
                 .unwrap_or_else(|| model_name.clone());
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             match compiler.compile_str(&model_name, &stripped_source, &doc_uri) {
-                Ok(comp_res) => {
-                    match build_stepper(&comp_res) {
-                        Ok(mut stepper) => {
-                            apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
-                            let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let symbols = collect_stepper_observables(&stepper);
-                            w.cached_models.insert(entity, CachedModel {
-                                model_name: model_name.clone(), source: Arc::from(source.clone()),
+                Ok(comp_res) => match build_stepper(&comp_res) {
+                    Ok(mut stepper) => {
+                        apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
+                        let input_names: Vec<String> = stepper.input_names().to_vec();
+                        let symbols = collect_stepper_observables(&stepper);
+                        w.cached_models.insert(
+                            entity,
+                            CachedModel {
+                                model_name: model_name.clone(),
+                                source: Arc::from(source.clone()),
                                 doc_uri: doc_uri.clone(),
-                            });
+                            },
+                        );
 
-                            w.steppers.insert(entity, (session_id, model_name.clone(), stepper));
-                            send(ModelicaResult {
-                                entity, session_id, new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: symbols, error: None,
-                                log_message: Some("Parameters applied.".to_string()),
-                                is_new_model: false, is_parameter_update: true, is_reset: false,
-                                detected_input_names: input_names,
-                                ..Default::default()
-                            });
-                        }
-                        Err(e) => {
-                            send(ModelicaResult {
-                                entity, session_id, new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {e}")),
-                                log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
-                                detected_input_names: Vec::new(),
-                                compile_diagnostics: crate::diagnostics_from_sim_error(&e, &stripped_source),
-                                ..Default::default()
-                            });
-                        }
+                        w.steppers
+                            .insert(entity, (session_id, model_name.clone(), stepper));
+                        send(ModelicaResult {
+                            entity,
+                            session_id,
+                            new_time: 0.0,
+                            outputs: Vec::new(),
+                            detected_symbols: symbols,
+                            error: None,
+                            log_message: Some("Parameters applied.".to_string()),
+                            is_new_model: false,
+                            is_parameter_update: true,
+                            is_reset: false,
+                            detected_input_names: input_names,
+                            ..Default::default()
+                        });
                     }
-                }
+                    Err(e) => {
+                        send(ModelicaResult {
+                            entity,
+                            session_id,
+                            new_time: 0.0,
+                            outputs: Vec::new(),
+                            detected_symbols: Vec::new(),
+                            error: Some(format!("Stepper Init Error: {e}")),
+                            log_message: None,
+                            is_new_model: false,
+                            is_parameter_update: true,
+                            is_reset: false,
+                            detected_input_names: Vec::new(),
+                            compile_diagnostics: crate::diagnostics_from_sim_error(
+                                &e,
+                                &stripped_source,
+                            ),
+                            ..Default::default()
+                        });
+                    }
+                },
                 Err(e) => {
                     send(ModelicaResult {
-                        entity, session_id, new_time: 0.0,
+                        entity,
+                        session_id,
+                        new_time: 0.0,
                         outputs: Vec::new(),
-                        detected_symbols: Vec::new(), error: Some(format!("Re-compile Error: {e}")),
-                        log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
+                        detected_symbols: Vec::new(),
+                        error: Some(format!("Re-compile Error: {e}")),
+                        log_message: None,
+                        is_new_model: false,
+                        is_parameter_update: true,
+                        is_reset: false,
                         detected_input_names: Vec::new(),
                         compile_diagnostics: compiler.compile_diagnostics(&model_name, &doc_uri),
                         ..Default::default()
@@ -1668,7 +1920,10 @@ pub struct ModelicaModel {
 pub fn on_remove_modelica(trigger: On<Remove, ModelicaModel>, channels: Res<ModelicaChannels>) {
     let entity = trigger.entity;
     let _ = channels.tx.send(ModelicaCommand::Despawn { entity });
-    info!("[modelica] observer: sent Despawn to Modelica for entity {:?}", entity);
+    info!(
+        "[modelica] observer: sent Despawn to Modelica for entity {:?}",
+        entity
+    );
 }
 
 /// Decide this tick's macro step for one model.
@@ -1792,7 +2047,9 @@ pub fn spawn_modelica_requests(
             continue;
         };
 
-        let inputs: Vec<(String, f64)> = model.inputs.iter()
+        let inputs: Vec<(String, f64)> = model
+            .inputs
+            .iter()
             .map(|(name, val)| (name.clone(), *val))
             .collect();
 
@@ -1863,18 +2120,10 @@ pub fn handle_modelica_responses(
             if let Some(roots) = source_roots.as_deref_mut() {
                 if let Some(entry) = roots.roots.get_mut(root_id) {
                     if let Some(err) = result.error.as_ref() {
-                        bevy::log::warn!(
-                            "[source-roots] `{}` load failed: {}",
-                            root_id, err,
-                        );
-                        entry.state = crate::source_roots::LoadState::Failed(
-                            err.clone(),
-                        );
+                        bevy::log::warn!("[source-roots] `{}` load failed: {}", root_id, err,);
+                        entry.state = crate::source_roots::LoadState::Failed(err.clone());
                     } else {
-                        bevy::log::info!(
-                            "[source-roots] `{}` is now Ready",
-                            root_id,
-                        );
+                        bevy::log::info!("[source-roots] `{}` is now Ready", root_id,);
                         entry.state = crate::source_roots::LoadState::Ready;
                     }
                 }
@@ -1931,7 +2180,9 @@ pub fn handle_modelica_responses(
         if let Ok(mut model) = q_models.get_mut(result.entity) {
             // ALWAYS check session ID before resetting is_stepping
             // Stale results must NOT reset the flag.
-            if result.session_id < model.session_id { continue; }
+            if result.session_id < model.session_id {
+                continue;
+            }
 
             model.is_stepping = false;
             // Compile-shaped results (new model / parameter update /
@@ -2069,7 +2320,11 @@ pub fn handle_modelica_responses(
 
             if result.is_new_model {
                 model.model_path = modelica_dir()
-                    .join(format!("{}_{}", result.entity.index(), result.entity.generation()))
+                    .join(format!(
+                        "{}_{}",
+                        result.entity.index(),
+                        result.entity.generation()
+                    ))
                     .join("model.mo");
                 model.variables.clear();
                 // A successful Compile leaves the model PAUSED/ready — we do
@@ -2098,7 +2353,9 @@ pub fn handle_modelica_responses(
                 // which is more reliable than the worker's DAE-discovered names (which may have 0.0).
                 let ui_inputs: HashMap<String, f64> = std::mem::take(&mut model.inputs);
                 for name in &result.detected_input_names {
-                    model.inputs.entry(name.clone())
+                    model
+                        .inputs
+                        .entry(name.clone())
                         .or_insert_with(|| *ui_inputs.get(name).unwrap_or(&0.0));
                 }
                 for (name, val) in ui_inputs {
@@ -2240,7 +2497,10 @@ mod macro_step_tests {
 
         for latency in [0_u32, 1, 2, 5, 10] {
             let (model, w) = run_ticks(TICKS, latency);
-            assert!((w - world).abs() < 1e-9, "world clock must not depend on latency");
+            assert!(
+                (w - world).abs() < 1e-9,
+                "world clock must not depend on latency"
+            );
             // Converged to within one micro-step (the rounding residual), NOT
             // to within a factor of (latency + 1).
             let err = (model - world).abs();

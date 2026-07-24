@@ -35,7 +35,8 @@ fn assert_builds(v: &Value) {
 
 #[test]
 fn patrol_one_waypoint_keeps_its_nesting() {
-    let v = json!({"kind":"patrol","waypoints":[[10.0,0.0,-5.0]],"speed":0.6,"radius":2.0,"dwell":0.0});
+    let v =
+        json!({"kind":"patrol","waypoints":[[10.0,0.0,-5.0]],"speed":0.6,"radius":2.0,"dwell":0.0});
     roundtrip(v.clone());
     assert_builds(&xml_to_value(&value_to_xml(&v).unwrap()).unwrap());
 }
@@ -184,8 +185,9 @@ fn all_leaf_kinds_roundtrip_and_build() {
 
 #[test]
 fn succeed_and_fail_use_the_btcpp_elements() {
-    let xml = value_to_xml(&json!({"kind":"selector","children":[{"kind":"succeed"},{"kind":"fail"}]}))
-        .unwrap();
+    let xml =
+        value_to_xml(&json!({"kind":"selector","children":[{"kind":"succeed"},{"kind":"fail"}]}))
+            .unwrap();
     assert!(xml.contains("<AlwaysSuccess/>"), "{xml}");
     assert!(xml.contains("<AlwaysFailure/>"), "{xml}");
 }

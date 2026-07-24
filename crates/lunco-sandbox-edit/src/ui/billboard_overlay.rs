@@ -75,7 +75,9 @@ pub fn draw_billboard_overlay(
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let origin = ctx.content_rect().min.to_vec2();
-    let theme = theme.map(|t| t.clone()).unwrap_or_else(lunco_theme::Theme::dark);
+    let theme = theme
+        .map(|t| t.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
 
     let cam_world =
         lunco_core::coords::world_position(cam_entity, &q_parents, &q_grids, &q_spatial)
@@ -93,7 +95,10 @@ pub fn draw_billboard_overlay(
     // and the ground now agree on which sphere they are on.
     let site = q_site.iter().next().copied();
     let radius_m = site.zip(registry.as_ref()).and_then(|(a, reg)| {
-        reg.bodies.iter().find(|b| b.ephemeris_id == a.body).map(|b| b.radius_m)
+        reg.bodies
+            .iter()
+            .find(|b| b.ephemeris_id == a.body)
+            .map(|b| b.radius_m)
     });
 
     let painter = ctx.layer_painter(world_overlay_layer("usd_billboard_overlay"));
@@ -140,9 +145,17 @@ pub fn draw_billboard_overlay(
         };
         let text = render_billboard(
             &bb.template,
-            &BillboardFacts { name: leaf, label: None, geo },
+            &BillboardFacts {
+                name: leaf,
+                label: None,
+                geo,
+            },
         );
-        drawn.push(Drawn { screen: egui::pos2(viewport.x, viewport.y) + origin, text, distance });
+        drawn.push(Drawn {
+            screen: egui::pos2(viewport.x, viewport.y) + origin,
+            text,
+            distance,
+        });
     }
 
     drawn.sort_by(|a, b| b.distance.total_cmp(&a.distance));
@@ -155,15 +168,16 @@ pub fn draw_billboard_overlay(
         let c = theme.tokens.text;
         let color = egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha);
 
-        let galley = painter.layout_no_wrap(
-            d.text.clone(),
-            egui::FontId::proportional(13.0),
-            color,
-        );
+        let galley =
+            painter.layout_no_wrap(d.text.clone(), egui::FontId::proportional(13.0), color);
         let size = galley.size();
         let top_left = d.screen - egui::vec2(size.x * 0.5, size.y + 8.0);
         let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(5.0, 3.0));
-        painter.rect_filled(bg, 3.0, egui::Color32::from_black_alpha((170.0 * fade) as u8));
+        painter.rect_filled(
+            bg,
+            3.0,
+            egui::Color32::from_black_alpha((170.0 * fade) as u8),
+        );
         painter.galley(top_left, galley, color);
     }
 }

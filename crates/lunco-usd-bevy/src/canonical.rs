@@ -206,7 +206,8 @@ impl CanonicalStage {
             .define_prim(path.clone())
             .map_err(|e| anyhow!("define_prim {path}: {e}"))?;
         if let Some(t) = type_name {
-            prim.set_type_name(t).map_err(|e| anyhow!("set_type_name {path}: {e}"))?;
+            prim.set_type_name(t)
+                .map_err(|e| anyhow!("set_type_name {path}: {e}"))?;
         }
         Ok(())
     }
@@ -290,9 +291,9 @@ impl CanonicalStage {
             .prim(path.clone())
             .set_metadata(
                 openusd::sdf::FieldKey::References.as_str(),
-                openusd::sdf::Value::ReferenceListOp(openusd::sdf::ReferenceListOp::prepended(
-                    [reference],
-                )),
+                openusd::sdf::Value::ReferenceListOp(openusd::sdf::ReferenceListOp::prepended([
+                    reference,
+                ])),
             )
             .map_err(|e| anyhow!("author reference @{asset_path}@ at {path}: {e}"))?;
         Ok(())
@@ -442,7 +443,10 @@ pub struct CanonicalStages {
 
 impl CanonicalStages {
     /// The live canonical stage built from `asset`, if any.
-    pub fn get(&self, asset: bevy::asset::AssetId<crate::UsdStageAsset>) -> Option<&CanonicalStage> {
+    pub fn get(
+        &self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+    ) -> Option<&CanonicalStage> {
         self.by_asset.get(&asset)
     }
 
@@ -452,7 +456,6 @@ impl CanonicalStages {
     ) -> Option<&mut CanonicalStage> {
         self.by_asset.get_mut(&asset)
     }
-
 
     pub fn len(&self) -> usize {
         self.by_asset.len()
@@ -487,7 +490,10 @@ impl CanonicalStages {
     /// the stage. Draining bumps each affected stage's `generation`.
     pub fn drain_all_changes(
         &mut self,
-    ) -> Vec<(bevy::asset::AssetId<crate::UsdStageAsset>, Vec<RawStageChange>)> {
+    ) -> Vec<(
+        bevy::asset::AssetId<crate::UsdStageAsset>,
+        Vec<RawStageChange>,
+    )> {
         self.by_asset
             .iter_mut()
             .filter_map(|(id, cs)| {
@@ -576,8 +582,12 @@ pub fn sync_canonical_stages(
     for event in events.read() {
         match event {
             AssetEvent::Added { id } | AssetEvent::Modified { id } => {
-                let Some(asset) = assets.get(*id) else { continue };
-                let Some(recipe) = asset.recipe.as_ref() else { continue };
+                let Some(asset) = assets.get(*id) else {
+                    continue;
+                };
+                let Some(recipe) = asset.recipe.as_ref() else {
+                    continue;
+                };
                 match CanonicalStage::from_recipe(recipe) {
                     Ok(cs) => {
                         bevy::log::info!(
@@ -636,13 +646,22 @@ mod recipe_tests {
             prims.iter().any(|p| p == "/Root/Box"),
             "recipe-built stage must contain /Root/Box, got {prims:?}"
         );
-        assert_eq!(view.value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"), Some(3.0));
+        assert_eq!(
+            view.value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"),
+            Some(3.0)
+        );
 
         // And it composes identically to the known-good file-composed path.
         let ref_stage = compose_file_to_stage(&f).expect("file compose");
-        let ref_prims: Vec<String> =
-            StageView::new(&ref_stage).prim_paths().iter().map(|p| p.to_string()).collect();
-        assert_eq!(prims, ref_prims, "recipe-built stage must match file-composed stage");
+        let ref_prims: Vec<String> = StageView::new(&ref_stage)
+            .prim_paths()
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        assert_eq!(
+            prims, ref_prims,
+            "recipe-built stage must match file-composed stage"
+        );
     }
 }
 
@@ -683,7 +702,9 @@ mod sync_system_tests {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<crate::UsdStageAsset>>()
-            .add(crate::UsdStageAsset { recipe: Some(recipe) });
+            .add(crate::UsdStageAsset {
+                recipe: Some(recipe),
+            });
 
         // One frame flushes the asset event; the next lets the system act on it.
         app.update();
@@ -693,10 +714,19 @@ mod sync_system_tests {
             .world()
             .get_non_send::<CanonicalStages>()
             .expect("CanonicalStages resource present");
-        assert_eq!(stages.len(), 1, "exactly one canonical stage built from the loaded asset");
-        let cs = stages.get(handle.id()).expect("canonical stage keyed by the asset id");
+        assert_eq!(
+            stages.len(),
+            1,
+            "exactly one canonical stage built from the loaded asset"
+        );
+        let cs = stages
+            .get(handle.id())
+            .expect("canonical stage keyed by the asset id");
         assert!(
-            cs.view().prim_paths().iter().any(|p| p.to_string() == "/Root/Box"),
+            cs.view()
+                .prim_paths()
+                .iter()
+                .any(|p| p.to_string() == "/Root/Box"),
             "the runtime canonical stage exposes the composed scene"
         );
     }
@@ -716,7 +746,10 @@ mod authoring_tests {
 
     fn touches(changes: &[RawStageChange], path: &str) -> bool {
         changes.iter().any(|c| {
-            c.info_only.iter().chain(c.resynced.iter()).any(|p| p.to_string() == path)
+            c.info_only
+                .iter()
+                .chain(c.resynced.iter())
+                .any(|p| p.to_string() == path)
         })
     }
 
@@ -728,8 +761,12 @@ mod authoring_tests {
 
         // MOVE: author a translate → sink reports the prim; it composes live.
         let rover = SdfPath::new("/World/Rover").unwrap();
-        cs.author_translate(&rover, [1.0, 2.0, 3.0]).expect("author translate");
-        assert!(touches(&cs.drain_changes(), "/World/Rover"), "translate fires the sink");
+        cs.author_translate(&rover, [1.0, 2.0, 3.0])
+            .expect("author translate");
+        assert!(
+            touches(&cs.drain_changes(), "/World/Rover"),
+            "translate fires the sink"
+        );
         assert_eq!(
             crate::read_vec3_f64(&cs.view(), &rover, "xformOp:translate"),
             Some([1.0, 2.0, 3.0]),
@@ -740,18 +777,28 @@ mod authoring_tests {
         let r2 = SdfPath::new("/World/Rover2").unwrap();
         cs.author_prim(&r2, Some("Xform")).expect("author prim");
         assert!(
-            cs.drain_changes().iter().any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/Rover2")),
+            cs.drain_changes()
+                .iter()
+                .any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/Rover2")),
             "defining a prim fires a resync"
         );
-        assert!(cs.view().has_prim(&r2), "the defined prim is live on the stage");
+        assert!(
+            cs.view().has_prim(&r2),
+            "the defined prim is live on the stage"
+        );
 
         // REMOVE: drop it → resync; it's gone.
         assert!(cs.remove_prim_at(&r2).expect("remove prim"));
         assert!(
-            cs.drain_changes().iter().any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/Rover2")),
+            cs.drain_changes()
+                .iter()
+                .any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/Rover2")),
             "removing a prim fires a resync"
         );
-        assert!(!cs.view().has_prim(&r2), "the removed prim is gone from the stage");
+        assert!(
+            !cs.view().has_prim(&r2),
+            "the removed prim is gone from the stage"
+        );
     }
 
     /// A keyframe authored onto the live stage fires the sink and composes as a
@@ -768,7 +815,10 @@ mod authoring_tests {
         let v = crate::author::parse_attribute_value("double3", "(1, 2, 3)").unwrap();
         cs.author_time_sample(&rover, "xformOp:translate", "double3", 12.0, v)
             .expect("author keyframe");
-        assert!(touches(&cs.drain_changes(), "/World/Rover"), "keyframe fires the sink");
+        assert!(
+            touches(&cs.drain_changes(), "/World/Rover"),
+            "keyframe fires the sink"
+        );
         assert!(
             cs.view().has_time_samples(&rover, "xformOp:translate"),
             "the authored keyframe composes as timeSamples on the live stage"
@@ -802,11 +852,16 @@ mod authoring_tests {
             cs.add_layer_bytes(HashMap::from([(ref_id.clone(), ROVER.as_bytes().to_vec())])),
             "a recipe-built stage must accept injected layer bytes"
         );
-        assert!(cs.has_layer_bytes(&ref_id), "bytes now present in the live resolver");
+        assert!(
+            cs.has_layer_bytes(&ref_id),
+            "bytes now present in the live resolver"
+        );
 
         let spawn = SdfPath::new("/World/rover_1").unwrap();
-        cs.author_prim(&spawn, Some("Xform")).expect("define the spawn prim");
-        cs.author_reference(&spawn, asset_path).expect("author the reference arc");
+        cs.author_prim(&spawn, Some("Xform"))
+            .expect("define the spawn prim");
+        cs.author_reference(&spawn, asset_path)
+            .expect("author the reference arc");
 
         // The sink reports the spawn path as resynced (the projector reconciles it).
         assert!(
@@ -848,11 +903,19 @@ mod authoring_tests {
         // The joint's two bodies compose on the LIVE stage — this is the read the
         // Avian joint builder does. Before the live author, this required a rebuild.
         assert_eq!(
-            cs.view().rel_targets(&hinge, "physics:body0").iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+            cs.view()
+                .rel_targets(&hinge, "physics:body0")
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>(),
             vec!["/Rig/Chassis".to_string()],
         );
         assert_eq!(
-            cs.view().rel_targets(&hinge, "physics:body1").iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+            cs.view()
+                .rel_targets(&hinge, "physics:body1")
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>(),
             vec!["/Rig/Wheel".to_string()],
         );
     }
@@ -866,8 +929,13 @@ mod authoring_tests {
         let _ = cs.drain_changes();
 
         let bus = SdfPath::new("/Rig/Bus").unwrap();
-        cs.author_connection(&bus, "inputs:voltage", "float", &["/Rig/Battery.outputs:voltage".into()])
-            .expect("author connection");
+        cs.author_connection(
+            &bus,
+            "inputs:voltage",
+            "float",
+            &["/Rig/Battery.outputs:voltage".into()],
+        )
+        .expect("author connection");
 
         assert_eq!(
             cs.view().connections(&bus, "inputs:voltage"),

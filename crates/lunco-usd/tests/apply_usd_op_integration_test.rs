@@ -4,15 +4,15 @@
 //! USD stage documents, notifies listeners via [`DocumentChanged`], and propagates
 //! updates through to the visual synchronization layer to update Bevy materials.
 
+use bevy::prelude::*;
+use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::document::UsdDocument;
-use bevy::prelude::*;
-use lunco_usd_bevy::*;
 use lunco_usd::{
-    ApplyUsdOp, UsdCommandsPlugin, UsdOp, LayerId,
     ui::{SetActiveUsdViewport, UsdViewportPlugin, UsdViewportState},
+    ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp,
 };
-use lunco_doc::DocumentOrigin;
+use lunco_usd_bevy::*;
 
 /// Tests that triggering an [`ApplyUsdOp`] command modifies a shader attribute
 /// (e.g. `diffuseColor` and `roughness`) in the underlying USD stage document,
@@ -74,7 +74,9 @@ def Xform "World"
 
     // 4. Allocate USD document in the registry
     let doc_id = {
-        let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+        let mut reg = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>();
         reg.allocate(
             usda_content.to_string(),
             lunco_doc::PathlessOrigin::untitled("test_stage.usda"),
@@ -84,16 +86,22 @@ def Xform "World"
 
     // 5. Trigger SetActiveUsdViewport command to bootstrap the preview stage
     // and install our newly allocated document into the active viewport
-    app.world_mut().trigger(SetActiveUsdViewport { doc: doc_id });
+    app.world_mut()
+        .trigger(SetActiveUsdViewport { doc: doc_id });
     println!("[TEST-DEBUG] Triggered SetActiveUsdViewport");
 
     // Run updates to process the viewport installation and initial visual synchronization
     for i in 1..=5 {
         app.update();
         println!("[TEST-DEBUG] Tick {} complete.", i);
-        
+
         // Print all entities and their components to trace spawning
-        let mut q_debug = app.world_mut().query::<(Entity, Option<&Name>, Option<&UsdPrimPath>, Has<UsdVisualSynced>)>();
+        let mut q_debug = app.world_mut().query::<(
+            Entity,
+            Option<&Name>,
+            Option<&UsdPrimPath>,
+            Has<UsdVisualSynced>,
+        )>();
         for (ent, name, prim_path, synced) in q_debug.iter(app.world()) {
             println!(
                 "  -> Entity: {:?}, Name: {:?}, PrimPath: {:?}, Synced: {}",
@@ -123,7 +131,9 @@ def Xform "World"
     // not add. Asserting on the intent is strictly better here — it is what USD
     // authors, and it is what survives on a server with no GPU.
     // See docs/architecture/render-decoupling.md.
-    let look = app.world().get::<lunco_render::PbrLook>(mesh_entity)
+    let look = app
+        .world()
+        .get::<lunco_render::PbrLook>(mesh_entity)
         .expect("Entity should have a PbrLook (the appearance authored by the USD material)");
 
     // Assert initial diffuse color (1.0, 0.5, 0.25) and roughness (0.75)
@@ -171,9 +181,12 @@ def Xform "World"
             updated_mesh_entity = Some(ent);
         }
     }
-    let updated_mesh_entity = updated_mesh_entity.expect("MeshWithMaterial should exist after reload");
+    let updated_mesh_entity =
+        updated_mesh_entity.expect("MeshWithMaterial should exist after reload");
 
-    let look2 = app.world().get::<lunco_render::PbrLook>(updated_mesh_entity)
+    let look2 = app
+        .world()
+        .get::<lunco_render::PbrLook>(updated_mesh_entity)
         .expect("Entity should have a PbrLook after reload");
 
     // Assert the appearance updated to Blue (0.0, 0.0, 1.0) and roughness 0.1
@@ -209,16 +222,25 @@ def Xform "World"
             reverted_entity = Some(ent);
         }
     }
-    let reverted_entity = reverted_entity.expect("MeshWithMaterial must survive the ReplaceSource rebuild");
-    let look3 = app.world().get::<lunco_render::PbrLook>(reverted_entity)
+    let reverted_entity =
+        reverted_entity.expect("MeshWithMaterial must survive the ReplaceSource rebuild");
+    let look3 = app
+        .world()
+        .get::<lunco_render::PbrLook>(reverted_entity)
         .expect("Entity should have a PbrLook after the full-reload rebuild");
     // Back to the original diffuse (1.0, 0.5, 0.25) + roughness 0.75.
-    assert!((look3.base_color.red - 1.0).abs() < 1e-4,
-        "base_color red must revert after full-reload, got {:?}", look3.base_color);
+    assert!(
+        (look3.base_color.red - 1.0).abs() < 1e-4,
+        "base_color red must revert after full-reload, got {:?}",
+        look3.base_color
+    );
     assert!((look3.base_color.green - 0.5).abs() < 1e-4);
     assert!((look3.base_color.blue - 0.25).abs() < 1e-4);
-    assert!((look3.perceptual_roughness - 0.75).abs() < 1e-4,
-        "roughness must revert to 0.75 after full-reload, got {}", look3.perceptual_roughness);
+    assert!(
+        (look3.perceptual_roughness - 0.75).abs() < 1e-4,
+        "roughness must revert to 0.75 after full-reload, got {}",
+        look3.perceptual_roughness
+    );
 
     // 8. Confirm viewport state has been updated
     let state = app.world().resource::<UsdViewportState>();

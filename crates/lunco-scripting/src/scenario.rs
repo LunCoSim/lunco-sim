@@ -76,9 +76,13 @@ impl ScriptScope {
     pub fn from_source(src: &str) -> Self {
         for line in src.lines().take(24) {
             let t = line.trim_start();
-            let Some(rest) = t.strip_prefix("//") else { continue };
+            let Some(rest) = t.strip_prefix("//") else {
+                continue;
+            };
             let rest = rest.trim_start().trim_start_matches('!').trim_start();
-            let Some(val) = rest.strip_prefix("@scope") else { continue };
+            let Some(val) = rest.strip_prefix("@scope") else {
+                continue;
+            };
             return match val.trim().to_ascii_lowercase().as_str() {
                 "client" => ScriptScope::Client,
                 "both" => ScriptScope::Both,
@@ -205,8 +209,12 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
     /// Call a lifecycle hook for `entity` — a no-op if the scenario doesn't
     /// define it or has no compiled program. Returns a runtime-error diagnostic
     /// if the hook ran and failed.
-    fn call_hook(&mut self, entity: Entity, hook: ScenarioHook, self_gid: i64)
-        -> Option<Diagnostic>;
+    fn call_hook(
+        &mut self,
+        entity: Entity,
+        hook: ScenarioHook,
+        self_gid: i64,
+    ) -> Option<Diagnostic>;
 
     /// Deliver one event to `entity`'s event hook (no-op if undefined).
     fn deliver_event(
@@ -252,7 +260,12 @@ struct Fsm {
 
 impl Default for Fsm {
     fn default() -> Self {
-        Self { generation: 0, started: false, compiled: false, gid: -1 }
+        Self {
+            generation: 0,
+            started: false,
+            compiled: false,
+            gid: -1,
+        }
     }
 }
 
@@ -268,7 +281,10 @@ pub struct ScenarioDriver<R: ScenarioRuntime> {
 
 impl<R: ScenarioRuntime + Default> Default for ScenarioDriver<R> {
     fn default() -> Self {
-        Self { runtime: R::default(), fsm: HashMap::new() }
+        Self {
+            runtime: R::default(),
+            fsm: HashMap::new(),
+        }
     }
 }
 
@@ -285,8 +301,14 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // (see below) — not every tick — since they're consumed solely by
         // `runtime.compile`.
         type CompileInput = (String, String, Option<String>);
-        let mut work: Vec<(Entity, u64, i64, u64, Option<CompileInput>, Option<SessionId>)> =
-            Vec::new();
+        let mut work: Vec<(
+            Entity,
+            u64,
+            i64,
+            u64,
+            Option<CompileInput>,
+            Option<SessionId>,
+        )> = Vec::new();
         // A predicting client only ticks scenarios scoped to run there
         // (`Client`/`Both`); the host ticks `Host`/`Both`. Read once — constant
         // for the whole pass.
@@ -296,8 +318,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         );
         let live: HashSet<Entity>;
         {
-            let mut q =
-                world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>, Option<&ScriptScope>)>();
+            let mut q = world.query::<(
+                Entity,
+                &ScriptedModel,
+                Option<&ScriptAuthority>,
+                Option<&ScriptScope>,
+            )>();
             let models: Vec<(
                 Entity,
                 bool,
@@ -586,9 +612,6 @@ pub struct ScriptEventInbox {
 /// (local input, client-side emits); host-authoritative game events reach it only
 /// once they are explicitly replicated — a scoped follow-up, not this collector's
 /// concern.
-pub fn collect_script_events(
-    trigger: On<TelemetryEvent>,
-    mut inbox: ResMut<ScriptEventInbox>,
-) {
+pub fn collect_script_events(trigger: On<TelemetryEvent>, mut inbox: ResMut<ScriptEventInbox>) {
     inbox.pending.push(trigger.event().clone());
 }

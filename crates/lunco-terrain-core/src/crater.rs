@@ -115,14 +115,20 @@ impl Crater {
             return 0.0;
         }
         let d = d2.sqrt() / r; // normalised radial distance
-        // Sampling kernel width, normalised by the rim radius (σ ≈ half the
-        // sample spacing — the classic anti-alias kernel), combined in
-        // quadrature with the crater's own degradation blur.
+                               // Sampling kernel width, normalised by the rim radius (σ ≈ half the
+                               // sample spacing — the classic anti-alias kernel), combined in
+                               // quadrature with the crater's own degradation blur.
         let sample_sigma = 0.5 * min_wavelength / r;
         let sigma_n = (sample_sigma * sample_sigma + self.softness * self.softness).sqrt();
-        let tail =
-            crater_profile_limited(CRATER_REACH, self.depth, self.rim_height, self.bowl_power, sigma_n);
-        fade * (crater_profile_limited(d, self.depth, self.rim_height, self.bowl_power, sigma_n) - tail)
+        let tail = crater_profile_limited(
+            CRATER_REACH,
+            self.depth,
+            self.rim_height,
+            self.bowl_power,
+            sigma_n,
+        );
+        fade * (crater_profile_limited(d, self.depth, self.rim_height, self.bowl_power, sigma_n)
+            - tail)
     }
 }
 
@@ -171,7 +177,11 @@ pub fn crater_profile_rim_limited(
     bowl_power: f64,
     rim_sigma_n: f64,
 ) -> f64 {
-    let bowl = if d < 1.0 { -depth * (1.0 - d.powf(bowl_power)) } else { 0.0 };
+    let bowl = if d < 1.0 {
+        -depth * (1.0 - d.powf(bowl_power))
+    } else {
+        0.0
+    };
     let rim_sigma = rim_sigma_n.clamp(RIM_SIGMA, 0.35);
     let rim = rim_height * gauss(d, RIM_CENTER, rim_sigma);
     let apron = rim_height * APRON_FRAC * gauss(d, APRON_CENTER, APRON_SIGMA);
@@ -193,8 +203,18 @@ pub fn crater_profile_rim_limited(
 /// here — [`Crater::delta_at_limited`] subtracts the residual at
 /// [`CRATER_REACH`] so the summed field cuts off continuously.
 #[inline]
-pub fn crater_profile_limited(d: f64, depth: f64, rim_height: f64, bowl_power: f64, sigma_n: f64) -> f64 {
-    let bowl = if d < 1.0 { -depth * (1.0 - d.powf(bowl_power)) } else { 0.0 };
+pub fn crater_profile_limited(
+    d: f64,
+    depth: f64,
+    rim_height: f64,
+    bowl_power: f64,
+    sigma_n: f64,
+) -> f64 {
+    let bowl = if d < 1.0 {
+        -depth * (1.0 - d.powf(bowl_power))
+    } else {
+        0.0
+    };
     let rim_sigma = (RIM_SIGMA * RIM_SIGMA + sigma_n * sigma_n).sqrt();
     let apron_sigma = (APRON_SIGMA * APRON_SIGMA + sigma_n * sigma_n).sqrt();
     let rim_amp = (RIM_SIGMA / rim_sigma) * (RIM_SIGMA / rim_sigma);
@@ -340,7 +360,9 @@ impl Craters {
             let (mut min_cx, mut min_cz) = (i64::MAX, i64::MAX);
             let (mut max_cx, mut max_cz) = (i64::MIN, i64::MIN);
             for c in &craters {
-                let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else { continue };
+                let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else {
+                    continue;
+                };
                 min_cx = min_cx.min(x0);
                 min_cz = min_cz.min(z0);
                 max_cx = max_cx.max(x1);
@@ -365,7 +387,9 @@ impl Craters {
         };
         let mut counts = vec![0u32; cells];
         for c in &craters {
-            let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else { continue };
+            let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else {
+                continue;
+            };
             for cz in z0..=z1 {
                 for cx in x0..=x1 {
                     counts[slot(cx, cz)] += 1;
@@ -379,7 +403,9 @@ impl Craters {
         let mut cursor: Vec<u32> = bucket_starts[..cells].to_vec();
         let mut bucket_entries = vec![0u32; bucket_starts[cells] as usize];
         for (i, c) in craters.iter().enumerate() {
-            let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else { continue };
+            let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else {
+                continue;
+            };
             for cz in z0..=z1 {
                 for cx in x0..=x1 {
                     let k = slot(cx, cz);
@@ -472,7 +498,10 @@ impl crate::modifier::HeightModifier for Craters {
         &self,
         min_wavelength: f64,
     ) -> Option<Arc<dyn crate::modifier::HeightModifier>> {
-        Some(Arc::new(Craters { index: self.index.clone(), min_wavelength }))
+        Some(Arc::new(Craters {
+            index: self.index.clone(),
+            min_wavelength,
+        }))
     }
 }
 
@@ -490,7 +519,10 @@ pub struct CraterField<S> {
 impl<S> CraterField<S> {
     /// Wrap `base` with `craters`; an empty set degrades to just sampling `base`.
     pub fn new(base: S, craters: Vec<Crater>) -> Self {
-        Self { base, craters: Craters::new(craters) }
+        Self {
+            base,
+            craters: Craters::new(craters),
+        }
     }
 
     /// Number of craters in the field.
@@ -520,7 +552,10 @@ impl<S: HeightSource> HeightSource for CraterField<S> {
 /// surprises).
 #[inline]
 fn cell_of(x: f64, z: f64, cell_size: f64) -> (i64, i64) {
-    ((x / cell_size).floor() as i64, (z / cell_size).floor() as i64)
+    (
+        (x / cell_size).floor() as i64,
+        (z / cell_size).floor() as i64,
+    )
 }
 
 #[cfg(test)]
@@ -595,7 +630,10 @@ mod tests {
 
     #[test]
     fn deterministic() {
-        let f = CraterField::new(Flat(1.0), vec![crater(3.0, -4.0, 8.0), crater(20.0, 5.0, 12.0)]);
+        let f = CraterField::new(
+            Flat(1.0),
+            vec![crater(3.0, -4.0, 8.0), crater(20.0, 5.0, 12.0)],
+        );
         assert_eq!(f.height_at(2.5, -3.0), f.height_at(2.5, -3.0));
     }
 
@@ -629,7 +667,10 @@ mod tests {
         // SAME-SCALE craters must yield the SAME bowl as one crater, not a
         // doubled one ("two craters in one").
         let one = CraterField::new(Flat(0.0), vec![crater(0.0, 0.0, 10.0)]);
-        let two = CraterField::new(Flat(0.0), vec![crater(0.0, 0.0, 10.0), crater(0.0, 0.0, 10.0)]);
+        let two = CraterField::new(
+            Flat(0.0),
+            vec![crater(0.0, 0.0, 10.0), crater(0.0, 0.0, 10.0)],
+        );
         assert!((two.height_at(0.0, 0.0) - one.height_at(0.0, 0.0)).abs() < 1e-12);
         // Offset overlap: the point in both bowls takes the DEEPER contribution.
         let a = crater(0.0, 0.0, 10.0);
@@ -657,7 +698,10 @@ mod tests {
         );
         // …and its rim rises RELATIVE to the local big-bowl floor.
         let rim = with.height_at(8.0, 0.0) - without.height_at(8.0, 0.0);
-        assert!(rim > 0.0, "small rim should ride on the big floor, got {rim}");
+        assert!(
+            rim > 0.0,
+            "small rim should ride on the big floor, got {rim}"
+        );
     }
 
     #[test]
@@ -666,10 +710,13 @@ mod tests {
         // a hard cut of the apron tail leaves a circular ledge that reads as a
         // "ring line" around every crater under raking light.
         let c = crater(0.0, 0.0, 10.0);
-        assert!(c.delta_at(15.9999, 0.0).abs() < 1e-3, "no ledge just inside the reach");
+        assert!(
+            c.delta_at(15.9999, 0.0).abs() < 1e-3,
+            "no ledge just inside the reach"
+        );
         assert_eq!(c.delta_at(16.0, 0.0), 0.0); // d = 1.6 exactly
         assert_eq!(c.delta_at(20.0, 0.0), 0.0); // d = 2.0
-        // Floor is a deep depression, rim is positive.
+                                                // Floor is a deep depression, rim is positive.
         assert!(crater_profile(0.0, 3.0, 0.5, 4.0) < -2.0);
         assert!(crater_profile(0.98, 0.0, 0.5, 4.0) > 0.0);
     }
@@ -680,7 +727,10 @@ mod tests {
         let sharp = c.delta_at_limited(9.8, 0.0, 0.0); // at the rim lip
         let soft = c.delta_at_limited(9.8, 0.0, 8.0); // 8 m samples on a 10 m crater
         assert!(sharp > 0.3, "ungated lip stays sharp");
-        assert!(soft < sharp * 0.5, "gated lip must widen/flatten, not alias");
+        assert!(
+            soft < sharp * 0.5,
+            "gated lip must widen/flatten, not alias"
+        );
         // Still continuous at the reach when gated.
         assert!(c.delta_at_limited(15.9999, 0.0, 8.0).abs() < 1e-3);
         assert_eq!(c.delta_at_limited(16.0, 0.0, 8.0), 0.0);
@@ -699,7 +749,9 @@ mod tests {
     fn gated_modifier_variant_matches_ungated_at_zero() {
         use crate::modifier::HeightModifier;
         let cs = Craters::new(vec![crater(0.0, 0.0, 10.0), crater(15.0, -8.0, 6.0)]);
-        let gated = cs.with_min_wavelength(0.0).expect("craters produce gated variants");
+        let gated = cs
+            .with_min_wavelength(0.0)
+            .expect("craters produce gated variants");
         for k in 0..40 {
             let (x, z) = (k as f64 * 0.7 - 14.0, k as f64 * 0.4 - 8.0);
             assert_eq!(gated.apply(x, z, 1.0), cs.apply(x, z, 1.0));
@@ -718,7 +770,9 @@ mod tests {
         // Deterministic LCG population: several radius octaves, overlapping bowls.
         let mut state = 0x9E37_79B9_7F4A_7C15_u64;
         let mut rng = move || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 11) as f64 / (1u64 << 53) as f64
         };
         let mut craters: Vec<Crater> = (0..400)
@@ -755,7 +809,9 @@ mod tests {
             }
         }
         let reference = |x: f64, z: f64| -> f64 {
-            let Some(indices) = buckets.get(&cell_of(x, z, cell_size)) else { return 0.0 };
+            let Some(indices) = buckets.get(&cell_of(x, z, cell_size)) else {
+                return 0.0;
+            };
             let mut deepest = [0.0_f64; OCTAVE_COUNT];
             let mut tallest = [0.0_f64; OCTAVE_COUNT];
             for &i in indices {

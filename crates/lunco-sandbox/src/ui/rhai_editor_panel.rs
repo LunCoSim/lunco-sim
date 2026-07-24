@@ -283,8 +283,14 @@ fn status_label(
     diags: &[Diagnostic],
     theme: &lunco_theme::Theme,
 ) -> (String, egui::Color32) {
-    let errors = diags.iter().filter(|d| d.severity == DiagnosticSeverity::Error).count();
-    let warnings = diags.iter().filter(|d| d.severity == DiagnosticSeverity::Warning).count();
+    let errors = diags
+        .iter()
+        .filter(|d| d.severity == DiagnosticSeverity::Error)
+        .count();
+    let warnings = diags
+        .iter()
+        .filter(|d| d.severity == DiagnosticSeverity::Warning)
+        .count();
     match state {
         CompileState::Ready => ("✓ compiled".to_string(), theme.tokens.success),
         CompileState::Error if errors > 0 => (
@@ -293,7 +299,10 @@ fn status_label(
         ),
         CompileState::Error => ("✗ error".to_string(), theme.tokens.error),
         _ if warnings > 0 => (
-            format!("⚠ {warnings} warning{}", if warnings == 1 { "" } else { "s" }),
+            format!(
+                "⚠ {warnings} warning{}",
+                if warnings == 1 { "" } else { "s" }
+            ),
             theme.tokens.warning,
         ),
         _ => ("—".to_string(), theme.tokens.text_subdued),

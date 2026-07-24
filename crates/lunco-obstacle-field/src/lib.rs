@@ -27,5 +27,7 @@ pub mod sampler;
 pub mod spec;
 
 pub use field::{grid_indices, grid_normals};
-pub use plugin::{grid_mesh, ObstacleFieldMode, ObstacleFieldPlugin, ObstacleFieldRoot, RegenerateField};
+pub use plugin::{
+    grid_mesh, ObstacleFieldMode, ObstacleFieldPlugin, ObstacleFieldRoot, RegenerateField,
+};
 pub use spec::{CraterLayer, ObstacleFieldSpec, Pattern, RockLayer, SizeDist};

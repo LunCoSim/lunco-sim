@@ -50,8 +50,7 @@ fn resizable_v_section<R>(
         .inner;
     // Drag handle — a 6 px tall horizontal strip with a centred
     // "grip" line so the affordance is visible even at rest.
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(avail_w, 6.0), egui::Sense::drag());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(avail_w, 6.0), egui::Sense::drag());
     let visuals = ui.visuals();
     let stroke_color = if resp.hovered() || resp.dragged() {
         visuals.selection.bg_fill
@@ -80,9 +79,15 @@ fn resizable_v_section<R>(
 pub struct TelemetryPanel;
 
 impl Panel for TelemetryPanel {
-    fn id(&self) -> PanelId { PanelId("modelica_inspector") }
-    fn title(&self) -> String { "📊 Telemetry".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn id(&self) -> PanelId {
+        PanelId("modelica_inspector")
+    }
+    fn title(&self) -> String {
+        "📊 Telemetry".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Design
     }
@@ -90,16 +95,15 @@ impl Panel for TelemetryPanel {
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Fix selection leakage
         ui.style_mut().interaction.selectable_labels = false;
-        let muted = ctx.resource_expect::<lunco_theme::Theme>().tokens.text_subdued;
+        let muted = ctx
+            .resource_expect::<lunco_theme::Theme>()
+            .tokens
+            .text_subdued;
 
         // Pin header — follow active tab by default; click 📍 to
         // pin this panel to the currently active model so it stays
         // put while the user edits another tab.
-        crate::ui::doc_pin::render_pin_header(
-            ui,
-            ctx,
-            crate::ui::doc_pin::PinKind::Telemetry,
-        );
+        crate::ui::doc_pin::render_pin_header(ui, ctx, crate::ui::doc_pin::PinKind::Telemetry);
 
         // Component inspector — when one or more nodes are selected
         // on the active diagram, show their parameters and let the
@@ -113,12 +117,7 @@ impl Panel for TelemetryPanel {
         // its own pin or the active document.
         let doc_id = crate::ui::doc_pin::resolved_telemetry_doc_ctx(ctx);
         let Some(doc_id) = doc_id else {
-            render_runtime_hint(
-                ui,
-                muted,
-                ctx,
-                "No document active.",
-            );
+            render_runtime_hint(ui, muted, ctx, "No document active.");
             return;
         };
 
@@ -128,8 +127,7 @@ impl Panel for TelemetryPanel {
             let pinned_entity = ctx
                 .resource::<WorkbenchState>()
                 .and_then(|s| s.selected_entity);
-            let resolved = crate::state::simulator_for_ctx(ctx, doc_id)
-                .or(pinned_entity);
+            let resolved = crate::state::simulator_for_ctx(ctx, doc_id).or(pinned_entity);
             let has = resolved
                 .map(|e| ctx.get::<ModelicaModel>(e).is_some())
                 .unwrap_or(false);
@@ -161,16 +159,17 @@ impl Panel for TelemetryPanel {
                 sorted
                     .into_iter()
                     .map(|(name, value)| {
-                        let entry =
-                            index_ref.and_then(|idx| idx.find_component_by_leaf(&name));
+                        let entry = index_ref.and_then(|idx| idx.find_component_by_leaf(&name));
                         InputRow {
                             description: entry
                                 .map(|e| e.description.clone())
                                 .filter(|s| !s.is_empty()),
-                            min: entry
-                                .and_then(|e| e.modifications.get("min").and_then(|s| s.parse().ok())),
-                            max: entry
-                                .and_then(|e| e.modifications.get("max").and_then(|s| s.parse().ok())),
+                            min: entry.and_then(|e| {
+                                e.modifications.get("min").and_then(|s| s.parse().ok())
+                            }),
+                            max: entry.and_then(|e| {
+                                e.modifications.get("max").and_then(|s| s.parse().ok())
+                            }),
                             name,
                             value,
                         }
@@ -204,7 +203,10 @@ impl Panel for TelemetryPanel {
             });
             if run_clicked {
                 ctx.defer(move |world| {
-                    world.trigger(crate::ui::commands::RunActiveModel { doc: doc_id, class: None });
+                    world.trigger(crate::ui::commands::RunActiveModel {
+                        doc: doc_id,
+                        class: None,
+                    });
                 });
             }
             if pause_clicked {
@@ -227,41 +229,44 @@ impl Panel for TelemetryPanel {
                 // be deferred until after the egui pass.
                 let mut input_changes: Vec<(String, f64)> = Vec::new();
                 resizable_v_section(ui, "inputs_height", 120.0, |ui| {
-                    egui::ScrollArea::vertical().id_salt("inputs_scroll").auto_shrink([false, false]).show(ui, |ui| {
-                        egui::Grid::new("inputs_grid")
-                            .num_columns(2)
-                            .striped(true)
-                            .spacing([8.0, 4.0])
-                            .show(ui, |ui| {
-                                for row in &input_rows {
-                                    let label = egui::Label::new(row.name.clone())
-                                        .sense(egui::Sense::hover());
-                                    let resp = ui.add(label);
-                                    if let Some(desc) = &row.description {
-                                        resp.on_hover_text(desc);
+                    egui::ScrollArea::vertical()
+                        .id_salt("inputs_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui::Grid::new("inputs_grid")
+                                .num_columns(2)
+                                .striped(true)
+                                .spacing([8.0, 4.0])
+                                .show(ui, |ui| {
+                                    for row in &input_rows {
+                                        let label = egui::Label::new(row.name.clone())
+                                            .sense(egui::Sense::hover());
+                                        let resp = ui.add(label);
+                                        if let Some(desc) = &row.description {
+                                            resp.on_hover_text(desc);
+                                        }
+                                        let mut v = row.value;
+                                        let avail = ui.available_width().max(60.0);
+                                        let val_resp = ui.add_sized(
+                                            [avail, 20.0],
+                                            egui::DragValue::new(&mut v)
+                                                .speed(0.1)
+                                                .fixed_decimals(2)
+                                                .range(
+                                                    row.min.unwrap_or(f64::NEG_INFINITY)
+                                                        ..=row.max.unwrap_or(f64::INFINITY),
+                                                ),
+                                        );
+                                        if let Some(desc) = &row.description {
+                                            val_resp.on_hover_text(desc);
+                                        }
+                                        ui.end_row();
+                                        if (v - row.value).abs() > 1e-10 {
+                                            input_changes.push((row.name.clone(), v));
+                                        }
                                     }
-                                    let mut v = row.value;
-                                    let avail = ui.available_width().max(60.0);
-                                    let val_resp = ui.add_sized(
-                                        [avail, 20.0],
-                                        egui::DragValue::new(&mut v)
-                                            .speed(0.1)
-                                            .fixed_decimals(2)
-                                            .range(
-                                                row.min.unwrap_or(f64::NEG_INFINITY)
-                                                    ..=row.max.unwrap_or(f64::INFINITY),
-                                            ),
-                                    );
-                                    if let Some(desc) = &row.description {
-                                        val_resp.on_hover_text(desc);
-                                    }
-                                    ui.end_row();
-                                    if (v - row.value).abs() > 1e-10 {
-                                        input_changes.push((row.name.clone(), v));
-                                    }
-                                }
-                            });
-                    });
+                                });
+                        });
                 });
                 for (name, v) in input_changes {
                     ctx.defer(move |world| {
@@ -335,8 +340,8 @@ impl Panel for TelemetryPanel {
         if filter_changed {
             let new_filter = filter_text.clone();
             ctx.defer(move |world| {
-                if let Some(mut vis) = world
-                    .get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
+                if let Some(mut vis) =
+                    world.get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
                 {
                     vis.var_filter = new_filter;
                 }
@@ -351,11 +356,7 @@ impl Panel for TelemetryPanel {
         let plot_options: Vec<(lunco_viz::viz::VizId, String)> = {
             let mut opts: Vec<_> = ctx
                 .resource::<lunco_viz::VisualizationRegistry>()
-                .map(|r| {
-                    r.iter()
-                        .map(|(id, cfg)| (*id, cfg.title.clone()))
-                        .collect()
-                })
+                .map(|r| r.iter().map(|(id, cfg)| (*id, cfg.title.clone())).collect())
                 .unwrap_or_default();
             opts.sort_by_key(|(id, _)| id.0);
             opts
@@ -380,19 +381,14 @@ impl Panel for TelemetryPanel {
                 .show_ui(ui, |ui| {
                     if ui
                         .selectable_label(pinned.is_none(), "Active plot")
-                        .on_hover_text(
-                            "Route to whichever plot tab was last focused.",
-                        )
+                        .on_hover_text("Route to whichever plot tab was last focused.")
                         .clicked()
                     {
                         new_target = Some(None);
                     }
                     for (id, title) in &plot_options {
                         let label = format!("{title}  (#{})", id.0);
-                        if ui
-                            .selectable_label(pinned == Some(*id), label)
-                            .clicked()
-                        {
+                        if ui.selectable_label(pinned == Some(*id), label).clicked() {
                             new_target = Some(Some(*id));
                         }
                     }
@@ -400,8 +396,8 @@ impl Panel for TelemetryPanel {
         });
         if let Some(t) = new_target {
             ctx.defer(move |world| {
-                if let Some(mut vis) = world
-                    .get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
+                if let Some(mut vis) =
+                    world.get_resource_mut::<crate::ui::panels::experiments::ExperimentVisibility>()
                 {
                     vis.target_plot = t;
                 }
@@ -430,157 +426,159 @@ impl Panel for TelemetryPanel {
             // floats mid-panel with dead space to its right.
             .auto_shrink([false, true])
             .show(ui, |ui| {
-            let (model_vars, model_inputs) = if let Some(e) = entity {
-                if let Some(m) = ctx.get::<ModelicaModel>(e) {
-                    (m.variables.keys().cloned().collect::<Vec<_>>(),
-                     m.inputs.keys().cloned().collect::<Vec<_>>())
+                let (model_vars, model_inputs) = if let Some(e) = entity {
+                    if let Some(m) = ctx.get::<ModelicaModel>(e) {
+                        (
+                            m.variables.keys().cloned().collect::<Vec<_>>(),
+                            m.inputs.keys().cloned().collect::<Vec<_>>(),
+                        )
+                    } else {
+                        (Vec::new(), Vec::new())
+                    }
                 } else {
                     (Vec::new(), Vec::new())
-                }
-            } else {
-                (Vec::new(), Vec::new())
-            };
+                };
 
-            // Read plotted-set from the viz registry for the target plot.
-            // Clone once so we don't reborrow the resource inside the loop.
-            let plotted: std::collections::HashSet<String> = if let Some(e) = entity {
-                ctx
-                    .resource::<lunco_viz::VisualizationRegistry>()
-                    .and_then(|r| r.get(target_plot))
-                    .map(|cfg| {
-                        cfg.inputs
-                            .iter()
-                            .filter(|b| b.source.entity == e)
-                            .map(|b| b.source.path.clone())
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                std::collections::HashSet::new()
-            };
+                // Read plotted-set from the viz registry for the target plot.
+                // Clone once so we don't reborrow the resource inside the loop.
+                let plotted: std::collections::HashSet<String> = if let Some(e) = entity {
+                    ctx.resource::<lunco_viz::VisualizationRegistry>()
+                        .and_then(|r| r.get(target_plot))
+                        .map(|cfg| {
+                            cfg.inputs
+                                .iter()
+                                .filter(|b| b.source.entity == e)
+                                .map(|b| b.source.path.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    std::collections::HashSet::new()
+                };
 
-            let picked_exp: std::collections::BTreeSet<String> = ctx
-                .resource::<crate::ui::panels::experiments::PlotPanelStates>()
-                .map(|s| s.picked(target_plot))
-                .unwrap_or_default();
+                let picked_exp: std::collections::BTreeSet<String> = ctx
+                    .resource::<crate::ui::panels::experiments::PlotPanelStates>()
+                    .map(|s| s.picked(target_plot))
+                    .unwrap_or_default();
 
-            // Variables sourced from completed experiments — surface
-            // them even when there's no live cosim entity yet.
-            let exp_vars: std::collections::BTreeSet<String> =
-                crate::ui::panels::experiments::all_experiment_variables_for_doc_ctx(ctx, doc_id);
+                // Variables sourced from completed experiments — surface
+                // them even when there's no live cosim entity yet.
+                let exp_vars: std::collections::BTreeSet<String> =
+                    crate::ui::panels::experiments::all_experiment_variables_for_doc_ctx(
+                        ctx, doc_id,
+                    );
 
-            let mut all_names: Vec<_> = model_vars;
-            all_names.extend(model_inputs);
-            all_names.extend(exp_vars.iter().cloned());
-            
-            // Proactively pull names from the document index if we're
-            // looking at a model that hasn't run yet.
-            let registry = ctx.resource::<crate::state::ModelicaDocumentRegistry>();
-            let index_ref = registry
-                .and_then(|r| r.host(doc_id))
-                .map(|h| h.document().index());
-            if let Some(index) = index_ref {
-                for comp in &index.components {
-                    // Very rough heuristic: if it's a Real and not
-                    // obviously a parameter, it's probably an
-                    // observable. This is just to seed the list
-                    // before the first compile.
-                    if comp.type_name == "Real"
-                        && comp.variability == crate::index::Variability::Continuous
-                    {
-                        all_names.push(comp.name.clone());
+                let mut all_names: Vec<_> = model_vars;
+                all_names.extend(model_inputs);
+                all_names.extend(exp_vars.iter().cloned());
+
+                // Proactively pull names from the document index if we're
+                // looking at a model that hasn't run yet.
+                let registry = ctx.resource::<crate::state::ModelicaDocumentRegistry>();
+                let index_ref = registry
+                    .and_then(|r| r.host(doc_id))
+                    .map(|h| h.document().index());
+                if let Some(index) = index_ref {
+                    for comp in &index.components {
+                        // Very rough heuristic: if it's a Real and not
+                        // obviously a parameter, it's probably an
+                        // observable. This is just to seed the list
+                        // before the first compile.
+                        if comp.type_name == "Real"
+                            && comp.variability == crate::index::Variability::Continuous
+                        {
+                            all_names.push(comp.name.clone());
+                        }
                     }
                 }
-            }
 
-            all_names.sort();
-            all_names.dedup();
+                all_names.sort();
+                all_names.dedup();
 
-            // Snapshot per-variable descriptions from the document index
-            // up front so the row loop doesn't reborrow the registry per
-            // checkbox.
-            let var_desc: std::collections::HashMap<String, String> = {
-                if let Some(index) = index_ref {
-                    all_names
-                        .iter()
-                        .filter_map(|n| {
-                            let entry = index.find_component_by_leaf(n)?;
-                            if entry.description.is_empty() {
-                                None
-                            } else {
-                                Some((n.clone(), entry.description.clone()))
-                            }
-                        })
-                        .collect()
-                } else {
-                    std::collections::HashMap::new()
-                }
-            };
-
-            // Group by leading dotted segment for compactness.
-            // Filtering happens before grouping so empty groups don't
-            // render at all.
-            let mut groups: std::collections::BTreeMap<String, Vec<String>> =
-                std::collections::BTreeMap::new();
-            for name in all_names {
-                if !filter_lower.is_empty()
-                    && !name.to_ascii_lowercase().contains(&filter_lower)
-                {
-                    continue;
-                }
-                let head = name.split('.').next().unwrap_or(name.as_str()).to_string();
-                groups.entry(head).or_default().push(name);
-            }
-
-            for (group_name, names) in &groups {
-                let picked_in_group = names
-                    .iter()
-                    .filter(|n| plotted.contains(*n) || picked_exp.contains(*n))
-                    .count();
-                let header = if picked_in_group > 0 {
-                    format!("{} ({}/{})", group_name, picked_in_group, names.len())
-                } else {
-                    format!("{} ({})", group_name, names.len())
+                // Snapshot per-variable descriptions from the document index
+                // up front so the row loop doesn't reborrow the registry per
+                // checkbox.
+                let var_desc: std::collections::HashMap<String, String> = {
+                    if let Some(index) = index_ref {
+                        all_names
+                            .iter()
+                            .filter_map(|n| {
+                                let entry = index.find_component_by_leaf(n)?;
+                                if entry.description.is_empty() {
+                                    None
+                                } else {
+                                    Some((n.clone(), entry.description.clone()))
+                                }
+                            })
+                            .collect()
+                    } else {
+                        std::collections::HashMap::new()
+                    }
                 };
-                let default_open = !filter_lower.is_empty() || picked_in_group > 0;
-                egui::CollapsingHeader::new(header)
-                    .id_salt(format!("telem_var_group_{group_name}"))
-                    .default_open(default_open)
-                    .show(ui, |ui| {
-                        for name in names {
-                            let mut is_picked =
-                                plotted.contains(name) || picked_exp.contains(name);
-                            ui.horizontal(|ui| {
-                                if ui.checkbox(&mut is_picked, "").changed() {
-                                    toggles.push((name.clone(), is_picked));
-                                }
-                                let short = name
-                                    .strip_prefix(&format!("{group_name}."))
-                                    .unwrap_or(name);
-                                let label =
-                                    egui::Label::new(short).sense(egui::Sense::hover());
-                                let resp = ui.add(label);
-                                if let Some(desc) =
-                                    var_desc.get(name).filter(|d| !d.trim().is_empty())
-                                {
-                                    resp.on_hover_text(desc);
-                                    ui.label(
-                                        egui::RichText::new(desc.trim())
-                                            .italics()
-                                            .color(muted)
-                                            .size(11.0),
-                                    )
-                                    .on_hover_text(desc);
-                                }
-                            });
-                        }
-                    });
-            }
-            if groups.is_empty() {
-                ui.weak("No variables match the filter.");
-            }
-            let _ = is_signal_plotted; // re-export available for future UIs
-        });
+
+                // Group by leading dotted segment for compactness.
+                // Filtering happens before grouping so empty groups don't
+                // render at all.
+                let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+                    std::collections::BTreeMap::new();
+                for name in all_names {
+                    if !filter_lower.is_empty()
+                        && !name.to_ascii_lowercase().contains(&filter_lower)
+                    {
+                        continue;
+                    }
+                    let head = name.split('.').next().unwrap_or(name.as_str()).to_string();
+                    groups.entry(head).or_default().push(name);
+                }
+
+                for (group_name, names) in &groups {
+                    let picked_in_group = names
+                        .iter()
+                        .filter(|n| plotted.contains(*n) || picked_exp.contains(*n))
+                        .count();
+                    let header = if picked_in_group > 0 {
+                        format!("{} ({}/{})", group_name, picked_in_group, names.len())
+                    } else {
+                        format!("{} ({})", group_name, names.len())
+                    };
+                    let default_open = !filter_lower.is_empty() || picked_in_group > 0;
+                    egui::CollapsingHeader::new(header)
+                        .id_salt(format!("telem_var_group_{group_name}"))
+                        .default_open(default_open)
+                        .show(ui, |ui| {
+                            for name in names {
+                                let mut is_picked =
+                                    plotted.contains(name) || picked_exp.contains(name);
+                                ui.horizontal(|ui| {
+                                    if ui.checkbox(&mut is_picked, "").changed() {
+                                        toggles.push((name.clone(), is_picked));
+                                    }
+                                    let short = name
+                                        .strip_prefix(&format!("{group_name}."))
+                                        .unwrap_or(name);
+                                    let label = egui::Label::new(short).sense(egui::Sense::hover());
+                                    let resp = ui.add(label);
+                                    if let Some(desc) =
+                                        var_desc.get(name).filter(|d| !d.trim().is_empty())
+                                    {
+                                        resp.on_hover_text(desc);
+                                        ui.label(
+                                            egui::RichText::new(desc.trim())
+                                                .italics()
+                                                .color(muted)
+                                                .size(11.0),
+                                        )
+                                        .on_hover_text(desc);
+                                    }
+                                });
+                            }
+                        });
+                }
+                if groups.is_empty() {
+                    ui.weak("No variables match the filter.");
+                }
+                let _ = is_signal_plotted; // re-export available for future UIs
+            });
 
         // Apply toggles after the paint — each toggle writes to BOTH the
         // viz registry (live cosim) and PlotPanelStates (Fast Run) so the
@@ -600,8 +598,8 @@ impl Panel for TelemetryPanel {
                             );
                         }
                     }
-                    if let Some(mut states) = world
-                        .get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
+                    if let Some(mut states) =
+                        world.get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
                     {
                         states.set_var(target_plot, name, on);
                     }
@@ -622,12 +620,7 @@ impl Panel for TelemetryPanel {
 /// stepper exists yet) and after a stepper loses its component
 /// (post-Reset / mid-rebuild). Keeping the action in-panel means users
 /// don't have to hunt the toolbar to escape the empty state.
-fn render_runtime_hint(
-    ui: &mut egui::Ui,
-    muted: egui::Color32,
-    ctx: &mut PanelCtx,
-    msg: &str,
-) {
+fn render_runtime_hint(ui: &mut egui::Ui, muted: egui::Color32, ctx: &mut PanelCtx, msg: &str) {
     let active_doc = ctx
         .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|w| w.active_document);
@@ -667,11 +660,13 @@ fn render_selected_components_inspector(
 ) {
     use crate::document::ModelicaOp;
     use crate::ui::panels::canvas_diagram::{
-        active_class_for_doc_ctx, active_doc_from_world_ctx, apply_ops_public,
-        CanvasDiagramState, IconNodeData,
+        active_class_for_doc_ctx, active_doc_from_world_ctx, apply_ops_public, CanvasDiagramState,
+        IconNodeData,
     };
 
-    let Some(doc_id) = active_doc_from_world_ctx(ctx) else { return };
+    let Some(doc_id) = active_doc_from_world_ctx(ctx) else {
+        return;
+    };
     // Snapshot the selected nodes' (id, instance, class, params) up
     // front so we can release the canvas-state borrow before issuing
     // commands.queue / apply_ops_public mutations.
@@ -714,9 +709,7 @@ fn render_selected_components_inspector(
     // type's parameter description-comments from the index for hover
     // help on the rows below.
     {
-        if let Some(registry) =
-            ctx.resource::<crate::state::ModelicaDocumentRegistry>()
-        {
+        if let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() {
             if let Some(host) = registry.host(doc_id) {
                 let index = host.document().index();
                 for row in &mut rows {
@@ -731,93 +724,85 @@ fn render_selected_components_inspector(
     // Collect SetParameter ops while painting; apply via the canvas
     // pipeline (needs `&mut World`) deferred after the egui pass.
     let mut collected_ops: Vec<ModelicaOp> = Vec::new();
-    egui::CollapsingHeader::new(format!(
-        "🧩 Selected components ({})",
-        rows.len()
-    ))
-    .default_open(true)
-    .show(ui, |ui| {
-        if editing_class.is_none() {
-            ui.label(
-                egui::RichText::new(
-                    "No active class — open a model class on the canvas to edit parameters.",
+    egui::CollapsingHeader::new(format!("🧩 Selected components ({})", rows.len()))
+        .default_open(true)
+        .show(ui, |ui| {
+            if editing_class.is_none() {
+                ui.label(
+                    egui::RichText::new(
+                        "No active class — open a model class on the canvas to edit parameters.",
+                    )
+                    .size(11.0)
+                    .color(muted),
+                );
+                return;
+            }
+            let class = editing_class.expect("class is Some by the branch above");
+            // Per-node block. CollapsingHeader so multi-select stays
+            // navigable on tall lists.
+            for row in &rows {
+                let leaf_type = row
+                    .qualified_type
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(&row.qualified_type)
+                    .to_string();
+                egui::CollapsingHeader::new(
+                    egui::RichText::new(format!("{} — {}", row.instance, leaf_type)).strong(),
                 )
-                .size(11.0)
-                .color(muted),
-            );
-            return;
-        }
-        let class = editing_class.expect("class is Some by the branch above");
-        // Per-node block. CollapsingHeader so multi-select stays
-        // navigable on tall lists.
-        for row in &rows {
-            let leaf_type = row
-                .qualified_type
-                .rsplit('.')
-                .next()
-                .unwrap_or(&row.qualified_type)
-                .to_string();
-            egui::CollapsingHeader::new(
-                egui::RichText::new(format!("{} — {}", row.instance, leaf_type)).strong(),
-            )
-            .id_salt(("selected_component", row.instance.as_str()))
-            .default_open(true)
-            .show(ui, |ui| {
-                if row.parameters.is_empty() {
-                    ui.label(
-                        egui::RichText::new("(no parameters)")
-                            .size(11.0)
-                            .color(muted)
-                            .italics(),
-                    );
-                    return;
-                }
-                // Two-pass: collect edits during the row loop, apply
-                // after the immutable borrow on `rows` is done. Using
-                // a String value keeps the editor general — Modelica
-                // params can be Real / Integer / Boolean / enumeration,
-                // and `SetParameter` accepts a textual replacement.
-                let mut edits: Vec<(String, String)> = Vec::new();
-                for (name, value) in &row.parameters {
-                    let mut buf = value.clone();
-                    let desc = row.param_desc.get(name);
-                    ui.horizontal(|ui| {
-                        let name_resp = ui.add(
-                            egui::Label::new(format!("{name:14}"))
-                                .sense(egui::Sense::hover()),
+                .id_salt(("selected_component", row.instance.as_str()))
+                .default_open(true)
+                .show(ui, |ui| {
+                    if row.parameters.is_empty() {
+                        ui.label(
+                            egui::RichText::new("(no parameters)")
+                                .size(11.0)
+                                .color(muted)
+                                .italics(),
                         );
-                        if let Some(d) = desc {
-                            name_resp.on_hover_text(d);
-                        }
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut buf)
-                                .desired_width(120.0),
-                        );
-                        if let Some(d) = desc {
-                            resp.clone().on_hover_text(d);
-                        }
-                        if resp.lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        {
-                            if buf != *value {
+                        return;
+                    }
+                    // Two-pass: collect edits during the row loop, apply
+                    // after the immutable borrow on `rows` is done. Using
+                    // a String value keeps the editor general — Modelica
+                    // params can be Real / Integer / Boolean / enumeration,
+                    // and `SetParameter` accepts a textual replacement.
+                    let mut edits: Vec<(String, String)> = Vec::new();
+                    for (name, value) in &row.parameters {
+                        let mut buf = value.clone();
+                        let desc = row.param_desc.get(name);
+                        ui.horizontal(|ui| {
+                            let name_resp = ui.add(
+                                egui::Label::new(format!("{name:14}")).sense(egui::Sense::hover()),
+                            );
+                            if let Some(d) = desc {
+                                name_resp.on_hover_text(d);
+                            }
+                            let resp =
+                                ui.add(egui::TextEdit::singleline(&mut buf).desired_width(120.0));
+                            if let Some(d) = desc {
+                                resp.clone().on_hover_text(d);
+                            }
+                            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                if buf != *value {
+                                    edits.push((name.clone(), buf.clone()));
+                                }
+                            } else if resp.lost_focus() && buf != *value {
                                 edits.push((name.clone(), buf.clone()));
                             }
-                        } else if resp.lost_focus() && buf != *value {
-                            edits.push((name.clone(), buf.clone()));
-                        }
-                    });
-                }
-                for (param, value) in edits {
-                    collected_ops.push(ModelicaOp::SetParameter {
-                        class: class.clone(),
-                        component: row.instance.clone(),
-                        param,
-                        value,
-                    });
-                }
-            });
-        }
-    });
+                        });
+                    }
+                    for (param, value) in edits {
+                        collected_ops.push(ModelicaOp::SetParameter {
+                            class: class.clone(),
+                            component: row.instance.clone(),
+                            param,
+                            value,
+                        });
+                    }
+                });
+            }
+        });
     if !collected_ops.is_empty() {
         ctx.defer(move |world| apply_ops_public(world, doc_id, collected_ops));
     }
@@ -982,9 +967,14 @@ pub fn populate_telemetry_view_model(world: &mut World) {
 
     let (rows, read_only) = {
         let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
-        let Some(host) = registry.host(doc_id) else { return };
+        let Some(host) = registry.host(doc_id) else {
+            return;
+        };
         let doc = host.document();
-        (flatten_class_parameters(doc.index(), &key.1), doc.is_read_only())
+        (
+            flatten_class_parameters(doc.index(), &key.1),
+            doc.is_read_only(),
+        )
     };
 
     let mut vm = world.resource_mut::<TelemetryViewModel>();
@@ -993,10 +983,7 @@ pub fn populate_telemetry_view_model(world: &mut World) {
     vm.built_for = Some(key);
 }
 
-fn flatten_class_parameters(
-    index: &crate::index::ModelicaIndex,
-    class: &str,
-) -> Vec<FlatParam> {
+fn flatten_class_parameters(index: &crate::index::ModelicaIndex, class: &str) -> Vec<FlatParam> {
     const MAX_DEPTH: usize = 4;
 
     /// Modelica-style class lookup, scope-walked. Tries the type
@@ -1073,7 +1060,9 @@ fn flatten_class_parameters(
             return;
         };
         for key in keys {
-            let Some(comp) = index.components.get(key.0 as usize) else { continue };
+            let Some(comp) = index.components.get(key.0 as usize) else {
+                continue;
+            };
             match comp.variability {
                 crate::index::Variability::Parameter | crate::index::Variability::Constant => {
                     // Modification override on the parent's component
@@ -1108,8 +1097,7 @@ fn flatten_class_parameters(
                     // an extended chain. Parent for override lookup at
                     // the next level is THIS class, since modifications
                     // live on the parent's declaration.
-                    let Some(child_type) = resolve_class(index, type_path, &comp.type_name)
-                    else {
+                    let Some(child_type) = resolve_class(index, type_path, &comp.type_name) else {
                         // Unresolvable type (MSL / cross-doc) — skip.
                         continue;
                     };
@@ -1125,8 +1113,7 @@ fn flatten_class_parameters(
 
     let mut out = Vec::new();
     let mut chain: Vec<String> = Vec::new();
-    let mut visited: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
     walk(index, class, class, &mut chain, &mut visited, &mut out);
 
     // Drop sub-component rows whose value is a bare identifier matching
@@ -1145,8 +1132,7 @@ fn flatten_class_parameters(
             return true;
         }
         let v = fp.value.trim();
-        let is_bare_ident =
-            !v.is_empty() && v.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let is_bare_ident = !v.is_empty() && v.chars().all(|c| c.is_alphanumeric() || c == '_');
         !(is_bare_ident && top_level.contains(v))
     });
     out
@@ -1193,22 +1179,22 @@ fn format_param_value(raw: &str) -> String {
     s
 }
 
-fn render_active_class_parameters(
-    ui: &mut egui::Ui,
-    ctx: &mut PanelCtx,
-    muted: egui::Color32,
-) {
+fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: egui::Color32) {
     use crate::document::ModelicaOp;
     use crate::ui::panels::canvas_diagram::{active_doc_from_world_ctx, apply_ops_public};
 
-    let Some(doc_id) = active_doc_from_world_ctx(ctx) else { return };
+    let Some(doc_id) = active_doc_from_world_ctx(ctx) else {
+        return;
+    };
 
     // Rows are precomputed by `populate_telemetry_view_model` (gated on
     // doc / active-class / index-generation), so this never walks the
     // index while painting. `active` + `read_only` come from the same
     // view-model so the edit path stays in lock-step with the rows.
     let (active, read_only) = {
-        let Some(vm) = ctx.resource::<TelemetryViewModel>() else { return };
+        let Some(vm) = ctx.resource::<TelemetryViewModel>() else {
+            return;
+        };
         match vm.built_for.as_ref() {
             Some((d, class, _)) if *d == doc_id && !vm.rows.is_empty() => {
                 (class.clone(), vm.read_only)
@@ -1222,7 +1208,9 @@ fn render_active_class_parameters(
     // `&mut World`, which we can't hold during the paint.
     let mut edits: Vec<(String, String, String)> = Vec::new();
     {
-        let Some(vm) = ctx.resource::<TelemetryViewModel>() else { return };
+        let Some(vm) = ctx.resource::<TelemetryViewModel>() else {
+            return;
+        };
         let rows = &vm.rows;
         egui::CollapsingHeader::new(format!("⚙ Parameters ({})", rows.len()))
             .id_salt("active_class_parameters")

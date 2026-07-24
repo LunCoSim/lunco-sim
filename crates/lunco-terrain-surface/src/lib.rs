@@ -39,8 +39,8 @@
 //! - [`plugin`] — the Bevy [`TerrainSurfacePlugin`]. Wires the M3 spawn path;
 //!   tile streaming + LOD + per-rover collider ring land in M7.
 
-pub mod collider_ring;
 pub mod band;
+pub mod collider_ring;
 pub mod derived_layers;
 pub mod georef;
 pub mod oracle;
@@ -60,18 +60,15 @@ pub use lunco_terrain_core::{quadtree, source, tile};
 // The pure DEM decode/crop/resample pipeline moved to `lunco-terrain-bake` (so
 // the wasm Web Worker can run it without linking Bevy). Re-export its modules so
 // `crate::bake` / `crate::dem` paths — and the external API surface — are unchanged.
-pub use lunco_terrain_bake::{bake, dem};
 pub use bake::resample;
-pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, read_geotiff_transform, DemError};
-pub use lunco_terrain_core::{
-    hazard_color, hazard_from_slope, AnalyticHeightSource, HeightSource, QuadCoord, Quadtree,
-    Selected, Square, TileCoord, TileGrid, TransferFn,
-};
-pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
 /// The shared filter policy for band-limited surface products — the DRY seam
 /// between what a wheel touches and what an eye sees. See [`band`] and
 /// `WHEEL_SINKING_ANALYSIS_v3.md` §4.1.
 pub use band::SurfaceBand;
+pub use collider_ring::{ColliderTiles, TerrainColliderRing};
+pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, read_geotiff_transform, DemError};
+pub use derived_layers::{DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps};
+pub use georef::{TerrainGeoref, DEFAULT_ANCHOR_BODY};
 /// The base raster [`SurfaceOracle`] composes over.
 ///
 /// Re-exported because it is already part of this crate's PUBLIC surface —
@@ -80,26 +77,27 @@ pub use band::SurfaceBand;
 /// `lunco-obstacle-field` directly, which is an implementation detail of where the
 /// type happens to live.
 pub use lunco_obstacle_field::field::HeightGrid;
+pub use lunco_terrain_bake::{bake, dem};
+pub use lunco_terrain_core::{
+    hazard_color, hazard_from_slope, AnalyticHeightSource, HeightSource, QuadCoord, Quadtree,
+    Selected, Square, TileCoord, TileGrid, TransferFn,
+};
+pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
 pub use plugin::TerrainSurfacePlugin;
-pub use derived_layers::{DerivedLayersBuilt, TerrainAuthoredMaps, TerrainDerivedMaps};
-pub use georef::{TerrainGeoref, DEFAULT_ANCHOR_BODY};
 pub use query::{register_terrain_queries, TerrainHeightProvider};
-pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{
     DemHeightField, LodFrozen, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainNodeErrors,
-    TerrainShaderMode,
-    TerrainStreamLockstep, TerrainStreamStatus, TileShadowCache,
+    TerrainShaderMode, TerrainStreamLockstep, TerrainStreamStatus, TileShadowCache,
+};
+pub use terrain::{
+    BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface,
+    DocBackedTerrain, FlattenTerrain, PlaceCrater, PlaceRock, RegenerateTerrainLayers,
+    RemoveTerrainLayer, SpawnDemTerrain, TerrainGenPhase, TerrainGenStatus,
 };
 pub use terrain_layers::{
     default_overzoom_layer, edit_attr_writes, make_crater_layer, parse_edit, rock_instance_layer,
-    EditKind, EditsLayer, LayerAttrSource, LayerEntry,
-    LayerId, LayerScatterCx, TerrainLayer, TerrainLayerAppExt, TerrainLayerParser,
-    TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied, TerrainRock, TerrainScatterEntity,
-    EDITS_LAYER_ID,
-};
-pub use terrain::{
-    BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface, DocBackedTerrain,
-    FlattenTerrain, PlaceCrater, PlaceRock, RegenerateTerrainLayers, RemoveTerrainLayer,
-    SpawnDemTerrain, TerrainGenPhase, TerrainGenStatus,
+    EditKind, EditsLayer, LayerAttrSource, LayerEntry, LayerId, LayerScatterCx, TerrainLayer,
+    TerrainLayerAppExt, TerrainLayerParser, TerrainLayerParserRegistry, TerrainLayerStack,
+    TerrainLayersApplied, TerrainRock, TerrainScatterEntity, EDITS_LAYER_ID,
 };
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

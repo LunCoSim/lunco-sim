@@ -180,7 +180,10 @@ impl Default for PbrLook {
 impl PbrLook {
     /// An opaque, matte surface of `color` — the common case.
     pub fn matte(color: LinearRgba) -> Self {
-        Self { base_color: color, ..Default::default() }
+        Self {
+            base_color: color,
+            ..Default::default()
+        }
     }
 
     /// Builder: this look casts no shadows.

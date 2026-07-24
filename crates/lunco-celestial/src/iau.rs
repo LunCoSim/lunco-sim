@@ -164,18 +164,12 @@ impl IauRotation {
             let e12 = e(239.961, 0.164_357_3);
             let e13 = e(25.053, 12.959_008_8);
 
-            ra += -3.8787 * e1.sin()
-                - 0.1204 * e2.sin()
-                + 0.0700 * e3.sin()
-                - 0.0172 * e4.sin()
+            ra += -3.8787 * e1.sin() - 0.1204 * e2.sin() + 0.0700 * e3.sin() - 0.0172 * e4.sin()
                 + 0.0072 * e6.sin()
                 - 0.0052 * e10.sin()
                 + 0.0043 * e13.sin();
 
-            dec += 1.5419 * e1.cos()
-                + 0.0239 * e2.cos()
-                - 0.0278 * e3.cos()
-                + 0.0068 * e4.cos()
+            dec += 1.5419 * e1.cos() + 0.0239 * e2.cos() - 0.0278 * e3.cos() + 0.0068 * e4.cos()
                 - 0.0029 * e6.cos()
                 + 0.0009 * e7.cos()
                 + 0.0008 * e10.cos()
@@ -184,10 +178,7 @@ impl IauRotation {
             // The d² term and the E-series on W: the Moon's physical libration
             // in longitude. Small (≤ 0.13°) but it is exactly the term that
             // makes "the near side faces Earth" true to arcminutes.
-            w += -1.4e-12 * d * d
-                + 3.5610 * e1.sin()
-                + 0.1208 * e2.sin()
-                - 0.0642 * e3.sin()
+            w += -1.4e-12 * d * d + 3.5610 * e1.sin() + 0.1208 * e2.sin() - 0.0642 * e3.sin()
                 + 0.0158 * e4.sin()
                 + 0.0252 * e5.sin()
                 - 0.0066 * e6.sin()
@@ -275,7 +266,11 @@ pub fn bevy_to_icrf(p: DVec3) -> DVec3 {
     // 1. Bevy Y-up → ecliptic.
     let ecl = DVec3::new(p.x, -p.z, p.y);
     // 2. ecliptic → equatorial.
-    DVec3::new(ecl.x, ecl.y * cos_e - ecl.z * sin_e, ecl.y * sin_e + ecl.z * cos_e)
+    DVec3::new(
+        ecl.x,
+        ecl.y * cos_e - ecl.z * sin_e,
+        ecl.y * sin_e + ecl.z * cos_e,
+    )
 }
 
 #[cfg(test)]
@@ -316,7 +311,10 @@ mod tests {
         }
 
         // …and the mean elements ALONE do not: proof the series is load-bearing.
-        let mean_only = IauRotation { periodic: PeriodicTerms::None, ..IauRotation::moon() };
+        let mean_only = IauRotation {
+            periodic: PeriodicTerms::None,
+            ..IauRotation::moon()
+        };
         let flat = mean_only.pole_bevy(lunco_time::J2000_JD);
         let flat_tilt = flat.dot(DVec3::Y).clamp(-1.0, 1.0).acos().to_degrees();
         assert!(
@@ -378,7 +376,12 @@ mod tests {
     /// `bevy_to_icrf` really is the inverse of `icrf_to_bevy`.
     #[test]
     fn icrf_round_trips() {
-        for v in [DVec3::X, DVec3::Y, DVec3::Z, DVec3::new(0.3, -0.5, 0.81).normalize()] {
+        for v in [
+            DVec3::X,
+            DVec3::Y,
+            DVec3::Z,
+            DVec3::new(0.3, -0.5, 0.81).normalize(),
+        ] {
             let back = bevy_to_icrf(icrf_to_bevy(v));
             assert!((back - v).length() < 1e-12, "{v:?} → {back:?}");
         }

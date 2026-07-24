@@ -73,7 +73,10 @@ impl HttpBridge {
         self
     }
 
-    pub async fn execute(&self, request: crate::schema::ApiRequest) -> Result<crate::schema::ApiResponse, ()> {
+    pub async fn execute(
+        &self,
+        request: crate::schema::ApiRequest,
+    ) -> Result<crate::schema::ApiResponse, ()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         // AWAIT a full queue rather than dropping. This is the command funnel: a
         // dropped request is an unattributable failure — the caller sees a timeout
@@ -86,7 +89,10 @@ impl HttpBridge {
         // the natural shed valve when the app genuinely cannot keep up. An `Err`
         // here means the ECS receiver is gone (app shutting down), which is the
         // existing contract for `Err(())`.
-        self.tx.send(BridgeMessage { request, reply: tx }).await.map_err(|_| ())?;
+        self.tx
+            .send(BridgeMessage { request, reply: tx })
+            .await
+            .map_err(|_| ())?;
         if let Some(waker) = &self.waker {
             waker();
         }
@@ -123,8 +129,14 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
             //                               the same derived list the MCP tool
             //                               surface is built from
             let app = axum::Router::new()
-                .route("/api/commands", axum::routing::post(http::handle_api_commands))
-                .route("/api/commands/schema", axum::routing::get(http::handle_schema))
+                .route(
+                    "/api/commands",
+                    axum::routing::post(http::handle_api_commands),
+                )
+                .route(
+                    "/api/commands/schema",
+                    axum::routing::get(http::handle_schema),
+                )
                 .route("/api/health", axum::routing::get(http::handle_health))
                 .with_state(bridge);
 
@@ -133,7 +145,8 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
             // API has zero local auth — any local process/user can drive the full
             // command surface. Revisit before multiplayer hardening
             // (REVIEW-2026-07-19.md API-1).
-            let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+            let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await
+            {
                 Ok(l) => l,
                 Err(e) => {
                     bevy::log::error!(

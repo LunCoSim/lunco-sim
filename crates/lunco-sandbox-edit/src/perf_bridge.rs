@@ -53,7 +53,9 @@ fn sample_physics_step(
     // workbench (joint_minimal etc.).
     stats: Option<ResMut<PerfStats>>,
 ) {
-    let Some(mut stats) = stats else { return; };
+    let Some(mut stats) = stats else {
+        return;
+    };
     let enabled = settings.as_deref().map(|s| s.enabled).unwrap_or(false);
     if !enabled {
         if stats.physics_ms.is_some() {

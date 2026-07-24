@@ -35,10 +35,7 @@ use openusd::usda;
 use lunco_assets::asset_path::canonicalize_root;
 
 use crate::canonical::StageRecipe;
-use crate::resolver::{
-    canonicalize_at, is_binary_asset, LuncoUsdResolver,
-    SharedLayerBytes,
-};
+use crate::resolver::{canonicalize_at, is_binary_asset, LuncoUsdResolver, SharedLayerBytes};
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.
@@ -60,7 +57,10 @@ pub(crate) async fn fetch_layer_closure(
     let mut queue = vec![root_id.clone()];
 
     while let Some(id) = queue.pop() {
-        let raw = bytes.get(&id).cloned().expect("queued id is present in map");
+        let raw = bytes
+            .get(&id)
+            .cloned()
+            .expect("queued id is present in map");
         for child_id in child_layer_ids(&id, &raw)? {
             if bytes.contains_key(&child_id) {
                 continue;
@@ -131,7 +131,6 @@ pub(crate) fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, 
     Ok((stage, shared))
 }
 
-
 /// Discover every binary-asset arc (glTF/OBJ/STL, per [`is_binary_asset`])
 /// authored across the composed stage's loaded layers, keyed by its authoring
 /// site `(layer identifier, spec path)` — the coordinates
@@ -151,28 +150,41 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
     // payload wrapper would otherwise be missed (its layer isn't loaded yet).
     let _ = stage.traverse(PrimPredicate::DEFAULT, |_| {});
     for layer_id in stage.layer_identifiers() {
-        let Some(layer) = stage.layer(&layer_id) else { continue };
+        let Some(layer) = stage.layer(&layer_id) else {
+            continue;
+        };
         let data = layer.data();
         let anchor = ResolvedPath::new(&layer_id);
         for path in data.spec_paths() {
             let mut arcs: Vec<String> = Vec::new();
             if let Ok(Some(v)) = data.try_field(&path, "references") {
                 if let Value::ReferenceListOp(op) = v.as_ref() {
-                    arcs.extend(op.iter().filter(|r| !r.asset_path.is_empty()).map(|r| r.asset_path.clone()));
+                    arcs.extend(
+                        op.iter()
+                            .filter(|r| !r.asset_path.is_empty())
+                            .map(|r| r.asset_path.clone()),
+                    );
                 }
             }
             if let Ok(Some(v)) = data.try_field(&path, "payload") {
                 match v.as_ref() {
-                    Value::Payload(p) if !p.asset_path.is_empty() => arcs.push(p.asset_path.clone()),
-                    Value::PayloadListOp(op) => {
-                        arcs.extend(op.iter().filter(|p| !p.asset_path.is_empty()).map(|p| p.asset_path.clone()))
+                    Value::Payload(p) if !p.asset_path.is_empty() => {
+                        arcs.push(p.asset_path.clone())
                     }
+                    Value::PayloadListOp(op) => arcs.extend(
+                        op.iter()
+                            .filter(|p| !p.asset_path.is_empty())
+                            .map(|p| p.asset_path.clone()),
+                    ),
                     _ => {}
                 }
             }
             for ap in arcs {
                 if is_binary_asset(&ap) {
-                    sites.insert((layer_id.clone(), path.clone()), canonicalize_at(&ap, Some(&anchor)));
+                    sites.insert(
+                        (layer_id.clone(), path.clone()),
+                        canonicalize_at(&ap, Some(&anchor)),
+                    );
                 }
             }
         }
@@ -195,9 +207,7 @@ pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
     // closure uniformly `lunco://` — a single resolution rule for the whole walk.
     let assets_root = lunco_assets::shipped_asset_root(path);
     let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
-        Some(rel) => {
-            lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(rel))
-        }
+        Some(rel) => lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(rel)),
         // NOT the raw path: every id in the map must be keyed by `canonicalize`,
         // the same function the resolver's `create_identifier` applies, or the
         // lookup misses and composition fails to resolve its own root layer.
@@ -211,14 +221,20 @@ pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
     let mut queue = vec![root_id.clone()];
 
     while let Some(id) = queue.pop() {
-        let raw = bytes.get(&id).cloned().expect("queued id is present in map");
+        let raw = bytes
+            .get(&id)
+            .cloned()
+            .expect("queued id is present in map");
         for child_id in child_layer_ids(&id, &raw)? {
             if bytes.contains_key(&child_id) {
                 continue;
             }
             let file = id_to_disk_path(&child_id, assets_root)?;
             let fetched = std::fs::read(&file).map_err(|e| {
-                anyhow!("failed to fetch sublayer {child_id} from {}: {e}", file.display())
+                anyhow!(
+                    "failed to fetch sublayer {child_id} from {}: {e}",
+                    file.display()
+                )
             })?;
             bytes.insert(child_id.clone(), fetched);
             queue.push(child_id);
@@ -231,15 +247,13 @@ pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
 /// Where an id's bytes live on disk, as an error rather than an `Option` — the
 /// mapping itself belongs to `lunco-assets` (it is asset-location knowledge, not
 /// USD composition); this only supplies the composition-side diagnostic.
-fn id_to_disk_path(
-    id: &str,
-    assets_root: Option<&std::path::Path>,
-) -> Result<std::path::PathBuf> {
+fn id_to_disk_path(id: &str, assets_root: Option<&std::path::Path>) -> Result<std::path::PathBuf> {
     lunco_assets::id_to_disk_path(id, assets_root).ok_or_else(|| {
-        anyhow!("`{id}` is a shipped-asset ref, but the composed file is outside any `assets/` root")
+        anyhow!(
+            "`{id}` is a shipped-asset ref, but the composed file is outside any `assets/` root"
+        )
     })
 }
-
 
 // Writes USDA fixtures to a temp dir and composes them from disk. Native-only
 // test code — the `std::fs` ban guards wasm *runtime* paths, and `clippy.toml`
@@ -260,8 +274,9 @@ mod inherits_compose_tests {
         let usda = "#usda 1.0\n\
 class \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:scale = 1\n        }\n    }\n}\n\
 def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
-        let stage = build_stage_from_closure(&crate::StageRecipe::from_source("inherits.usda", usda))
-            .expect("compose");
+        let stage =
+            build_stage_from_closure(&crate::StageRecipe::from_source("inherits.usda", usda))
+                .expect("compose");
         let view = StageView::new(&stage);
         let fwd = SdfPath::new("/Rover/Controls/forward").unwrap();
         assert_eq!(
@@ -388,4 +403,3 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         );
     }
 }
-

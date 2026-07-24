@@ -34,7 +34,11 @@ pub struct MeshData {
 impl HeightGrid {
     pub fn new_flat(res: usize, half_extent: f32) -> Self {
         let res = res.max(2);
-        Self { res, half_extent, heights: vec![0.0; res * res] }
+        Self {
+            res,
+            half_extent,
+            heights: vec![0.0; res * res],
+        }
     }
 
     /// Metres between adjacent samples.
@@ -78,7 +82,10 @@ impl HeightGrid {
     /// World position (XZ) of sample `(ix, iz)`.
     fn sample_pos(&self, ix: usize, iz: usize) -> Vec2 {
         let s = self.spacing();
-        Vec2::new(-self.half_extent + ix as f32 * s, -self.half_extent + iz as f32 * s)
+        Vec2::new(
+            -self.half_extent + ix as f32 * s,
+            -self.half_extent + iz as f32 * s,
+        )
     }
 
     /// Additively stamp one crater. Profile: parabolic bowl inside the rim plus a
@@ -89,7 +96,7 @@ impl HeightGrid {
         }
         let s = self.spacing();
         let reach = radius * 1.6; // bowl + rim falloff
-        // Bounding box of affected samples (clamped to grid).
+                                  // Bounding box of affected samples (clamped to grid).
         let to_i = |w: f32| -> i32 { ((w + self.half_extent) / s).round() as i32 };
         let min_x = to_i(center.x - reach).max(0);
         let max_x = to_i(center.x + reach).min(self.res as i32 - 1);
@@ -149,8 +156,20 @@ impl HeightGrid {
             (iz, 0)
         };
         // Inward neighbour on each axis, used for the outward slope.
-        let inx = if dx < 0 { 1 } else if dx > 0 { last - 1 } else { ax };
-        let inz = if dz < 0 { 1 } else if dz > 0 { last - 1 } else { az };
+        let inx = if dx < 0 {
+            1
+        } else if dx > 0 {
+            last - 1
+        } else {
+            ax
+        };
+        let inz = if dz < 0 {
+            1
+        } else if dz > 0 {
+            last - 1
+        } else {
+            az
+        };
         let at = |x: isize, z: isize| self.heights[self.idx(x as usize, z as usize)];
 
         let h = at(ax, az);
@@ -250,12 +269,20 @@ impl HeightGrid {
                 let p = self.sample_pos(ix, iz);
                 let y = self.heights[self.idx(ix, iz)] as f32;
                 positions.push([p.x, y, p.y]);
-                uvs.push([ix as f32 / (res as f32 - 1.0), iz as f32 / (res as f32 - 1.0)]);
+                uvs.push([
+                    ix as f32 / (res as f32 - 1.0),
+                    iz as f32 / (res as f32 - 1.0),
+                ]);
             }
         }
         let normals = grid_normals(&positions, res);
         let indices = grid_indices(res);
-        MeshData { positions, normals, uvs, indices }
+        MeshData {
+            positions,
+            normals,
+            uvs,
+            indices,
+        }
     }
 }
 
@@ -455,7 +482,10 @@ mod tests {
         // Curvature is required: on a plane every interpolant is correctly linear.
         g.stamp_crater(Vec2::ZERO, 60.0, 8.0, 1.0);
         let s = g.spacing();
-        assert!(s > 2.0, "cell {s} m must be wider than the probe for this to bite");
+        assert!(
+            s > 2.0,
+            "cell {s} m must be wider than the probe for this to bite"
+        );
 
         // Two probe points inside the SAME cell, away from the crater centre where
         // the profile is curved.

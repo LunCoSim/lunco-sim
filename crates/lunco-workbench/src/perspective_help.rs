@@ -10,10 +10,10 @@
 //! perspective's controls. Closed with Esc or by clicking the dimmed
 //! backdrop.
 
-use std::collections::HashMap;
+pub(crate) use crate::{PerspectiveId, WorkbenchLayout};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-pub(crate) use crate::{PerspectiveId, WorkbenchLayout};
+use std::collections::HashMap;
 
 /// A single keyboard shortcut entry.
 #[derive(Debug, Clone, Default)]
@@ -127,9 +127,7 @@ fn help_row(ui: &mut egui::Ui, left: egui::RichText, right: &str, right_color: e
                 ui.label(left);
             },
         );
-        ui.add(
-            egui::Label::new(egui::RichText::new(right).color(right_color)).wrap(),
-        );
+        ui.add(egui::Label::new(egui::RichText::new(right).color(right_color)).wrap());
     });
     ui.add_space(5.0);
 }
@@ -169,10 +167,8 @@ fn render_help_popup(
         .fixed_pos(viewport.min)
         .interactable(true)
         .show(ctx, |ui| {
-            let (rect, resp) =
-                ui.allocate_exact_size(viewport.size(), egui::Sense::click());
-            ui.painter()
-                .rect_filled(rect, 0.0, theme.tokens.scrim);
+            let (rect, resp) = ui.allocate_exact_size(viewport.size(), egui::Sense::click());
+            ui.painter().rect_filled(rect, 0.0, theme.tokens.scrim);
             if resp.clicked() {
                 close = true;
             }
@@ -202,14 +198,11 @@ fn render_help_popup(
                     // Header — title + close button on the same row.
                     ui.horizontal(|ui| {
                         ui.heading(egui::RichText::new(help.title).color(text));
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui.button("✖").on_hover_text("Close (Esc)").clicked() {
-                                    close = true;
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("✖").on_hover_text("Close (Esc)").clicked() {
+                                close = true;
+                            }
+                        });
                     });
                     ui.add_space(2.0);
                     ui.label(egui::RichText::new(help.description).color(muted));
@@ -247,9 +240,7 @@ fn render_help_popup(
                             }
 
                             if help.shortcuts.is_empty() && help.mouse.is_empty() {
-                                ui.label(
-                                    egui::RichText::new("No shortcuts listed.").weak(),
-                                );
+                                ui.label(egui::RichText::new("No shortcuts listed.").weak());
                             }
                         });
 

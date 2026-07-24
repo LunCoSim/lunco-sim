@@ -149,7 +149,9 @@ pub fn generate_suggestions(
                 start_connector: output_name.clone(),
                 end_element: entity,
                 end_connector: "force_y".into(),
-                reason: format!("'{output_name}' is a known force output — connect to Avian force_y"),
+                reason: format!(
+                    "'{output_name}' is a known force output — connect to Avian force_y"
+                ),
                 confidence: 0.9,
             });
         }

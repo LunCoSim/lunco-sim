@@ -166,7 +166,11 @@ pub fn author_reference(data: &mut sdf::Data, prim_path: &SdfPath, asset_path: &
 /// openusd's Stage `Attribute` API exposes sample *authoring* (`set_at`) but no
 /// per-sample erase, so this drops to the `sdf` spec level — the same level at
 /// which [`author_reference`] writes reference metadata.
-pub fn remove_time_sample(data: &mut sdf::Data, attr_path: &SdfPath, time: f64) -> Result<Option<Value>> {
+pub fn remove_time_sample(
+    data: &mut sdf::Data,
+    attr_path: &SdfPath,
+    time: f64,
+) -> Result<Option<Value>> {
     let Some(spec) = data.spec_mut(attr_path) else {
         return Ok(None);
     };
@@ -193,9 +197,7 @@ pub fn remove_time_sample(data: &mut sdf::Data, attr_path: &SdfPath, time: f64) 
 /// the typing. General over every value type the parser understands, so the
 /// document op layer doesn't reimplement USD value literal parsing.
 pub fn parse_attribute_value(type_name: &str, literal: &str) -> Result<Value> {
-    let snippet = format!(
-        "#usda 1.0\ndef \"_v\"\n{{\n    {type_name} _a = {literal}\n}}\n"
-    );
+    let snippet = format!("#usda 1.0\ndef \"_v\"\n{{\n    {type_name} _a = {literal}\n}}\n");
     let data = usda_to_data(&snippet)?;
     let attr = SdfPath::new("/_v._a").map_err(|e| anyhow!("attr path: {e}"))?;
     data.spec(&attr)
@@ -219,7 +221,11 @@ pub fn value_to_literal(type_name: &str, value: Value) -> Option<String> {
     let empty = usda_to_data("#usda 1.0\n").ok()?;
     let stage = open_doc_stage(&empty).ok()?;
     stage.define_prim("/_v").ok()?;
-    stage.create_attribute("/_v._a", type_name).ok()?.set(value).ok()?;
+    stage
+        .create_attribute("/_v._a", type_name)
+        .ok()?
+        .set(value)
+        .ok()?;
     let data = extract_root_layer_data(&stage).ok()?;
     let text = data_to_usda(&data).ok()?;
     // Extract the right-hand side of the single `<type> _a = <literal>` line. A
@@ -309,7 +315,11 @@ fn merge_specifier(bspec: &mut SpecData, rval: &Value) {
             return;
         }
     };
-    let strongest = if rank(runtime) > rank(base) { runtime } else { base };
+    let strongest = if rank(runtime) > rank(base) {
+        runtime
+    } else {
+        base
+    };
     bspec.add("specifier", Value::Specifier(strongest));
 }
 
@@ -348,8 +358,9 @@ mod tests {
     fn author_reference_round_trips_through_usda() {
         // Define the spawn prim exactly as `AddPrim` does (stage round-trip),
         // then author the reference into the extracted data.
-        let stage = open_doc_stage(&usda_to_data("#usda 1.0\ndef Xform \"World\"\n{\n}\n").unwrap())
-            .unwrap();
+        let stage =
+            open_doc_stage(&usda_to_data("#usda 1.0\ndef Xform \"World\"\n{\n}\n").unwrap())
+                .unwrap();
         stage.define_prim("/World/spawn_1").unwrap();
         let mut data = extract_root_layer_data(&stage).unwrap();
         let prim = SdfPath::new("/World/spawn_1").unwrap();
@@ -357,7 +368,10 @@ mod tests {
 
         // Serializes as a `references = @…@` opinion...
         let text = data_to_usda(&data).unwrap();
-        assert!(text.contains("@vessels/rover.usda@"), "USDA must carry the reference:\n{text}");
+        assert!(
+            text.contains("@vessels/rover.usda@"),
+            "USDA must carry the reference:\n{text}"
+        );
 
         // ...and survives a re-parse as an explicit ReferenceListOp.
         let reparsed = usda_to_data(&text).unwrap();
@@ -393,7 +407,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("value_to_literal returned None for {ty} = {literal}"));
             let reparsed = parse_attribute_value(ty, &round)
                 .unwrap_or_else(|e| panic!("re-parse {ty} = {round}: {e}"));
-            assert_eq!(parsed, reparsed, "{ty}: {literal} → {round} must round-trip");
+            assert_eq!(
+                parsed, reparsed,
+                "{ty}: {literal} → {round} must round-trip"
+            );
         }
     }
 
@@ -406,17 +423,23 @@ mod tests {
         let stage = open_doc_stage(&data).unwrap();
 
         // Author a brand-new prim by SDF path.
-        stage.define_prim("/World/Rover").unwrap().set_type_name("Xform").unwrap();
+        stage
+            .define_prim("/World/Rover")
+            .unwrap()
+            .set_type_name("Xform")
+            .unwrap();
         let out = extract_root_layer_data(&stage).unwrap();
 
         assert_eq!(
-            out.prim_type_name(&SdfPath::new("/World/Rover").unwrap()).as_deref(),
+            out.prim_type_name(&SdfPath::new("/World/Rover").unwrap())
+                .as_deref(),
             Some("Xform"),
             "newly authored prim must appear in the extracted root layer data"
         );
         // Pre-existing structure survives.
         assert_eq!(
-            out.prim_type_name(&SdfPath::new("/World/Box").unwrap()).as_deref(),
+            out.prim_type_name(&SdfPath::new("/World/Box").unwrap())
+                .as_deref(),
             Some("Sphere")
         );
     }
@@ -430,7 +453,11 @@ mod tests {
         let stage = open_doc_stage(&data).unwrap();
 
         let val = parse_attribute_value("double", "2").unwrap();
-        stage.create_attribute("/World/Box.radius", "double").unwrap().set(val).unwrap();
+        stage
+            .create_attribute("/World/Box.radius", "double")
+            .unwrap()
+            .set(val)
+            .unwrap();
         let out = extract_root_layer_data(&stage).unwrap();
 
         assert_eq!(
@@ -455,16 +482,23 @@ mod tests {
         let data = usda_to_data(with_ref).unwrap();
         let stage = open_doc_stage(&data).unwrap();
 
-        stage.define_prim("/World/Light").unwrap().set_type_name("DistantLight").unwrap();
+        stage
+            .define_prim("/World/Light")
+            .unwrap()
+            .set_type_name("DistantLight")
+            .unwrap();
         let out = extract_root_layer_data(&stage).unwrap();
 
         let vehicle = SdfPath::new("/World/Vehicle").unwrap();
         assert!(
-            out.spec(&vehicle).and_then(|s| s.get("references")).is_some(),
+            out.spec(&vehicle)
+                .and_then(|s| s.get("references"))
+                .is_some(),
             "root-layer reference opinion must survive an unrelated edit"
         );
         assert_eq!(
-            out.prim_type_name(&SdfPath::new("/World/Light").unwrap()).as_deref(),
+            out.prim_type_name(&SdfPath::new("/World/Light").unwrap())
+                .as_deref(),
             Some("DistantLight")
         );
     }
@@ -475,7 +509,7 @@ mod tests {
     #[test]
     fn compose_layers_overlays_runtime_onto_base() {
         let base = usda_to_data(SCENE).unwrap(); // /World/Box(radius=1)/Inner(radius=9)
-        // Runtime: override Box.radius and add a new sibling prim under /World.
+                                                 // Runtime: override Box.radius and add a new sibling prim under /World.
         let runtime = usda_to_data(
             "#usda 1.0\nover \"World\"\n{\n    over \"Box\"\n    {\n        double radius = 7\n    }\n    def Sphere \"Obstacle\"\n    {\n    }\n}\n",
         )
@@ -490,12 +524,15 @@ mod tests {
         );
         // Base-only nested child survives untouched.
         assert_eq!(
-            composed.prim_attribute_value::<f64>(&SdfPath::new("/World/Box/Inner").unwrap(), "radius"),
+            composed
+                .prim_attribute_value::<f64>(&SdfPath::new("/World/Box/Inner").unwrap(), "radius"),
             Some(9.0)
         );
         // Runtime-only prim is present in the composed tree...
         assert_eq!(
-            composed.prim_type_name(&SdfPath::new("/World/Obstacle").unwrap()).as_deref(),
+            composed
+                .prim_type_name(&SdfPath::new("/World/Obstacle").unwrap())
+                .as_deref(),
             Some("Sphere")
         );
         // ...and `prim_children` of /World lists BOTH the base Box and the runtime Obstacle.
@@ -504,8 +541,14 @@ mod tests {
             .iter()
             .map(|p| p.name().unwrap_or_default().to_string())
             .collect();
-        assert!(kids.contains(&"Box".to_string()), "base child survives: {kids:?}");
-        assert!(kids.contains(&"Obstacle".to_string()), "runtime child added: {kids:?}");
+        assert!(
+            kids.contains(&"Box".to_string()),
+            "base child survives: {kids:?}"
+        );
+        assert!(
+            kids.contains(&"Obstacle".to_string()),
+            "runtime child added: {kids:?}"
+        );
     }
 
     /// A runtime sparse `over` (the shape a `SetAttribute` edit authors) must NOT
@@ -526,7 +569,11 @@ mod tests {
         // Specifier stays `def` on every overridden prim (not downgraded to over).
         for p in ["/World", "/World/Box"] {
             let spec = composed.spec(&SdfPath::new(p).unwrap()).unwrap();
-            let specifier = spec.fields.iter().find(|(k, _)| k == "specifier").map(|(_, v)| v);
+            let specifier = spec
+                .fields
+                .iter()
+                .find(|(k, _)| k == "specifier")
+                .map(|(_, v)| v);
             assert!(
                 matches!(specifier, Some(Value::Specifier(sdf::Specifier::Def))),
                 "{p} must stay `def`, got {specifier:?}"
@@ -544,12 +591,15 @@ mod tests {
         );
         // The base prim type + nested child survive the round-trip too.
         assert_eq!(
-            reparsed.prim_type_name(&SdfPath::new("/World/Box").unwrap()).as_deref(),
+            reparsed
+                .prim_type_name(&SdfPath::new("/World/Box").unwrap())
+                .as_deref(),
             Some("Sphere"),
             "base prim type must survive:\n{text}"
         );
         assert_eq!(
-            reparsed.prim_attribute_value::<f64>(&SdfPath::new("/World/Box/Inner").unwrap(), "radius"),
+            reparsed
+                .prim_attribute_value::<f64>(&SdfPath::new("/World/Box/Inner").unwrap(), "radius"),
             Some(9.0),
             "nested base child must survive:\n{text}"
         );
@@ -574,10 +624,20 @@ mod tests {
         let text = data_to_usda(&composed).unwrap();
         let reparsed = usda_to_data(&text).unwrap();
         let p = SdfPath::new("/P").unwrap();
-        assert_eq!(reparsed.prim_attribute_value::<f32>(&p, "a"), Some(9.0), "override lost:\n{text}");
-        assert_eq!(reparsed.prim_attribute_value::<f32>(&p, "b"), Some(2.0), "sibling `b` dropped:\n{text}");
         assert_eq!(
-            reparsed.prim_attribute_value::<String>(&p, "tag").as_deref(),
+            reparsed.prim_attribute_value::<f32>(&p, "a"),
+            Some(9.0),
+            "override lost:\n{text}"
+        );
+        assert_eq!(
+            reparsed.prim_attribute_value::<f32>(&p, "b"),
+            Some(2.0),
+            "sibling `b` dropped:\n{text}"
+        );
+        assert_eq!(
+            reparsed
+                .prim_attribute_value::<String>(&p, "tag")
+                .as_deref(),
             Some("keep"),
             "sibling `tag` dropped:\n{text}"
         );
@@ -590,7 +650,9 @@ mod tests {
         let empty = usda_to_data("#usda 1.0\n").unwrap();
         let composed = compose_layers(&base, &empty);
         assert_eq!(
-            composed.prim_type_name(&SdfPath::new("/World/Box").unwrap()).as_deref(),
+            composed
+                .prim_type_name(&SdfPath::new("/World/Box").unwrap())
+                .as_deref(),
             Some("Sphere")
         );
     }
@@ -605,9 +667,12 @@ mod tests {
         let out = extract_root_layer_data(&stage).unwrap();
 
         assert!(out.spec(&SdfPath::new("/World/Box").unwrap()).is_none());
-        assert!(out.spec(&SdfPath::new("/World/Box/Inner").unwrap()).is_none());
+        assert!(out
+            .spec(&SdfPath::new("/World/Box/Inner").unwrap())
+            .is_none());
         assert_eq!(
-            out.prim_type_name(&SdfPath::new("/World").unwrap()).as_deref(),
+            out.prim_type_name(&SdfPath::new("/World").unwrap())
+                .as_deref(),
             Some("Xform"),
             "sibling structure survives"
         );

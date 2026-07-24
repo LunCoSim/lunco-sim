@@ -45,26 +45,26 @@
 
 pub mod catalog;
 pub mod commands;
+/// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
+/// Shared by `commands` (the authoring tier) and the editor's Inspector panel — it
+/// lived in the panel, which is what broke the `--no-ui` server build (`commands`
+/// reached into `crate::ui` for it).
+pub mod doc_resolve;
 /// `QueryEntity` — the READ side of the scene verbs, reporting the same
 /// grid-absolute frame [`commands::MoveEntity`] accepts.
 pub mod entity_query;
+/// `RunLint` — lint the loaded scene on demand, through the authored rules.
+pub mod lint_command;
+/// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
+/// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
+pub mod shader_doc;
+pub mod spawn_meta;
 /// `QueryUsdPrim` — the AUTHORED read: composed USD attributes off the live
 /// stage, for asset invariants that scripts (not just Rust) can check.
 pub mod usd_prim_query;
 /// `ValidateAsset` — parse-only pre-flight for asset files (.mo/.usda/.wgsl/
 /// .rhai): no cosim, no scene load, no GPU. Also the `--validate` CLI leg.
 pub mod validate;
-/// `RunLint` — lint the loaded scene on demand, through the authored rules.
-pub mod lint_command;
-/// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
-/// Shared by `commands` (the authoring tier) and the editor's Inspector panel — it
-/// lived in the panel, which is what broke the `--no-ui` server build (`commands`
-/// reached into `crate::ui` for it).
-pub mod doc_resolve;
-/// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
-/// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
-pub mod shader_doc;
-pub mod spawn_meta;
 
 use bevy::prelude::*;
 

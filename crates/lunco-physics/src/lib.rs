@@ -166,7 +166,9 @@ impl PhysicsStepRequest {
 /// a paused world clock must stop force application too, and `Time<Physics>` does
 /// not report itself paused merely because virtual time is.
 pub fn physics_is_live(physics_time: Res<Time<Physics>>, virtual_time: Res<Time<Virtual>>) -> bool {
-    !physics_time.is_paused() && !virtual_time.is_paused() && virtual_time.relative_speed_f64() > 0.0
+    !physics_time.is_paused()
+        && !virtual_time.is_paused()
+        && virtual_time.relative_speed_f64() > 0.0
 }
 
 /// Project [`PhysicsHolds`] onto avian's `Time<Physics>`.
@@ -281,7 +283,10 @@ mod tests {
             .resource_mut::<PhysicsHolds>()
             .set(PhysicsHolds::CINEMATIC, true);
         world.run_system_once(apply_physics_holds).unwrap();
-        assert!(world.resource::<Time<Physics>>().is_paused(), "held ⇒ frozen");
+        assert!(
+            world.resource::<Time<Physics>>().is_paused(),
+            "held ⇒ frozen"
+        );
 
         world.resource_mut::<PhysicsStepRequest>().request(1);
         world.run_system_once(grant_physics_step).unwrap();

@@ -30,19 +30,19 @@
 use crate::lock_ext::LockExt;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use crossbeam_channel::{Sender, unbounded};
-use lunco_settings::SettingsSection;
-use serde::{Deserialize, Serialize};
+use crossbeam_channel::{unbounded, Sender};
 use lunco_experiments::{
     Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ModelRef, ParamPath,
-    ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta,
-    RunProgress, RunResult, RunStatus, RunUpdate,
+    ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta, RunProgress,
+    RunResult, RunStatus, RunUpdate,
 };
+use lunco_settings::SettingsSection;
 use rumoca_compile::compile::Dae;
+use serde::{Deserialize, Serialize};
 // Used only by the native-only DAE-override fast path (`apply_overrides_to_dae`).
 // Used by `apply_value_bindings_to_dae` on BOTH platforms (native runner and
 // the wasm worker both inject run values at the DAE level), so not wasm-gated.
@@ -283,7 +283,8 @@ impl ModelicaRunner {
                 // CQ-525: evict only THIS model's cached DAEs, not the whole
                 // cache — an edit to one model shouldn't force every other
                 // model in a multi-model workspace to recompile.
-                s.dae_cache.retain(|_, (cached_ident, _)| *cached_ident != ident);
+                s.dae_cache
+                    .retain(|_, (cached_ident, _)| *cached_ident != ident);
             }
         }
     }
@@ -456,7 +457,15 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     }
     let state_for_thread = state.clone();
     std::thread::spawn(move || {
-        run_inner(state_for_thread.clone(), model_ref, overrides, inputs, bounds, cancel, tx);
+        run_inner(
+            state_for_thread.clone(),
+            model_ref,
+            overrides,
+            inputs,
+            bounds,
+            cancel,
+            tx,
+        );
         finish_run(&state_for_thread, run_id);
     });
 }
@@ -539,7 +548,12 @@ fn spawn_forwarder(
     state: Arc<Mutex<RunnerState>>,
 ) {
     let mut slot = wasm_forwarders().lock_or_recover();
-    slot.push(WasmForwarder { run_id, forward_rx, tx, state });
+    slot.push(WasmForwarder {
+        run_id,
+        forward_rx,
+        tx,
+        state,
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -551,8 +565,7 @@ struct WasmForwarder {
 }
 
 #[cfg(target_arch = "wasm32")]
-static WASM_FORWARDERS: std::sync::OnceLock<Mutex<Vec<WasmForwarder>>> =
-    std::sync::OnceLock::new();
+static WASM_FORWARDERS: std::sync::OnceLock<Mutex<Vec<WasmForwarder>>> = std::sync::OnceLock::new();
 
 #[cfg(target_arch = "wasm32")]
 fn wasm_forwarders() -> &'static Mutex<Vec<WasmForwarder>> {
@@ -653,9 +666,7 @@ pub fn apply_value_bindings_to_dae(
             .parameters
             .get_mut(&key)
             .or_else(|| dae.variables.inputs.get_mut(&key))
-            .ok_or_else(|| {
-                format!("'{}' is not a top-level DAE parameter or input", path.0)
-            })?;
+            .ok_or_else(|| format!("'{}' is not a top-level DAE parameter or input", path.0))?;
         let lit = match value {
             ParamValue::Real(x) => DaeLiteral::Real(*x),
             ParamValue::Int(x) => DaeLiteral::Integer(*x),
@@ -663,7 +674,10 @@ pub fn apply_value_bindings_to_dae(
             ParamValue::String(s) => DaeLiteral::String(s.clone()),
             _ => return Err(format!("binding for '{}' is not a scalar literal", path.0)),
         };
-        var.start = Some(DaeExpression::Literal { value: lit, span: DaeSpan::DUMMY });
+        var.start = Some(DaeExpression::Literal {
+            value: lit,
+            span: DaeSpan::DUMMY,
+        });
     }
     Ok(())
 }
@@ -951,7 +965,10 @@ fn run_batch_sim(
     let keep = batch_keep_indices(&result.times, opts.t_start, opts.t_end, opts.dt);
     let raw_samples = result.times.len();
     let (kept_times, gather): (Vec<f64>, Option<Vec<usize>>) = match &keep {
-        Some(idx) => (idx.iter().map(|&i| result.times[i]).collect(), Some(idx.clone())),
+        Some(idx) => (
+            idx.iter().map(|&i| result.times[i]).collect(),
+            Some(idx.clone()),
+        ),
         None => (result.times.clone(), None),
     };
 
@@ -965,7 +982,10 @@ fn run_batch_sim(
         }
         let full = result.data.get(i);
         let column: Vec<f64> = match (&gather, full) {
-            (Some(idx), Some(col)) => idx.iter().map(|&j| col.get(j).copied().unwrap_or(f64::NAN)).collect(),
+            (Some(idx), Some(col)) => idx
+                .iter()
+                .map(|&j| col.get(j).copied().unwrap_or(f64::NAN))
+                .collect(),
             (None, Some(col)) => col.clone(),
             (_, None) => Vec::new(),
         };
@@ -1008,7 +1028,12 @@ fn run_batch_sim(
 /// first and last sample. Returns `None` (no decimation) when there's no usable
 /// `dt`, or when the trajectory is already at/under the grid size (the
 /// well-behaved smooth-model case — leave it byte-for-byte untouched).
-fn batch_keep_indices(times: &[f64], t_start: f64, t_end: f64, dt: Option<f64>) -> Option<Vec<usize>> {
+fn batch_keep_indices(
+    times: &[f64],
+    t_start: f64,
+    t_end: f64,
+    dt: Option<f64>,
+) -> Option<Vec<usize>> {
     let dt = dt?;
     if !(dt > 0.0) || times.len() < 2 {
         return None;
@@ -1029,8 +1054,7 @@ fn batch_keep_indices(times: &[f64], t_start: f64, t_end: f64, dt: Option<f64>) 
     for k in 0..=grid_n {
         let target = t_start + (k as f64) * dt;
         // Advance while the next sample is closer to `target` than the current.
-        while cursor + 1 < n
-            && (times[cursor + 1] - target).abs() <= (times[cursor] - target).abs()
+        while cursor + 1 < n && (times[cursor + 1] - target).abs() <= (times[cursor] - target).abs()
         {
             cursor += 1;
         }
@@ -1174,8 +1198,11 @@ pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions
     // (family, tableau) pair once — no re-parsing of strings, no silent
     // unknown→BDF degradation. `None` = backend default (BDF; see the rationale
     // on `stepper_options_from_bounds` for why this is no longer TR-BDF2).
-    let (mode, method) =
-        solver_choice_to_rumoca(bounds.solver.unwrap_or(lunco_experiments::SolverChoice::Bdf));
+    let (mode, method) = solver_choice_to_rumoca(
+        bounds
+            .solver
+            .unwrap_or(lunco_experiments::SolverChoice::Bdf),
+    );
     opts.solver_mode = mode;
     opts.diffsol_method = method;
     // `SimOptions.dt` is the solver's initial step (h0) on the diffsol path.
@@ -1242,7 +1269,12 @@ pub fn run_stepping_loop(
 
     // Variable names from the initial state.
     let names: Vec<String> = match stepper.state() {
-        Ok(state) => state.values.keys().filter(|n| *n != "time").cloned().collect(),
+        Ok(state) => state
+            .values
+            .keys()
+            .filter(|n| *n != "time")
+            .cloned()
+            .collect(),
         Err(e) => {
             bevy::log::warn!("[sim] initial state read failed: {e:?}");
             sink.emit(RunUpdate::Failed {
@@ -1273,7 +1305,9 @@ pub fn run_stepping_loop(
     #[cfg(target_arch = "wasm32")]
     let internal_dt = {
         let span = (t_end - bounds.t_start).max(0.0);
-        output_dt.min(25.0).max(span / crate::sim_target::SAMPLE_CAP)
+        output_dt
+            .min(25.0)
+            .max(span / crate::sim_target::SAMPLE_CAP)
     };
     #[cfg(not(target_arch = "wasm32"))]
     let internal_dt = output_dt;
@@ -1469,7 +1503,10 @@ pub fn detect_top_level_inputs(
 ) -> Vec<DetectedInput> {
     crate::ast_extract::extract_typed_inputs_for_class(class)
         .into_iter()
-        .map(|c| DetectedInput { name: c.name, type_name: c.type_name })
+        .map(|c| DetectedInput {
+            name: c.name,
+            type_name: c.type_name,
+        })
         .collect()
 }
 
@@ -1511,11 +1548,14 @@ pub fn detect_top_level_literal_parameters(
                 // but are still overridable.
                 default_literal: c.default.map(|x| format!("{x}")),
                 supportable: !is_array,
-                reason: is_array
-                    .then(|| "array/record parameters can't be overridden".to_string()),
+                reason: is_array.then(|| "array/record parameters can't be overridden".to_string()),
                 description: {
                     let d = c.description.trim();
-                    if d.is_empty() { None } else { Some(d.to_string()) }
+                    if d.is_empty() {
+                        None
+                    } else {
+                        Some(d.to_string())
+                    }
                 },
             }
         })
@@ -1592,9 +1632,7 @@ pub struct PendingHandles(pub Vec<RunHandle>);
 /// `CompileStates`, which is reserved for compile/Step errors on
 /// the doc itself.
 #[derive(Resource, Default)]
-pub struct ExperimentSources(
-    pub std::collections::HashMap<ExperimentId, lunco_doc::DocumentId>,
-);
+pub struct ExperimentSources(pub std::collections::HashMap<ExperimentId, lunco_doc::DocumentId>);
 
 /// Per-document playback entity: holds the latest completed run's
 /// time-series in `SignalRegistry` so canvas plot tiles can resolve
@@ -1653,20 +1691,14 @@ pub fn drain_pending_handles(
                     // off the `RunCompleted` message below — core only writes
                     // the result + status into the registry here.
                     registry.set_result(handle.run_id, result);
-                    registry.set_status(
-                        handle.run_id,
-                        RunStatus::Done { wall_time_ms: wall },
-                    );
+                    registry.set_status(handle.run_id, RunStatus::Done { wall_time_ms: wall });
                     ev_completed.write(RunCompleted {
                         experiment_id: handle.run_id,
                     });
                     terminal = true;
                 }
                 RunUpdate::Failed { error, partial } => {
-                    bevy::log::warn!(
-                        "[experiments] run {:?} failed: {error}",
-                        handle.run_id
-                    );
+                    bevy::log::warn!("[experiments] run {:?} failed: {error}", handle.run_id);
                     let had_partial = partial.is_some();
                     if let Some(p) = partial {
                         registry.set_result(handle.run_id, p);
@@ -1852,17 +1884,29 @@ mod tests {
     #[test]
     fn resolved_max_parallel_honours_setting_and_falls_back() {
         assert_eq!(
-            ExperimentSettings { max_parallel: Some(3) }.resolved_max_parallel(),
+            ExperimentSettings {
+                max_parallel: Some(3)
+            }
+            .resolved_max_parallel(),
             3
         );
         assert_eq!(
-            ExperimentSettings { max_parallel: Some(1) }.resolved_max_parallel(),
+            ExperimentSettings {
+                max_parallel: Some(1)
+            }
+            .resolved_max_parallel(),
             1
         );
         // None and the 0 sentinel both fall back to the platform auto
         // default, which is always a valid (≥1) cap.
         assert!(ExperimentSettings { max_parallel: None }.resolved_max_parallel() >= 1);
-        assert!(ExperimentSettings { max_parallel: Some(0) }.resolved_max_parallel() >= 1);
+        assert!(
+            ExperimentSettings {
+                max_parallel: Some(0)
+            }
+            .resolved_max_parallel()
+                >= 1
+        );
     }
 
     #[test]
@@ -1934,7 +1978,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(settled, "scheduler should drain to empty after all runs end");
+        assert!(
+            settled,
+            "scheduler should drain to empty after all runs end"
+        );
     }
 
     /// CQ-525 regression: [`dae_cache_key`] MUST fold the model source body (and

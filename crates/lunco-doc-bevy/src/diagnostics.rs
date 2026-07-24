@@ -96,7 +96,11 @@ impl DocumentDiagnostics {
             .iter()
             .any(|d| d.severity == lunco_doc::DiagnosticSeverity::Error);
         let e = self.by_doc.entry(id).or_default();
-        e.state = if has_error { CompileState::Error } else { CompileState::Ready };
+        e.state = if has_error {
+            CompileState::Error
+        } else {
+            CompileState::Ready
+        };
         e.diagnostics = diagnostics;
         self.started.remove(&id);
     }

@@ -143,8 +143,7 @@ fn parse_label(text: &str) -> Label {
                 "BANDS" => lbl.bands = parse_usize(val),
                 "SAMPLE_BITS" => lbl.sample_bits = parse_usize(val),
                 "SAMPLE_TYPE" => {
-                    lbl.sample_type =
-                        Some(strip_units(val).trim_matches('"').to_uppercase())
+                    lbl.sample_type = Some(strip_units(val).trim_matches('"').to_uppercase())
                 }
                 "SCALING_FACTOR" => lbl.scaling_factor = parse_f64(val),
                 "OFFSET" => lbl.offset = parse_f64(val),
@@ -159,8 +158,7 @@ fn parse_label(text: &str) -> Label {
         if in_proj {
             match key {
                 "MAP_PROJECTION_TYPE" => {
-                    lbl.projection =
-                        Some(strip_units(val).trim_matches('"').to_uppercase())
+                    lbl.projection = Some(strip_units(val).trim_matches('"').to_uppercase())
                 }
                 "MAP_SCALE" => lbl.map_scale_m = parse_f64(val),
                 "MINIMUM_LATITUDE" => min_lat = parse_f64(val),
@@ -173,7 +171,12 @@ fn parse_label(text: &str) -> Label {
     }
 
     if let (Some(a), Some(b), Some(w), Some(e)) = (min_lat, max_lat, west_lon, east_lon) {
-        lbl.extent = Some(PdsExtent { min_lat: a, max_lat: b, west_lon: w, east_lon: e });
+        lbl.extent = Some(PdsExtent {
+            min_lat: a,
+            max_lat: b,
+            west_lon: w,
+            east_lon: e,
+        });
     }
     lbl
 }
@@ -219,7 +222,10 @@ impl PdsImage {
             .ok_or_else(|| io_err("PDS label missing IMAGE LINE_SAMPLES".into()))?;
         let bands = label.bands.unwrap_or(1);
         let bits = label.sample_bits.unwrap_or(32);
-        let stype = label.sample_type.clone().unwrap_or_else(|| "PC_REAL".into());
+        let stype = label
+            .sample_type
+            .clone()
+            .unwrap_or_else(|| "PC_REAL".into());
 
         // Where the pixels start.
         let data_offset = if let Some(off) = label.image_byte_offset {
@@ -230,9 +236,9 @@ impl PdsImage {
         } else if let Some(hint) = data_offset_hint {
             hint
         } else {
-            let rb = label
-                .record_bytes
-                .ok_or_else(|| io_err("PDS label has no ^IMAGE pointer and no RECORD_BYTES".into()))?;
+            let rb = label.record_bytes.ok_or_else(|| {
+                io_err("PDS label has no ^IMAGE pointer and no RECORD_BYTES".into())
+            })?;
             label.label_records.unwrap_or(1) * rb
         };
 
@@ -269,7 +275,11 @@ impl PdsImage {
                 (true, 64, true) => f64::from_le_bytes(b.try_into().unwrap()),
                 (true, 64, false) => f64::from_be_bytes(b.try_into().unwrap()),
                 (false, 8, _) => {
-                    if unsigned { b[0] as f64 } else { b[0] as i8 as f64 }
+                    if unsigned {
+                        b[0] as f64
+                    } else {
+                        b[0] as i8 as f64
+                    }
                 }
                 (false, 16, true) => {
                     if unsigned {
@@ -312,7 +322,11 @@ impl PdsImage {
                 .missing
                 .iter()
                 .any(|m| raw == *m || (raw - m).abs() <= m.abs() * 1e-6);
-            samples.push(if missing { f64::NAN } else { raw * scale + offs });
+            samples.push(if missing {
+                f64::NAN
+            } else {
+                raw * scale + offs
+            });
         }
 
         Ok(PdsImage {
@@ -330,7 +344,12 @@ impl PdsImage {
 mod tests {
     use super::*;
 
-    fn write_attached_img(dir: &Path, name: &str, label: &str, pixels: &[u8]) -> std::path::PathBuf {
+    fn write_attached_img(
+        dir: &Path,
+        name: &str,
+        label: &str,
+        pixels: &[u8],
+    ) -> std::path::PathBuf {
         // Attached label padded to one record.
         let record_bytes: usize = 512;
         let mut file = label.as_bytes().to_vec();

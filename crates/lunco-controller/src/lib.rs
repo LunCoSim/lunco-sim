@@ -73,15 +73,16 @@ pub struct SimulateIntent {
 
 impl Default for SimulateIntent {
     fn default() -> Self {
-        Self { intent: String::new(), held: false, target: Entity::PLACEHOLDER }
+        Self {
+            intent: String::new(),
+            held: false,
+            target: Entity::PLACEHOLDER,
+        }
     }
 }
 
 #[on_command(SimulateIntent)]
-fn on_simulate_intent(
-    trigger: On<SimulateIntent>,
-    mut sim: ResMut<SimulatedIntents>,
-) {
+fn on_simulate_intent(trigger: On<SimulateIntent>, mut sim: ResMut<SimulatedIntents>) {
     let cmd = trigger.event();
     let Some(intent) = lunco_core::parse_user_intent(&cmd.intent) else {
         warn!("[simulate-intent] unknown intent '{}'", cmd.intent);
@@ -143,7 +144,10 @@ pub struct SetControlPath {
 // real vessel, so a `SetControlPath` that arrives without a target is inert.
 impl Default for SetControlPath {
     fn default() -> Self {
-        Self { target: Entity::PLACEHOLDER, down: false }
+        Self {
+            target: Entity::PLACEHOLDER,
+            down: false,
+        }
     }
 }
 
@@ -165,7 +169,11 @@ fn on_set_control_path(
     info!(
         "[control-path] gid {} {}",
         gid.get(),
-        if cmd.down { "DOWN — commands will not reach it" } else { "restored" }
+        if cmd.down {
+            "DOWN — commands will not reach it"
+        } else {
+            "restored"
+        }
     );
 }
 
@@ -295,8 +303,7 @@ fn drive_from_bindings(
     // own `ActionState`. Before, the sim half was a global set consulted inside this
     // same loop, so one `SimulateIntent` pressed the key on EVERY controlled vessel.
     let held = |vessel: Entity, intent, intents: &ActionState<UserIntent>| {
-        sim_intents
-            .is_some_and(|s| s.0.get(&vessel).is_some_and(|set| set.contains(&intent)))
+        sim_intents.is_some_and(|s| s.0.get(&vessel).is_some_and(|set| set.contains(&intent)))
             || (!egui_keyboard && intents.pressed(&intent))
     };
 
@@ -339,9 +346,12 @@ fn drive_from_bindings(
         // `None`, per the yield above), which the ownership-gated floor would refuse
         // — gating the floor here would break ordinary local play. The policy is what
         // must bind everywhere; the floor stays where it belongs.
-        if let (Some(rbac), Some(paths), Some(local), Some((gid, _))) =
-            (rbac.as_ref(), control_paths.as_ref(), local_session.as_ref(), vessel_id)
-        {
+        if let (Some(rbac), Some(paths), Some(local), Some((gid, _))) = (
+            rbac.as_ref(),
+            control_paths.as_ref(),
+            local_session.as_ref(),
+            vessel_id,
+        ) {
             let owns = registry
                 .as_ref()
                 .is_some_and(|reg| reg.owns(local.0, gid.get()));
@@ -398,7 +408,9 @@ fn drive_from_bindings(
         // then, single-player/host gets the arbiter; the wire keeps its
         // contiguous stream.
         let active = writes.iter().any(|(_, v)| v.abs() > f64::EPSILON);
-        let prev = was_active.insert(link.vessel_entity, active).unwrap_or(false);
+        let prev = was_active
+            .insert(link.vessel_entity, active)
+            .unwrap_or(false);
         if !active && !prev && owned_gid.is_none() {
             continue;
         }
@@ -428,7 +440,12 @@ fn drive_from_bindings(
     for (entity, intents, binding) in q_self.iter() {
         // A self-driver IS its own vessel, so it is its own intent subject.
         let writes = binding.resolve(|intent| held(entity, intent, intents));
-        commands.trigger(lunco_cosim::SetPorts { target: entity, writes, seq: 0, tick: 0 });
+        commands.trigger(lunco_cosim::SetPorts {
+            target: entity,
+            writes,
+            seq: 0,
+            tick: 0,
+        });
     }
 }
 
@@ -456,7 +473,9 @@ fn record_control_input(
     q: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
 ) {
     let cmd = trigger.event();
-    let Ok((gid, owned)) = q.get(cmd.target) else { return };
+    let Ok((gid, owned)) = q.get(cmd.target) else {
+        return;
+    };
     let g = gid.get();
     // Capture throttle/steer for the render-lead (both roles harmless; the lead
     // system is client-only). Undeclared names default to the prior value.
@@ -555,7 +574,9 @@ const KEYBINDINGS_JSON: &str = include_str!("../../../assets/config/keybindings.
 /// [`lunco_core::parse_user_intent`]). Keys starting with `_` (e.g. `_comment`)
 /// and unknown intents are skipped. The mouse `Look`/`Zoom` axes are not
 /// key-bindable, so they're always added in code.
-pub fn build_avatar_input_map(json: &str) -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
+pub fn build_avatar_input_map(
+    json: &str,
+) -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
     use leafwing_input_manager::prelude::*;
     use lunco_core::UserIntent::{Look, Zoom};
 
@@ -789,7 +810,10 @@ mod tests {
                 serde_json::from_value(val.clone()).expect("intent value must be a KeyCode array");
             bound_keys += keys.len();
         }
-        assert!(bound_keys >= 8, "expected the default control keys to be present");
+        assert!(
+            bound_keys >= 8,
+            "expected the default control keys to be present"
+        );
         // Builder runs end-to-end (also adds the mouse axes) without panicking.
         let _ = get_avatar_input_map();
         let _ = UserIntent::MoveForward;

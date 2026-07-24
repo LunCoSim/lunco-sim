@@ -18,13 +18,13 @@
 //! names is a non-optional dependency of this crate, and all of its systems are
 //! self-guarding no-ops on host/standalone.
 
-use bevy::prelude::*;
-use bevy::math::{DQuat, DVec3};
+use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::{
     AngularVelocity, Collisions, LinearVelocity, PhysicsSystems, RigidBody, SubstepCount,
 };
-use avian3d::schedule::{PhysicsSchedule, Physics, Substeps};
-use avian3d::physics_transform::{Position, Rotation};
+use avian3d::schedule::{Physics, PhysicsSchedule, Substeps};
+use bevy::math::{DQuat, DVec3};
+use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -428,7 +428,13 @@ pub fn interpolate_proxies(
     // `INTERP_DELAY`-old interpolated pose here. Phase B: a free predicted prop
     // (`PredictedDynamic`) is likewise locally simulated + state-reconciled, so it
     // is excluded too.
-    q_local_sim: Query<(), Or<(With<lunco_core::OwnedLocally>, With<lunco_core::PredictedDynamic>)>>,
+    q_local_sim: Query<
+        (),
+        Or<(
+            With<lunco_core::OwnedLocally>,
+            With<lunco_core::PredictedDynamic>,
+        )>,
+    >,
     mut q: Query<(
         &mut Transform,
         Option<&mut Position>,
@@ -540,7 +546,13 @@ pub fn drive_kinematic_proxies(
     mut clock: ResMut<ProxyPlaybackClock>,
     // Excluded: locally-simulated bodies (owned rover, predicted props) run their
     // own Dynamic step + reconcile, not curve-following.
-    q_local_sim: Query<(), Or<(With<lunco_core::OwnedLocally>, With<lunco_core::PredictedDynamic>)>>,
+    q_local_sim: Query<
+        (),
+        Or<(
+            With<lunco_core::OwnedLocally>,
+            With<lunco_core::PredictedDynamic>,
+        )>,
+    >,
     mut q: Query<
         (
             &mut Position,
@@ -681,7 +693,12 @@ impl Default for VisualLeadSettings {
             / 1000.0;
         // Gentle defaults — the lead is SMOOTHED (eased) so it never leaps; tune up
         // via `SetVisualLead` to taste.
-        Self { enabled, yaw_rate: 0.5, speed: 4.0, lead_secs }
+        Self {
+            enabled,
+            yaw_rate: 0.5,
+            speed: 4.0,
+            lead_secs,
+        }
     }
 }
 
@@ -754,11 +771,18 @@ pub fn maintain_owned_locally(
     lead: Res<VisualLeadSettings>,
     mut commands: Commands,
     q: Query<
-        (Entity, &lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>),
+        (
+            Entity,
+            &lunco_core::GlobalEntityId,
+            Has<lunco_core::OwnedLocally>,
+        ),
         // Skip articulated wheels: they are never owned in the registry (only the
         // chassis gid is claimed), so this system would strip the `OwnedLocally`
         // that `propagate_owned_to_wheels` mirrors onto an owned rover's wheels.
-        (With<lunco_core::NetReplicate>, Without<lunco_core::ArticulatedLink>),
+        (
+            With<lunco_core::NetReplicate>,
+            Without<lunco_core::ArticulatedLink>,
+        ),
     >,
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
@@ -770,7 +794,10 @@ pub fn maintain_owned_locally(
         // Kinematic↔Dynamic; when it does lapse the body cleanly returns to
         // interpolation (`force_kinematic_proxies` re-pins it).
         let owns = reg.owns(local.0, gid.get());
-        let last_active = input_log.0.get(&gid.get()).map_or(0, |l| l.last_active_tick);
+        let last_active = input_log
+            .0
+            .get(&gid.get())
+            .map_or(0, |l| l.last_active_tick);
         // `no_local_predict()` / `visual_predict()` force follow-authority mode:
         // never promote to a local `Dynamic` step (the wobble source) — the rover
         // stays a kinematic proxy. In `visual_predict` the render-lead adds back
@@ -790,7 +817,9 @@ pub fn maintain_owned_locally(
                 // `force_kinematic_proxies` re-pins `Kinematic` + zeros velocity.
                 info!(
                     "[predict] promote owned rover gid={} -> Dynamic (last_active={}, now={})",
-                    gid.get(), last_active, tick.0
+                    gid.get(),
+                    last_active,
+                    tick.0
                 );
                 commands
                     .entity(e)
@@ -804,7 +833,9 @@ pub fn maintain_owned_locally(
                 if let Some(s) = buffers.0.get(&gid.get()).and_then(|b| b.back()).copied() {
                     let ent = e;
                     commands.queue(move |world: &mut World| {
-                        let Ok(mut em) = world.get_entity_mut(ent) else { return };
+                        let Ok(mut em) = world.get_entity_mut(ent) else {
+                            return;
+                        };
                         if let Some(mut p) = em.get_mut::<Position>() {
                             p.0 = s.pos_world;
                         }
@@ -821,7 +852,10 @@ pub fn maintain_owned_locally(
                 }
             }
             (false, true) => {
-                info!("[predict] demote owned rover gid={} (idle/released)", gid.get());
+                info!(
+                    "[predict] demote owned rover gid={} (idle/released)",
+                    gid.get()
+                );
                 commands.entity(e).remove::<lunco_core::OwnedLocally>();
             }
             _ => {}
@@ -852,9 +886,15 @@ pub fn propagate_owned_to_wheels(
     role: Res<lunco_core::NetworkRole>,
     q_owned_chassis: Query<
         (),
-        (With<lunco_core::OwnedLocally>, With<lunco_core::ArticulatedVehicle>),
+        (
+            With<lunco_core::OwnedLocally>,
+            With<lunco_core::ArticulatedVehicle>,
+        ),
     >,
-    q_wheels: Query<(Entity, &ChildOf, Has<lunco_core::OwnedLocally>), With<lunco_core::ArticulatedLink>>,
+    q_wheels: Query<
+        (Entity, &ChildOf, Has<lunco_core::OwnedLocally>),
+        With<lunco_core::ArticulatedLink>,
+    >,
     mut commands: Commands,
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
@@ -942,7 +982,9 @@ fn lead_owned_rover_render(
         }
         let (c, fwd) = {
             let Ok(gt) = q_gt.get(e) else { continue };
-            let fwd = (gt.rotation() * Vec3::NEG_Z).with_y(0.0).normalize_or_zero();
+            let fwd = (gt.rotation() * Vec3::NEG_Z)
+                .with_y(0.0)
+                .normalize_or_zero();
             (gt.translation(), fwd)
         };
         // World rigid delta: yaw about the rover's centre, then translate forward.
@@ -1130,9 +1172,7 @@ pub fn record_predicted_state(
 /// path stays the current reconcile, so this cannot regress anything until chosen.
 fn rollback_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("LUNCO_ROLLBACK").map_or(false, |v| v == "1" || v == "true")
-    })
+    *ON.get_or_init(|| std::env::var("LUNCO_ROLLBACK").map_or(false, |v| v == "1" || v == "true"))
 }
 
 /// Don't rollback for noise. Below this the prediction already matches authority,
@@ -1176,7 +1216,12 @@ struct AssemblyState {
 pub struct AssemblyHistory(HashMap<u64, VecDeque<AssemblyState>>);
 
 fn rb_state(p: &Position, r: &Rotation, lv: &LinearVelocity, av: &AngularVelocity) -> RbState {
-    RbState { pos: p.0, rot: r.0, lv: lv.0, av: av.0 }
+    RbState {
+        pos: p.0,
+        rot: r.0,
+        lv: lv.0,
+        av: av.0,
+    }
 }
 
 /// Record the owned rover's full assembly each fixed tick, keyed by the input seq
@@ -1209,17 +1254,19 @@ pub fn record_assembly_state(
     // *restored* afterwards as part of the frozen set), tore the revolute joints,
     // and launched the rover tens of metres. Walk the real hierarchy instead.
     q_children: Query<&Children>,
-    q_body: Query<
-        (&Position, &Rotation, &LinearVelocity, &AngularVelocity),
-        With<RigidBody>,
-    >,
+    q_body: Query<(&Position, &Rotation, &LinearVelocity, &AngularVelocity), With<RigidBody>>,
 ) {
     if !rollback_enabled() {
         return;
     }
     for (chassis_e, gid, p, r, lv, av) in q_chassis.iter() {
         let g = gid.get();
-        let Some(seq) = input_log.0.get(&g).and_then(|l| l.frames.back()).map(|f| f.seq) else {
+        let Some(seq) = input_log
+            .0
+            .get(&g)
+            .and_then(|l| l.frames.back())
+            .map(|f| f.seq)
+        else {
             continue;
         };
         let ring = hist.0.entry(g).or_default();
@@ -1318,10 +1365,10 @@ pub fn rollback_owned_prediction(world: &mut World) {
     // ── Gather the owned chassis + its ack, without holding any borrows ──
     let mut owned: Vec<(Entity, u64)> = Vec::new();
     {
-        let mut q = world.query_filtered::<
-            (Entity, &lunco_core::GlobalEntityId),
-            (With<lunco_core::OwnedLocally>, Without<lunco_core::ArticulatedLink>),
-        >();
+        let mut q = world.query_filtered::<(Entity, &lunco_core::GlobalEntityId), (
+            With<lunco_core::OwnedLocally>,
+            Without<lunco_core::ArticulatedLink>,
+        )>();
         for (e, gid) in q.iter(world) {
             owned.push((e, gid.get()));
         }
@@ -1512,7 +1559,9 @@ pub fn rollback_owned_prediction(world: &mut World) {
 /// Seat a batch of bodies' public physics state (the only state a rollback may touch).
 fn apply_states(world: &mut World, states: &[(Entity, RbState)]) {
     for (e, s) in states {
-        let Ok(mut em) = world.get_entity_mut(*e) else { continue };
+        let Ok(mut em) = world.get_entity_mut(*e) else {
+            continue;
+        };
         if let Some(mut p) = em.get_mut::<Position>() {
             p.0 = s.pos;
         }
@@ -1659,7 +1708,10 @@ pub fn reconcile_owned_prediction(
             // smoothly. Writing the pose (or `Transform`) here instead popped the
             // body AND reset `bevy_transform_interpolation`'s easing — the
             // hold-the-key jitter.
-            lunco_core::Reconciliation::Correct { pos: new_pos, rot: new_rot } => {
+            lunco_core::Reconciliation::Correct {
+                pos: new_pos,
+                rot: new_rot,
+            } => {
                 let dpos = new_pos - tf.translation;
                 let drot = (new_rot * tf.rotation.inverse()).normalize();
                 match off {
@@ -1668,16 +1720,20 @@ pub fn reconcile_owned_prediction(
                         pc.rot = (drot * pc.rot).normalize();
                     }
                     None => {
-                        commands
-                            .entity(e)
-                            .try_insert(PendingCorrection { pos: dpos, rot: drot });
+                        commands.entity(e).try_insert(PendingCorrection {
+                            pos: dpos,
+                            rot: drot,
+                        });
                     }
                 }
             }
             // Gross desync: teleport semantics — seat pose directly (Transform
             // included; the interpolation easing-reset on a real teleport is
             // exactly what we want) and drop any queued residual.
-            lunco_core::Reconciliation::Snap { pos: new_pos, rot: new_rot } => {
+            lunco_core::Reconciliation::Snap {
+                pos: new_pos,
+                rot: new_rot,
+            } => {
                 // The force-rebaseline. It used to be SILENT; it is now counted and
                 // announced (review N3) — a snapping owned body is the loudest
                 // symptom the netcode has, and it was invisible in the field.
@@ -1794,7 +1850,9 @@ pub fn maintain_predicted_dynamic(
         }
         // Mark eligible, but leave it a kinematic proxy: `promote_contacting_proxies`
         // flips it `Dynamic` only while an owned body is touching it.
-        commands.entity(e).try_insert(lunco_core::ContactPredictable);
+        commands
+            .entity(e)
+            .try_insert(lunco_core::ContactPredictable);
     }
     for e in q_demote.iter() {
         commands.entity(e).remove::<(
@@ -1877,7 +1935,9 @@ pub fn maintain_predicted_vehicles(
         }
         // Eligible only: stays a kinematic proxy until an owned body shoves it,
         // at which point `promote_contacting_proxies` flips it `Dynamic` to yield.
-        commands.entity(e).try_insert(lunco_core::ContactPredictable);
+        commands
+            .entity(e)
+            .try_insert(lunco_core::ContactPredictable);
     }
 }
 
@@ -1922,10 +1982,7 @@ pub fn promote_contacting_proxies(
     q_owned: Query<(), With<lunco_core::OwnedLocally>>,
     q_eligible: Query<(), With<lunco_core::ContactPredictable>>,
     // Bodies currently promoted (Dynamic) that carry the linger countdown.
-    mut q_promoted: Query<
-        (Entity, &mut ContactPredictLinger),
-        With<lunco_core::PredictedDynamic>,
-    >,
+    mut q_promoted: Query<(Entity, &mut ContactPredictLinger), With<lunco_core::PredictedDynamic>>,
     mut commands: Commands,
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
@@ -2046,7 +2103,9 @@ pub fn reconcile_predicted_dynamic(
     let render_t = clock.t;
     for gid in q_pred.iter() {
         let g = gid.get();
-        let Some(buf) = buffers.0.get(&g) else { continue };
+        let Some(buf) = buffers.0.get(&g) else {
+            continue;
+        };
         if buf.is_empty() {
             continue;
         }
@@ -2109,38 +2168,39 @@ pub fn reconcile_predicted_dynamic(
                 *pc = PendingCorrection::default();
             }
         } else if dist > RECONCILE_EPS_POS || angle > RECONCILE_EPS_ROT {
-                // OUT of the in-sync dead-zone but not far enough to snap.
-                //
-                // Feed-forward authoritative velocity to ALL predicted bodies here so
-                // they dead-reckon smoothly between snapshots instead of sitting still
-                // (0 local velocity) and drifting until they cross RECONCILE_SNAP_DIST
-                // and teleport. This applies to free props (host-launched debris, a
-                // ball mid-flight) just as much as to driven rovers — gating it on
-                // `is_rover` left non-rover bodies stationary and snapping. A
-                // host-moved prop leaves the dead-zone immediately, so it reaches this
-                // branch and tracks authority velocity.
-                if let Some(mut l) = lin {
-                    l.0 = lv;
-                }
-                if let Some(mut a) = ang {
-                    a.0 = av;
-                }
+            // OUT of the in-sync dead-zone but not far enough to snap.
+            //
+            // Feed-forward authoritative velocity to ALL predicted bodies here so
+            // they dead-reckon smoothly between snapshots instead of sitting still
+            // (0 local velocity) and drifting until they cross RECONCILE_SNAP_DIST
+            // and teleport. This applies to free props (host-launched debris, a
+            // ball mid-flight) just as much as to driven rovers — gating it on
+            // `is_rover` left non-rover bodies stationary and snapping. A
+            // host-moved prop leaves the dead-zone immediately, so it reaches this
+            // branch and tracks authority velocity.
+            if let Some(mut l) = lin {
+                l.0 = lv;
+            }
+            if let Some(mut a) = ang {
+                a.0 = av;
+            }
 
-                // Soft CONTINUOUS spring (every fixed tick): SET the residual to the
-                // freshly-measured error; `drain_pending_corrections` eases a bounded bit
-                // per tick into Position/Rotation (smooth, never a Transform write).
-                let dpos = err.as_vec3();
-                match off {
-                    Some(mut pc) => {
-                        pc.pos = dpos;
-                        pc.rot = rot_err;
-                    }
-                    None => {
-                        commands
-                            .entity(e)
-                            .try_insert(PendingCorrection { pos: dpos, rot: rot_err });
-                    }
+            // Soft CONTINUOUS spring (every fixed tick): SET the residual to the
+            // freshly-measured error; `drain_pending_corrections` eases a bounded bit
+            // per tick into Position/Rotation (smooth, never a Transform write).
+            let dpos = err.as_vec3();
+            match off {
+                Some(mut pc) => {
+                    pc.pos = dpos;
+                    pc.rot = rot_err;
                 }
+                None => {
+                    commands.entity(e).try_insert(PendingCorrection {
+                        pos: dpos,
+                        rot: rot_err,
+                    });
+                }
+            }
         }
         // else: within tolerance — leave the body entirely to local physics; any
         // residual `PendingCorrection` finishes draining and removes itself.
@@ -2446,13 +2506,23 @@ mod tests {
     fn owned_and_actively_driving_predicts() {
         // Driven this very tick, and anywhere inside the grace window.
         assert!(predicts_locally(true, 1_000, 1_000, PREDICT_GRACE_TICKS));
-        assert!(predicts_locally(true, 1_000, 1_000 + PREDICT_GRACE_TICKS, PREDICT_GRACE_TICKS));
+        assert!(predicts_locally(
+            true,
+            1_000,
+            1_000 + PREDICT_GRACE_TICKS,
+            PREDICT_GRACE_TICKS
+        ));
     }
 
     #[test]
     fn owned_idle_past_grace_falls_back_to_interpolation() {
         // One tick past the grace window → demote to proxy/interpolation.
-        assert!(!predicts_locally(true, 1_000, 1_001 + PREDICT_GRACE_TICKS, PREDICT_GRACE_TICKS));
+        assert!(!predicts_locally(
+            true,
+            1_000,
+            1_001 + PREDICT_GRACE_TICKS,
+            PREDICT_GRACE_TICKS
+        ));
     }
 
     #[test]
@@ -2535,7 +2605,11 @@ mod pose_write_tests {
             .entry(gid)
             .or_default()
             .ring
-            .push_back(PredictedState { seq: 1, pos: Vec3::ZERO, rot: predicted });
+            .push_back(PredictedState {
+                seq: 1,
+                pos: Vec3::ZERO,
+                rot: predicted,
+            });
         // …and the host acks seq 1 with a divergent authoritative orientation.
         world
             .resource_mut::<InterpBuffers>()
@@ -2605,7 +2679,10 @@ mod pose_write_tests {
         // Clock is now an external resource (advanced in FixedUpdate by
         // `drive_kinematic_proxies`); seat it at the render instant directly. For
         // the single sample at gen_t 0, render_t = −INTERP_DELAY ⇒ snap-to-oldest.
-        world.insert_resource(ProxyPlaybackClock { t: -INTERP_DELAY, init: true });
+        world.insert_resource(ProxyPlaybackClock {
+            t: -INTERP_DELAY,
+            init: true,
+        });
 
         let gid = 0x00AB_0002u64;
         let target = Quat::from_rotation_y(0.8);
@@ -2670,7 +2747,10 @@ mod pose_write_tests {
         // newest_gen 0.50 − INTERP_DELAY 0.18 = 0.32 render instant (the clock is
         // external now; seat it where the old self-advancing clock would have eased
         // to on first sight).
-        world.insert_resource(ProxyPlaybackClock { t: 0.32, init: true });
+        world.insert_resource(ProxyPlaybackClock {
+            t: 0.32,
+            init: true,
+        });
 
         let gid = 0x00AB_0003u64;
         let e = world
@@ -2693,23 +2773,30 @@ mod pose_write_tests {
             let tick = 12 + k * 3; // 12,15,…,30  ⇒ gen_t 0.20,0.25,…,0.50
             let gen_t = tick as f64 * SECS_PER_TICK;
             let x = (gen_t * 100.0) as f32;
-            world.resource_mut::<IncomingSnapshots>().0.push(SnapshotSample {
-                gid,
-                tick,
-                t: [x, 0.0, 0.0],
-                r: identity_r,
-                lv: [100.0, 0.0, 0.0], // unused here (we bracket, never extrapolate)
-                av: [0.0; 3],
-                last_input_seq: 0,
-                pos: [gen_t * 100.0, 0.0, 0.0],
-                cell: [0; 3],
-            });
+            world
+                .resource_mut::<IncomingSnapshots>()
+                .0
+                .push(SnapshotSample {
+                    gid,
+                    tick,
+                    t: [x, 0.0, 0.0],
+                    r: identity_r,
+                    lv: [100.0, 0.0, 0.0], // unused here (we bracket, never extrapolate)
+                    av: [0.0; 3],
+                    last_input_seq: 0,
+                    pos: [gen_t * 100.0, 0.0, 0.0],
+                    cell: [0; 3],
+                });
         }
 
         // One frame: the whole burst lands in the buffer at once.
         world.run_system_once(ingest_snapshots).unwrap();
         assert_eq!(
-            world.resource::<InterpBuffers>().0.get(&gid).map(|b| b.len()),
+            world
+                .resource::<InterpBuffers>()
+                .0
+                .get(&gid)
+                .map(|b| b.len()),
             Some(7),
             "all 7 burst samples must be distinct buffer entries"
         );
@@ -2738,7 +2825,10 @@ mod pose_write_tests {
         world.init_resource::<lunco_core::DivergenceStats>();
         // reconcile only runs as a connected Client; the clock is the render instant.
         world.insert_resource(lunco_core::NetworkRole::Client);
-        world.insert_resource(lunco_core::NetStatus { connected: true, ..Default::default() });
+        world.insert_resource(lunco_core::NetStatus {
+            connected: true,
+            ..Default::default()
+        });
         world.insert_resource(ProxyPlaybackClock { t: 0.5, init: true });
 
         let gid = 0x00BB_0001u64;
@@ -2776,8 +2866,14 @@ mod pose_write_tests {
         // `Transform`, which writeback derives) and the authoritative velocity.
         let p = world.entity(e).get::<Position>().unwrap().0;
         let v = world.entity(e).get::<LinearVelocity>().unwrap().0;
-        assert!((p.x - 50.0).abs() < 1e-4, "should snap to authority, got {p:?}");
-        assert!((v.x - 2.0).abs() < 1e-4, "velocity must be seated to authority, got {v:?}");
+        assert!(
+            (p.x - 50.0).abs() < 1e-4,
+            "should snap to authority, got {p:?}"
+        );
+        assert!(
+            (v.x - 2.0).abs() < 1e-4,
+            "velocity must be seated to authority, got {v:?}"
+        );
     }
 
     /// Phase B: when a `PredictedDynamic` prop is already at authority (InSync), the
@@ -2790,7 +2886,10 @@ mod pose_write_tests {
         world.init_resource::<InterpBuffers>();
         world.init_resource::<lunco_core::DivergenceStats>();
         world.insert_resource(lunco_core::NetworkRole::Client);
-        world.insert_resource(lunco_core::NetStatus { connected: true, ..Default::default() });
+        world.insert_resource(lunco_core::NetStatus {
+            connected: true,
+            ..Default::default()
+        });
         world.insert_resource(ProxyPlaybackClock { t: 0.5, init: true });
 
         let gid = 0x00BB_0002u64;
@@ -2882,7 +2981,11 @@ mod pose_write_tests {
             .entry(gid)
             .or_default()
             .ring
-            .push_back(PredictedState { seq: 1, pos: Vec3::ZERO, rot: Quat::IDENTITY });
+            .push_back(PredictedState {
+                seq: 1,
+                pos: Vec3::ZERO,
+                rot: Quat::IDENTITY,
+            });
 
         // A stale snapshot arrives still advertising the PREVIOUS owner's seq 5000.
         world
@@ -2927,7 +3030,10 @@ mod pose_write_tests {
             });
         world.run_system_once(reconcile_owned_prediction).unwrap();
 
-        assert_eq!(world.resource::<PredictedStateLog>().0[&gid].last_reconciled, 1);
+        assert_eq!(
+            world.resource::<PredictedStateLog>().0[&gid].last_reconciled,
+            1
+        );
         let p = world.entity(e).get::<Position>().unwrap().0;
         assert!(
             (p.x - 100.0).abs() < 1e-4,
@@ -2989,7 +3095,9 @@ mod avian_kinematic_probe {
             // Fixed step == H, and advance virtual time by exactly H per update:
             // one — and only one — physics tick per `app.update()`, no wall clock.
             .insert_resource(Time::<Fixed>::from_hz(HZ))
-            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(H)));
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                H,
+            )));
         // `app.run()` calls these; bare `app.update()` does not. avian inserts its
         // diagnostics resources (`ColliderTreeDiagnostics`, …) in `finish`.
         app.finish();
@@ -3084,7 +3192,12 @@ mod avian_kinematic_probe {
         let x0 = app.world().entity(target).get::<Position>().unwrap().0.x;
         step(&mut app, 30);
         let pos = app.world().entity(target).get::<Position>().unwrap().0;
-        let vel = app.world().entity(target).get::<LinearVelocity>().unwrap().0;
+        let vel = app
+            .world()
+            .entity(target)
+            .get::<LinearVelocity>()
+            .unwrap()
+            .0;
 
         assert!(
             pos.x > x0 + 0.1,
@@ -3121,13 +3234,29 @@ mod step1_curve_tests {
     #[test]
     fn hermite_matches_endpoints() {
         let mut buf = VecDeque::new();
-        buf.push_back(sample(0.0, DVec3::new(0.0, 0.0, 0.0), Vec3::X, Quat::IDENTITY));
-        buf.push_back(sample(1.0, DVec3::new(5.0, 0.0, 0.0), Vec3::X, Quat::IDENTITY));
+        buf.push_back(sample(
+            0.0,
+            DVec3::new(0.0, 0.0, 0.0),
+            Vec3::X,
+            Quat::IDENTITY,
+        ));
+        buf.push_back(sample(
+            1.0,
+            DVec3::new(5.0, 0.0, 0.0),
+            Vec3::X,
+            Quat::IDENTITY,
+        ));
 
         let (p0, _, _, _) = sample_curve(&buf, 0.0).unwrap();
         let (p1, _, _, _) = sample_curve(&buf, 1.0).unwrap();
-        assert!((p0 - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-9, "start: {p0:?}");
-        assert!((p1 - DVec3::new(5.0, 0.0, 0.0)).length() < 1e-9, "end: {p1:?}");
+        assert!(
+            (p0 - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-9,
+            "start: {p0:?}"
+        );
+        assert!(
+            (p1 - DVec3::new(5.0, 0.0, 0.0)).length() < 1e-9,
+            "end: {p1:?}"
+        );
     }
 
     /// Constant velocity (`p1 = p0 + v·span`, equal end tangents) ⇒ Hermite is
@@ -3150,16 +3279,27 @@ mod step1_curve_tests {
     #[test]
     fn starved_extrapolates_then_caps() {
         let mut buf = VecDeque::new();
-        buf.push_back(sample(0.0, DVec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Quat::IDENTITY));
+        buf.push_back(sample(
+            0.0,
+            DVec3::ZERO,
+            Vec3::new(1.0, 0.0, 0.0),
+            Quat::IDENTITY,
+        ));
 
         // Small overshoot within both caps: linear glide = v·dt.
         let (p, _, _, _) = sample_curve(&buf, 0.1).unwrap();
-        assert!((p - DVec3::new(0.1, 0.0, 0.0)).length() < 1e-9, "glide: {p:?}");
+        assert!(
+            (p - DVec3::new(0.1, 0.0, 0.0)).length() < 1e-9,
+            "glide: {p:?}"
+        );
 
         // Far past: time cap (0.25) then distance cap (8.0) bound it — here time
         // cap binds first (1 m/s × 0.25 s = 0.25 m).
         let (far, _, _, _) = sample_curve(&buf, 100.0).unwrap();
-        assert!(far.x <= INTERP_MAX_EXTRAP_DIST + 1e-9, "distance cap: {far:?}");
+        assert!(
+            far.x <= INTERP_MAX_EXTRAP_DIST + 1e-9,
+            "distance cap: {far:?}"
+        );
         assert!((far.x - 0.25).abs() < 1e-9, "time cap should bind: {far:?}");
     }
 
@@ -3182,10 +3322,21 @@ mod step1_curve_tests {
     #[test]
     fn ang_vel_quarter_turn_about_y() {
         let h = 1.0 / 64.0;
-        let w = ang_vel_to_track(Quat::IDENTITY, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), h);
+        let w = ang_vel_to_track(
+            Quat::IDENTITY,
+            Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            h,
+        );
         let expected = (std::f64::consts::FRAC_PI_2) / h;
-        assert!(w.x.abs() < 1e-6 && w.z.abs() < 1e-6, "axis should be +Y; got {w:?}");
-        assert!((w.y - expected).abs() < 1e-4, "ω.y expected {expected}; got {}", w.y);
+        assert!(
+            w.x.abs() < 1e-6 && w.z.abs() < 1e-6,
+            "axis should be +Y; got {w:?}"
+        );
+        assert!(
+            (w.y - expected).abs() < 1e-4,
+            "ω.y expected {expected}; got {}",
+            w.y
+        );
     }
 
     /// `w < 0` branch: a quaternion equal to `−q` is the same orientation; the
@@ -3199,6 +3350,10 @@ mod step1_curve_tests {
         let w = ang_vel_to_track(Quat::IDENTITY, neg, h);
         let expected = (std::f64::consts::FRAC_PI_2) / h; // short arc magnitude
         assert!(w.y > 0.0, "short arc should be +Y; got {w:?}");
-        assert!((w.y - expected).abs() < 1e-4, "ω.y short-arc expected {expected}; got {}", w.y);
+        assert!(
+            (w.y - expected).abs() < 1e-4,
+            "ω.y short-arc expected {expected}; got {}",
+            w.y
+        );
     }
 }

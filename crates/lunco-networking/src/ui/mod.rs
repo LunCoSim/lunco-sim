@@ -94,7 +94,10 @@ fn draw_pending_connect_prompt(
             ui.strong(&req.address);
             if !req.digest.is_empty() {
                 ui.add_space(2.0);
-                ui.weak(format!("pinned cert digest: {}…", &req.digest[..req.digest.len().min(16)]));
+                ui.weak(format!(
+                    "pinned cert digest: {}…",
+                    &req.digest[..req.digest.len().min(16)]
+                ));
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -352,14 +355,22 @@ pub fn draw_collaborator_cursors(
             // Exact Catppuccin Mocha `red` (243,139,168) — the "you are connected
             // as a client" banner accent. Blocked on the dep, see above.
             egui::Stroke::new(1.5, egui::Color32::from_rgb(243, 139, 168)),
-            true,                       // scrim: block input behind the Follow-Mode lock
+            true, // scrim: block input behind the Follow-Mode lock
             egui::vec2(12.0, 4.0),
             |ui| {
-                ui.label(egui::RichText::new(label).color(egui::Color32::WHITE).strong());
+                ui.label(
+                    egui::RichText::new(label)
+                        .color(egui::Color32::WHITE)
+                        .strong(),
+                );
                 if can_exit {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .button(egui::RichText::new("Exit").color(egui::Color32::from_rgb(243, 139, 168)).strong())
+                            .button(
+                                egui::RichText::new("Exit")
+                                    .color(egui::Color32::from_rgb(243, 139, 168))
+                                    .strong(),
+                            )
                             .clicked()
                         {
                             commands.trigger(crate::sync::SetFollowMode { enabled: false });
@@ -375,11 +386,10 @@ pub fn draw_collaborator_cursors(
     // Without this, a targeted/observed student has no indication they are the
     // active student. (When follow_mode is on, the "Mirroring" banner above
     // already conveys it, so skip to avoid stacking two banners.)
-    let is_targeted = tutor_status.target_client.is_none()
-        || tutor_status.target_client == Some(local.0 .0);
-    let is_active_student = tutor_status.tutor_active
-        && !tutorial_settings.follow_mode
-        && is_targeted;
+    let is_targeted =
+        tutor_status.target_client.is_none() || tutor_status.target_client == Some(local.0 .0);
+    let is_active_student =
+        tutor_status.tutor_active && !tutorial_settings.follow_mode && is_targeted;
     if is_active_student {
         let label = if tutor_status.observe_mode {
             "👤 Student Mode (Tutor is observing you)"
@@ -397,7 +407,11 @@ pub fn draw_collaborator_cursors(
             false,
             egui::vec2(10.0, 2.0),
             |ui| {
-                ui.label(egui::RichText::new(label).color(egui::Color32::WHITE).small());
+                ui.label(
+                    egui::RichText::new(label)
+                        .color(egui::Color32::WHITE)
+                        .small(),
+                );
             },
         );
     }
@@ -415,10 +429,18 @@ pub fn draw_collaborator_cursors(
             false,
             egui::vec2(10.0, 2.0),
             |ui| {
-                ui.label(egui::RichText::new("🎓 Teaching Mode (Broadcasting)").color(egui::Color32::WHITE).small());
+                ui.label(
+                    egui::RichText::new("🎓 Teaching Mode (Broadcasting)")
+                        .color(egui::Color32::WHITE)
+                        .small(),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .button(egui::RichText::new("Stop").color(egui::Color32::from_rgb(166, 227, 161)).small())
+                        .button(
+                            egui::RichText::new("Stop")
+                                .color(egui::Color32::from_rgb(166, 227, 161))
+                                .small(),
+                        )
                         .clicked()
                     {
                         commands.trigger(crate::sync::SetTeachMode { enabled: false });
@@ -470,8 +492,14 @@ pub fn draw_collaborator_cursors(
             let margin_right = 16.0 + size.x + 8.0;
             let margin_bottom = 20.0 + size.y + 4.0;
 
-            let clamped_x = x.clamp(screen_rect.min.x + margin_left, screen_rect.max.x - margin_right);
-            let clamped_y = y.clamp(screen_rect.min.y + margin_top, screen_rect.max.y - margin_bottom);
+            let clamped_x = x.clamp(
+                screen_rect.min.x + margin_left,
+                screen_rect.max.x - margin_right,
+            );
+            let clamped_y = y.clamp(
+                screen_rect.min.y + margin_top,
+                screen_rect.max.y - margin_bottom,
+            );
             let pos = egui::pos2(clamped_x, clamped_y);
 
             let color = egui::Color32::from_rgb(info.color[0], info.color[1], info.color[2]);
@@ -482,7 +510,11 @@ pub fn draw_collaborator_cursors(
             let p2 = pos + egui::vec2(0.0, 16.0);
             let p3 = pos + egui::vec2(4.5, 12.0);
             let p4 = pos + egui::vec2(12.0, 12.0);
-            painter.add(egui::Shape::convex_polygon(vec![p1, p2, p3, p4], color, stroke));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p1, p2, p3, p4],
+                color,
+                stroke,
+            ));
 
             // Draw name tag below and to the right with a thin black border
             let tag_pos = pos + egui::vec2(12.0, 16.0);

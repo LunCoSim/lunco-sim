@@ -34,8 +34,8 @@ use crate::layer::{EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, Too
 use crate::overlay::Overlay;
 use crate::scene::{Pos, Rect, Scene};
 use crate::selection::Selection;
-use crate::tool::{CanvasOps, DefaultTool, Tool, ToolOutcome};
 pub use crate::tool::SnapSettings;
+use crate::tool::{CanvasOps, DefaultTool, Tool, ToolOutcome};
 use crate::viewport::Viewport;
 use crate::visual::{DrawCtx, VisualRegistry};
 
@@ -258,11 +258,8 @@ impl Canvas {
             //      tool is still in a non-Idle state — covers
             //      release events that arrived but were dropped by
             //      whatever stack between the OS and us.
-            let focus_lost_with_drag =
-                !ui.ctx().input(|i| i.focused) && self.tool.is_active();
-            let stale_button_state = !primary_down
-                && !primary_pressed
-                && self.tool.is_active();
+            let focus_lost_with_drag = !ui.ctx().input(|i| i.focused) && self.tool.is_active();
+            let stale_button_state = !primary_down && !primary_pressed && self.tool.is_active();
             let synthesise_release = focus_lost_with_drag || stale_button_state;
             if primary_released || synthesise_release {
                 // ALWAYS commit the release. Earlier we required a
@@ -302,14 +299,15 @@ impl Canvas {
         // Dedicated middle-button pan is kept as an alternate for
         // users with three-button mice who prefer it.
         if response.hovered() || response.contains_pointer() {
-            let (middle_down, delta) = ui
-                .ctx()
-                .input(|i| (i.pointer.button_down(PointerButton::Middle), i.pointer.delta()));
+            let (middle_down, delta) = ui.ctx().input(|i| {
+                (
+                    i.pointer.button_down(PointerButton::Middle),
+                    i.pointer.delta(),
+                )
+            });
             if middle_down && delta != egui::Vec2::ZERO {
-                self.viewport.pan_by_world(
-                    -delta.x / self.viewport.zoom,
-                    -delta.y / self.viewport.zoom,
-                );
+                self.viewport
+                    .pan_by_world(-delta.x / self.viewport.zoom, -delta.y / self.viewport.zoom);
             }
         }
 
@@ -324,19 +322,23 @@ impl Canvas {
         // frame, no pan happens, and egui's context_menu opens on
         // release. Clean separation without state.
         if response.hovered() || response.contains_pointer() {
-            let (secondary_down, delta) = ui
-                .ctx()
-                .input(|i| (i.pointer.button_down(PointerButton::Secondary), i.pointer.delta()));
+            let (secondary_down, delta) = ui.ctx().input(|i| {
+                (
+                    i.pointer.button_down(PointerButton::Secondary),
+                    i.pointer.delta(),
+                )
+            });
             if secondary_down && delta.length_sq() > 0.25 {
-                self.viewport.pan_by_world(
-                    -delta.x / self.viewport.zoom,
-                    -delta.y / self.viewport.zoom,
-                );
+                self.viewport
+                    .pan_by_world(-delta.x / self.viewport.zoom, -delta.y / self.viewport.zoom);
             }
         }
 
         if response.double_clicked() {
-            if let Some(p) = response.interact_pointer_pos().or_else(|| response.hover_pos()) {
+            if let Some(p) = response
+                .interact_pointer_pos()
+                .or_else(|| response.hover_pos())
+            {
                 let screen = Pos::new(p.x, p.y);
                 let world = self.viewport.screen_to_world(screen, screen_rect);
                 input_events.push(InputEvent::DoubleClick {
@@ -361,10 +363,7 @@ impl Canvas {
             ];
             for (name, key) in key_names {
                 if ui.ctx().input(|i| i.key_pressed(*key)) {
-                    input_events.push(InputEvent::Key {
-                        name,
-                        modifiers,
-                    });
+                    input_events.push(InputEvent::Key { name, modifiers });
                 }
             }
         }
@@ -500,9 +499,7 @@ impl Canvas {
             InputEvent::Key { name, .. } => {
                 if *name == "F" {
                     if let Some(world_rect) = self.scene.bounds() {
-                        let (c, z) = self
-                            .viewport
-                            .fit_values(world_rect, screen_rect, 30.0);
+                        let (c, z) = self.viewport.fit_values(world_rect, screen_rect, 30.0);
                         self.viewport.set_target(c, z);
                     }
                 }

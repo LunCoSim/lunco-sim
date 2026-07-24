@@ -8,7 +8,7 @@
 //! both modes without driving the GUI.
 
 use bevy::prelude::*;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::{Theme, ThemeMode};
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,11 @@ fn on_set_theme(
     mut pref: ResMut<ThemePreference>,
     mut override_mode: ResMut<NonPersistedThemeOverride>,
 ) {
-    let target = trigger.event().mode.as_deref().map(|s| s.to_ascii_lowercase());
+    let target = trigger
+        .event()
+        .mode
+        .as_deref()
+        .map(|s| s.to_ascii_lowercase());
     let explicit = match target.as_deref() {
         Some("dark") => Some(ThemeMode::Dark),
         Some("light") => Some(ThemeMode::Light),

@@ -70,10 +70,7 @@ pub(crate) fn bundled_source_for(qualified: &str) -> Option<&'static str> {
 /// indexed MSL/third-party → filesystem library roots → open documents
 /// → bundled examples. Returns `None` only when no backend knows the
 /// class.
-pub(crate) fn resolve_class_source(
-    world: &World,
-    qualified: &str,
-) -> Option<ResolvedClassSource> {
+pub(crate) fn resolve_class_source(world: &World, qualified: &str) -> Option<ResolvedClassSource> {
     // 1) MSL / third-party. The prebuilt palette index is the fast path;
     //    `locate_library_file` covers extra libraries not in that index.
     if let Some(path) = crate::library_fs::resolve_class_path_indexed(qualified)
@@ -123,7 +120,10 @@ mod tests {
         // yet)" on a bundled composite duplicate.
         let src = bundled_source_for("AnnotatedRocketStage.RocketStage")
             .expect("AnnotatedRocketStage.mo must be bundled");
-        assert!(src.contains("model RocketStage"), "expected nested model in bundled source");
+        assert!(
+            src.contains("model RocketStage"),
+            "expected nested model in bundled source"
+        );
     }
 
     #[test]

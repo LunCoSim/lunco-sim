@@ -85,7 +85,10 @@ pub struct WorldGridConfig {
 
 impl Default for WorldGridConfig {
     fn default() -> Self {
-        Self { cell_edge_length: 2000.0, switching_threshold: 100.0 }
+        Self {
+            cell_edge_length: 2000.0,
+            switching_threshold: 100.0,
+        }
     }
 }
 
@@ -217,8 +220,7 @@ impl Plugin for WorldShellPlugin {
             // zero origins, so there is no error and no propagation gap.
             .add_systems(
                 PostUpdate,
-                anchor_owns_origin_by_default
-                    .before(BigSpaceSystems::RecenterLargeTransforms),
+                anchor_owns_origin_by_default.before(BigSpaceSystems::RecenterLargeTransforms),
             )
             .add_systems(
                 PostUpdate,
@@ -291,7 +293,13 @@ fn setup_world(world: &mut World) {
 /// system fighting big_space recentering.
 fn dbg_cell_drift(
     mut n: Local<u32>,
-    q: Query<(Entity, &CellCoord, &Transform, Option<&Name>, bevy::prelude::Has<FloatingOrigin>)>,
+    q: Query<(
+        Entity,
+        &CellCoord,
+        &Transform,
+        Option<&Name>,
+        bevy::prelude::Has<FloatingOrigin>,
+    )>,
 ) {
     *n = n.wrapping_add(1);
     if !(*n).is_multiple_of(120) {
@@ -312,14 +320,19 @@ fn dbg_cell_drift(
             .saturating_add(c.y.saturating_abs() as i64)
             .saturating_add(c.z.saturating_abs() as i64);
         if mag > 8 && worst.as_ref().is_none_or(|w| mag > w.0) {
-            let nm = name.map(|n| n.to_string()).unwrap_or_else(|| format!("{e}"));
+            let nm = name
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| format!("{e}"));
             worst = Some((mag, nm, *c, tf.translation, is_origin));
         }
     }
     if let Some((mag, nm, c, t, o)) = worst {
         bevy::log::warn!(
             "[CELL-DRIFT] {nm}: cell=({},{},{}) tf={:.0?} floating_origin={o} (mag {mag})",
-            c.x, c.y, c.z, t
+            c.x,
+            c.y,
+            c.z,
+            t
         );
     }
 }
@@ -328,11 +341,17 @@ fn dbg_origin_bracket_first(
     mut printed: Local<u32>,
     q: Query<(&CellCoord, &Transform), With<FloatingOrigin>>,
 ) {
-    if *printed > 120 { return; }
+    if *printed > 120 {
+        return;
+    }
     if let Ok((c, tf)) = q.single() {
         if c.y.saturating_abs() > 3 {
             *printed += 1;
-            bevy::log::warn!("[BRACKET-First] cell.y={} tf.y={:.1}", c.y, tf.translation.y);
+            bevy::log::warn!(
+                "[BRACKET-First] cell.y={} tf.y={:.1}",
+                c.y,
+                tf.translation.y
+            );
         }
     }
 }
@@ -341,11 +360,17 @@ fn dbg_origin_bracket_last(
     mut printed: Local<u32>,
     q: Query<(&CellCoord, &Transform), With<FloatingOrigin>>,
 ) {
-    if *printed > 120 { return; }
+    if *printed > 120 {
+        return;
+    }
     if let Ok((c, tf)) = q.single() {
         if c.y.saturating_abs() > 3 {
             *printed += 1;
-            bevy::log::warn!("[BRACKET-Last ] cell.y={} tf.y={:.1}", c.y, tf.translation.y);
+            bevy::log::warn!(
+                "[BRACKET-Last ] cell.y={} tf.y={:.1}",
+                c.y,
+                tf.translation.y
+            );
         }
     }
 }
@@ -385,8 +410,14 @@ fn audit_cells_under_non_grid_parents(
             continue;
         }
         reported.0.insert(e);
-        let name = q_names.get(e).map(|n| n.as_str().to_owned()).unwrap_or_else(|_| format!("{e:?}"));
-        let parent_name = q_names.get(parent).map(|n| n.as_str().to_owned()).unwrap_or_else(|_| format!("{parent:?}"));
+        let name = q_names
+            .get(e)
+            .map(|n| n.as_str().to_owned())
+            .unwrap_or_else(|_| format!("{e:?}"));
+        let parent_name = q_names
+            .get(parent)
+            .map(|n| n.as_str().to_owned())
+            .unwrap_or_else(|_| format!("{parent:?}"));
         bevy::log::warn!(
             "[cell-audit] `{name}` ({e:?}) carries CellCoord but its parent \
              `{parent_name}` ({parent:?}) is not a Grid — big_space will not \

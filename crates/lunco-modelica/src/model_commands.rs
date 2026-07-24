@@ -48,13 +48,18 @@ impl SetModelInputError {
     pub fn message(&self) -> String {
         match self {
             Self::NoActiveDocument => "no active document (pass `doc` explicitly)".into(),
-            Self::NoLinkedEntity { doc } => format!(
-                "doc {doc} has no linked entity — compile the model before setting inputs"
-            ),
-            Self::EntityMissingModel { doc } => format!(
-                "doc {doc}'s linked entity has no `ModelicaModel` component"
-            ),
-            Self::UnknownInput { name, model_name, known_inputs, .. } => format!(
+            Self::NoLinkedEntity { doc } => {
+                format!("doc {doc} has no linked entity — compile the model before setting inputs")
+            }
+            Self::EntityMissingModel { doc } => {
+                format!("doc {doc}'s linked entity has no `ModelicaModel` component")
+            }
+            Self::UnknownInput {
+                name,
+                model_name,
+                known_inputs,
+                ..
+            } => format!(
                 "input `{name}` not declared on `{model_name}`. \
                  Known inputs: [{}]",
                 known_inputs.join(", ")
@@ -97,9 +102,17 @@ pub fn apply_set_model_input(
     // workbench / batch models have no registered port, so `write_port` returns
     // false and we fall through to the direct write below (which also owns the
     // friendly `UnknownInput` validation for the no-cosim case).
-    if let Some(registry) = world.get_resource::<lunco_core::ports::PortRegistry>().cloned() {
+    if let Some(registry) = world
+        .get_resource::<lunco_core::ports::PortRegistry>()
+        .cloned()
+    {
         if registry.write_port(world, entity, name, value) {
-            bevy::log::debug!("[SetModelInput] doc={} {}={} (via port)", doc.raw(), name, value);
+            bevy::log::debug!(
+                "[SetModelInput] doc={} {}={} (via port)",
+                doc.raw(),
+                name,
+                value
+            );
             return Ok(doc);
         }
     }
@@ -190,7 +203,10 @@ pub(crate) fn resolve_setup_bounds_in<R: crate::sim_default::ResourceRead>(
     use lunco_experiments::ExperimentRunner;
     let draft = ctx
         .read_resource::<crate::experiments_runner::ExperimentDrafts>()
-        .and_then(|d| d.get(doc, model_ref).and_then(|dr| dr.bounds_override.clone()));
+        .and_then(|d| {
+            d.get(doc, model_ref)
+                .and_then(|dr| dr.bounds_override.clone())
+        });
     let annotation = bounds_from_annotation_in(ctx, doc, model_ref);
     let runner_cached = ctx
         .read_resource::<crate::ModelicaRunnerResource>()

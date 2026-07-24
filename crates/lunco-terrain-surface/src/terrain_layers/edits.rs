@@ -29,15 +29,27 @@ use crate::oracle::HeightContribution;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EditKind {
     /// Smooth radial brush: `amplitude` m at the centre (− digs, + raises), 0 at `radius`.
-    Brush { center: [f64; 2], radius: f64, amplitude: f64 },
+    Brush {
+        center: [f64; 2],
+        radius: f64,
+        amplitude: f64,
+    },
     /// Flatten toward `target_y` within `radius`, blending back at the edge.
-    Flatten { center: [f64; 2], radius: f64, target_y: f64 },
+    Flatten {
+        center: [f64; 2],
+        radius: f64,
+        target_y: f64,
+    },
     /// One hand-placed impact crater: rim radius `radius` m, bowl `depth` m below
     /// the datum. Same analytic profile as the procedural crater field (fresh
     /// morphology, quasi-paraboloid bowl + rim lip + ejecta apron), so a manual
     /// crater is indistinguishable from an authored-field one in mesh, collider
     /// and derived maps alike.
-    Crater { center: [f64; 2], radius: f64, depth: f64 },
+    Crater {
+        center: [f64; 2],
+        radius: f64,
+        depth: f64,
+    },
 }
 
 /// The analytic shape a manual crater edit stamps — fresh-ish morphology with
@@ -64,7 +76,12 @@ impl EditKind {
             EditKind::Flatten { center, radius, .. } => (center, radius),
             EditKind::Crater { center, radius, .. } => (center, radius * CRATER_REACH),
         };
-        [center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius]
+        [
+            center[0] - radius,
+            center[1] - radius,
+            center[0] + radius,
+            center[1] + radius,
+        ]
     }
 
     /// Apply this edit to the accumulated height at `(x, z)`, band-limited for a
@@ -72,15 +89,21 @@ impl EditKind {
     #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64, min_wavelength: f64) -> f64 {
         match *self {
-            EditKind::Brush { center, radius, amplitude } => {
-                BrushModifier::new(center, radius, amplitude).apply(x, z, h_in)
-            }
-            EditKind::Flatten { center, radius, target_y } => {
-                FlattenModifier::new(center, radius, target_y).apply(x, z, h_in)
-            }
-            EditKind::Crater { center, radius, depth } => {
-                h_in + manual_crater(center, radius, depth).delta_at_limited(x, z, min_wavelength)
-            }
+            EditKind::Brush {
+                center,
+                radius,
+                amplitude,
+            } => BrushModifier::new(center, radius, amplitude).apply(x, z, h_in),
+            EditKind::Flatten {
+                center,
+                radius,
+                target_y,
+            } => FlattenModifier::new(center, radius, target_y).apply(x, z, h_in),
+            EditKind::Crater {
+                center,
+                radius,
+                depth,
+            } => h_in + manual_crater(center, radius, depth).delta_at_limited(x, z, min_wavelength),
         }
     }
 }
@@ -113,7 +136,10 @@ impl EditsLayer {
     pub fn with_edit(&self, id: LayerId, kind: EditKind) -> Self {
         let mut edits = self.edits.clone();
         edits.push((id, kind));
-        EditsLayer { edits, min_wavelength: self.min_wavelength }
+        EditsLayer {
+            edits,
+            min_wavelength: self.min_wavelength,
+        }
     }
 
     /// A copy with the edit identified by `id` removed; `None` if `id` isn't present.
@@ -122,7 +148,12 @@ impl EditsLayer {
             return None;
         }
         Some(EditsLayer {
-            edits: self.edits.iter().filter(|(eid, _)| eid != id).cloned().collect(),
+            edits: self
+                .edits
+                .iter()
+                .filter(|(eid, _)| eid != id)
+                .cloned()
+                .collect(),
             min_wavelength: self.min_wavelength,
         })
     }
@@ -137,19 +168,29 @@ impl EditsLayer {
     pub fn from_edits(mut edits: Vec<(LayerId, EditKind)>) -> Self {
         fn trailing_num(id: &LayerId) -> u64 {
             let s = id.as_str();
-            let digits = s.rfind(|c: char| !c.is_ascii_digit()).map_or(s, |i| &s[i + 1..]);
+            let digits = s
+                .rfind(|c: char| !c.is_ascii_digit())
+                .map_or(s, |i| &s[i + 1..]);
             digits.parse().unwrap_or(u64::MAX)
         }
         edits.sort_by(|(a, _), (b, _)| {
-            trailing_num(a).cmp(&trailing_num(b)).then_with(|| a.as_str().cmp(b.as_str()))
+            trailing_num(a)
+                .cmp(&trailing_num(b))
+                .then_with(|| a.as_str().cmp(b.as_str()))
         });
-        EditsLayer { edits, min_wavelength: 0.0 }
+        EditsLayer {
+            edits,
+            min_wavelength: 0.0,
+        }
     }
 
     /// The world footprint of the edit identified by `id`, or `None` if it isn't in
     /// this layer. Used to scope an undo/remove to only the tiles it touched.
     pub fn edit_bounds(&self, id: &LayerId) -> Option<[f64; 4]> {
-        self.edits.iter().find(|(eid, _)| eid == id).map(|(_, kind)| kind.aabb())
+        self.edits
+            .iter()
+            .find(|(eid, _)| eid == id)
+            .map(|(_, kind)| kind.aabb())
     }
 }
 
@@ -177,9 +218,21 @@ pub fn parse_edit(id: LayerId, a: &dyn LayerAttrSource) -> Option<(LayerId, Edit
     let radius = a.get_f64(EDIT_RADIUS)?;
     let amount = a.get_f64(EDIT_AMOUNT)?;
     let edit = match kind.as_str() {
-        "brush" => EditKind::Brush { center, radius, amplitude: amount },
-        "flatten" => EditKind::Flatten { center, radius, target_y: amount },
-        "crater" => EditKind::Crater { center, radius, depth: amount },
+        "brush" => EditKind::Brush {
+            center,
+            radius,
+            amplitude: amount,
+        },
+        "flatten" => EditKind::Flatten {
+            center,
+            radius,
+            target_y: amount,
+        },
+        "crater" => EditKind::Crater {
+            center,
+            radius,
+            depth: amount,
+        },
         _ => return None,
     };
     Some((id, edit))
@@ -191,9 +244,21 @@ pub fn parse_edit(id: LayerId, a: &dyn LayerAttrSource) -> Option<(LayerId, Edit
 /// edit is still a single undo step.
 pub fn edit_attr_writes(kind: &EditKind) -> Vec<(&'static str, &'static str, String)> {
     let (k, c, r, p) = match *kind {
-        EditKind::Brush { center, radius, amplitude } => ("brush", center, radius, amplitude),
-        EditKind::Flatten { center, radius, target_y } => ("flatten", center, radius, target_y),
-        EditKind::Crater { center, radius, depth } => ("crater", center, radius, depth),
+        EditKind::Brush {
+            center,
+            radius,
+            amplitude,
+        } => ("brush", center, radius, amplitude),
+        EditKind::Flatten {
+            center,
+            radius,
+            target_y,
+        } => ("flatten", center, radius, target_y),
+        EditKind::Crater {
+            center,
+            radius,
+            depth,
+        } => ("crater", center, radius, depth),
     };
     vec![
         (EDIT_KIND, "token", format!("\"{k}\"")),
@@ -219,10 +284,17 @@ impl HeightModifier for EditsLayer {
     /// the consumer's sampling wavelength so a coarse far tile fades/softens a
     /// small placed crater instead of aliasing its rim.
     fn with_min_wavelength(&self, min_wavelength: f64) -> Option<Arc<dyn HeightModifier>> {
-        if !self.edits.iter().any(|(_, k)| matches!(k, EditKind::Crater { .. })) {
+        if !self
+            .edits
+            .iter()
+            .any(|(_, k)| matches!(k, EditKind::Crater { .. }))
+        {
             return None; // brush/flatten are resolution-independent — use as-is
         }
-        Some(Arc::new(EditsLayer { edits: self.edits.clone(), min_wavelength }))
+        Some(Arc::new(EditsLayer {
+            edits: self.edits.clone(),
+            min_wavelength,
+        }))
     }
 }
 
@@ -242,21 +314,33 @@ impl TerrainLayer for EditsLayer {
                 key.write_u64(*b as u64);
             }
             match *kind {
-                EditKind::Brush { center, radius, amplitude } => {
+                EditKind::Brush {
+                    center,
+                    radius,
+                    amplitude,
+                } => {
                     key.write_u64(1);
                     key.write_u64(center[0].to_bits());
                     key.write_u64(center[1].to_bits());
                     key.write_u64(radius.to_bits());
                     key.write_u64(amplitude.to_bits());
                 }
-                EditKind::Flatten { center, radius, target_y } => {
+                EditKind::Flatten {
+                    center,
+                    radius,
+                    target_y,
+                } => {
                     key.write_u64(2);
                     key.write_u64(center[0].to_bits());
                     key.write_u64(center[1].to_bits());
                     key.write_u64(radius.to_bits());
                     key.write_u64(target_y.to_bits());
                 }
-                EditKind::Crater { center, radius, depth } => {
+                EditKind::Crater {
+                    center,
+                    radius,
+                    depth,
+                } => {
                     key.write_u64(3);
                     key.write_u64(center[0].to_bits());
                     key.write_u64(center[1].to_bits());
@@ -265,7 +349,10 @@ impl TerrainLayer for EditsLayer {
                 }
             }
         }
-        Some(HeightContribution { modifier: Arc::new(self.clone()), content_key: key.finish() })
+        Some(HeightContribution {
+            modifier: Arc::new(self.clone()),
+            content_key: key.finish(),
+        })
     }
 
     fn as_any(&self) -> Option<&dyn Any> {

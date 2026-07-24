@@ -124,7 +124,10 @@ impl ParamValue {
     /// Best-effort parse from a comma-separated string for the given type
     /// (the USD authoring + `SetObjectProperty` text vocabulary).
     pub fn parse(ty: ParamType, s: &str) -> Option<Self> {
-        let nums: Vec<f32> = s.split(',').filter_map(|p| p.trim().parse::<f32>().ok()).collect();
+        let nums: Vec<f32> = s
+            .split(',')
+            .filter_map(|p| p.trim().parse::<f32>().ok())
+            .collect();
         Some(match ty {
             ParamType::F32 => ParamValue::F32(*nums.first()?),
             ParamType::I32 => ParamValue::I32(*nums.first()? as i32),
@@ -207,12 +210,21 @@ impl ParamSchema {
                 v.write_flat(&mut flat, i, f.ty.components());
             }
         }
-        std::array::from_fn(|i| Vec4::from_array([flat[i * 4], flat[i * 4 + 1], flat[i * 4 + 2], flat[i * 4 + 3]]))
+        std::array::from_fn(|i| {
+            Vec4::from_array([
+                flat[i * 4],
+                flat[i * 4 + 1],
+                flat[i * 4 + 2],
+                flat[i * 4 + 3],
+            ])
+        })
     }
 
     /// True if `name` is an `@engine` (Rust-filled) field.
     pub fn is_engine(&self, name: &str) -> bool {
-        self.fields.iter().any(|f| f.name == name && matches!(f.ui, UiKind::Engine))
+        self.fields
+            .iter()
+            .any(|f| f.name == name && matches!(f.ui, UiKind::Engine))
     }
 
     pub fn field(&self, name: &str) -> Option<&ParamField> {
@@ -233,11 +245,23 @@ impl ParamSchema {
             cursor = offset + ty.size();
             let a = ann.get(&name);
             let (ui, label) = match a {
-                Some(h) => (h.ui.clone(), h.label.clone().unwrap_or_else(|| name.clone())),
+                Some(h) => (
+                    h.ui.clone(),
+                    h.label.clone().unwrap_or_else(|| name.clone()),
+                ),
                 None => (default_ui(ty), name.clone()),
             };
-            let default = a.and_then(|h| h.default.as_ref()).and_then(|s| ParamValue::parse(ty, s));
-            fields.push(ParamField { name, ty, offset, label, ui, default });
+            let default = a
+                .and_then(|h| h.default.as_ref())
+                .and_then(|s| ParamValue::parse(ty, s));
+            fields.push(ParamField {
+                name,
+                ty,
+                offset,
+                label,
+                ui,
+                default,
+            });
         }
         let size = round_up(cursor, 16);
         if size > BLOCK_BYTES {
@@ -301,7 +325,9 @@ fn parse_struct_fields(body: &str) -> Vec<(String, ParamType)> {
         if decl.is_empty() {
             continue;
         }
-        let Some((name, ty)) = decl.split_once(':') else { continue };
+        let Some((name, ty)) = decl.split_once(':') else {
+            continue;
+        };
         let name = name.trim();
         if name.is_empty() {
             continue;
@@ -326,7 +352,9 @@ fn parse_annotations(wgsl: &str) -> BTreeMap<String, Annotation> {
     let mut map: BTreeMap<String, Annotation> = BTreeMap::new();
     for line in wgsl.lines() {
         let line = line.trim();
-        let Some(rest) = line.strip_prefix("//!@") else { continue };
+        let Some(rest) = line.strip_prefix("//!@") else {
+            continue;
+        };
         // Split off a trailing "quoted label" if present.
         let (head, label) = match rest.split_once('"') {
             Some((h, tail)) => (h.trim(), tail.strip_suffix('"').map(|s| s.to_string())),
@@ -402,10 +430,16 @@ mod tests {
         assert_eq!(s.field("albedo").unwrap().offset, 16);
         assert_eq!(s.field("sun_dir").unwrap().offset, 32);
         assert_eq!(s.size, 48);
-        assert!(matches!(s.field("macro_scale").unwrap().ui, UiKind::Slider { .. }));
+        assert!(matches!(
+            s.field("macro_scale").unwrap().ui,
+            UiKind::Slider { .. }
+        ));
         assert!(matches!(s.field("albedo").unwrap().ui, UiKind::Color));
         assert!(s.is_engine("sun_dir"));
-        assert_eq!(s.field("macro_scale").unwrap().default, Some(ParamValue::F32(8.0)));
+        assert_eq!(
+            s.field("macro_scale").unwrap().default,
+            Some(ParamValue::F32(8.0))
+        );
     }
 
     #[test]

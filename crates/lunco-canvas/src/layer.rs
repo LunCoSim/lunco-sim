@@ -214,8 +214,12 @@ impl Layer for EdgesLayer {
         let registry = &self.registry_handle;
         let visual_cache = &mut self.visual_cache;
         for (eid, edge) in scene.edges() {
-            let Some(from_node) = scene.node(edge.from.node) else { continue };
-            let Some(to_node) = scene.node(edge.to.node) else { continue };
+            let Some(from_node) = scene.node(edge.from.node) else {
+                continue;
+            };
+            let Some(to_node) = scene.node(edge.to.node) else {
+                continue;
+            };
             // Port lookup: when the edge endpoint references a port
             // that doesn't exist on the node (typical for top-level
             // connector instances — they ARE the connector and have
@@ -271,11 +275,14 @@ impl Layer for EdgesLayer {
                     .unwrap_or_else(|| Box::new(crate::visual::PlaceholderEdgeVisual));
                 visual_cache.insert(
                     *eid,
-                    CachedEdgeVisual { kind: edge.kind.clone(), data_addr: addr, visual },
+                    CachedEdgeVisual {
+                        kind: edge.kind.clone(),
+                        data_addr: addr,
+                        visual,
+                    },
                 );
             }
-            let selected =
-                selection.contains(crate::selection::SelectItem::Edge(*eid));
+            let selected = selection.contains(crate::selection::SelectItem::Edge(*eid));
             // Project the live waypoints (mid-drag this is what the
             // tool just mutated) into screen space, with the same
             // pixel-snap as the endpoints so the polyline stays
@@ -288,11 +295,13 @@ impl Layer for EdgesLayer {
                     crate::scene::Pos::new(s.x.round(), s.y.round())
                 })
                 .collect();
-            visual_cache
-                .get(eid)
-                .unwrap()
-                .visual
-                .draw(ctx, from_s, to_s, &waypoints_screen, selected);
+            visual_cache.get(eid).unwrap().visual.draw(
+                ctx,
+                from_s,
+                to_s,
+                &waypoints_screen,
+                selected,
+            );
         }
         // Evict visuals for edges that no longer exist (CQ-202).
         visual_cache.retain(|id, _| scene.edge(*id).is_some());
@@ -306,17 +315,19 @@ impl Layer for EdgesLayer {
             if *count < 3 {
                 continue;
             }
-            let Some(node) = scene.node(*node_id) else { continue };
-            let Some(port) = node.ports.iter().find(|p| p.id == *port_id) else { continue };
+            let Some(node) = scene.node(*node_id) else {
+                continue;
+            };
+            let Some(port) = node.ports.iter().find(|p| p.id == *port_id) else {
+                continue;
+            };
             let world = port.world_pos(node.rect);
             let p = ctx.viewport.world_to_screen(world, sr);
             let center = egui::pos2(p.x.round(), p.y.round());
             // Radius scaled with zoom so the dot stays visible at
             // wide-zoom and doesn't dominate when zoomed in.
             let r = (3.0 * ctx.viewport.zoom.clamp(0.5, 2.0)).max(2.5);
-            ctx.ui
-                .painter()
-                .circle_filled(center, r, dot_color);
+            ctx.ui.painter().circle_filled(center, r, dot_color);
         }
     }
     fn name(&self) -> &'static str {
@@ -373,7 +384,11 @@ impl Layer for NodesLayer {
                     .unwrap_or_else(|| Box::new(crate::visual::PlaceholderNodeVisual));
                 cache.insert(
                     *nid,
-                    CachedNodeVisual { kind: node.kind.clone(), data_addr: addr, visual },
+                    CachedNodeVisual {
+                        kind: node.kind.clone(),
+                        data_addr: addr,
+                        visual,
+                    },
                 );
             }
             let selected = selection.contains(crate::selection::SelectItem::Node(*nid));
@@ -434,7 +449,9 @@ pub struct ToolPreviewLayer;
 
 impl Layer for ToolPreviewLayer {
     fn draw(&mut self, ctx: &mut DrawCtx, _scene: &Scene, _selection: &Selection) {
-        let Some(preview_opt) = ctx.extras.downcast_ref::<Option<crate::tool::ToolPreview>>()
+        let Some(preview_opt) = ctx
+            .extras
+            .downcast_ref::<Option<crate::tool::ToolPreview>>()
         else {
             return;
         };
@@ -459,11 +476,7 @@ impl Layer for ToolPreviewLayer {
                     [egui::pos2(a.x, a.y), egui::pos2(b.x, b.y)],
                     egui::Stroke::new(2.0, ghost_edge),
                 );
-                painter.circle_filled(
-                    egui::pos2(a.x, a.y),
-                    4.0,
-                    ghost_edge,
-                );
+                painter.circle_filled(egui::pos2(a.x, a.y), 4.0, ghost_edge);
                 if let Some(t) = snap_target {
                     let s = ctx.viewport.world_to_screen(*t, sr);
                     painter.circle_stroke(
@@ -487,8 +500,7 @@ impl Layer for ToolPreviewLayer {
                 // the classic L: horizontal-then-vertical (or the
                 // reverse, choosing whichever has the larger initial
                 // delta).
-                let mut pts: Vec<egui::Pos2> =
-                    Vec::with_capacity(3 + bends.len());
+                let mut pts: Vec<egui::Pos2> = Vec::with_capacity(3 + bends.len());
                 let a = ctx.viewport.world_to_screen(*from_world, sr);
                 pts.push(egui::pos2(a.x, a.y));
                 for b in bends {
@@ -535,43 +547,32 @@ impl Layer for ToolPreviewLayer {
                 // Thin dashed lines through the snapped coordinate
                 // span the visible viewport. World-space x/y; clip to
                 // screen bounds via the viewport transform.
-                let screen_min = ctx.viewport.screen_to_world(
-                    crate::scene::Pos::new(sr.min.x, sr.min.y),
-                    sr,
-                );
-                let screen_max = ctx.viewport.screen_to_world(
-                    crate::scene::Pos::new(sr.max.x, sr.max.y),
-                    sr,
-                );
+                let screen_min = ctx
+                    .viewport
+                    .screen_to_world(crate::scene::Pos::new(sr.min.x, sr.min.y), sr);
+                let screen_max = ctx
+                    .viewport
+                    .screen_to_world(crate::scene::Pos::new(sr.max.x, sr.max.y), sr);
                 let stroke = egui::Stroke::new(1.0, snap_guide);
                 if let Some(gx) = x {
-                    let top = ctx.viewport.world_to_screen(
-                        crate::scene::Pos::new(*gx, screen_min.y),
-                        sr,
-                    );
-                    let bot = ctx.viewport.world_to_screen(
-                        crate::scene::Pos::new(*gx, screen_max.y),
-                        sr,
-                    );
-                    painter.line_segment(
-                        [egui::pos2(top.x, top.y), egui::pos2(bot.x, bot.y)],
-                        stroke,
-                    );
+                    let top = ctx
+                        .viewport
+                        .world_to_screen(crate::scene::Pos::new(*gx, screen_min.y), sr);
+                    let bot = ctx
+                        .viewport
+                        .world_to_screen(crate::scene::Pos::new(*gx, screen_max.y), sr);
+                    painter
+                        .line_segment([egui::pos2(top.x, top.y), egui::pos2(bot.x, bot.y)], stroke);
                 }
                 if let Some(gy) = y {
-                    let left = ctx.viewport.world_to_screen(
-                        crate::scene::Pos::new(screen_min.x, *gy),
-                        sr,
-                    );
-                    let right = ctx.viewport.world_to_screen(
-                        crate::scene::Pos::new(screen_max.x, *gy),
-                        sr,
-                    );
+                    let left = ctx
+                        .viewport
+                        .world_to_screen(crate::scene::Pos::new(screen_min.x, *gy), sr);
+                    let right = ctx
+                        .viewport
+                        .world_to_screen(crate::scene::Pos::new(screen_max.x, *gy), sr);
                     painter.line_segment(
-                        [
-                            egui::pos2(left.x, left.y),
-                            egui::pos2(right.x, right.y),
-                        ],
+                        [egui::pos2(left.x, left.y), egui::pos2(right.x, right.y)],
                         stroke,
                     );
                 }

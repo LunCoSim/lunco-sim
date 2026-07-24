@@ -21,7 +21,11 @@ use lunco_usd_bevy::dome::{equirect_to_cubemap, Equirect};
 /// triggered the artefact. Deliberately has NO high-frequency content, so any
 /// discontinuity in the output is the projection's doing, not aliasing.
 fn band_at(d: Vec3) -> f32 {
-    let n = Vec3::new(0.0, (62.0f32).to_radians().cos(), (62.0f32).to_radians().sin());
+    let n = Vec3::new(
+        0.0,
+        (62.0f32).to_radians().cos(),
+        (62.0f32).to_radians().sin(),
+    );
     let s = d.normalize().dot(n);
     0.05 * (-(s / 0.13).powi(2)).exp()
 }
@@ -35,7 +39,11 @@ fn make_equirect(w: u32, h: u32) -> Equirect {
         for x in 0..w {
             let u = (x as f32 + 0.5) / w as f32;
             let phi = (u - 0.5) * std::f32::consts::TAU;
-            let dir = Vec3::new(theta.sin() * phi.sin(), theta.cos(), -theta.sin() * phi.cos());
+            let dir = Vec3::new(
+                theta.sin() * phi.sin(),
+                theta.cos(),
+                -theta.sin() * phi.cos(),
+            );
             let b = band_at(dir);
             texels.push([b, b, b, 1.0]);
         }
@@ -91,7 +99,10 @@ fn projection_matches_the_analytic_sky_everywhere() {
     }
     println!("worst abs error {worst:.6} at face/px/py {worst_at:?} (band peak 0.05)");
     // 2% of the band's peak amplitude. A visible terrace is far larger than this.
-    assert!(worst < 0.001, "projection deviates from the analytic sky by {worst}");
+    assert!(
+        worst < 0.001,
+        "projection deviates from the analytic sky by {worst}"
+    );
 }
 
 #[test]

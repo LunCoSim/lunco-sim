@@ -24,7 +24,9 @@ pub struct AssetVisibilitySettings {
 
 impl Default for AssetVisibilitySettings {
     fn default() -> Self {
-        Self { show_test_assets: false }
+        Self {
+            show_test_assets: false,
+        }
     }
 }
 

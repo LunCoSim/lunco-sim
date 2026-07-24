@@ -36,8 +36,8 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_hooks::HookValue as H;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_hooks::HookValue as H;
 use lunco_usd_bevy::{CanonicalStage, UsdRead};
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -214,9 +214,7 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
     let syntax = rumoca_phase_parse::parse_to_syntax(text, file_name);
     if syntax.has_errors() {
         match syntax.parse_error() {
-            Some(joined) => report
-                .errors
-                .extend(joined.lines().map(|l| l.to_string())),
+            Some(joined) => report.errors.extend(joined.lines().map(|l| l.to_string())),
             None => report
                 .errors
                 .push("parse failed (no diagnostic text from rumoca)".to_string()),
@@ -316,13 +314,9 @@ fn branch_lint(text: &str) -> Vec<String> {
         // anywhere; `if` is also a valid *expression* in bindings, so only
         // flag it inside the sections the solver walks.
         if has_word(trimmed, "when") || has_word(trimmed, "elsewhen") {
-            errors.push(format!(
-                "line {n}: `when` equation — {HINT}"
-            ));
+            errors.push(format!("line {n}: `when` equation — {HINT}"));
         } else if in_equations && has_word(trimmed, "if") {
-            errors.push(format!(
-                "line {n}: `if` in an equation — {HINT}"
-            ));
+            errors.push(format!("line {n}: `if` in an equation — {HINT}"));
         }
     }
     errors
@@ -425,9 +419,9 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 /// once there reaches every vessel referencing it. So the shape decides, not the
 /// name: a scope is any prim with a child that authors `lunco:port`.
 fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
-    view.children(prim).iter().any(|c| {
-        c.name().is_some() && view.attr_names(c).iter().any(|a| a == "lunco:port")
-    })
+    view.children(prim)
+        .iter()
+        .any(|c| c.name().is_some() && view.attr_names(c).iter().any(|a| a == "lunco:port"))
 }
 
 /// Spellings [`lunco_core::parse_user_intent`] accepts. Used ONLY to suggest a

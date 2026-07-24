@@ -72,7 +72,10 @@ pub fn produce_usd_param_view(
     };
     let stage_id = prim.stage_handle.id();
     if canonical.get(stage_id).is_none() {
-        if let Some(recipe) = stages.get(&prim.stage_handle).and_then(|a| a.recipe.clone()) {
+        if let Some(recipe) = stages
+            .get(&prim.stage_handle)
+            .and_then(|a| a.recipe.clone())
+        {
             canonical.get_or_build(stage_id, &recipe);
         }
     }

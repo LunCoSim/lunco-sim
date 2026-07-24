@@ -81,14 +81,14 @@
 //! The old "merged Body+Grid" design caused the center of rotation to shift
 //! and broke Moon positioning. The two-layer design is correct.
 
-use bevy::prelude::*;
-use big_space::prelude::*;
+use crate::gravity::PointMassGravity;
+use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
+use crate::soi::SOI;
 use avian3d::prelude::{Collider, CollisionLayers, LayerMask};
 use bevy::camera::visibility::NoFrustumCulling;
-use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
-use crate::gravity::PointMassGravity;
+use bevy::prelude::*;
+use big_space::prelude::*;
 use lunco_environment::GravityProvider;
-use crate::soi::SOI;
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SceneCamera};
 
@@ -131,7 +131,10 @@ pub fn adopt_authored_body_look(
             for (e, _) in tiles.retiring.drain(..) {
                 commands.entity(e).try_despawn();
             }
-            info!("[celestial] body {} adopted the look authored on its prim", decl.naif);
+            info!(
+                "[celestial] body {} adopted the look authored on its prim",
+                decl.naif
+            );
         }
     }
 }
@@ -385,78 +388,90 @@ pub fn setup_big_space_hierarchy(
     // camera is within tens of km of the site), so the same f32 rotation
     // costs sub-millimetres, and the 1 AU offset below travels through the
     // EXACT i64 cells of the now identity-rotation Solar Grid.
-    let align_grid = commands.spawn((
-        SiteAlignGrid,
-        // Subtree root: the entire body hierarchy chain-parents under this, so a
-        // recursive despawn here tears down every grid, body, anchor and globe tile.
-        CelestialDerived,
-        Grid::new(2_000.0, 100.0),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Site Align Grid"),
-    )).set_parent_in_place(big_space_root).id();
+    let align_grid = commands
+        .spawn((
+            SiteAlignGrid,
+            // Subtree root: the entire body hierarchy chain-parents under this, so a
+            // recursive despawn here tears down every grid, body, anchor and globe tile.
+            CelestialDerived,
+            Grid::new(2_000.0, 100.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Site Align Grid"),
+        ))
+        .set_parent_in_place(big_space_root)
+        .id();
 
-    let solar_grid = commands.spawn((
-        SolarSystemRoot,
-        CelestialReferenceFrame { ephemeris_id: 10 },
-        Grid::new(2_000.0, 100.0),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Solar Grid (Inertial)"),
-    )).set_parent_in_place(align_grid).id();
+    let solar_grid = commands
+        .spawn((
+            SolarSystemRoot,
+            CelestialReferenceFrame { ephemeris_id: 10 },
+            Grid::new(2_000.0, 100.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Solar Grid (Inertial)"),
+        ))
+        .set_parent_in_place(align_grid)
+        .id();
 
     // ── Sun (simple entity on Solar Grid, no grid of its own) ─────────────
-    let _sun_body = commands.spawn((
-        SolarSystemRoot,
-        CelestialBody {
-            name: "Sun".to_string(),
-            ephemeris_id: 10,
-            radius_m: 696_340.0e3,
-        },
-        SOI { radius_m: 1.0e13 },
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        // The sun's own visual sphere must NEVER cast shadows: it sits exactly
-        // along the `DirectionalLight` direction, so as a caster it pancakes
-        // into every cascade map and "eclipses" the whole scene — with the
-        // celestial hierarchy enabled, every fragment within
-        // `shadow_max_distance` rendered fully shadowed (the pitch-black
-        // site-anchored surface), while terrain beyond cascade range lit fine.
-        bevy::light::NotShadowCaster,
-        Mesh3d(meshes.add(Sphere::new(696_340.0e3).mesh().ico(4).unwrap())),
-        // `no_shadow_cast` mirrors the `NotShadowCaster` above and is NOT optional:
-        // the binder's `Changed<PbrLook>` pass reconciles the marker from the look, so
-        // a look that said `false` would STRIP the marker on the first frame and bring
-        // back the sun-eclipses-everything bug the comment above describes.
-        PbrLook {
-            base_color: LinearRgba::BLACK,
-            emissive: LinearRgba::from(Color::srgb(1.0, 0.9, 0.4)) * 5.0,
-            // `StandardMaterial`'s default, which this spawn used to inherit via
-            // `..default()`. `PbrLook`'s own default is 1.0 (regolith), so it must be
-            // stated explicitly to keep the sun disc's shading identical.
-            perceptual_roughness: 0.5,
-            no_shadow_cast: true,
-            ..default()
-        },
-        Name::new("Sun Body"),
-        // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
-        // it exists so a click can focus the body. It IS in the spatial-query BVH,
-        // and a body's volume routinely contains the entire local scene (the Sun's
-        // sphere sits on the origin in any scene that anchors no site), so it must be
-        // masked out of suspension/sensor rays or every raycast wheel reports a
-        // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
-        Collider::sphere(696_340.0e3),
-        CollisionLayers::new(LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER), LayerMask::ALL),
-    )).set_parent_in_place(solar_grid).id();
+    let _sun_body = commands
+        .spawn((
+            SolarSystemRoot,
+            CelestialBody {
+                name: "Sun".to_string(),
+                ephemeris_id: 10,
+                radius_m: 696_340.0e3,
+            },
+            SOI { radius_m: 1.0e13 },
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            // The sun's own visual sphere must NEVER cast shadows: it sits exactly
+            // along the `DirectionalLight` direction, so as a caster it pancakes
+            // into every cascade map and "eclipses" the whole scene — with the
+            // celestial hierarchy enabled, every fragment within
+            // `shadow_max_distance` rendered fully shadowed (the pitch-black
+            // site-anchored surface), while terrain beyond cascade range lit fine.
+            bevy::light::NotShadowCaster,
+            Mesh3d(meshes.add(Sphere::new(696_340.0e3).mesh().ico(4).unwrap())),
+            // `no_shadow_cast` mirrors the `NotShadowCaster` above and is NOT optional:
+            // the binder's `Changed<PbrLook>` pass reconciles the marker from the look, so
+            // a look that said `false` would STRIP the marker on the first frame and bring
+            // back the sun-eclipses-everything bug the comment above describes.
+            PbrLook {
+                base_color: LinearRgba::BLACK,
+                emissive: LinearRgba::from(Color::srgb(1.0, 0.9, 0.4)) * 5.0,
+                // `StandardMaterial`'s default, which this spawn used to inherit via
+                // `..default()`. `PbrLook`'s own default is 1.0 (regolith), so it must be
+                // stated explicitly to keep the sun disc's shading identical.
+                perceptual_roughness: 0.5,
+                no_shadow_cast: true,
+                ..default()
+            },
+            Name::new("Sun Body"),
+            // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
+            // it exists so a click can focus the body. It IS in the spatial-query BVH,
+            // and a body's volume routinely contains the entire local scene (the Sun's
+            // sphere sits on the origin in any scene that anchors no site), so it must be
+            // masked out of suspension/sensor rays or every raycast wheel reports a
+            // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
+            Collider::sphere(696_340.0e3),
+            CollisionLayers::new(
+                LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
+                LayerMask::ALL,
+            ),
+        ))
+        .set_parent_in_place(solar_grid)
+        .id();
 
     // ── Sun Light ──────────────────────────────────────────────────────────
     // Tagged `FallbackSceneLight`: a scene that authors its own UsdLux
@@ -514,32 +529,38 @@ pub fn setup_big_space_hierarchy(
     ));
 
     // ── EMB Grid (inertial anchor for Earth-Moon system) ───────────────────
-    let emb_grid = commands.spawn((
-        EMBRoot,
-        CelestialReferenceFrame { ephemeris_id: 3 },
-        // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
-        Grid::new(2_000.0, 100.0),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("EMB Grid (Inertial)"),
-    )).set_parent_in_place(solar_grid).id();
+    let emb_grid = commands
+        .spawn((
+            EMBRoot,
+            CelestialReferenceFrame { ephemeris_id: 3 },
+            // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+            Grid::new(2_000.0, 100.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("EMB Grid (Inertial)"),
+        ))
+        .set_parent_in_place(solar_grid)
+        .id();
 
     // ── Earth Inertial Grid (positioned by ephemeris) ──────────────────────
-    let earth_grid = commands.spawn((
-        EarthRoot,
-        CelestialReferenceFrame { ephemeris_id: 399 },
-        // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
-        Grid::new(2_000.0, 100.0),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Earth Grid (Inertial)"),
-    )).set_parent_in_place(emb_grid).id();
+    let earth_grid = commands
+        .spawn((
+            EarthRoot,
+            CelestialReferenceFrame { ephemeris_id: 399 },
+            // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+            Grid::new(2_000.0, 100.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Earth Grid (Inertial)"),
+        ))
+        .set_parent_in_place(emb_grid)
+        .id();
 
     // ── Earth Inertial Anchor (star-fixed frame at Earth) ──────────────────
     // Same position as the Earth Grid, NO rotation. `sync_inertial_anchors`
@@ -547,71 +568,89 @@ pub fn setup_big_space_hierarchy(
     // Observer Camera hangs here so the orbit view is actually star-fixed
     // (parented to the rotating Earth Grid it swung a 19,000 km circle once per
     // sidereal day — the whole point of `InertialAnchor`).
-    let earth_inertial = commands.spawn((
-        InertialAnchor { ephemeris_id: 399 },
-        // Same 2 km / 100 m as every other celestial grid — cell edge is a
-        // PRECISION knob (see the Solar Grid note).
-        Grid::new(2_000.0, 100.0),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Earth Inertial Anchor"),
-    )).set_parent_in_place(emb_grid).id();
+    let earth_inertial = commands
+        .spawn((
+            InertialAnchor { ephemeris_id: 399 },
+            // Same 2 km / 100 m as every other celestial grid — cell edge is a
+            // PRECISION knob (see the Solar Grid note).
+            Grid::new(2_000.0, 100.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Earth Inertial Anchor"),
+        ))
+        .set_parent_in_place(emb_grid)
+        .id();
 
     // ── Earth Body (rotating child of Earth Grid) ─────────────────────────
     // Note: Body does NOT have CellCoord. It's a low-precision entity whose
     // GlobalTransform = Grid × local Transform. This allows rotation from
     // body_rotation_system to propagate to tile children via propagate_low_precision.
     // Position is handled by the parent Grid's ephemeris updates.
-    let earth_gm = registry.bodies.iter()
+    let earth_gm = registry
+        .bodies
+        .iter()
         .find(|d| d.ephemeris_id == 399)
         .map(|d| d.gm)
         .unwrap_or(3.986e14);
-    let earth_soi = registry.bodies.iter()
+    let earth_soi = registry
+        .bodies
+        .iter()
         .find(|d| d.ephemeris_id == 399)
         .and_then(|d| d.soi_radius_m)
         .unwrap_or(924e6);
 
-    let earth_body = commands.spawn((
-        CelestialBody {
-            name: "Earth".to_string(),
-            ephemeris_id: 399,
-            radius_m: 6371.0e3,
-        },
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        NoFrustumCulling,
-        GravityProvider {
-            model: Box::new(PointMassGravity { gm: earth_gm }),
-        },
-        SOI { radius_m: earth_soi },
-        // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
-        // it exists so a click can focus the body. It IS in the spatial-query BVH,
-        // and a body's volume routinely contains the entire local scene (the Sun's
-        // sphere sits on the origin in any scene that anchors no site), so it must be
-        // masked out of suspension/sensor rays or every raycast wheel reports a
-        // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
-        Collider::sphere(6371.0e3),
-        CollisionLayers::new(LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER), LayerMask::ALL),
-        Name::new("Earth Body (Rotating)"),
-    )).set_parent_in_place(earth_grid).id();
+    let earth_body = commands
+        .spawn((
+            CelestialBody {
+                name: "Earth".to_string(),
+                ephemeris_id: 399,
+                radius_m: 6371.0e3,
+            },
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            NoFrustumCulling,
+            GravityProvider {
+                model: Box::new(PointMassGravity { gm: earth_gm }),
+            },
+            SOI {
+                radius_m: earth_soi,
+            },
+            // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
+            // it exists so a click can focus the body. It IS in the spatial-query BVH,
+            // and a body's volume routinely contains the entire local scene (the Sun's
+            // sphere sits on the origin in any scene that anchors no site), so it must be
+            // masked out of suspension/sensor rays or every raycast wheel reports a
+            // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
+            Collider::sphere(6371.0e3),
+            CollisionLayers::new(
+                LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
+                LayerMask::ALL,
+            ),
+            Name::new("Earth Body (Rotating)"),
+        ))
+        .set_parent_in_place(earth_grid)
+        .id();
 
     // ── Earth Surface Grid (edge=1e3 m, inside the rotating Earth Grid) ────
-    let earth_surface_grid = commands.spawn((
-        EarthSurfaceRoot,
-        Grid::new(1_000.0, 100.0),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Earth Surface Grid"),
-    )).set_parent_in_place(earth_grid).id();
+    let earth_surface_grid = commands
+        .spawn((
+            EarthSurfaceRoot,
+            Grid::new(1_000.0, 100.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Earth Surface Grid"),
+        ))
+        .set_parent_in_place(earth_grid)
+        .id();
 
     // Earth terrain: camera-driven cube-sphere LOD (replaces the old fixed 24-tile
     // shell). `update_globe_lod` streams tiles parented to the Earth Surface Grid.
@@ -619,9 +658,8 @@ pub fn setup_big_space_hierarchy(
     // graticule. Imagery, if a scene has any, arrives the ordinary way — a
     // `UsdShade` Material bound to the body prim, adopted by
     // `adopt_authored_body_look`.
-    let earth_blueprint = blueprint_tile_look_untextured(
-        EARTH_BODY_COLOR, [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5,
-    );
+    let earth_blueprint =
+        blueprint_tile_look_untextured(EARTH_BODY_COLOR, [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5);
     commands.entity(earth_body).insert((
         crate::globe_lod::GlobeLod {
             radius_m: 6371.0e3,
@@ -635,72 +673,87 @@ pub fn setup_big_space_hierarchy(
     ));
 
     // ── Moon Inertial Grid (positioned by ephemeris) ───────────────────────
-    let moon_grid = commands.spawn((
-        MoonRoot,
-        CelestialReferenceFrame { ephemeris_id: 301 },
-        // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
-        Grid::new(2_000.0, 100.0),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Moon Grid (Inertial)"),
-    )).set_parent_in_place(emb_grid).id();
+    let moon_grid = commands
+        .spawn((
+            MoonRoot,
+            CelestialReferenceFrame { ephemeris_id: 301 },
+            // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+            Grid::new(2_000.0, 100.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Moon Grid (Inertial)"),
+        ))
+        .set_parent_in_place(emb_grid)
+        .id();
 
     // ── Moon Body (rotating child of Moon Grid) ────────────────────────────
-    let moon_gm = registry.bodies.iter()
+    let moon_gm = registry
+        .bodies
+        .iter()
         .find(|d| d.ephemeris_id == 301)
         .map(|d| d.gm)
         .unwrap_or(4.904e12);
-    let moon_soi = registry.bodies.iter()
+    let moon_soi = registry
+        .bodies
+        .iter()
         .find(|d| d.ephemeris_id == 301)
         .and_then(|d| d.soi_radius_m)
         .unwrap_or(66.1e6);
 
-    let moon_body = commands.spawn((
-        CelestialBody {
-            name: "Moon".to_string(),
-            ephemeris_id: 301,
-            radius_m: 1737.0e3,
-        },
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        NoFrustumCulling,
-        GravityProvider {
-            model: Box::new(PointMassGravity { gm: moon_gm }),
-        },
-        SOI { radius_m: moon_soi },
-        // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
-        // it exists so a click can focus the body. It IS in the spatial-query BVH,
-        // and a body's volume routinely contains the entire local scene (the Sun's
-        // sphere sits on the origin in any scene that anchors no site), so it must be
-        // masked out of suspension/sensor rays or every raycast wheel reports a
-        // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
-        Collider::sphere(1737.0e3),
-        CollisionLayers::new(LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER), LayerMask::ALL),
-        Name::new("Moon Body (Rotating)"),
-    )).set_parent_in_place(moon_grid).id();
+    let moon_body = commands
+        .spawn((
+            CelestialBody {
+                name: "Moon".to_string(),
+                ephemeris_id: 301,
+                radius_m: 1737.0e3,
+            },
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            NoFrustumCulling,
+            GravityProvider {
+                model: Box::new(PointMassGravity { gm: moon_gm }),
+            },
+            SOI { radius_m: moon_soi },
+            // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
+            // it exists so a click can focus the body. It IS in the spatial-query BVH,
+            // and a body's volume routinely contains the entire local scene (the Sun's
+            // sphere sits on the origin in any scene that anchors no site), so it must be
+            // masked out of suspension/sensor rays or every raycast wheel reports a
+            // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
+            Collider::sphere(1737.0e3),
+            CollisionLayers::new(
+                LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
+                LayerMask::ALL,
+            ),
+            Name::new("Moon Body (Rotating)"),
+        ))
+        .set_parent_in_place(moon_grid)
+        .id();
 
     // ── Moon Surface Grid (edge=1e3 m, inside the rotating Moon Grid) ──────
-    let moon_surface_grid = commands.spawn((
-        MoonSurfaceRoot,
-        Grid::new(1_000.0, 100.0),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Moon Surface Grid"),
-    )).set_parent_in_place(moon_grid).id();
+    let moon_surface_grid = commands
+        .spawn((
+            MoonSurfaceRoot,
+            Grid::new(1_000.0, 100.0),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Moon Surface Grid"),
+        ))
+        .set_parent_in_place(moon_grid)
+        .id();
 
     // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
-    let moon_blueprint = blueprint_tile_look_untextured(
-        MOON_BODY_COLOR, [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9,
-    );
+    let moon_blueprint =
+        blueprint_tile_look_untextured(MOON_BODY_COLOR, [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9);
     commands.entity(moon_body).insert((
         crate::globe_lod::GlobeLod {
             radius_m: 1737.0e3,
@@ -725,87 +778,105 @@ pub fn setup_big_space_hierarchy(
     // Hosts that own their camera (sandbox avatar) keep their FloatingOrigin;
     // only the full-client Observer Camera claims it (doc 43).
     if config.spawn_observer_camera {
-    // The Observer Camera is the intended view, so it holds the single
-    // FloatingOrigin. Claim it from any prior holder (the shell's OriginAnchor)
-    // so big_space never sees two origins (the "multiple floating origins →
-    // resetting this big space" error — a known multi-crate hazard).
-    for prior in q_prior_origins.iter() {
-        commands.entity(prior).remove::<FloatingOrigin>();
-    }
+        // The Observer Camera is the intended view, so it holds the single
+        // FloatingOrigin. Claim it from any prior holder (the shell's OriginAnchor)
+        // so big_space never sees two origins (the "multiple floating origins →
+        // resetting this big space" error — a known multi-crate hazard).
+        for prior in q_prior_origins.iter() {
+            commands.entity(prior).remove::<FloatingOrigin>();
+        }
 
-    commands.spawn((
-        Camera::default(),
-        // The scene camera stated as INTENT: `lunco-render-bevy` attaches `Camera3d`,
-        // the tonemapper and MSAA. Systems asking "which entity is the scene camera?"
-        // filter on `With<SceneCamera>` — that question no longer costs a GPU stack.
-        //
-        // BLOOM IS DELIBERATELY OFF. This spawn used to carry a tuned `Bloom`, but
-        // `hdr` is set true NOWHERE in this repo (review finding `R4`), so that bloom
-        // rendered NOTHING while still paying for its downsample/upsample chain.
-        // Keeping it off is therefore what preserves today's actual output; turning it
-        // on would be a visual change smuggled in by a decoupling pass. If someone
-        // wants real bloom, that is a separate, deliberate decision:
-        // `SceneCamera::default().with_bloom(..)` — which turns HDR on for you, because
-        // bloom without HDR is exactly the bug `SceneCamera` exists to make
-        // unrepresentable.
-        //
-        // Tonemapping uses AgX (`ToneMap::default()`). SMAA was already
-        // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
-        // fix on main).
-        SceneCamera::default(),
-        // Physical exposure paired with the canonical sun illuminance
-        // (single source of truth — lunco_environment::LunarSun).
-        bevy::camera::Exposure { ev100: lunco_environment::LunarSun::default().exposure_ev100 },
-        Projection::Perspective(PerspectiveProjection {
-            near: 1.0,
-            far: 1.0e15,
-            ..default()
-        }),
-        FloatingOrigin,
-        CellCoord::default(),
-        Transform::from_translation(cam_pos).looking_at(Vec3::ZERO, Vec3::Y),
-        GlobalTransform::default(),
-        lunco_core::Avatar,
-        lunco_core::IntentState::default(),
-        lunco_controller::get_avatar_input_map(),
-        lunco_core::IntentAnalogState::default(),
-        Name::new("Observer Camera"),
-    )).set_parent_in_place(earth_inertial); // Star-fixed frame at Earth — NOT the rotating Earth Grid.
+        commands
+            .spawn((
+                Camera::default(),
+                // The scene camera stated as INTENT: `lunco-render-bevy` attaches `Camera3d`,
+                // the tonemapper and MSAA. Systems asking "which entity is the scene camera?"
+                // filter on `With<SceneCamera>` — that question no longer costs a GPU stack.
+                //
+                // BLOOM IS DELIBERATELY OFF. This spawn used to carry a tuned `Bloom`, but
+                // `hdr` is set true NOWHERE in this repo (review finding `R4`), so that bloom
+                // rendered NOTHING while still paying for its downsample/upsample chain.
+                // Keeping it off is therefore what preserves today's actual output; turning it
+                // on would be a visual change smuggled in by a decoupling pass. If someone
+                // wants real bloom, that is a separate, deliberate decision:
+                // `SceneCamera::default().with_bloom(..)` — which turns HDR on for you, because
+                // bloom without HDR is exactly the bug `SceneCamera` exists to make
+                // unrepresentable.
+                //
+                // Tonemapping uses AgX (`ToneMap::default()`). SMAA was already
+                // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
+                // fix on main).
+                SceneCamera::default(),
+                // Physical exposure paired with the canonical sun illuminance
+                // (single source of truth — lunco_environment::LunarSun).
+                bevy::camera::Exposure {
+                    ev100: lunco_environment::LunarSun::default().exposure_ev100,
+                },
+                Projection::Perspective(PerspectiveProjection {
+                    near: 1.0,
+                    far: 1.0e15,
+                    ..default()
+                }),
+                FloatingOrigin,
+                CellCoord::default(),
+                Transform::from_translation(cam_pos).looking_at(Vec3::ZERO, Vec3::Y),
+                GlobalTransform::default(),
+                lunco_core::Avatar,
+                lunco_core::IntentState::default(),
+                lunco_controller::get_avatar_input_map(),
+                lunco_core::IntentAnalogState::default(),
+                Name::new("Observer Camera"),
+            ))
+            .set_parent_in_place(earth_inertial); // Star-fixed frame at Earth — NOT the rotating Earth Grid.
     } // config.spawn_observer_camera
 
     // ── Other Planets (simple entities on Solar Grid) ──────────────────────
     for body_desc in registry.bodies.iter() {
-        if body_desc.ephemeris_id == 10 || body_desc.ephemeris_id == 399
-            || body_desc.ephemeris_id == 301 || body_desc.ephemeris_id == 3
+        if body_desc.ephemeris_id == 10
+            || body_desc.ephemeris_id == 399
+            || body_desc.ephemeris_id == 301
+            || body_desc.ephemeris_id == 3
         {
             continue;
         }
-        commands.spawn((
-            CelestialBody {
-                name: body_desc.name.clone(),
-                ephemeris_id: body_desc.ephemeris_id,
-                radius_m: body_desc.radius_m,
-            },
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-            Mesh3d(meshes.add(Sphere::new(body_desc.radius_m as f32).mesh().ico(2).unwrap())),
-            PbrLook {
-                base_color: LinearRgba::from(Color::srgb(0.5, 0.5, 0.5)),
-                // `StandardMaterial`'s default (inherited via `..default()` before);
-                // `PbrLook`'s default is 1.0, so state it or the planets go matte.
-                perceptual_roughness: 0.5,
-                ..default()
-            },
-            Name::new(format!("{} Body", body_desc.name)),
-            // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
-            // it exists so a click can focus the body. It IS in the spatial-query BVH,
-            // and a body's volume routinely contains the entire local scene (the Sun's
-            // sphere sits on the origin in any scene that anchors no site), so it must be
-            // masked out of suspension/sensor rays or every raycast wheel reports a
-            // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
-            Collider::sphere(body_desc.radius_m),
-            CollisionLayers::new(LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER), LayerMask::ALL),
-        )).set_parent_in_place(solar_grid);
+        commands
+            .spawn((
+                CelestialBody {
+                    name: body_desc.name.clone(),
+                    ephemeris_id: body_desc.ephemeris_id,
+                    radius_m: body_desc.radius_m,
+                },
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+                Mesh3d(
+                    meshes.add(
+                        Sphere::new(body_desc.radius_m as f32)
+                            .mesh()
+                            .ico(2)
+                            .unwrap(),
+                    ),
+                ),
+                PbrLook {
+                    base_color: LinearRgba::from(Color::srgb(0.5, 0.5, 0.5)),
+                    // `StandardMaterial`'s default (inherited via `..default()` before);
+                    // `PbrLook`'s default is 1.0, so state it or the planets go matte.
+                    perceptual_roughness: 0.5,
+                    ..default()
+                },
+                Name::new(format!("{} Body", body_desc.name)),
+                // PICKING-ONLY GEOMETRY. No `RigidBody`, so this never generates a contact —
+                // it exists so a click can focus the body. It IS in the spatial-query BVH,
+                // and a body's volume routinely contains the entire local scene (the Sun's
+                // sphere sits on the origin in any scene that anchors no site), so it must be
+                // masked out of suspension/sensor rays or every raycast wheel reports a
+                // distance-0 contact with a planet. See `CELESTIAL_COLLISION_LAYER`.
+                Collider::sphere(body_desc.radius_m),
+                CollisionLayers::new(
+                    LayerMask(lunco_core::CELESTIAL_COLLISION_LAYER),
+                    LayerMask::ALL,
+                ),
+            ))
+            .set_parent_in_place(solar_grid);
     }
 }

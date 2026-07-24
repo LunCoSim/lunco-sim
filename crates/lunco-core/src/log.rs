@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use crate::telemetry::{TelemetryEvent, SampledParameter};
+use crate::telemetry::{SampledParameter, TelemetryEvent};
 
 /// Plugin that registers logging observers.
 pub struct LunCoLogPlugin;
@@ -26,12 +26,16 @@ fn log_telemetry_events(trigger: On<TelemetryEvent>) {
     // see them); they just stop being default-visible log output. Mission events
     // (touchdown, low-fuel, `emit("rover_deployed")`) keep `info!`.
     if evt.name.starts_with("cmd:") || evt.name.starts_with("key:") {
-        debug!("[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
-            evt.name, evt.severity, evt.data, evt.timestamp);
+        debug!(
+            "[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
+            evt.name, evt.severity, evt.data, evt.timestamp
+        );
         return;
     }
-    info!("[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
-        evt.name, evt.severity, evt.data, evt.timestamp);
+    info!(
+        "[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
+        evt.name, evt.severity, evt.data, evt.timestamp
+    );
 }
 
 fn log_sampled_parameter(trigger: On<SampledParameter>) {
@@ -42,6 +46,8 @@ fn log_sampled_parameter(trigger: On<SampledParameter>) {
     // disk. The black-box RECORD of samples belongs in a telemetry channel/recording,
     // not the tracing log; this line is only a debug aid. Discrete EVENTs stay at
     // `info!` above — they are rare (touchdown, low-fuel) and worth seeing by default.
-    debug!("[BLACKBOX] SAMPLE: name={}, value={:?}, unit={}, ts={:.4}",
-        param.name, param.value, param.unit, param.timestamp);
+    debug!(
+        "[BLACKBOX] SAMPLE: name={}, value={:?}, unit={}, ts={:.4}",
+        param.name, param.value, param.unit, param.timestamp
+    );
 }

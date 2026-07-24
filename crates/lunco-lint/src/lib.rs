@@ -115,7 +115,10 @@ pub struct LintFinding {
 impl LintFinding {
     /// The one-line form used for logs, toasts and test assertions.
     pub fn line(&self) -> String {
-        format!("[{}/{}] {} — {}", self.domain, self.rule, self.subject, self.message)
+        format!(
+            "[{}/{}] {} — {}",
+            self.domain, self.rule, self.subject, self.message
+        )
     }
 }
 
@@ -136,11 +139,17 @@ pub struct LintReport {
 impl LintReport {
     /// Count of findings at [`LintSeverity::Error`].
     pub fn errors(&self) -> usize {
-        self.findings.iter().filter(|f| f.severity == LintSeverity::Error).count()
+        self.findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Error)
+            .count()
     }
     /// Count of findings at [`LintSeverity::Warn`].
     pub fn warnings(&self) -> usize {
-        self.findings.iter().filter(|f| f.severity == LintSeverity::Warn).count()
+        self.findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Warn)
+            .count()
     }
     /// Drop everything a domain previously reported — what a domain calls before
     /// re-linting the same subject, so a fixed problem disappears instead of
@@ -285,7 +294,10 @@ mod tests {
     fn policy_findings_are_parsed_with_severity() {
         register_canned(
             "test_parse",
-            vec![finding_map("nested-body-no-joint", "error"), finding_map("slow", "info")],
+            vec![
+                finding_map("nested-body-no-joint", "error"),
+                finding_map("slow", "info"),
+            ],
         );
         let f = run_lint("test_parse", H::Unit);
         assert_eq!(f.len(), 2);
@@ -310,7 +322,10 @@ mod tests {
     /// than logged as a mystery.
     #[test]
     fn incomplete_findings_are_skipped() {
-        register_canned("test_incomplete", vec![H::map([("severity", H::str("error"))])]);
+        register_canned(
+            "test_incomplete",
+            vec![H::map([("severity", H::str("error"))])],
+        );
         assert!(run_lint("test_incomplete", H::Unit).is_empty());
         lunco_hooks::unregister(&hook_id("test_incomplete"));
     }

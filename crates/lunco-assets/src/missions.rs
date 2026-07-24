@@ -14,7 +14,9 @@ static MISSIONS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../asse
 /// One mission file's source by basename (e.g. `"artemis_2_mission.usda"`), or `None`.
 /// Case-sensitive; works for any embedded mission file (`.json`, `.usda`, …).
 pub fn mission_source(filename: &str) -> Option<&'static str> {
-    MISSIONS_DIR.get_file(filename).and_then(|f| f.contents_utf8())
+    MISSIONS_DIR
+        .get_file(filename)
+        .and_then(|f| f.contents_utf8())
 }
 
 #[cfg(test)]

@@ -59,9 +59,7 @@ pub fn render_modal_host(
                     }
                     ModalButton::Destructive(label) => {
                         if ui
-                            .add(
-                                egui::Button::new(label).fill(destructive_fill),
-                            )
+                            .add(egui::Button::new(label).fill(destructive_fill))
                             .clicked()
                         {
                             outcome = Some(ModalOutcome::Destructive(label.clone()));

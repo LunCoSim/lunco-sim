@@ -113,7 +113,10 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
 
         // Stable order: a dictionary that reshuffles every poll makes a useless tree.
         channels.sort_by(|a, b| {
-            a["key"].as_str().unwrap_or("").cmp(b["key"].as_str().unwrap_or(""))
+            a["key"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["key"].as_str().unwrap_or(""))
         });
 
         ApiResponse::ok(serde_json::json!({
@@ -172,9 +175,18 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
             );
         };
 
-        let start = params.get("start").and_then(|v| v.as_f64()).unwrap_or(f64::NEG_INFINITY);
-        let end = params.get("end").and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
-        let limit = params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+        let start = params
+            .get("start")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::NEG_INFINITY);
+        let end = params
+            .get("end")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::INFINITY);
+        let limit = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
 
         let epoch_jd = world
             .get_resource::<lunco_time::WorldTime>()
@@ -252,10 +264,18 @@ impl ApiQueryProvider for ExportTelemetryRecordingProvider {
     }
 
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
-        let start = params.get("start").and_then(|v| v.as_f64()).unwrap_or(f64::NEG_INFINITY);
-        let end = params.get("end").and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
+        let start = params
+            .get("start")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::NEG_INFINITY);
+        let end = params
+            .get("end")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::INFINITY);
         let wanted: Option<Vec<String>> = params.get("keys").and_then(|v| v.as_array()).map(|a| {
-            a.iter().filter_map(|x| x.as_str().map(String::from)).collect()
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
         });
 
         // key -> entity, for every live channel.
@@ -298,7 +318,10 @@ impl ApiQueryProvider for ExportTelemetryRecordingProvider {
         }
 
         // The union time grid — channels at different rates share no axis of their own.
-        let mut times: Vec<f64> = per_key.iter().flat_map(|(_, p)| p.iter().map(|(t, _)| *t)).collect();
+        let mut times: Vec<f64> = per_key
+            .iter()
+            .flat_map(|(_, p)| p.iter().map(|(t, _)| *t))
+            .collect();
         times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         times.dedup();
 
@@ -331,7 +354,9 @@ pub(crate) fn build(app: &mut App) {
     // `init_resource` first: plugin order is not ours to control, and `resource_mut` on a
     // registry lunco-api hasn't installed yet would panic.
     app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
-    let mut registry = app.world_mut().resource_mut::<lunco_api::queries::ApiQueryRegistry>();
+    let mut registry = app
+        .world_mut()
+        .resource_mut::<lunco_api::queries::ApiQueryRegistry>();
     registry.register(ListTelemetryChannelsProvider);
     registry.register(QueryTelemetryHistoryProvider);
     registry.register(ExportTelemetryRecordingProvider);

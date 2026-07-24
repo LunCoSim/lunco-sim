@@ -43,8 +43,8 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
-    coords, CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId,
-    Severity, SessionId, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
+    coords, CelestialBody, CommandOutcome, CommandResults, GlobalEntityId, OpId, SessionId,
+    Severity, SimTick, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -141,17 +141,29 @@ pub fn build_from_reflect<B: ValueBuilder>(
 
     // Structural fallback: containers → arrays, newtypes unwrap, structs → maps.
     match value.reflect_ref() {
-        ReflectRef::List(l) => Some(b.array(l.iter().filter_map(|x| build_from_reflect(b, x)).collect())),
-        ReflectRef::Array(a) => Some(b.array(a.iter().filter_map(|x| build_from_reflect(b, x)).collect())),
-        ReflectRef::Tuple(t) => Some(b.array(
-            t.iter_fields().filter_map(|x| build_from_reflect(b, x)).collect(),
-        )),
+        ReflectRef::List(l) => {
+            Some(b.array(l.iter().filter_map(|x| build_from_reflect(b, x)).collect()))
+        }
+        ReflectRef::Array(a) => {
+            Some(b.array(a.iter().filter_map(|x| build_from_reflect(b, x)).collect()))
+        }
+        ReflectRef::Tuple(t) => Some(
+            b.array(
+                t.iter_fields()
+                    .filter_map(|x| build_from_reflect(b, x))
+                    .collect(),
+            ),
+        ),
         ReflectRef::TupleStruct(ts) if ts.field_len() == 1 => {
             ts.field(0).and_then(|f| build_from_reflect(b, f))
         }
-        ReflectRef::TupleStruct(ts) => Some(b.array(
-            ts.iter_fields().filter_map(|x| build_from_reflect(b, x)).collect(),
-        )),
+        ReflectRef::TupleStruct(ts) => Some(
+            b.array(
+                ts.iter_fields()
+                    .filter_map(|x| build_from_reflect(b, x))
+                    .collect(),
+            ),
+        ),
         ReflectRef::Struct(s) => {
             let mut entries = Vec::new();
             for i in 0..s.field_len() {
@@ -183,7 +195,11 @@ pub fn build_from_json<B: ValueBuilder>(b: &B, v: &serde_json::Value) -> B::Valu
         }
         J::String(s) => b.string(s),
         J::Array(a) => b.array(a.iter().map(|x| build_from_json(b, x)).collect()),
-        J::Object(o) => b.map(o.iter().map(|(k, x)| (k.clone(), build_from_json(b, x))).collect()),
+        J::Object(o) => b.map(
+            o.iter()
+                .map(|(k, x)| (k.clone(), build_from_json(b, x)))
+                .collect(),
+        ),
     }
 }
 
@@ -498,12 +514,17 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
             // client and host agree on the seq the reconcile acks against.
             if owns_target && name == "SetPorts" {
                 if let Some(gid) = command_target_gid(world, name, &params) {
-                    let tick = world.get_resource::<lunco_core::SimTick>().map_or(0, |t| t.0);
-                    let seq = world.get_resource_mut::<lunco_core::OwnedInputLog>().map(|mut log| {
-                        let entry = log.0.entry(gid).or_default();
-                        entry.next_seq = entry.next_seq.wrapping_add(1); // seq 0 reserved
-                        entry.next_seq
-                    });
+                    let tick = world
+                        .get_resource::<lunco_core::SimTick>()
+                        .map_or(0, |t| t.0);
+                    let seq =
+                        world
+                            .get_resource_mut::<lunco_core::OwnedInputLog>()
+                            .map(|mut log| {
+                                let entry = log.0.entry(gid).or_default();
+                                entry.next_seq = entry.next_seq.wrapping_add(1); // seq 0 reserved
+                                entry.next_seq
+                            });
                     if let (Some(seq), Some(obj)) = (seq, params.as_object_mut()) {
                         obj.insert("seq".into(), serde_json::json!(seq));
                         obj.insert("tick".into(), serde_json::json!(tick));
@@ -536,9 +557,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
             .and_then(|r| r.get(id).cloned());
         command_result_json(id, outcome.as_ref())
     })
-    .unwrap_or_else(|| {
-        serde_json::json!({ "id": -1, "ok": false, "error": "no world in scope" })
-    })
+    .unwrap_or_else(|| serde_json::json!({ "id": -1, "ok": false, "error": "no world in scope" }))
 }
 
 /// `cmd` as a native value: fire, then convert the JSON result in one pass.
@@ -574,7 +593,9 @@ pub fn query_raw(name: &str, params: serde_json::Value) -> Option<serde_json::Va
             .get_resource::<ApiQueryRegistry>()
             .and_then(|reg| reg.get(name))?;
         match provider.execute(world, &params) {
-            ApiResponse::Ok { data: Some(data), .. } => Some(data),
+            ApiResponse::Ok {
+                data: Some(data), ..
+            } => Some(data),
             _ => None,
         }
     })
@@ -640,7 +661,8 @@ pub fn world_pos(gid: u64) -> Option<DVec3> {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial) = state.get(world).expect("read-only queries always validate");
+        let (q_parents, q_grids, q_spatial) =
+            state.get(world).expect("read-only queries always validate");
         coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
     })
     .flatten()
@@ -679,7 +701,11 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
             .find(|b| b.ephemeris_id == anchor.body)
             .map(|b| b.radius_m)?;
         let local = coords::world_position(entity, &q_parents, &q_grids, &q_spatial)?;
-        Some(lunco_celestial::geo::local_to_geodetic(&anchor.geodetic, radius_m, local))
+        Some(lunco_celestial::geo::local_to_geodetic(
+            &anchor.geodetic,
+            radius_m,
+            local,
+        ))
     })
     .flatten()
 }
@@ -976,13 +1002,19 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
             Query<&ChildOf>,
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
-            Query<(Option<&Name>, Has<lunco_core::ControlBinding>, Option<&CelestialBody>)>,
+            Query<(
+                Option<&Name>,
+                Has<lunco_core::ControlBinding>,
+                Option<&CelestialBody>,
+            )>,
         )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial, q_meta) = state.get(world).expect("read-only queries always validate");
+        let (q_parents, q_grids, q_spatial, q_meta) =
+            state.get(world).expect("read-only queries always validate");
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {
-                let (name, accepts_commands, body) = q_meta.get(entity).unwrap_or((None, false, None));
+                let (name, accepts_commands, body) =
+                    q_meta.get(entity).unwrap_or((None, false, None));
                 // NOTE: the reported kind string is deliberately unchanged — a lander
                 // accepts commands and has always reported as "rover" here.
                 let kind = if accepts_commands {
@@ -1163,8 +1195,7 @@ fn splitmix64(state: &mut u64) -> u64 {
 /// and on_event don't draw the identical sequence). Called by the scenario
 /// runtime before each hook invocation.
 pub fn rng_begin(gid: u64, tick: u64, salt: u64) {
-    let seed = gid
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    let seed = gid.wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ tick.wrapping_mul(0xD1B5_4A32_D192_ED03)
         ^ salt.wrapping_mul(0xA0761_D6478_BD642F);
     RNG_STATE.with(|c| c.set(seed));
@@ -1223,7 +1254,10 @@ pub fn build_event<B: ValueBuilder>(b: &B, ev: &TelemetryEvent) -> B::Value {
         // fired (independent of the name). `0` = global/no entity.
         ("source".to_string(), b.int(ev.source as i64)),
         ("value".to_string(), telemetry_value(b, &ev.data)),
-        ("severity".to_string(), b.string(&format!("{:?}", ev.severity))),
+        (
+            "severity".to_string(),
+            b.string(&format!("{:?}", ev.severity)),
+        ),
         ("timestamp".to_string(), b.float(ev.timestamp)),
     ])
 }
@@ -1273,25 +1307,41 @@ mod tests {
         // command, so it dispatches as a fire-and-forget no-op and reports ok.
         set_script_authority(None);
         let r = cmd_raw("SetPorts", serde_json::json!({ "target": 1, "writes": [] }));
-        assert_eq!(r["ok"], serde_json::json!(true), "local launch must be ungated");
+        assert_eq!(
+            r["ok"],
+            serde_json::json!(true),
+            "local launch must be ungated"
+        );
 
         // (2) Authenticated Observer + an OPEN command (not in the policy base)
         // → allowed.
         set_script_authority(Some(SessionId(7)));
         let r = cmd_raw("SomeOpenCommand", serde_json::json!({}));
-        assert_eq!(r["ok"], serde_json::json!(true), "OPEN command passes for an authed session");
+        assert_eq!(
+            r["ok"],
+            serde_json::json!(true),
+            "OPEN command passes for an authed session"
+        );
 
         // (3) Same Observer + an OWNED_CONTROL command on a target it does NOT
         // own → demands Operator → rejected BEFORE dispatch.
         set_script_authority(Some(SessionId(7)));
         let r = cmd_raw("SetPorts", serde_json::json!({ "target": 1, "writes": [] }));
-        assert_eq!(r["ok"], serde_json::json!(false), "unowned OWNED_CONTROL must be rejected");
+        assert_eq!(
+            r["ok"],
+            serde_json::json!(false),
+            "unowned OWNED_CONTROL must be rejected"
+        );
         assert!(r["error"].is_string());
 
         // (4) Unknown / unauthenticated session → denied even for an OPEN command.
         set_script_authority(Some(SessionId(999)));
         let r = cmd_raw("SomeOpenCommand", serde_json::json!({}));
-        assert_eq!(r["ok"], serde_json::json!(false), "unknown session denied even for OPEN");
+        assert_eq!(
+            r["ok"],
+            serde_json::json!(false),
+            "unknown session denied even for OPEN"
+        );
     }
 
     /// The structural verbs (`add`/`remove`/`despawn`) route through the SAME
@@ -1318,7 +1368,9 @@ mod tests {
                 token: Some("server-token".into()),
             },
         );
-        let _ = world.resource_mut::<SessionRegistry>().claim(SessionId(7), 1);
+        let _ = world
+            .resource_mut::<SessionRegistry>()
+            .claim(SessionId(7), 1);
 
         let _scope = WorldScope::enter(&mut world);
 

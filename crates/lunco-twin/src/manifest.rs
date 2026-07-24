@@ -183,7 +183,9 @@ pub fn glob_matches(glob: &str, path: &str) -> bool {
         match pat.split_once('*') {
             None => pat == s,
             Some((head, tail)) => {
-                let Some(s) = s.strip_prefix(head) else { return false };
+                let Some(s) = s.strip_prefix(head) else {
+                    return false;
+                };
                 (0..=s.len()).any(|k| star_match(tail, &s[k..]))
             }
         }
@@ -338,10 +340,8 @@ mod tests {
             usd: None,
             journal: None,
         };
-        let path = std::env::temp_dir().join(format!(
-            "lunco_twin_manifest_{}.toml",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("lunco_twin_manifest_{}.toml", std::process::id()));
         manifest.write(&path).expect("write via storage");
         let read_back = TwinManifest::read(&path).expect("read via storage");
         assert_eq!(read_back, manifest);
@@ -458,14 +458,29 @@ uuid = "{id}"
 
     #[test]
     fn glob_star_stays_inside_one_segment() {
-        assert!(glob_matches("sim/scenes/*.usda", "sim/scenes/traverse.usda"));
+        assert!(glob_matches(
+            "sim/scenes/*.usda",
+            "sim/scenes/traverse.usda"
+        ));
         // `*` must not eat the separator, or "scenes/*.usda" would claim every
         // nested file and the pattern would say less than the author meant.
-        assert!(!glob_matches("sim/scenes/*.usda", "sim/scenes/old/traverse.usda"));
-        assert!(glob_matches("sim/scenes/**", "sim/scenes/old/traverse.usda"));
+        assert!(!glob_matches(
+            "sim/scenes/*.usda",
+            "sim/scenes/old/traverse.usda"
+        ));
+        assert!(glob_matches(
+            "sim/scenes/**",
+            "sim/scenes/old/traverse.usda"
+        ));
         // Prefix/suffix around the star.
-        assert!(glob_matches("sim/scenes/traverse*.usda", "sim/scenes/traverse_apollo15.usda"));
-        assert!(!glob_matches("sim/scenes/traverse*.usda", "sim/scenes/other.usda"));
+        assert!(glob_matches(
+            "sim/scenes/traverse*.usda",
+            "sim/scenes/traverse_apollo15.usda"
+        ));
+        assert!(!glob_matches(
+            "sim/scenes/traverse*.usda",
+            "sim/scenes/other.usda"
+        ));
     }
 
     #[test]
@@ -473,15 +488,24 @@ uuid = "{id}"
         let text = "name = \"t\"\nversion = \"0.1.0\"\n\n[usd]\ndefault_scene = \"sim/scenes/traverse.usda\"\nscenes = [\"sim/scenes/*.usda\"]\n";
         let parsed: TwinManifest = toml::from_str(text).unwrap();
         let usd = parsed.usd.expect("[usd] section");
-        assert_eq!(usd.scenes.as_deref(), Some(&["sim/scenes/*.usda".to_string()][..]));
+        assert_eq!(
+            usd.scenes.as_deref(),
+            Some(&["sim/scenes/*.usda".to_string()][..])
+        );
     }
 
     #[test]
     fn a_twin_that_declares_nothing_still_finds_its_scenes() {
         // Undeclared is the existing state of every twin on disk; the fallback
         // is what keeps them working until they say so themselves.
-        assert!(DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "sim/scenes/traverse.usda")));
-        assert!(DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "scenes/tests/link.usda")));
-        assert!(!DEFAULT_SCENE_GLOBS.iter().any(|g| glob_matches(g, "models/rover.usda")));
+        assert!(DEFAULT_SCENE_GLOBS
+            .iter()
+            .any(|g| glob_matches(g, "sim/scenes/traverse.usda")));
+        assert!(DEFAULT_SCENE_GLOBS
+            .iter()
+            .any(|g| glob_matches(g, "scenes/tests/link.usda")));
+        assert!(!DEFAULT_SCENE_GLOBS
+            .iter()
+            .any(|g| glob_matches(g, "models/rover.usda")));
     }
 }

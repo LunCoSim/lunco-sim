@@ -61,7 +61,9 @@ pub struct Fnv1a {
 impl Fnv1a {
     /// A fresh hasher seeded with the FNV-1a offset basis.
     pub const fn new() -> Self {
-        Self { state: FNV1A_OFFSET_BASIS }
+        Self {
+            state: FNV1A_OFFSET_BASIS,
+        }
     }
 
     /// Canonical byte-wise FNV-1a. **Wire-locked** — see the type docs.
@@ -170,7 +172,10 @@ mod tests {
         // then multiply. Distinct from `write_bytes(&x.to_ne_bytes())`.
         let mut h = Fnv1a::new();
         h.write_u64(42);
-        assert_eq!(h.finish(), (FNV1A_OFFSET_BASIS ^ 42).wrapping_mul(FNV1A_PRIME));
+        assert_eq!(
+            h.finish(),
+            (FNV1A_OFFSET_BASIS ^ 42).wrapping_mul(FNV1A_PRIME)
+        );
     }
 
     #[cfg(feature = "cid")]

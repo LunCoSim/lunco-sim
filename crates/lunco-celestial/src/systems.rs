@@ -1,26 +1,34 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use crate::big_space_setup::{SolarSystemRoot, EarthRoot, InertialAnchor, MoonRoot};
-use crate::ephemeris::EphemerisResource;
-use lunco_time::WorldTime;
-use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
+use crate::big_space_setup::{EarthRoot, InertialAnchor, MoonRoot, SolarSystemRoot};
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
+use crate::ephemeris::EphemerisResource;
+use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
 use lunco_materials::{ParamValue, ShaderLook};
+use lunco_time::WorldTime;
 
 /// Update body and frame positions based on ephemeris data.
 /// Optimized: Only re-computes if Epoch has changed significantly.
 pub fn ephemeris_update_system(
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
-    mut q_entities: Query<(Entity, &mut CellCoord, &mut Transform, Option<&CelestialBody>, Option<&CelestialReferenceFrame>)>,
+    mut q_entities: Query<(
+        Entity,
+        &mut CellCoord,
+        &mut Transform,
+        Option<&CelestialBody>,
+        Option<&CelestialReferenceFrame>,
+    )>,
     _q_all_parents: Query<&ChildOf>,
     _q_frames: Query<&CelestialReferenceFrame>,
     q_grids: Query<&Grid>,
     mut last_jd: Local<f64>,
 ) {
-    let Some(ephemeris) = ephemeris else { return; };
+    let Some(ephemeris) = ephemeris else {
+        return;
+    };
 
     // Gate: re-project the whole body/frame hierarchy only when the epoch
     // has actually advanced. `last_jd` starts at 0.0 (a JD this clock never
@@ -33,7 +41,13 @@ pub fn ephemeris_update_system(
     *last_jd = world.epoch_jd;
 
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
-        let ephemeris_id = if let Some(b) = body { b.ephemeris_id } else if let Some(f) = frame { f.ephemeris_id } else { continue; };
+        let ephemeris_id = if let Some(b) = body {
+            b.ephemeris_id
+        } else if let Some(f) = frame {
+            f.ephemeris_id
+        } else {
+            continue;
+        };
 
         // NEVER write the Solar Grid (id 10) here. Its parent-relative
         // position is zero by definition (`position(10) == 0`), so in an
@@ -60,12 +74,12 @@ pub fn ephemeris_update_system(
         let pos_bevy_m = ecliptic_to_bevy(rel_pos_au).raw();
 
         // Find the grid this entity is in. Since body/frame entities are typically children of their reference frame grid:
-        // We need to resolve which grid we are relative to. 
+        // We need to resolve which grid we are relative to.
         // In our setup, Earth Body is child of Earth Local Grid.
         // If the provider returns pos relative to parent, then for Earth (399) it is relative to EMB (3).
         // But Earth Body is in Earth Local Grid, which is child of EMB Grid.
         // This means Earth Body should have translation = ZERO in its own local grid.
-        
+
         // WAIT: The design is:
         // Solar Grid (10) -> Sun Body
         // Solar Grid (10) -> EMB Grid (3)
@@ -73,18 +87,21 @@ pub fn ephemeris_update_system(
         // EMB Grid (3) -> Moon Grid (301)
         // Earth Grid (399) -> Earth Body
         // Moon Grid (301) -> Moon Body
-        
+
         // So:
         // EMB Grid position relative to Solar Grid = EMB helio (rel 10)
         // Earth Grid position relative to EMB Grid = Earth rel EMB (rel 3)
         // Moon Grid position relative to EMB Grid = Moon rel EMB (rel 3)
         // Earth Body position relative to Earth Grid = ZERO
-        
+
         let mut depth = 0;
         let mut current = entity;
         // Search up for the first Grid parent
         while let Ok(child_of) = _q_all_parents.get(current) {
-            if depth > 10 { break; } depth += 1;
+            if depth > 10 {
+                break;
+            }
+            depth += 1;
             let parent = child_of.parent();
             if let Ok(grid) = q_grids.get(parent) {
                 // If this is a Body entity, its position relative to its own Local Grid should be zero?
@@ -155,7 +172,11 @@ pub fn body_rotation_system(
     mut q_grids: Query<(&mut Transform, &CelestialReferenceFrame)>,
 ) {
     for (mut tf, frame) in q_grids.iter_mut() {
-        if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == frame.ephemeris_id) {
+        if let Some(desc) = registry
+            .bodies
+            .iter()
+            .find(|d| d.ephemeris_id == frame.ephemeris_id)
+        {
             if desc.spins() {
                 // Shared with the geodesy math (`geo::body_rotation`) so
                 // rendered grids and comms/anchor positions cannot diverge.
@@ -193,7 +214,10 @@ pub fn sun_emit_direction(
     p_moon: crate::frames::EclipticAu,
 ) -> Option<Vec3> {
     // `to_sun` = Moon→Sun in Bevy world space; the light emits the other way.
-    let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_moon).raw().as_vec3().normalize_or_zero();
+    let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_moon)
+        .raw()
+        .as_vec3()
+        .normalize_or_zero();
     if to_sun.length_squared() < 0.5 {
         return None;
     }
@@ -259,7 +283,9 @@ pub fn update_sun_light_system(
     } else {
         Quat::IDENTITY
     };
-    let Some(ephemeris) = ephemeris else { return; };
+    let Some(ephemeris) = ephemeris else {
+        return;
+    };
 
     let observer_body = q_site
         .iter()
@@ -270,7 +296,9 @@ pub fn update_sun_light_system(
 
     let (Some(p_sun), Some(p_observer)) = (
         ephemeris.provider.global_position(10, world.epoch_jd),
-        ephemeris.provider.global_position(observer_body, world.epoch_jd),
+        ephemeris
+            .provider
+            .global_position(observer_body, world.epoch_jd),
     ) else {
         return;
     };
@@ -282,7 +310,11 @@ pub fn update_sun_light_system(
     // is R_site_to_solar, so transforming from solar to site-ENU world frame
     // requires align_rot.inverse().
     let dir = (align_rot.inverse() * dir).normalize();
-    let up = if dir.dot(Vec3::Y).abs() > 0.99 { Vec3::X } else { Vec3::Y };
+    let up = if dir.dot(Vec3::Y).abs() > 0.99 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
     if sun_dir_out.0 != dir {
         sun_dir_out.0 = dir;
     }
@@ -361,8 +393,6 @@ pub fn update_sun_light_system(
     }
 }
 
-
-
 /// Force per-frame `GlobalTransform` recomputation for the celestial subtree.
 ///
 /// **Measured to be load-bearing (2026-07-11, `LUNCO_JUMP_PROBE=1`).** An
@@ -424,14 +454,20 @@ pub fn touch_celestial_transforms(
 pub fn celestial_visuals_system(
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
-    mut q_tiles: Query<(&mut ShaderLook, &lunco_terrain_globe::TileCoord), With<lunco_terrain_globe::TerrainTile>>,
+    mut q_tiles: Query<
+        (&mut ShaderLook, &lunco_terrain_globe::TileCoord),
+        With<lunco_terrain_globe::TerrainTile>,
+    >,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_site: Query<(), With<crate::geo::SiteAnchor>>,
 ) {
-    let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else { return; };
-    let cam_abs = world_position_seeded(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
+    let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else {
+        return;
+    };
+    let cam_abs =
+        world_position_seeded(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
 
     // The blueprint grid is an EDITOR affordance, and a scene with a site anchor is
     // not being edited from orbit — it is being stood on. Suppress the ramp there and
@@ -469,7 +505,9 @@ pub fn celestial_visuals_system(
     let end_transition_alt = 10_000.0;
     let mut per_body: std::collections::HashMap<Entity, f32> = std::collections::HashMap::new();
     for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
-        let body_abs = world_position_seeded(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
+        let body_abs = world_position_seeded(
+            body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial,
+        );
         let altitude = ((cam_abs - body_abs).length() - body.radius_m).max(0.0);
         let transition = if site_anchored {
             0.0
@@ -491,7 +529,9 @@ pub fn celestial_visuals_system(
     // rebind system does no work. Unguarded, all ~600 resident tiles would re-key and
     // re-bind every frame.
     for (mut look, coord) in q_tiles.iter_mut() {
-        let Some(&transition) = per_body.get(&coord.body) else { continue };
+        let Some(&transition) = per_body.get(&coord.body) else {
+            continue;
+        };
         let next = ParamValue::F32(transition);
         if look.values.get("transition") != Some(&next) {
             look.values.insert("transition".into(), next);
@@ -503,8 +543,8 @@ pub fn celestial_visuals_system(
 mod sun_dir_tests {
     //! Pure ephemeris→sun-direction math ([`sun_emit_direction`], doc 19 — T2).
     use super::*;
-    use bevy::math::DVec3;
     use crate::frames::EclipticAu;
+    use bevy::math::DVec3;
 
     #[test]
     fn degenerate_ephemeris_yields_no_direction() {
@@ -518,21 +558,35 @@ mod sun_dir_tests {
         // Sun at the heliocentre, Moon offset along +X (ecliptic).
         let d = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.0, 0.0)))
             .expect("non-degenerate");
-        assert!((d.length() - 1.0).abs() < 1e-5, "emit dir must be unit length");
+        assert!(
+            (d.length() - 1.0).abs() < 1e-5,
+            "emit dir must be unit length"
+        );
 
         // The light emits AWAY from the Sun: with the Moon on the far side, the
         // emit direction flips to the antipode.
-        let d_opp = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(-1.0, 0.0, 0.0)))
-            .expect("non-degenerate");
-        assert!((d + d_opp).length() < 1e-5, "antipodal Moon → antipodal light");
+        let d_opp = sun_emit_direction(
+            EclipticAu::ZERO,
+            EclipticAu::new(DVec3::new(-1.0, 0.0, 0.0)),
+        )
+        .expect("non-degenerate");
+        assert!(
+            (d + d_opp).length() < 1e-5,
+            "antipodal Moon → antipodal light"
+        );
     }
 
     #[test]
     fn emit_direction_tracks_the_moon_position() {
         // Two distinct Moon positions give two distinct light directions — i.e.
         // advancing the epoch (which moves the Moon) re-aims the sun.
-        let a = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.2, 0.0))).unwrap();
-        let b = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.0, 0.3))).unwrap();
-        assert!((a - b).length() > 1e-3, "different Moon positions → different sun aim");
+        let a = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.2, 0.0)))
+            .unwrap();
+        let b = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.0, 0.3)))
+            .unwrap();
+        assert!(
+            (a - b).length() > 1e-3,
+            "different Moon positions → different sun aim"
+        );
     }
 }

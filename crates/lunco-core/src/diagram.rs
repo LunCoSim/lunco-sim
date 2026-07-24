@@ -334,7 +334,9 @@ impl ComponentGraph {
 
     /// Find a node by qualified name.
     pub fn find_node(&self, qualified_name: &str) -> Option<&ComponentNode> {
-        self.nodes.iter().find(|n| n.qualified_name == qualified_name)
+        self.nodes
+            .iter()
+            .find(|n| n.qualified_name == qualified_name)
     }
 
     /// Get all edges connected to a node.
@@ -490,7 +492,8 @@ impl ComponentBuilder {
                 target_node.label, target_port
             )
         });
-        self.graph.connect_labeled(source, sp, target, tp, kind, label);
+        self.graph
+            .connect_labeled(source, sp, target, tp, kind, label);
         self
     }
 
@@ -550,12 +553,12 @@ mod tests {
     fn test_builder_simple() {
         let graph = ComponentBuilder::new("Test")
             .node("R1", NodeKind::Component)
-                .port(ComponentPort::output("p").with_type("Pin"))
-                .port(ComponentPort::output("n").with_type("Pin"))
+            .port(ComponentPort::output("p").with_type("Pin"))
+            .port(ComponentPort::output("n").with_type("Pin"))
             .end()
             .node("C1", NodeKind::Component)
-                .port(ComponentPort::input("p").with_type("Pin"))
-                .port(ComponentPort::input("n").with_type("Pin"))
+            .port(ComponentPort::input("p").with_type("Pin"))
+            .port(ComponentPort::input("n").with_type("Pin"))
             .end()
             .connect("R1", "p", "C1", "p", EdgeKind::Connect)
             .build();
@@ -577,12 +580,16 @@ mod tests {
     #[test]
     fn test_direct_api() {
         let mut graph = ComponentGraph::new();
-        let a = graph.add_node(NodeKind::Component, "Sensor", vec![
-            ComponentPort::output("voltage").with_type("Real"),
-        ]);
-        let b = graph.add_node(NodeKind::Component, "ADC", vec![
-            ComponentPort::input("analog").with_type("Real"),
-        ]);
+        let a = graph.add_node(
+            NodeKind::Component,
+            "Sensor",
+            vec![ComponentPort::output("voltage").with_type("Real")],
+        );
+        let b = graph.add_node(
+            NodeKind::Component,
+            "ADC",
+            vec![ComponentPort::input("analog").with_type("Real")],
+        );
         graph.connect(a, 0, b, 0, EdgeKind::Signal);
 
         assert_eq!(graph.node_count(), 2);
@@ -595,10 +602,10 @@ mod tests {
     fn test_graph_clear() {
         let mut graph = ComponentBuilder::new("Test")
             .node("A", NodeKind::Component)
-                .port(ComponentPort::output("x"))
+            .port(ComponentPort::output("x"))
             .end()
             .node("B", NodeKind::Component)
-                .port(ComponentPort::input("y"))
+            .port(ComponentPort::input("y"))
             .end()
             .connect("A", "x", "B", "y", EdgeKind::Connect)
             .build();
@@ -613,14 +620,14 @@ mod tests {
     fn test_edges_for_node() {
         let graph = ComponentBuilder::new("Test")
             .node("A", NodeKind::Component)
-                .port(ComponentPort::output("x"))
+            .port(ComponentPort::output("x"))
             .end()
             .node("B", NodeKind::Component)
-                .port(ComponentPort::input("y"))
-                .port(ComponentPort::output("z"))
+            .port(ComponentPort::input("y"))
+            .port(ComponentPort::output("z"))
             .end()
             .node("C", NodeKind::Component)
-                .port(ComponentPort::input("w"))
+            .port(ComponentPort::input("w"))
             .end()
             .connect("A", "x", "B", "y", EdgeKind::Connect)
             .connect("B", "z", "C", "w", EdgeKind::Connect)
@@ -658,7 +665,11 @@ mod tests {
         let mut graph = ComponentGraph::new();
         let a = graph.add_node(NodeKind::Component, "a", vec![ComponentPort::output("x")]);
         for (i, kind) in kinds.iter().enumerate() {
-            let b = graph.add_node(NodeKind::Component, &format!("b{i}"), vec![ComponentPort::input("y")]);
+            let b = graph.add_node(
+                NodeKind::Component,
+                &format!("b{i}"),
+                vec![ComponentPort::input("y")],
+            );
             graph.connect(a, 0, b, 0, *kind);
         }
         assert_eq!(graph.edge_count(), kinds.len());

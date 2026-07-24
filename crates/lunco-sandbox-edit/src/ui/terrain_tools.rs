@@ -16,13 +16,21 @@ use crate::terrain_tools::{TerrainTool, TerrainToolState};
 pub struct ToolsPanel;
 
 impl Panel for ToolsPanel {
-    fn id(&self) -> PanelId { PanelId("tools_palette") }
-    fn title(&self) -> String { "🛠 Tools".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    fn id(&self) -> PanelId {
+        PanelId("tools_palette")
+    }
+    fn title(&self) -> String {
+        "🛠 Tools".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::SideBrowser
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn transparent_background(&self) -> bool { true }
+    fn transparent_background(&self) -> bool {
+        true
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let Some((mantle, tokens)) = ctx
@@ -67,17 +75,29 @@ fn terrain_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::
 
     // Brush parameters — mutated locally, then deferred back if changed.
     let r0 = radius;
-    ui.add(egui::Slider::new(&mut radius, 0.5..=200.0).text("Radius (m)").logarithmic(true));
+    ui.add(
+        egui::Slider::new(&mut radius, 0.5..=200.0)
+            .text("Radius (m)")
+            .logarithmic(true),
+    );
     if (radius - r0).abs() > f32::EPSILON {
         ctx.defer(move |world| {
-            if let Some(mut s) = world.get_resource_mut::<TerrainToolState>() { s.radius = radius; }
+            if let Some(mut s) = world.get_resource_mut::<TerrainToolState>() {
+                s.radius = radius;
+            }
         });
     }
     let s0 = strength;
-    ui.add(egui::Slider::new(&mut strength, 0.05..=50.0).text("Strength (m)").logarithmic(true));
+    ui.add(
+        egui::Slider::new(&mut strength, 0.05..=50.0)
+            .text("Strength (m)")
+            .logarithmic(true),
+    );
     if (strength - s0).abs() > f32::EPSILON {
         ctx.defer(move |world| {
-            if let Some(mut s) = world.get_resource_mut::<TerrainToolState>() { s.strength = strength; }
+            if let Some(mut s) = world.get_resource_mut::<TerrainToolState>() {
+                s.strength = strength;
+            }
         });
     }
 
@@ -102,9 +122,17 @@ fn tool_button(
     current: TerrainTool,
 ) -> egui::Response {
     let selected = current == which;
-    let text = if selected { format!("✓ {label}") } else { label.to_string() };
+    let text = if selected {
+        format!("✓ {label}")
+    } else {
+        label.to_string()
+    };
     let btn = egui::Button::new(text);
-    let btn = if selected { btn.fill(tokens.success_subdued) } else { btn };
+    let btn = if selected {
+        btn.fill(tokens.success_subdued)
+    } else {
+        btn
+    };
     let resp = ui.add(btn);
     if resp.clicked() {
         // Toggle: clicking the armed tool disarms it.

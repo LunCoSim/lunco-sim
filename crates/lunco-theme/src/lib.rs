@@ -109,7 +109,9 @@ pub fn active(ctx: &egui::Context) -> Arc<Theme> {
 }
 
 /// Supported theme modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize,
+)]
 pub enum ThemeMode {
     #[default]
     Dark,
@@ -121,11 +123,11 @@ pub fn theme_key(domain: &str, token: &str) -> (u64, u64) {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     domain.hash(&mut hasher);
     let domain_id = hasher.finish();
-    
+
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     token.hash(&mut hasher);
     let token_id = hasher.finish();
-    
+
     (domain_id, token_id)
 }
 
@@ -425,18 +427,8 @@ impl PlotTokens {
     pub fn from_palette(p: &ColorPalette) -> Self {
         Self {
             series: vec![
-                p.blue,
-                p.peach,
-                p.green,
-                p.red,
-                p.mauve,
-                p.teal,
-                p.yellow,
-                p.pink,
-                p.sky,
-                p.lavender,
-                p.maroon,
-                p.sapphire,
+                p.blue, p.peach, p.green, p.red, p.mauve, p.teal, p.yellow, p.pink, p.sky,
+                p.lavender, p.maroon, p.sapphire,
             ],
             series_invalid: p.overlay0,
         }
@@ -717,7 +709,11 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
         return (0.0, 0.0, l);
     }
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == rf {
         ((gf - bf) / d) + if gf < bf { 6.0 } else { 0.0 }
     } else if max == gf {
@@ -733,7 +729,11 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
         let v = (l * 255.0).round() as u8;
         return (v, v, v);
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let p = 2.0 * l - q;
     let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
     let g = hue_to_rgb(p, q, h);
@@ -746,11 +746,21 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
 }
 
 fn hue_to_rgb(p: f32, q: f32, mut t: f32) -> f32 {
-    if t < 0.0 { t += 1.0; }
-    if t > 1.0 { t -= 1.0; }
-    if t < 1.0 / 6.0 { return p + (q - p) * 6.0 * t; }
-    if t < 1.0 / 2.0 { return q; }
-    if t < 2.0 / 3.0 { return p + (q - p) * (2.0 / 3.0 - t) * 6.0; }
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        return p + (q - p) * 6.0 * t;
+    }
+    if t < 1.0 / 2.0 {
+        return q;
+    }
+    if t < 2.0 / 3.0 {
+        return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+    }
     p
 }
 
@@ -1023,9 +1033,7 @@ fn install_fallback_fonts_once(
         );
         return;
     };
-    bevy::log::info!(
-        "[lunco-theme] installing fallback fonts (Greek/math/arrow coverage)…"
-    );
+    bevy::log::info!("[lunco-theme] installing fallback fonts (Greek/math/arrow coverage)…");
     #[cfg(target_arch = "wasm32")]
     {
         // Wasm has no filesystem — fetch the font over HTTP from the

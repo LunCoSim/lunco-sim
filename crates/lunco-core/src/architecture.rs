@@ -405,7 +405,11 @@ mod tests {
 
     #[test]
     fn test_port_defaults() {
-        assert_eq!(Port::default().value, 0.0, "A port should initialize to zero");
+        assert_eq!(
+            Port::default().value,
+            0.0,
+            "A port should initialize to zero"
+        );
     }
 
     /// `"back"` used to appear in BOTH the `MoveBackward` and the `Cancel` arm;
@@ -415,8 +419,14 @@ mod tests {
     fn back_parses_as_cancel_not_move_backward() {
         assert_eq!(parse_user_intent("back"), Some(UserIntent::Cancel));
         assert_eq!(parse_user_intent("Back"), Some(UserIntent::Cancel));
-        assert_eq!(parse_user_intent("backward"), Some(UserIntent::MoveBackward));
-        assert_eq!(parse_user_intent("movebackward"), Some(UserIntent::MoveBackward));
+        assert_eq!(
+            parse_user_intent("backward"),
+            Some(UserIntent::MoveBackward)
+        );
+        assert_eq!(
+            parse_user_intent("movebackward"),
+            Some(UserIntent::MoveBackward)
+        );
         assert_eq!(parse_user_intent("cancel"), Some(UserIntent::Cancel));
         assert_eq!(parse_user_intent("unpossess"), Some(UserIntent::Cancel));
     }

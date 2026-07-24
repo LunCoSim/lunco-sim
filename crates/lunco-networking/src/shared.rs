@@ -1,9 +1,9 @@
 //! Mode dispatch + helpers shared by the host and client adapters.
 
+use crate::sync::{DeclareChannelExt, SyncEnvelope};
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
-use crate::sync::{DeclareChannelExt, SyncEnvelope};
 use lunco_core::{NetStatus, NetworkRole, SessionId, SyncChannel};
 
 use crate::NetworkMode;
@@ -50,7 +50,10 @@ pub(crate) fn deserialize_env(bytes: &[u8]) -> Option<SyncEnvelope> {
     // Reject oversize frames up front, then cap bincode's internal allocation so
     // a smaller frame with a lying length prefix can't pre-allocate gigabytes.
     if bytes.len() > MAX_ENVELOPE_BYTES {
-        warn!("[sync] envelope decode rejected: {} bytes exceeds cap", bytes.len());
+        warn!(
+            "[sync] envelope decode rejected: {} bytes exceeds cap",
+            bytes.len()
+        );
         return None;
     }
     let cfg = bincode::config::standard().with_limit::<MAX_ENVELOPE_BYTES>();
@@ -114,7 +117,9 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                     connected: true,
                     ..Default::default()
                 });
-                app.add_plugins(lightyear::prelude::server::ServerPlugins { tick_duration: tick });
+                app.add_plugins(lightyear::prelude::server::ServerPlugins {
+                    tick_duration: tick,
+                });
                 add_protocol(app);
                 crate::server::setup_host(app, *port);
             }
@@ -131,7 +136,9 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
         // sync — a pure client defers id-minting to the host, an idle-local
         // sandbox is its own authority and mints.
         client_mode => {
-            app.add_plugins(lightyear::prelude::client::ClientPlugins { tick_duration: tick });
+            app.add_plugins(lightyear::prelude::client::ClientPlugins {
+                tick_duration: tick,
+            });
             add_protocol(app);
             // Ferry systems, disconnect observer, JoinServer/LeaveServer commands,
             // and (wasm) the hostname-URL dialing plugin.

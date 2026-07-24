@@ -80,15 +80,17 @@ pub(crate) fn draw_view_mode_switcher(
                                     let resp =
                                         ui.selectable_label(selected, label).on_hover_text(hover);
                                     if resp.clicked() && !selected {
-                                        commands.trigger(FocusTarget { avatar: None, target });
+                                        commands.trigger(FocusTarget {
+                                            avatar: None,
+                                            target,
+                                        });
                                     }
                                 }
                                 None => {
                                     ui.add_enabled_ui(false, |ui| {
-                                        ui.selectable_label(false, label)
-                                            .on_disabled_hover_text(
-                                                "Body not present in this scene",
-                                            );
+                                        ui.selectable_label(false, label).on_disabled_hover_text(
+                                            "Body not present in this scene",
+                                        );
                                     });
                                 }
                             }

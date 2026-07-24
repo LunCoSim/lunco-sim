@@ -58,7 +58,11 @@ pub struct TerrainToolState {
 
 impl Default for TerrainToolState {
     fn default() -> Self {
-        Self { tool: TerrainTool::None, radius: 5.0, strength: 0.5 }
+        Self {
+            tool: TerrainTool::None,
+            radius: 5.0,
+            strength: 0.5,
+        }
     }
 }
 
@@ -190,9 +194,15 @@ pub fn update_terrain_brush_ghost(
     else {
         return;
     };
-    let Some(window) = windows.iter().next() else { return };
-    let Some(cursor) = window.cursor_position() else { return };
-    let Ok(ray) = camera.viewport_to_world(cam_tf, cursor) else { return };
+    let Some(window) = windows.iter().next() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Ok(ray) = camera.viewport_to_world(cam_tf, cursor) else {
+        return;
+    };
     let origin = ray.origin.as_dvec3();
     let dir = ray.direction;
 
@@ -221,8 +231,11 @@ pub fn update_terrain_brush_ghost(
     let color = action_color(state.tool, alt, ctrl);
 
     // Lift the disc a hair off the surface so it doesn't z-fight the terrain.
-    let transform = Transform::from_translation(point + Vec3::Y * 0.05)
-        .with_scale(Vec3::new(state.radius, 1.0, state.radius));
+    let transform = Transform::from_translation(point + Vec3::Y * 0.05).with_scale(Vec3::new(
+        state.radius,
+        1.0,
+        state.radius,
+    ));
 
     if let Some((_, mut tf, mut look)) = q_ghost.iter_mut().next() {
         // `set_if_neq`, NOT `*tf = transform`: the latter goes through `DerefMut`, so
@@ -238,7 +251,9 @@ pub fn update_terrain_brush_ghost(
             look.base_color = color.to_linear();
         }
     } else {
-        let Some(grid) = grids.iter().next() else { return };
+        let Some(grid) = grids.iter().next() else {
+            return;
+        };
         // Unit-radius flat disc; scaled by `radius` each frame via the transform.
         let mesh = meshes.add(Cylinder::new(1.0, 0.02).mesh().resolution(48).build());
         // `Visibility` pulls in `InheritedVisibility` + `ViewVisibility` as required
@@ -313,15 +328,39 @@ pub fn on_scene_click_terrain(
     // into a one-shot flatten-to-clicked-height; the Flatten tool always flattens.
     if state.tool == TerrainTool::Crater {
         // depth 0 → the command's realistic default (0.4·radius).
-        commands.trigger(PlaceCrater { x, z, radius, depth: 0.0, id: String::new() });
+        commands.trigger(PlaceCrater {
+            x,
+            z,
+            radius,
+            depth: 0.0,
+            id: String::new(),
+        });
     } else if state.tool == TerrainTool::Rock {
         // size 0 would mean "default"; the brush radius is the boulder radius
         // (the command clamps it to sane boulder bounds). seed 0 = derived.
-        commands.trigger(PlaceRock { x, z, size: radius, seed: 0, id: String::new() });
+        commands.trigger(PlaceRock {
+            x,
+            z,
+            size: radius,
+            seed: 0,
+            id: String::new(),
+        });
     } else if state.tool == TerrainTool::Flatten || ctrl {
-        commands.trigger(FlattenTerrain { x, z, radius, target_y: point.y, id: String::new() });
+        commands.trigger(FlattenTerrain {
+            x,
+            z,
+            radius,
+            target_y: point.y,
+            id: String::new(),
+        });
     } else {
         let amplitude = if alt { -state.strength } else { state.strength };
-        commands.trigger(BrushTerrain { x, z, radius, amplitude, id: String::new() });
+        commands.trigger(BrushTerrain {
+            x,
+            z,
+            radius,
+            amplitude,
+            id: String::new(),
+        });
     }
 }

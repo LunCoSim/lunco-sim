@@ -10,16 +10,17 @@ use lightyear::prelude::*;
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr};
 
+use crate::scenario::{
+    cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg,
+    ScenarioManifestResource,
+};
 use crate::sync::{
     HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
     SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
 };
+use lunco_core::{NetStatus, SessionId, SessionProfiles, SessionRegistry, SimTick, SyncChannel};
 use lunco_doc_bevy::JournalResource;
-use lunco_core::{
-    NetStatus, SessionId, SessionRegistry, SessionProfiles, SimTick, SyncChannel,
-};
 use lunco_workspace::{Twin, TwinAdded, WorkspaceResource};
-use crate::scenario::{cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg, ScenarioManifestResource};
 
 /// Host-authoritative map: live connection (deterministic netcode peer key) →
 /// **server-assigned** [`SessionId`]. The authority id is drawn from server
@@ -64,9 +65,9 @@ use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, peer_to_session, serialize_env, PRIVATE_KEY, PROTOCOL_ID};
 
 use lunco_storage::{FileStorage, Storage, StorageHandle};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use wtransport::tls::{Certificate, CertificateChain, PrivateKey};
-use sha2::{Digest, Sha256};
 
 /// Env vars naming a CA-signed cert + key (PEM). When both are set the host
 /// serves that identity and browsers validate via the normal chain — no digest.
@@ -110,7 +111,10 @@ fn resolve_cert_paths() -> Option<(String, String)> {
             .any(|ext| cert.ends_with(ext));
         if !is_file {
             // Directory layout: certbot's fullchain.pem + privkey.pem.
-            return Some((format!("{cert}/fullchain.pem"), format!("{cert}/privkey.pem")));
+            return Some((
+                format!("{cert}/fullchain.pem"),
+                format!("{cert}/privkey.pem"),
+            ));
         }
         let key = cli_key.filter(|s| !s.is_empty()).unwrap_or_else(|| {
             // Sibling privkey.pem next to the cert file. Accept either
@@ -254,7 +258,10 @@ impl AssetHttpServer {
     pub(crate) fn start(port: u16) -> Self {
         let index: lunco_api::transports::assets::AssetIndex = Default::default();
         let bind_host = std::env::var("LUNCO_ASSET_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
-        lunco_api::transports::assets::spawn_asset_server(format!("{bind_host}:{port}"), index.clone());
+        lunco_api::transports::assets::spawn_asset_server(
+            format!("{bind_host}:{port}"),
+            index.clone(),
+        );
         let base_url = std::env::var("LUNCO_ASSET_BASE_URL").unwrap_or_else(|_| {
             let host = primary_lan_ip()
                 .map(|ip| ip.to_string())
@@ -606,13 +613,16 @@ fn on_server_connected(
     // promoted to Operator (gaining SetPorts control) when it sets a name via
     // `on_update_profile_rbac`. The token makes the session a server-issued credential
     // (`is_authorized` requires one), closing the name-only self-promotion of M2.
-    rbac.sessions.insert(session.0, lunco_core::session::UserSession {
-        session_id: session,
-        username: format!("Player {}", session.0),
-        role: lunco_core::session::AuthorityRole::Observer,
-        authenticated: true,
-        token: Some(token),
-    });
+    rbac.sessions.insert(
+        session.0,
+        lunco_core::session::UserSession {
+            session_id: session,
+            username: format!("Player {}", session.0),
+            role: lunco_core::session::AuthorityRole::Observer,
+            authenticated: true,
+            token: Some(token),
+        },
+    );
     let server = server.into_inner();
     let target = NetworkTarget::Single(peer);
 
@@ -697,7 +707,10 @@ fn on_server_connected(
     // Policies need no connect-time push: a `LunCoPolicy` prim is a USD doc op, so
     // it arrives in the full journal replay above and each peer's projector
     // activates it — determinism by identical composition, not by broadcast.
-    info!("[net] client connected: peer={peer:?} session={}", session.0);
+    info!(
+        "[net] client connected: peer={peer:?} session={}",
+        session.0
+    );
 }
 
 // ── Connect-time journal replay, metered (review N5) ──────────────────────────
@@ -779,7 +792,11 @@ mod journal_replay_tests {
     use crate::journal_plane::JournalEntryMsg;
 
     fn journal(n: usize) -> std::collections::VecDeque<JournalEntryMsg> {
-        (0..n).map(|i| JournalEntryMsg { json: format!("{{\"i\":{i}}}") }).collect()
+        (0..n)
+            .map(|i| JournalEntryMsg {
+                json: format!("{{\"i\":{i}}}"),
+            })
+            .collect()
     }
 
     /// **Review N5.** The connect-time replay used to push ONE reliable envelope per
@@ -792,9 +809,13 @@ mod journal_replay_tests {
     fn connect_replay_is_chunked_and_budgeted() {
         let mut remaining = journal(982);
 
-        let frame1 = take_replay_chunks(&mut remaining, JOURNAL_REPLAY_BUDGET, JOURNAL_REPLAY_CHUNK);
+        let frame1 =
+            take_replay_chunks(&mut remaining, JOURNAL_REPLAY_BUDGET, JOURNAL_REPLAY_CHUNK);
         let sent1: usize = frame1.iter().map(Vec::len).sum();
-        assert_eq!(sent1, JOURNAL_REPLAY_BUDGET, "one frame ships exactly its budget");
+        assert_eq!(
+            sent1, JOURNAL_REPLAY_BUDGET,
+            "one frame ships exactly its budget"
+        );
         assert!(
             frame1.len() < 20,
             "982 entries must not become ~982 reliable messages; got {} in frame 1",
@@ -807,10 +828,11 @@ mod journal_replay_tests {
         let mut frames = 1;
         let mut total = sent1;
         while !remaining.is_empty() {
-            total += take_replay_chunks(&mut remaining, JOURNAL_REPLAY_BUDGET, JOURNAL_REPLAY_CHUNK)
-                .iter()
-                .map(Vec::len)
-                .sum::<usize>();
+            total +=
+                take_replay_chunks(&mut remaining, JOURNAL_REPLAY_BUDGET, JOURNAL_REPLAY_CHUNK)
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>();
             frames += 1;
             assert!(frames < 100, "replay must terminate");
         }
@@ -957,7 +979,10 @@ fn assemble_and_send_snapshots(
     // Diffed each assemble to decide what to send; out-of-interest gids are
     // evicted so a re-entry re-baselines.
     mut sent_last: Local<
-        std::collections::HashMap<SessionId, std::collections::HashMap<u64, crate::sync::PoseDigest>>,
+        std::collections::HashMap<
+            SessionId,
+            std::collections::HashMap<u64, crate::sync::PoseDigest>,
+        >,
     >,
     // Per-session set of gids the peer has been sent a `Spawn` for (scoped-spawn,
     // Phase 2). Persists across AOI exit/re-entry (soft-exit keeps the proxy), so a
@@ -1195,7 +1220,11 @@ fn collect_scenario_input(
             continue;
         };
         let rel_path = lunco_assets::asset_path::slashed(rel);
-        descriptors.push(AssetDescriptor { abs_path, rel_path, media_type });
+        descriptors.push(AssetDescriptor {
+            abs_path,
+            rel_path,
+            media_type,
+        });
     }
 
     let scenario_id = twin
@@ -1214,7 +1243,13 @@ fn collect_scenario_input(
         .manifest
         .as_ref()
         .map(|m| m.name.clone())
-        .unwrap_or_else(|| twin.root.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        .unwrap_or_else(|| {
+            twin.root
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
     // 5. Two entry-scene forms:
     //    - `twin_scene` = the Twin-relative path (raw `default_scene`), so a
     //      client holding the Twin locally loads `twin://<name>/<twin_scene>` —
@@ -1232,7 +1267,14 @@ fn collect_scenario_input(
             .unwrap_or(ds)
     });
 
-    ScenarioBuildInput { scenario_id, name, default_scene, twin_scene, descriptors, journal_head }
+    ScenarioBuildInput {
+        scenario_id,
+        name,
+        default_scene,
+        twin_scene,
+        descriptors,
+        journal_head,
+    }
 }
 
 /// Extension → manifest media type (USD text/binary, glTF binary, images).
@@ -1287,7 +1329,14 @@ fn scenario_id_from_path(root: &Path) -> [u8; 16] {
 type ScenarioBuildOutput = (ScenarioManifestMsg, Vec<(Vec<u8>, PathBuf)>);
 
 fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildOutput> {
-    let ScenarioBuildInput { scenario_id, name, default_scene, twin_scene, descriptors, journal_head } = input;
+    let ScenarioBuildInput {
+        scenario_id,
+        name,
+        default_scene,
+        twin_scene,
+        descriptors,
+        journal_head,
+    } = input;
     let mut assets = Vec::with_capacity(descriptors.len());
     let mut cid_paths = Vec::with_capacity(descriptors.len());
     for d in descriptors {
@@ -1363,7 +1412,9 @@ fn spawn_manifest_build(
 /// The host's current journal head (build-time base for Layer B), or `None` if
 /// there's no journal / empty history.
 fn journal_head(journal: &Option<Res<JournalResource>>) -> Option<lunco_twin_journal::EntryId> {
-    journal.as_ref().and_then(|j| j.with_read(|jj| jj.merged_head()))
+    journal
+        .as_ref()
+        .and_then(|j| j.with_read(|jj| jj.merged_head()))
 }
 
 /// Startup: if a Twin is already open when the host boots, kick off its manifest
@@ -1375,9 +1426,14 @@ fn spawn_initial_scenario_manifest(
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
     let Some(workspace) = workspace else { return };
-    let Some(active) = workspace.active_twin else { return };
+    let Some(active) = workspace.active_twin else {
+        return;
+    };
     if let Some(twin) = workspace.twin(active) {
-        info!("[net] Host started with active twin, building scenario manifest for {:?}", twin.root);
+        info!(
+            "[net] Host started with active twin, building scenario manifest for {:?}",
+            twin.root
+        );
         spawn_manifest_build(twin, journal_head(&journal), &mut pending);
     }
 }
@@ -1401,7 +1457,10 @@ fn drive_scenario_manifest(
     pending.task = None;
     match result {
         Some((mut manifest, cid_paths)) => {
-            info!("[net] scenario manifest built: {} assets", manifest.assets.len());
+            info!(
+                "[net] scenario manifest built: {} assets",
+                manifest.assets.len()
+            );
             // Rebuild the CID→path serving index for the new scenario (a reload
             // replaces the whole map — stale CIDs from the previous scenario must
             // not linger and serve wrong bytes).
@@ -1430,7 +1489,10 @@ fn on_twin_added_host(
     mut pending: ResMut<PendingScenarioManifest>,
 ) {
     if let Some(twin) = workspace.twin(trigger.event().twin) {
-        info!("[net] Twin added; building scenario manifest for {:?}", twin.root);
+        info!(
+            "[net] Twin added; building scenario manifest for {:?}",
+            twin.root
+        );
         spawn_manifest_build(twin, journal_head(&journal), &mut pending);
     }
 }
@@ -1476,7 +1538,10 @@ fn ingest_asset_offers(
         // Fail-closed: the bytes must hash to the advertised CID (never trust a
         // wire-supplied path/bytes pairing).
         if crate::scenario::cid_for_content(&offer.data).to_bytes() != offer.cid {
-            warn!("[net] rejected asset offer: bytes don't match CID ({})", offer.path);
+            warn!(
+                "[net] rejected asset offer: bytes don't match CID ({})",
+                offer.path
+            );
             continue;
         }
         let Some(rel) = crate::scenario_sync::safe_rel_path(&offer.path) else {
@@ -1487,7 +1552,10 @@ fn ingest_asset_offers(
         // creates parent dirs itself, so all I/O stays behind the storage seam.
         match lunco_storage::write_file_sync(&dest, &offer.data) {
             Ok(()) => {
-                info!("[net] ingested imported asset {dest:?} ({} bytes)", offer.data.len());
+                info!(
+                    "[net] ingested imported asset {dest:?} ({} bytes)",
+                    offer.data.len()
+                );
                 wrote = true;
             }
             Err(e) => warn!("[net] asset offer write {dest:?} failed: {e}"),

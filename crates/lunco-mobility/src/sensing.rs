@@ -32,8 +32,7 @@ impl ApiQueryProvider for RaycastProvider {
         "Raycast"
     }
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
-        let (Some(origin), Some(dir_v)) =
-            (parse_vec3(params, "origin"), parse_vec3(params, "dir"))
+        let (Some(origin), Some(dir_v)) = (parse_vec3(params, "origin"), parse_vec3(params, "dir"))
         else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -82,10 +81,11 @@ impl ApiQueryProvider for GroundHeightProvider {
             .unwrap_or(2.0e5);
         let origin = DVec3::new(x, from, z);
         match cast_ray_response(world, origin, Dir3::NEG_Y, max) {
-            ApiResponse::Ok {
-                data: Some(d), ..
-            } => {
-                let hit = d.get("hit").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            ApiResponse::Ok { data: Some(d), .. } => {
+                let hit = d
+                    .get("hit")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
                 let height = d
                     .get("point")
                     .and_then(|p| p.get(1))
@@ -111,7 +111,9 @@ impl ApiQueryProvider for GroundHeightProvider {
 fn cast_ray_response(world: &mut World, origin: DVec3, dir: Dir3, max: f64) -> ApiResponse {
     let mut state: SystemState<(lunco_physics::GridSpatialQuery, Res<ApiEntityRegistry>)> =
         SystemState::new(world);
-    let (spatial, registry) = state.get(world).expect("SpatialQuery + registry always validate");
+    let (spatial, registry) = state
+        .get(world)
+        .expect("SpatialQuery + registry always validate");
     match spatial.cast_ray_render(origin, dir, max, true, &SpatialQueryFilter::default()) {
         Some(hit) => {
             let point = origin + (*dir).as_dvec3() * hit.distance;
@@ -229,34 +231,62 @@ fn bridge_collision_events(
 ) {
     let timestamp = world.map(|w| w.epoch_jd).unwrap_or(0.0);
     let fire = |name: String, data: TelemetryValue, source: u64, commands: &mut Commands| {
-        commands.trigger(TelemetryEvent { name, source, severity: Severity::Info, data, timestamp });
+        commands.trigger(TelemetryEvent {
+            name,
+            source,
+            severity: Severity::Info,
+            data,
+            timestamp,
+        });
     };
     // Prefer the explicit `TriggerZone` name (short, stable), falling back to the
     // entity's `Name` (its USD path) for an unnamed sensor.
     let zone_name = |e: Entity| {
-        zones
-            .get(e)
-            .ok()
-            .map(|(tz, name)| tz.map(|z| z.0.clone()).unwrap_or_else(|| name.as_str().to_string()))
+        zones.get(e).ok().map(|(tz, name)| {
+            tz.map(|z| z.0.clone())
+                .unwrap_or_else(|| name.as_str().to_string())
+        })
     };
 
     for ev in starts.read() {
         if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
-            fire("COLLISION_START".to_string(), TelemetryValue::String(p), 0, &mut commands);
+            fire(
+                "COLLISION_START".to_string(),
+                TelemetryValue::String(p),
+                0,
+                &mut commands,
+            );
         }
-        for (name, entrant, zone) in
-            zone_events("enter", ev.collider1, ev.body1, ev.collider2, ev.body2, &zone_name, &registry)
-        {
+        for (name, entrant, zone) in zone_events(
+            "enter",
+            ev.collider1,
+            ev.body1,
+            ev.collider2,
+            ev.body2,
+            &zone_name,
+            &registry,
+        ) {
             fire(name, TelemetryValue::I64(entrant), zone, &mut commands);
         }
     }
     for ev in ends.read() {
         if let Some(p) = contact_pair(&registry, ev.collider1, ev.body1, ev.collider2, ev.body2) {
-            fire("COLLISION_END".to_string(), TelemetryValue::String(p), 0, &mut commands);
+            fire(
+                "COLLISION_END".to_string(),
+                TelemetryValue::String(p),
+                0,
+                &mut commands,
+            );
         }
-        for (name, entrant, zone) in
-            zone_events("exit", ev.collider1, ev.body1, ev.collider2, ev.body2, &zone_name, &registry)
-        {
+        for (name, entrant, zone) in zone_events(
+            "exit",
+            ev.collider1,
+            ev.body1,
+            ev.collider2,
+            ev.body2,
+            &zone_name,
+            &registry,
+        ) {
             fire(name, TelemetryValue::I64(entrant), zone, &mut commands);
         }
     }

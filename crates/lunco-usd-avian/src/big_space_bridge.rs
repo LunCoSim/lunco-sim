@@ -54,7 +54,9 @@
 //! handle via `GlobalTransform` math.
 
 use avian3d::math::Vector;
-use avian3d::physics_transform::{PhysicsTransformConfig, PhysicsTransformSystems, Position, Rotation};
+use avian3d::physics_transform::{
+    PhysicsTransformConfig, PhysicsTransformSystems, Position, Rotation,
+};
 use avian3d::prelude::*;
 use avian3d::schedule::{PhysicsSchedule, PhysicsStepSystems, PhysicsSystems};
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
@@ -359,7 +361,9 @@ fn position_to_pose(
                 break;
             }
             // Plain intermediate node: local offset in ITS parent's frame.
-            let Ok((p_cell, p_tf)) = q_plain.get(parent) else { continue 'bodies };
+            let Ok((p_cell, p_tf)) = q_plain.get(parent) else {
+                continue 'bodies;
+            };
             let edge = q_parents
                 .get(parent)
                 .ok()
@@ -378,7 +382,9 @@ fn position_to_pose(
         let (mut fp, mut fr) = match anchor {
             Anchor::Body(p, r) => (p, r),
             Anchor::GridEntity(g) => {
-                let Ok((g_cell, g_tf)) = q_plain.get(g) else { continue };
+                let Ok((g_cell, g_tf)) = q_plain.get(g) else {
+                    continue;
+                };
                 world_pose_seeded(
                     g,
                     &g_cell.copied().unwrap_or_default(),
@@ -529,14 +535,25 @@ mod tests {
         let grid_cell = CellCoord::new(150_000_000, 0, 0);
         let grid_rot = Quat::from_rotation_y(0.6435); // ~37°
         let root_grid = world
-            .spawn((Grid::new(edge, 0.0), CellCoord::ZERO, Transform::default(), GlobalTransform::default()))
+            .spawn((
+                Grid::new(edge, 0.0),
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
             .id();
         let grid_e = world
-            .spawn((grid, grid_cell, Transform::from_rotation(grid_rot), GlobalTransform::default(), ChildOf(root_grid)))
+            .spawn((
+                grid,
+                grid_cell,
+                Transform::from_rotation(grid_rot),
+                GlobalTransform::default(),
+                ChildOf(root_grid),
+            ))
             .id();
         let b_cell = CellCoord::new(3, -1, 2);
-        let b_tf = Transform::from_xyz(120.0, -40.0, 80.0)
-            .with_rotation(Quat::from_rotation_y(0.1745));
+        let b_tf =
+            Transform::from_xyz(120.0, -40.0, 80.0).with_rotation(Quat::from_rotation_y(0.1745));
         let body = world
             .spawn((b_cell, b_tf, GlobalTransform::default(), ChildOf(grid_e)))
             .id();
@@ -546,12 +563,16 @@ mod tests {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_spatial) =
-            state.get(&world).expect("read-only queries always validate");
+        let (q_parents, q_grids, q_spatial) = state
+            .get(&world)
+            .expect("read-only queries always validate");
 
         // READ direction: body world pose.
         let (p, r) = world_pose(body, &q_parents, &q_grids, &q_spatial).unwrap();
-        assert!(p.length() > 1.0e11, "world pose {p:?} not at astronomical scale");
+        assert!(
+            p.length() > 1.0e11,
+            "world pose {p:?} not at astronomical scale"
+        );
 
         // WRITEBACK direction: world → parent-grid-local → remainder against
         // the CURRENT cell (the bridge never rewrites the cell itself).

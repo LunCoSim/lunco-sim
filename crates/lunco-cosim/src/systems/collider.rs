@@ -3,8 +3,8 @@
 //! Watches [`crate::SimComponent`] outputs for `volume` and updates
 //! the entity's [`Collider`] to a sphere with the corresponding radius.
 
-use bevy::prelude::*;
 use avian3d::prelude::{Collider, RigidBody};
+use bevy::prelude::*;
 
 use crate::SimComponent;
 
@@ -51,7 +51,9 @@ pub fn sync_collider(
                     // the dead entity under Bevy 0.18's command error handler
                     // (observed crashing the sandbox); `try_insert` is a no-op — a
                     // despawned body has no collider to gate, so skipping is correct.
-                    commands.entity(entity).try_insert(LastColliderVolume(volume));
+                    commands
+                        .entity(entity)
+                        .try_insert(LastColliderVolume(volume));
                 }
             }
         }

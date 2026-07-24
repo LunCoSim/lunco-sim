@@ -1,7 +1,7 @@
 //! Operation and change types for Modelica documents.
 
-use std::ops::Range;
 use crate::pretty::{self, ComponentDecl, ConnectEquation, Placement, PortRef};
+use std::ops::Range;
 
 /// How many structured changes the document retains for consumer
 /// polling.

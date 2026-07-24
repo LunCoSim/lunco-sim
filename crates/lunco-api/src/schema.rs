@@ -8,8 +8,8 @@
 //! that implement `Event + Reflect`. This means any `#[Command]` struct is automatically
 //! available as an API endpoint — zero hardcoding.
 
-use serde::{Deserialize, Serialize};
 pub use lunco_core::GlobalEntityId as ApiEntityId;
+use serde::{Deserialize, Serialize};
 
 /// Telemetry subscription filter.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -54,16 +54,22 @@ pub enum ApiRequest {
     // provider.
     ListEntities,
     DiscoverSchema,
-    SubscribeTelemetry { filter: Option<TelemetryFilter> },
+    SubscribeTelemetry {
+        filter: Option<TelemetryFilter>,
+    },
     /// Cancel a subscription created by [`ApiRequest::SubscribeTelemetry`].
     ///
     /// `TelemetrySubscriptions::unsubscribe` existed from the start but **nothing could
     /// reach it** — every subscription leaked for the life of the process, and a client
     /// that reconnected accumulated a new one each time.
-    UnsubscribeTelemetry { id: u64 },
+    UnsubscribeTelemetry {
+        id: u64,
+    },
     /// Poll the outcome of a previously-accepted command by its
     /// `command_id` (the request id returned in `command_accepted`).
-    QueryCommandResult { id: u64 },
+    QueryCommandResult {
+        id: u64,
+    },
 }
 
 /// Response status codes for API errors.
@@ -78,23 +84,40 @@ pub enum ApiErrorCode {
 /// Transport-agnostic API response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ApiResponse {
-    Ok { command_id: Option<u64>, data: Option<serde_json::Value> },
-    Error { code: u16, message: String },
+    Ok {
+        command_id: Option<u64>,
+        data: Option<serde_json::Value>,
+    },
+    Error {
+        code: u16,
+        message: String,
+    },
     TelemetryEvent(TelemetryResponse),
     /// Raw screenshot PNG bytes — returned directly by the HTTP transport.
     #[serde(skip)]
-    Screenshot { png_bytes: Vec<u8> },
+    Screenshot {
+        png_bytes: Vec<u8>,
+    },
 }
 
 impl ApiResponse {
     pub fn ok(data: serde_json::Value) -> Self {
-        Self::Ok { command_id: None, data: Some(data) }
+        Self::Ok {
+            command_id: None,
+            data: Some(data),
+        }
     }
     pub fn command_accepted(command_id: u64) -> Self {
-        Self::Ok { command_id: Some(command_id), data: None }
+        Self::Ok {
+            command_id: Some(command_id),
+            data: None,
+        }
     }
     pub fn error(code: ApiErrorCode, message: impl Into<String>) -> Self {
-        Self::Error { code: code as u16, message: message.into() }
+        Self::Error {
+            code: code as u16,
+            message: message.into(),
+        }
     }
 }
 

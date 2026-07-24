@@ -16,8 +16,8 @@
 // raw `std::fs` access to the on-disk asset cache.
 #![allow(clippy::disallowed_methods)]
 
-use std::path::PathBuf;
 use lunco_assets::{download, process};
+use std::path::PathBuf;
 
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -116,9 +116,8 @@ fn main() {
             ("download", Some(key)) => {
                 download::download_one_for_twin(&twin_root, key).map_err(|e| e.to_string())
             }
-            ("download", None) => {
-                download::download_all_for_twin_with_limit(&twin_root, parallel).map_err(|e| e.to_string())
-            }
+            ("download", None) => download::download_all_for_twin_with_limit(&twin_root, parallel)
+                .map_err(|e| e.to_string()),
             ("process", key) => process_for_twin(&twin_root, key, quality),
             ("list", _) => download::list_for_twin(&twin_root).map_err(|e| e.to_string()),
             _ => unreachable!(),
@@ -199,7 +198,11 @@ fn process_filtered(
         if let Some(ref proc_cfg) = entry.process {
             let source_path = download::entry_dest_path(entry, twin_root);
             if !source_path.exists() {
-                println!("  ⚠ {} source not found at {}, skipping", key, source_path.display());
+                println!(
+                    "  ⚠ {} source not found at {}, skipping",
+                    key,
+                    source_path.display()
+                );
                 println!("    Run 'download' first.");
                 continue;
             }
@@ -219,7 +222,10 @@ fn process_filtered(
     }
 
     if processed == 0 {
-        println!("  No assets with [process] section in {}", manifest_path.display());
+        println!(
+            "  No assets with [process] section in {}",
+            manifest_path.display()
+        );
     } else {
         println!("  {} asset(s) processed", processed);
     }
@@ -283,7 +289,9 @@ fn print_usage() {
     println!("  cargo run -p lunco-assets -- download -a KEY       Download a single asset by key");
     println!("  cargo run -p lunco-assets -- download -t DIR       Download a Twin folder's assets (into the Twin)");
     println!("  cargo run -p lunco-assets -- download -t DIR -a KEY  Download one Twin asset by key (skips the rest)");
-    println!("  cargo run -p lunco-assets -- process  -t DIR -a KEY  Process one Twin asset by key");
+    println!(
+        "  cargo run -p lunco-assets -- process  -t DIR -a KEY  Process one Twin asset by key"
+    );
     println!("  cargo run -p lunco-assets -- process  -t DIR --quality coarse   Quick-start bake (¼ resolution; re-run with `good` for full)");
     println!("  cargo run -p lunco-assets -- process               Process all downloaded assets");
     println!("  cargo run -p lunco-assets -- process -g GROUP      Process one manifest group");

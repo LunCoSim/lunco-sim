@@ -66,7 +66,9 @@ fn a_spawned_bodys_render_follows_its_physics_position_over_time() {
     .init_asset::<UsdStageAsset>()
     // Deterministic stepping — each `update()` advances exactly one frame, so the
     // solver really runs (a wall-clock app would step physics ~never in a test).
-    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+        1.0 / 60.0,
+    )))
     .insert_resource(Gravity::ZERO)
     .insert_resource(Time::<Fixed>::from_hz(60.0));
 
@@ -116,7 +118,11 @@ fn a_spawned_bodys_render_follows_its_physics_position_over_time() {
 
     let world = app.world();
     let pos_y = world.get::<Position>(root).expect("physics position").0.y;
-    let tf_y = world.get::<Transform>(root).expect("render transform").translation.y as f64;
+    let tf_y = world
+        .get::<Transform>(root)
+        .expect("render transform")
+        .translation
+        .y as f64;
 
     // Guards a vacuously-green step loop: if the solver never ran there would be
     // nothing for the render to follow, and the real assertion below would pass

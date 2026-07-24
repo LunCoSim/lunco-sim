@@ -78,8 +78,7 @@ fn set_error_handler(device: Res<RenderDevice>) {
                 // for hours like a lighting/camera-activation bug. Promote it to a
                 // loud, actionable error so it can never masquerade as black again.
                 if description.contains("SMAA")
-                    || (description.contains("dimension = D2")
-                        && description.contains("D3"))
+                    || (description.contains("dimension = D2") && description.contains("D3"))
                 {
                     error!(
                         "wgpu validation error in the SMAA pass — this binary spawns a \

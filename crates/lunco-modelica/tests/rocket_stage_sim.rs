@@ -89,7 +89,9 @@ fn rocket_throttle_seeded_at_ic_drives_thrust_and_lift() {
     advance(&mut stepper, 0.1, 100); // 10 s
 
     let m1 = stepper.get_var("tank.m").expect("tank.m after");
-    let alt1 = stepper.get_var("airframe.altitude").expect("altitude after");
+    let alt1 = stepper
+        .get_var("airframe.altitude")
+        .expect("altitude after");
 
     assert!(m1 < m0, "tank should deplete: {m0} -> {m1}");
     assert!(alt1 > alt0, "altitude should rise: {alt0} -> {alt1}");

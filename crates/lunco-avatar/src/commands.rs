@@ -106,4 +106,3 @@ pub struct ShowNotification {
     #[reflect(default)]
     pub secs: f32,
 }
-

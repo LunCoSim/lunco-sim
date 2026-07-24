@@ -5,11 +5,9 @@
 //! the per-domain sections (Modelica, USD, …) are usually what the
 //! user wants; Files is the escape hatch for "show me the raw layout."
 //!
-//! Click a row → emits [`super::BrowserAction::OpenFile`]. The host
-//! app's domain dispatchers decide what "open" means per file kind
-//! (Modelica → diagram tab, USD → stage tab, image → external viewer,
-//! …). The Files section itself is intentionally dumb about file
-//! semantics.
+//! Clicking a row opens that file in the source panel. Saving touches only the
+//! selected file; "Save & Update" then dispatches the standard `OpenFile`
+//! command so its owning domain can refresh it.
 
 use bevy_egui::egui;
 
@@ -335,14 +333,14 @@ impl BrowserSection for FilesSection {
             ui.separator();
         }
 
-        // Per-frame queues. Single-click on a row queues an `OpenFile`
-        // action; double-click queues a "begin rename" intent; Enter on
-        // a rename TextEdit queues a `RenameTwinEntry` command. We
+        // Per-frame queues. Single-click previews a file, double-click pins
+        // it, and Rename remains available from the row context menu. Enter
+        // on a rename TextEdit queues a `RenameTwinEntry` command. We
         // accumulate inside the nested egui closures (which can't
         // re-borrow `ctx.world` / `ctx.actions` while the closure
         // borrows `self.rename`), then dispatch in one pass after the
         // closures return. Same pattern the click buffer used.
-        let mut clicks: Vec<std::path::PathBuf> = Vec::new();
+        let mut clicks: Vec<(std::path::PathBuf, std::path::PathBuf, bool)> = Vec::new();
         let mut begin_rename: Option<RenameInProgress> = None;
         let mut submit_rename: Option<RenameInProgress> = None;
         let mut cancel_rename = false;
@@ -409,8 +407,12 @@ impl BrowserSection for FilesSection {
 
         // Dispatch queued intents now that the egui closures have
         // released their borrows on `self` and `ctx`.
-        for relative_path in clicks {
-            ctx.actions.push(BrowserAction::OpenFile { relative_path });
+        for (twin_root, relative_path, pinned) in clicks {
+            ctx.trigger(crate::OpenTwinSource {
+                twin_root: twin_root.to_string_lossy().into_owned(),
+                relative_path: relative_path.to_string_lossy().into_owned(),
+                pinned,
+            });
         }
         if let Some(intent) = begin_rename {
             self.rename = Some(intent);
@@ -444,7 +446,7 @@ impl BrowserSection for FilesSection {
 /// Directories render as `CollapsingHeader`s with the folder icon;
 /// files render as `selectable_label`s. Both support double-click to
 /// enter inline rename mode and Enter/Esc to submit/cancel. Files
-/// additionally support single-click to dispatch `BrowserAction::OpenFile`.
+/// additionally support single-click to open the editable source panel.
 ///
 /// All mutation lands on the caller-owned queues (`clicks`,
 /// `begin_rename`, …) so the egui closures can stay shallow; the
@@ -456,7 +458,7 @@ fn render_dir(
     twin_root: &std::path::Path,
     active_rename_abs: Option<&std::path::Path>,
     rename: &mut Option<RenameInProgress>,
-    clicks: &mut Vec<std::path::PathBuf>,
+    clicks: &mut Vec<(std::path::PathBuf, std::path::PathBuf, bool)>,
     begin_rename: &mut Option<RenameInProgress>,
     submit_rename: &mut Option<RenameInProgress>,
     cancel_rename: &mut bool,
@@ -546,16 +548,22 @@ fn render_dir(
             };
             let r = ui.selectable_label(false, &label);
             if r.double_clicked() {
-                *begin_rename = Some(RenameInProgress {
-                    target_abs: abs.clone(),
-                    twin_root: twin_root.to_path_buf(),
-                    relative_path: entry.relative_path.clone(),
-                    buffer: leaf,
-                    needs_focus: true,
-                });
+                clicks.push((twin_root.to_path_buf(), entry.relative_path.clone(), true));
             } else if r.clicked() {
-                clicks.push(entry.relative_path.clone());
+                clicks.push((twin_root.to_path_buf(), entry.relative_path.clone(), false));
             }
+            r.context_menu(|ui| {
+                if ui.button("Rename").clicked() {
+                    ui.close();
+                    *begin_rename = Some(RenameInProgress {
+                        target_abs: abs.clone(),
+                        twin_root: twin_root.to_path_buf(),
+                        relative_path: entry.relative_path.clone(),
+                        buffer: leaf.clone(),
+                        needs_focus: true,
+                    });
+                }
+            });
         }
     }
 }

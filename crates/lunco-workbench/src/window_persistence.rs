@@ -27,9 +27,7 @@
 //! AGENTS.md §7.1).
 
 use bevy::prelude::*;
-use bevy::window::{
-    MonitorSelection, PrimaryWindow, WindowPosition, WindowResolution,
-};
+use bevy::window::{MonitorSelection, PrimaryWindow, WindowPosition, WindowResolution};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 
@@ -121,9 +119,7 @@ impl WindowGeometry {
     /// (the original ship behaviour).
     pub fn position(&self) -> WindowPosition {
         match (self.x, self.y) {
-            (Some(x), Some(y)) if !self.is_unset() => {
-                WindowPosition::At(IVec2::new(x, y))
-            }
+            (Some(x), Some(y)) if !self.is_unset() => WindowPosition::At(IVec2::new(x, y)),
             _ => WindowPosition::Centered(MonitorSelection::Primary),
         }
     }

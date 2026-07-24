@@ -19,15 +19,15 @@
 //! `lunco_environment::horizon::finish_shadow_cache_bake`, preserving the original
 //! single-crate `.chain()`.
 
+use crate::shader_material::ShaderMaterial;
+use bevy::camera::visibility::RenderLayers;
 use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
-use bevy::camera::visibility::RenderLayers;
 use lunco_environment::horizon::{
     finish_shadow_cache_bake, pick_sun, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig,
     SunQuery,
 };
-use crate::shader_material::ShaderMaterial;
 use lunco_materials::ParamValue;
 
 pub(crate) fn build(app: &mut App) {
@@ -113,8 +113,12 @@ pub fn wire_terrain_materials(
     for e in removed_terrains.read() {
         cache_engaged.remove(&e);
     }
-    let Some(mut shader_mats) = shader_mats else { return };
-    let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
+    let Some(mut shader_mats) = shader_mats else {
+        return;
+    };
+    let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else {
+        return;
+    };
     // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
     // gate, not just cosmetics — inside it the live 48-step march is
     // skipped (CSM owns the near field), and "march everywhere" turned low
@@ -140,7 +144,11 @@ pub fn wire_terrain_materials(
             .transform_vector3(to_sun_world)
             .normalize_or_zero();
         let (hf_size_v, hf_res, height_map_handle) = match map {
-            Some(m) => (m.field.size(), m.field.resolution() as f32, Some(m.image.clone())),
+            Some(m) => (
+                m.field.size(),
+                m.field.resolution() as f32,
+                Some(m.image.clone()),
+            ),
             None => (Vec2::ONE, 0.0, None),
         };
 
@@ -154,12 +162,19 @@ pub fn wire_terrain_materials(
         let cache_image: Option<Handle<Image>> = shadow_cache.map(|c| c.image.clone());
         let engaged = {
             let prev = cache_engaged.get(&entity).copied().unwrap_or(false);
-            let now = if prev { sun_local.y > 5.0e-5 } else { sun_local.y > 2.0e-4 };
+            let now = if prev {
+                sun_local.y > 5.0e-5
+            } else {
+                sun_local.y > 2.0e-4
+            };
             cache_engaged.insert(entity, now);
             now
         };
-        let shadow_cache_on: f32 =
-            if cfg.enabled && engaged && cache_image.is_some() { 1.0 } else { 0.0 };
+        let shadow_cache_on: f32 = if cfg.enabled && engaged && cache_image.is_some() {
+            1.0
+        } else {
+            0.0
+        };
 
         // Named engine uniforms consumed by the terrain shaders (regolith /
         // terrain_shadow declare these in their `Material` struct; the engine
@@ -216,11 +231,16 @@ pub fn wire_terrain_materials(
             let needs = shader_mats.get(&handle.0).is_some_and(|m| {
                 m.height_map != height_map_handle
                     || m.shadow_cache != cache_image
-                    || m.get_scalar("shadow_cache_on").is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
-                    || m.get_vec3("sun_dir").is_none_or(|v| (v - sun_local).length() > SUN_DIR_EPSILON)
-                    || m.get_vec3("sun_dir_world").is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)
-                    || m.get_scalar("hf_res").is_none_or(|r| (r - hf_res).abs() > 1e-3)
-                    || m.get_scalar("csm_far").is_none_or(|c| (c - csm_far).abs() > 1e-3)
+                    || m.get_scalar("shadow_cache_on")
+                        .is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
+                    || m.get_vec3("sun_dir")
+                        .is_none_or(|v| (v - sun_local).length() > SUN_DIR_EPSILON)
+                    || m.get_vec3("sun_dir_world")
+                        .is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)
+                    || m.get_scalar("hf_res")
+                        .is_none_or(|r| (r - hf_res).abs() > 1e-3)
+                    || m.get_scalar("csm_far")
+                        .is_none_or(|c| (c - csm_far).abs() > 1e-3)
             });
             if needs {
                 if let Some(mut m) = shader_mats.get_mut(&handle.0) {
@@ -281,8 +301,12 @@ pub fn wire_sun_for_non_terrain_materials(
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     meshes: Query<&MeshMaterial3d<ShaderMaterial>, (Without<HorizonMap>, Without<RenderLayers>)>,
 ) {
-    let Some(mut shader_mats) = shader_mats else { return };
-    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
+    let Some(mut shader_mats) = shader_mats else {
+        return;
+    };
+    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else {
+        return;
+    };
     let to_sun_world: Vec3 = sun_gt.back().into();
     let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
 
@@ -373,7 +397,9 @@ pub fn shade_dynamic_entities(
     if terrains.is_empty() {
         return;
     }
-    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
+    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else {
+        return;
+    };
     let to_sun_world: Vec3 = sun_gt.back().into();
 
     // Throttle the expensive full sweep — O(entities × terrains × ≤48-step
@@ -381,8 +407,8 @@ pub fn shade_dynamic_entities(
     // (120–175) every frame the sun animates (day cycle, `SetEnvironmentLight`
     // slider drag). Moving entities still update every frame via the
     // `gt.is_changed()` fast path below; only the sun-moved full pass is gated.
-    let timer = sweep_timer
-        .get_or_insert_with(|| Timer::from_seconds(1.0 / 30.0, TimerMode::Repeating));
+    let timer =
+        sweep_timer.get_or_insert_with(|| Timer::from_seconds(1.0 / 30.0, TimerMode::Repeating));
     timer.tick(time.delta());
 
     let sun_moved = match *last_sun {
@@ -429,7 +455,8 @@ pub fn shade_dynamic_entities(
         for (inv, sun_local, map) in &terrain_cache {
             let local = inv.transform_point3(gt.translation());
             if let Some(v) =
-                map.field.sun_visibility(Vec2::new(local.x, local.z), *sun_local, tan_r)
+                map.field
+                    .sun_visibility(Vec2::new(local.x, local.z), *sun_local, tan_r)
             {
                 vis = vis.min(v);
             }
@@ -454,7 +481,6 @@ pub fn shade_dynamic_entities(
             // textures are not crushed or darkened when horizon maps initialize.
             // Directional sun light and CSM shadows handle real-time GPU lighting.
         }
-
     }
 }
 
@@ -488,7 +514,10 @@ mod tests {
         // Sun: identity rotation ⇒ `GlobalTransform::back()` is +Z.
         app.world_mut().spawn((
             GlobalTransform::IDENTITY,
-            DirectionalLight { illuminance: 10_000.0, ..Default::default() },
+            DirectionalLight {
+                illuminance: 10_000.0,
+                ..Default::default()
+            },
         ));
 
         let handle = app
@@ -517,13 +546,19 @@ mod tests {
         // Dim fill pointing +Z, bright sun pointing +X. Brightness, not order, decides.
         app.world_mut().spawn((
             GlobalTransform::IDENTITY,
-            DirectionalLight { illuminance: 10.0, ..Default::default() },
+            DirectionalLight {
+                illuminance: 10.0,
+                ..Default::default()
+            },
         ));
         app.world_mut().spawn((
             GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_y(
                 std::f32::consts::FRAC_PI_2,
             ))),
-            DirectionalLight { illuminance: 100_000.0, ..Default::default() },
+            DirectionalLight {
+                illuminance: 100_000.0,
+                ..Default::default()
+            },
         ));
 
         let handle = app
@@ -539,7 +574,10 @@ mod tests {
         else {
             panic!("sun_dir_world missing or not a Vec3");
         };
-        assert!(v[0] > 0.99, "expected the BRIGHT light's +X direction, got {v:?}");
+        assert!(
+            v[0] > 0.99,
+            "expected the BRIGHT light's +X direction, got {v:?}"
+        );
     }
 
     /// STEADY STATE COSTS NOTHING. Running the system twice with an unmoved sun
@@ -555,7 +593,10 @@ mod tests {
         let mut app = test_app();
         app.world_mut().spawn((
             GlobalTransform::IDENTITY,
-            DirectionalLight { illuminance: 10_000.0, ..Default::default() },
+            DirectionalLight {
+                illuminance: 10_000.0,
+                ..Default::default()
+            },
         ));
         let handle = app
             .world_mut()
@@ -587,7 +628,10 @@ mod tests {
             app.update();
         }
         assert_eq!(
-            app.world().resource::<Assets<ShaderMaterial>>().get(&handle).map(|m| m.get("sun_dir_world")),
+            app.world()
+                .resource::<Assets<ShaderMaterial>>()
+                .get(&handle)
+                .map(|m| m.get("sun_dir_world")),
             Some(Some(ParamValue::Vec3([0.0, 0.0, 1.0]))),
             "the sun must be written"
         );
@@ -620,7 +664,10 @@ mod tests {
             .world_mut()
             .spawn((
                 GlobalTransform::IDENTITY,
-                DirectionalLight { illuminance: 10_000.0, ..Default::default() },
+                DirectionalLight {
+                    illuminance: 10_000.0,
+                    ..Default::default()
+                },
             ))
             .id();
         let handle = app
@@ -647,8 +694,10 @@ mod tests {
         const STEP_RAD: f32 = 3e-6; // ~0.0002° per frame, well under the epsilon
         for i in 0..FRAMES {
             let rot = Quat::from_rotation_x(STEP_RAD * i as f32);
-            *app.world_mut().entity_mut(sun).get_mut::<GlobalTransform>().unwrap() =
-                GlobalTransform::from(Transform::from_rotation(rot));
+            *app.world_mut()
+                .entity_mut(sun)
+                .get_mut::<GlobalTransform>()
+                .unwrap() = GlobalTransform::from(Transform::from_rotation(rot));
             app.update();
         }
 
@@ -668,7 +717,10 @@ mod tests {
         let mut app = test_app();
         app.world_mut().spawn((
             GlobalTransform::IDENTITY,
-            DirectionalLight { illuminance: 10_000.0, ..Default::default() },
+            DirectionalLight {
+                illuminance: 10_000.0,
+                ..Default::default()
+            },
         ));
 
         let handle = app
@@ -685,7 +737,10 @@ mod tests {
         );
         app.world_mut().spawn((
             MeshMaterial3d(handle.clone()),
-            HorizonMap { field, image: Handle::default() },
+            HorizonMap {
+                field,
+                image: Handle::default(),
+            },
         ));
 
         app.update();

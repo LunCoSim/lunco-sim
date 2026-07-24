@@ -51,7 +51,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use lunco_core::coords::world_pose;
-use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::{
+    on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
+};
 use lunco_hooks::HookValue;
 use lunco_terrain_surface::{DemHeightField, SurfaceOracle};
 use lunco_time::WorldTime;
@@ -100,7 +102,10 @@ pub struct LinkConfig {
 
 impl Default for LinkConfig {
     fn default() -> Self {
-        Self { interval_s: 0.25, drop_debounce: 3 }
+        Self {
+            interval_s: 0.25,
+            drop_debounce: 3,
+        }
     }
 }
 
@@ -117,7 +122,11 @@ pub struct LinkNode {
 
 impl Default for LinkNode {
     fn default() -> Self {
-        Self { max_range_m: 1.0e12, min_elevation_deg: -90.0, class: None }
+        Self {
+            max_range_m: 1.0e12,
+            min_elevation_deg: -90.0,
+            class: None,
+        }
     }
 }
 
@@ -165,7 +174,10 @@ pub struct LinkOccluder {
 impl Default for LinkOccluder {
     fn default() -> Self {
         // A unit cube: the identity that makes `scale` alone sufficient.
-        Self { half_extents: DVec3::splat(0.5), center: DVec3::ZERO }
+        Self {
+            half_extents: DVec3::splat(0.5),
+            center: DVec3::ZERO,
+        }
     }
 }
 
@@ -404,7 +416,11 @@ pub(crate) fn update_links(
             let (a, b) = (&nodes[i], &nodes[j]);
             let d = b.pose.pos - a.pose.pos;
             let range_m = d.length();
-            let dir = if range_m > 1e-6 { d / range_m } else { DVec3::ZERO };
+            let dir = if range_m > 1e-6 {
+                d / range_m
+            } else {
+                DVec3::ZERO
+            };
             let elev = |up: DVec3, dir: DVec3| -> f64 {
                 if up == DVec3::ZERO {
                     90.0
@@ -443,8 +459,14 @@ pub(crate) fn update_links(
                 ("b", HookValue::Int(b.gid as i64)),
                 ("name_a", HookValue::str(a.label.clone())),
                 ("name_b", HookValue::str(b.label.clone())),
-                ("class_a", HookValue::str(a.node.class.clone().unwrap_or_default())),
-                ("class_b", HookValue::str(b.node.class.clone().unwrap_or_default())),
+                (
+                    "class_a",
+                    HookValue::str(a.node.class.clone().unwrap_or_default()),
+                ),
+                (
+                    "class_b",
+                    HookValue::str(b.node.class.clone().unwrap_or_default()),
+                ),
                 ("range_m", HookValue::Float(range_m)),
                 ("light_time_s", HookValue::Float(light_time_s(range_m))),
                 ("elev_a", HookValue::Float(elev_a)),
@@ -452,10 +474,16 @@ pub(crate) fn update_links(
                 ("min_elev_a", HookValue::Float(a.node.min_elevation_deg)),
                 ("min_elev_b", HookValue::Float(b.node.min_elevation_deg)),
                 ("occluded", HookValue::Bool(occluded_by.is_some())),
-                ("occluded_by", HookValue::str(occluded_by.clone().unwrap_or_default())),
+                (
+                    "occluded_by",
+                    HookValue::str(occluded_by.clone().unwrap_or_default()),
+                ),
                 ("terrain_blocked", HookValue::Bool(terrain_blocked)),
                 ("occluder_blocked", HookValue::Bool(occluder_blocked)),
-                ("max_range_m", HookValue::Float(a.node.max_range_m.min(b.node.max_range_m))),
+                (
+                    "max_range_m",
+                    HookValue::Float(a.node.max_range_m.min(b.node.max_range_m)),
+                ),
             ]);
             let builtin = cheap_ok && !terrain_blocked && !occluder_blocked;
             let raw = match lunco_hooks::invoke(LINK_HOOK, &[ctx]) {
@@ -510,7 +538,11 @@ pub(crate) fn update_links(
         }
     }
 
-    debug!("[link] recompute: {} nodes, {} links up", nodes.len(), up_now.len());
+    debug!(
+        "[link] recompute: {} nodes, {} links up",
+        nodes.len(),
+        up_now.len()
+    );
 
     // AOS/LOS edges vs the previous recompute, in gid-pair order so the event
     // sequence is deterministic across runs and peers.
@@ -687,7 +719,9 @@ fn best_per_class(state: &LinkState) -> std::collections::HashMap<String, &LinkP
     for p in &state.peers {
         // A peer with no class is unreachable by an authored wire (there is no port
         // name for it) — `LinkState` still carries it for script/UI.
-        let Some(class) = p.class.as_deref() else { continue };
+        let Some(class) = p.class.as_deref() else {
+            continue;
+        };
         best.entry(sanitize_class(class))
             .and_modify(|cur| {
                 let better = match (cur.connected, p.connected) {
@@ -737,7 +771,9 @@ fn class_ports(p: &LinkPeer) -> [(&'static str, f64); 3] {
 /// what lets a scalar Modelica port see an N-peer graph.
 pub const LINK_PORT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
     list: |world, entity, out| {
-        let Some(state) = world.get::<LinkState>(entity) else { return };
+        let Some(state) = world.get::<LinkState>(entity) else {
+            return;
+        };
         for (class, p) in best_per_class(state) {
             for (suffix, value) in class_ports(p) {
                 out.push(lunco_core::ports::PortRef {
@@ -853,7 +889,9 @@ mod tests {
     fn ports_exist_without_any_modelica_model_on_the_entity() {
         let mut world = World::new();
         let e = world
-            .spawn(LinkState { peers: vec![peer(1, "base", true, 674.0, -4.9)] })
+            .spawn(LinkState {
+                peers: vec![peer(1, "base", true, 674.0, -4.9)],
+            })
             .id();
 
         assert_eq!(port(&world, e, "link_base_range_m"), Some(674.0));
@@ -900,7 +938,9 @@ mod tests {
     fn unknown_names_do_not_resolve() {
         let mut world = World::new();
         let e = world
-            .spawn(LinkState { peers: vec![peer(1, "base", true, 674.0, -4.9)] })
+            .spawn(LinkState {
+                peers: vec![peer(1, "base", true, 674.0, -4.9)],
+            })
             .id();
 
         assert_eq!(port(&world, e, "link_earth_range_m"), None);
@@ -946,8 +986,17 @@ mod tests {
         world
             .spawn((
                 lunco_core::GlobalEntityId::from_raw(gid),
-                LinkNode { max_range_m: max_range, min_elevation_deg: -90.0, class: Some(class.into()) },
-                SolarFramePose { pos, local: pos, up: DVec3::Y, body: 301 },
+                LinkNode {
+                    max_range_m: max_range,
+                    min_elevation_deg: -90.0,
+                    class: Some(class.into()),
+                },
+                SolarFramePose {
+                    pos,
+                    local: pos,
+                    up: DVec3::Y,
+                    body: 301,
+                },
             ))
             .id()
     }
@@ -959,12 +1008,7 @@ mod tests {
     fn node(world: &mut World, class: &str, pos: DVec3, max_range: f64) -> Entity {
         // First node spawned in a test is A, every later one B — every test here
         // is a two-node scene.
-        let gid = if world
-            .query::<&LinkNode>()
-            .iter(world)
-            .next()
-            .is_none()
-        {
+        let gid = if world.query::<&LinkNode>().iter(world).next().is_none() {
             GID_A
         } else {
             GID_B
@@ -1006,7 +1050,11 @@ mod tests {
     /// not pay for, or trip over, a march that has nothing to march.
     #[test]
     fn no_terrain_never_blocks() {
-        assert!(!terrain_blocks(DVec3::new(-200.0, 2.0, 0.0), DVec3::new(200.0, 2.0, 0.0), &[]));
+        assert!(!terrain_blocks(
+            DVec3::new(-200.0, 2.0, 0.0),
+            DVec3::new(200.0, 2.0, 0.0),
+            &[]
+        ));
     }
 
     /// Flat ground between two raised endpoints does not block. Guards the margin:
@@ -1015,7 +1063,10 @@ mod tests {
     #[test]
     fn flat_terrain_does_not_block() {
         use lunco_terrain_surface::HeightGrid;
-        let flat = Arc::new(SurfaceOracle::new(Arc::new(HeightGrid::new_flat(65, 500.0)), vec![]));
+        let flat = Arc::new(SurfaceOracle::new(
+            Arc::new(HeightGrid::new_flat(65, 500.0)),
+            vec![],
+        ));
         let terrains = [(DVec3::ZERO, DQuat::IDENTITY, flat)];
         assert!(!terrain_blocks(
             DVec3::new(-200.0, 2.0, 0.0),
@@ -1074,7 +1125,11 @@ mod tests {
         let site = DVec3::new(1_737_000.0, -412_500.0, 96_000.0); // lunar-scale, f64
         let terrains = [(site, DQuat::IDENTITY, ridge_oracle(40.0, 500.0))];
         assert!(
-            terrain_blocks(site + DVec3::new(-200.0, 2.0, 0.0), site + DVec3::new(200.0, 2.0, 0.0), &terrains),
+            terrain_blocks(
+                site + DVec3::new(-200.0, 2.0, 0.0),
+                site + DVec3::new(200.0, 2.0, 0.0),
+                &terrains
+            ),
             "a ridge must block just the same 1700 km from the origin — if this fails, \
              the DEM pose and the segment are in different frames again"
         );
@@ -1100,11 +1155,19 @@ mod tests {
         let rot = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
         let terrains = [(DVec3::ZERO, rot, ridge_oracle(40.0, 500.0))];
         assert!(
-            terrain_blocks(DVec3::new(0.0, 2.0, -200.0), DVec3::new(0.0, 2.0, 200.0), &terrains),
+            terrain_blocks(
+                DVec3::new(0.0, 2.0, -200.0),
+                DVec3::new(0.0, 2.0, 200.0),
+                &terrains
+            ),
             "after a 90° yaw the wall stands across the z-axis segment"
         );
         assert!(
-            !terrain_blocks(DVec3::new(-200.0, 2.0, 200.0), DVec3::new(200.0, 2.0, 200.0), &terrains),
+            !terrain_blocks(
+                DVec3::new(-200.0, 2.0, 200.0),
+                DVec3::new(200.0, 2.0, 200.0),
+                &terrains
+            ),
             "…and an x-axis segment at z = 200 is well clear of the |z| ≤ 12 band"
         );
         // The mirror of the unrotated check, and the part that actually pins the
@@ -1112,7 +1175,11 @@ mod tests {
         // yawed slab for its whole length, so it must block. Apply the rotation the
         // wrong way round and this reads clear.
         assert!(
-            terrain_blocks(DVec3::new(-200.0, 2.0, 0.0), DVec3::new(200.0, 2.0, 0.0), &terrains),
+            terrain_blocks(
+                DVec3::new(-200.0, 2.0, 0.0),
+                DVec3::new(200.0, 2.0, 0.0),
+                &terrains
+            ),
             "at z = 0 the x-axis segment runs THROUGH the yawed wall, not beside it"
         );
     }
@@ -1147,10 +1214,16 @@ mod tests {
 
     fn world_at_epoch(interval_s: f64) -> World {
         let mut world = World::new();
-        world.insert_resource(lunco_time::WorldTime { epoch_jd: 2_451_545.0, ..Default::default() });
+        world.insert_resource(lunco_time::WorldTime {
+            epoch_jd: 2_451_545.0,
+            ..Default::default()
+        });
         // `drop_debounce: 1` = flip immediately, so every geometry test reads the raw
         // verdict on the sweep it runs. The debounce itself is exercised on its own.
-        world.insert_resource(LinkConfig { interval_s, drop_debounce: 1 });
+        world.insert_resource(LinkConfig {
+            interval_s,
+            drop_debounce: 1,
+        });
         world
     }
 
@@ -1164,7 +1237,11 @@ mod tests {
         world.run_system_once(update_links).unwrap();
 
         let sa = world.get::<LinkState>(a).expect("node a has LinkState");
-        let peer = sa.peers.iter().find(|p| p.peer == GID_B).expect("a sees relay");
+        let peer = sa
+            .peers
+            .iter()
+            .find(|p| p.peer == GID_B)
+            .expect("a sees relay");
         assert!(peer.connected, "a clear 10 m link should be up: {peer:?}");
         assert!((peer.range_m - 10.0).abs() < 1e-6, "range {}", peer.range_m);
     }
@@ -1183,11 +1260,23 @@ mod tests {
         let sys = world.register_system(update_links);
         let is_up = |w: &mut World| {
             w.run_system(sys).unwrap();
-            w.get::<LinkState>(a).unwrap().peers.iter().find(|p| p.peer == GID_B).unwrap().connected
+            w.get::<LinkState>(a)
+                .unwrap()
+                .peers
+                .iter()
+                .find(|p| p.peer == GID_B)
+                .unwrap()
+                .connected
         };
         // Force the RAW verdict down by pulling the range past both nodes' max.
-        let sever = |w: &mut World| { w.get_mut::<LinkNode>(a).unwrap().max_range_m = 1.0; w.get_mut::<LinkNode>(b).unwrap().max_range_m = 1.0; };
-        let heal = |w: &mut World| { w.get_mut::<LinkNode>(a).unwrap().max_range_m = 100.0; w.get_mut::<LinkNode>(b).unwrap().max_range_m = 100.0; };
+        let sever = |w: &mut World| {
+            w.get_mut::<LinkNode>(a).unwrap().max_range_m = 1.0;
+            w.get_mut::<LinkNode>(b).unwrap().max_range_m = 1.0;
+        };
+        let heal = |w: &mut World| {
+            w.get_mut::<LinkNode>(a).unwrap().max_range_m = 100.0;
+            w.get_mut::<LinkNode>(b).unwrap().max_range_m = 100.0;
+        };
 
         assert!(is_up(&mut world), "50 m link within 100 m range is up");
 
@@ -1199,7 +1288,10 @@ mod tests {
         heal(&mut world);
         assert!(is_up(&mut world), "re-acquired");
         sever(&mut world);
-        assert!(is_up(&mut world), "streak restarts after a re-acquire (1/3), not 3/3");
+        assert!(
+            is_up(&mut world),
+            "streak restarts after a re-acquire (1/3), not 3/3"
+        );
         assert!(is_up(&mut world), "streak 2/3");
         // Third consecutive severed read finally publishes the drop.
         assert!(!is_up(&mut world), "3 consecutive severed reads ⇒ LOS");
@@ -1217,7 +1309,12 @@ mod tests {
         const EARTH_MOON_M: f64 = 384_400_000.0;
         let mut world = world_at_epoch(0.0);
         let a = node(&mut world, "earth_dsn", DVec3::ZERO, 1.0e12);
-        node(&mut world, "lunar_relay", DVec3::new(EARTH_MOON_M, 0.0, 0.0), 1.0e12);
+        node(
+            &mut world,
+            "lunar_relay",
+            DVec3::new(EARTH_MOON_M, 0.0, 0.0),
+            1.0e12,
+        );
 
         world.run_system_once(update_links).unwrap();
 
@@ -1262,15 +1359,27 @@ mod tests {
         let a = world
             .spawn((
                 lunco_core::GlobalEntityId::from_raw(GID_A),
-                LinkNode { max_range_m: 1.0e12, min_elevation_deg: 30.0, class: None },
-                SolarFramePose { pos: DVec3::ZERO, local: DVec3::ZERO, up: DVec3::Y, body: 301 },
+                LinkNode {
+                    max_range_m: 1.0e12,
+                    min_elevation_deg: 30.0,
+                    class: None,
+                },
+                SolarFramePose {
+                    pos: DVec3::ZERO,
+                    local: DVec3::ZERO,
+                    up: DVec3::Y,
+                    body: 301,
+                },
             ))
             .id();
         // `b` sits on the horizon (elevation 0°) → below the 30° mask.
         node(&mut world, "b", DVec3::new(10.0, 0.0, 0.0), 1.0e12);
         world.run_system_once(update_links).unwrap();
         let sa = world.get::<LinkState>(a).unwrap();
-        assert!(sa.peers.iter().all(|p| !p.connected), "0° < 30° mask → down");
+        assert!(
+            sa.peers.iter().all(|p| !p.connected),
+            "0° < 30° mask → down"
+        );
     }
 
     // ── Identity ─────────────────────────────────────────────────────────────
@@ -1301,11 +1410,19 @@ mod tests {
         let peers = &world.get::<LinkState>(rover).unwrap().peers;
         let mut ids: Vec<u64> = peers.iter().map(|p| p.peer).collect();
         ids.sort();
-        assert_eq!(ids, vec![11, 12, 13], "each same-class station is its own node");
+        assert_eq!(
+            ids,
+            vec![11, 12, 13],
+            "each same-class station is its own node"
+        );
         // …and they are genuinely distinct links, not one repeated.
         let mut ranges: Vec<i64> = peers.iter().map(|p| p.range_m as i64).collect();
         ranges.sort();
-        assert_eq!(ranges, vec![100, 200, 300], "each station keeps its own range");
+        assert_eq!(
+            ranges,
+            vec![100, 200, 300],
+            "each station keeps its own range"
+        );
     }
 
     /// A node whose identity has not been minted yet is SKIPPED, never given a
@@ -1318,8 +1435,16 @@ mod tests {
         let a = node_gid(&mut world, GID_A, "rover", DVec3::ZERO, 1.0e12);
         // Same shape, but identity not yet assigned (the PostUpdate window).
         world.spawn((
-            LinkNode { class: Some("station".into()), ..default() },
-            SolarFramePose { pos: DVec3::new(10.0, 0.0, 0.0), local: DVec3::new(10.0, 0.0, 0.0), up: DVec3::Y, body: 301 },
+            LinkNode {
+                class: Some("station".into()),
+                ..default()
+            },
+            SolarFramePose {
+                pos: DVec3::new(10.0, 0.0, 0.0),
+                local: DVec3::new(10.0, 0.0, 0.0),
+                up: DVec3::Y,
+                body: 301,
+            },
         ));
 
         world.run_system_once(update_links).unwrap();
@@ -1343,7 +1468,10 @@ mod tests {
     fn occluder(world: &mut World, at: DVec3, half: DVec3) -> Entity {
         world
             .spawn((
-                LinkOccluder { half_extents: half, center: DVec3::ZERO },
+                LinkOccluder {
+                    half_extents: half,
+                    center: DVec3::ZERO,
+                },
                 Transform::from_translation(at.as_vec3()),
             ))
             .id()
@@ -1356,14 +1484,25 @@ mod tests {
         let a = node(&mut world, "rover", DVec3::ZERO, 1.0e12);
         node(&mut world, "station", DVec3::new(20.0, 0.0, 0.0), 1.0e12);
         // A wall astride the segment at its midpoint.
-        occluder(&mut world, DVec3::new(10.0, 0.0, 0.0), DVec3::new(1.0, 5.0, 5.0));
+        occluder(
+            &mut world,
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(1.0, 5.0, 5.0),
+        );
 
         world.run_system_once(update_links).unwrap();
 
         let peer = world.get::<LinkState>(a).unwrap().peers[0].clone();
-        assert!(!peer.connected, "a wall across the sight-line must sever it: {peer:?}");
+        assert!(
+            !peer.connected,
+            "a wall across the sight-line must sever it: {peer:?}"
+        );
         // …and it is the OCCLUDER that severed it, not range or the elevation mask.
-        assert!((peer.range_m - 20.0).abs() < 1e-6, "range unchanged: {}", peer.range_m);
+        assert!(
+            (peer.range_m - 20.0).abs() < 1e-6,
+            "range unchanged: {}",
+            peer.range_m
+        );
     }
 
     /// The control for the test above: same nodes, same distance, box moved aside.
@@ -1376,7 +1515,11 @@ mod tests {
         let a = node(&mut world, "rover", DVec3::ZERO, 1.0e12);
         node(&mut world, "station", DVec3::new(20.0, 0.0, 0.0), 1.0e12);
         // Same box, lifted well clear of the segment.
-        occluder(&mut world, DVec3::new(10.0, 50.0, 0.0), DVec3::new(1.0, 5.0, 5.0));
+        occluder(
+            &mut world,
+            DVec3::new(10.0, 50.0, 0.0),
+            DVec3::new(1.0, 5.0, 5.0),
+        );
 
         world.run_system_once(update_links).unwrap();
 
@@ -1470,8 +1613,14 @@ mod tests {
         let a = node(&mut world, "rover", a_pos, 1.0e12);
         node(&mut world, "station", b_pos, 1.0e12);
         world.spawn((
-            LinkOccluder { half_extents: thin, center: DVec3::ZERO },
-            Transform { translation: center.as_vec3(), ..default() },
+            LinkOccluder {
+                half_extents: thin,
+                center: DVec3::ZERO,
+            },
+            Transform {
+                translation: center.as_vec3(),
+                ..default()
+            },
         ));
         world.run_system_once(update_links).unwrap();
         assert!(
@@ -1486,7 +1635,10 @@ mod tests {
         let a = node(&mut world, "rover", a_pos, 1.0e12);
         node(&mut world, "station", b_pos, 1.0e12);
         world.spawn((
-            LinkOccluder { half_extents: thin, center: DVec3::ZERO },
+            LinkOccluder {
+                half_extents: thin,
+                center: DVec3::ZERO,
+            },
             Transform {
                 translation: center.as_vec3(),
                 rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
@@ -1506,7 +1658,10 @@ mod tests {
         let a = node(&mut world, "rover", a_pos, 1.0e12);
         node(&mut world, "station", b_pos, 1.0e12);
         world.spawn((
-            LinkOccluder { half_extents: thin, center: DVec3::ZERO },
+            LinkOccluder {
+                half_extents: thin,
+                center: DVec3::ZERO,
+            },
             Transform {
                 translation: Vec3::new(10.0, 0.0, 4.0),
                 rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
@@ -1563,8 +1718,14 @@ mod tests {
 
         lunco_hooks::unregister(LINK_HOOK);
 
-        assert!(!down, "hook returning false must sever a geometrically clear link");
-        assert!(up, "hook returning true must raise a link the builtin would refuse");
+        assert!(
+            !down,
+            "hook returning false must sever a geometrically clear link"
+        );
+        assert!(
+            up,
+            "hook returning true must raise a link the builtin would refuse"
+        );
     }
 
     /// The hook receives the geometry FACTS it is documented to receive. If a key
@@ -1579,8 +1740,7 @@ mod tests {
         impl lunco_hooks::ScriptHook for Captor {
             fn invoke(&self, args: &[HookValue]) -> lunco_hooks::HookResult {
                 if let Some(HookValue::Map(entries)) = args.first() {
-                    *self.0.lock().unwrap() =
-                        entries.iter().map(|(k, _)| k.clone()).collect();
+                    *self.0.lock().unwrap() = entries.iter().map(|(k, _)| k.clone()).collect();
                 }
                 Ok(HookValue::Bool(true))
             }
@@ -1602,11 +1762,26 @@ mod tests {
 
         let keys = captor.0.lock().unwrap().clone();
         for expected in [
-            "a", "b", "class_a", "class_b", "range_m", "light_time_s", "elev_a", "elev_b",
-            "min_elev_a", "min_elev_b", "occluded", "occluded_by", "terrain_blocked",
-            "occluder_blocked", "max_range_m",
+            "a",
+            "b",
+            "class_a",
+            "class_b",
+            "range_m",
+            "light_time_s",
+            "elev_a",
+            "elev_b",
+            "min_elev_a",
+            "min_elev_b",
+            "occluded",
+            "occluded_by",
+            "terrain_blocked",
+            "occluder_blocked",
+            "max_range_m",
         ] {
-            assert!(keys.contains(&expected.to_string()), "hook ctx missing '{expected}': {keys:?}");
+            assert!(
+                keys.contains(&expected.to_string()),
+                "hook ctx missing '{expected}': {keys:?}"
+            );
         }
     }
 
@@ -1642,14 +1817,23 @@ mod tests {
         world.run_system(sys).unwrap();
         world.run_system(sys).unwrap();
         assert_eq!(
-            world.resource::<SeenEvents>().0.iter().filter(|(n, _)| n == "link.aos").count(),
+            world
+                .resource::<SeenEvents>()
+                .0
+                .iter()
+                .filter(|(n, _)| n == "link.aos")
+                .count(),
             1,
             "AOS fires once on the rising edge, not per recompute: {:?}",
             world.resource::<SeenEvents>().0
         );
 
         // Drop a wall in → one LOS.
-        occluder(&mut world, DVec3::new(10.0, 0.0, 0.0), DVec3::new(1.0, 5.0, 5.0));
+        occluder(
+            &mut world,
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(1.0, 5.0, 5.0),
+        );
         world.run_system(sys).unwrap();
         world.run_system(sys).unwrap();
 
@@ -1662,7 +1846,8 @@ mod tests {
         // The event names the pair by GID, ordered — the ids a subscriber can
         // resolve with `name(id)`, not labels it would have to match by string.
         assert!(
-            seen.iter().any(|(n, d)| n == "link.los" && *d == format!("{GID_A}-{GID_B}")),
+            seen.iter()
+                .any(|(n, d)| n == "link.los" && *d == format!("{GID_A}-{GID_B}")),
             "LOS carries the GID pair: {seen:?}"
         );
         let _ = (a, b);
@@ -1681,7 +1866,10 @@ mod tests {
         let sys = world.register_system(update_links);
 
         world.run_system(sys).unwrap();
-        assert!(!world.get::<LinkState>(a).unwrap().peers.is_empty(), "first sweep runs");
+        assert!(
+            !world.get::<LinkState>(a).unwrap().peers.is_empty(),
+            "first sweep runs"
+        );
 
         // Clobber the published state: a second sweep at the same epoch must NOT
         // rewrite it.

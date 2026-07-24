@@ -67,7 +67,13 @@ pub struct AssetHttpFetch {
 impl Default for AssetHttpFetch {
     fn default() -> Self {
         let (tx, rx) = unbounded();
-        Self { tx, rx, inflight: 0, attempts: Default::default(), revision: None }
+        Self {
+            tx,
+            rx,
+            inflight: 0,
+            attempts: Default::default(),
+            revision: None,
+        }
     }
 }
 
@@ -252,7 +258,10 @@ mod tests {
         // so the caller can retry/fall back rather than cache a lie.
         let substituted = verified(cid.clone(), "http://h/a".into(), Ok(b"evil".to_vec()));
         assert_eq!(substituted.cid, cid);
-        assert!(substituted.bytes.is_none(), "mismatched content must be discarded");
+        assert!(
+            substituted.bytes.is_none(),
+            "mismatched content must be discarded"
+        );
 
         // Even empty bytes must not pass for a non-empty CID.
         let empty = verified(cid.clone(), "http://h/a".into(), Ok(Vec::new()));

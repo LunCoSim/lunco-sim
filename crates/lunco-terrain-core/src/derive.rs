@@ -199,8 +199,16 @@ mod los_tests {
         // ray sinks below the surface past x≈8.
         let (dx, dy) = (1.0_f64, -0.15_f64);
         let len = (dx * dx + dy * dy).sqrt();
-        let t = los_hit(&s, [0.0, 2.0, 0.0], [dx / len, dy / len, 0.0], 100.0, 10.0, 0.5, 0.05)
-            .expect("ray should hit the slope");
+        let t = los_hit(
+            &s,
+            [0.0, 2.0, 0.0],
+            [dx / len, dy / len, 0.0],
+            100.0,
+            10.0,
+            0.5,
+            0.05,
+        )
+        .expect("ray should hit the slope");
         let hit_x = (dx / len) * t;
         assert!((hit_x - 8.0).abs() < 0.6, "hit x = {hit_x}");
     }
@@ -209,9 +217,27 @@ mod los_tests {
     fn ray_above_relief_and_outside_footprint_miss() {
         let s = Ramp;
         // Horizontal ray well above the highest terrain (0.1·10 = 1.0 at the edge).
-        assert!(los_hit(&s, [-10.0, 100.0, 0.0], [1.0, 0.0, 0.0], 20.0, 10.0, 0.5, 0.05).is_none());
+        assert!(los_hit(
+            &s,
+            [-10.0, 100.0, 0.0],
+            [1.0, 0.0, 0.0],
+            20.0,
+            10.0,
+            0.5,
+            0.05
+        )
+        .is_none());
         // Entirely outside the ±10 footprint → open sky, no hit.
-        assert!(los_hit(&s, [200.0, 5.0, 0.0], [1.0, 0.0, 0.0], 10.0, 10.0, 0.5, 0.05).is_none());
+        assert!(los_hit(
+            &s,
+            [200.0, 5.0, 0.0],
+            [1.0, 0.0, 0.0],
+            10.0,
+            10.0,
+            0.5,
+            0.05
+        )
+        .is_none());
     }
 }
 
@@ -268,7 +294,11 @@ pub fn upsample_bilinear(src: &[f32], src_res: usize, dst_res: usize) -> Vec<f32
         return src.to_vec();
     }
     let mut out = Vec::with_capacity(dst_res * dst_res);
-    let scale = if dst_res > 1 { (src_res - 1) as f32 / (dst_res - 1) as f32 } else { 0.0 };
+    let scale = if dst_res > 1 {
+        (src_res - 1) as f32 / (dst_res - 1) as f32
+    } else {
+        0.0
+    };
     for iz in 0..dst_res {
         let fz = iz as f32 * scale;
         let z0 = (fz as usize).min(src_res - 1);
@@ -389,7 +419,10 @@ mod tests {
     }
 
     fn region() -> Square {
-        Square { center: [0.0, 0.0], half: 100.0 }
+        Square {
+            center: [0.0, 0.0],
+            half: 100.0,
+        }
     }
 
     #[test]
@@ -471,7 +504,10 @@ mod tests {
         // neutral; flat ground far from the pit stays near neutral.
         let center = at(res / 2, res / 2);
         let corner = at(0, 0);
-        assert!(center < corner, "bowl {center} not darker than open ground {corner}");
+        assert!(
+            center < corner,
+            "bowl {center} not darker than open ground {corner}"
+        );
         assert!(a.iter().all(|&v| (0.0..=1.0).contains(&v)));
     }
 }

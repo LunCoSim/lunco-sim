@@ -18,10 +18,12 @@ use bevy::prelude::*;
 /// predating its change-tick baseline — are picked up. Always drains removed
 /// events so the queue can't linger.
 struct ChangeDetector<S: Component> {
-    state: Option<SystemState<(
-        Query<'static, 'static, (), Changed<S>>,
-        RemovedComponents<'static, 'static, S>,
-    )>>,
+    state: Option<
+        SystemState<(
+            Query<'static, 'static, (), Changed<S>>,
+            RemovedComponents<'static, 'static, S>,
+        )>,
+    >,
     first_check: bool,
 }
 
@@ -40,7 +42,10 @@ impl<S: Component> ChangeDetector<S> {
 
 impl<S: Component> Default for ChangeDetector<S> {
     fn default() -> Self {
-        Self { state: None, first_check: true }
+        Self {
+            state: None,
+            first_check: true,
+        }
     }
 }
 
@@ -61,7 +66,10 @@ pub struct RebuildOnChange<Source: Component, Value> {
 
 impl<Source: Component, Value: Default> Default for RebuildOnChange<Source, Value> {
     fn default() -> Self {
-        Self { value: Value::default(), detector: ChangeDetector::default() }
+        Self {
+            value: Value::default(),
+            detector: ChangeDetector::default(),
+        }
     }
 }
 

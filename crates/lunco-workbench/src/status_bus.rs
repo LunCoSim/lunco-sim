@@ -306,12 +306,7 @@ impl Default for StatusBus {
 
 impl StatusBus {
     /// Append a discrete event to history.
-    pub fn push(
-        &mut self,
-        source: &'static str,
-        level: StatusLevel,
-        message: impl Into<String>,
-    ) {
+    pub fn push(&mut self, source: &'static str, level: StatusLevel, message: impl Into<String>) {
         debug_assert!(
             level != StatusLevel::Progress,
             "use push_progress for Progress events"
@@ -561,9 +556,7 @@ impl StatusBus {
     /// Walks the parent-of relation — `is_busy(BusyScope::Global)` is
     /// `true` whenever anything is busy.
     pub fn is_busy(&self, scope: BusyScope) -> bool {
-        self.active_progress
-            .keys()
-            .any(|(s, _)| s.is_within(scope))
+        self.active_progress.keys().any(|(s, _)| s.is_within(scope))
     }
 
     /// Iterator over active entries whose scope is within `scope`.
@@ -644,10 +637,7 @@ pub struct BusyDebug {
 
 /// Drains [`BusyHandle`] drop notifications and clears the corresponding
 /// active-progress entries. Runs every frame as part of [`StatusBusPlugin`].
-pub fn drain_busy_drops(
-    mut bus: ResMut<StatusBus>,
-    debug: Option<Res<BusyDebug>>,
-) {
+pub fn drain_busy_drops(mut bus: ResMut<StatusBus>, debug: Option<Res<BusyDebug>>) {
     let min = debug.map(|d| d.min_duration).unwrap_or_default();
     // Pull all pending drops out under the mutex first so we can release
     // it before mutating self via `clear_by_id`.

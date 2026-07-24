@@ -33,10 +33,10 @@
 //! reported as "Solver Error" in the logs rather than crashing the application.
 
 use bevy::prelude::*;
-use rumoca_compile::{Session, SessionConfig};
 use crossbeam_channel::unbounded;
-use std::thread;
 use lunco_assets::msl_dir;
+use rumoca_compile::{Session, SessionConfig};
+use std::thread;
 
 /// Typed identity for a Modelica class across the workbench.
 ///
@@ -137,25 +137,25 @@ pub mod visual_diagram;
 // ── Egui-free core modules lifted out of the (egui-gated) `ui` module so the
 //    headless / server build (`--no-default-features`) compiles. The egui
 //    rendering for these lives under `ui::panels::*`. ────────────────────────
-/// Workbench-side document registry + shared UI-agnostic state (was `ui::state`).
-pub mod state;
-/// Modelica tab registry data types (was `ui::panels::model_view::types`).
-pub mod model_tabs_types;
-/// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
-pub mod model_tabs;
 /// Core data for API-driven canvas focus/connection pulses (UI drains them).
 pub mod canvas_feedback;
 /// Documentation annotation extractor (was `ui::panels::model_view::parsing`).
 pub mod doc_extract;
-/// Default-simulation-class resolution + run-target overrides
-/// (was `ui::panels::model_view::context::default_simulation_class` & friends).
-pub mod sim_default;
-/// Package-tree backend: egui-free data + scanning logic for the library /
-/// package browser (was `ui::panels::package_browser::{types,scanner,cache,library_tree}`).
-pub mod package_tree;
 /// Egui-free Modelica document ops application
 /// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
 pub mod doc_ops;
+/// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
+pub mod model_tabs;
+/// Modelica tab registry data types (was `ui::panels::model_view::types`).
+pub mod model_tabs_types;
+/// Package-tree backend: egui-free data + scanning logic for the library /
+/// package browser (was `ui::panels::package_browser::{types,scanner,cache,library_tree}`).
+pub mod package_tree;
+/// Default-simulation-class resolution + run-target overrides
+/// (was `ui::panels::model_view::context::default_simulation_class` & friends).
+pub mod sim_default;
+/// Workbench-side document registry + shared UI-agnostic state (was `ui::state`).
+pub mod state;
 
 /// Per-document UI projection — what panels read instead of the AST.
 /// Skeleton; population happens in the upcoming AST-canonical refactor.
@@ -176,16 +176,16 @@ pub mod model_commands;
 pub mod engine;
 pub mod engine_resource;
 
-/// Modelica adapter to the canonical Twin journal in
-/// `lunco-twin-journal`. Records each applied [`crate::document::ModelicaOp`] as a
-/// summary entry alongside its inverse. See module docs for the
-/// "summary, not full Serialize" rationale.
-pub mod journal;
 /// Experiment-*definition* journaling (`DomainKind::Experiment`) — records
 /// create/rename/bounds/params/delete into the canonical twin journal so
 /// experiment setups sync + persist. Run results ride the content plane; run
 /// status rides presence.
 pub mod experiment_journal;
+/// Modelica adapter to the canonical Twin journal in
+/// `lunco-twin-journal`. Records each applied [`crate::document::ModelicaOp`] as a
+/// summary entry alongside its inverse. See module docs for the
+/// "summary, not full Serialize" rationale.
+pub mod journal;
 
 /// Minimal byte-range diff helper. Used by the code-editor commit path
 /// to convert a debounced full-buffer snapshot into a single
@@ -998,7 +998,8 @@ impl ModelicaCompiler {
                 log::info!(
                     "[ModelicaCompiler] installed pre-parsed MSL bundle \
                      ({} of {} docs)",
-                    inserted, total,
+                    inserted,
+                    total,
                 );
                 return rumoca_compile::compile::SourceRootLoadReport {
                     source_set_id: id.to_string(),
@@ -1101,9 +1102,7 @@ fn diagnostics_from_strict_report(
                 }
                 // Diagnostic in another file — name it so the user knows
                 // where it came from, but leave it unlocated.
-                Some((name, _, _)) => {
-                    Diagnostic::message_only(format!("{message}  (in {name})"))
-                }
+                Some((name, _, _)) => Diagnostic::message_only(format!("{message}  (in {name})")),
                 None => Diagnostic::message_only(message),
             }
         })
@@ -1145,7 +1144,6 @@ fn diagnostics_from_sim_error(
         _ => vec![Diagnostic::message_only(message)],
     }
 }
-
 
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -1191,7 +1189,7 @@ impl Default for ModelicaUiConfig {
         }
     }
 }
-pub mod msl_settings;
+pub mod experiments_runner;
 /// The MSL **indexer** — a host-side tool, not a runtime component: it walks the
 /// on-disk MSL tree, parses every `.mo`, and emits `msl_index.json` + the
 /// pre-parsed `parsed-msl.bin` bundle. It is `std::fs`-shaped by definition and
@@ -1203,9 +1201,9 @@ pub mod msl_settings;
 /// `msl_remote`, and this is the thing that makes its input.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod indexer;
+pub mod msl_settings;
 pub mod sim_stream;
 pub mod worker;
-pub mod experiments_runner;
 
 /// Bevy resource wrapping the singleton [`experiments_runner::ModelicaRunner`].
 /// Stored as `Arc` so UI panels can clone the handle and call
@@ -1218,8 +1216,8 @@ pub struct ModelicaRunnerResource(pub std::sync::Arc<experiments_runner::Modelic
 #[cfg(target_arch = "wasm32")]
 pub mod worker_transport;
 pub use worker::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaResult, handle_modelica_responses,
-    spawn_modelica_requests,
+    handle_modelica_responses, spawn_modelica_requests, ModelicaChannels, ModelicaCommand,
+    ModelicaModel, ModelicaResult,
 };
 
 #[cfg(feature = "lunco-api")]
@@ -1234,7 +1232,7 @@ pub mod api;
 
 /// Shareable model links (encode model source into a URL fragment).
 pub mod model_share;
-pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
+pub use sim_stream::{new_sim_stream, SimSample, SimSnapshot, SimStream, VarHistory};
 
 /// UI-agnostic per-frame queue of live sim samples.
 ///
@@ -1570,7 +1568,10 @@ fn build_modelica_core(app: &mut App) {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res });
+    app.insert_resource(ModelicaChannels {
+        tx: tx_cmd,
+        rx: rx_res,
+    });
     #[cfg(target_arch = "wasm32")]
     {
         // Hand the result-side sender to the worker_transport so the JS
@@ -1581,7 +1582,12 @@ fn build_modelica_core(app: &mut App) {
         // Same trick on the command side so the JS test bridge can post
         // commands without going through the UI.
         let _ = worker_transport::register_command_sender(tx_cmd.clone());
-        app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
+        app.insert_resource(ModelicaChannels {
+            tx: tx_cmd,
+            rx: rx_res,
+            rx_cmd,
+            tx_res,
+        });
     }
 
     app.init_resource::<crate::state::WorkbenchState>();
@@ -1624,9 +1630,9 @@ fn build_modelica_core(app: &mut App) {
     // ModelicaRunner binding. UI for the Run buttons and Experiments
     // panel is layered in `ui::experiments_panel` (Step 5+).
     app.add_plugins(lunco_experiments::ExperimentsPlugin);
-    app.insert_resource(ModelicaRunnerResource(
-        std::sync::Arc::new(experiments_runner::ModelicaRunner::new()),
-    ));
+    app.insert_resource(ModelicaRunnerResource(std::sync::Arc::new(
+        experiments_runner::ModelicaRunner::new(),
+    )));
     app.init_resource::<experiments_runner::PendingHandles>();
     app.init_resource::<experiments_runner::ExperimentDrafts>();
     app.init_resource::<experiments_runner::ExperimentSources>();
@@ -1664,10 +1670,13 @@ fn build_modelica_core(app: &mut App) {
 
     app.register_type::<ModelicaModel>()
         .add_observer(worker::on_remove_modelica)
-        .add_systems(FixedUpdate, (
-            handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
-            spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
-        ));
+        .add_systems(
+            FixedUpdate,
+            (
+                handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
+                spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
+            ),
+        );
 
     // Global frame-time tracker. Logs every Update tick that exceeds
     // a threshold AND every tick within a 5-second window after the
@@ -1694,8 +1703,7 @@ fn build_modelica_core(app: &mut App) {
         // compiles (just on the main thread).
         app.add_systems(
             Update,
-            worker_transport::pump_commands_to_worker
-                .before(worker::inline_worker_process),
+            worker_transport::pump_commands_to_worker.before(worker::inline_worker_process),
         );
         // Re-seed MSL into workers respawned after a crash, deferred so the
         // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
@@ -1802,7 +1810,9 @@ fn frame_time_probe_end(mut probe: ResMut<FrameTimeProbe>) {
         .last_start
         .map(|t| now.duration_since(t).as_secs_f64() * 1000.0)
         .unwrap_or(0.0);
-    let Some(start) = probe.frame_start else { return };
+    let Some(start) = probe.frame_start else {
+        return;
+    };
     let dt_ms = now.duration_since(start).as_secs_f64() * 1000.0;
     let in_window = probe
         .last_edit
@@ -1848,20 +1858,14 @@ pub struct FrameTimeProbe {
     last_edit: Option<web_time::Instant>,
 }
 
-
 // ---------------------------------------------------------------------------
 // Re-export AST extraction for public API compatibility
 // ---------------------------------------------------------------------------
 // These functions live in `ast_extract` but are re-exported here so external
 // callers (workbench binaries, UI panels) can import from the crate root.
 pub use ast_extract::{
-    extract_model_name,
-    extract_model_name_from_ast,
-    extract_parameters,
-    extract_parameters_from_ast,
-    extract_inputs_with_defaults,
-    extract_inputs_with_defaults_from_ast,
-    hash_content,
+    extract_inputs_with_defaults, extract_inputs_with_defaults_from_ast, extract_model_name,
+    extract_model_name_from_ast, extract_parameters, extract_parameters_from_ast, hash_content,
 };
 // `strip_input_defaults` is already imported via `use self::ast_extract::strip_input_defaults`
 // above and is available publicly through the `pub mod ast_extract` declaration.
@@ -1869,17 +1873,19 @@ pub use ast_extract::{
 // ---------------------------------------------------------------------------
 // Re-export diagram types for public API
 // ---------------------------------------------------------------------------
-pub use diagram::{
-    DiagramType,
-    ModelicaComponentBuilder,
-    list_class_names,
-};
+pub use diagram::{list_class_names, DiagramType, ModelicaComponentBuilder};
 
 #[derive(Component, Reflect, Default)]
-pub struct ModelicaInput { pub variable_name: String, pub value: f64 }
+pub struct ModelicaInput {
+    pub variable_name: String,
+    pub value: f64,
+}
 
 #[derive(Component, Reflect, Default)]
-pub struct ModelicaOutput { pub variable_name: String, pub value: f64 }
+pub struct ModelicaOutput {
+    pub variable_name: String,
+    pub value: f64,
+}
 
 #[cfg(test)]
 mod observables_smoke {
@@ -1929,7 +1935,8 @@ mod observables_smoke {
         let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
         let mut c = ModelicaCompiler::new();
         // `compile_str` strips bound-input defaults itself (the chokepoint).
-        let r = c.compile_str("RocketEngine", raw, "RocketEngine.mo")
+        let r = c
+            .compile_str("RocketEngine", raw, "RocketEngine.mo")
             .expect("compile ok");
         // Options come from the canonical builder, never `SimOptions::default()`:
         // the session clamps every advance at `t_end`, whose default is 1.0.
@@ -1939,25 +1946,38 @@ mod observables_smoke {
             ..Default::default()
         });
         let mut stepper = SimulationSession::new(&r.dae, opts).expect("stepper ok");
-        stepper.set_input("throttle", 1.0).expect("throttle is an input");
+        stepper
+            .set_input("throttle", 1.0)
+            .expect("throttle is an input");
         stepper.step(0.01).expect("step ok");
 
         let obs = worker::collect_stepper_observables(&stepper);
-        let by_name: std::collections::HashMap<_, _> =
-            obs.into_iter().collect();
+        let by_name: std::collections::HashMap<_, _> = obs.into_iter().collect();
 
         for name in ["m_prop", "impulse", "m_dot", "thrust", "p_chamber", "isp"] {
             assert!(by_name.contains_key(name), "missing observable: {name}");
         }
-        assert!(by_name["m_dot"] > 0.0,
-            "m_dot should be nonzero at throttle=1, got {}", by_name["m_dot"]);
-        assert!(by_name["thrust"] > 0.0,
-            "thrust should be nonzero, got {}", by_name["thrust"]);
-        assert!(by_name["p_chamber"] > 0.0,
-            "p_chamber should be nonzero, got {}", by_name["p_chamber"]);
+        assert!(
+            by_name["m_dot"] > 0.0,
+            "m_dot should be nonzero at throttle=1, got {}",
+            by_name["m_dot"]
+        );
+        assert!(
+            by_name["thrust"] > 0.0,
+            "thrust should be nonzero, got {}",
+            by_name["thrust"]
+        );
+        assert!(
+            by_name["p_chamber"] > 0.0,
+            "p_chamber should be nonzero, got {}",
+            by_name["p_chamber"]
+        );
         // v_e = 3100.0 in assets/models/RocketEngine.mo (the old 2900 here was stale).
-        assert!((by_name["isp"] - 3100.0 / 9.80665).abs() < 1e-3,
-            "isp should equal v_e / g, got {}", by_name["isp"]);
+        assert!(
+            (by_name["isp"] - 3100.0 / 9.80665).abs() < 1e-3,
+            "isp should equal v_e / g, got {}",
+            by_name["isp"]
+        );
     }
 
     /// Verifies that `"..."` description strings (MLS §A.2.5) survive
@@ -1967,15 +1987,14 @@ mod observables_smoke {
     #[test]
     fn rocket_engine_descriptions_populate() {
         let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
-        let ast = rumoca_phase_parse::parse_to_ast(raw, "RocketEngine.mo")
-            .expect("parses");
+        let ast = rumoca_phase_parse::parse_to_ast(raw, "RocketEngine.mo").expect("parses");
         let mut index = crate::index::ModelicaIndex::new();
         index.rebuild_from_ast(&ast, raw);
         for (var, needle) in [
             ("m_dot_max", "mass flow"),
-            ("throttle",  "Throttle"),
-            ("m_prop",    "Propellant"),
-            ("thrust",    "Thrust"),
+            ("throttle", "Throttle"),
+            ("m_prop", "Propellant"),
+            ("thrust", "Thrust"),
         ] {
             let entry = index
                 .find_component_by_leaf(var)
@@ -2011,7 +2030,6 @@ mod observables_smoke {
         lunco_assets::msl_source_root_path().is_some()
     }
 
-
     /// Trivial smoke test — compile a self-contained model with no
     /// MSL references. Shouldn't touch the iterative loop at all,
     /// verifies the plain-compile path works post-refactor.
@@ -2025,7 +2043,8 @@ mod observables_smoke {
             end Bare;
         "#;
         let mut c = ModelicaCompiler::new();
-        let r = c.compile_str("Bare", src, "Bare.mo")
+        let r = c
+            .compile_str("Bare", src, "Bare.mo")
             .expect("bare model must compile without MSL");
         // Just assert we got a DAE at all — shape details vary
         // by rumoca version.
@@ -2063,9 +2082,11 @@ mod observables_smoke {
     #[ignore = "rumoca CONSTANT_PACKAGES lookup can't find ModelicaServices.Machine even after the file is loaded"]
     fn msl_compile_tiny_limpid_model_is_fast() {
         if !msl_available() {
-            eprintln!("skipping msl_compile_tiny_limpid_model_is_fast: \
+            eprintln!(
+                "skipping msl_compile_tiny_limpid_model_is_fast: \
                        MSL not at {:?}",
-                lunco_assets::msl_source_root_path());
+                lunco_assets::msl_source_root_path()
+            );
             return;
         }
         // Tiny model that references one MSL block — drags in the
@@ -2093,7 +2114,9 @@ mod observables_smoke {
             "msl_compile_tiny_limpid_model_is_fast: elapsed {:.2}s, \
              result = {}",
             elapsed.as_secs_f64(),
-            if result.is_ok() { "OK".to_string() } else {
+            if result.is_ok() {
+                "OK".to_string()
+            } else {
                 format!("ERR: {}", result.as_ref().err().unwrap())
             }
         );
@@ -2139,9 +2162,19 @@ mod observables_smoke {
             "msl_compile_pid_controller_example_succeeds: elapsed {:.2}s, \
              result = {}",
             elapsed.as_secs_f64(),
-            if result.is_ok() { "OK".to_string() } else {
-                format!("ERR (first 500 chars): {}",
-                    result.as_ref().err().unwrap().chars().take(500).collect::<String>())
+            if result.is_ok() {
+                "OK".to_string()
+            } else {
+                format!(
+                    "ERR (first 500 chars): {}",
+                    result
+                        .as_ref()
+                        .err()
+                        .unwrap()
+                        .chars()
+                        .take(500)
+                        .collect::<String>()
+                )
             }
         );
         result.expect("PID_Controller must compile after iterative MSL load");
@@ -2180,9 +2213,19 @@ mod observables_smoke {
             "msl_compile_known_good_rotational_example: elapsed {:.2}s, \
              result = {}",
             elapsed.as_secs_f64(),
-            if result.is_ok() { "OK".to_string() } else {
-                format!("ERR (first 800 chars): {}",
-                    result.as_ref().err().unwrap().chars().take(800).collect::<String>())
+            if result.is_ok() {
+                "OK".to_string()
+            } else {
+                format!(
+                    "ERR (first 800 chars): {}",
+                    result
+                        .as_ref()
+                        .err()
+                        .unwrap()
+                        .chars()
+                        .take(800)
+                        .collect::<String>()
+                )
             }
         );
         result.expect("Rotational.Examples.First (known-good MSL target) must compile");
@@ -2214,15 +2257,21 @@ mod observables_smoke {
         eprintln!(
             "msl_fully_qualified_time_resolves: elapsed {:.2}s, result = {}",
             elapsed.as_secs_f64(),
-            if result.is_ok() { "OK".into() } else {
-                format!("ERR (first 800 chars): {}",
-                    result.as_ref().err().unwrap().chars().take(800).collect::<String>())
+            if result.is_ok() {
+                "OK".into()
+            } else {
+                format!(
+                    "ERR (first 800 chars): {}",
+                    result
+                        .as_ref()
+                        .err()
+                        .unwrap()
+                        .chars()
+                        .take(800)
+                        .collect::<String>()
+                )
             }
         );
         result.expect("fully-qualified SI.Time must compile");
     }
 }
-
-
-
-

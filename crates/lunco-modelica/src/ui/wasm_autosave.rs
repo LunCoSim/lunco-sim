@@ -162,7 +162,9 @@ fn file_storage_key(path: &str) -> String {
 /// for an existing in-memory entry by display name.
 #[cfg(target_arch = "wasm32")]
 fn restore_from_localstorage(world: &mut World) {
-    let Some(storage) = local_storage() else { return };
+    let Some(storage) = local_storage() else {
+        return;
+    };
     let len = storage.length().unwrap_or(0);
     if len == 0 {
         return;
@@ -172,8 +174,12 @@ fn restore_from_localstorage(world: &mut World) {
     // so uploads come back too, not just scratch docs.
     let mut entries: Vec<(String, bool, String, String)> = Vec::new();
     for i in 0..len {
-        let Some(key) = storage.key(i).ok().flatten() else { continue };
-        let Some(source) = storage.get_item(&key).ok().flatten() else { continue };
+        let Some(key) = storage.key(i).ok().flatten() else {
+            continue;
+        };
+        let Some(source) = storage.get_item(&key).ok().flatten() else {
+            continue;
+        };
         if let Some(path) = key.strip_prefix(KEY_PREFIX_FILE) {
             entries.push((key.clone(), true, path.to_string(), source));
         } else if let Some(name) = key.strip_prefix(KEY_PREFIX) {
@@ -207,8 +213,7 @@ fn restore_from_localstorage(world: &mut World) {
         // Skip if a doc with this display name already exists
         // (e.g. the bundled default tab, or a re-fired Startup).
         let already = {
-            let cache = world
-                .get_resource::<crate::package_tree::PackageTreeCache>();
+            let cache = world.get_resource::<crate::package_tree::PackageTreeCache>();
             cache
                 .map(|c| {
                     c.in_memory_models
@@ -245,9 +250,7 @@ fn restore_from_localstorage(world: &mut World) {
         // Register an in-memory entry so the Package Browser shows the doc
         // under "Your Models". The browser's existing render path picks it up;
         // no extra UI plumbing.
-        if let Some(mut cache) = world
-            .get_resource_mut::<crate::package_tree::PackageTreeCache>()
-        {
+        if let Some(mut cache) = world.get_resource_mut::<crate::package_tree::PackageTreeCache>() {
             let id = format!("mem://{display_name}");
             cache
                 .in_memory_models
@@ -267,10 +270,7 @@ fn restore_from_localstorage(world: &mut World) {
                 .resource_mut::<crate::model_tabs::ModelTabs>()
                 .ensure_for(doc_id, drilled);
             if let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() {
-                layout.open_instance(
-                    crate::ui::MODEL_VIEW_KIND,
-                    tab_id,
-                );
+                layout.open_instance(crate::ui::MODEL_VIEW_KIND, tab_id);
             }
         }
     }
@@ -333,9 +333,13 @@ fn autosave_on_changed(
     gesture: bevy::prelude::Res<IsGestureActive>,
     mut keys: bevy::prelude::ResMut<AutosaveKeys>,
 ) {
-    let Some(storage) = local_storage() else { return };
+    let Some(storage) = local_storage() else {
+        return;
+    };
     let doc = trigger.event().doc;
-    let Some(host) = registry.host(doc) else { return };
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
     let document = host.document();
     let origin = document.origin();
     // Persist any *writable* doc the browser would otherwise lose on reload:
@@ -390,12 +394,16 @@ fn persist_open_tabs(
     registry: bevy::prelude::Res<crate::state::ModelicaDocumentRegistry>,
     mut last: bevy::prelude::Local<String>,
 ) {
-    let Some(storage) = local_storage() else { return };
+    let Some(storage) = local_storage() else {
+        return;
+    };
     // BTreeMap → deterministic JSON so the change-detection compare is stable.
     let mut map: std::collections::BTreeMap<String, Option<String>> =
         std::collections::BTreeMap::new();
     for (_id, st) in tabs.iter() {
-        let Some(host) = registry.host(st.doc) else { continue };
+        let Some(host) = registry.host(st.doc) else {
+            continue;
+        };
         let origin = host.document().origin();
         let key = if origin.is_untitled() {
             storage_key(&origin.display_name())
@@ -431,13 +439,17 @@ fn forget_on_closed(
     trigger: bevy::prelude::On<lunco_doc_bevy::DocumentClosed>,
     mut keys: bevy::prelude::ResMut<AutosaveKeys>,
 ) {
-    let Some(storage) = local_storage() else { return };
+    let Some(storage) = local_storage() else {
+        return;
+    };
     let doc = trigger.event().doc;
     // `CloseDocument`'s `on_close_document` observer removes the doc
     // from the registry *before* `DocumentClosed` fires, so the
     // origin is unreachable here. Use the full storage key captured in
     // `AutosaveKeys` while the doc still existed. Absent ⇒ the doc was
     // never autosaved (read-only library/bundled) ⇒ nothing to clear.
-    let Some(key) = keys.by_doc.remove(&doc) else { return };
+    let Some(key) = keys.by_doc.remove(&doc) else {
+        return;
+    };
     let _ = storage.remove_item(&key);
 }

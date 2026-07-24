@@ -25,11 +25,24 @@ fn test_blueprint_shader_schema_reflects() {
     .expect("blueprint.wgsl present");
     let schema = ParamSchema::parse(&wgsl).expect("blueprint Material struct reflects");
     // A few representative fields must be present with the right types.
-    assert_eq!(schema.field("surface_color").map(|f| f.ty), Some(ParamType::Vec3));
-    assert_eq!(schema.field("transition").map(|f| f.ty), Some(ParamType::F32));
-    assert_eq!(schema.field("major_grid_spacing").map(|f| f.ty), Some(ParamType::F32));
+    assert_eq!(
+        schema.field("surface_color").map(|f| f.ty),
+        Some(ParamType::Vec3)
+    );
+    assert_eq!(
+        schema.field("transition").map(|f| f.ty),
+        Some(ParamType::F32)
+    );
+    assert_eq!(
+        schema.field("major_grid_spacing").map(|f| f.ty),
+        Some(ParamType::F32)
+    );
     // Whole block stays within the 256-byte uniform budget.
-    assert!(schema.size <= 256, "blueprint params overflow uniform block: {}", schema.size);
+    assert!(
+        schema.size <= 256,
+        "blueprint params overflow uniform block: {}",
+        schema.size
+    );
 }
 
 /// Verifies that `solar_panel.wgsl`'s `Material` struct correctly reflects the
@@ -42,9 +55,16 @@ fn test_solar_panel_shader_reflects_seamless_u_and_v_scale() {
     ))
     .expect("solar_panel.wgsl present");
     let schema = ParamSchema::parse(&wgsl).expect("solar_panel Material struct reflects");
-    assert_eq!(schema.field("seamless_u").map(|f| f.ty), Some(ParamType::F32));
+    assert_eq!(
+        schema.field("seamless_u").map(|f| f.ty),
+        Some(ParamType::F32)
+    );
     assert_eq!(schema.field("v_scale").map(|f| f.ty), Some(ParamType::F32));
-    assert!(schema.size <= 256, "solar_panel params overflow uniform block: {}", schema.size);
+    assert!(
+        schema.size <= 256,
+        "solar_panel params overflow uniform block: {}",
+        schema.size
+    );
 }
 
 /// Every terrain shader that ray-marches the heightfield now declares the
@@ -64,7 +84,9 @@ fn test_terrain_shaders_reflect_shadow_cache_on() {
     ];
     for name in shaders {
         let wgsl = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shaders").join(name),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets/shaders")
+                .join(name),
         )
         .unwrap_or_else(|_| panic!("{name} present"));
         let schema =
@@ -101,7 +123,9 @@ fn test_terrain_shaders_reflect_shadow_cache_on() {
 fn both_terrain_paths_reflect_the_authored_layer_weights() {
     for name in ["terrain_layered.wgsl", "terrain_geomorph.wgsl"] {
         let wgsl = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shaders").join(name),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets/shaders")
+                .join(name),
         )
         .unwrap_or_else(|_| panic!("{name} present"));
         let schema =

@@ -17,8 +17,8 @@ use lunco_core::GlobalEntityId;
 use lunco_time::WorldTime;
 
 use crate::coords::ecliptic_to_bevy;
-use crate::geo::segment_hits_sphere;
 use crate::ephemeris::EphemerisResource;
+use crate::geo::segment_hits_sphere;
 use crate::geo::{solar_position_of_geodetic, GeodeticAnchor};
 use crate::kepler::KeplerOrbit;
 use crate::link::{node_label, LinkNode, LinkState};
@@ -78,7 +78,9 @@ impl ApiQueryProvider for OccultationProvider {
         let mut by: Option<String> = None;
         for b in reg.bodies.iter().filter(|b| b.radius_m > 0.0) {
             // A body we cannot place cannot block a line of sight.
-            let Some(p) = eph.provider.global_position(b.ephemeris_id, jd) else { continue };
+            let Some(p) = eph.provider.global_position(b.ephemeris_id, jd) else {
+                continue;
+            };
             let center = ecliptic_to_bevy(p).raw();
             if segment_hits_sphere(o, t, center, b.radius_m) {
                 by = Some(b.name.clone());
@@ -117,7 +119,12 @@ impl ApiQueryProvider for BodyPositionProvider {
         };
         let radius = world
             .get_resource::<CelestialBodyRegistry>()
-            .and_then(|r| r.bodies.iter().find(|b| b.ephemeris_id == naif).map(|b| b.radius_m))
+            .and_then(|r| {
+                r.bodies
+                    .iter()
+                    .find(|b| b.ephemeris_id == naif)
+                    .map(|b| b.radius_m)
+            })
             .unwrap_or(0.0);
         let Some(p) = eph.provider.global_position(naif, jd) else {
             return ApiResponse::error(
@@ -201,7 +208,9 @@ impl ApiQueryProvider for SolarPoseProvider {
             let Some(desc) = reg.bodies.iter().find(|b| b.ephemeris_id == a.body) else {
                 return not_found();
             };
-            let Some(center) = center_of(a.body) else { return not_found() };
+            let Some(center) = center_of(a.body) else {
+                return not_found();
+            };
             let center = center.raw();
             let pos = solar_position_of_geodetic(desc, &a.geodetic, center, jd);
             let up = (pos - center).normalize_or_zero();
@@ -210,7 +219,9 @@ impl ApiQueryProvider for SolarPoseProvider {
             let Some(desc) = reg.bodies.iter().find(|b| b.ephemeris_id == o.body) else {
                 return not_found();
             };
-            let Some(center) = center_of(o.body) else { return not_found() };
+            let Some(center) = center_of(o.body) else {
+                return not_found();
+            };
             let pos = center.raw() + o.elements.position_bevy_m(desc.gm, jd);
             (pos, None, "orbit", o.body)
         } else {
@@ -269,8 +280,13 @@ impl ApiQueryProvider for LinksProvider {
         // class → the GIDs that carry it, so a role stays routable now that
         // identity is per-node (see the type doc).
         let mut groups: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
-        let mut q =
-            world.query::<(Entity, Option<&Name>, &LinkNode, &LinkState, &GlobalEntityId)>();
+        let mut q = world.query::<(
+            Entity,
+            Option<&Name>,
+            &LinkNode,
+            &LinkState,
+            &GlobalEntityId,
+        )>();
         for (e, name, node, state, gid) in q.iter(world) {
             let id = gid.get();
             let label = node_label(node.class.as_deref(), name, e);

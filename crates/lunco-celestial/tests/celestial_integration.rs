@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
-use lunco_celestial::CelestialPlugin;
 use lunco_celestial::CelestialBody;
-use lunco_time::WorldTime;
+use lunco_celestial::CelestialPlugin;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
+use lunco_time::WorldTime;
 use std::sync::Arc;
 
 /// Test ephemeris that returns an **epoch-dependent** position, so advancing the
@@ -15,8 +15,14 @@ use std::sync::Arc;
 #[derive(Debug)]
 struct StubEphemeris;
 impl EphemerisProvider for StubEphemeris {
-    fn position(&self, _body_id: i32, epoch_jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
-        Some(lunco_celestial::frames::EclipticAu::new(bevy::math::DVec3::new(epoch_jd, 0.0, 0.0)))
+    fn position(
+        &self,
+        _body_id: i32,
+        epoch_jd: f64,
+    ) -> Option<lunco_celestial::frames::EclipticAu> {
+        Some(lunco_celestial::frames::EclipticAu::new(
+            bevy::math::DVec3::new(epoch_jd, 0.0, 0.0),
+        ))
     }
 }
 
@@ -61,7 +67,9 @@ fn celestial_test_app() -> App {
 #[test]
 fn observer_camera_hangs_in_a_star_fixed_frame() {
     let mut app = celestial_test_app();
-    app.insert_resource(EphemerisResource { provider: Arc::new(StubEphemeris) });
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
     app.update();
 
     // The camera's parent must be the inertial anchor, not the rotating grid.
@@ -75,11 +83,15 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
         .parent();
 
     assert!(
-        app.world().get::<lunco_celestial::InertialAnchor>(parent).is_some(),
+        app.world()
+            .get::<lunco_celestial::InertialAnchor>(parent)
+            .is_some(),
         "the Observer Camera must be parented to an InertialAnchor"
     );
     assert!(
-        app.world().get::<lunco_celestial::EarthRoot>(parent).is_none(),
+        app.world()
+            .get::<lunco_celestial::EarthRoot>(parent)
+            .is_none(),
         "…and NOT to the Earth Grid, which rotates once per sidereal day"
     );
 
@@ -151,7 +163,9 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
 #[test]
 fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     let mut app = celestial_test_app(); // declares Sun/Earth/Moon
-    app.insert_resource(EphemerisResource { provider: Arc::new(StubEphemeris) });
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
     // Let the hierarchy + orbit views spawn.
     app.update();
     app.update();
@@ -240,13 +254,15 @@ fn test_celestial_startup_and_movement() {
     // Override the NoOp provider (installed by CelestialPlugin) with one whose
     // output depends on the epoch, so the clock seek below actually repositions
     // Earth's grid via `ephemeris_update_system`.
-    app.insert_resource(EphemerisResource { provider: Arc::new(StubEphemeris) });
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
 
     // Ensure startup systems run
     app.update();
-    
+
     let epoch_before = app.world().resource::<WorldTime>().epoch_jd;
-    
+
     // 1. Verify Sun and Earth exist.
     //
     // `EarthRoot` is the Earth *grid* (a frame) inside the EMB grid. Its pose is
@@ -254,10 +270,12 @@ fn test_celestial_startup_and_movement() {
     // the cells are real (2 km edges; see `big_space_setup`). Comparing only the
     // `Transform` residual would pass even if the cell were computed wrong, and
     // would break outright the moment Earth crossed a cell boundary. Compose.
-    let mut query = app.world_mut().query::<(&lunco_celestial::EarthRoot, &CellCoord, &Transform)>();
+    let mut query = app
+        .world_mut()
+        .query::<(&lunco_celestial::EarthRoot, &CellCoord, &Transform)>();
     let earth = query.iter(app.world()).next().expect("No EarthRoot found");
     let earth_pose_1 = (*earth.1, earth.2.translation);
-    
+
     // 2. Advance the clock by 10 days. The epoch is a *derived* view
     //    (`WorldTime.epoch_jd`, written by the `lunco-time` spine each frame), so
     //    seek via the authority — re-anchor the `MissionClock` epoch. The spine
@@ -276,9 +294,11 @@ fn test_celestial_startup_and_movement() {
         (epoch_after - (epoch_before + 10.0)).abs() < 1e-3,
         "derived epoch should track the MissionClock re-anchor (+10 days)"
     );
-    
+
     // 3. Verify Earth has moved.
-    let mut grid_q = app.world_mut().query::<(&lunco_celestial::EMBRoot, &big_space::prelude::Grid)>();
+    let mut grid_q = app
+        .world_mut()
+        .query::<(&lunco_celestial::EMBRoot, &big_space::prelude::Grid)>();
     let edge = grid_q
         .iter(app.world())
         .next()
@@ -286,7 +306,9 @@ fn test_celestial_startup_and_movement() {
         .1
         .cell_edge_length() as f64;
 
-    let mut query = app.world_mut().query::<(&lunco_celestial::EarthRoot, &CellCoord, &Transform)>();
+    let mut query = app
+        .world_mut()
+        .query::<(&lunco_celestial::EarthRoot, &CellCoord, &Transform)>();
     let earth = query.iter(app.world()).next().expect("No EarthRoot found");
     let earth_pose_2 = (*earth.1, earth.2.translation);
 
@@ -344,20 +366,30 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
     impl EphemerisProvider for SunAndMoon {
         fn position(&self, body_id: i32, _jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
             Some(match body_id {
-                301 => lunco_celestial::frames::EclipticAu::new(bevy::math::DVec3::new(1.0, 0.0, 0.0)),
+                301 => {
+                    lunco_celestial::frames::EclipticAu::new(bevy::math::DVec3::new(1.0, 0.0, 0.0))
+                }
                 _ => lunco_celestial::frames::EclipticAu::ZERO,
             })
         }
     }
 
     let mut app = celestial_test_app();
-    app.insert_resource(EphemerisResource { provider: Arc::new(SunAndMoon) });
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(SunAndMoon),
+    });
 
     // The sandbox's own light: the brightest `DirectionalLight`, aimed by hand.
     let authored = Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.7, -0.9, 0.0));
     let light = app
         .world_mut()
-        .spawn((DirectionalLight { illuminance: 128_000.0, ..default() }, authored))
+        .spawn((
+            DirectionalLight {
+                illuminance: 128_000.0,
+                ..default()
+            },
+            authored,
+        ))
         .id();
 
     for _ in 0..8 {
@@ -397,7 +429,9 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
     );
 
     assert_eq!(
-        app.world().resource::<lunco_celestial::SunDirectionWorld>().0,
+        app.world()
+            .resource::<lunco_celestial::SunDirectionWorld>()
+            .0,
         Vec3::ZERO,
         "an unanchored scene has no known ecliptic→world rotation, so the sun must not be \
          steered at all — a direction here is the raw ecliptic vector aimed along the horizon"

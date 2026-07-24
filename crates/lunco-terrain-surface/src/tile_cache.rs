@@ -84,7 +84,9 @@ impl lunco_precompute::Bake for TileBake<'_> {
         // value `spawn_tile`/the collider ring use to place the tile's `CellCoord`, so
         // mesh geometry and entity origin agree. (Full oracle, not `limited`, so the
         // placement matches what the visualiser samples with `hf.0.height_at`.)
-        let origin_y = self.oracle.height_at(self.region.center[0], self.region.center[1]);
+        let origin_y = self
+            .oracle
+            .height_at(self.region.center[0], self.region.center[1]);
         bake_tile_mesh(
             &limited,
             &parent_limited,
@@ -116,7 +118,14 @@ pub fn bake_tile_mesh_cached(
     origin_xz: [f64; 2],
 ) -> TileMesh {
     lunco_precompute::bake_or_load(
-        &TileBake { oracle, coord, region, res, dem_half_extent, origin_xz },
+        &TileBake {
+            oracle,
+            coord,
+            region,
+            res,
+            dem_half_extent,
+            origin_xz,
+        },
         &lunco_assets::cache_dir(),
     )
 }
@@ -190,7 +199,14 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     for _ in 0..idx_count {
         indices.push(u32::from_le_bytes(take(&mut off, 4)?.try_into().ok()?));
     }
-    Some(TileMesh { positions, morph_targets, morph_normals, normals, uvs, indices })
+    Some(TileMesh {
+        positions,
+        morph_targets,
+        morph_normals,
+        normals,
+        uvs,
+        indices,
+    })
 }
 
 #[cfg(test)]

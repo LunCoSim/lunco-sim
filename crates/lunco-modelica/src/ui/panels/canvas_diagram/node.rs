@@ -13,9 +13,7 @@ use lunco_theme::ColorAlpha;
 
 use super::edge::port_edge_dir;
 use super::paint::paint_dashed_rect;
-use super::port::{
-    PortShape, paint_input_control_widget, paint_port_shape,
-};
+use super::port::{paint_input_control_widget, paint_port_shape, PortShape};
 use super::theme::{canvas_theme_from_ctx, modelica_icon_palette_from_ctx};
 
 /// Typed payload carried in `lunco_canvas::Node.data` for every
@@ -148,10 +146,8 @@ impl NodeVisual for IconNodeVisual {
         let r = ctx
             .viewport
             .world_rect_to_screen(node.rect, ctx.screen_rect);
-        let rect = egui::Rect::from_min_max(
-            egui::pos2(r.min.x, r.min.y),
-            egui::pos2(r.max.x, r.max.y),
-        );
+        let rect =
+            egui::Rect::from_min_max(egui::pos2(r.min.x, r.min.y), egui::pos2(r.max.x, r.max.y));
         // Hard-clip every primitive this draw emits to the canvas's
         // allocated rect. `Canvas::ui` already calls
         // `ui.set_clip_rect(rect)`, but in some host layouts (docked
@@ -222,8 +218,7 @@ impl NodeVisual for IconNodeVisual {
             // covers both top-level state vars and dotted refs into
             // sub-components / ports. Falls back to the bare name
             // for cases like global `time`.
-            let node_state =
-                lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
+            let node_state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
             let instance = self.instance_name.clone();
             let resolver = move |name: &str| -> Option<f64> {
                 if !instance.is_empty() {
@@ -309,12 +304,8 @@ impl NodeVisual for IconNodeVisual {
             Some(egui::Stroke::new(1.0, theme_snap.inactive_stroke))
         } else if theme_snap.show_authored_icon_border {
             let c = theme_snap.inactive_stroke;
-            let dim = egui::Color32::from_rgba_unmultiplied(
-                c.r(),
-                c.g(),
-                c.b(),
-                (c.a() / 3).max(40),
-            );
+            let dim =
+                egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (c.a() / 3).max(40));
             Some(egui::Stroke::new(0.75, dim))
         } else {
             None
@@ -371,9 +362,7 @@ impl NodeVisual for IconNodeVisual {
                 .port_connector_paths
                 .iter()
                 .find(|(name, _, _, _, _)| name == port.id.as_str());
-            let connector_path: &str = port_info
-                .map(|(_, p, _, _, _)| p.as_str())
-                .unwrap_or("");
+            let connector_path: &str = port_info.map(|(_, p, _, _, _)| p.as_str()).unwrap_or("");
             let (port_size_x_icon, port_size_y_icon, port_rotation_deg) = port_info
                 .map(|(_, _, sx, sy, rot)| (*sx, *sy, *rot))
                 .unwrap_or((20.0, 20.0, 0.0));
@@ -393,85 +382,87 @@ impl NodeVisual for IconNodeVisual {
                 .and_then(|i| self.port_connector_icons.get(i).cloned().flatten());
             if let Some(icon) = resolved_icon {
                 {
-                        // Render the connector's icon at the port
-                        // location, sized to the port's authored
-                        // `Placement(extent=...)` in the parent's icon
-                        // coords. MSL convention: parent icon coord
-                        // system spans 200 units (-100..100) and the
-                        // parent is placed at `node.rect` in world
-                        // coords. So 1 icon-unit = node_world / 200.
-                        // Connector placement (e.g. Flange_a's
-                        // 20×20 box) maps to 20/200 * node_world =
-                        // 10% of the parent's world width — the small
-                        // dot OMEdit shows.
-                        let parent_w = node.rect.width().max(1.0);
-                        let parent_h = node.rect.height().max(1.0);
-                        // Use the authored placement extent as-is for
-                        // every connector class — that is the size MSL
-                        // authors intended (Flange_a's 20×20 dot, the
-                        // 20×20 RealInput triangle on plain blocks, the
-                        // 40×40 RealInput on LimPID). OMEdit / Dymola
-                        // render at this size; over-scaling produces a
-                        // triangle that dominates the icon body.
-                        let half_x = (port_size_x_icon * 0.5 / 100.0) * (parent_w * 0.5);
-                        let half_y = (port_size_y_icon * 0.5 / 100.0) * (parent_h * 0.5);
-                        let world_rect = lunco_canvas::Rect::from_min_max(
-                            lunco_canvas::Pos::new(world.x - half_x, world.y - half_y),
-                            lunco_canvas::Pos::new(world.x + half_x, world.y + half_y),
-                        );
-                        let s_rect = ctx.viewport.world_rect_to_screen(world_rect, ctx.screen_rect);
-                        let port_rect = egui::Rect::from_min_max(
-                            egui::pos2(s_rect.min.x, s_rect.min.y),
-                            egui::pos2(s_rect.max.x, s_rect.max.y),
-                        );
-                        let palette = modelica_icon_palette_from_ctx(ctx.ui.ctx());
-                        // Compose the connector icon's orientation from
-                        // (a) the parent's mirror flags so a mirrored
-                        // parent (e.g. `extent={{22,-50},{2,-30}}` on
-                        // speedSensor) flips the connector icon too —
-                        // RealOutput's TIP must point AWAY from the
-                        // parent regardless of which canvas side it
-                        // ends up on, and (b) the port's authored
-                        // `Placement(transformation(rotation=...))` so
-                        // a `rotation=270` input sits with its
-                        // triangle pointing the right way (e.g. PI's
-                        // `u_m` on the bottom edge points up).
-                        // MLS `rotation=270` on a port placement means
-                        // 270° CCW *in the visual frame* (where Y is
-                        // down, i.e. screen frame) — rotation=270 on
-                        // PI's `u_m` produces a triangle pointing UP
-                        // on screen. Our `to_screen` applies rotation
-                        // in Modelica's +Y-up frame and then flips Y,
-                        // which is equivalent to rotating CW in the
-                        // visual frame. Negate so the visual outcome
-                        // matches MLS / OMEdit.
-                        // Include the PARENT's rotation in the port
-                        // marker's orientation. Without this, when
-                        // the parent is rotated (e.g. addSat at
-                        // rotation=270), only the port POSITION is
-                        // rotated — the connector arrow keeps its
-                        // default orientation and ends up pointing
-                        // the wrong way relative to the rotated
-                        // icon. Adding the parent's rotation makes
-                        // the marker rotate WITH the icon body so
-                        // the arrow tip always points into the icon.
-                        let port_orientation = crate::icon_paint::IconOrientation {
-                            rotation_deg: self.rotation_deg - port_rotation_deg,
-                            mirror_x: self.mirror_x,
-                            mirror_y: self.mirror_y,
-                        };
-                        crate::icon_paint::paint_graphics_themed(
-                            painter,
-                            port_rect,
-                            icon.coordinate_system,
-                            port_orientation,
-                            None,
-                            None,
-                            palette.as_ref(),
-                            &icon.graphics,
-                        );
-                        painted_authored = true;
-                    }
+                    // Render the connector's icon at the port
+                    // location, sized to the port's authored
+                    // `Placement(extent=...)` in the parent's icon
+                    // coords. MSL convention: parent icon coord
+                    // system spans 200 units (-100..100) and the
+                    // parent is placed at `node.rect` in world
+                    // coords. So 1 icon-unit = node_world / 200.
+                    // Connector placement (e.g. Flange_a's
+                    // 20×20 box) maps to 20/200 * node_world =
+                    // 10% of the parent's world width — the small
+                    // dot OMEdit shows.
+                    let parent_w = node.rect.width().max(1.0);
+                    let parent_h = node.rect.height().max(1.0);
+                    // Use the authored placement extent as-is for
+                    // every connector class — that is the size MSL
+                    // authors intended (Flange_a's 20×20 dot, the
+                    // 20×20 RealInput triangle on plain blocks, the
+                    // 40×40 RealInput on LimPID). OMEdit / Dymola
+                    // render at this size; over-scaling produces a
+                    // triangle that dominates the icon body.
+                    let half_x = (port_size_x_icon * 0.5 / 100.0) * (parent_w * 0.5);
+                    let half_y = (port_size_y_icon * 0.5 / 100.0) * (parent_h * 0.5);
+                    let world_rect = lunco_canvas::Rect::from_min_max(
+                        lunco_canvas::Pos::new(world.x - half_x, world.y - half_y),
+                        lunco_canvas::Pos::new(world.x + half_x, world.y + half_y),
+                    );
+                    let s_rect = ctx
+                        .viewport
+                        .world_rect_to_screen(world_rect, ctx.screen_rect);
+                    let port_rect = egui::Rect::from_min_max(
+                        egui::pos2(s_rect.min.x, s_rect.min.y),
+                        egui::pos2(s_rect.max.x, s_rect.max.y),
+                    );
+                    let palette = modelica_icon_palette_from_ctx(ctx.ui.ctx());
+                    // Compose the connector icon's orientation from
+                    // (a) the parent's mirror flags so a mirrored
+                    // parent (e.g. `extent={{22,-50},{2,-30}}` on
+                    // speedSensor) flips the connector icon too —
+                    // RealOutput's TIP must point AWAY from the
+                    // parent regardless of which canvas side it
+                    // ends up on, and (b) the port's authored
+                    // `Placement(transformation(rotation=...))` so
+                    // a `rotation=270` input sits with its
+                    // triangle pointing the right way (e.g. PI's
+                    // `u_m` on the bottom edge points up).
+                    // MLS `rotation=270` on a port placement means
+                    // 270° CCW *in the visual frame* (where Y is
+                    // down, i.e. screen frame) — rotation=270 on
+                    // PI's `u_m` produces a triangle pointing UP
+                    // on screen. Our `to_screen` applies rotation
+                    // in Modelica's +Y-up frame and then flips Y,
+                    // which is equivalent to rotating CW in the
+                    // visual frame. Negate so the visual outcome
+                    // matches MLS / OMEdit.
+                    // Include the PARENT's rotation in the port
+                    // marker's orientation. Without this, when
+                    // the parent is rotated (e.g. addSat at
+                    // rotation=270), only the port POSITION is
+                    // rotated — the connector arrow keeps its
+                    // default orientation and ends up pointing
+                    // the wrong way relative to the rotated
+                    // icon. Adding the parent's rotation makes
+                    // the marker rotate WITH the icon body so
+                    // the arrow tip always points into the icon.
+                    let port_orientation = crate::icon_paint::IconOrientation {
+                        rotation_deg: self.rotation_deg - port_rotation_deg,
+                        mirror_x: self.mirror_x,
+                        mirror_y: self.mirror_y,
+                    };
+                    crate::icon_paint::paint_graphics_themed(
+                        painter,
+                        port_rect,
+                        icon.coordinate_system,
+                        port_orientation,
+                        None,
+                        None,
+                        palette.as_ref(),
+                        &icon.graphics,
+                    );
+                    painted_authored = true;
+                }
             }
 
             if !painted_authored {
@@ -505,16 +496,10 @@ impl NodeVisual for IconNodeVisual {
         let in_canvas = cursor
             .map(|c| canvas_widget_rect.contains(c))
             .unwrap_or(false);
-        let is_hovered = cursor
-            .map(|c| rect.contains(c))
-            .unwrap_or(false)
-            && in_canvas;
+        let is_hovered = cursor.map(|c| rect.contains(c)).unwrap_or(false) && in_canvas;
         if is_hovered && !self.instance_name.is_empty() {
             let cursor = cursor.unwrap();
-            let snap =
-                lunco_viz::kinds::canvas_plot_node::fetch_node_state(
-                    ctx.ui.ctx(),
-                );
+            let snap = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
             let prefix = format!("{}.", self.instance_name);
             let mut rows: Vec<(&String, &f64)> = snap
                 .values
@@ -522,13 +507,7 @@ impl NodeVisual for IconNodeVisual {
                 .filter(|(k, _)| k.starts_with(&prefix))
                 .collect();
             rows.sort_by(|a, b| a.0.cmp(b.0));
-            paint_hover_card(
-                ctx.ui,
-                cursor,
-                &self.instance_name,
-                &self.class_name,
-                &rows,
-            );
+            paint_hover_card(ctx.ui, cursor, &self.instance_name, &self.class_name, &rows);
         }
 
         // Dashboard-style in-canvas control widget. Last call in
@@ -601,18 +580,14 @@ pub(super) fn paint_hover_card(
     // Anchor card to the right of the cursor with a small offset;
     // flip to the left if we'd run off the screen edge.
     let screen = ui.ctx().content_rect();
-    let mut origin =
-        egui::pos2(cursor.x + 14.0, cursor.y + 14.0);
+    let mut origin = egui::pos2(cursor.x + 14.0, cursor.y + 14.0);
     if origin.x + card_w > screen.max.x {
         origin.x = cursor.x - card_w - 14.0;
     }
     if origin.y + card_h > screen.max.y {
         origin.y = cursor.y - card_h - 14.0;
     }
-    let card_rect = egui::Rect::from_min_size(
-        origin,
-        egui::vec2(card_w, card_h),
-    );
+    let card_rect = egui::Rect::from_min_size(origin, egui::vec2(card_w, card_h));
     // Drop shadow so the card pops over the diagram.
     painter.rect_filled(
         card_rect.translate(egui::vec2(0.0, 2.0)),
@@ -691,12 +666,8 @@ pub(super) fn paint_flow_dots(
     let spacing = SPACING_PX * scale;
     let speed = SPEED_PX_S * scale;
     let phase = ((time as f32) * speed).rem_euclid(spacing);
-    let dot_color = egui::Color32::from_rgba_unmultiplied(
-        base_color.r(),
-        base_color.g(),
-        base_color.b(),
-        180,
-    );
+    let dot_color =
+        egui::Color32::from_rgba_unmultiplied(base_color.r(), base_color.g(), base_color.b(), 180);
     let mut s = phase;
     while s < total_len {
         // Walk the polyline to find the segment containing arc-length s.
@@ -716,4 +687,3 @@ pub(super) fn paint_flow_dots(
         s += spacing;
     }
 }
-

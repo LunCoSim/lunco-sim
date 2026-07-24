@@ -43,8 +43,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    parse_macro_input, parse_quote, DeriveInput, Field, Ident, ItemFn, Path, Token, Data, Fields,
-    punctuated::Punctuated,
+    parse_macro_input, parse_quote, punctuated::Punctuated, Data, DeriveInput, Field, Fields,
+    Ident, ItemFn, Path, Token,
 };
 
 // ── #[Command] — struct attribute ─────────────────────────────────────────
@@ -127,12 +127,20 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fields = match &input.data {
         Data::Struct(ds) => match &ds.fields {
             Fields::Named(n) => &n.named,
-            _ => return syn::Error::new_spanned(&input,
-                "Command requires named fields, e.g. `pub struct Foo { bar: u32 }`")
-                .to_compile_error().into(),
+            _ => {
+                return syn::Error::new_spanned(
+                    &input,
+                    "Command requires named fields, e.g. `pub struct Foo { bar: u32 }`",
+                )
+                .to_compile_error()
+                .into()
+            }
         },
-        _ => return syn::Error::new_spanned(&input, "Command can only be used on structs")
-            .to_compile_error().into(),
+        _ => {
+            return syn::Error::new_spanned(&input, "Command can only be used on structs")
+                .to_compile_error()
+                .into()
+        }
     };
 
     // Rewrite field-role sugar into bevy reflect custom attributes, consumed
@@ -148,11 +156,13 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
         .map(|mut f| {
             if f.attrs.iter().any(|a| a.path().is_ident("sync_local")) {
                 f.attrs.retain(|a| !a.path().is_ident("sync_local"));
-                f.attrs.push(parse_quote!(#[reflect(@::lunco_core::SyncLocal)]));
+                f.attrs
+                    .push(parse_quote!(#[reflect(@::lunco_core::SyncLocal)]));
             }
             if f.attrs.iter().any(|a| a.path().is_ident("authz_target")) {
                 f.attrs.retain(|a| !a.path().is_ident("authz_target"));
-                f.attrs.push(parse_quote!(#[reflect(@::lunco_core::AuthzTarget)]));
+                f.attrs
+                    .push(parse_quote!(#[reflect(@::lunco_core::AuthzTarget)]));
             }
             f
         })
@@ -255,11 +265,7 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     // expansion. (This check caught two long-standing offenders when it landed.)
     let first_is_trigger = match func.sig.inputs.first() {
         Some(syn::FnArg::Typed(pat)) => match &*pat.ty {
-            syn::Type::Path(tp) => tp
-                .path
-                .segments
-                .last()
-                .is_some_and(|seg| seg.ident == "On"),
+            syn::Type::Path(tp) => tp.path.segments.last().is_some_and(|seg| seg.ident == "On"),
             _ => false,
         },
         _ => false,
@@ -284,10 +290,7 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     // through untouched, so a handler takes system params exactly like any observer.
     let existing_params: Vec<_> = func.sig.inputs.iter().skip(1).collect();
 
-    let register_fn_name = Ident::new(
-        &format!("__register_{}", fn_name),
-        fn_name.span(),
-    );
+    let register_fn_name = Ident::new(&format!("__register_{}", fn_name), fn_name.span());
 
     // A handler with a return type (`-> Result<Ack, String>`) opts into
     // result recording: the wrapper runs the body, then — if a transport
@@ -356,16 +359,19 @@ pub fn register_commands(input: TokenStream) -> TokenStream {
             Err(e) => return e.to_compile_error().into(),
         };
 
-    let calls: Vec<TokenStream2> = args.iter().map(|path| {
-        // Rebuild the path with its final segment renamed to the
-        // generated `__register_<name>` helper, keeping the module
-        // prefix (e.g. `lifecycle::on_open` -> `lifecycle::__register_on_open`).
-        let mut path = path.clone();
-        if let Some(last) = path.segments.last_mut() {
-            last.ident = Ident::new(&format!("__register_{}", last.ident), last.ident.span());
-        }
-        quote! { #path(app); }
-    }).collect();
+    let calls: Vec<TokenStream2> = args
+        .iter()
+        .map(|path| {
+            // Rebuild the path with its final segment renamed to the
+            // generated `__register_<name>` helper, keeping the module
+            // prefix (e.g. `lifecycle::on_open` -> `lifecycle::__register_on_open`).
+            let mut path = path.clone();
+            if let Some(last) = path.segments.last_mut() {
+                last.ident = Ident::new(&format!("__register_{}", last.ident), last.ident.span());
+            }
+            quote! { #path(app); }
+        })
+        .collect();
 
     let expanded = quote! {
         /// Registers all typed commands with the Bevy app.

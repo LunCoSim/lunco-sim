@@ -91,7 +91,9 @@ pub struct SignalBinding {
     pub visible: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 // Small serde glue for `Option<Color32>` — keeps workspace files
 // human-readable (`[r, g, b]` / `null`).
@@ -102,7 +104,9 @@ mod color_opt {
     pub(super) fn serialize<S: Serializer>(c: &Option<Color32>, s: S) -> Result<S::Ok, S::Error> {
         c.map(|c| [c.r(), c.g(), c.b()]).serialize(s)
     }
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Color32>, D::Error> {
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Color32>, D::Error> {
         let opt: Option<[u8; 3]> = Option::deserialize(d)?;
         Ok(opt.map(|[r, g, b]| Color32::from_rgb(r, g, b)))
     }

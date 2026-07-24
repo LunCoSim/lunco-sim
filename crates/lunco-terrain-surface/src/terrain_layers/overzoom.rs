@@ -40,7 +40,10 @@ impl TerrainLayer for OverzoomLayer {
         key.write_u64(s.depth_ratio.1.to_bits());
         key.write_u64(s.relief_amp.to_bits());
         key.write_u64(s.relief_scale.to_bits());
-        Some(HeightContribution { modifier: Arc::new(s.clone()), content_key: key.finish() })
+        Some(HeightContribution {
+            modifier: Arc::new(s.clone()),
+            content_key: key.finish(),
+        })
     }
 }
 
@@ -53,7 +56,9 @@ impl TerrainLayer for OverzoomLayer {
 /// that wants scientifically-honest bare interpolation authors an `overzoom`
 /// prim with `amplitude = 0` and `density = 0`.
 pub fn default_overzoom_layer() -> Arc<dyn TerrainLayer> {
-    Arc::new(OverzoomLayer { spec: Overzoom::default() })
+    Arc::new(OverzoomLayer {
+        spec: Overzoom::default(),
+    })
 }
 
 /// Parse a `lunco:layer = "overzoom"` prim:
@@ -66,18 +71,33 @@ pub fn default_overzoom_layer() -> Arc<dyn TerrainLayer> {
 /// Returns `None` (layer disabled) when both channels are zeroed.
 pub(super) fn parse_overzoom_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
     let defaults = Overzoom::default();
-    let relief_amp = a.get_f32("amplitude").map(f64::from).unwrap_or(defaults.relief_amp);
-    let crater_mean = a.get_f32("density").map(f64::from).unwrap_or(defaults.crater_mean);
+    let relief_amp = a
+        .get_f32("amplitude")
+        .map(f64::from)
+        .unwrap_or(defaults.relief_amp);
+    let crater_mean = a
+        .get_f32("density")
+        .map(f64::from)
+        .unwrap_or(defaults.crater_mean);
     if relief_amp <= 0.0 && crater_mean <= 0.0 {
         return None;
     }
     let spec = Overzoom {
         seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(defaults.seed),
-        max_radius: a.get_f32("maxFeature").map(f64::from).unwrap_or(defaults.max_radius),
-        min_radius: a.get_f32("minFeature").map(f64::from).unwrap_or(defaults.min_radius),
+        max_radius: a
+            .get_f32("maxFeature")
+            .map(f64::from)
+            .unwrap_or(defaults.max_radius),
+        min_radius: a
+            .get_f32("minFeature")
+            .map(f64::from)
+            .unwrap_or(defaults.min_radius),
         crater_mean,
         relief_amp,
-        relief_scale: a.get_f32("reliefScale").map(f64::from).unwrap_or(defaults.relief_scale),
+        relief_scale: a
+            .get_f32("reliefScale")
+            .map(f64::from)
+            .unwrap_or(defaults.relief_scale),
         ..defaults
     };
     Some(Arc::new(OverzoomLayer { spec }))

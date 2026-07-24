@@ -26,9 +26,9 @@
 //! - Click a body in the window, drag with the gizmo — same pulse
 //!   + zero behavior.
 
-use bevy::prelude::*;
-use avian3d::prelude::*;
 use avian3d::physics_transform::Position;
+use avian3d::prelude::*;
+use bevy::prelude::*;
 
 fn main() {
     App::new()
@@ -38,7 +38,9 @@ fn main() {
         // (see workspace `Cargo.toml`).
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(lunco_core::LunCoCorePlugin)
-        .add_plugins(lunco_api::LunCoApiPlugin::new(lunco_api::LunCoApiConfig::from_args()))
+        .add_plugins(lunco_api::LunCoApiPlugin::new(
+            lunco_api::LunCoApiConfig::from_args(),
+        ))
         .add_plugins(lunco_sandbox_edit::SandboxEditPlugin)
         .insert_resource(SubstepCount(8))
         .add_systems(Startup, setup)
@@ -60,7 +62,11 @@ fn setup(
     ));
 
     commands.spawn((
-        DirectionalLight { illuminance: 8000.0, shadow_maps_enabled: false, ..default() },
+        DirectionalLight {
+            illuminance: 8000.0,
+            shadow_maps_enabled: false,
+            ..default()
+        },
         Transform::default().looking_at(Vec3::new(-1.0, -2.5, -1.5), Vec3::Y),
     ));
 
@@ -77,13 +83,13 @@ fn setup(
     ));
 
     let cube_mesh = meshes.add(Cuboid::from_length(1.0));
-    let anchor_mat = mats.add(Color::srgb(0.85, 0.85, 0.90));   // light grey
+    let anchor_mat = mats.add(Color::srgb(0.85, 0.85, 0.90)); // light grey
     let slave_mats = [
-        mats.add(Color::srgb(0.95, 0.30, 0.30)),  // red — Fixed
-        mats.add(Color::srgb(0.95, 0.65, 0.20)),  // orange — Revolute
-        mats.add(Color::srgb(0.95, 0.90, 0.20)),  // yellow — Prismatic
-        mats.add(Color::srgb(0.30, 0.85, 0.30)),  // green — Distance
-        mats.add(Color::srgb(0.30, 0.55, 0.95)),  // blue — Spherical
+        mats.add(Color::srgb(0.95, 0.30, 0.30)), // red — Fixed
+        mats.add(Color::srgb(0.95, 0.65, 0.20)), // orange — Revolute
+        mats.add(Color::srgb(0.95, 0.90, 0.20)), // yellow — Prismatic
+        mats.add(Color::srgb(0.30, 0.85, 0.30)), // green — Distance
+        mats.add(Color::srgb(0.30, 0.55, 0.95)), // blue — Spherical
     ];
 
     // === FREE-ROTATION DEMO (no joint) ===
@@ -107,34 +113,38 @@ fn setup(
 
     for (i, (&x, &name)) in station_x.iter().zip(station_names.iter()).enumerate() {
         // Anchor — kinematic cube at y=5, doesn't fall.
-        let anchor = commands.spawn((
-            Mesh3d(cube_mesh.clone()),
-            MeshMaterial3d(anchor_mat.clone()),
-            Transform::from_xyz(x, 5.0, 0.0),
-            RigidBody::Kinematic,
-            Collider::cuboid(1.0, 1.0, 1.0),
-            Mass(1.0),
-            Name::new(format!("Anchor_{}", name)),
-        )).id();
+        let anchor = commands
+            .spawn((
+                Mesh3d(cube_mesh.clone()),
+                MeshMaterial3d(anchor_mat.clone()),
+                Transform::from_xyz(x, 5.0, 0.0),
+                RigidBody::Kinematic,
+                Collider::cuboid(1.0, 1.0, 1.0),
+                Mass(1.0),
+                Name::new(format!("Anchor_{}", name)),
+            ))
+            .id();
 
         // Slave — dynamic cube 2m forward of anchor.
-        let slave = commands.spawn((
-            Mesh3d(cube_mesh.clone()),
-            MeshMaterial3d(slave_mats[i].clone()),
-            Transform::from_xyz(x, 5.0, 2.0),
-            RigidBody::Dynamic,
-            Collider::cuboid(1.0, 1.0, 1.0),
-            // Full mass properties (Mass + AngularInertia + CenterOfMass)
-            // — Avian's joint solver needs the inertia tensor to compute
-            // correct impulses, not just scalar mass.
-            MassPropertiesBundle::from_shape(&Cuboid::from_length(1.0), 1.0),
-            Name::new(format!("Slave_{}", name)),
-        )).id();
+        let slave = commands
+            .spawn((
+                Mesh3d(cube_mesh.clone()),
+                MeshMaterial3d(slave_mats[i].clone()),
+                Transform::from_xyz(x, 5.0, 2.0),
+                RigidBody::Dynamic,
+                Collider::cuboid(1.0, 1.0, 1.0),
+                // Full mass properties (Mass + AngularInertia + CenterOfMass)
+                // — Avian's joint solver needs the inertia tensor to compute
+                // correct impulses, not just scalar mass.
+                MassPropertiesBundle::from_shape(&Cuboid::from_length(1.0), 1.0),
+                Name::new(format!("Slave_{}", name)),
+            ))
+            .id();
 
         // Joint anchors meet at world (x, 5, 1) — midpoint between
         // the two cubes along z.
-        let local_a = DVec3::new(0.0, 0.0, 1.0);   // +Z half-distance from anchor
-        let local_s = DVec3::new(0.0, 0.0, -1.0);  // -Z half-distance from slave
+        let local_a = DVec3::new(0.0, 0.0, 1.0); // +Z half-distance from anchor
+        let local_s = DVec3::new(0.0, 0.0, -1.0); // -Z half-distance from slave
 
         match i {
             0 => {
@@ -205,18 +215,19 @@ fn setup(
 
 /// Logs slave positions every 1.0s so you can watch joint behavior
 /// from the terminal without polling QueryEntity.
-fn log_positions(
-    time: Res<Time>,
-    mut last: Local<f32>,
-    q: Query<(&Name, &Position)>,
-) {
+fn log_positions(time: Res<Time>, mut last: Local<f32>, q: Query<(&Name, &Position)>) {
     let now = time.elapsed_secs();
-    if now - *last < 1.0 { return; }
+    if now - *last < 1.0 {
+        return;
+    }
     *last = now;
     for (name, pos) in q.iter() {
         let n = name.as_str();
         if n.starts_with("Slave_") || n == "FreeRotator" {
-            info!("[{:.1}s] {} pos=({:.2}, {:.2}, {:.2})", now, n, pos.0.x, pos.0.y, pos.0.z);
+            info!(
+                "[{:.1}s] {} pos=({:.2}, {:.2}, {:.2})",
+                now, n, pos.0.x, pos.0.y, pos.0.z
+            );
         }
     }
 }

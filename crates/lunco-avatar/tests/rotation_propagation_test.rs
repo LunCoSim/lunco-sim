@@ -14,8 +14,8 @@
 //!
 //! Run with: cargo test -p lunco-avatar --test rotation_propagation_test -- --nocapture
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 use big_space::prelude::*;
 
 use lunco_celestial::{CelestialBody, CelestialReferenceFrame};
@@ -28,10 +28,7 @@ const MOON_GRID_CELL_SIZE: f64 = 2_000.0;
 #[test]
 fn test_body_rotation_propagates_to_tile_with_cellcoord() {
     let mut app = App::new();
-    app.add_plugins((
-        MinimalPlugins,
-        big_space::prelude::BigSpaceDefaultPlugins,
-    ));
+    app.add_plugins((MinimalPlugins, big_space::prelude::BigSpaceDefaultPlugins));
 
     let moon_radius = MOON_RADIUS;
     let _moon_grid = Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32);
@@ -51,55 +48,65 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
         (tile_body_local.z - tile_cell.z as f64 * cel) as f32,
     );
 
-    println!("PRE-SPAWN DEBUG: tile_body_local={:?} tile_cell={:?} tile_local_tf={:?}",
-             tile_body_local, tile_cell, tile_local_tf);
+    println!(
+        "PRE-SPAWN DEBUG: tile_body_local={:?} tile_cell={:?} tile_local_tf={:?}",
+        tile_body_local, tile_cell, tile_local_tf
+    );
 
     app.add_systems(Startup, move |mut commands: Commands| {
         let root = commands.spawn(BigSpace::default()).id();
 
-        let solar_grid = commands.spawn((
-            CelestialReferenceFrame { ephemeris_id: 10 },
-            Grid::new(2_000.0, 100.0),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        )).id();
+        let solar_grid = commands
+            .spawn((
+                CelestialReferenceFrame { ephemeris_id: 10 },
+                Grid::new(2_000.0, 100.0),
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
         commands.entity(solar_grid).set_parent_in_place(root);
 
-        let moon_grid = commands.spawn((
-            CelestialReferenceFrame { ephemeris_id: 301 },
-            Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        )).id();
+        let moon_grid = commands
+            .spawn((
+                CelestialReferenceFrame { ephemeris_id: 301 },
+                Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32),
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
         commands.entity(moon_grid).set_parent_in_place(solar_grid);
 
         // Moon Body at Grid origin, initially identity rotation
         // Note: Body does NOT have Grid component, only CellCoord.
         // Tiles must be parented to the Grid (not Body) for big_space to compute
         // their GlobalTransform from CellCoord. Rotation is synced manually.
-        let moon_body = commands.spawn((
-            CelestialBody {
-                name: "Moon".to_string(),
-                ephemeris_id: 301,
-                radius_m: moon_radius,
-            },
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        )).id();
+        let moon_body = commands
+            .spawn((
+                CelestialBody {
+                    name: "Moon".to_string(),
+                    ephemeris_id: 301,
+                    radius_m: moon_radius,
+                },
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
         commands.entity(moon_body).set_parent_in_place(moon_grid);
 
         // Terrain tile as child of the GRID (not Body), with CellCoord.
         // big_space's propagate_high_precision will compute GlobalTransform from
         // Grid + CellCoord + Transform. Rotation is synced via body_rotation_system.
-        let tile = commands.spawn((
-            tile_cell,
-            Transform::from_translation(tile_local_tf),
-            GlobalTransform::default(),
-            Name::new("Test Tile"),
-        )).id();
+        let tile = commands
+            .spawn((
+                tile_cell,
+                Transform::from_translation(tile_local_tf),
+                GlobalTransform::default(),
+                Name::new("Test Tile"),
+            ))
+            .id();
         commands.entity(moon_grid).add_child(tile);
     });
 
@@ -112,13 +119,15 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
     let (moon_body, tile_ent) = {
         let world = app.world_mut();
         let mut q_bodies = world.query::<(Entity, &CelestialBody)>();
-        let moon_body = q_bodies.iter(world)
+        let moon_body = q_bodies
+            .iter(world)
             .find(|(_, b)| b.ephemeris_id == 301)
             .map(|(e, _)| e)
             .unwrap();
 
         let mut q_tiles = world.query::<(Entity, &Name)>();
-        let tile_ent = q_tiles.iter(world)
+        let tile_ent = q_tiles
+            .iter(world)
             .find(|(_, n)| n.as_str() == "Test Tile")
             .map(|(e, _)| e)
             .unwrap();
@@ -126,14 +135,23 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
         // Debug: print tile's CellCoord, Transform, GlobalTransform, and parent
         let mut q_tile_data = world.query::<(&CellCoord, &Transform, &GlobalTransform, &ChildOf)>();
         if let Ok((cell, tf, gtf, child_of)) = q_tile_data.get(world, tile_ent) {
-            println!("TILE DEBUG: CellCoord={:?} local_tf={:?} GlobalTransform={:?} parent={:?}",
-                  cell, tf.translation, gtf.translation(), child_of.parent());
+            println!(
+                "TILE DEBUG: CellCoord={:?} local_tf={:?} GlobalTransform={:?} parent={:?}",
+                cell,
+                tf.translation,
+                gtf.translation(),
+                child_of.parent()
+            );
         }
 
         // Also print the Body's GlobalTransform
         let mut q_body_data = world.query::<(&Transform, &GlobalTransform)>();
         if let Ok((tf, gtf)) = q_body_data.get(world, moon_body) {
-            println!("BODY DEBUG: local_tf={:?} GlobalTransform={:?}", tf.translation, gtf.translation());
+            println!(
+                "BODY DEBUG: local_tf={:?} GlobalTransform={:?}",
+                tf.translation,
+                gtf.translation()
+            );
         }
 
         (moon_body, tile_ent)
@@ -148,7 +166,9 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
 
     assert!(
         (initial_tile_pos.x - moon_radius as f32).abs() < 100.0,
-        "Initial tile X should be ~R={:.0}, got {:.0}", moon_radius, initial_tile_pos.x
+        "Initial tile X should be ~R={:.0}, got {:.0}",
+        moon_radius,
+        initial_tile_pos.x
     );
 
     // Rotate the Body 45° around Y axis
@@ -183,7 +203,10 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
             // the tile's world position relative to Body = tile_gtf.translation().
             let world_pos = tile_gtf.translation();
             let rotated_pos = body_rot.mul_vec3(world_pos);
-            println!("TILE ROTATION: world_pos={:?} body_rot={:?} rotated_pos={:?}", world_pos, body_rot, rotated_pos);
+            println!(
+                "TILE ROTATION: world_pos={:?} body_rot={:?} rotated_pos={:?}",
+                world_pos, body_rot, rotated_pos
+            );
             *tile_gtf = GlobalTransform::from_translation(rotated_pos)
                 * GlobalTransform::from_rotation(body_rot);
         }
@@ -224,11 +247,13 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
     assert!(
         (rotated_tile_pos.x - expected_x).abs() < tolerance,
         "After 45° Y rotation, tile X should be ~{:.0}, got {:.0}",
-        expected_x, rotated_tile_pos.x
+        expected_x,
+        rotated_tile_pos.x
     );
     assert!(
         (rotated_tile_pos.z - expected_z).abs() < tolerance,
         "After 45° Y rotation, tile Z should be ~{:.0}, got {:.0}",
-        expected_z, rotated_tile_pos.z
+        expected_z,
+        rotated_tile_pos.z
     );
 }

@@ -204,16 +204,27 @@ mod tests {
         }
 
         // Hooks present.
-        let hook_names: Vec<&str> = data["hooks"].as_array().unwrap()
-            .iter().filter_map(|h| h["name"].as_str()).collect();
+        let hook_names: Vec<&str> = data["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|h| h["name"].as_str())
+            .collect();
         assert!(hook_names.contains(&"on_tick"));
 
         // Prelude introspected (the embedded prelude defines helpers).
-        assert!(!data["prelude"].as_array().unwrap().is_empty(), "prelude empty");
+        assert!(
+            !data["prelude"].as_array().unwrap().is_empty(),
+            "prelude empty"
+        );
 
         // Our registered tool library shows up.
-        let tool_names: Vec<&str> = data["tools"].as_array().unwrap()
-            .iter().filter_map(|t| t["name"].as_str()).collect();
+        let tool_names: Vec<&str> = data["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
         assert!(tool_names.contains(&"probe_lib"), "tools: {tool_names:?}");
 
         // Commands/queries keys exist (arrays; empty in this bare world is fine).

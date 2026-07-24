@@ -6,10 +6,10 @@
 //! projection systems (`sync_twin_overlays` → `author_structural_edit` →
 //! `project_stage_changes`) now drive incremental structural edits.
 
-use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd::document::UsdDocument;
 use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::document::UsdDocument;
 use lunco_usd::{
     ui::{SetActiveUsdViewport, UsdViewportPlugin},
     ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp,
@@ -26,7 +26,9 @@ fn has_prim_entity(app: &mut App, path: &str) -> bool {
 /// pulled in by a reference arc).
 fn prims_under(app: &mut App, prefix: &str) -> usize {
     let mut q = app.world_mut().query::<&UsdPrimPath>();
-    q.iter(app.world()).filter(|p| p.path.starts_with(prefix)).count()
+    q.iter(app.world())
+        .filter(|p| p.path.starts_with(prefix))
+        .count()
 }
 
 /// Boot a doc-backed viewport app with the twin asset source wired.
@@ -61,8 +63,13 @@ fn add_prim_projects_live_via_sink_no_reload() {
     // A minimal scene: one Xform the spawn will hang under.
     let usda = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
     let doc = {
-        let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-        reg.allocate(usda.to_string(), lunco_doc::PathlessOrigin::untitled("live_spawn.usda"))
+        let mut reg = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>();
+        reg.allocate(
+            usda.to_string(),
+            lunco_doc::PathlessOrigin::untitled("live_spawn.usda"),
+        )
     };
 
     // Install it as the active viewport → doc-backed twin scene → async mount →
@@ -124,8 +131,13 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
 
     let usda = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
     let doc = {
-        let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-        reg.allocate(usda.to_string(), lunco_doc::PathlessOrigin::untitled("ref_spawn.usda"))
+        let mut reg = app
+            .world_mut()
+            .resource_mut::<DocumentRegistry<UsdDocument>>();
+        reg.allocate(
+            usda.to_string(),
+            lunco_doc::PathlessOrigin::untitled("ref_spawn.usda"),
+        )
     };
 
     app.world_mut().trigger(SetActiveUsdViewport { doc });
@@ -135,7 +147,10 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
             break;
         }
     }
-    assert!(has_prim_entity(&mut app, "/World"), "scene root must project first");
+    assert!(
+        has_prim_entity(&mut app, "/World"),
+        "scene root must project first"
+    );
 
     // Spawn a rover by reference through the location-independent `lunco://`
     // source (→ `<workspace>/assets/vessels/rovers/skid_rover.usda`), so it

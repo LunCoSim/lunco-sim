@@ -97,7 +97,10 @@ pub fn produce_usd_mount_view(
     };
     let stage_id = prim.stage_handle.id();
     if canonical.get(stage_id).is_none() {
-        if let Some(recipe) = stages.get(&prim.stage_handle).and_then(|a| a.recipe.clone()) {
+        if let Some(recipe) = stages
+            .get(&prim.stage_handle)
+            .and_then(|a| a.recipe.clone())
+        {
             canonical.get_or_build(stage_id, &recipe);
         }
     }
@@ -123,9 +126,8 @@ pub fn produce_usd_mount_view(
                 if let Ok(pp) = SdfPath::new(part) {
                     let cur = lunco_usd_bevy::local_transform_at(&stage_view, &pp, 0.0)
                         .unwrap_or_default();
-                    let dt = (cur.translation
-                        - Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32))
-                    .length();
+                    let dt = (cur.translation - Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32))
+                        .length();
                     aligned = dt < 1.0e-3;
                 }
                 placement = Some(t);
@@ -135,7 +137,11 @@ pub fn produce_usd_mount_view(
 
         // An empty socket (no attached part) that names a default asset offers a
         // new-attach; a socket already holding a part does not.
-        let attach_asset = if socket.part.is_none() { socket.asset.clone() } else { None };
+        let attach_asset = if socket.part.is_none() {
+            socket.asset.clone()
+        } else {
+            None
+        };
 
         view.items.push(MountItem {
             socket: socket.name,

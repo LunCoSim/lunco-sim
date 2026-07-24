@@ -49,8 +49,7 @@ pub(super) struct EdgePulseLayer {
 pub(crate) const EDGE_PULSE_DATA_ID: &str = "lunco_modelica_edge_pulse_alphas";
 
 /// Live pulse map type stashed in egui ctx data per frame.
-pub(crate) type EdgePulseAlphaMap =
-    std::collections::HashMap<(String, String), f32>;
+pub(crate) type EdgePulseAlphaMap = std::collections::HashMap<(String, String), f32>;
 
 impl lunco_canvas::Layer for EdgePulseLayer {
     fn name(&self) -> &'static str {
@@ -98,12 +97,7 @@ impl lunco_canvas::Layer for EdgePulseLayer {
             d.insert_temp(bevy_egui::egui::Id::new(EDGE_PULSE_DATA_ID), alphas);
         });
         // Repaint while pulses are alive so the decay curve advances.
-        if self
-            .data
-            .read()
-            .map(|g| !g.is_empty())
-            .unwrap_or(false)
-        {
+        if self.data.read().map(|g| !g.is_empty()).unwrap_or(false) {
             ctx.ui.ctx().request_repaint();
         }
     }
@@ -168,16 +162,6 @@ pub fn drive_pending_api_connections(
 // also drift the values, so each frame we snap-set both current AND
 // target to the eased keyframe value (`viewport.snap_to`).
 
-
-
-
-
-
-
-
-
-
-
 /// One pulse-glow entry: target id, when it started, and how long it
 /// should last (per-call duration; the API caller can pass
 /// `animation_ms` on the command to override the default). Splitting
@@ -193,8 +177,7 @@ pub struct PulseEntry<T> {
 /// Per-doc node-pulse registry. Vec rather than HashMap because we
 /// expect ≤ a few entries at a time and iteration order doesn't
 /// matter — the layer re-walks every frame anyway.
-pub type PulseHandle =
-    std::sync::Arc<std::sync::RwLock<Vec<PulseEntry<lunco_canvas::NodeId>>>>;
+pub type PulseHandle = std::sync::Arc<std::sync::RwLock<Vec<PulseEntry<lunco_canvas::NodeId>>>>;
 
 /// One live edge-pulse, keyed by the wire's `(from_path, to_path)`
 /// dot-form so the per-edge visual can match without a scene-edge id
@@ -211,8 +194,7 @@ pub struct EdgePulseRecord {
 /// Edge-pulse registry. Pushed into by
 /// [`drive_pending_api_connections`] when a `ConnectComponents` call
 /// lands; drained-by-decay by [`EdgePulseLayer`].
-pub type EdgePulseHandle =
-    std::sync::Arc<std::sync::RwLock<Vec<EdgePulseRecord>>>;
+pub type EdgePulseHandle = std::sync::Arc<std::sync::RwLock<Vec<EdgePulseRecord>>>;
 
 /// Outer-glow render layer: paints a soft ring around each
 /// recently-added node, alpha decaying linearly to 0 over
@@ -396,7 +378,9 @@ pub fn drive_pending_api_focus(
     // not move tab B's camera. Fixes the focus regression where
     // split-view tabs only animated the first tab.
     for (_, d, ds) in state.iter_mut() {
-        let Some(entries) = matched.get(&d) else { continue };
+        let Some(entries) = matched.get(&d) else {
+            continue;
+        };
 
         if let Ok(mut guard) = ds.pulse_handle.write() {
             for (i, (name, anim_ms)) in entries.iter().enumerate() {
@@ -411,9 +395,7 @@ pub fn drive_pending_api_focus(
                 else {
                     continue;
                 };
-                let stagger = std::time::Duration::from_millis(
-                    PULSE_STAGGER_MS * i as u64,
-                );
+                let stagger = std::time::Duration::from_millis(PULSE_STAGGER_MS * i as u64);
                 guard.push(PulseEntry {
                     id: *node_id,
                     started: now_pulse + stagger,

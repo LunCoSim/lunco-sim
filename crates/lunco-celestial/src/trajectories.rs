@@ -1,16 +1,16 @@
+use crate::ephemeris::EphemerisResource;
+use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::tasks::Task;
 use bevy_mesh::PrimitiveTopology;
-use bevy::asset::RenderAssetUsages;
 use big_space::prelude::CellCoord;
 use futures_lite::future;
-use std::sync::Arc;
-use crate::ephemeris::EphemerisResource;
-use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
 use lunco_time::WorldTime;
+use std::sync::Arc;
 
-use bevy::math::cubic_splines::CubicCardinalSpline;
 use bevy::camera::visibility::NoFrustumCulling;
+use bevy::math::cubic_splines::CubicCardinalSpline;
 use lunco_render::{PbrLook, SurfaceAlpha};
 
 pub struct TrajectoryPlugin;
@@ -32,7 +32,7 @@ pub struct TrajectoryView {
     pub reference_id: i32,
     pub frame: TrajectoryFrame,
     pub color: LinearRgba,
-    pub is_visible: bool, // Controlled by mission range logic
+    pub is_visible: bool,   // Controlled by mission range logic
     pub user_visible: bool, // Controlled by UI checkbox
     pub sampling_days: f64,
     pub sampling_step: f64,
@@ -115,9 +115,9 @@ pub struct TrajectoryMeshMarker;
 impl Plugin for TrajectoryPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<TrajectoryView>()
-           .register_type::<TrajectoryFrame>()
-           .register_type::<TrajectoryPath>();
-           
+            .register_type::<TrajectoryFrame>()
+            .register_type::<TrajectoryPath>();
+
         // NO Rust-spawned trajectory views. An orbit line is CONTENT — a scene
         // says which paths it wants drawn, with `lunco:trajectory:*` on a prim
         // (`LunCoMissionTrajectoryAPI` → `MissionTrajectoryDecl` →
@@ -136,7 +136,6 @@ impl Plugin for TrajectoryPlugin {
         // Now the only way an orbit line exists is that a prim asked for it, and
         // an unauthored `userVisible` reads as OFF — see `MissionTrajectoryDecl`.
 
-
         // CHAINED: a rebuild must be ATOMIC within one frame.
         //
         // `handle_trajectory_tasks` writes `path.points` AND `path.anchor`
@@ -152,15 +151,19 @@ impl Plugin for TrajectoryPlugin {
         // ~1.7e6 m for the Moon line, ~1.3e9 m for Earth's. That is the "orbits
         // jumping around" flash, and rebuilds only fire while the clock runs,
         // which is why a paused scene never showed it.
-        app.add_systems(Update, (
-            spawn_trajectory_update_task,
-            handle_trajectory_tasks,
-            trajectory_mesh_init_system,
-            trajectory_mesh_update_system,
-            trajectory_alpha_update_system,
-            trajectory_visibility_system,
-            mission_visibility_system,
-        ).chain());
+        app.add_systems(
+            Update,
+            (
+                spawn_trajectory_update_task,
+                handle_trajectory_tasks,
+                trajectory_mesh_init_system,
+                trajectory_mesh_update_system,
+                trajectory_alpha_update_system,
+                trajectory_visibility_system,
+                mission_visibility_system,
+            )
+                .chain(),
+        );
 
         // Alignment must run in `PostUpdate`, NOT `Update`.
         //
@@ -250,7 +253,9 @@ pub fn jump_probe_system(
         *trace = Some(std::env::var("LUNCO_GT_TRACE").ok());
     }
     let label = |e: Entity, q: &Query<&Name>| -> String {
-        q.get(e).map(|n| n.as_str().to_string()).unwrap_or_else(|_| format!("{e:?}"))
+        q.get(e)
+            .map(|n| n.as_str().to_string())
+            .unwrap_or_else(|_| format!("{e:?}"))
     };
     for (e, name, gt) in q_marks.iter() {
         // Attribute the tug-of-war directly: log every PARENT flip, jump or not.
@@ -267,7 +272,9 @@ pub fn jump_probe_system(
                     );
                     last_parent.insert(e, parent);
                 }
-                None => { last_parent.insert(e, parent); }
+                None => {
+                    last_parent.insert(e, parent);
+                }
                 _ => {}
             }
         }
@@ -277,7 +284,11 @@ pub fn jump_probe_system(
             if !filter.is_empty() && n.contains(filter.as_str()) {
                 bevy::log::info!(
                     "[gt-trace] f{} {}: {:.3} {:.3} {:.3}",
-                    *frame, n, p.x, p.y, p.z
+                    *frame,
+                    n,
+                    p.x,
+                    p.y,
+                    p.z
                 );
             }
         }
@@ -301,7 +312,10 @@ pub fn jump_probe_system(
                 );
             }
             if jerk > heartbeat.0 {
-                *heartbeat = (jerk, name.map(|n| n.as_str().to_string()).unwrap_or_default());
+                *heartbeat = (
+                    jerk,
+                    name.map(|n| n.as_str().to_string()).unwrap_or_default(),
+                );
             }
             last.insert(e, (p, d));
         } else {
@@ -311,7 +325,9 @@ pub fn jump_probe_system(
     if *frame % 120 == 0 {
         bevy::log::info!(
             "[jump-probe] f{} heartbeat: max jerk since last = {:.3e} m ({})",
-            *frame, heartbeat.0, heartbeat.1
+            *frame,
+            heartbeat.0,
+            heartbeat.1
         );
         *heartbeat = (0.0, String::new());
     }
@@ -336,7 +352,17 @@ pub fn jump_probe_system(
 /// see the doc 45 correction block — class 2).
 #[allow(clippy::type_complexity)]
 pub fn trajectory_probe_system(
-    q_views: Query<(&Name, &TrajectoryView, &CellCoord, &Transform, &GlobalTransform, &ChildOf), With<TrajectoryPath>>,
+    q_views: Query<
+        (
+            &Name,
+            &TrajectoryView,
+            &CellCoord,
+            &Transform,
+            &GlobalTransform,
+            &ChildOf,
+        ),
+        With<TrajectoryPath>,
+    >,
     q_frames: Query<(&GlobalTransform, &big_space::prelude::Grid)>,
     mut tick: Local<u32>,
 ) {
@@ -365,7 +391,6 @@ pub fn trajectory_probe_system(
         );
     }
 }
-
 
 pub fn spawn_trajectory_update_task(
     world: Res<WorldTime>,
@@ -399,8 +424,7 @@ pub fn spawn_trajectory_update_task(
         let needs_update = if is_fixed {
             path.points.is_empty()
         } else {
-            (path.update_epoch - current_epoch).abs() > view.sampling_step
-                || path.points.is_empty()
+            (path.update_epoch - current_epoch).abs() > view.sampling_step || path.points.is_empty()
         };
 
         // Wall-clock rate limit. The trigger above is a SIM condition, so a fast sky
@@ -418,7 +442,7 @@ pub fn spawn_trajectory_update_task(
             let provider = Arc::clone(&ephemeris.provider);
             let registry_arc = Arc::new((*registry).clone());
             let view_copy = *view;
-            
+
             let aligned_epoch = if is_fixed {
                 // If fixed range, update_epoch is not moving
                 view_copy.start_epoch.unwrap()
@@ -453,11 +477,13 @@ pub fn spawn_trajectory_update_task(
                     let end = view_copy.end_epoch.unwrap();
                     let count = ((end - start) / view_copy.sampling_step).ceil() as usize + 1;
                     points.reserve(count);
-                    
+
                     for i in 0..count {
                         let jd = start + (i as f64) * view_copy.sampling_step;
-                        if jd > end { break; } // Don't overshoot
-                        
+                        if jd > end {
+                            break;
+                        } // Don't overshoot
+
                         // A sample we cannot compute is a sample we do not plot — it used to
                         // become a point at the Sun's centre, dragging a spurious line across
                         // the whole solar system.
@@ -468,9 +494,13 @@ pub fn spawn_trajectory_update_task(
                             continue;
                         };
                         let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
-                        
+
                         if view_copy.frame == TrajectoryFrame::BodyFixed {
-                            if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
+                            if let Some(desc) = registry_arc
+                                .bodies
+                                .iter()
+                                .find(|b| b.ephemeris_id == view_copy.reference_id)
+                            {
                                 // Share `geo::body_rotation` — the IAU model — rather than
                                 // re-deriving a rotation here. This local copy was a THIRD
                                 // spelling of the body rotation, and it was doubly wrong:
@@ -485,9 +515,10 @@ pub fn spawn_trajectory_update_task(
                         points.push(rel_pos - anchor);
                     }
                 } else {
-                    let half_count = (view_copy.sampling_days / view_copy.sampling_step / 2.0).ceil() as isize;
+                    let half_count =
+                        (view_copy.sampling_days / view_copy.sampling_step / 2.0).ceil() as isize;
                     points.reserve((half_count * 2 + 1) as usize);
-                    
+
                     for i in -half_count..=half_count {
                         let jd = aligned_epoch + (i as f64) * view_copy.sampling_step;
                         let (Some(p_target), Some(p_ref)) = (
@@ -499,7 +530,11 @@ pub fn spawn_trajectory_update_task(
                         let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
 
                         if view_copy.frame == TrajectoryFrame::BodyFixed {
-                            if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
+                            if let Some(desc) = registry_arc
+                                .bodies
+                                .iter()
+                                .find(|b| b.ephemeris_id == view_copy.reference_id)
+                            {
                                 // Share `geo::body_rotation` — the IAU model — rather than
                                 // re-deriving a rotation here. This local copy was a THIRD
                                 // spelling of the body rotation, and it was doubly wrong:
@@ -521,7 +556,7 @@ pub fn spawn_trajectory_update_task(
                     anchor,
                 }
             });
-            
+
             commands.entity(entity).try_insert(TrajectoryTask(task));
         }
     }
@@ -529,7 +564,12 @@ pub fn spawn_trajectory_update_task(
 
 pub fn handle_trajectory_tasks(
     mut commands: Commands,
-    mut q_tasks: Query<(Entity, &mut TrajectoryTask, &mut TrajectoryPath, &TrajectoryView)>,
+    mut q_tasks: Query<(
+        Entity,
+        &mut TrajectoryTask,
+        &mut TrajectoryPath,
+        &TrajectoryView,
+    )>,
 ) {
     for (entity, mut task, mut path, view) in q_tasks.iter_mut() {
         if let Some(data) = future::block_on(future::poll_once(&mut task.0)) {
@@ -572,7 +612,12 @@ pub fn trajectory_mesh_init_system(
         // Not shared with anything: each view's colour differs, so this is 2–3
         // materials in total.
         let look = PbrLook {
-            base_color: LinearRgba::new(emissive_color.red, emissive_color.green, emissive_color.blue, 1.0),
+            base_color: LinearRgba::new(
+                emissive_color.red,
+                emissive_color.green,
+                emissive_color.blue,
+                1.0,
+            ),
             unlit: true,
             alpha: SurfaceAlpha::Add,
             ..default()
@@ -604,8 +649,10 @@ pub fn trajectory_mesh_update_system(
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
     for (path, view, children) in q_paths.iter() {
-        if path.points.is_empty() { continue; }
-        
+        if path.points.is_empty() {
+            continue;
+        }
+
         let color = view.color;
 
         // Use Catmull-Rom spline for smooth curves (needs >= 4 points)
@@ -623,7 +670,8 @@ pub fn trajectory_mesh_update_system(
             path.points.iter().map(|p| p.as_vec3().to_array()).collect()
         };
 
-        let colors: Vec<[f32; 4]> = vec![[color.red, color.green, color.blue, 1.0]; final_pts.len()];
+        let colors: Vec<[f32; 4]> =
+            vec![[color.red, color.green, color.blue, 1.0]; final_pts.len()];
 
         info!("Updating trajectory mesh with {} points", final_pts.len());
 
@@ -651,7 +699,9 @@ pub fn trajectory_alpha_update_system(
     // re-upload when the alpha curve hasn't moved. See
     // docs/code-quality-remediation.md (CQ-214).
     for (path, view, children) in q_paths.iter() {
-        if path.points.len() < 2 { continue; }
+        if path.points.len() < 2 {
+            continue;
+        }
         for child in children.iter() {
             if let Ok(mesh_handle) = q_marker.get(child) {
                 if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
@@ -661,31 +711,34 @@ pub fn trajectory_alpha_update_system(
                     } else {
                         path.update_epoch - (view.sampling_days / 2.0)
                     };
-                    let total_sampling_days = if view.start_epoch.is_some() && view.end_epoch.is_some() {
-                        view.end_epoch.unwrap() - view.start_epoch.unwrap()
-                    } else {
-                        view.sampling_days
-                    };
-                    
-                    let num_points = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().len();
-                    
-                    let colors: Vec<[f32; 4]> = (0..num_points).map(|i| {
-                        let t = i as f64 / (num_points - 1) as f64;
-                        let pt_epoch = start_epoch + t * total_sampling_days;
-                        
-                        let days_past = world.epoch_jd - pt_epoch;
-                        let alpha = if days_past > 0.0 {
-                            // Smoothly fade out the past trajectory over 10% of total duration (capped between 1 to 20 days)
-                            let fade_days = (total_sampling_days * 0.1).clamp(1.0, 20.0);
-                            let a = 1.0 - (days_past / fade_days);
-                            // With additive blending at 15x brightness, we need alpha to approach zero, not 0.05!
-                            a.max(0.001) as f32 // Gentle curve drop-off
+                    let total_sampling_days =
+                        if view.start_epoch.is_some() && view.end_epoch.is_some() {
+                            view.end_epoch.unwrap() - view.start_epoch.unwrap()
                         } else {
-                            1.0
+                            view.sampling_days
                         };
-                        
-                        [color.red, color.green, color.blue, alpha]
-                    }).collect();
+
+                    let num_points = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().len();
+
+                    let colors: Vec<[f32; 4]> = (0..num_points)
+                        .map(|i| {
+                            let t = i as f64 / (num_points - 1) as f64;
+                            let pt_epoch = start_epoch + t * total_sampling_days;
+
+                            let days_past = world.epoch_jd - pt_epoch;
+                            let alpha = if days_past > 0.0 {
+                                // Smoothly fade out the past trajectory over 10% of total duration (capped between 1 to 20 days)
+                                let fade_days = (total_sampling_days * 0.1).clamp(1.0, 20.0);
+                                let a = 1.0 - (days_past / fade_days);
+                                // With additive blending at 15x brightness, we need alpha to approach zero, not 0.05!
+                                a.max(0.001) as f32 // Gentle curve drop-off
+                            } else {
+                                1.0
+                            };
+
+                            [color.red, color.green, color.blue, alpha]
+                        })
+                        .collect();
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
                     trace!("Trajectory alpha updated for {} points", num_points);
                 }
@@ -694,11 +747,7 @@ pub fn trajectory_alpha_update_system(
     }
 }
 
-
-pub fn mission_visibility_system(
-    world: Res<WorldTime>,
-    mut q_views: Query<&mut TrajectoryView>,
-) {
+pub fn mission_visibility_system(world: Res<WorldTime>, mut q_views: Query<&mut TrajectoryView>) {
     for mut view in q_views.iter_mut() {
         if let (Some(start), Some(end)) = (view.start_epoch, view.end_epoch) {
             let should_be_visible = world.epoch_jd >= start && world.epoch_jd <= end;
@@ -714,7 +763,6 @@ pub fn mission_visibility_system(
     }
 }
 
-
 pub fn trajectory_visibility_system(
     q_views: Query<(&TrajectoryView, &Children), Changed<TrajectoryView>>,
     mut q_visibility: Query<&mut Visibility>,
@@ -725,7 +773,11 @@ pub fn trajectory_visibility_system(
                 // Combine mission-controlled visibility and user-controlled visibility
                 let final_visible = view.is_visible && view.user_visible;
                 // Use Visible instead of Inherited to prevent frustum culling of large meshes
-                *vis = if final_visible { Visibility::Visible } else { Visibility::Hidden };
+                *vis = if final_visible {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
             }
         }
     }
@@ -736,9 +788,27 @@ pub fn trajectory_alignment_system(
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
-    q_frames: Query<(Entity, &CelestialReferenceFrame, Option<&big_space::prelude::Grid>, &Transform), Without<TrajectoryPath>>,
+    q_frames: Query<
+        (
+            Entity,
+            &CelestialReferenceFrame,
+            Option<&big_space::prelude::Grid>,
+            &Transform,
+        ),
+        Without<TrajectoryPath>,
+    >,
     q_bodies: Query<(Entity, &crate::registry::CelestialBody)>,
-    mut q_vistas: Query<(Entity, &TrajectoryView, &TrajectoryPath, &mut Transform, Option<&mut CellCoord>, Option<&ChildOf>), Without<CelestialReferenceFrame>>,
+    mut q_vistas: Query<
+        (
+            Entity,
+            &TrajectoryView,
+            &TrajectoryPath,
+            &mut Transform,
+            Option<&mut CellCoord>,
+            Option<&ChildOf>,
+        ),
+        Without<CelestialReferenceFrame>,
+    >,
     q_view_children: Query<&Children>,
     q_traj_mesh: Query<(), With<TrajectoryMeshMarker>>,
 ) {
@@ -758,7 +828,11 @@ pub fn trajectory_alignment_system(
             .bodies
             .iter()
             .any(|d| d.ephemeris_id == eph_id && d.spins());
-        if spins { tf.rotation.inverse() } else { Quat::IDENTITY }
+        if spins {
+            tf.rotation.inverse()
+        } else {
+            Quat::IDENTITY
+        }
     };
     for (v_entity, view, path, mut transform, cell, current_parent) in q_vistas.iter_mut() {
         let mut target_parent = None;
@@ -857,7 +931,9 @@ pub fn trajectory_alignment_system(
         }
 
         if let Some(parent_ent) = target_parent {
-            let is_current_parent = current_parent.map(|p| p.parent() == parent_ent).unwrap_or(false);
+            let is_current_parent = current_parent
+                .map(|p| p.parent() == parent_ent)
+                .unwrap_or(false);
             let had_cell = cell.is_some();
             if !is_current_parent {
                 // Trajectory views are NOT `GridAnchor`s — they parent to
@@ -951,4 +1027,3 @@ pub fn trajectory_alignment_system(
         }
     }
 }
-

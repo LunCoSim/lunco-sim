@@ -231,9 +231,7 @@ impl SessionRegistry {
     pub fn may_possess(&self, session: SessionId, gid: u64) -> bool {
         match self.policy {
             PossessionPolicy::LastWins => true,
-            PossessionPolicy::Exclusive => {
-                self.owners.get(&gid).is_none_or(|&cur| cur == session)
-            }
+            PossessionPolicy::Exclusive => self.owners.get(&gid).is_none_or(|&cur| cur == session),
         }
     }
 
@@ -373,7 +371,6 @@ impl SessionRbac {
         session.role.satisfies(required_role)
     }
 }
-
 
 /// Suppress the USD loader's automatic [`crate::Provenance::Content`] stamping
 /// for a runtime-instanced subtree. Runtime instances get server-allocated
@@ -693,7 +690,11 @@ impl Default for DivergenceStats {
         // measured free-driving prediction error (~13–27 cm per 20 Hz ack), and well
         // below the 6 m gross-desync snap — so a sustained metre of error is real
         // divergence, not noise, and it is reported BEFORE the snap papers over it.
-        Self { bodies: HashMap::new(), warn_m: 1.0, warn_streak: 5 }
+        Self {
+            bodies: HashMap::new(),
+            warn_m: 1.0,
+            warn_streak: 5,
+        }
     }
 }
 
@@ -879,7 +880,11 @@ impl BufferedClientInputs {
             let Some(map) = self.pending.get(&gid) else {
                 return self.last_writes.get(&gid).cloned();
             };
-            match map.range(cursor.saturating_add(1)..).next().map(|(s, _)| *s) {
+            match map
+                .range(cursor.saturating_add(1)..)
+                .next()
+                .map(|(s, _)| *s)
+            {
                 None => return self.last_writes.get(&gid).cloned(),
                 Some(ns) if map.len() > cap => *map.keys().next_back().unwrap_or(&ns),
                 Some(ns) => ns,
@@ -1055,10 +1060,16 @@ impl Default for CommandPolicy {
 
 impl CommandPolicy {
     /// Open sandbox: any authenticated session, no ownership requirement.
-    pub const OPEN: Self = Self { min_role: AuthorityRole::Observer, ownership_gated: false };
+    pub const OPEN: Self = Self {
+        min_role: AuthorityRole::Observer,
+        ownership_gated: false,
+    };
     /// Ownership-gated control (e.g. `SetPorts`): the owner may act at the
     /// Observer floor; a non-owner is rejected.
-    pub const OWNED_CONTROL: Self = Self { min_role: AuthorityRole::Observer, ownership_gated: true };
+    pub const OWNED_CONTROL: Self = Self {
+        min_role: AuthorityRole::Observer,
+        ownership_gated: true,
+    };
 }
 
 /// Well-known capability keys for authorization gates that aren't a single
@@ -1216,9 +1227,24 @@ impl Default for CommandPolicyRegistry {
         // their target (G4). Everything else stays OPEN.
         base.insert("SetPorts", CommandPolicy::OWNED_CONTROL);
         // H2 Fix: gate tutor/relay capabilities to Operator role by default
-        base.insert(capability::TUTOR_STATUS, CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false });
-        base.insert(capability::SHARE_PERSPECTIVE, CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false });
-        Self { base, overrides: HashMap::new() }
+        base.insert(
+            capability::TUTOR_STATUS,
+            CommandPolicy {
+                min_role: AuthorityRole::Operator,
+                ownership_gated: false,
+            },
+        );
+        base.insert(
+            capability::SHARE_PERSPECTIVE,
+            CommandPolicy {
+                min_role: AuthorityRole::Operator,
+                ownership_gated: false,
+            },
+        );
+        Self {
+            base,
+            overrides: HashMap::new(),
+        }
     }
 }
 
@@ -1345,7 +1371,10 @@ pub fn authorize_policy(
     let ctx = HookValue::map([
         ("session", HookValue::Int(origin.0 as i64)),
         ("capability", HookValue::str(type_name)),
-        ("target", HookValue::Int(target_gid.map(|g| g as i64).unwrap_or(-1))),
+        (
+            "target",
+            HookValue::Int(target_gid.map(|g| g as i64).unwrap_or(-1)),
+        ),
         ("owns_target", HookValue::Bool(owns_target)),
         ("role", HookValue::str(role)),
         // Precomputed FACT, not a lookup the policy could do itself: the hook engine
@@ -1470,7 +1499,10 @@ mod tests {
     struct TeleopPolicy;
     impl lunco_hooks::ScriptHook for TeleopPolicy {
         fn invoke(&self, args: &[lunco_hooks::HookValue]) -> lunco_hooks::HookResult {
-            let ctx = args.first().cloned().unwrap_or(lunco_hooks::HookValue::Unit);
+            let ctx = args
+                .first()
+                .cloned()
+                .unwrap_or(lunco_hooks::HookValue::Unit);
             let get = |k: &str| ctx.get(k).cloned().unwrap_or(lunco_hooks::HookValue::Unit);
             if get("capability").as_str() != Some("SetPorts") {
                 return Ok(lunco_hooks::HookValue::Bool(true));
@@ -1536,13 +1568,16 @@ mod tests {
         let mut reg = SessionRegistry::default();
         reg.claim(A, R1).unwrap();
         let mut rbac = SessionRbac::default();
-        rbac.sessions.insert(A.0, UserSession {
-            session_id: A,
-            username: "Player A".into(),
-            role: AuthorityRole::Operator,
-            authenticated: true,
-            token: Some("srv-token-a".into()),
-        });
+        rbac.sessions.insert(
+            A.0,
+            UserSession {
+                session_id: A,
+                username: "Player A".into(),
+                role: AuthorityRole::Operator,
+                authenticated: true,
+                token: Some("srv-token-a".into()),
+            },
+        );
         (reg, rbac, CommandPolicyRegistry::default())
     }
 
@@ -1598,7 +1633,10 @@ mod tests {
 
         assert!(drive_up.is_ok(), "link up ⇒ the owner drives");
         assert!(drive_down.is_err(), "link down ⇒ tele-op is refused");
-        assert!(possess_down.is_ok(), "a blackout refuses driving, not everything");
+        assert!(
+            possess_down.is_ok(),
+            "a blackout refuses driving, not everything"
+        );
         assert!(other_down.is_ok(), "the blackout is per-target, not global");
     }
 
@@ -1631,7 +1669,10 @@ mod tests {
         lunco_hooks::unregister(AUTHORIZE_HOOK);
 
         assert!(full.is_err(), "the wire floor refuses an unowned target");
-        assert!(local_blacked.is_err(), "the local path still honours the policy");
+        assert!(
+            local_blacked.is_err(),
+            "the local path still honours the policy"
+        );
         assert!(
             local_clear.is_ok(),
             "…and with no blackout the local path drives an unpossessed vessel — \
@@ -1647,13 +1688,16 @@ mod tests {
         let mut reg = SessionRegistry::default();
         reg.claim(B, R1).unwrap();
         let mut rbac = SessionRbac::default();
-        rbac.sessions.insert(B.0, UserSession {
-            session_id: B,
-            username: "autopilot".into(),
-            role: AuthorityRole::AiAgent,
-            authenticated: true,
-            token: Some("srv-token-b".into()),
-        });
+        rbac.sessions.insert(
+            B.0,
+            UserSession {
+                session_id: B,
+                username: "autopilot".into(),
+                role: AuthorityRole::AiAgent,
+                authenticated: true,
+                token: Some("srv-token-b".into()),
+            },
+        );
         let pol = CommandPolicyRegistry::default();
         lunco_hooks::register(lunco_hooks::RegisteredHook {
             id: AUTHORIZE_HOOK.to_string(),
@@ -1673,7 +1717,10 @@ mod tests {
     #[test]
     fn control_path_registry_is_per_gid_and_clearable() {
         let mut paths = ControlPathRegistry::default();
-        assert!(!paths.is_down(R1), "unknown ⇒ reachable, so the resource is inert by default");
+        assert!(
+            !paths.is_down(R1),
+            "unknown ⇒ reachable, so the resource is inert by default"
+        );
         paths.set(R1, true);
         assert!(paths.is_down(R1));
         assert!(!paths.is_down(R2));
@@ -1681,12 +1728,18 @@ mod tests {
         assert!(!paths.is_down(R1), "restoring must actually clear it");
         paths.set(R1, true);
         paths.clear();
-        assert!(!paths.is_down(R1), "clear() drops every blackout (scene teardown)");
+        assert!(
+            !paths.is_down(R1),
+            "clear() drops every blackout (scene teardown)"
+        );
     }
 
     #[test]
     fn default_policy_is_exclusive() {
-        assert_eq!(SessionRegistry::default().policy(), PossessionPolicy::Exclusive);
+        assert_eq!(
+            SessionRegistry::default().policy(),
+            PossessionPolicy::Exclusive
+        );
     }
 
     // ── Input-ack watermark (review N1) ───────────────────────────────────────
@@ -1786,7 +1839,10 @@ mod tests {
         // A's client picks up where ITS counter left off — far past the zeroed slot.
         buf.push(R1, 5001, vec![("throttle".into(), 1.0)]);
         buf.push(R1, 5002, vec![("throttle".into(), 1.0)]);
-        assert!(buf.next_for_tick(R1, 8).is_some(), "the returning owner must be able to drive");
+        assert!(
+            buf.next_for_tick(R1, 8).is_some(),
+            "the returning owner must be able to drive"
+        );
         applied.record(R1, Some(A), buf.cursor(R1));
         assert_eq!(applied.ack(R1), 5001);
         buf.next_for_tick(R1, 8);
@@ -1857,7 +1913,10 @@ mod tests {
         buf.push(R1, 1, vec![("throttle".into(), 1.0)]);
         buf.push(R1, 2, vec![("throttle".into(), 1.0)]);
         buf.clear_gid(R1);
-        assert!(buf.next_for_tick(R1, 8).is_none(), "A's inputs must not drive B's vessel");
+        assert!(
+            buf.next_for_tick(R1, 8).is_none(),
+            "A's inputs must not drive B's vessel"
+        );
         assert_eq!(buf.cursor(R1), 0);
     }
 
@@ -1876,7 +1935,10 @@ mod tests {
                 signals += 1;
             }
         }
-        assert_eq!(signals, 1, "one signal per sustained divergence, not one per tick");
+        assert_eq!(
+            signals, 1,
+            "one signal per sustained divergence, not one per tick"
+        );
         assert_eq!(stats.worst(), Some((R1, over)));
 
         // Back in tolerance → streak resets, max is remembered.
@@ -1921,7 +1983,7 @@ mod tests {
         // A different session cannot take an owned vessel.
         assert_eq!(reg.claim(B, R1), Err(A));
         assert_eq!(reg.owner_of(R1), Some(A)); // unchanged
-        // Same session re-claim is idempotent.
+                                               // Same session re-claim is idempotent.
         assert!(reg.claim(A, R1).is_ok());
         assert_eq!(reg.owner_of(R1), Some(A));
     }
@@ -1962,7 +2024,7 @@ mod tests {
         assert_eq!(reg.owner_of(R1), None);
         assert_eq!(reg.owner_of(R2), None);
         assert_eq!(reg.owner_of(0xC3), Some(B)); // B untouched
-        // Freed vessel is now claimable by anyone, even under Exclusive.
+                                                 // Freed vessel is now claimable by anyone, even under Exclusive.
         assert!(reg.claim(B, R1).is_ok());
     }
 
@@ -2006,20 +2068,26 @@ mod tests {
         let mut reg = SessionRegistry::default();
         reg.claim(A, R1).unwrap();
         let mut rbac = SessionRbac::default();
-        rbac.sessions.insert(A.0, UserSession {
-            session_id: A,
-            username: "Player A".to_string(),
-            role: AuthorityRole::Operator,
-            authenticated: true,
-            token: Some("srv-token-a".to_string()),
-        });
-        rbac.sessions.insert(B.0, UserSession {
-            session_id: B,
-            username: "Player B".to_string(),
-            role: AuthorityRole::Operator,
-            authenticated: true,
-            token: Some("srv-token-b".to_string()),
-        });
+        rbac.sessions.insert(
+            A.0,
+            UserSession {
+                session_id: A,
+                username: "Player A".to_string(),
+                role: AuthorityRole::Operator,
+                authenticated: true,
+                token: Some("srv-token-a".to_string()),
+            },
+        );
+        rbac.sessions.insert(
+            B.0,
+            UserSession {
+                session_id: B,
+                username: "Player B".to_string(),
+                role: AuthorityRole::Operator,
+                authenticated: true,
+                token: Some("srv-token-b".to_string()),
+            },
+        );
 
         // The owner may issue control commands.
         assert!(authorize(&reg, &rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_ok());
@@ -2038,30 +2106,45 @@ mod tests {
         // Observer and may never send an UpdateProfile to be promoted.)
         let mut observer_rbac = SessionRbac::default();
         for s in [A, B] {
-            observer_rbac.sessions.insert(s.0, UserSession {
-                session_id: s,
-                username: "Observer".to_string(),
-                role: AuthorityRole::Observer,
-                authenticated: true,
-                token: Some(format!("srv-token-{}", s.0)),
-            });
+            observer_rbac.sessions.insert(
+                s.0,
+                UserSession {
+                    session_id: s,
+                    username: "Observer".to_string(),
+                    role: AuthorityRole::Observer,
+                    authenticated: true,
+                    token: Some(format!("srv-token-{}", s.0)),
+                },
+            );
         }
         // Owner-Observer A may drive what it owns, and possess/structural commands.
         assert!(authorize(&reg, &observer_rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_ok());
-        assert!(authorize(&reg, &observer_rbac, &pol, &paths, A, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(
+            &reg,
+            &observer_rbac,
+            &pol,
+            &paths,
+            A,
+            "PossessVessel",
+            Some(R1)
+        )
+        .is_ok());
         // An authenticated non-owner is still rejected by the ownership gate.
         assert!(authorize(&reg, &observer_rbac, &pol, &paths, B, "SetPorts", Some(R1)).is_err());
 
         // The authenticated FLOOR remains: an UNauthenticated session is rejected
         // even for an owned entity (RBAC infra stays wired, just not role-gated).
         let mut unauth_rbac = SessionRbac::default();
-        unauth_rbac.sessions.insert(A.0, UserSession {
-            session_id: A,
-            username: "Player A".to_string(),
-            role: AuthorityRole::Observer,
-            authenticated: false,
-            token: None,
-        });
+        unauth_rbac.sessions.insert(
+            A.0,
+            UserSession {
+                session_id: A,
+                username: "Player A".to_string(),
+                role: AuthorityRole::Observer,
+                authenticated: false,
+                token: None,
+            },
+        );
         assert!(authorize(&reg, &unauth_rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_err());
 
         // M2: a session that is `authenticated` but carries NO server-issued token
@@ -2069,15 +2152,27 @@ mod tests {
         // name-only `UpdateProfile` from minting authority — a credential the
         // server (not the client) created is now required.
         let mut tokenless_rbac = SessionRbac::default();
-        tokenless_rbac.sessions.insert(A.0, UserSession {
-            session_id: A,
-            username: "Player A".to_string(),
-            role: AuthorityRole::Operator,
-            authenticated: true,
-            token: None,
-        });
+        tokenless_rbac.sessions.insert(
+            A.0,
+            UserSession {
+                session_id: A,
+                username: "Player A".to_string(),
+                role: AuthorityRole::Operator,
+                authenticated: true,
+                token: None,
+            },
+        );
         assert!(authorize(&reg, &tokenless_rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_err());
-        assert!(authorize(&reg, &tokenless_rbac, &pol, &paths, A, "PossessVessel", Some(R1)).is_err());
+        assert!(authorize(
+            &reg,
+            &tokenless_rbac,
+            &pol,
+            &paths,
+            A,
+            "PossessVessel",
+            Some(R1)
+        )
+        .is_err());
     }
 
     #[test]
@@ -2092,13 +2187,16 @@ mod tests {
 
         let reg = SessionRegistry::default();
         let mut rbac = SessionRbac::default();
-        rbac.sessions.insert(A.0, UserSession {
-            session_id: A,
-            username: "Observer".to_string(),
-            role: AuthorityRole::Observer,
-            authenticated: true,
-            token: Some("srv-token-a".to_string()),
-        });
+        rbac.sessions.insert(
+            A.0,
+            UserSession {
+                session_id: A,
+                username: "Observer".to_string(),
+                role: AuthorityRole::Observer,
+                authenticated: true,
+                token: Some("srv-token-a".to_string()),
+            },
+        );
         assert!(authorize(&reg, &rbac, &pol, &paths, A, "SomeBrandNewCommand", None).is_ok());
     }
 
@@ -2110,25 +2208,34 @@ mod tests {
         let paths = ControlPathRegistry::default();
         pol.set_override(
             "SpawnEntity",
-            CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false },
+            CommandPolicy {
+                min_role: AuthorityRole::Operator,
+                ownership_gated: false,
+            },
         );
 
         let reg = SessionRegistry::default();
         let mut rbac = SessionRbac::default();
-        rbac.sessions.insert(A.0, UserSession {
-            session_id: A,
-            username: "Observer".to_string(),
-            role: AuthorityRole::Observer,
-            authenticated: true,
-            token: Some("srv-token-a".to_string()),
-        });
-        rbac.sessions.insert(B.0, UserSession {
-            session_id: B,
-            username: "Operator".to_string(),
-            role: AuthorityRole::Operator,
-            authenticated: true,
-            token: Some("srv-token-b".to_string()),
-        });
+        rbac.sessions.insert(
+            A.0,
+            UserSession {
+                session_id: A,
+                username: "Observer".to_string(),
+                role: AuthorityRole::Observer,
+                authenticated: true,
+                token: Some("srv-token-a".to_string()),
+            },
+        );
+        rbac.sessions.insert(
+            B.0,
+            UserSession {
+                session_id: B,
+                username: "Operator".to_string(),
+                role: AuthorityRole::Operator,
+                authenticated: true,
+                token: Some("srv-token-b".to_string()),
+            },
+        );
 
         // Observer is rejected for the tightened command…
         assert!(authorize(&reg, &rbac, &pol, &paths, A, "SpawnEntity", None).is_err());

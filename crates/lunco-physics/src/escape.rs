@@ -212,15 +212,13 @@ fn update_world_bounds(
 fn report_escaped_bodies(
     bounds: Res<WorldBounds>,
     mut reported: ResMut<ReportedEscapes>,
-    q: Query<
-        (
-            Entity,
-            &Position,
-            &LinearVelocity,
-            Option<&Name>,
-            &RigidBody,
-        ),
-    >,
+    q: Query<(
+        Entity,
+        &Position,
+        &LinearVelocity,
+        Option<&Name>,
+        &RigidBody,
+    )>,
 ) {
     for (entity, pos, vel, name, rb) in &q {
         // Static bodies do not move, and a kinematic body is wherever its driver
@@ -301,7 +299,11 @@ impl Plugin for EscapeDiagnosticPlugin {
                 // `forget_dead_bodies` first: a body despawned this tick must leave
                 // the set before anything is judged, or a recycled id starts life
                 // already-reported and its first real escape is silent.
-                (forget_dead_bodies, update_world_bounds, report_escaped_bodies)
+                (
+                    forget_dead_bodies,
+                    update_world_bounds,
+                    report_escaped_bodies,
+                )
                     .chain()
                     .in_set(PhysicsSystems::Writeback)
                     .after(avian3d::schedule::PhysicsStepSystems::Last)
@@ -334,8 +336,14 @@ mod tests {
             min: Vector::new(-600.0, -100.0, -600.0),
             max: Vector::new(600.0, Scalar::INFINITY, 600.0),
         };
-        assert!(b.escaped(Vector::new(0.0, -1510.0, 0.0)), "y=-1510 must flag");
-        assert!(b.escaped(Vector::new(0.0, -737.0, 0.0)), "elev=-737 must flag");
+        assert!(
+            b.escaped(Vector::new(0.0, -1510.0, 0.0)),
+            "y=-1510 must flag"
+        );
+        assert!(
+            b.escaped(Vector::new(0.0, -737.0, 0.0)),
+            "elev=-737 must flag"
+        );
         // A body resting on the terrain is fine.
         assert!(!b.escaped(Vector::new(10.0, 0.5, -20.0)));
         // A body a metre under the surface — settling, not escaping — is fine.
@@ -438,7 +446,10 @@ mod tests {
         app.add_systems(Update, forget_dead_bodies);
 
         let e = app.world_mut().spawn(RigidBody::Dynamic).id();
-        app.world_mut().resource_mut::<ReportedEscapes>().0.insert(e);
+        app.world_mut()
+            .resource_mut::<ReportedEscapes>()
+            .0
+            .insert(e);
 
         // No death yet: the report stands.
         app.update();

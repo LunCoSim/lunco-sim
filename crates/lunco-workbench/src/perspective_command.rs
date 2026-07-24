@@ -11,9 +11,9 @@
 //! 3D `ViewportPanel`) that a stale persisted workspace-state had dropped — the
 //! persisted restore only runs at load, so a runtime re-activation wins.
 
-use bevy::prelude::*;
-use lunco_core::{Command, on_command, register_commands};
 use crate::WorkbenchLayout;
+use bevy::prelude::*;
+use lunco_core::{on_command, register_commands, Command};
 
 /// Activate a registered [`Perspective`](crate::Perspective) by its
 /// `PerspectiveId` string. The sandbox ships `sandbox_view`, `rover_build`,
@@ -25,10 +25,7 @@ pub struct ActivatePerspective {
 }
 
 #[on_command(ActivatePerspective)]
-fn on_activate_perspective(
-    trigger: On<ActivatePerspective>,
-    mut layout: ResMut<WorkbenchLayout>,
-) {
+fn on_activate_perspective(trigger: On<ActivatePerspective>, mut layout: ResMut<WorkbenchLayout>) {
     let id = trigger.event().id.clone();
     if layout.activate_perspective_by_str(&id) {
         info!("[ActivatePerspective] activated `{id}`");

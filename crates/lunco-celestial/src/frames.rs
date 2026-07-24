@@ -126,7 +126,11 @@ pub enum Center {
     /// It is a CENTRE, not a frame kind. The frame an L-point naturally lives in is the pair's
     /// [`Synodic`] (co-rotating) frame, where L1–L5 are stationary — which is why `Synodic`
     /// carries the same pair.
-    Libration { primary: BodyId, secondary: BodyId, point: LPoint },
+    Libration {
+        primary: BodyId,
+        secondary: BodyId,
+        point: LPoint,
+    },
     /// A surface site (a geodetic anchor on a body).
     Site { body: BodyId, id: u32 },
 }
@@ -264,10 +268,18 @@ impl<F: Frame<Origin = ()>> Pos<F> {
     /// incidents happened.
     #[inline]
     pub const fn new(v: DVec3) -> Self {
-        Self { v, origin: (), _f: PhantomData }
+        Self {
+            v,
+            origin: (),
+            _f: PhantomData,
+        }
     }
 
-    pub const ZERO: Self = Self { v: DVec3::ZERO, origin: (), _f: PhantomData };
+    pub const ZERO: Self = Self {
+        v: DVec3::ZERO,
+        origin: (),
+        _f: PhantomData,
+    };
 }
 
 impl<F: Frame<Origin = Center>> Pos<F> {
@@ -275,13 +287,21 @@ impl<F: Frame<Origin = Center>> Pos<F> {
     /// caveat on [`Pos::new`] — this is an assertion, not a conversion.
     #[inline]
     pub const fn at(center: Center, v: DVec3) -> Self {
-        Self { v, origin: center, _f: PhantomData }
+        Self {
+            v,
+            origin: center,
+            _f: PhantomData,
+        }
     }
 
     /// Convenience: centred on a body by NAIF id.
     #[inline]
     pub const fn at_body(body: BodyId, v: DVec3) -> Self {
-        Self { v, origin: Center::Body(body), _f: PhantomData }
+        Self {
+            v,
+            origin: Center::Body(body),
+            _f: PhantomData,
+        }
     }
 
     /// What this frame is centred on.
@@ -295,7 +315,11 @@ impl<F: Frame<Origin = Pair>> Pos<F> {
     /// Wrap a raw vector as being in the co-rotating frame of `pair`.
     #[inline]
     pub const fn in_pair(pair: Pair, v: DVec3) -> Self {
-        Self { v, origin: pair, _f: PhantomData }
+        Self {
+            v,
+            origin: pair,
+            _f: PhantomData,
+        }
     }
 
     #[inline]
@@ -319,14 +343,20 @@ impl<F: Frame> Pos<F> {
 
     #[inline]
     pub fn normalize(self) -> Self {
-        Self { v: self.v.normalize(), ..self }
+        Self {
+            v: self.v.normalize(),
+            ..self
+        }
     }
 
     /// Interpolate within one frame (an ephemeris table lookup between two samples).
     #[inline]
     pub fn lerp(self, rhs: Self, t: f64) -> Self {
         debug_assert!(self.same_origin(rhs), "lerp across two different origins");
-        Self { v: self.v.lerp(rhs.v, t), ..self }
+        Self {
+            v: self.v.lerp(rhs.v, t),
+            ..self
+        }
     }
 
     #[inline]
@@ -346,7 +376,10 @@ impl<F: Frame> Pos<F> {
     /// Used by the conversion functions; not a way to change frames.
     #[inline]
     pub(crate) fn map(self, f: impl FnOnce(DVec3) -> DVec3) -> Self {
-        Self { v: f(self.v), ..self }
+        Self {
+            v: f(self.v),
+            ..self
+        }
     }
 
     #[inline]
@@ -367,7 +400,10 @@ impl<F: Frame> std::ops::Add for Pos<F> {
             self.origin,
             rhs.origin
         );
-        Self { v: self.v + rhs.v, ..self }
+        Self {
+            v: self.v + rhs.v,
+            ..self
+        }
     }
 }
 
@@ -389,7 +425,10 @@ impl<F: Frame> std::ops::Sub for Pos<F> {
             self.origin,
             rhs.origin
         );
-        Self { v: self.v - rhs.v, ..self }
+        Self {
+            v: self.v - rhs.v,
+            ..self
+        }
     }
 }
 
@@ -397,7 +436,10 @@ impl<F: Frame> std::ops::Mul<f64> for Pos<F> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: f64) -> Self {
-        Self { v: self.v * rhs, ..self }
+        Self {
+            v: self.v * rhs,
+            ..self
+        }
     }
 }
 
@@ -443,7 +485,10 @@ mod tests {
     #[test]
     fn a_global_frame_vector_is_the_size_of_its_vector() {
         assert_eq!(std::mem::size_of::<SolarM>(), std::mem::size_of::<DVec3>());
-        assert_eq!(std::mem::size_of::<EclipticAu>(), std::mem::size_of::<DVec3>());
+        assert_eq!(
+            std::mem::size_of::<EclipticAu>(),
+            std::mem::size_of::<DVec3>()
+        );
     }
 
     /// Same-frame arithmetic stays ergonomic — a type that makes correct code painful gets
@@ -480,20 +525,34 @@ mod tests {
     /// is expressible as a hardcoded newtype — and both fall out of this scheme for free.
     #[test]
     fn a_libration_point_is_a_center_in_a_synodic_frame() {
-        let em = Pair { primary: 399, secondary: 301 };
+        let em = Pair {
+            primary: 399,
+            secondary: 301,
+        };
         // A halo orbit sample about Earth–Moon L2, in the co-rotating frame.
         let halo = Pos::<Synodic>::in_pair(em, DVec3::new(1.0e7, 0.0, 5.0e6));
         assert_eq!(halo.pair(), em);
 
-        let l2 = Center::Libration { primary: 399, secondary: 301, point: LPoint::L2 };
+        let l2 = Center::Libration {
+            primary: 399,
+            secondary: 301,
+            point: LPoint::L2,
+        };
         assert_ne!(
             l2,
-            Center::Libration { primary: 399, secondary: 301, point: LPoint::L1 },
+            Center::Libration {
+                primary: 399,
+                secondary: 301,
+                point: LPoint::L1
+            },
             "L1 and L2 are different centres of the same frame"
         );
 
         // A Sun–Earth L2 halo is a different frame entirely, and says so.
-        let se = Pair { primary: 10, secondary: 399 };
+        let se = Pair {
+            primary: 10,
+            secondary: 399,
+        };
         assert_ne!(halo.pair(), se);
     }
 

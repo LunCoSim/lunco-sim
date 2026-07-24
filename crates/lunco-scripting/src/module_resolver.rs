@@ -99,9 +99,7 @@ impl ModuleResolver for AssetModuleResolver {
         };
 
         // Serve the memo only if it was compiled from the text now in the registry.
-        if let Some((cached_text, m)) =
-            self.cache.read().ok().and_then(|c| c.get(&id).cloned())
-        {
+        if let Some((cached_text, m)) = self.cache.read().ok().and_then(|c| c.get(&id).cloned()) {
             if cached_text == text {
                 return Ok(m);
             }
@@ -131,7 +129,11 @@ impl ModuleResolver for AssetModuleResolver {
         let evaluated = engine
             .compile(&text)
             .map_err(|e| {
-                Box::new(EvalAltResult::ErrorInModule(id.clone(), Box::new(e.into()), pos))
+                Box::new(EvalAltResult::ErrorInModule(
+                    id.clone(),
+                    Box::new(e.into()),
+                    pos,
+                ))
             })
             .and_then(|ast| {
                 Module::eval_ast_as_new(Scope::new(), &ast, engine)
@@ -181,7 +183,10 @@ mod tests {
             .eval::<i64>(r#"import "../../../etc/passwd" as m; 1"#)
             .unwrap_err();
         assert!(
-            matches!(*err, EvalAltResult::ErrorInModule(..) | EvalAltResult::ErrorModuleNotFound(..)),
+            matches!(
+                *err,
+                EvalAltResult::ErrorInModule(..) | EvalAltResult::ErrorModuleNotFound(..)
+            ),
             "expected a resolution failure, got {err:?}"
         );
     }
@@ -194,8 +199,13 @@ mod tests {
     #[test]
     fn unregistered_import_fails() {
         let engine = engine_with(ScriptSources::default());
-        let err = engine.eval::<i64>(r#"import "twin://ep1/lib" as m; 1"#).unwrap_err();
-        assert!(matches!(*err, EvalAltResult::ErrorModuleNotFound(..)), "got {err:?}");
+        let err = engine
+            .eval::<i64>(r#"import "twin://ep1/lib" as m; 1"#)
+            .unwrap_err();
+        assert!(
+            matches!(*err, EvalAltResult::ErrorModuleNotFound(..)),
+            "got {err:?}"
+        );
     }
 
     /// Relative imports anchor to the IMPORTING script, via the shared
@@ -211,7 +221,9 @@ mod tests {
         let mut ast = engine.compile(r#"import "lib" as m; m::v()"#).unwrap();
         // `source` is what rhai passes the resolver as the importing script's id.
         ast.set_source("twin://ep1/main.rhai");
-        let got: i64 = engine.eval_ast(&ast).expect("relative import should resolve");
+        let got: i64 = engine
+            .eval_ast(&ast)
+            .expect("relative import should resolve");
         assert_eq!(got, 7);
     }
 }

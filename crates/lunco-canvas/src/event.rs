@@ -13,7 +13,7 @@
 //! scripted replay, remote control) can drive the canvas without
 //! pretending to be egui.
 
-use crate::scene::{EdgeId, NodeId, Pos, PortRef, Rect};
+use crate::scene::{EdgeId, NodeId, PortRef, Pos, Rect};
 use crate::selection::Selection;
 
 /// Editor-facing event. One per user action that mutates the scene.
@@ -54,19 +54,14 @@ pub enum SceneEvent {
         points: Vec<Pos>,
     },
     /// Existing edge was deleted (Delete key, context menu, etc.).
-    EdgeDeleted {
-        id: EdgeId,
-    },
+    EdgeDeleted { id: EdgeId },
     /// User finished editing an edge's polyline (drag of a corner or
     /// segment handle ended). Carries the final list of *interior*
     /// waypoints in world coords (port endpoints excluded). Emitted
     /// once on drag-end, matching `NodeMoved`'s cadence — no per-frame
     /// events during the drag, so consumers translate one user gesture
     /// to one domain op + one undo entry.
-    EdgeWaypointsChanged {
-        id: EdgeId,
-        points: Vec<Pos>,
-    },
+    EdgeWaypointsChanged { id: EdgeId, points: Vec<Pos> },
     /// Node was deleted. `orphaned_edges` lists edges that the scene
     /// had to remove because they pointed at the gone node — so the
     /// caller can emit one combined undo entry rather than discovering
@@ -95,9 +90,7 @@ pub enum SceneEvent {
     },
     /// Primary-button double-click on a node — "drill into this".
     /// Modelica uses this to open the class definition in a new tab.
-    NodeDoubleClicked {
-        id: NodeId,
-    },
+    NodeDoubleClicked { id: NodeId },
 }
 
 /// What a right-click landed on.

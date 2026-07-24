@@ -88,8 +88,20 @@ pub struct PendingTwinDocs {
 
 impl PendingTwinDocs {
     /// Queue a default twin scene for doc-backed projection.
-    pub fn push(&mut self, handle: Handle<UsdSourceText>, name: String, rel: String, abs_path: PathBuf) {
-        self.items.push(PendingTwinDoc { handle, name, rel, abs_path, attempts: 0 });
+    pub fn push(
+        &mut self,
+        handle: Handle<UsdSourceText>,
+        name: String,
+        rel: String,
+        abs_path: PathBuf,
+    ) {
+        self.items.push(PendingTwinDoc {
+            handle,
+            name,
+            rel,
+            abs_path,
+            attempts: 0,
+        });
     }
 }
 
@@ -144,7 +156,6 @@ impl DocBackedTwinScenes {
             overlay_synced_generation: None,
         });
     }
-
 }
 
 /// The editable document backing a running scene's stage asset, if the scene is
@@ -244,7 +255,10 @@ pub(crate) fn drain_pending_twin_docs(
                 warn!(
                     "[usd-e1b] base source for `{twin_path}` never loaded — mounting without doc projection"
                 );
-                commands.trigger(LoadScene { path: twin_path, root_prim: String::new() });
+                commands.trigger(LoadScene {
+                    path: twin_path,
+                    root_prim: String::new(),
+                });
             }
             continue;
         };
@@ -300,7 +314,10 @@ pub(crate) fn drain_pending_twin_docs(
             overlay_synced_generation: Some(cur_gen),
         });
         info!("[usd-e1b] default scene `{twin_path}` is doc-backed ({doc}) — mounting composed");
-        commands.trigger(LoadScene { path: twin_path, root_prim: String::new() });
+        commands.trigger(LoadScene {
+            path: twin_path,
+            root_prim: String::new(),
+        });
     }
     pending.items.extend(still);
 }
@@ -315,11 +332,19 @@ pub(crate) fn drain_pending_twin_docs(
 /// whole-stage recompose + serialize — so call it only once the document has SETTLED
 /// (see the debounce in [`sync_twin_overlays`]), never on every edit.
 fn write_twin_overlay(world: &mut World, doc: DocumentId, name: &str, rel: &str, gen: u64) {
-    let composed_source =
-        world.resource::<DocumentRegistry<UsdDocument>>().host(doc).map(|h| h.document().composed_source());
+    let composed_source = world
+        .resource::<DocumentRegistry<UsdDocument>>()
+        .host(doc)
+        .map(|h| h.document().composed_source());
     if let Some(src) = composed_source {
-        world.resource::<TwinRoots>().set_overlay(name, rel, Arc::new(src.into_bytes()));
-        if let Some(s) = world.resource_mut::<DocBackedTwinScenes>().map.get_mut(&doc) {
+        world
+            .resource::<TwinRoots>()
+            .set_overlay(name, rel, Arc::new(src.into_bytes()));
+        if let Some(s) = world
+            .resource_mut::<DocBackedTwinScenes>()
+            .map
+            .get_mut(&doc)
+        {
             s.overlay_synced_generation = Some(gen);
         }
     }
@@ -333,7 +358,13 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         .map
         .iter()
         .map(|(doc, s)| {
-            (*doc, s.name.clone(), s.rel.clone(), s.synced_generation, s.overlay_synced_generation)
+            (
+                *doc,
+                s.name.clone(),
+                s.rel.clone(),
+                s.synced_generation,
+                s.overlay_synced_generation,
+            )
         })
         .collect();
 
@@ -350,7 +381,8 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     // despawn and the new one's spawn. Project nothing rather than everything:
     // the incoming scene resumes on the tick its root appears.
     let mounted: Option<AssetId<UsdStageAsset>> = {
-        let mut q = world.query_filtered::<&UsdPrimPath, With<lunco_usd_sim::cosim::UsdSceneRoot>>();
+        let mut q =
+            world.query_filtered::<&UsdPrimPath, With<lunco_usd_sim::cosim::UsdSceneRoot>>();
         q.iter(world).next().map(|p| p.stage_handle.id())
     };
     let active_doc: Option<DocumentId> = mounted.and_then(|id| {
@@ -488,7 +520,11 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             }
         }
 
-        if let Some(s) = world.resource_mut::<DocBackedTwinScenes>().map.get_mut(&doc) {
+        if let Some(s) = world
+            .resource_mut::<DocBackedTwinScenes>()
+            .map
+            .get_mut(&doc)
+        {
             s.synced_generation = Some(cur_gen);
         }
     }
@@ -499,9 +535,10 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
 /// [`author::author_reference`](lunco_usd_bevy::author::author_reference).
 fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
     match spec.get("references") {
-        Some(openusd::sdf::Value::ReferenceListOp(op)) => {
-            op.iter().find(|r| !r.asset_path.is_empty()).map(|r| r.asset_path.clone())
-        }
+        Some(openusd::sdf::Value::ReferenceListOp(op)) => op
+            .iter()
+            .find(|r| !r.asset_path.is_empty())
+            .map(|r| r.asset_path.clone()),
         _ => None,
     }
 }
@@ -553,31 +590,45 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
 /// [`project_stage_changes`](crate::live_consume::project_stage_changes) reconcile
 /// ECS. Only incremental ops reach here; coarse ops ([`op_needs_rebuild`]) rebuild
 /// instead. Reads/authors the `!Send` stage under short borrows.
-fn apply_incremental_op_to_stage(
-    world: &mut World,
-    scene_id: AssetId<UsdStageAsset>,
-    op: &UsdOp,
-) {
+fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
     use lunco_usd_bevy::CanonicalStages;
     match op {
         UsdOp::SetTranslate { path, value, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            if let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
                 if let Err(e) = cs.author_translate(&sp, *value) {
                     warn!("[twin] author translate {path}: {e}");
                 }
             }
         }
         UsdOp::SetRotate { path, value, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            if let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
                 if let Err(e) = cs.author_rotate(&sp, *value) {
                     warn!("[twin] author rotate {path}: {e}");
                 }
             }
         }
-        UsdOp::SetAttribute { path, name, type_name, value, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
+        UsdOp::SetAttribute {
+            path,
+            name,
+            type_name,
+            value,
+            ..
+        } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
             // Mirror the document op: a `string` value is RAW (`Value::String`, no
             // literal parse); every other type is a parsed literal.
             let is_string = type_name == "string";
@@ -660,24 +711,50 @@ fn apply_incremental_op_to_stage(
                 }
             }
         }
-        UsdOp::AddPrim { parent_path, name, type_name, reference, .. } => {
+        UsdOp::AddPrim {
+            parent_path,
+            name,
+            type_name,
+            reference,
+            ..
+        } => {
             let prim_path = if parent_path == "/" || parent_path.is_empty() {
                 format!("/{name}")
             } else {
                 format!("{}/{name}", parent_path.trim_end_matches('/'))
             };
-            spawn_prim_op(world, scene_id, &prim_path, type_name.clone(), reference.clone());
+            spawn_prim_op(
+                world,
+                scene_id,
+                &prim_path,
+                type_name.clone(),
+                reference.clone(),
+            );
         }
         UsdOp::RemovePrim { path, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            if let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
                 if let Err(e) = cs.remove_prim_at(&sp) {
                     warn!("[twin] remove {path}: {e}");
                 }
             }
         }
-        UsdOp::SetTimeSample { path, name, type_name, time, value, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
+        UsdOp::SetTimeSample {
+            path,
+            name,
+            type_name,
+            time,
+            value,
+            ..
+        } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
             let v = match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
                 Ok(v) => v,
                 Err(e) => {
@@ -707,12 +784,25 @@ fn apply_incremental_op_to_stage(
                 refresh_prim_subtree(world, scene_id, path);
             }
         }
-        UsdOp::SetRelationship { path, name, targets, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            let authored = match world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+        UsdOp::SetRelationship {
+            path,
+            name,
+            targets,
+            ..
+        } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let authored = match world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
                 Some(cs) => match cs.author_relationship(&sp, name, targets) {
                     Ok(()) => true,
-                    Err(e) => { warn!("[twin] author relationship {path}.{name}: {e}"); false }
+                    Err(e) => {
+                        warn!("[twin] author relationship {path}.{name}: {e}");
+                        false
+                    }
                 },
                 None => false,
             };
@@ -724,12 +814,26 @@ fn apply_incremental_op_to_stage(
                 refresh_relationship_dependents(world, scene_id, path, name);
             }
         }
-        UsdOp::SetConnection { path, name, type_name, sources, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            let authored = match world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+        UsdOp::SetConnection {
+            path,
+            name,
+            type_name,
+            sources,
+            ..
+        } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let authored = match world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
                 Some(cs) => match cs.author_connection(&sp, name, type_name, sources) {
                     Ok(()) => true,
-                    Err(e) => { warn!("[twin] author connection {path}.{name}: {e}"); false }
+                    Err(e) => {
+                        warn!("[twin] author connection {path}.{name}: {e}");
+                        false
+                    }
                 },
                 None => false,
             };
@@ -769,7 +873,11 @@ fn refresh_relationship_dependents(
 /// sampler already drives it and a fresh keyframe needs no re-instantiation. False
 /// when the prim is static (or has no live entity yet), which is when a first
 /// keyframe must trigger a subtree refresh to (re-)tag it.
-fn prim_entity_is_animated(world: &mut World, scene_id: AssetId<UsdStageAsset>, path: &str) -> bool {
+fn prim_entity_is_animated(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &str,
+) -> bool {
     let mut q = world.query::<(&UsdPrimPath, Option<&lunco_usd_bevy::UsdAnimated>)>();
     q.iter(world)
         .any(|(upp, anim)| upp.stage_handle.id() == scene_id && upp.path == *path && anim.is_some())
@@ -790,11 +898,16 @@ fn spawn_prim_op(
     reference: Option<String>,
 ) {
     use lunco_usd_bevy::CanonicalStages;
-    let Ok(sp) = openusd::sdf::Path::new(prim_path) else { return };
+    let Ok(sp) = openusd::sdf::Path::new(prim_path) else {
+        return;
+    };
 
     let Some(asset_path) = reference else {
         // Plain prim — author now.
-        if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+        if let Some(cs) = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|s| s.get(scene_id))
+        {
             if let Err(e) = cs.author_prim(&sp, type_name.as_deref()) {
                 warn!("[twin] spawn {prim_path}: {e}");
             }
@@ -808,7 +921,9 @@ fn spawn_prim_op(
         Fetch(String),
     }
     let plan = {
-        let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        let Some(cs) = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|s| s.get(scene_id))
         else {
             return;
         };
@@ -821,7 +936,10 @@ fn spawn_prim_op(
     };
     match plan {
         Plan::Now => {
-            if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            if let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
                 if let Err(e) = cs
                     .author_prim(&sp, type_name.as_deref())
                     .and_then(|_| cs.author_reference(&sp, &asset_path))
@@ -831,14 +949,19 @@ fn spawn_prim_op(
             }
         }
         Plan::Fetch(ref_id) => {
-            let ref_handle = world.resource::<AssetServer>().load::<UsdStageAsset>(ref_id);
-            world.resource_mut::<PendingRefSpawns>().items.push(RefSpawn {
-                scene_id,
-                prim_path: prim_path.to_string(),
-                type_name,
-                asset_path,
-                ref_handle,
-            });
+            let ref_handle = world
+                .resource::<AssetServer>()
+                .load::<UsdStageAsset>(ref_id);
+            world
+                .resource_mut::<PendingRefSpawns>()
+                .items
+                .push(RefSpawn {
+                    scene_id,
+                    prim_path: prim_path.to_string(),
+                    type_name,
+                    asset_path,
+                    ref_handle,
+                });
         }
     }
 }
@@ -857,10 +980,18 @@ fn author_structural_edit(
     composed: &openusd::sdf::Data,
 ) {
     use lunco_usd_bevy::CanonicalStages;
-    let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-    let Some(spec) = composed.spec(&sp).filter(|s| s.ty == openusd::sdf::SpecType::Prim) else {
+    let Ok(sp) = openusd::sdf::Path::new(path) else {
+        return;
+    };
+    let Some(spec) = composed
+        .spec(&sp)
+        .filter(|s| s.ty == openusd::sdf::SpecType::Prim)
+    else {
         // Removed from the document → remove from the live stage.
-        if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+        if let Some(cs) = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|s| s.get(scene_id))
+        {
             if let Err(e) = cs.remove_prim_at(&sp) {
                 warn!("[twin] remove {path}: {e}");
             }
@@ -920,7 +1051,11 @@ fn reinstantiate_entity(world: &mut World, entity: Entity) {
 /// `material:binding` to arbitrary meshes and needs the whole-scene refresh. This
 /// avoids re-instantiating unrelated roots (including live physics bodies) on
 /// every attribute edit.
-pub(crate) fn refresh_prim_subtree(world: &mut World, scene_id: AssetId<UsdStageAsset>, path: &str) {
+pub(crate) fn refresh_prim_subtree(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &str,
+) {
     let entity = {
         let mut q = world.query::<(Entity, &UsdPrimPath)>();
         q.iter(world)
@@ -983,14 +1118,19 @@ fn rebuild_scene_from_composed(
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
     let (scene_layer, mut bytes) = {
-        let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        let Some(cs) = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|s| s.get(scene_id))
         else {
             return;
         };
         (cs.scene_layer.clone(), cs.layer_bytes_snapshot())
     };
     bytes.insert(scene_layer.clone(), composed_source.as_bytes().to_vec());
-    let recipe = StageRecipe { root_id: scene_layer, bytes };
+    let recipe = StageRecipe {
+        root_id: scene_layer,
+        bytes,
+    };
     let rebuilt = world
         .get_non_send_mut::<CanonicalStages>()
         .map(|mut stages| stages.rebuild(scene_id, &recipe))
@@ -1019,7 +1159,9 @@ fn reconcile_full_to_composed(
 
     // Snapshot the authored-prim sets under a short borrow of the `!Send` stage.
     let (live_authored, composed_prims): (BTreeSet<String>, BTreeSet<String>) = {
-        let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        let Some(cs) = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|s| s.get(scene_id))
         else {
             return;
         };
@@ -1078,8 +1220,12 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             still.push(item);
             continue;
         };
-        let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else { continue };
-        let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(item.scene_id))
+        let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else {
+            continue;
+        };
+        let Some(cs) = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|s| s.get(item.scene_id))
         else {
             continue; // scene stage gone — drop the spawn
         };
@@ -1089,7 +1235,10 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             .author_prim(&sp, item.type_name.as_deref())
             .and_then(|_| cs.author_reference(&sp, &item.asset_path))
         {
-            warn!("[twin] referenced spawn {} (post-fetch): {e}", item.prim_path);
+            warn!(
+                "[twin] referenced spawn {} (post-fetch): {e}",
+                item.prim_path
+            );
         }
     }
     world.resource_mut::<PendingRefSpawns>().items.extend(still);
@@ -1112,32 +1261,48 @@ mod tests {
         let et = LayerId::root();
         // Incremental now — a joint's two `physics:body` rels and a cosim wire.
         assert!(!op_needs_rebuild(&UsdOp::SetRelationship {
-            edit_target: et.clone(), path: "/J".into(), name: "physics:body0".into(), targets: vec![],
+            edit_target: et.clone(),
+            path: "/J".into(),
+            name: "physics:body0".into(),
+            targets: vec![],
         }));
         assert!(!op_needs_rebuild(&UsdOp::SetConnection {
-            edit_target: et.clone(), path: "/B".into(), name: "inputs:v".into(),
-            type_name: "float".into(), sources: vec![],
+            edit_target: et.clone(),
+            path: "/B".into(),
+            name: "inputs:v".into(),
+            type_name: "float".into(),
+            sources: vec![],
         }));
         // apiSchema / active REBUILD: their effect is a prim's ECS component set /
         // entity presence, which the visual-only subtree refresh can't reconcile.
         assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
-            edit_target: et.clone(), path: "/W".into(), schemas: vec![],
+            edit_target: et.clone(),
+            path: "/W".into(),
+            schemas: vec![],
         }));
         assert!(op_needs_rebuild(&UsdOp::SetActive {
-            edit_target: et.clone(), path: "/W".into(), active: false,
+            edit_target: et.clone(),
+            path: "/W".into(),
+            active: false,
         }));
         // Composition-arc edits also rebuild — value resolution recomposes the
         // subtree, which the incremental sink can't express.
         assert!(op_needs_rebuild(&UsdOp::SetVariantSelection {
-            edit_target: et.clone(), path: "/R".into(),
-            variant_set: "drivetrain".into(), variant: "physical".into(),
+            edit_target: et.clone(),
+            path: "/R".into(),
+            variant_set: "drivetrain".into(),
+            variant: "physical".into(),
         }));
         assert!(op_needs_rebuild(&UsdOp::SetPayload {
-            edit_target: et.clone(), path: "/H".into(), asset_paths: vec![],
+            edit_target: et.clone(),
+            path: "/H".into(),
+            asset_paths: vec![],
         }));
         // Pre-existing coarse ops unchanged.
         assert!(op_needs_rebuild(&UsdOp::MovePrim {
-            edit_target: et, from_path: "/a".into(), to_path: "/b".into(),
+            edit_target: et,
+            from_path: "/a".into(),
+            to_path: "/b".into(),
         }));
     }
 
@@ -1173,10 +1338,16 @@ mod tests {
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let abs = PathBuf::from("/twins/moonbase/scene.usda");
         let (doc, _) = registry.open_file(abs.clone(), TINY.to_string());
-        registry.allocate(TINY.to_string(), lunco_doc::PathlessOrigin::untitled("Untitled.usda"));
+        registry.allocate(
+            TINY.to_string(),
+            lunco_doc::PathlessOrigin::untitled("Untitled.usda"),
+        );
 
         assert_eq!(registry.doc_for_file(&abs), Some(doc));
-        assert_eq!(registry.doc_for_file(std::path::Path::new("/twins/x.usda")), None);
+        assert_eq!(
+            registry.doc_for_file(std::path::Path::new("/twins/x.usda")),
+            None
+        );
     }
 
     /// The bytes pushed into the overlay are the document's *composed* source —

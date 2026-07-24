@@ -117,7 +117,10 @@ pub struct TimeTransport {
 
 impl Default for TimeTransport {
     fn default() -> Self {
-        Self { mode: TransportMode::Playing, rate: 1.0 }
+        Self {
+            mode: TransportMode::Playing,
+            rate: 1.0,
+        }
     }
 }
 
@@ -144,7 +147,10 @@ pub struct TimeAnchor {
 
 impl Default for TimeAnchor {
     fn default() -> Self {
-        Self { epoch0_jd: J2000_JD, tick0: 0 }
+        Self {
+            epoch0_jd: J2000_JD,
+            tick0: 0,
+        }
     }
 }
 
@@ -294,7 +300,11 @@ pub fn advance_clock(
         (TimeRegime::RealtimePhysics, TimeRegime::KinematicWarp) => {
             // Entering warp: seed the wall preview from the current realtime epoch.
             let cur = clock.anchor.epoch_jd(tick);
-            clock.warp = Some(WarpPreview { epoch0_jd: cur, real0_secs: real_secs, rate });
+            clock.warp = Some(WarpPreview {
+                epoch0_jd: cur,
+                real0_secs: real_secs,
+                rate,
+            });
         }
         (TimeRegime::KinematicWarp, TimeRegime::KinematicWarp) => {
             // Still warping but `rate` may have changed: re-seed at the current
@@ -313,7 +323,10 @@ pub fn advance_clock(
             let cur = clock
                 .warp
                 .map_or_else(|| clock.anchor.epoch_jd(tick), |w| w.epoch_at(real_secs));
-            clock.anchor = TimeAnchor { epoch0_jd: cur, tick0: tick };
+            clock.anchor = TimeAnchor {
+                epoch0_jd: cur,
+                tick0: tick,
+            };
             clock.warp = None;
         }
         (TimeRegime::RealtimePhysics, TimeRegime::RealtimePhysics) => {}
@@ -488,7 +501,10 @@ mod tests {
 
     #[test]
     fn epoch_derives_from_tick_no_accumulation() {
-        let a = TimeAnchor { epoch0_jd: J2000_JD, tick0: 0 };
+        let a = TimeAnchor {
+            epoch0_jd: J2000_JD,
+            tick0: 0,
+        };
         // 60 ticks = 1 second = 1/86400 day.
         assert!((a.epoch_jd(60) - (J2000_JD + 1.0 / SECS_PER_DAY)).abs() < EPS);
         // One full day later.
@@ -628,7 +644,10 @@ mod tests {
             world.run_system_once(advance_world_clock).unwrap();
 
             let vt = world.resource::<Time<Virtual>>();
-            assert!(vt.is_paused(), "{mode:?}/{rate} should freeze via the paused flag");
+            assert!(
+                vt.is_paused(),
+                "{mode:?}/{rate} should freeze via the paused flag"
+            );
             assert!(
                 vt.relative_speed_f64() > 0.0,
                 "{mode:?}/{rate} left relative_speed at {} — consumers divide by it",
@@ -644,7 +663,10 @@ mod tests {
 
         let mut world = bevy::prelude::World::new();
         world.insert_resource(lunco_core::SimTick(0));
-        world.insert_resource(TimeTransport { mode: TransportMode::Playing, rate: 2.0 });
+        world.insert_resource(TimeTransport {
+            mode: TransportMode::Playing,
+            rate: 2.0,
+        });
         world.insert_resource(Time::<bevy::time::Real>::default());
         world.insert_resource(MissionClock::default());
         world.insert_resource(WorldTime::default());

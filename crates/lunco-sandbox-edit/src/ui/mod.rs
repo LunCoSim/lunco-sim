@@ -6,20 +6,11 @@
 
 use bevy::prelude::*;
 use lunco_workbench::{
-    HelpMouse, HelpShortcut, PanelId, ViewportPanel, Perspective, PerspectiveId, WorkbenchAppExt,
+    HelpMouse, HelpShortcut, PanelId, Perspective, PerspectiveId, ViewportPanel, WorkbenchAppExt,
     WorkbenchLayout, VIEWPORT_PANEL_ID,
 };
 
-pub mod spawn_palette;
-pub mod inspector;
-pub mod entity_list;
 pub mod asset_visibility;
-pub mod terrain_tools;
-pub mod connection_canvas;
-pub mod usd_prim_tree;
-pub mod usd_params;
-pub mod usd_variants;
-pub mod usd_mount;
 /// Screen-space labels a prim authored for itself (`lunco:billboard*`).
 pub mod billboard_overlay;
 /// Interactive checkpoint authoring — Ctrl+LMB append + right-click context
@@ -34,6 +25,15 @@ pub mod cinematic;
 /// (possession status, autopilot engage/disengage, checkpoint list). Pure
 /// reader: every mutation dispatches a typed command (§4.2).
 pub mod command_deck;
+pub mod connection_canvas;
+pub mod entity_list;
+pub mod inspector;
+pub mod spawn_palette;
+pub mod terrain_tools;
+pub mod usd_mount;
+pub mod usd_params;
+pub mod usd_prim_tree;
+pub mod usd_variants;
 
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
@@ -65,7 +65,10 @@ impl Plugin for SandboxEditUiPlugin {
         app.init_resource::<cinematic::CinematicTarget>();
         app.add_systems(
             Update,
-            (cinematic::track_active_camera_path, cinematic::draw_camera_paths),
+            (
+                cinematic::track_active_camera_path,
+                cinematic::draw_camera_paths,
+            ),
         );
         app.register_panel(spawn_palette::SpawnPalette)
             .register_panel(inspector::Inspector)
@@ -188,9 +191,9 @@ impl Plugin for SandboxEditUiPlugin {
         // a change-gated producer instead of being rebuilt every egui frame.
         // …and its "show system entities" filter is a persisted pref exposed in the
         // workbench Settings menu, not a panel-local toolbar.
-        lunco_settings::AppSettingsExt::register_settings_section::<
-            entity_list::EntityListSettings,
-        >(app);
+        lunco_settings::AppSettingsExt::register_settings_section::<entity_list::EntityListSettings>(
+            app,
+        );
         app.add_systems(Startup, entity_list::register_settings_menu);
 
         // Same shape for "show test scenes": a persisted pref in the Settings
@@ -199,12 +202,13 @@ impl Plugin for SandboxEditUiPlugin {
             asset_visibility::AssetVisibilitySettings,
         >(app);
         app.add_systems(Startup, asset_visibility::register_settings_menu);
-        app.init_resource::<entity_list::EntityTreeView>().add_systems(
-            Update,
-            entity_list::populate_entity_tree_view
-                .in_set(ViewModelSet)
-                .run_if(entity_list::scene_topology_changed),
-        );
+        app.init_resource::<entity_list::EntityTreeView>()
+            .add_systems(
+                Update,
+                entity_list::populate_entity_tree_view
+                    .in_set(ViewModelSet)
+                    .run_if(entity_list::scene_topology_changed),
+            );
 
         // WP-8: the Inspector reads query-derived sun / camera / joint state
         // (which `PanelCtx` can't gather in paint) from `InspectorView`,
@@ -220,17 +224,19 @@ impl Plugin for SandboxEditUiPlugin {
         // stage by a main-thread producer (the stage is `!Send`), hash-gated so
         // it only rebuilds on a topology change. No `run_if` — the system
         // early-returns cheaply when nothing is wired or the topology is stable.
-        app.init_resource::<connection_canvas::UsdCanvasState>().add_systems(
-            Update,
-            connection_canvas::produce_usd_canvas.in_set(ViewModelSet),
-        );
+        app.init_resource::<connection_canvas::UsdCanvasState>()
+            .add_systems(
+                Update,
+                connection_canvas::produce_usd_canvas.in_set(ViewModelSet),
+            );
 
         // USD prim tree: same main-thread producer pattern (the stage is
         // `!Send`), hash-gated on the prim-path set.
-        app.init_resource::<usd_prim_tree::UsdPrimTreeView>().add_systems(
-            Update,
-            usd_prim_tree::produce_usd_prim_tree.in_set(ViewModelSet),
-        );
+        app.init_resource::<usd_prim_tree::UsdPrimTreeView>()
+            .add_systems(
+                Update,
+                usd_prim_tree::produce_usd_prim_tree.in_set(ViewModelSet),
+            );
 
         // USD parameter sliders: harvest the selected prim's customData-ranged
         // attributes for the Inspector's data-driven Parameters section.
@@ -242,10 +248,11 @@ impl Plugin for SandboxEditUiPlugin {
         // Variant sets: which configurations the selected prim ships (a rover's
         // `drivetrain`, a scenario scene's `terrain` site) and which composes
         // now — the Inspector's ⎇ Variants picker.
-        app.init_resource::<usd_variants::UsdVariantView>().add_systems(
-            Update,
-            usd_variants::produce_usd_variant_view.in_set(ViewModelSet),
-        );
+        app.init_resource::<usd_variants::UsdVariantView>()
+            .add_systems(
+                Update,
+                usd_variants::produce_usd_variant_view.in_set(ViewModelSet),
+            );
 
         // Mount snap: resolve each socket the selected host advertises + the
         // placement that lands its part's plug on the socket (Inspector 🔩 Mount).
@@ -258,10 +265,11 @@ impl Plugin for SandboxEditUiPlugin {
         // readout for the currently-selected vessel. Cheap O(1) single-entity
         // lookups each `Update` (the sanctioned live-readout exception to §7),
         // so no change-gate — same shape as the avatar status producer.
-        app.init_resource::<command_deck::CommandDeckView>().add_systems(
-            Update,
-            command_deck::populate_command_deck_view.in_set(ViewModelSet),
-        );
+        app.init_resource::<command_deck::CommandDeckView>()
+            .add_systems(
+                Update,
+                command_deck::populate_command_deck_view.in_set(ViewModelSet),
+            );
 
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
@@ -384,8 +392,12 @@ fn register_debug_viz_settings(world: &mut World) {
 pub struct ViewPerspective;
 
 impl Perspective for ViewPerspective {
-    fn id(&self) -> PerspectiveId { PerspectiveId("sandbox_view") }
-    fn title(&self) -> String { "🎬 View".into() }
+    fn id(&self) -> PerspectiveId {
+        PerspectiveId("sandbox_view")
+    }
+    fn title(&self) -> String {
+        "🎬 View".into()
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser(None);
@@ -402,10 +414,14 @@ impl Perspective for ViewPerspective {
 pub struct BuildPerspective;
 
 impl Perspective for BuildPerspective {
-    fn id(&self) -> PerspectiveId { PerspectiveId("rover_build") }
+    fn id(&self) -> PerspectiveId {
+        PerspectiveId("rover_build")
+    }
     // ⚒ (U+2692) instead of 🏗 (U+1F3D7) — the latter tofus in the
     // bundled DejaVu fallback; ⚒ renders everywhere (see welcome.rs).
-    fn title(&self) -> String { "⚒ Build".into() }
+    fn title(&self) -> String {
+        "⚒ Build".into()
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser_tabs(vec![
@@ -446,9 +462,13 @@ impl Perspective for BuildPerspective {
 pub struct ObjectBuilderPerspective;
 
 impl Perspective for ObjectBuilderPerspective {
-    fn id(&self) -> PerspectiveId { PerspectiveId("object_builder") }
+    fn id(&self) -> PerspectiveId {
+        PerspectiveId("object_builder")
+    }
     // 🧩 renders in the bundled fallback (unlike 🏗, which tofus — see welcome.rs).
-    fn title(&self) -> String { "🧩 Object Builder".into() }
+    fn title(&self) -> String {
+        "🧩 Object Builder".into()
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         // Structure first: the USD prim tree (the object's authoring hierarchy)
@@ -485,8 +505,12 @@ impl Perspective for ObjectBuilderPerspective {
 pub struct TerrainPerspective;
 
 impl Perspective for TerrainPerspective {
-    fn id(&self) -> PerspectiveId { PerspectiveId("terrain_sculpt") }
-    fn title(&self) -> String { "🏔 Terrain".into() }
+    fn id(&self) -> PerspectiveId {
+        PerspectiveId("terrain_sculpt")
+    }
+    fn title(&self) -> String {
+        "🏔 Terrain".into()
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser_tabs(vec![PanelId("tools_palette")]);

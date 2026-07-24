@@ -12,10 +12,10 @@
 //! onto the declaration components below. No mission prim ⇒ no mission. There is
 //! no filesystem scan and no implicit set.
 
+use crate::trajectories::{TrajectoryFrame, TrajectoryPath, TrajectoryView};
 use bevy::prelude::*;
-use lunco_render::{PbrLook, WorldLabel};
-use crate::trajectories::{TrajectoryView, TrajectoryPath, TrajectoryFrame};
 use big_space::prelude::CellCoord;
+use lunco_render::{PbrLook, WorldLabel};
 
 /// Ids of the missions spawned into the current scene. Diagnostic/UI only — the
 /// authority is the declaration components, which live on the USD prim entities
@@ -127,12 +127,16 @@ impl Plugin for MissionPlugin {
         // carries `MissionTrajectoryDecl`/`MissionSpacecraftDecl`, which only the
         // USD bridge writes and only for an authored `lunco:mission:*` prim.
         app.add_systems(Update, spawn_declared_missions);
-        app.add_systems(Update, (
-            update_spacecraft_position_system,
-            spacecraft_alignment_system,
-            spacecraft_visibility_system,
-            spacecraft_billboard_system,
-        ).chain());
+        app.add_systems(
+            Update,
+            (
+                update_spacecraft_position_system,
+                spacecraft_alignment_system,
+                spacecraft_visibility_system,
+                spacecraft_billboard_system,
+            )
+                .chain(),
+        );
     }
 }
 
@@ -182,7 +186,12 @@ pub fn spawn_declared_missions(
                 tracked_id: traj.tracked_id,
                 reference_id: traj.reference_id,
                 frame,
-                color: LinearRgba::from(Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3])),
+                color: LinearRgba::from(Color::srgba(
+                    traj.color[0],
+                    traj.color[1],
+                    traj.color[2],
+                    traj.color[3],
+                )),
                 is_visible: true,
                 // Unauthored ⇒ OFF. An orbit line is an ANALYSIS overlay: a
                 // 400-day Earth ellipse drawn across a surface scene's sky is
@@ -213,87 +222,93 @@ pub fn spawn_declared_missions(
         let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
         let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
 
-                let mut sc_ent = commands.spawn((
-                    Name::new(sc.name.clone()),
-                    crate::big_space_setup::CelestialDerived,
-                    Spacecraft {
-                        name: sc.name.clone(),
-                        ephemeris_id: sc.ephemeris_id,
-                        reference_id: sc.reference_id,
-                        start_epoch_jd: sc.start_epoch_jd,
-                        end_epoch_jd: sc.end_epoch_jd,
-                        hit_radius_m,
-                        user_visible: true,
+        let mut sc_ent = commands.spawn((
+            Name::new(sc.name.clone()),
+            crate::big_space_setup::CelestialDerived,
+            Spacecraft {
+                name: sc.name.clone(),
+                ephemeris_id: sc.ephemeris_id,
+                reference_id: sc.reference_id,
+                start_epoch_jd: sc.start_epoch_jd,
+                end_epoch_jd: sc.end_epoch_jd,
+                hit_radius_m,
+                user_visible: true,
+            },
+            Transform::from_scale(Vec3::splat(sc.scale)),
+            GlobalTransform::default(),
+            Visibility::default(),
+            // NO eager CellCoord — `spacecraft_alignment_system` inserts
+            // it together with the frame-grid parent (see above).
+        ));
+
+        sc_ent.with_children(|parent| {
+            // Appearance is stated as INTENT (`PbrLook`); `lunco-render-bevy`
+            // binds the `StandardMaterial`. Identical looks share one material,
+            // so the two solar panels below cost one, not two.
+            // Main Body (Service Module) - Darker metallic grey
+            parent.spawn((
+                Mesh3d(meshes.add(Cylinder::new(radius_m, radius_m * 1.5).mesh())),
+                PbrLook {
+                    base_color: LinearRgba::from(Color::srgb(0.2, 0.2, 0.2)),
+                    metallic: 0.8,
+                    perceptual_roughness: 0.2,
+                    ..default()
+                },
+                Name::new("Service Module"),
+            ));
+
+            // Capsule (Command Module) - Silver metallic
+            parent.spawn((
+                Mesh3d(meshes.add(Cylinder::new(radius_m * 0.1, radius_m).mesh())),
+                PbrLook {
+                    base_color: LinearRgba::from(Color::srgb(0.8, 0.8, 0.8)),
+                    metallic: 1.0,
+                    perceptual_roughness: 0.1,
+                    ..default()
+                },
+                Transform::from_translation(Vec3::Y * radius_m * 1.25),
+                Name::new("Command Module"),
+            ));
+
+            // Solar Panels (Left and Right) - Blue solar look
+            let panel_width = radius_m * 4.0;
+            let panel_height = radius_m * 0.8;
+            let panel_thickness = radius_m * 0.1;
+
+            for side in [-1.0, 1.0] {
+                parent.spawn((
+                    Mesh3d(
+                        meshes.add(Cuboid::new(panel_width, panel_height, panel_thickness).mesh()),
+                    ),
+                    PbrLook {
+                        base_color: LinearRgba::from(Color::srgb(0.0, 0.1, 0.4)), // Dark blue solar cells
+                        emissive: LinearRgba::new(0.0, 0.2, 0.8, 1.0) * 2.0,
+                        metallic: 0.5,
+                        perceptual_roughness: 0.3,
+                        ..default()
                     },
-                    Transform::from_scale(Vec3::splat(sc.scale)),
-                    GlobalTransform::default(),
-                    Visibility::default(),
-                    // NO eager CellCoord — `spacecraft_alignment_system` inserts
-                    // it together with the frame-grid parent (see above).
+                    Transform::from_translation(Vec3::X * side * (radius_m + panel_width * 0.5)),
+                    Name::new(if side < 0.0 {
+                        "Solar Panel Left"
+                    } else {
+                        "Solar Panel Right"
+                    }),
                 ));
+            }
 
-                sc_ent.with_children(|parent| {
-                    // Appearance is stated as INTENT (`PbrLook`); `lunco-render-bevy`
-                    // binds the `StandardMaterial`. Identical looks share one material,
-                    // so the two solar panels below cost one, not two.
-                    // Main Body (Service Module) - Darker metallic grey
-                    parent.spawn((
-                        Mesh3d(meshes.add(Cylinder::new(radius_m, radius_m * 1.5).mesh())),
-                        PbrLook {
-                            base_color: LinearRgba::from(Color::srgb(0.2, 0.2, 0.2)),
-                            metallic: 0.8,
-                            perceptual_roughness: 0.2,
-                            ..default()
-                        },
-                        Name::new("Service Module"),
-                    ));
-
-                    // Capsule (Command Module) - Silver metallic
-                    parent.spawn((
-                        Mesh3d(meshes.add(Cylinder::new(radius_m * 0.1, radius_m).mesh())),
-                        PbrLook {
-                            base_color: LinearRgba::from(Color::srgb(0.8, 0.8, 0.8)),
-                            metallic: 1.0,
-                            perceptual_roughness: 0.1,
-                            ..default()
-                        },
-                        Transform::from_translation(Vec3::Y * radius_m * 1.25),
-                        Name::new("Command Module"),
-                    ));
-
-                    // Solar Panels (Left and Right) - Blue solar look
-                    let panel_width = radius_m * 4.0;
-                    let panel_height = radius_m * 0.8;
-                    let panel_thickness = radius_m * 0.1;
-
-                    for side in [-1.0, 1.0] {
-                        parent.spawn((
-                            Mesh3d(meshes.add(Cuboid::new(panel_width, panel_height, panel_thickness).mesh())),
-                            PbrLook {
-                                base_color: LinearRgba::from(Color::srgb(0.0, 0.1, 0.4)), // Dark blue solar cells
-                                emissive: LinearRgba::new(0.0, 0.2, 0.8, 1.0) * 2.0,
-                                metallic: 0.5,
-                                perceptual_roughness: 0.3,
-                                ..default()
-                            },
-                            Transform::from_translation(Vec3::X * side * (radius_m + panel_width * 0.5)),
-                            Name::new(if side < 0.0 { "Solar Panel Left" } else { "Solar Panel Right" }),
-                        ));
-                    }
-
-                    // Billboard label, as INTENT. `Text2d` lives in `bevy_sprite`,
-                    // whose `bevy_sprite_render` feature pulls `bevy_render` → wgpu +
-                    // naga — and this one label was the last thing dragging the whole
-                    // GPU stack into the `--no-ui` server. The spacecraft's *name* is
-                    // simulation data and stays here; the glyphs are not, and
-                    // `lunco-render-bevy` builds them from `WorldLabel` in render
-                    // builds. See docs/architecture/render-decoupling.md.
-                    parent.spawn((
-                        SpacecraftBillboard,
-                        WorldLabel::new(sc.name.clone(), 100.0),
-                        Transform::from_translation(Vec3::Y * radius_m * 5.0),
-                    ));
-                });
+            // Billboard label, as INTENT. `Text2d` lives in `bevy_sprite`,
+            // whose `bevy_sprite_render` feature pulls `bevy_render` → wgpu +
+            // naga — and this one label was the last thing dragging the whole
+            // GPU stack into the `--no-ui` server. The spacecraft's *name* is
+            // simulation data and stays here; the glyphs are not, and
+            // `lunco-render-bevy` builds them from `WorldLabel` in render
+            // builds. See docs/architecture/render-decoupling.md.
+            parent.spawn((
+                SpacecraftBillboard,
+                WorldLabel::new(sc.name.clone(), 100.0),
+                Transform::from_translation(Vec3::Y * radius_m * 5.0),
+            ));
+        });
     }
 }
 
@@ -301,7 +316,12 @@ pub fn update_spacecraft_position_system(
     world: Res<lunco_time::WorldTime>,
     ephemeris: Res<crate::ephemeris::EphemerisResource>,
     q_grids: Query<&big_space::prelude::Grid>,
-    mut q_spacecraft: Query<(&Spacecraft, &mut Transform, Option<&mut CellCoord>, Option<&ChildOf>)>,
+    mut q_spacecraft: Query<(
+        &Spacecraft,
+        &mut Transform,
+        Option<&mut CellCoord>,
+        Option<&ChildOf>,
+    )>,
 ) {
     let jd = world.epoch_jd;
     for (sc, mut tf, cell, child_of) in q_spacecraft.iter_mut() {
@@ -344,8 +364,13 @@ pub fn update_spacecraft_position_system(
 
         // Point solar panels towards the Sun
         // Sun ID is 10
-        let Some(p_sun) = ephemeris.provider.global_position(10, jd) else { continue };
-        let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target).raw().as_vec3().normalize_or_zero();
+        let Some(p_sun) = ephemeris.provider.global_position(10, jd) else {
+            continue;
+        };
+        let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target)
+            .raw()
+            .as_vec3()
+            .normalize_or_zero();
         if to_sun.length_squared() > 0.0 {
             // Bevy's look_to makes Local -Z point at the target.
             // Our panels are in the XY plane (width X, height Y), so they face +Z and -Z.
@@ -357,7 +382,11 @@ pub fn update_spacecraft_position_system(
 
 pub fn spacecraft_alignment_system(
     mut commands: Commands,
-    q_frames: Query<(Entity, &crate::registry::CelestialReferenceFrame, Has<big_space::prelude::Grid>)>,
+    q_frames: Query<(
+        Entity,
+        &crate::registry::CelestialReferenceFrame,
+        Has<big_space::prelude::Grid>,
+    )>,
     q_sc: Query<(Entity, &Spacecraft, Option<&ChildOf>)>,
     q_children: Query<&Children>,
 ) {
@@ -414,9 +443,13 @@ pub fn spacecraft_visibility_system(
         if let (Some(start), Some(end)) = (sc.start_epoch_jd, sc.end_epoch_jd) {
             mission_visible = world.epoch_jd >= start && world.epoch_jd <= end;
         }
-        
+
         let final_visible = mission_visible && sc.user_visible;
-        let target_vis = if final_visible { Visibility::Inherited } else { Visibility::Hidden };
+        let target_vis = if final_visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
         if *vis != target_vis {
             *vis = target_vis;
         }

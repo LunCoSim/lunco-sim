@@ -7,8 +7,8 @@
 //! 4. Possession is allowed again after deselection
 
 use bevy::prelude::*;
-use lunco_sandbox_edit::SelectedEntities;
 use lunco_core::DragModeActive;
+use lunco_sandbox_edit::SelectedEntities;
 
 // ─── Selection Flow Tests ─────────────────────────────────────────────────────
 
@@ -30,7 +30,10 @@ fn test_shift_left_click_selects_entity() {
 
     // --- AFTER SELECTION ---
     assert_eq!(selected.primary(), Some(rover));
-    assert!(drag_mode.active, "Drag mode should be set to block possession");
+    assert!(
+        drag_mode.active,
+        "Drag mode should be set to block possession"
+    );
 }
 
 /// Simulates what happens when user deselects with Escape
@@ -70,7 +73,10 @@ fn test_possession_blocked_during_selection() {
         possession_attempted = true;
     }
 
-    assert!(!possession_attempted, "Possession should NOT be attempted during selection");
+    assert!(
+        !possession_attempted,
+        "Possession should NOT be attempted during selection"
+    );
 }
 
 /// Verifies that after deselection, possession is allowed again
@@ -92,7 +98,10 @@ fn test_deselection_allows_possession() {
     } else {
         possession_attempted = true; // allowed
     }
-    assert!(possession_attempted, "Possession MUST be allowed after deselection");
+    assert!(
+        possession_attempted,
+        "Possession MUST be allowed after deselection"
+    );
 }
 
 /// Tests switching selection between entities
@@ -112,6 +121,10 @@ fn test_switching_selection() {
     selected.entities.push(rover2);
     // drag_mode stays true
 
-    assert_eq!(selected.primary(), Some(rover2), "Should now select second rover");
+    assert_eq!(
+        selected.primary(),
+        Some(rover2),
+        "Should now select second rover"
+    );
     assert!(drag_mode.active, "Possession should still be blocked");
 }

@@ -81,16 +81,12 @@ impl Storage for FileStorage {
             #[cfg(not(target_arch = "wasm32"))]
             StorageHandle::File(path) => match std::fs::read(path) {
                 Ok(bytes) => Ok(bytes),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Err(StorageError::NotFound)
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StorageError::NotFound),
                 Err(e) => Err(StorageError::Io(e)),
             },
             StorageHandle::Memory(key) => {
                 let map = self.memory.lock().expect("memory poisoned");
-                map.get(key)
-                    .cloned()
-                    .ok_or(StorageError::NotFound)
+                map.get(key).cloned().ok_or(StorageError::NotFound)
             }
             _ => Err(StorageError::Unsupported(
                 "FileStorage does not handle web / remote variants".into(),
@@ -125,9 +121,7 @@ impl Storage for FileStorage {
             #[cfg(not(target_arch = "wasm32"))]
             StorageHandle::File(path) => match std::fs::remove_file(path) {
                 Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Err(StorageError::NotFound)
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StorageError::NotFound),
                 Err(e) => Err(StorageError::Io(e)),
             },
             StorageHandle::Memory(key) => {

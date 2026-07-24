@@ -3,8 +3,8 @@
 //! Used for in-cockpit displays, body labels, orbit annotations.
 //! These render as textured quads in the 3D world, not as screen overlays.
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 
 /// Distance-based LOD configuration for world-space UI.
 #[derive(Clone, Copy)]
@@ -78,14 +78,20 @@ mod tests {
 
     #[test]
     fn test_lod_visible_when_close() {
-        let lod = WorldLod { fade_start: 1000.0, fade_end: 5000.0 };
+        let lod = WorldLod {
+            fade_start: 1000.0,
+            fade_end: 5000.0,
+        };
         assert!(lod.visible(500.0));
         assert_eq!(lod.opacity(500.0), 1.0);
     }
 
     #[test]
     fn test_lod_fading() {
-        let lod = WorldLod { fade_start: 1000.0, fade_end: 5000.0 };
+        let lod = WorldLod {
+            fade_start: 1000.0,
+            fade_end: 5000.0,
+        };
         assert_eq!(lod.opacity(1000.0), 1.0);
         assert_eq!(lod.opacity(5000.0), 0.0);
         let mid = lod.opacity(3000.0);
@@ -94,7 +100,10 @@ mod tests {
 
     #[test]
     fn test_lod_hidden_when_far() {
-        let lod = WorldLod { fade_start: 1000.0, fade_end: 5000.0 };
+        let lod = WorldLod {
+            fade_start: 1000.0,
+            fade_end: 5000.0,
+        };
         assert!(!lod.visible(6000.0));
         assert_eq!(lod.opacity(10000.0), 0.0);
     }

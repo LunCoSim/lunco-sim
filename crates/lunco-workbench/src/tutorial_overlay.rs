@@ -263,7 +263,9 @@ fn draw_spotlight(
     if hud.tour.is_some() {
         return;
     }
-    let Some((key, caption)) = hud.spotlight.clone() else { return };
+    let Some((key, caption)) = hud.spotlight.clone() else {
+        return;
+    };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let screen = ctx.content_rect();
     let theme = theme
@@ -286,9 +288,14 @@ fn draw_spotlight(
     let card_w = 300.0;
     let pos = match target {
         Some(t) => {
-            let x = (t.center().x - card_w * 0.5).clamp(screen.left() + 12.0, screen.right() - card_w - 12.0);
+            let x = (t.center().x - card_w * 0.5)
+                .clamp(screen.left() + 12.0, screen.right() - card_w - 12.0);
             let below = t.max.y + 14.0;
-            let y = if below + 70.0 <= screen.bottom() { below } else { (t.min.y - 84.0).max(screen.top() + 12.0) };
+            let y = if below + 70.0 <= screen.bottom() {
+                below
+            } else {
+                (t.min.y - 84.0).max(screen.top() + 12.0)
+            };
             egui::pos2(x, y)
         }
         None => egui::pos2(screen.center().x - card_w * 0.5, screen.center().y - 40.0),
@@ -330,13 +337,45 @@ fn paint_scrim(
         painter.rect_filled(screen, 0.0, scrim);
         return;
     };
-    painter.rect_filled(egui::Rect::from_min_max(screen.min, egui::pos2(screen.max.x, t.min.y)), 0.0, scrim);
-    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(screen.min.x, t.max.y), screen.max), 0.0, scrim);
-    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(screen.min.x, t.min.y), egui::pos2(t.min.x, t.max.y)), 0.0, scrim);
-    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(t.max.x, t.min.y), egui::pos2(screen.max.x, t.max.y)), 0.0, scrim);
+    painter.rect_filled(
+        egui::Rect::from_min_max(screen.min, egui::pos2(screen.max.x, t.min.y)),
+        0.0,
+        scrim,
+    );
+    painter.rect_filled(
+        egui::Rect::from_min_max(egui::pos2(screen.min.x, t.max.y), screen.max),
+        0.0,
+        scrim,
+    );
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(screen.min.x, t.min.y),
+            egui::pos2(t.min.x, t.max.y),
+        ),
+        0.0,
+        scrim,
+    );
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(t.max.x, t.min.y),
+            egui::pos2(screen.max.x, t.max.y),
+        ),
+        0.0,
+        scrim,
+    );
     let phase = (ctx.input(|i| i.time).sin() as f32 * 0.5 + 0.5) * 0.55 + 0.45;
-    let ring = egui::Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), (255.0 * phase) as u8);
-    painter.rect_stroke(t, 8.0, egui::Stroke::new(2.5, ring), egui::StrokeKind::Outside);
+    let ring = egui::Color32::from_rgba_unmultiplied(
+        ACCENT.r(),
+        ACCENT.g(),
+        ACCENT.b(),
+        (255.0 * phase) as u8,
+    );
+    painter.rect_stroke(
+        t,
+        8.0,
+        egui::Stroke::new(2.5, ring),
+        egui::StrokeKind::Outside,
+    );
     ctx.request_repaint();
 }
 
@@ -383,7 +422,9 @@ fn draw_tour(
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let screen = ctx.content_rect();
 
-    let theme = theme.map(|t| t.clone()).unwrap_or_else(lunco_theme::Theme::dark);
+    let theme = theme
+        .map(|t| t.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
     let accent = theme.tokens.accent;
     let accent_text = theme.colors.base;
     let muted = theme.tokens.text_subdued;
@@ -413,8 +454,7 @@ fn draw_tour(
                 .clamp(screen.min.x + margin, screen.max.x - card_w - margin),
             (t.min.y + 16.0).clamp(screen.min.y + margin, screen.max.y - card_h_est - margin),
         );
-        let target_huge =
-            t.width() > screen.width() * 0.55 && t.height() > screen.height() * 0.5;
+        let target_huge = t.width() > screen.width() * 0.55 && t.height() > screen.height() * 0.5;
         let target_short = t.height() < 50.0;
         let below_y = if target_short {
             (t.max.y + 80.0).clamp(screen.min.y + margin, screen.max.y - card_h_est - margin)
@@ -488,8 +528,7 @@ fn draw_tour(
             let painter = ui.painter();
             paint_scrim(painter, ctx, screen, target, theme.tokens.scrim);
             if let Some(t) = target {
-                let card_rect =
-                    egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));
+                let card_rect = egui::Rect::from_min_size(card_pos, egui::vec2(card_w, card_h_est));
                 if let Some((apex, b1, b2)) = tour_tail_points(side, t, card_rect) {
                     painter.add(egui::Shape::Path(egui::epaint::PathShape {
                         points: vec![apex, b1, b2],
@@ -527,7 +566,12 @@ fn draw_tour(
                     let p = ui.painter();
                     p.rect_filled(
                         banner_rect,
-                        egui::CornerRadius { nw: 13, ne: 13, sw: 0, se: 0 },
+                        egui::CornerRadius {
+                            nw: 13,
+                            ne: 13,
+                            sw: 0,
+                            se: 0,
+                        },
                         accent,
                     );
                     let stripe = accent_text.linear_multiply(0.12);
@@ -579,7 +623,8 @@ fn draw_tour(
                                     egui::vec2(ui.available_width(), 4.0),
                                     egui::Sense::hover(),
                                 );
-                                ui.painter().rect_filled(bar, 2.0, muted.linear_multiply(0.25));
+                                ui.painter()
+                                    .rect_filled(bar, 2.0, muted.linear_multiply(0.25));
                                 let frac = (step.index as f32 + 1.0) / step.total as f32;
                                 let fill = egui::Rect::from_min_max(
                                     bar.min,
@@ -662,16 +707,32 @@ fn draw_tour(
         });
 
     if next {
-        emit_tour(&mut commands, "cmd:TutorialNext", lunco_core::TelemetryValue::Bool(true));
+        emit_tour(
+            &mut commands,
+            "cmd:TutorialNext",
+            lunco_core::TelemetryValue::Bool(true),
+        );
     }
     if back {
-        emit_tour(&mut commands, "cmd:TutorialBack", lunco_core::TelemetryValue::Bool(true));
+        emit_tour(
+            &mut commands,
+            "cmd:TutorialBack",
+            lunco_core::TelemetryValue::Bool(true),
+        );
     }
     if skip {
-        emit_tour(&mut commands, "cmd:TutorialSkip", lunco_core::TelemetryValue::Bool(true));
+        emit_tour(
+            &mut commands,
+            "cmd:TutorialSkip",
+            lunco_core::TelemetryValue::Bool(true),
+        );
     }
     if let Some(i) = goto {
-        emit_tour(&mut commands, "cmd:TutorialGoto", lunco_core::TelemetryValue::I64(i as i64));
+        emit_tour(
+            &mut commands,
+            "cmd:TutorialGoto",
+            lunco_core::TelemetryValue::I64(i as i64),
+        );
     }
 }
 

@@ -27,7 +27,9 @@
 //!   cargo run --bin rollback_probe --release
 
 use avian3d::prelude::*;
-use bevy::app::{ScheduleRunnerPlugin, TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
+use bevy::app::{
+    ScheduleRunnerPlugin, TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy,
+};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
@@ -113,7 +115,9 @@ fn make_app(threads: usize) -> App {
     .insert_resource(Gravity(DVec3::new(0.0, -9.81, 0.0)))
     .insert_resource(SubstepCount(12))
     .insert_resource(Time::<Fixed>::from_hz(60.0))
-    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+        1.0 / 60.0,
+    )))
     .init_resource::<DriveInput>()
     .add_systems(Startup, setup)
     // Actuation must run BEFORE physics writeback each tick; FixedUpdate is before
@@ -155,9 +159,15 @@ fn step(app: &mut App, input: DriveInput) {
 fn read_state(app: &mut App) -> BodyState {
     let mut q = app
         .world_mut()
-        .query_filtered::<(&Position, &Rotation, &LinearVelocity, &AngularVelocity), With<Vehicle>>();
+        .query_filtered::<(&Position, &Rotation, &LinearVelocity, &AngularVelocity), With<Vehicle>>(
+        );
     let (p, r, lv, av) = q.single(app.world()).expect("one vehicle");
-    BodyState { pos: p.0, rot: r.0, lv: lv.0, av: av.0 }
+    BodyState {
+        pos: p.0,
+        rot: r.0,
+        lv: lv.0,
+        av: av.0,
+    }
 }
 
 /// Restore ONLY the public snapshot state — the deliberate constraint: a real
@@ -165,10 +175,12 @@ fn read_state(app: &mut App) -> BodyState {
 /// needs those to reproduce the reference, ROLLBACK error won't collapse and we've
 /// learned the live port must invalidate them.
 fn restore_state(app: &mut App, s: BodyState) {
-    let mut q = app.world_mut().query_filtered::<
-        (&mut Position, &mut Rotation, &mut LinearVelocity, &mut AngularVelocity),
-        With<Vehicle>,
-    >();
+    let mut q = app.world_mut().query_filtered::<(
+        &mut Position,
+        &mut Rotation,
+        &mut LinearVelocity,
+        &mut AngularVelocity,
+    ), With<Vehicle>>();
     let world = app.world_mut();
     let (mut p, mut r, mut lv, mut av) = q.single_mut(world).expect("one vehicle");
     p.0 = s.pos;
@@ -181,7 +193,10 @@ fn restore_state(app: &mut App, s: BodyState) {
 /// sinusoidal steer: the CHANGING input that exposes a proportional corrector's lag.
 fn gen_input(t: usize) -> DriveInput {
     let phase = t as f64 / 45.0; // ~0.75 s period-ish sweep
-    DriveInput { throttle: 1.0, steer: 0.8 * phase.sin() }
+    DriveInput {
+        throttle: 1.0,
+        steer: 0.8 * phase.sin(),
+    }
 }
 
 /// Run the authoritative host: record per-tick input + resulting state.
@@ -304,9 +319,7 @@ fn main() {
     ] {
         let errs = run_client(strat, &inputs, &host, threads);
         let (mean, max, tail) = summarize(&errs);
-        println!(
-            "{name}: mean_err={mean:.4} m  max_err={max:.4} m  steady_tail_err={tail:.5} m"
-        );
+        println!("{name}: mean_err={mean:.4} m  max_err={max:.4} m  steady_tail_err={tail:.5} m");
     }
     println!(
         "\nExpect: NONE stays diverged; BLEND reduces but leaves a steady/oscillating tail;\n\

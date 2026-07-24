@@ -115,7 +115,10 @@ mod tests {
     fn a_registered_scheme_dispatches_on_its_remainder() {
         let reg = SchemeRegistry::default();
         reg.register("pack", |rest| Some(PathBuf::from("/packs").join(rest)));
-        assert_eq!(reg.local_path("pack://a/b.usda"), Some(PathBuf::from("/packs/a/b.usda")));
+        assert_eq!(
+            reg.local_path("pack://a/b.usda"),
+            Some(PathBuf::from("/packs/a/b.usda"))
+        );
         assert_eq!(reg.schemes(), vec!["pack".to_string()]);
     }
 

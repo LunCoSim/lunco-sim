@@ -39,8 +39,8 @@ use lunco_scripting::{
     ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot,
-    UsdPrimPath, UsdRead, UsdStageAsset,
+    CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
+    UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
@@ -326,7 +326,9 @@ fn process_usd_cosim_prim_read(
     // subsystems live on child prims, not the moving body). Harmless on
     // non-`RigidBody` cosim prims (e.g. a joint-driven solar tracker): the
     // marker is inert where prediction never runs.
-    commands.entity(entity).try_insert(lunco_core::NotPredictable);
+    commands
+        .entity(entity)
+        .try_insert(lunco_core::NotPredictable);
 
     // Source files are loaded through Bevy's `AssetServer`: on native it reads
     // from the workspace `assets/` source, on wasm it issues an HTTP fetch
@@ -356,7 +358,9 @@ fn process_usd_cosim_prim_read(
         .scalar::<bool>(sdf_path, "lunco:program:realtimeSafe")
         .unwrap_or(false)
     {
-        commands.entity(entity).try_insert(lunco_cosim::RealtimeSafe);
+        commands
+            .entity(entity)
+            .try_insert(lunco_cosim::RealtimeSafe);
     }
 
     // Event rules are `LunCoPortEvent` CHILD prims — one prim per rule, each with a
@@ -875,10 +879,7 @@ pub fn rewire_usd_connections(
     // opted out of prediction). Absence of the promise is the dangerous case;
     // absence of the body is the safe one.
     q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
-    q_predicted_body: Query<
-        &avian3d::prelude::RigidBody,
-        Without<lunco_core::NotPredictable>,
-    >,
+    q_predicted_body: Query<&avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
     q_defaults: Query<&UsdInputDefaults>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
@@ -1455,11 +1456,7 @@ fn on_restart_scene(
 pub struct ClearScene {}
 
 #[on_command(ClearScene)]
-fn on_clear_scene(
-    trigger: On<ClearScene>,
-    mut commands: Commands,
-    scene: SceneEntities,
-) {
+fn on_clear_scene(trigger: On<ClearScene>, mut commands: Commands, scene: SceneEntities) {
     info!("[clear-scene] clearing viewport");
     clear_scene_entities(&mut commands, &scene);
 }
@@ -1539,7 +1536,9 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     // guard is a backstop, not the handover. `try_insert` is a no-op if the anchor
     // already holds it (the origin never left home for this scene).
     if let Ok(anchor) = q_origin.single() {
-        commands.entity(anchor).try_insert(big_space::prelude::FloatingOrigin);
+        commands
+            .entity(anchor)
+            .try_insert(big_space::prelude::FloatingOrigin);
     }
 
     // Despawn any root-level derived connection wires (which are spawned as root entities)
@@ -1547,10 +1546,7 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         commands.entity(e).try_despawn();
         despawned += 1;
     }
-    info!(
-        "[scene] cleanup: {} entities despawned",
-        despawned
-    );
+    info!("[scene] cleanup: {} entities despawned", despawned);
     // Every scene clear resets the whole clock tree to defaults (doc 19 §11b): a sky
     // left detached at 100 000×, a scrubbed animation, a paused transport — none of it
     // may survive into the next scene. This is the single choke point all three reload
@@ -2019,8 +2015,6 @@ pub(crate) fn install(app: &mut App) {
 
 register_commands!(on_clear_scene, on_restart_scene,);
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2078,8 +2072,7 @@ mod tests {
             .get::<SimComponent>(e)
             .expect("the interface must be published at bind, not at compile-complete");
         assert!(
-            comp.inputs.contains_key("vehicle_throttle")
-                && comp.inputs.contains_key("sun_azimuth"),
+            comp.inputs.contains_key("vehicle_throttle") && comp.inputs.contains_key("sun_azimuth"),
             "a wire into a declared input must resolve while the model still compiles; \
              got inputs {:?}",
             comp.inputs.keys().collect::<Vec<_>>()

@@ -66,10 +66,10 @@ fn executables() -> &'static RwLock<HashMap<String, Arc<dyn ExecutableTool>>> {
 /// `Tool + ExecutableTool` impl, not just [`ClosureTool`]. Idempotent (re-register
 /// replaces).
 pub fn register_executable<T: ExecutableTool + 'static>(tool: Arc<T>) {
-    executables()
-        .write()
-        .unwrap()
-        .insert(tool.name().to_string(), tool.clone() as Arc<dyn ExecutableTool>);
+    executables().write().unwrap().insert(
+        tool.name().to_string(),
+        tool.clone() as Arc<dyn ExecutableTool>,
+    );
     // Also into the bevy-free registry, so discovery / rhai binding see it.
     lunco_tools::register(tool as Arc<dyn Tool>);
 }
@@ -217,7 +217,11 @@ impl ClosureTool {
         functions: Vec<String>,
         exec: impl Fn(&mut DeferredWorld, Entity, u64, &str) -> ToolResult + Send + Sync + 'static,
     ) -> Self {
-        Self { name: name.into(), functions, exec: Arc::new(exec) }
+        Self {
+            name: name.into(),
+            functions,
+            exec: Arc::new(exec),
+        }
     }
 }
 
@@ -242,7 +246,12 @@ impl ExecutableTool for ClosureTool {
         // read `vessel` and borrow `world` in one expression with no self-borrow
         // conflict (the dance `ctx.world()` + `ctx.vessel` would otherwise need).
         // `world` is owned (DeferredWorld); reborrow `&mut` for the closure.
-        let ToolCallCtx { vessel, vessel_gid, args, mut world } = ctx;
+        let ToolCallCtx {
+            vessel,
+            vessel_gid,
+            args,
+            mut world,
+        } = ctx;
         (self.exec)(&mut world, vessel, vessel_gid, &args)
     }
 }
@@ -278,7 +287,9 @@ mod tests {
 
     #[test]
     fn closure_tool_is_executable() {
-        let tool = ClosureTool::new("test::ping", vec!["ping/0".into()], |_, _, _, _| ToolResult::Ok);
+        let tool = ClosureTool::new("test::ping", vec!["ping/0".into()], |_, _, _, _| {
+            ToolResult::Ok
+        });
         assert_eq!(tool.name(), "test::ping");
         assert_eq!(tool.backend(), "rust");
         assert_eq!(tool.functions(), vec!["ping/0".to_string()]);
@@ -295,10 +306,18 @@ mod tests {
 
         struct Bespoke;
         impl Tool for Bespoke {
-            fn name(&self) -> &str { "test::bespoke" }
-            fn backend(&self) -> &str { "rust" }
-            fn functions(&self) -> Vec<String> { vec!["bespoke/0".into()] }
-            fn as_any(&self) -> &dyn Any { self }
+            fn name(&self) -> &str {
+                "test::bespoke"
+            }
+            fn backend(&self) -> &str {
+                "rust"
+            }
+            fn functions(&self) -> Vec<String> {
+                vec!["bespoke/0".into()]
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
         }
         impl ExecutableTool for Bespoke {
             fn execute(&self, _ctx: ToolCallCtx) -> ToolResult {
@@ -318,7 +337,10 @@ mod tests {
             args: String::new(),
         });
         app.world_mut().flush();
-        assert!(RAN.load(Ordering::Relaxed), "a bespoke ExecutableTool must dispatch");
+        assert!(
+            RAN.load(Ordering::Relaxed),
+            "a bespoke ExecutableTool must dispatch"
+        );
     }
 
     #[test]
@@ -329,7 +351,10 @@ mod tests {
         // same observer the host app uses (no shortcuts).
         use std::sync::{Arc, Mutex};
         #[derive(Event, Clone, Debug)]
-        struct CapturedCommand { vessel: Entity, args: String }
+        struct CapturedCommand {
+            vessel: Entity,
+            args: String,
+        }
         let captured: Arc<Mutex<Option<CapturedCommand>>> = Arc::new(Mutex::new(None));
 
         // Register a closure tool that records what it was called with. It also
@@ -339,8 +364,14 @@ mod tests {
             "test::capture",
             vec!["capture/0".into()],
             move |world, vessel, _gid, args| {
-                world.trigger(CapturedCommand { vessel, args: args.to_string() });
-                *captured_for_closure.lock().unwrap() = Some(CapturedCommand { vessel, args: args.to_string() });
+                world.trigger(CapturedCommand {
+                    vessel,
+                    args: args.to_string(),
+                });
+                *captured_for_closure.lock().unwrap() = Some(CapturedCommand {
+                    vessel,
+                    args: args.to_string(),
+                });
                 ToolResult::Ok
             },
         );
@@ -362,7 +393,10 @@ mod tests {
         let got = captured.lock().unwrap().clone();
         let got = got.expect("closure must have run");
         assert_eq!(got.vessel, vessel, "closure sees the firing vessel Entity");
-        assert_eq!(got.args, r#"{"exposure":0.5}"#, "closure sees the leaf's args string");
+        assert_eq!(
+            got.args, r#"{"exposure":0.5}"#,
+            "closure sees the leaf's args string"
+        );
     }
 
     #[test]

@@ -76,7 +76,10 @@ pub fn apply_policy(def: &PolicyDef, journal: Option<&JournalResource>) -> Resul
     if def.seam == MERGE_SEAM {
         if let Some(j) = journal {
             return crate::journal_plane::activate_scripted_merge_policy(
-                j, &def.seam, &def.entry, &def.source,
+                j,
+                &def.seam,
+                &def.entry,
+                &def.source,
             );
         }
     }
@@ -135,19 +138,31 @@ mod tests {
     use lunco_twin_journal::MergeStrategy;
 
     fn policy(seam: &str, src: &str, deterministic: bool) -> PolicyDef {
-        PolicyDef { seam: seam.into(), entry: "cmp".into(), source: src.into(), deterministic }
+        PolicyDef {
+            seam: seam.into(),
+            entry: "cmp".into(),
+            source: src.into(),
+            deterministic,
+        }
     }
 
     #[test]
     fn apply_merge_seam_policy_registers_hook_and_sets_strategy() {
         use lunco_twin_journal::{AuthorId, TwinId};
         let journal = JournalResource::new(TwinId::new("t"), AuthorId::new("me"));
-        apply_policy(&policy(MERGE_SEAM, "fn cmp(a, b) { 0 }", true), Some(&journal)).unwrap();
+        apply_policy(
+            &policy(MERGE_SEAM, "fn cmp(a, b) { 0 }", true),
+            Some(&journal),
+        )
+        .unwrap();
         // Hook registered…
         assert!(lunco_hooks::get(MERGE_SEAM).is_some());
         // …and the journal now linearizes via the scripted strategy at that seam.
         journal.with_read(|j| {
-            assert_eq!(*j.merge_strategy(), MergeStrategy::Scripted(MERGE_SEAM.into()));
+            assert_eq!(
+                *j.merge_strategy(),
+                MergeStrategy::Scripted(MERGE_SEAM.into())
+            );
         });
         lunco_hooks::unregister(MERGE_SEAM);
     }
@@ -157,7 +172,11 @@ mod tests {
         // A policy authored at the gate's seam registers there so `authorize()`
         // consults it — the seam IS the id (open, no enum-pinning).
         apply_policy(
-            &policy(lunco_core::session::AUTHORIZE_HOOK, "fn cmp(ctx) { true }", false),
+            &policy(
+                lunco_core::session::AUTHORIZE_HOOK,
+                "fn cmp(ctx) { true }",
+                false,
+            ),
             None,
         )
         .unwrap();
@@ -173,7 +192,10 @@ mod tests {
         let mut reg = ScriptedPolicyRegistry::default();
         // Round 1: two policies projected + registered.
         project_policies(
-            vec![policy("a.seam", "fn cmp(){1}", true), policy("b.seam", "fn cmp(){2}", true)],
+            vec![
+                policy("a.seam", "fn cmp(){1}", true),
+                policy("b.seam", "fn cmp(){2}", true),
+            ],
             &mut reg,
             None,
         );
@@ -182,9 +204,19 @@ mod tests {
 
         // Round 2: `b.seam` vanished from the composed set → retracted (unregistered).
         project_policies(vec![policy("a.seam", "fn cmp(){1}", true)], &mut reg, None);
-        assert!(lunco_hooks::get("a.seam").is_some(), "still-desired seam stays active");
-        assert!(lunco_hooks::get("b.seam").is_none(), "vanished seam is unregistered");
-        assert_eq!(reg.policies.len(), 1, "registry is the derived active-set cache");
+        assert!(
+            lunco_hooks::get("a.seam").is_some(),
+            "still-desired seam stays active"
+        );
+        assert!(
+            lunco_hooks::get("b.seam").is_none(),
+            "vanished seam is unregistered"
+        );
+        assert_eq!(
+            reg.policies.len(),
+            1,
+            "registry is the derived active-set cache"
+        );
 
         lunco_hooks::unregister("a.seam");
     }

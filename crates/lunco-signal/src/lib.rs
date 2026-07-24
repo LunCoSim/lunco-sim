@@ -49,12 +49,18 @@ pub struct SignalRef {
 
 impl SignalRef {
     pub fn new(entity: Entity, path: impl Into<String>) -> Self {
-        Self { entity, path: path.into() }
+        Self {
+            entity,
+            path: path.into(),
+        }
     }
 
     /// Global signal not tied to a specific entity.
     pub fn global(path: impl Into<String>) -> Self {
-        Self { entity: Entity::PLACEHOLDER, path: path.into() }
+        Self {
+            entity: Entity::PLACEHOLDER,
+            path: path.into(),
+        }
     }
 
     /// Cross-session form: swap the session-local `Entity` for its stable
@@ -70,7 +76,10 @@ impl SignalRef {
         } else {
             Some(gid_of(self.entity)?)
         };
-        Some(PersistedSignalRef { entity, path: self.path.clone() })
+        Some(PersistedSignalRef {
+            entity,
+            path: self.path.clone(),
+        })
     }
 }
 
@@ -102,7 +111,10 @@ impl PersistedSignalRef {
             None => Entity::PLACEHOLDER,
             Some(gid) => entity_of(gid)?,
         };
-        Some(SignalRef { entity, path: self.path.clone() })
+        Some(SignalRef {
+            entity,
+            path: self.path.clone(),
+        })
     }
 }
 
@@ -161,7 +173,10 @@ pub struct ScalarHistory {
 impl ScalarHistory {
     pub fn new(capacity: usize) -> Self {
         let capacity = capacity.max(1);
-        Self { samples: VecDeque::with_capacity(capacity), capacity }
+        Self {
+            samples: VecDeque::with_capacity(capacity),
+            capacity,
+        }
     }
 
     pub fn push(&mut self, sample: ScalarSample) {
@@ -211,11 +226,18 @@ pub struct SignalRegistry {
 
 impl SignalRegistry {
     pub fn with_default_capacity(capacity: usize) -> Self {
-        Self { default_capacity: capacity, ..Default::default() }
+        Self {
+            default_capacity: capacity,
+            ..Default::default()
+        }
     }
 
     fn capacity_default(&self) -> usize {
-        if self.default_capacity == 0 { DEFAULT_CAPACITY } else { self.default_capacity }
+        if self.default_capacity == 0 {
+            DEFAULT_CAPACITY
+        } else {
+            self.default_capacity
+        }
     }
 
     /// Push a scalar (time, value) sample. Allocates the history buffer and records the
@@ -225,8 +247,10 @@ impl SignalRegistry {
             return;
         }
         let cap = self.capacity_default();
-        let history =
-            self.scalar_history.entry(sig.clone()).or_insert_with(|| ScalarHistory::new(cap));
+        let history = self
+            .scalar_history
+            .entry(sig.clone())
+            .or_insert_with(|| ScalarHistory::new(cap));
         history.push(ScalarSample { time, value });
         self.types.entry(sig).or_insert(SignalType::Scalar);
     }
@@ -334,10 +358,17 @@ mod tests {
     fn a_full_history_drops_the_oldest_sample() {
         let mut h = ScalarHistory::new(3);
         for i in 0..5 {
-            h.push(ScalarSample { time: i as f64, value: i as f64 });
+            h.push(ScalarSample {
+                time: i as f64,
+                value: i as f64,
+            });
         }
         assert_eq!(h.len(), 3);
-        assert_eq!(h.iter().next().unwrap().time, 2.0, "the two oldest must have been evicted");
+        assert_eq!(
+            h.iter().next().unwrap().time,
+            2.0,
+            "the two oldest must have been evicted"
+        );
     }
 
     /// Retention is per-signal and re-authorable: shrinking must drop the oldest samples
@@ -346,7 +377,10 @@ mod tests {
     fn shrinking_capacity_evicts_immediately() {
         let mut h = ScalarHistory::new(10);
         for i in 0..10 {
-            h.push(ScalarSample { time: i as f64, value: 0.0 });
+            h.push(ScalarSample {
+                time: i as f64,
+                value: 0.0,
+            });
         }
         h.set_capacity(4);
         assert_eq!(h.len(), 4);
@@ -357,10 +391,16 @@ mod tests {
     #[test]
     fn a_zero_capacity_is_clamped_not_fatal() {
         let mut h = ScalarHistory::new(0);
-        h.push(ScalarSample { time: 0.0, value: 1.0 });
+        h.push(ScalarSample {
+            time: 0.0,
+            value: 1.0,
+        });
         assert_eq!(h.len(), 1);
         h.set_capacity(0);
-        h.push(ScalarSample { time: 1.0, value: 2.0 });
+        h.push(ScalarSample {
+            time: 1.0,
+            value: 2.0,
+        });
         assert_eq!(h.len(), 1);
     }
 
@@ -374,7 +414,10 @@ mod tests {
         reg.push_scalar(b.clone(), 0.0, 2.0);
         assert_eq!(reg.scalar_history(&a).unwrap().len(), 1);
         assert_eq!(reg.scalar_history(&b).unwrap().len(), 1);
-        assert_eq!(reg.scalar_history(&b).unwrap().iter().next().unwrap().value, 2.0);
+        assert_eq!(
+            reg.scalar_history(&b).unwrap().iter().next().unwrap().value,
+            2.0
+        );
     }
 
     /// Persistence must carry the stable id, never `Entity` bits: resolving in a
@@ -416,7 +459,10 @@ mod tests {
         let s = SignalRef::global("nan");
         reg.push_scalar(s.clone(), 0.0, f64::NAN);
         reg.push_scalar(s.clone(), 1.0, f64::INFINITY);
-        assert!(reg.scalar_history(&s).is_none(), "NaN/inf must never enter a plot buffer");
+        assert!(
+            reg.scalar_history(&s).is_none(),
+            "NaN/inf must never enter a plot buffer"
+        );
     }
 
     #[test]

@@ -19,8 +19,8 @@ pub mod look_cache;
 mod scene_camera;
 mod scene_ports;
 mod sensor_beams;
-pub mod shader_material;
 mod shader_look;
+pub mod shader_material;
 mod shader_ports;
 mod terrain_maps;
 mod world_label;
@@ -98,7 +98,10 @@ impl Plugin for LuncoRenderPlugin {
             .add_observer(bind_pbr_look)
             .add_systems(
                 Update,
-                (rebind_changed_pbr_look, look_cache::sweep_look_cache::<PbrLook>)
+                (
+                    rebind_changed_pbr_look,
+                    look_cache::sweep_look_cache::<PbrLook>,
+                )
                     // Names the binders; carries no ordering rule. The despawn race
                     // that used to live here is solved a schedule up — the USD
                     // projector runs in `PreUpdate`. See `lunco_render::LookRebind`.
@@ -315,14 +318,26 @@ mod tests {
             .add_plugins(LuncoRenderPlugin);
 
         let look = PbrLook::matte(LinearRgba::rgb(0.22, 0.21, 0.20));
-        let ids: Vec<Entity> = (0..64).map(|_| app.world_mut().spawn(look.clone()).id()).collect();
+        let ids: Vec<Entity> = (0..64)
+            .map(|_| app.world_mut().spawn(look.clone()).id())
+            .collect();
         app.update();
 
         let handles: Vec<_> = ids
             .iter()
-            .map(|&e| app.world().entity(e).get::<MeshMaterial3d<StandardMaterial>>().unwrap().0.clone())
+            .map(|&e| {
+                app.world()
+                    .entity(e)
+                    .get::<MeshMaterial3d<StandardMaterial>>()
+                    .unwrap()
+                    .0
+                    .clone()
+            })
             .collect();
-        assert!(handles.windows(2).all(|w| w[0] == w[1]), "64 identical looks must share one handle");
+        assert!(
+            handles.windows(2).all(|w| w[0] == w[1]),
+            "64 identical looks must share one handle"
+        );
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 1);
     }
 
@@ -334,8 +349,10 @@ mod tests {
             .init_asset::<StandardMaterial>()
             .add_plugins(LuncoRenderPlugin);
 
-        app.world_mut().spawn(PbrLook::matte(LinearRgba::rgb(1.0, 0.0, 0.0)));
-        app.world_mut().spawn(PbrLook::matte(LinearRgba::rgb(0.0, 1.0, 0.0)));
+        app.world_mut()
+            .spawn(PbrLook::matte(LinearRgba::rgb(1.0, 0.0, 0.0)));
+        app.world_mut()
+            .spawn(PbrLook::matte(LinearRgba::rgb(0.0, 1.0, 0.0)));
         app.update();
 
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 2);

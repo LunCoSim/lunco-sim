@@ -71,7 +71,11 @@ pub struct PortRef {
 #[inline]
 pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDirection) {
     for (name, value) in map {
-        out.push(PortRef { name: name.clone(), direction: dir, value: *value });
+        out.push(PortRef {
+            name: name.clone(),
+            direction: dir,
+            value: *value,
+        });
     }
 }
 
@@ -228,7 +232,12 @@ impl PortRegistry {
     /// can't win over a `SimComponent` output of the same name on one entity).
     /// The first owner is used whether via slot (it has a fast path) or via the
     /// name read (it doesn't → `None` here).
-    pub fn resolve_output(&self, world: &World, entity: Entity, name: &str) -> Option<ResolvedPort> {
+    pub fn resolve_output(
+        &self,
+        world: &World,
+        entity: Entity,
+        name: &str,
+    ) -> Option<ResolvedPort> {
         for (i, b) in self.backends.iter().enumerate() {
             // A readable output reveals ownership by name (outputs are readable).
             if (b.read_output)(world, entity, name).is_some() {
@@ -275,7 +284,13 @@ impl PortRegistry {
 
     /// Write to a resolved input port. `false` if the slot no longer backs a live
     /// input (component removed) — the caller reports the dangling target.
-    pub fn write_resolved(&self, world: &mut World, entity: Entity, r: ResolvedPort, value: f64) -> bool {
+    pub fn write_resolved(
+        &self,
+        world: &mut World,
+        entity: Entity,
+        r: ResolvedPort,
+        value: f64,
+    ) -> bool {
         match self.backends[r.backend].write_slot {
             Some(write) => write(world, entity, r.slot, value),
             None => false,

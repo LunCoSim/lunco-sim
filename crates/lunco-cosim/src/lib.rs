@@ -41,25 +41,25 @@ use bevy::prelude::*;
 
 pub mod avian;
 pub mod component;
+pub mod connection;
 pub mod joint;
 pub mod ports;
 pub mod sensors;
 pub mod suggestion;
 pub mod systems;
-pub mod connection;
 
 pub use avian::*;
 pub use component::*;
+pub use connection::*;
 pub use joint::*;
 pub use ports::*;
 pub use suggestion::*;
-pub use connection::*;
 
 // Typed-command machinery (re-exported from `lunco-core`, which re-exports
 // the `lunco-command-macro` proc-macros). Used by the `SetPorts` command +
 // observer defined below — the ONE generic vessel-control command (a batch of
 // named input-port writes), driving landers, rovers, and any port-bearing vessel.
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 
 /// Plugin for co-simulation orchestration.
 ///
@@ -151,7 +151,8 @@ impl Plugin for CoSimPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                systems::propagate::propagate_connections.in_set(systems::propagate::CosimSet::Propagate),
+                systems::propagate::propagate_connections
+                    .in_set(systems::propagate::CosimSet::Propagate),
                 // The single avian force consumer: drains `PendingForces` (filled
                 // by propagation's `force_*` writes) into avian's `Forces`. Joint
                 // motors are driven inline by the `angle` input port's write
@@ -321,4 +322,3 @@ fn on_set_ports(
 }
 
 register_commands!(on_set_ports);
-

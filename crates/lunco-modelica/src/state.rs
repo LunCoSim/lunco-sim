@@ -18,8 +18,8 @@
 //! Panels don't know where the entity came from. They just render it.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
 use lunco_doc::{Document, DocumentHost, DocumentId, DocumentOrigin};
+use std::collections::HashMap;
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -65,9 +65,14 @@ static FILE_LOAD_CELL: AtomicPtr<String> = AtomicPtr::new(std::ptr::null_mut());
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn set_file_load_result(content: &str) {
-    let prev = FILE_LOAD_CELL.swap(Box::into_raw(Box::new(content.to_string())), Ordering::SeqCst);
+    let prev = FILE_LOAD_CELL.swap(
+        Box::into_raw(Box::new(content.to_string())),
+        Ordering::SeqCst,
+    );
     if !prev.is_null() {
-        unsafe { drop(Box::from_raw(prev)); }
+        unsafe {
+            drop(Box::from_raw(prev));
+        }
     }
 }
 
@@ -130,7 +135,6 @@ pub struct WorkbenchState {
 // trigger machinery and lets every domain funnel through the same
 // events — the canonical `JournalResource` records them all.
 
-
 // ---------------------------------------------------------------------------
 // B.3 phase 6 helpers — drop-in replacements for `OpenModel` field
 // reads. Derive each field from the document registry so the legacy
@@ -147,10 +151,7 @@ pub fn detected_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Optio
 
 /// `PanelCtx` sibling of [`detected_name_for`].
 #[cfg(feature = "ui")]
-pub fn detected_name_for_ctx(
-    ctx: &lunco_workbench::PanelCtx,
-    doc: DocumentId,
-) -> Option<String> {
+pub fn detected_name_for_ctx(ctx: &lunco_workbench::PanelCtx, doc: DocumentId) -> Option<String> {
     crate::sim_default::default_simulation_class_ctx(ctx, doc)
 }
 
@@ -165,10 +166,7 @@ pub fn read_only_for_ctx(ctx: &lunco_workbench::PanelCtx, doc: DocumentId) -> bo
 
 /// `PanelCtx` sibling of [`display_name_for`].
 #[cfg(feature = "ui")]
-pub fn display_name_for_ctx(
-    ctx: &lunco_workbench::PanelCtx,
-    doc: DocumentId,
-) -> Option<String> {
+pub fn display_name_for_ctx(ctx: &lunco_workbench::PanelCtx, doc: DocumentId) -> Option<String> {
     ctx.resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.host(doc))
         .map(|h| h.document().origin().display_name())
@@ -176,7 +174,7 @@ pub fn display_name_for_ctx(
 
 /// Read-only flag for `doc`. Replaces `open_model.read_only`.
 pub fn read_only_for(world: &bevy::prelude::World, doc: DocumentId) -> bool {
-world
+    world
         .resource::<ModelicaDocumentRegistry>()
         .host(doc)
         .map(|h| h.document().is_read_only())
@@ -185,7 +183,7 @@ world
 
 /// Display name for `doc`. Replaces `open_model.display_name`.
 pub fn display_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Option<String> {
-world
+    world
         .resource::<ModelicaDocumentRegistry>()
         .host(doc)
         .map(|h| h.document().origin().display_name())
@@ -274,11 +272,7 @@ impl ModelicaDocumentRegistry {
     /// Allocate a fresh [`lunco_doc::DocumentId`] + [`DocumentHost`] with an
     /// explicit origin. Use this when opening from disk or bundled
     /// assets so `SaveDocument` + read-only badges work.
-    pub fn allocate_with_origin(
-        &mut self,
-        source: String,
-        origin: DocumentOrigin,
-    ) -> DocumentId {
+    pub fn allocate_with_origin(&mut self, source: String, origin: DocumentOrigin) -> DocumentId {
         self.next_doc_id = self.next_doc_id.saturating_add(1);
         let id = DocumentId::new(self.next_doc_id);
         let doc = ModelicaDocument::with_origin(id, source, origin);
@@ -348,7 +342,10 @@ impl ModelicaDocumentRegistry {
     /// first); linking to an unknown id is a no-op in release builds and
     /// a debug assertion failure otherwise.
     pub fn link(&mut self, entity: Entity, doc: DocumentId) {
-        debug_assert!(self.hosts.contains_key(&doc), "link to unknown DocumentId {doc}");
+        debug_assert!(
+            self.hosts.contains_key(&doc),
+            "link to unknown DocumentId {doc}"
+        );
         self.by_entity.insert(entity, doc);
     }
 
@@ -389,12 +386,12 @@ impl ModelicaDocumentRegistry {
     /// equivalent of `find_by_path` for the bundled variant, which
     /// has no on-disk path.
     pub fn find_bundled(&self, filename: &str) -> Option<DocumentId> {
-        self.hosts.iter().find_map(|(id, host)| {
-            match host.document().origin() {
+        self.hosts
+            .iter()
+            .find_map(|(id, host)| match host.document().origin() {
                 lunco_doc::DocumentOrigin::Bundled { filename: f } if f == filename => Some(*id),
                 _ => None,
-            }
-        })
+            })
     }
 
     /// Iterate every `(entity, doc)` link currently registered.
@@ -459,10 +456,7 @@ pub fn simulator_for(world: &World, doc: DocumentId) -> Option<Entity> {
 /// context so ported panels can resolve their doc's simulator entity
 /// during paint without `&World`.
 #[cfg(feature = "ui")]
-pub fn simulator_for_ctx(
-    ctx: &lunco_workbench::PanelCtx,
-    doc: DocumentId,
-) -> Option<Entity> {
+pub fn simulator_for_ctx(ctx: &lunco_workbench::PanelCtx, doc: DocumentId) -> Option<Entity> {
     ctx.resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.simulator_for(doc))
 }
@@ -489,7 +483,6 @@ pub fn active_simulator(world: &World) -> Option<Entity> {
 /// at module scope, not on the registry — they consult multiple
 /// resources.
 impl ModelicaDocumentRegistry {
-
     /// Replace the source on an existing document. Returns `true` if the
     /// document changed (different source), `false` on no-op (identical
     /// source) or unknown id.
@@ -498,7 +491,9 @@ impl ModelicaDocumentRegistry {
     /// changes; [`drain_pending_changes`](Self::drain_pending_changes)
     /// emits the observer trigger on the next system run.
     pub fn checkpoint_source(&mut self, doc: DocumentId, source: String) -> bool {
-        let Some(host) = self.hosts.get_mut(&doc) else { return false };
+        let Some(host) = self.hosts.get_mut(&doc) else {
+            return false;
+        };
         if host.document().source() == source {
             return false;
         }
@@ -706,7 +701,10 @@ mod tests {
         );
 
         assert_eq!(reg.find_by_path(&path), Some(doc));
-        assert_eq!(reg.find_by_path(std::path::Path::new("/models/Other.mo")), None);
+        assert_eq!(
+            reg.find_by_path(std::path::Path::new("/models/Other.mo")),
+            None
+        );
 
         // An untitled document has no path and must never collide with one.
         reg.allocate_with_origin("model U end U;".into(), DocumentOrigin::untitled("U"));
@@ -758,11 +756,20 @@ mod tests {
         assert!(!reg.host(doc).unwrap().document().is_dirty());
 
         let host = reg.host_mut(doc).unwrap();
-        assert!(FileBacked::reload_base(host.document_mut(), "model A Real x; end A;"));
+        assert!(FileBacked::reload_base(
+            host.document_mut(),
+            "model A Real x; end A;"
+        ));
 
         let d = reg.host(doc).unwrap().document();
-        assert!(d.source().contains("Real x"), "must project the NEW disk text");
-        assert!(!d.is_dirty(), "text came FROM disk ⇒ the document matches it ⇒ clean");
+        assert!(
+            d.source().contains("Real x"),
+            "must project the NEW disk text"
+        );
+        assert!(
+            !d.is_dirty(),
+            "text came FROM disk ⇒ the document matches it ⇒ clean"
+        );
     }
 
     #[test]
@@ -803,8 +810,10 @@ mod tests {
         let gen0 = reg.host(doc).unwrap().generation();
 
         // A journal op payload = a serialized ModelicaOp.
-        let op =
-            serde_json::to_value(ModelicaOp::ReplaceSource { new: "model B end B;".into() }).unwrap();
+        let op = serde_json::to_value(ModelicaOp::ReplaceSource {
+            new: "model B end B;".into(),
+        })
+        .unwrap();
         assert!(reg.replay_op(doc, &op), "valid op replays");
 
         let host = reg.host(doc).unwrap();
@@ -827,7 +836,10 @@ mod tests {
         let doc = reg.allocate("same".into());
 
         let changed = reg.checkpoint_source(doc, "same".into());
-        assert!(!changed, "re-checkpointing identical source must not bump generation");
+        assert!(
+            !changed,
+            "re-checkpointing identical source must not bump generation"
+        );
         assert_eq!(reg.host(doc).unwrap().generation(), 1); // unchanged fresh gen 1
     }
 
@@ -900,7 +912,11 @@ mod tests {
         let mut expected = entities.clone();
         expected.sort_unstable();
 
-        assert_eq!(reg.entities_linked_to(doc), expected, "must be sorted, not hash order");
+        assert_eq!(
+            reg.entities_linked_to(doc),
+            expected,
+            "must be sorted, not hash order"
+        );
         assert_eq!(
             reg.simulator_for(doc),
             expected.first().copied(),

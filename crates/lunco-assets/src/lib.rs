@@ -485,7 +485,9 @@ pub fn assets_dir() -> PathBuf {
 /// than joining `"assets"` itself: a bare relative join silently follows the CWD
 /// of whoever calls it, which is how the same reference resolved two ways.
 pub fn assets_dir_abs() -> PathBuf {
-    std::env::current_dir().unwrap_or_default().join(assets_dir())
+    std::env::current_dir()
+        .unwrap_or_default()
+        .join(assets_dir())
 }
 
 /// On-disk root of a shipped Modelica package under `assets/models/` — the
@@ -650,7 +652,6 @@ pub fn library_rel(path: &Path) -> Option<String> {
         .map(asset_path::slashed)
 }
 
-
 /// Cache `fonts/` directory — where `lunco-assets -- download`
 /// materialises font files declared in per-crate `Assets.toml`. Lives
 /// under [`cache_dir`] because these are downloaded artifacts, not
@@ -718,10 +719,7 @@ mod tests {
     #[test]
     fn user_config_subdir_creates_dir() {
         let prev = std::env::var_os("LUNCOSIM_CONFIG");
-        let tmp = std::env::temp_dir().join(format!(
-            "lunco-test-cfg-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("lunco-test-cfg-{}", std::process::id()));
         std::env::set_var("LUNCOSIM_CONFIG", &tmp);
         let sub = user_config_subdir("recents");
         assert!(sub.exists());

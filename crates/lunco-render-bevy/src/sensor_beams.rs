@@ -88,7 +88,9 @@ fn drive_range_hit(
         if id.0 != HIT_DRIVER_ID {
             continue;
         }
-        let Ok(s) = q_sensors.get(parent.parent()) else { continue };
+        let Ok(s) = q_sensors.get(parent.parent()) else {
+            continue;
+        };
 
         // HIDDEN on a miss. The sensor is reporting its out-of-range fallback, so there
         // is no landing point — parking the marker at the range limit would draw a
@@ -99,7 +101,11 @@ fn drive_range_hit(
         // and a zero-scaled mesh still costs a draw call and still answers a raycast.
         //
         // Guarded: `DerefMut` marks it `Changed` and re-propagates the visibility tree.
-        let want = if s.hit { Visibility::Inherited } else { Visibility::Hidden };
+        let want = if s.hit {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
         if *vis != want {
             *vis = want;
         }
@@ -139,7 +145,9 @@ fn drive_range_beam(
         if id.0 != DRIVER_ID {
             continue;
         }
-        let Ok(s) = q_sensors.get(parent.parent()) else { continue };
+        let Ok(s) = q_sensors.get(parent.parent()) else {
+            continue;
+        };
         let param = |key: &str, fallback: f64| {
             params
                 .and_then(|p| p.0.get(key).copied())

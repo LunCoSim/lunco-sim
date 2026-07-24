@@ -1,9 +1,9 @@
 #[cfg(feature = "python")]
+use bevy::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
 use pyo3::IntoPyObjectExt;
-#[cfg(feature = "python")]
-use bevy::prelude::*;
 
 #[cfg(feature = "python")]
 #[pyclass]

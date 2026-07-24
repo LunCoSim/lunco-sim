@@ -30,7 +30,9 @@ pub const VIZ_PANEL_KIND: PanelId = PanelId("lunco_viz_panel");
 pub struct VizPanel;
 
 impl InstancePanel for VizPanel {
-    fn kind(&self) -> PanelId { VIZ_PANEL_KIND }
+    fn kind(&self) -> PanelId {
+        VIZ_PANEL_KIND
+    }
 
     fn default_slot(&self) -> PanelSlot {
         // Time-series charts live in the bottom dock by default —
@@ -99,16 +101,10 @@ impl InstancePanel for VizPanel {
                 // inspector / control surface; the actual render
                 // happens elsewhere. Left as a placeholder until the
                 // 3D view lands.
-                ui.label(
-                    egui::RichText::new("3D viewport viz — controls coming.")
-                        .color(muted),
-                );
+                ui.label(egui::RichText::new("3D viewport viz — controls coming.").color(muted));
             }
             ViewTarget::Panel3D => {
-                ui.label(
-                    egui::RichText::new("3D sub-panel — not implemented yet.")
-                        .color(muted),
-                );
+                ui.label(egui::RichText::new("3D sub-panel — not implemented yet.").color(muted));
             }
         }
     }

@@ -50,7 +50,10 @@ mod wasm {
             half_extent: baked.grid.half_extent,
             native_res: baked.native_res,
         };
-        let Ok(header_bytes) = bincode::serde::encode_to_vec(&header, bincode::config::standard()) else { return };
+        let Ok(header_bytes) = bincode::serde::encode_to_vec(&header, bincode::config::standard())
+        else {
+            return;
+        };
         let header_arr = Uint8Array::new_with_length(header_bytes.len() as u32);
         header_arr.copy_from(&header_bytes);
 
@@ -79,7 +82,9 @@ mod wasm {
             half_extent: 0.0,
             native_res: 0,
         };
-        let Ok(bytes) = bincode::serde::encode_to_vec(&header, bincode::config::standard()) else { return };
+        let Ok(bytes) = bincode::serde::encode_to_vec(&header, bincode::config::standard()) else {
+            return;
+        };
         let arr = Uint8Array::new_with_length(bytes.len() as u32);
         arr.copy_from(&bytes);
         let obj = Object::new();

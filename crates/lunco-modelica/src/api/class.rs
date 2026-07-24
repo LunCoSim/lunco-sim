@@ -1,11 +1,11 @@
 //! API handlers for class-level operations (Rename, etc).
 
-use bevy::prelude::*;
-use lunco_core::{Command, on_command};
-use lunco_doc::DocumentId;
+use super::util::resolve_doc;
 use crate::document::ModelicaOp;
 use crate::state::ModelicaDocumentRegistry;
-use super::util::resolve_doc;
+use bevy::prelude::*;
+use lunco_core::{on_command, Command};
+use lunco_doc::DocumentId;
 
 /// Rename a top-level class within an open Modelica document.
 #[Command(default)]
@@ -16,10 +16,7 @@ pub struct RenameModelicaClass {
 }
 
 #[on_command(RenameModelicaClass)]
-pub fn on_rename_modelica_class(
-    trigger: On<RenameModelicaClass>,
-    mut commands: Commands,
-) {
+pub fn on_rename_modelica_class(trigger: On<RenameModelicaClass>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc(world, ev.doc) else {
@@ -91,7 +88,14 @@ pub fn on_rename_modelica_class(
 
 fn rewrite_class_name(source: &str, old: &str, new: &str) -> Option<String> {
     const KEYWORDS: &[&str] = &[
-        "model", "class", "package", "connector", "record", "block", "type", "function",
+        "model",
+        "class",
+        "package",
+        "connector",
+        "record",
+        "block",
+        "type",
+        "function",
     ];
     let bytes = source.as_bytes();
     let mut decl_pos = None;
@@ -100,10 +104,18 @@ fn rewrite_class_name(source: &str, old: &str, new: &str) -> Option<String> {
     'outer: for (i, _) in source.char_indices() {
         for kw in KEYWORDS {
             let pat_len = kw.len() + 1 + old.len();
-            if i + pat_len > source.len() { continue; }
-            if !source[i..].starts_with(kw) { continue; }
-            if bytes[i + kw.len()] != b' ' { continue; }
-            if !source[i + kw.len() + 1..].starts_with(old) { continue; }
+            if i + pat_len > source.len() {
+                continue;
+            }
+            if !source[i..].starts_with(kw) {
+                continue;
+            }
+            if bytes[i + kw.len()] != b' ' {
+                continue;
+            }
+            if !source[i + kw.len() + 1..].starts_with(old) {
+                continue;
+            }
             let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
             let after = i + pat_len;
             let after_ok = after >= bytes.len() || !is_ident_byte(bytes[after]);
@@ -173,9 +185,7 @@ pub fn on_file_renamed_chain_to_modelica(
     let doc_ids: Vec<lunco_doc::DocumentId> = registry
         .iter()
         .filter_map(|(id, host)| match host.document().origin() {
-            DocumentOrigin::File { path, .. } if path.starts_with(&ev.old_abs) => {
-                Some(id)
-            }
+            DocumentOrigin::File { path, .. } if path.starts_with(&ev.old_abs) => Some(id),
             _ => None,
         })
         .collect();

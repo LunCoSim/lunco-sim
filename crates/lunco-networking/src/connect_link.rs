@@ -151,7 +151,10 @@ mod tests {
     #[test]
     fn native_round_trip_with_digest() {
         let url = native_url("192.168.10.91:5888", "ab12cd");
-        assert_eq!(url, "luncosim://connect?address=192.168.10.91:5888&digest=ab12cd");
+        assert_eq!(
+            url,
+            "luncosim://connect?address=192.168.10.91:5888&digest=ab12cd"
+        );
         let link = parse_native(&url).unwrap();
         assert_eq!(link.address, "192.168.10.91:5888");
         assert_eq!(link.digest, "ab12cd");
@@ -191,9 +194,16 @@ mod tests {
     #[test]
     fn web_url_idempotent_and_fragments_digest() {
         let u = web_url("https://lunica.lunco.space/", "192.168.10.91:5888", "ab12");
-        assert_eq!(u, "https://lunica.lunco.space/?connect=192.168.10.91:5888#ab12");
+        assert_eq!(
+            u,
+            "https://lunica.lunco.space/?connect=192.168.10.91:5888#ab12"
+        );
         // Re-building off a live location that already carries query/fragment.
-        let u2 = web_url("https://lunica.lunco.space/?connect=old#deadbeef", "h:1", "");
+        let u2 = web_url(
+            "https://lunica.lunco.space/?connect=old#deadbeef",
+            "h:1",
+            "",
+        );
         assert_eq!(u2, "https://lunica.lunco.space/?connect=h:1");
     }
 

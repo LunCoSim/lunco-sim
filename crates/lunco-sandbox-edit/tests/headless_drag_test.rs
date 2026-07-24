@@ -4,8 +4,8 @@
 //! without requiring GPU, window, or physics systems.
 
 use bevy::prelude::*;
-use lunco_sandbox_edit::SelectedEntities;
 use lunco_core::DragModeActive;
+use lunco_sandbox_edit::SelectedEntities;
 
 // ─── Selection State Machine Tests ─────────────────────────────────────────────
 
@@ -26,7 +26,10 @@ fn test_shift_click_selects_entity() {
 
     // Verify selection state
     assert_eq!(selected.primary(), Some(rover));
-    assert!(drag_mode.active, "DragModeActive must be set to block possession");
+    assert!(
+        drag_mode.active,
+        "DragModeActive must be set to block possession"
+    );
 }
 
 /// Verifies that possession is blocked during selection
@@ -43,7 +46,10 @@ fn test_selection_blocks_possession() {
         possession_triggered = true;
     }
 
-    assert!(!possession_triggered, "Possession MUST be blocked when drag_mode.active=true");
+    assert!(
+        !possession_triggered,
+        "Possession MUST be blocked when drag_mode.active=true"
+    );
 }
 
 /// Verifies that after deselection, possession is allowed again
@@ -64,7 +70,10 @@ fn test_deselection_allows_possession() {
 
     // Verify deselection
     assert!(selected.primary().is_none(), "Entity should be deselected");
-    assert!(!drag_mode.active, "DragModeActive must be cleared to allow possession");
+    assert!(
+        !drag_mode.active,
+        "DragModeActive must be cleared to allow possession"
+    );
 
     // Verify possession is now allowed
     let mut possession_triggered = false;
@@ -73,7 +82,10 @@ fn test_deselection_allows_possession() {
     } else {
         possession_triggered = true; // allowed
     }
-    assert!(possession_triggered, "Possession MUST be allowed after deselection");
+    assert!(
+        possession_triggered,
+        "Possession MUST be allowed after deselection"
+    );
 }
 
 /// Tests Escape key behavior during selection
@@ -93,7 +105,10 @@ fn test_escape_cancels_selection() {
 
     // Verify everything is cleared
     assert!(selected.primary().is_none(), "Entity should be deselected");
-    assert!(!drag_mode.active, "Possession should be allowed after cancel");
+    assert!(
+        !drag_mode.active,
+        "Possession should be allowed after cancel"
+    );
 }
 
 /// Tests switching selection between entities
@@ -113,6 +128,10 @@ fn test_switching_selection() {
     selected.entities.push(rover2);
     drag_mode.active = true; // Still active
 
-    assert_eq!(selected.primary(), Some(rover2), "Should now select second rover");
+    assert_eq!(
+        selected.primary(),
+        Some(rover2),
+        "Should now select second rover"
+    );
     assert!(drag_mode.active, "Possession should still be blocked");
 }

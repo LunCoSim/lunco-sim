@@ -53,9 +53,9 @@
 //! A plain `Material` is unlit by default; the `.wgsl` returns its own colour
 //! (it may shade using `VertexOutput.world_normal` if it wants form).
 
-use bevy::prelude::*;
-use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin};
 use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin};
+use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
@@ -162,7 +162,14 @@ pub struct ShaderMaterial {
 /// the reflect system derives a real schema from its shader source.
 fn empty_schema_arc() -> Arc<ParamSchema> {
     static EMPTY: OnceLock<Arc<ParamSchema>> = OnceLock::new();
-    EMPTY.get_or_init(|| Arc::new(ParamSchema { fields: Vec::new(), size: 0 })).clone()
+    EMPTY
+        .get_or_init(|| {
+            Arc::new(ParamSchema {
+                fields: Vec::new(),
+                size: 0,
+            })
+        })
+        .clone()
 }
 
 impl Default for ShaderMaterial {
@@ -286,7 +293,10 @@ pub struct ShaderKey {
 
 impl From<&ShaderMaterial> for ShaderKey {
     fn from(m: &ShaderMaterial) -> Self {
-        Self { shader: m.shader.clone(), vertex_shader: m.vertex_shader.clone() }
+        Self {
+            shader: m.shader.clone(),
+            vertex_shader: m.vertex_shader.clone(),
+        }
     }
 }
 
@@ -428,7 +438,10 @@ impl Plugin for ShaderMaterialPlugin {
 /// Builds a [`ShaderMaterial`] from a shader handle + a template (preserves
 /// the template's named `values`/`schema` so swapping the `.wgsl` keeps tuned
 /// params). The reflect system re-derives the schema from the new shader.
-pub fn build_shader_material(shader: Handle<Shader>, mut material: ShaderMaterial) -> ShaderMaterial {
+pub fn build_shader_material(
+    shader: Handle<Shader>,
+    mut material: ShaderMaterial,
+) -> ShaderMaterial {
     material.shader = shader;
     material
 }
@@ -460,7 +473,10 @@ pub fn apply_param(m: &mut ShaderMaterial, key: &str, value: &str) -> bool {
         ParamType::Vec3 | ParamType::Vec4 => {
             // Colours are authored as `r,g,b` (USD displayColor style) or
             // `r,g,b,a` for vec4 params.
-            let n: Vec<f32> = value.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+            let n: Vec<f32> = value
+                .split(',')
+                .filter_map(|s| s.trim().parse::<f32>().ok())
+                .collect();
             if ty == ParamType::Vec4 && n.len() >= 4 {
                 m.set(key, ParamValue::Vec4([n[0], n[1], n[2], n[3]]));
                 true

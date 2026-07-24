@@ -69,7 +69,9 @@ fn make_app() -> App {
     ));
     // Drive real frames at the fixed timestep so FixedUpdate ticks once per
     // update — deterministic, no wall-clock dependency.
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(15625)));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
+        15625,
+    )));
     // Plugins registering resources in `Plugin::finish` (avian's diagnostics)
     // never get it called when tests drive `app.update()` directly.
     app.finish();
@@ -111,7 +113,10 @@ fn dynamic_body_settles_on_static_ground_at_origin() {
     step(&mut app, 600);
 
     // Fell from 5 m and rests on the ground top (y = 0) at half-height 0.5.
-    let pos = app.world().get::<Position>(body).expect("body has Position");
+    let pos = app
+        .world()
+        .get::<Position>(body)
+        .expect("body has Position");
     assert!(
         (pos.y - 0.5).abs() < 0.1,
         "body did not settle on ground: Position.y = {}",
@@ -171,7 +176,11 @@ fn physics_works_at_astronomical_offset_with_small_local_transforms() {
         "Position not in the absolute frame: x = {}",
         pos.x
     );
-    assert!((pos.y - 0.5).abs() < 0.1, "did not settle: Position.y = {}", pos.y);
+    assert!(
+        (pos.y - 0.5).abs() < 0.1,
+        "did not settle: Position.y = {}",
+        pos.y
+    );
     // …while the render-truth Transform stayed cell-local and small.
     let tf = app.world().get::<Transform>(body).unwrap();
     assert!(
@@ -179,7 +188,11 @@ fn physics_works_at_astronomical_offset_with_small_local_transforms() {
         "Transform not cell-local: {:?}",
         tf.translation
     );
-    assert!((tf.translation.y - 0.5).abs() < 0.1, "local y = {}", tf.translation.y);
+    assert!(
+        (tf.translation.y - 0.5).abs() < 0.1,
+        "local y = {}",
+        tf.translation.y
+    );
 }
 
 #[test]
@@ -226,7 +239,10 @@ fn dynamic_body_settles_on_child_collider_ground() {
 
     step(&mut app, 600);
 
-    let pos = app.world().get::<Position>(body).expect("body has Position");
+    let pos = app
+        .world()
+        .get::<Position>(body)
+        .expect("body has Position");
     assert!(
         (pos.y - (-0.1 + (-1.0) + 1.0 + 0.5)).abs() < 0.15,
         "body did not settle on child-collider ground: Position.y = {}",
@@ -280,7 +296,10 @@ fn scaled_child_collider_ground_settles_without_root_transform() {
 
     step(&mut app, 600);
 
-    let pos = app.world().get::<Position>(body).expect("body has Position");
+    let pos = app
+        .world()
+        .get::<Position>(body)
+        .expect("body has Position");
     assert!(
         pos.y > -1.0,
         "body fell through the scaled ground — the bridge's rootless \
@@ -370,8 +389,9 @@ fn external_teleport_carries_child_body() {
             ChildOf(chassis),
         ))
         .id();
-    app.world_mut()
-        .spawn(FixedJoint::new(chassis, wheel).with_local_anchor1(bevy::math::DVec3::new(2.0, 0.0, 0.0)));
+    app.world_mut().spawn(
+        FixedJoint::new(chassis, wheel).with_local_anchor1(bevy::math::DVec3::new(2.0, 0.0, 0.0)),
+    );
 
     // Let the pair free-fall a few ticks so the solver owns both.
     step(&mut app, 5);
@@ -388,7 +408,11 @@ fn external_teleport_carries_child_body() {
 
     let c = app.world().get::<Position>(chassis).unwrap().0;
     let w = app.world().get::<Position>(wheel).unwrap().0;
-    assert!(c.x > 400.0, "chassis teleport did not reach physics: x = {}", c.x);
+    assert!(
+        c.x > 400.0,
+        "chassis teleport did not reach physics: x = {}",
+        c.x
+    );
     let after = w - c;
     assert!(
         (after - before).length() < 0.5,

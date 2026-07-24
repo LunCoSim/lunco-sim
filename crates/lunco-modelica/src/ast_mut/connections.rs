@@ -208,8 +208,9 @@ fn set_line_fields(
         return Ok(());
     }
     let source = edit.source();
-    let line_group = text::annotation_clause(source, stmt.clone())
-        .and_then(|(_, group)| clause::call_group(source, group.clone(), "Line").map(|l| (group, l)));
+    let line_group = text::annotation_clause(source, stmt.clone()).and_then(|(_, group)| {
+        clause::call_group(source, group.clone(), "Line").map(|l| (group, l))
+    });
 
     match line_group {
         // A `Line(...)` is already there: splice each field into its arg list.
@@ -217,12 +218,9 @@ fn set_line_fields(
             for (name, value) in fields {
                 match clause::arg_value(source, line.clone(), name) {
                     Some(range) => edit.replace(range, value.clone()),
-                    None => clause::upsert_arg(
-                        edit,
-                        line.clone(),
-                        name,
-                        &format!("{name}={value}"),
-                    ),
+                    None => {
+                        clause::upsert_arg(edit, line.clone(), name, &format!("{name}={value}"))
+                    }
                 }
             }
         }

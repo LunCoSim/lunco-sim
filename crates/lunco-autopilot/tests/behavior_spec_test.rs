@@ -14,7 +14,10 @@ fn spec_round_trips_patrol_waypoints() {
     let wps = spec.patrol_waypoints().expect("patrol exposes waypoints");
     assert_eq!(wps.len(), 2);
     assert_eq!(wps[0].pos, [1.0, 0.0, 0.0]);
-    assert!(wps[0].on_arrival.is_empty(), "legacy bare-array → no actions");
+    assert!(
+        wps[0].on_arrival.is_empty(),
+        "legacy bare-array → no actions"
+    );
     // Round-trip back to JSON.
     let out = spec.to_json().expect("serialize");
     let reparsed: BehaviorSpec = serde_json::from_str(&out).expect("reparse");
@@ -35,14 +38,20 @@ fn patrol_waypoint_with_arrival_action_parses() {
     assert_eq!(wps.len(), 2);
     assert_eq!(wps[0].pos, [10.0, 0.0, 0.0]);
     assert_eq!(wps[0].on_arrival.len(), 1, "first waypoint fires one tool");
-    assert!(wps[1].on_arrival.is_empty(), "second waypoint has no actions");
+    assert!(
+        wps[1].on_arrival.is_empty(),
+        "second waypoint has no actions"
+    );
 }
 
 #[test]
 fn non_patrol_spec_has_no_patrol_waypoints() {
     let json = r#"{"kind":"brake"}"#;
     let spec = AutopilotBehaviorSpec::from_json(json).expect("brake spec parses");
-    assert!(spec.patrol_waypoints().is_none(), "non-patrol exposes no waypoints");
+    assert!(
+        spec.patrol_waypoints().is_none(),
+        "non-patrol exposes no waypoints"
+    );
 }
 
 #[test]

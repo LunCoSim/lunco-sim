@@ -73,7 +73,11 @@ pub fn ensure_preview_surface_ops(geom_path: &str) -> Option<(Vec<UsdOp>, String
     let root_name = parts.next()?;
     let root = format!("/{root_name}");
     let rest: Vec<&str> = geom.split('/').skip(1).collect();
-    let stem = if rest.is_empty() { root_name } else { &rest.join("_") };
+    let stem = if rest.is_empty() {
+        root_name
+    } else {
+        &rest.join("_")
+    };
     let mat_name = format!("{}_Mat", sanitize(stem));
 
     let looks = format!("{root}/{LOOKS}");
@@ -265,7 +269,13 @@ pub fn preview_surface_input(key: &str) -> Option<(&'static str, &'static str)> 
 fn sanitize(s: &str) -> String {
     let mut out: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         out.insert(0, '_');
@@ -282,14 +292,32 @@ mod tests {
         let described = ops
             .iter()
             .map(|op| match op {
-                UsdOp::AddPrim { parent_path, name, type_name, .. } => {
-                    format!("AddPrim {parent_path}/{name} : {}", type_name.clone().unwrap_or_default())
+                UsdOp::AddPrim {
+                    parent_path,
+                    name,
+                    type_name,
+                    ..
+                } => {
+                    format!(
+                        "AddPrim {parent_path}/{name} : {}",
+                        type_name.clone().unwrap_or_default()
+                    )
                 }
                 UsdOp::SetAttribute { path, name, .. } => format!("SetAttribute {path}.{name}"),
-                UsdOp::SetConnection { path, name, sources, .. } => {
+                UsdOp::SetConnection {
+                    path,
+                    name,
+                    sources,
+                    ..
+                } => {
                     format!("SetConnection {path}.{name} -> {}", sources.join(","))
                 }
-                UsdOp::SetRelationship { path, name, targets, .. } => {
+                UsdOp::SetRelationship {
+                    path,
+                    name,
+                    targets,
+                    ..
+                } => {
                     format!("SetRelationship {path}.{name} -> {}", targets.join(","))
                 }
                 _ => "?".into(),
@@ -351,7 +379,8 @@ mod tests {
             .expect("ops");
 
         assert!(
-            ops.iter().any(|o| matches!(o, UsdOp::SetApiSchemas { path, schemas, .. }
+            ops.iter()
+                .any(|o| matches!(o, UsdOp::SetApiSchemas { path, schemas, .. }
                 if path == "/World/PhysicsMaterials/Regolith"
                     && schemas == &["PhysicsMaterialAPI".to_string()])),
             "PhysicsMaterialAPI applies to a Material in the PhysicsMaterials scope"

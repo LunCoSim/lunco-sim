@@ -132,17 +132,13 @@ pub(crate) fn perpendicular_dist_sq(p: Pos, a: Pos, b: Pos) -> f32 {
 /// after a delete, so a dangling reference from an old selection
 /// reliably resolves to `None` instead of silently pointing at a new
 /// node that happens to have taken the slot.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NodeId(pub u64);
 
 /// Stable identifier for an [`Edge`] within a single [`Scene`].
 ///
 /// Same allocation discipline as [`NodeId`] — monotonic, not reused.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EdgeId(pub u64);
 
 /// Identifier for a [`Port`] **within a single node**.
@@ -151,9 +147,7 @@ pub struct EdgeId(pub u64);
 /// different nodes both have `PortId(0)`. Strings are used (not `u32`)
 /// because ports carry domain meaning (`"heatPort"`, `"pin_p"`) that
 /// survives serialisation and shows up in user-visible error messages.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PortId(pub SmolStr);
 
 impl PortId {
@@ -541,11 +535,7 @@ impl Scene {
     /// visuals with non-rectangular bodies will want to pre-filter
     /// here then refine via the visual trait — that plumbing lands
     /// when a real case needs it.
-    pub fn hit_node(
-        &self,
-        world_pos: Pos,
-        port_radius: f32,
-    ) -> Option<(NodeId, NodeHitKind)> {
+    pub fn hit_node(&self, world_pos: Pos, port_radius: f32) -> Option<(NodeId, NodeHitKind)> {
         let radius_sq = port_radius * port_radius;
         for (id, node) in self.nodes.iter().rev() {
             for port in &node.ports {
@@ -632,7 +622,9 @@ impl Scene {
         let thr_sq = threshold * threshold;
         let handle_sq = handle_radius * handle_radius;
         for (id, edge) in self.edges.iter().rev() {
-            let Some((from, to)) = self.edge_endpoint_positions(edge) else { continue };
+            let Some((from, to)) = self.edge_endpoint_positions(edge) else {
+                continue;
+            };
             // Handle checks first (corner > segment midpoint > body).
             if with_handles && handle_radius > 0.0 {
                 // Corner handles on interior waypoints.

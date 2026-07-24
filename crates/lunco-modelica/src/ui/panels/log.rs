@@ -154,8 +154,12 @@ pub fn render_log_view(
             // t=0 rather than some arbitrary app-boot moment.
             use std::sync::OnceLock;
             static SESSION_START: OnceLock<web_time::Instant> = OnceLock::new();
-            let session_start = *SESSION_START
-                .get_or_init(|| entries.front().map(|e| e.at).unwrap_or_else(web_time::Instant::now));
+            let session_start = *SESSION_START.get_or_init(|| {
+                entries
+                    .front()
+                    .map(|e| e.at)
+                    .unwrap_or_else(web_time::Instant::now)
+            });
             for entry in entries {
                 let color = entry.level.color(theme);
                 let offset = entry
@@ -164,12 +168,7 @@ pub fn render_log_view(
                     .as_secs_f32();
                 let ts = format!("[{:>6.2}s]", offset);
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(&ts)
-                            .monospace()
-                            .size(10.0)
-                            .color(muted),
-                    );
+                    ui.label(egui::RichText::new(&ts).monospace().size(10.0).color(muted));
                     ui.label(
                         egui::RichText::new(entry.level.tag())
                             .monospace()
@@ -186,8 +185,7 @@ pub fn render_log_view(
                         // → `Rectifier`); display names are
                         // usually much shorter.
                         let pill = if model.chars().count() > 24 {
-                            let s: String =
-                                model.chars().rev().take(24).collect::<String>();
+                            let s: String = model.chars().rev().take(24).collect::<String>();
                             format!("…{}", s.chars().rev().collect::<String>())
                         } else {
                             model.to_string()

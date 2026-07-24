@@ -18,8 +18,14 @@ fn wgsl_fract(x: f32) -> f32 {
 }
 
 /// Exact copy of the WGSL cartesian grid shader math.
-fn compute_grid_mask(body_local: Vec3, major_spacing: f32, minor_spacing: f32,
-                     major_line_width: f32, minor_line_width: f32, minor_line_fade: f32) -> f32 {
+fn compute_grid_mask(
+    body_local: Vec3,
+    major_spacing: f32,
+    minor_spacing: f32,
+    major_line_width: f32,
+    minor_line_width: f32,
+    minor_line_fade: f32,
+) -> f32 {
     let bx = body_local.x;
     let by = body_local.y;
     let bz = body_local.z;
@@ -29,13 +35,17 @@ fn compute_grid_mask(body_local: Vec3, major_spacing: f32, minor_spacing: f32,
     let gz = ((wgsl_fract(bz / major_spacing - 0.5).abs() - 0.5).abs()) * major_spacing;
 
     let world_per_px = 1.0f32;
-    let major_px = (gx / world_per_px).min(gy / world_per_px).min(gz / world_per_px);
+    let major_px = (gx / world_per_px)
+        .min(gy / world_per_px)
+        .min(gz / world_per_px);
     let major_m = 1.0 - smoothstep(0.0, major_line_width, major_px);
 
     let gx2 = ((wgsl_fract(bx / minor_spacing - 0.5).abs() - 0.5).abs()) * minor_spacing;
     let gy2 = ((wgsl_fract(by / minor_spacing - 0.5).abs() - 0.5).abs()) * minor_spacing;
     let gz2 = ((wgsl_fract(bz / minor_spacing - 0.5).abs() - 0.5).abs()) * minor_spacing;
-    let minor_px = (gx2 / world_per_px).min(gy2 / world_per_px).min(gz2 / world_per_px);
+    let minor_px = (gx2 / world_per_px)
+        .min(gy2 / world_per_px)
+        .min(gz2 / world_per_px);
     let minor_raw = 1.0 - smoothstep(0.0, minor_line_width, minor_px);
     let minor_m = minor_raw * minor_line_fade * (1.0 - major_m);
 
@@ -49,7 +59,14 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 
 /// Simulates the quadsphere mesh generation for a single tile.
 /// Returns (positions, normals) in BODY-LOCAL space.
-fn generate_tile_vertices(face: u8, level: u32, i: i32, j: i32, radius: f64, res: u32) -> (Vec<Vec3>, Vec<Vec3>) {
+fn generate_tile_vertices(
+    face: u8,
+    level: u32,
+    i: i32,
+    j: i32,
+    radius: f64,
+    res: u32,
+) -> (Vec<Vec3>, Vec<Vec3>) {
     // Reproduce create_quadsphere_tile_mesh logic
     let tiles_at_level = 1 << level;
     let step = 2.0 / tiles_at_level as f64;
@@ -79,16 +96,26 @@ fn generate_tile_vertices(face: u8, level: u32, i: i32, j: i32, radius: f64, res
                 (pos_sphere.z * h - tile_center.z) as f32,
             );
             positions.push(vertex_local);
-            normals.push(Vec3::new(pos_sphere.x as f32, pos_sphere.y as f32, pos_sphere.z as f32));
+            normals.push(Vec3::new(
+                pos_sphere.x as f32,
+                pos_sphere.y as f32,
+                pos_sphere.z as f32,
+            ));
         }
     }
     (positions, normals)
 }
 
 /// Compute body-local position of a tile center, given its cell and local transform.
-fn tile_body_local_position(cell_x: i64, cell_y: i64, cell_z: i64,
-                             local_x: f32, local_y: f32, local_z: f32,
-                             cell_size: f64) -> DVec3 {
+fn tile_body_local_position(
+    cell_x: i64,
+    cell_y: i64,
+    cell_z: i64,
+    local_x: f32,
+    local_y: f32,
+    local_z: f32,
+    cell_size: f64,
+) -> DVec3 {
     DVec3::new(
         cell_x as f64 * cell_size + local_x as f64,
         cell_y as f64 * cell_size + local_y as f64,
@@ -119,7 +146,8 @@ fn test_tile_vertices_on_sphere() {
     for face in 0..6u8 {
         for tile_i in 0..2i32 {
             for tile_j in 0..2i32 {
-                let (positions, normals) = generate_tile_vertices(face, 1, tile_i, tile_j, MOON_R, res);
+                let (positions, normals) =
+                    generate_tile_vertices(face, 1, tile_i, tile_j, MOON_R, res);
 
                 // Compute the tile center in body-local space
                 let tiles_at_level = 2u32; // LOD 1
@@ -138,17 +166,34 @@ fn test_tile_vertices_on_sphere() {
                     );
                     let dist = body_local.length();
                     let error = (dist - MOON_R).abs();
-                    assert!(error < tolerance,
+                    assert!(
+                        error < tolerance,
                         "Face {} tile [{},{}] vertex {} off sphere: dist={:.2}, error={:.2}",
-                        face, tile_i, tile_j, k, dist, error);
+                        face,
+                        tile_i,
+                        tile_j,
+                        k,
+                        dist,
+                        error
+                    );
 
                     // Normal should match radial direction
                     let expected_normal = body_local.normalize();
-                    let actual_normal = DVec3::new(normals[k].x as f64, normals[k].y as f64, normals[k].z as f64);
+                    let actual_normal = DVec3::new(
+                        normals[k].x as f64,
+                        normals[k].y as f64,
+                        normals[k].z as f64,
+                    );
                     let normal_error = (expected_normal - actual_normal).length();
-                    assert!(normal_error < 0.001,
+                    assert!(
+                        normal_error < 0.001,
                         "Face {} tile [{},{}] vertex {} normal error: {:.6}",
-                        face, tile_i, tile_j, k, normal_error);
+                        face,
+                        tile_i,
+                        tile_j,
+                        k,
+                        normal_error
+                    );
                 }
             }
         }
@@ -186,7 +231,9 @@ fn test_tile_positions_match_grid_decomposition() {
                 let local_z = (tile_center.z - cell_z as f64 * cell_size) as f32;
 
                 // Reassemble
-                let reassembled = tile_body_local_position(cell_x, cell_y, cell_z, local_x, local_y, local_z, cell_size);
+                let reassembled = tile_body_local_position(
+                    cell_x, cell_y, cell_z, local_x, local_y, local_z, cell_size,
+                );
                 let error = (reassembled - tile_center).length();
                 assert!(error < 0.01,
                     "Face {} tile [{},{}] grid decomposition error: {:.4} (center={:?}, cell=({},{},{}), local=({},{},{}))",
@@ -217,13 +264,18 @@ fn test_grid_visible_from_surface_camera() {
             // Project back to sphere surface
             let pt_normalized = pt.normalize() * MOON_R as f32;
             let m = compute_grid_mask(pt_normalized, 1000.0, 500.0, 0.75, 0.4, 0.3);
-            if m > max_mask { max_mask = m; }
+            if m > max_mask {
+                max_mask = m;
+            }
         }
     }
 
-    assert!(max_mask > 0.1,
+    assert!(
+        max_mask > 0.1,
         "Blueprint grid should be visible from surface camera at +Z. Max mask={:.4}, cam_pos={:?}",
-        max_mask, cam_pos);
+        max_mask,
+        cam_pos
+    );
 }
 
 #[test]
@@ -244,22 +296,39 @@ fn test_grid_orientation_consistent_across_tile_boundary() {
     // Right edge of tile A (last column, x=res)
     // Left edge of tile B (first column, x=0)
     // These should be at the same body-local position
-    let right_edge_a: Vec<Vec3> = (0..=res).map(|y| {
-        let idx = y as usize * (res as usize + 1) + res as usize;
-        let v = pos_a[idx];
-        Vec3::new(v.x as f32 + tc_a.x as f32, v.y as f32 + tc_a.y as f32, v.z as f32 + tc_a.z as f32)
-    }).collect();
+    let right_edge_a: Vec<Vec3> = (0..=res)
+        .map(|y| {
+            let idx = y as usize * (res as usize + 1) + res as usize;
+            let v = pos_a[idx];
+            Vec3::new(
+                v.x as f32 + tc_a.x as f32,
+                v.y as f32 + tc_a.y as f32,
+                v.z as f32 + tc_a.z as f32,
+            )
+        })
+        .collect();
 
-    let left_edge_b: Vec<Vec3> = (0..=res).map(|y| {
-        let idx = y as usize * (res as usize + 1);
-        let v = pos_b[idx];
-        Vec3::new(v.x as f32 + tc_b.x as f32, v.y as f32 + tc_b.y as f32, v.z as f32 + tc_b.z as f32)
-    }).collect();
+    let left_edge_b: Vec<Vec3> = (0..=res)
+        .map(|y| {
+            let idx = y as usize * (res as usize + 1);
+            let v = pos_b[idx];
+            Vec3::new(
+                v.x as f32 + tc_b.x as f32,
+                v.y as f32 + tc_b.y as f32,
+                v.z as f32 + tc_b.z as f32,
+            )
+        })
+        .collect();
 
     for (i, (a, b)) in right_edge_a.iter().zip(left_edge_b.iter()).enumerate() {
         let error = (a - b).length();
-        assert!(error < 1.0,
+        assert!(
+            error < 1.0,
             "Tile boundary mismatch at row {}: edge_a={:?}, edge_b={:?}, error={:.2}",
-            i, a, b, error);
+            i,
+            a,
+            b,
+            error
+        );
     }
 }

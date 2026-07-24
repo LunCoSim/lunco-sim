@@ -9,8 +9,8 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 // `bevy_mesh`, not `bevy::render` — `PrimitiveTopology` is re-exported from
 // `wgpu-types` and needs no render pipeline. See docs/architecture/render-decoupling.md.
-use bevy_mesh::PrimitiveTopology;
 use bevy_mesh::Indices;
+use bevy_mesh::PrimitiveTopology;
 use rand::RngExt;
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -59,9 +59,23 @@ fn append_box(
             // Material is double-sided, so winding is cosmetic — keep it
             // consistent per face direction anyway.
             if sign > 0.0 {
-                indices.extend_from_slice(&[start, start + 1, start + 2, start, start + 2, start + 3]);
+                indices.extend_from_slice(&[
+                    start,
+                    start + 1,
+                    start + 2,
+                    start,
+                    start + 2,
+                    start + 3,
+                ]);
             } else {
-                indices.extend_from_slice(&[start, start + 2, start + 1, start, start + 3, start + 2]);
+                indices.extend_from_slice(&[
+                    start,
+                    start + 2,
+                    start + 1,
+                    start,
+                    start + 3,
+                    start + 2,
+                ]);
             }
         }
     }
@@ -94,10 +108,21 @@ pub fn faceted_rock_mesh(seed: u64, cube_count: usize, radius: f32) -> Mesh {
             rng.random_range(0.0..std::f32::consts::TAU),
             rng.random_range(0.0..std::f32::consts::TAU),
         );
-        append_box(&mut positions, &mut normals, &mut uvs, &mut indices, half, offset, rot);
+        append_box(
+            &mut positions,
+            &mut normals,
+            &mut uvs,
+            &mut indices,
+            half,
+            offset,
+            rot,
+        );
     }
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);

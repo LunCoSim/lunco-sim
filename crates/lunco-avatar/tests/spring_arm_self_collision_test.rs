@@ -21,16 +21,24 @@ use lunco_avatar::vessel_collision_exclusions_for_test as exclusions;
 /// version), each wheel owning a child collider prim.
 fn spawn_rover(world: &mut World) -> (Entity, Vec<Entity>, Vec<Entity>) {
     let grid = world.spawn(Name::new("Grid")).id();
-    let chassis = world.spawn((Name::new("Chassis"), RigidBody::Dynamic, ChildOf(grid))).id();
+    let chassis = world
+        .spawn((Name::new("Chassis"), RigidBody::Dynamic, ChildOf(grid)))
+        .id();
 
     let mut wheels = Vec::new();
     let mut wheel_colliders = Vec::new();
     for i in 0..6 {
         let wheel = world
-            .spawn((Name::new(format!("Wheel_{i}")), RigidBody::Dynamic, ChildOf(grid)))
+            .spawn((
+                Name::new(format!("Wheel_{i}")),
+                RigidBody::Dynamic,
+                ChildOf(grid),
+            ))
             .id();
         // The collider geometry hangs off the wheel as its own prim.
-        let col = world.spawn((Name::new(format!("Tire_{i}")), ChildOf(wheel))).id();
+        let col = world
+            .spawn((Name::new(format!("Tire_{i}")), ChildOf(wheel)))
+            .id();
         world.spawn(RevoluteJoint::new(chassis, wheel));
         wheels.push(wheel);
         wheel_colliders.push(col);
@@ -74,8 +82,14 @@ fn excludes_transitively_across_a_joint_chain() {
     world.spawn(SphericalJoint::new(arm, scoop));
 
     let excluded = exclusions(world, chassis);
-    assert!(excluded.contains(&arm), "two joints out is still the vehicle");
-    assert!(excluded.contains(&scoop), "three joints out is still the vehicle");
+    assert!(
+        excluded.contains(&arm),
+        "two joints out is still the vehicle"
+    );
+    assert!(
+        excluded.contains(&scoop),
+        "three joints out is still the vehicle"
+    );
 }
 
 /// The camera MUST still collide with the world. An exclusion set that swallowed
@@ -92,10 +106,16 @@ fn does_not_exclude_unrelated_bodies() {
     let (other_chassis, other_wheels, _) = spawn_rover(world);
 
     let excluded = exclusions(world, chassis);
-    assert!(!excluded.contains(&boulder), "scenery must still block the camera");
+    assert!(
+        !excluded.contains(&boulder),
+        "scenery must still block the camera"
+    );
     assert!(
         !excluded.contains(&other_chassis),
         "another vessel is an obstacle, not part of this one"
     );
-    assert!(!excluded.contains(&other_wheels[0]), "…including its wheels");
+    assert!(
+        !excluded.contains(&other_wheels[0]),
+        "…including its wheels"
+    );
 }

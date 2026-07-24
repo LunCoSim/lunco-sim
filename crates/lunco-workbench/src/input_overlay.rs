@@ -5,12 +5,11 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 use std::collections::HashSet;
 
 /// Persisted settings for the input overlay HUD.
-#[derive(Resource, Clone, Copy, PartialEq, Debug)]
-#[derive(Default)]
+#[derive(Resource, Clone, Copy, PartialEq, Debug, Default)]
 pub struct InputOverlaySettings {
     /// Whether the overlay is rendered.
     pub enabled: bool,
@@ -49,10 +48,7 @@ fn on_toggle_input_overlay(
 }
 
 #[on_command(SimulateInput)]
-fn on_simulate_input(
-    trigger: On<SimulateInput>,
-    mut simulated: ResMut<SimulatedInputs>,
-) {
+fn on_simulate_input(trigger: On<SimulateInput>, mut simulated: ResMut<SimulatedInputs>) {
     let cmd = trigger.event();
     // Every key the vessel control profile actually binds. The old list stopped
     // at W/A/S/D/Space/Shift, so `SimulateInput` for anything else was accepted
@@ -73,7 +69,10 @@ fn on_simulate_input(
         "Space" | "space" => Some(KeyCode::Space),
         "Shift" | "shift" => Some(KeyCode::ShiftLeft),
         _ => {
-            warn!("[input-overlay] SimulateInput: unmapped key {:?} — ignored", cmd.key);
+            warn!(
+                "[input-overlay] SimulateInput: unmapped key {:?} — ignored",
+                cmd.key
+            );
             None
         }
     };
@@ -150,29 +149,65 @@ pub fn draw_input_overlay(
                                 .inner_margin(egui::Margin::symmetric(7, 3))
                                 .show(ui, |ui| {
                                     ui.label(
-                                        egui::RichText::new(text)
-                                            .strong()
-                                            .size(15.0)
-                                            .color(glyph),
+                                        egui::RichText::new(text).strong().size(15.0).color(glyph),
                                     );
                                 });
                         };
 
                         ui.label(egui::RichText::new("⌨").size(15.0).weak());
-                        draw_key(ui, "W", keys.pressed(KeyCode::KeyW) || simulated.keys.contains(&KeyCode::KeyW));
-                        draw_key(ui, "A", keys.pressed(KeyCode::KeyA) || simulated.keys.contains(&KeyCode::KeyA));
-                        draw_key(ui, "S", keys.pressed(KeyCode::KeyS) || simulated.keys.contains(&KeyCode::KeyS));
-                        draw_key(ui, "D", keys.pressed(KeyCode::KeyD) || simulated.keys.contains(&KeyCode::KeyD));
+                        draw_key(
+                            ui,
+                            "W",
+                            keys.pressed(KeyCode::KeyW) || simulated.keys.contains(&KeyCode::KeyW),
+                        );
+                        draw_key(
+                            ui,
+                            "A",
+                            keys.pressed(KeyCode::KeyA) || simulated.keys.contains(&KeyCode::KeyA),
+                        );
+                        draw_key(
+                            ui,
+                            "S",
+                            keys.pressed(KeyCode::KeyS) || simulated.keys.contains(&KeyCode::KeyS),
+                        );
+                        draw_key(
+                            ui,
+                            "D",
+                            keys.pressed(KeyCode::KeyD) || simulated.keys.contains(&KeyCode::KeyD),
+                        );
                         ui.separator();
-                        draw_key(ui, "Space", keys.pressed(KeyCode::Space) || simulated.keys.contains(&KeyCode::Space));
-                        draw_key(ui, "Shift", keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) || simulated.keys.contains(&KeyCode::ShiftLeft));
+                        draw_key(
+                            ui,
+                            "Space",
+                            keys.pressed(KeyCode::Space)
+                                || simulated.keys.contains(&KeyCode::Space),
+                        );
+                        draw_key(
+                            ui,
+                            "Shift",
+                            keys.pressed(KeyCode::ShiftLeft)
+                                || keys.pressed(KeyCode::ShiftRight)
+                                || simulated.keys.contains(&KeyCode::ShiftLeft),
+                        );
                         // Q/E yaw and G (release to autopilot) are bound by the
                         // vessel control profile and were missing from the row —
                         // so the single most important keystroke in a piloted
                         // landing, the handback, was invisible.
-                        draw_key(ui, "Q", keys.pressed(KeyCode::KeyQ) || simulated.keys.contains(&KeyCode::KeyQ));
-                        draw_key(ui, "E", keys.pressed(KeyCode::KeyE) || simulated.keys.contains(&KeyCode::KeyE));
-                        draw_key(ui, "G", keys.pressed(KeyCode::KeyG) || simulated.keys.contains(&KeyCode::KeyG));
+                        draw_key(
+                            ui,
+                            "Q",
+                            keys.pressed(KeyCode::KeyQ) || simulated.keys.contains(&KeyCode::KeyQ),
+                        );
+                        draw_key(
+                            ui,
+                            "E",
+                            keys.pressed(KeyCode::KeyE) || simulated.keys.contains(&KeyCode::KeyE),
+                        );
+                        draw_key(
+                            ui,
+                            "G",
+                            keys.pressed(KeyCode::KeyG) || simulated.keys.contains(&KeyCode::KeyG),
+                        );
                         ui.separator();
 
                         // WHO IS FLYING. A key row shows inputs arriving; it
@@ -210,7 +245,14 @@ pub fn draw_input_overlay(
                         draw_key(ui, "M", m_middle);
                         draw_key(ui, "R", m_right);
 
-                        ui.label(egui::RichText::new(format!(" [{:.0}, {:.0}]", cursor_pos.x, cursor_pos.y)).weak().size(10.0));
+                        ui.label(
+                            egui::RichText::new(format!(
+                                " [{:.0}, {:.0}]",
+                                cursor_pos.x, cursor_pos.y
+                            ))
+                            .weak()
+                            .size(10.0),
+                        );
                     });
                 });
         });
@@ -225,6 +267,6 @@ pub fn build_input_overlay(app: &mut App) {
     // Who is flying — written by possess/release, read by the AUTO/MANUAL badge.
     app.init_resource::<lunco_core::markers::FlightAuthority>();
     app.add_systems(bevy_egui::EguiPrimaryContextPass, draw_input_overlay);
-    
+
     register_all_commands(app);
 }

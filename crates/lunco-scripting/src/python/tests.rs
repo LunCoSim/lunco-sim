@@ -22,10 +22,16 @@ mod tests {
             // Test our EntityProxy
             let locals = pyo3::types::PyDict::new(py);
             let proxy = EntityProxy::new(42);
-            locals.set_item("entity", proxy.into_py_any(py).unwrap()).unwrap();
+            locals
+                .set_item("entity", proxy.into_py_any(py).unwrap())
+                .unwrap();
 
             let code = CString::new("entity.Transform").unwrap();
-            let result: String = py.eval(&code, None, Some(&locals)).unwrap().extract().unwrap();
+            let result: String = py
+                .eval(&code, None, Some(&locals))
+                .unwrap()
+                .extract()
+                .unwrap();
             println!("Result: {}", result);
             assert!(result.contains("Component 'Transform' on"));
             assert!(result.contains("42"));

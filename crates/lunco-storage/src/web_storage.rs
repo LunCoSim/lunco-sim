@@ -94,9 +94,8 @@ impl Storage for WebStorage {
         if ls.get_item(&key).ok().flatten().is_none() {
             return Err(StorageError::NotFound);
         }
-        ls.remove_item(&key).map_err(|_| {
-            StorageError::Io(std::io::Error::other("localStorage remove failed"))
-        })
+        ls.remove_item(&key)
+            .map_err(|_| StorageError::Io(std::io::Error::other("localStorage remove failed")))
     }
 
     async fn exists(&self, handle: &StorageHandle) -> bool {

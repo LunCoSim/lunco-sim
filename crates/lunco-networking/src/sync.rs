@@ -24,30 +24,33 @@
 //!   per-peer assembler (`assemble_and_send_snapshots`, `server.rs`) emits
 //!   interest-scoped `Spawn`s.
 
-use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Position, RigidBody, Rotation};
-use big_space::prelude::CellCoord;
+use avian3d::prelude::{
+    AngularVelocity, LinearVelocity, PhysicsSystems, Position, RigidBody, Rotation,
+};
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
 use bevy::reflect::TypePath;
+use big_space::prelude::CellCoord;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use lunco_doc::DocumentId;
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{
-    authorize, AppliedInputSeq, GlobalEntityId, IncomingSnapshots, LocalAvatar, LocalSession, Mutation,
-    NetReplicate, NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn, SessionId,
-    SessionRegistry, SessionProfiles, SimTick, SnapshotSample, SyncApplyGuard, SyncChannel,
+    authorize, AppliedInputSeq, GlobalEntityId, IncomingSnapshots, LocalAvatar, LocalSession,
+    Mutation, NetReplicate, NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn,
+    SessionId, SessionProfiles, SessionRegistry, SimTick, SnapshotSample, SyncApplyGuard,
+    SyncChannel,
 };
+use lunco_doc::DocumentId;
 
 use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
 use lunco_api::registry::ApiEntityRegistry;
-pub use lunco_doc_bevy::{Presence, UserId, PresenceInfo};
-use lunco_doc_bevy::JournalResource;
-use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_celestial::CelestialReferenceFrame;
+use lunco_doc_bevy::JournalResource;
+pub use lunco_doc_bevy::{Presence, PresenceInfo, UserId};
+use lunco_settings::{AppSettingsExt, SettingsSection};
 
 // ── Wire payloads ─────────────────────────────────────────────────────────────
 
@@ -320,7 +323,11 @@ pub type AvatarState = (Vec3, Quat, CellCoord, Option<i32>);
 
 /// Pack an avatar pose for the wire. One definition shared by the tutor, student,
 /// and share-perspective senders so the field order can't drift between them.
-fn encode_avatar_state(transform: &Transform, cell: &CellCoord, ephem_id: Option<i32>) -> WireAvatarState {
+fn encode_avatar_state(
+    transform: &Transform,
+    cell: &CellCoord,
+    ephem_id: Option<i32>,
+) -> WireAvatarState {
     (
         transform.translation.to_array(),
         transform.rotation.to_array(),
@@ -335,7 +342,11 @@ fn decode_avatar_state(w: WireAvatarState) -> AvatarState {
     (
         Vec3::from_array(pos),
         Quat::from_array(rot),
-        CellCoord { x: cell[0], y: cell[1], z: cell[2] },
+        CellCoord {
+            x: cell[0],
+            y: cell[1],
+            z: cell[2],
+        },
         ephem_id,
     )
 }
@@ -349,7 +360,11 @@ pub(crate) fn profile_wire_entries(profiles: &SessionProfiles) -> Vec<(u64, Stri
         .profiles
         .iter()
         .map(|(&s, n)| {
-            let color = profiles.colors.get(&s).copied().unwrap_or_else(|| generate_user_color(s));
+            let color = profiles
+                .colors
+                .get(&s)
+                .copied()
+                .unwrap_or_else(|| generate_user_color(s));
             (s, n.clone(), color)
         })
         .collect()
@@ -802,11 +817,15 @@ pub struct SyncCommandEvent {
 /// networked command (e.g. `SetPorts` → `ControlStream`, `PossessVessel` →
 /// `CommandBus`). No-op-on-the-wire commands need not be declared.
 pub trait DeclareChannelExt {
-    fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: SyncChannel) -> &mut Self;
+    fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: SyncChannel)
+        -> &mut Self;
 }
 
 impl DeclareChannelExt for App {
-    fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: SyncChannel) -> &mut Self {
+    fn declare_channel<C: Event + Reflect + TypePath>(
+        &mut self,
+        channel: SyncChannel,
+    ) -> &mut Self {
         let name = C::short_type_path().to_string();
         if !self.world().contains_resource::<SyncChannelRegistry>() {
             self.init_resource::<SyncChannelRegistry>();
@@ -929,7 +948,15 @@ pub fn apply_sync_command(
                 .get_with_short_type_path(&ev.type_name)
                 .and_then(|r| authz_target_gid(&ev.params, r.type_id(), &type_reg))
         };
-        if let Err(reject) = authorize(&session_registry, &rbac, &command_policies, &control_paths, ev.origin, &ev.type_name, target_gid) {
+        if let Err(reject) = authorize(
+            &session_registry,
+            &rbac,
+            &command_policies,
+            &control_paths,
+            ev.origin,
+            &ev.type_name,
+            target_gid,
+        ) {
             // Diagnostic: show the gid the command targets, who (if anyone) the
             // host thinks owns it, and the full ownership table — so a drive
             // rejected despite a successful possession reveals whether it's a
@@ -938,7 +965,12 @@ pub fn apply_sync_command(
             let owner = target_gid.and_then(|g| session_registry.owner_of(g));
             warn!(
                 "[sync] rejected {} from {}: {:?} | target_gid={:?} current_owner={:?} owners={:?}",
-                ev.type_name, ev.origin, reject, target_gid, owner, session_registry.snapshot(),
+                ev.type_name,
+                ev.origin,
+                reject,
+                target_gid,
+                owner,
+                session_registry.snapshot(),
             );
             return;
         }
@@ -1150,8 +1182,14 @@ pub fn drain_sync_inbox(
                 if role.is_host() {
                     continue;
                 }
-                if entities.resolve(&GlobalEntityId::from_raw(spawn.gid)).is_some() {
-                    warn!("[net] Spawn rejected: gid {} already exists in registry", spawn.gid);
+                if entities
+                    .resolve(&GlobalEntityId::from_raw(spawn.gid))
+                    .is_some()
+                {
+                    warn!(
+                        "[net] Spawn rejected: gid {} already exists in registry",
+                        spawn.gid
+                    );
                     continue;
                 }
                 pending_spawns.0.push(ReplicatedSpawn {
@@ -1226,8 +1264,12 @@ pub fn drain_sync_inbox(
             }
             SyncEnvelope::Ack(_) => { /* MVP is optimistic; acks unused */ }
             SyncEnvelope::Cursor(c) => {
-                let session_id = if role.is_host() { sender } else { SessionId(c.session) };
-                
+                let session_id = if role.is_host() {
+                    sender
+                } else {
+                    SessionId(c.session)
+                };
+
                 // If it is a client and it's our own cursor, ignore it to prevent echos
                 if !role.is_host() && session_id == local.0 {
                     continue;
@@ -1338,10 +1380,10 @@ pub fn drain_sync_inbox(
                     // A non-consenting peer's `follow_mode` is left untouched (its own
                     // manual choice stands), so one broadcast can no longer freeze every
                     // peer in the session — the residual half of review H2.
-                    let is_explicitly_targeted = msg.target_client == Some(local.0.0);
+                    let is_explicitly_targeted = msg.target_client == Some(local.0 .0);
                     let is_broadcast = msg.target_client.is_none();
-                    let consented = is_explicitly_targeted
-                        || (is_broadcast && tutorial_settings.follow_opt_in);
+                    let consented =
+                        is_explicitly_targeted || (is_broadcast && tutorial_settings.follow_opt_in);
 
                     if consented {
                         if !tutor_status.tutor_active {
@@ -1393,12 +1435,13 @@ pub fn drain_sync_inbox(
 
                 // If we are currently observing this student:
                 if tutorial_settings.teach_mode
-                    && tutorial_settings.target_client == Some(msg.student_session) 
-                    && tutorial_settings.observe_mode 
+                    && tutorial_settings.target_client == Some(msg.student_session)
+                    && tutorial_settings.observe_mode
                 {
                     tutor_status.observed_student_doc = msg.active_doc;
                     tutor_status.observed_student_perspective = msg.active_perspective.clone();
-                    tutor_status.observed_student_avatar_state = msg.avatar_state.map(decode_avatar_state);
+                    tutor_status.observed_student_avatar_state =
+                        msg.avatar_state.map(decode_avatar_state);
                 }
             }
             SyncEnvelope::SharePerspective(mut msg) => {
@@ -1528,7 +1571,9 @@ pub fn drain_sync_inbox(
                     sender,
                     lunco_core::session::capability::JOURNAL_EDIT,
                 ) {
-                    warn!("[journal-plane] rejected journal edit from unauthorized session {sender}");
+                    warn!(
+                        "[journal-plane] rejected journal edit from unauthorized session {sender}"
+                    );
                 } else if let Some(journal) = ctx.journal.as_ref() {
                     crate::journal_plane::apply_inbound_entry(journal, &msg);
                 }
@@ -1830,7 +1875,12 @@ pub(crate) fn diff_peer_batch(
         let Some(entry) = entries.get(&gid) else {
             continue;
         };
-        let key = (entry.cell, entry.pos_q, entry.rot_packed, entry.last_input_seq);
+        let key = (
+            entry.cell,
+            entry.pos_q,
+            entry.rot_packed,
+            entry.last_input_seq,
+        );
         if digest.get(&gid) != Some(&key) {
             batch.push(entry.clone());
             digest.insert(gid, key);
@@ -2020,32 +2070,38 @@ pub fn broadcast_despawns(
 }
 
 /// Sync `Presence` users with `SessionProfiles`.
-pub fn sync_presence_with_profiles(
-    profiles: Res<SessionProfiles>,
-    mut presence: ResMut<Presence>,
-) {
+pub fn sync_presence_with_profiles(profiles: Res<SessionProfiles>, mut presence: ResMut<Presence>) {
     if !profiles.is_changed() {
         return;
     }
     // Remove users that are no longer in profiles
-    presence.users.retain(|uid, _| profiles.profiles.contains_key(&uid.0));
+    presence
+        .users
+        .retain(|uid, _| profiles.profiles.contains_key(&uid.0));
 
     // Add/update users from profiles
     for (&session_id, name) in &profiles.profiles {
         let uid = UserId(session_id);
-        let color = profiles.colors.get(&session_id).copied().unwrap_or_else(|| generate_user_color(session_id));
+        let color = profiles
+            .colors
+            .get(&session_id)
+            .copied()
+            .unwrap_or_else(|| generate_user_color(session_id));
         if let Some(info) = presence.users.get_mut(&uid) {
             if info.display_name != *name {
                 info.display_name = name.clone();
             }
             info.color = color;
         } else {
-            presence.users.insert(uid, PresenceInfo {
-                display_name: name.clone(),
-                color,
-                active_doc: None,
-                cursor: None,
-            });
+            presence.users.insert(
+                uid,
+                PresenceInfo {
+                    display_name: name.clone(),
+                    color,
+                    active_doc: None,
+                    cursor: None,
+                },
+            );
         }
     }
 }
@@ -2159,17 +2215,20 @@ pub fn send_local_cursor_updates(
 
     let current_pos = if is_demo {
         let elapsed = time.elapsed_secs();
-        let (w, h) = q_window.iter().next().map(|win| (win.width(), win.height())).unwrap_or((1920.0, 1080.0));
+        let (w, h) = q_window
+            .iter()
+            .next()
+            .map(|win| (win.width(), win.height()))
+            .unwrap_or((1920.0, 1080.0));
         Some([
             w * (0.5 + (elapsed * 2.0).cos() * 0.25),
             h * (0.5 + (elapsed * 2.0).sin() * 0.25),
         ])
     } else {
-        q_window.iter().next().and_then(|window| {
-            window.cursor_position().map(|pos| {
-                [pos.x, pos.y]
-            })
-        })
+        q_window
+            .iter()
+            .next()
+            .and_then(|window| window.cursor_position().map(|pos| [pos.x, pos.y]))
     };
 
     // Check if we need to send the update
@@ -2273,8 +2332,7 @@ pub fn send_tutor_status_updates(
     mut timer: Local<f32>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
-    #[cfg(feature = "workbench")]
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     if !role.is_networked() {
         return;
@@ -2294,7 +2352,10 @@ pub fn send_tutor_status_updates(
     let active_perspective = {
         #[cfg(feature = "workbench")]
         {
-            layout.as_ref().and_then(|l| l.active_perspective()).map(|pid| pid.as_str().to_string())
+            layout
+                .as_ref()
+                .and_then(|l| l.active_perspective())
+                .map(|pid| pid.as_str().to_string())
         }
         #[cfg(not(feature = "workbench"))]
         {
@@ -2329,8 +2390,7 @@ pub fn send_student_status_updates(
     mut timer: Local<f32>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
-    #[cfg(feature = "workbench")]
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     if !role.is_networked() {
         return;
@@ -2351,7 +2411,10 @@ pub fn send_student_status_updates(
     let active_perspective = {
         #[cfg(feature = "workbench")]
         {
-            layout.as_ref().and_then(|l| l.active_perspective()).map(|pid| pid.as_str().to_string())
+            layout
+                .as_ref()
+                .and_then(|l| l.active_perspective())
+                .map(|pid| pid.as_str().to_string())
         }
         #[cfg(not(feature = "workbench"))]
         {
@@ -2384,7 +2447,10 @@ fn capture_avatar_state(
     q_reference_frames: &Query<&CelestialReferenceFrame>,
 ) -> Option<WireAvatarState> {
     q_avatar.iter().next().map(|(transform, cell, child_of)| {
-        let ephem_id = q_reference_frames.get(child_of.0).ok().map(|rf| rf.ephemeris_id);
+        let ephem_id = q_reference_frames
+            .get(child_of.0)
+            .ok()
+            .map(|rf| rf.ephemeris_id);
         encode_avatar_state(transform, cell, ephem_id)
     })
 }
@@ -2424,7 +2490,8 @@ fn snap_avatars_to(
     // reproduces the mirrored orientation instead of fighting it.
     let (target_yaw, target_pitch, _roll) = rot.to_euler(EulerRot::YXZ);
     let target_tf = Transform::from_translation(pos).with_rotation(rot);
-    for (avatar_entity, mut transform, mut cell_coord, child_of, freeflight) in q_avatar.iter_mut() {
+    for (avatar_entity, mut transform, mut cell_coord, child_of, freeflight) in q_avatar.iter_mut()
+    {
         if let Some(mut ff) = freeflight {
             if ff.yaw != target_yaw {
                 ff.yaw = target_yaw;
@@ -2505,21 +2572,22 @@ pub fn apply_tutorial_mirroring(
         With<LocalAvatar>,
     >,
     q_reference_frames: Query<(Entity, &CelestialReferenceFrame)>,
-    #[cfg(feature = "workbench")]
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     // Case 1: Student is in follow mode, mirroring tutor status
     if settings.follow_mode {
         // If we are being observed, don't mirror (since the tutor mirrors us, mirroring back creates a loop)
         if let Some(loc) = &local {
-            if tutor_status.target_client == Some(loc.0.0) && tutor_status.observe_mode {
+            if tutor_status.target_client == Some(loc.0 .0) && tutor_status.observe_mode {
                 return;
             }
         }
 
         // Check if tutor status is targeted at us (None = everyone)
-        let is_targeted = tutor_status.target_client.is_none() 
-            || local.as_ref().map_or(false, |loc| tutor_status.target_client == Some(loc.0.0));
+        let is_targeted = tutor_status.target_client.is_none()
+            || local
+                .as_ref()
+                .map_or(false, |loc| tutor_status.target_client == Some(loc.0 .0));
 
         if is_targeted {
             // Mirror active document (no-op on a headless host with no workspace)
@@ -2535,7 +2603,11 @@ pub fn apply_tutorial_mirroring(
                 if let Some(ref l) = layout {
                     let current_persp = l.active_perspective().map(|pid| pid.as_str());
                     if current_persp != Some(target_persp) {
-                        commands.trigger(lunco_workbench::perspective_command::ActivatePerspective { id: target_persp.clone() });
+                        commands.trigger(
+                            lunco_workbench::perspective_command::ActivatePerspective {
+                                id: target_persp.clone(),
+                            },
+                        );
                     }
                 }
             }
@@ -2571,13 +2643,19 @@ pub fn apply_tutorial_mirroring(
                 if let Some(ref l) = layout {
                     let current_persp = l.active_perspective().map(|pid| pid.as_str());
                     if current_persp != Some(target_persp) {
-                        commands.trigger(lunco_workbench::perspective_command::ActivatePerspective { id: target_persp.clone() });
+                        commands.trigger(
+                            lunco_workbench::perspective_command::ActivatePerspective {
+                                id: target_persp.clone(),
+                            },
+                        );
                     }
                 }
             }
 
             // Mirror avatar transform, cell coordinate, and grid parent from the observed student
-            if let Some((pos, rot, cell, grid_ephemeris_id)) = tutor_status.observed_student_avatar_state {
+            if let Some((pos, rot, cell, grid_ephemeris_id)) =
+                tutor_status.observed_student_avatar_state
+            {
                 snap_avatars_to(
                     &mut commands,
                     &mut q_avatar,
@@ -2606,7 +2684,9 @@ pub fn apply_tutorial_mirroring(
             if let Some(ref l) = layout {
                 let current_persp = l.active_perspective().map(|pid| pid.as_str());
                 if current_persp != Some(target_persp) {
-                    commands.trigger(lunco_workbench::perspective_command::ActivatePerspective { id: target_persp.clone() });
+                    commands.trigger(lunco_workbench::perspective_command::ActivatePerspective {
+                        id: target_persp.clone(),
+                    });
                 }
             }
         }
@@ -2685,19 +2765,19 @@ pub fn block_action_states(
 pub struct SyncPlugin;
 
 /// Startup system to register the host session in SessionRbac (Owner role, authenticated).
-fn setup_host_rbac(
-    local: Res<LocalSession>,
-    mut rbac: ResMut<lunco_core::session::SessionRbac>,
-) {
-    rbac.sessions.insert(local.0.0, lunco_core::session::UserSession {
-        session_id: local.0,
-        username: "Host".to_string(),
-        role: lunco_core::session::AuthorityRole::Owner,
-        authenticated: true,
-        // The host issues its own credential — `is_authorized` now requires a
-        // server-issued token (review M2), and the host trivially holds one.
-        token: Some(lunco_core::ids::random_token()),
-    });
+fn setup_host_rbac(local: Res<LocalSession>, mut rbac: ResMut<lunco_core::session::SessionRbac>) {
+    rbac.sessions.insert(
+        local.0 .0,
+        lunco_core::session::UserSession {
+            session_id: local.0,
+            username: "Host".to_string(),
+            role: lunco_core::session::AuthorityRole::Owner,
+            authenticated: true,
+            // The host issues its own credential — `is_authorized` now requires a
+            // server-issued token (review M2), and the host trivially holds one.
+            token: Some(lunco_core::ids::random_token()),
+        },
+    );
 }
 
 /// Startup invariant guard: **client-local ⊆ non-networked**.
@@ -2765,18 +2845,27 @@ fn on_update_profile_rbac(
     // An origin not in the map (or tokenless) is a profile update from a source the
     // server never authenticated; ignore it rather than fabricate authority.
     let Some(session) = rbac.sessions.get_mut(&origin.0) else {
-        debug!("[net] RBAC: UpdateProfile from non-issued session {} ignored", origin.0);
+        debug!(
+            "[net] RBAC: UpdateProfile from non-issued session {} ignored",
+            origin.0
+        );
         return;
     };
     if session.token.is_none() {
-        warn!("[net] RBAC: session {} has no server token; refusing promotion", origin.0);
+        warn!(
+            "[net] RBAC: session {} has no server token; refusing promotion",
+            origin.0
+        );
         return;
     }
     session.username = username;
     if session.role == lunco_core::session::AuthorityRole::Observer {
         session.role = lunco_core::session::AuthorityRole::Operator; // setting a name grants Operator
     }
-    info!("[net] RBAC: session {} set name '{}' (role {:?})", origin.0, session.username, session.role);
+    info!(
+        "[net] RBAC: session {} set name '{}' (role {:?})",
+        origin.0, session.username, session.role
+    );
 }
 
 /// Set Teach Mode command.
@@ -2804,10 +2893,7 @@ pub struct SetObserveMode {
 }
 
 #[lunco_core::on_command(SetTeachMode)]
-fn on_set_teach_mode(
-    trigger: On<SetTeachMode>,
-    mut settings: ResMut<TutorialSettings>,
-) {
+fn on_set_teach_mode(trigger: On<SetTeachMode>, mut settings: ResMut<TutorialSettings>) {
     settings.teach_mode = trigger.event().enabled;
     if !settings.teach_mode {
         settings.observe_mode = false;
@@ -2816,30 +2902,27 @@ fn on_set_teach_mode(
 }
 
 #[lunco_core::on_command(SetFollowMode)]
-fn on_set_follow_mode(
-    trigger: On<SetFollowMode>,
-    mut settings: ResMut<TutorialSettings>,
-) {
+fn on_set_follow_mode(trigger: On<SetFollowMode>, mut settings: ResMut<TutorialSettings>) {
     settings.follow_mode = trigger.event().enabled;
     info!("[net] Command: Follow Mode set to {}", settings.follow_mode);
 }
 
 #[lunco_core::on_command(SetTargetClient)]
-fn on_set_target_client(
-    trigger: On<SetTargetClient>,
-    mut settings: ResMut<TutorialSettings>,
-) {
+fn on_set_target_client(trigger: On<SetTargetClient>, mut settings: ResMut<TutorialSettings>) {
     settings.target_client = trigger.event().target;
-    info!("[net] Command: Target Client set to {:?}", settings.target_client);
+    info!(
+        "[net] Command: Target Client set to {:?}",
+        settings.target_client
+    );
 }
 
 #[lunco_core::on_command(SetObserveMode)]
-fn on_set_observe_mode(
-    trigger: On<SetObserveMode>,
-    mut settings: ResMut<TutorialSettings>,
-) {
+fn on_set_observe_mode(trigger: On<SetObserveMode>, mut settings: ResMut<TutorialSettings>) {
     settings.observe_mode = trigger.event().enabled;
-    info!("[net] Command: Observe Mode set to {}", settings.observe_mode);
+    info!(
+        "[net] Command: Observe Mode set to {}",
+        settings.observe_mode
+    );
 }
 
 /// Set Allow Free Movement command.
@@ -2854,7 +2937,10 @@ fn on_set_allow_free_movement(
     mut settings: ResMut<TutorialSettings>,
 ) {
     settings.allow_free_movement = trigger.event().enabled;
-    info!("[net] Command: Allow Free Movement set to {}", settings.allow_free_movement);
+    info!(
+        "[net] Command: Allow Free Movement set to {}",
+        settings.allow_free_movement
+    );
 }
 
 /// Set Follow Opt-In command: local consent to be locked by a broadcasting tutor.
@@ -2864,10 +2950,7 @@ pub struct SetFollowOptIn {
 }
 
 #[lunco_core::on_command(SetFollowOptIn)]
-fn on_set_follow_opt_in(
-    trigger: On<SetFollowOptIn>,
-    mut settings: ResMut<TutorialSettings>,
-) {
+fn on_set_follow_opt_in(trigger: On<SetFollowOptIn>, mut settings: ResMut<TutorialSettings>) {
     settings.follow_opt_in = trigger.event().enabled;
     // Opting out while currently following a broadcast releases the lock now,
     // rather than waiting for the tutor to flip free-movement. An explicitly
@@ -2875,7 +2958,10 @@ fn on_set_follow_opt_in(
     if !settings.follow_opt_in {
         settings.follow_mode = false;
     }
-    info!("[net] Command: Follow Opt-In set to {}", settings.follow_opt_in);
+    info!(
+        "[net] Command: Follow Opt-In set to {}",
+        settings.follow_opt_in
+    );
 }
 
 /// Share Perspective command (Look-At).
@@ -2890,14 +2976,16 @@ fn on_share_perspective(
     q_avatar: Query<(&Transform, &CellCoord, &ChildOf), With<LocalAvatar>>,
     q_reference_frames: Query<&CelestialReferenceFrame>,
     mut outbox: ResMut<SyncOutbox>,
-    #[cfg(feature = "workbench")]
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
 ) {
     let active_doc = workspace.active_document;
     let active_perspective = {
         #[cfg(feature = "workbench")]
         {
-            layout.as_ref().and_then(|l| l.active_perspective()).map(|pid| pid.as_str().to_string())
+            layout
+                .as_ref()
+                .and_then(|l| l.active_perspective())
+                .map(|pid| pid.as_str().to_string())
         }
         #[cfg(not(feature = "workbench"))]
         {
@@ -3013,29 +3101,32 @@ impl Plugin for SyncPlugin {
                     .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
             )
             .add_systems(PreUpdate, block_bevy_inputs)
-            .add_systems(Update, (
-                drain_sync_inbox,
-                track_spawn_info,
-                broadcast_despawns,
-                sync_presence_with_profiles,
-                seed_local_cursor_color,
-                send_local_cursor_updates,
-                send_view_center_updates,
-                send_tutor_status_updates,
-                send_student_status_updates,
-                apply_tutorial_mirroring,
-                update_tutor_lifecycle,
-                block_action_states,
-                // B4 Phase 1: compute per-peer AOI interest sets (host-only, throttled
-                // to `interest_hz`). The server-side `assemble_and_send_snapshots`
-                // routes pose updates by these sets.
-                recompute_interest,
-                // Journal plane: both roles stream new journal entries — the
-                // host relays all (fan-out hub), clients send their own edits.
-                // Policies ride this too — a `LunCoPolicy` prim is a USD doc op —
-                // so there is no separate policy broadcast.
-                crate::journal_plane::broadcast_journal_entries,
-            ))
+            .add_systems(
+                Update,
+                (
+                    drain_sync_inbox,
+                    track_spawn_info,
+                    broadcast_despawns,
+                    sync_presence_with_profiles,
+                    seed_local_cursor_color,
+                    send_local_cursor_updates,
+                    send_view_center_updates,
+                    send_tutor_status_updates,
+                    send_student_status_updates,
+                    apply_tutorial_mirroring,
+                    update_tutor_lifecycle,
+                    block_action_states,
+                    // B4 Phase 1: compute per-peer AOI interest sets (host-only, throttled
+                    // to `interest_hz`). The server-side `assemble_and_send_snapshots`
+                    // routes pose updates by these sets.
+                    recompute_interest,
+                    // Journal plane: both roles stream new journal entries — the
+                    // host relays all (fan-out hub), clients send their own edits.
+                    // Policies ride this too — a `LunCoPolicy` prim is a USD doc op —
+                    // so there is no separate policy broadcast.
+                    crate::journal_plane::broadcast_journal_entries,
+                ),
+            )
             // Scenario asset transfer (Phase 3 + G1/G2/G3), client-side. Split
             // into its own tuple (bevy caps system-tuple arity); ordered after
             // `drain_sync_inbox` so the manifest/chunk queues it fills are current
@@ -3084,7 +3175,10 @@ impl Plugin for SyncPlugin {
             // the same fixed clock (keeps the steady-20 Hz decoupling) AND honors
             // the ordering — matching the client's `record_predicted_state`,
             // which also records after writeback in `FixedPostUpdate`.
-            .add_systems(FixedPostUpdate, gather_snapshot.after(PhysicsSystems::Writeback));
+            .add_systems(
+                FixedPostUpdate,
+                gather_snapshot.after(PhysicsSystems::Writeback),
+            );
         register_all_commands(app);
         // Scenario-distribution commands (PromoteScenario) — its own
         // `register_commands!` set in the `scenario_sync` module.
@@ -3214,11 +3308,15 @@ mod codec_roundtrip {
         // expect a 4-byte fixint (`[3,0,0,0]`), which was bincode 1's `serialize()`;
         // the crate moved to bincode 2 and the stale premise went unnoticed because
         // the `networking` feature was outside the built feature set.
-        assert_eq!(discriminant_of(&SyncEnvelope::Handshake(HandshakeMsg {
-            session: 1,
-            tick: 2,
-            wire_version: WIRE_VERSION,
-        })), 3, "Handshake discriminant moved");
+        assert_eq!(
+            discriminant_of(&SyncEnvelope::Handshake(HandshakeMsg {
+                session: 1,
+                tick: 2,
+                wire_version: WIRE_VERSION,
+            })),
+            3,
+            "Handshake discriminant moved"
+        );
         assert_eq!(
             discriminant_of(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 })),
             11,
@@ -3248,13 +3346,20 @@ mod codec_roundtrip {
             SyncEnvelope::Handshake(h) => {
                 assert_eq!(h.session, 42);
                 assert_eq!(h.tick, 7);
-                assert_eq!(h.wire_version, WIRE_VERSION, "the version must survive the codec");
+                assert_eq!(
+                    h.wire_version, WIRE_VERSION,
+                    "the version must survive the codec"
+                );
             }
             _ => panic!("wrong variant after round-trip"),
         }
 
         // A peer from a different build is refused rather than mis-decoding forever.
-        let stale = HandshakeMsg { session: 1, tick: 0, wire_version: WIRE_VERSION - 1 };
+        let stale = HandshakeMsg {
+            session: 1,
+            tick: 0,
+            wire_version: WIRE_VERSION - 1,
+        };
         assert_ne!(
             stale.wire_version, WIRE_VERSION,
             "a version-skewed handshake must be distinguishable — this is the check \
@@ -3298,7 +3403,10 @@ mod codec_roundtrip {
         // Lock the indices so a future mid-enum insert fails loudly instead of
         // silently breaking a version-skewed peer (stale wasm bundle vs fresh host).
         assert_eq!(
-            discriminant_of(&SyncEnvelope::ViewCenter(ViewCenterMsg { pos: [0.0; 3], cell: [0; 3] })),
+            discriminant_of(&SyncEnvelope::ViewCenter(ViewCenterMsg {
+                pos: [0.0; 3],
+                cell: [0; 3]
+            })),
             12,
             "ViewCenter discriminant moved"
         );
@@ -3313,12 +3421,18 @@ mod codec_roundtrip {
             asset_base_url: None,
             twin_scene: None,
         });
-        assert_eq!(discriminant_of(&manifest), 13, "ScenarioManifest must be index 13");
+        assert_eq!(
+            discriminant_of(&manifest),
+            13,
+            "ScenarioManifest must be index 13"
+        );
 
         assert_eq!(
-            discriminant_of(&SyncEnvelope::AssetRequest(crate::scenario::AssetRequestMsg {
-                missing: Vec::new(),
-            })),
+            discriminant_of(&SyncEnvelope::AssetRequest(
+                crate::scenario::AssetRequestMsg {
+                    missing: Vec::new(),
+                }
+            )),
             14,
             "AssetRequest must be index 14"
         );
@@ -3343,7 +3457,9 @@ mod codec_roundtrip {
         );
 
         assert_eq!(
-            discriminant_of(&SyncEnvelope::JournalEntry(JournalEntryMsg { json: String::new() })),
+            discriminant_of(&SyncEnvelope::JournalEntry(JournalEntryMsg {
+                json: String::new()
+            })),
             17,
             "JournalEntry must be index 17"
         );
@@ -3358,9 +3474,18 @@ mod codec_roundtrip {
             AuthorId, AuthorTag, DomainKind, EntryId, EntryKind, JournalEntry, TwinId,
         };
         let entry = JournalEntry {
-            id: EntryId { author: AuthorId::new("peer"), lamport: 7 },
-            parents: vec![EntryId { author: AuthorId::local(), lamport: 3 }],
-            author: AuthorTag { user: "peer".into(), tool: "remote".into() },
+            id: EntryId {
+                author: AuthorId::new("peer"),
+                lamport: 7,
+            },
+            parents: vec![EntryId {
+                author: AuthorId::local(),
+                lamport: 3,
+            }],
+            author: AuthorTag {
+                user: "peer".into(),
+                tool: "remote".into(),
+            },
             at_ms: 42,
             twin: TwinId::new("t"),
             doc: lunco_doc::DocumentId::new(1),
@@ -3373,7 +3498,9 @@ mod codec_roundtrip {
             },
             change_set: None,
         };
-        let msg = JournalEntryMsg { json: serde_json::to_string(&entry).unwrap() };
+        let msg = JournalEntryMsg {
+            json: serde_json::to_string(&entry).unwrap(),
+        };
         let bytes = serialize_env(&SyncEnvelope::JournalEntry(msg)).expect("serialize");
         let back = deserialize_env(&bytes).expect("deserialize");
         let SyncEnvelope::JournalEntry(m) = back else {
@@ -3393,7 +3520,9 @@ mod codec_roundtrip {
 
     #[test]
     fn scenario_manifest_envelope_roundtrips() {
-        use crate::scenario::{cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg};
+        use crate::scenario::{
+            cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg,
+        };
         // A realistic manifest: two assets with real CIDs + a computed revision.
         let assets = vec![
             ScenarioAsset {
@@ -3437,7 +3566,10 @@ mod codec_roundtrip {
                 assert_eq!(m.assets[1].size, 9);
                 // The bytes-plane endpoint survives the round-trip (appended last,
                 // so the positional bincode layout of the older fields is unchanged).
-                assert_eq!(m.asset_base_url.as_deref(), Some("http://10.0.0.5:5889/assets/"));
+                assert_eq!(
+                    m.asset_base_url.as_deref(),
+                    Some("http://10.0.0.5:5889/assets/")
+                );
             }
             _ => panic!("wrong variant after round-trip"),
         }
@@ -3452,9 +3584,18 @@ mod codec_roundtrip {
         let mut dedup = SyncDedup::default();
         let (a, b, op) = (SessionId(1), SessionId(2), OpId(42));
         assert!(dedup.check_and_insert(a, op), "first (a,42) is new");
-        assert!(!dedup.check_and_insert(a, op), "replay of (a,42) is a duplicate");
-        assert!(dedup.check_and_insert(b, op), "same op_id from a DIFFERENT origin is NOT a dup");
-        assert!(!dedup.check_and_insert(b, op), "replay of (b,42) is a duplicate");
+        assert!(
+            !dedup.check_and_insert(a, op),
+            "replay of (a,42) is a duplicate"
+        );
+        assert!(
+            dedup.check_and_insert(b, op),
+            "same op_id from a DIFFERENT origin is NOT a dup"
+        );
+        assert!(
+            !dedup.check_and_insert(b, op),
+            "replay of (b,42) is a duplicate"
+        );
     }
 
     #[test]
@@ -3462,7 +3603,10 @@ mod codec_roundtrip {
         // Per-peer windows: a chatty peer flooding op_ids must NOT evict another
         // peer's recent op from the dedup window (the global-FIFO bug). `b`'s op
         // survives `a` overflowing its own window many times over.
-        let mut dedup = SyncDedup { per_origin: HashMap::new(), cap: 8 };
+        let mut dedup = SyncDedup {
+            per_origin: HashMap::new(),
+            cap: 8,
+        };
         let (a, b) = (SessionId(1), SessionId(2));
         assert!(dedup.check_and_insert(b, OpId(7)), "b's op is new");
         for i in 0..1000 {
@@ -3560,8 +3704,7 @@ mod aoi {
         // a driver never loses its own vehicle (no reconciliation pop on return). An
         // unowned body at the same far distance is still culled.
         let peer = SessionId(10);
-        let positions =
-            HashMap::from([(1, pos_at(0.0)), (2, pos_at(9000.0)), (3, pos_at(9000.0))]);
+        let positions = HashMap::from([(1, pos_at(0.0)), (2, pos_at(9000.0)), (3, pos_at(9000.0))]);
         let table = [(1u64, peer.0), (2u64, peer.0)];
         let set = interest_for(
             peer,
@@ -3599,7 +3742,10 @@ mod aoi {
             R_EXIT,
             R_PRED,
         );
-        assert!(!cold[&peer].contains(&2), "outside enter radius, not previously in → excluded");
+        assert!(
+            !cold[&peer].contains(&2),
+            "outside enter radius, not previously in → excluded"
+        );
 
         // gid 2 already relevant → kept (1200 < exit 1500).
         let prev = HashMap::from([(peer, HashSet::from([2u64]))]);
@@ -3614,7 +3760,10 @@ mod aoi {
             R_EXIT,
             R_PRED,
         );
-        assert!(warm[&peer].contains(&2), "in-band body stays until it passes exit radius");
+        assert!(
+            warm[&peer].contains(&2),
+            "in-band body stays until it passes exit radius"
+        );
     }
 
     #[test]
@@ -3623,8 +3772,7 @@ mod aoi {
         // 1400). gid 2 is an ownerless Dynamic body (predict candidate) within the
         // predict radius → force-kept; gid 3 (non-dynamic) → culled.
         let peer = SessionId(10);
-        let positions =
-            HashMap::from([(1, pos_at(0.0)), (2, pos_at(1400.0)), (3, pos_at(1400.0))]);
+        let positions = HashMap::from([(1, pos_at(0.0)), (2, pos_at(1400.0)), (3, pos_at(1400.0))]);
         let table = [(1u64, peer.0)];
         let dynamic = HashSet::from([2u64]);
         let set = interest_for(
@@ -3637,8 +3785,14 @@ mod aoi {
             1100.0, // exit radius below 1400 so spatial can't keep these
             R_PRED, // 1500 > 1400
         );
-        assert!(set.contains(&2), "predicted free Dynamic within predict radius is force-kept");
-        assert!(!set.contains(&3), "non-dynamic body at same distance is culled");
+        assert!(
+            set.contains(&2),
+            "predicted free Dynamic within predict radius is force-kept"
+        );
+        assert!(
+            !set.contains(&3),
+            "non-dynamic body at same distance is culled"
+        );
     }
 
     #[test]
@@ -3651,13 +3805,17 @@ mod aoi {
             peer,
             &positions,
             &HashSet::new(),
-            &[], // owns nothing
+            &[],             // owns nothing
             &HashMap::new(), // no report
             R_ENTER,
             R_EXIT,
             R_PRED,
         );
-        assert_eq!(set, positions.keys().copied().collect::<HashSet<_>>(), "fail-open = all bodies");
+        assert_eq!(
+            set,
+            positions.keys().copied().collect::<HashSet<_>>(),
+            "fail-open = all bodies"
+        );
     }
 
     /// **Review N5.** Fail-open must not mean "replicate the whole scene". It is the
@@ -3680,7 +3838,7 @@ mod aoi {
             peer,
             &positions,
             &HashSet::new(),
-            &[], // owns nothing *positioned* — see below; center still unknown…
+            &[],             // owns nothing *positioned* — see below; center still unknown…
             &HashMap::new(), // …and no view report → fail-open
             R_ENTER,
             R_EXIT,
@@ -3691,7 +3849,10 @@ mod aoi {
             "a centerless peer must not be fed the whole scene: {} > {FAIL_OPEN_CAP}",
             set.len()
         );
-        assert!(!set.is_empty(), "…but it must still see something (fail OPEN, not closed)");
+        assert!(
+            !set.is_empty(),
+            "…but it must still see something (fail OPEN, not closed)"
+        );
 
         // Determinism: the same world yields the same capped set every recompute
         // (otherwise the peer would churn re-baselines).
@@ -3705,7 +3866,10 @@ mod aoi {
             R_EXIT,
             R_PRED,
         );
-        assert_eq!(set, again, "the capped fail-open set must be stable across recomputes");
+        assert_eq!(
+            set, again,
+            "the capped fail-open set must be stable across recomputes"
+        );
     }
 
     /// The cap never costs a peer its OWN vessel — but note that owning a positioned
@@ -3728,7 +3892,10 @@ mod aoi {
             R_EXIT,
             R_PRED,
         );
-        assert!(set.contains(&owned_gid), "the peer's own vessel survives the cap");
+        assert!(
+            set.contains(&owned_gid),
+            "the peer's own vessel survives the cap"
+        );
         assert!(set.len() <= FAIL_OPEN_CAP + 1);
     }
 
@@ -3750,8 +3917,14 @@ mod aoi {
             R_EXIT,
             R_PRED,
         );
-        assert!(set.contains(&2), "body near the reported center is relevant");
-        assert!(!set.contains(&3), "body far from the reported center is culled");
+        assert!(
+            set.contains(&2),
+            "body near the reported center is relevant"
+        );
+        assert!(
+            !set.contains(&3),
+            "body far from the reported center is culled"
+        );
     }
 
     #[test]
@@ -3813,7 +3986,11 @@ mod aoi {
         entries.insert(2, entry(2, 20, 5));
         let batch = diff_peer_batch(&set, &entries, &mut digest);
         let gids: HashSet<u64> = batch.iter().map(|e| e.gid).collect();
-        assert_eq!(gids, HashSet::from([1, 2]), "moved body AND ack-advanced body both resent");
+        assert_eq!(
+            gids,
+            HashSet::from([1, 2]),
+            "moved body AND ack-advanced body both resent"
+        );
 
         // Stable again → quiet.
         assert!(diff_peer_batch(&set, &entries, &mut digest).is_empty());
@@ -3835,6 +4012,10 @@ mod aoi {
         // skipped (its client proxy was frozen and may need re-seeding).
         let both = HashSet::from([1u64, 2u64]);
         let reenter = diff_peer_batch(&both, &entries, &mut digest);
-        assert_eq!(reenter.iter().map(|e| e.gid).collect::<Vec<_>>(), vec![2], "re-entry re-baselines gid 2");
+        assert_eq!(
+            reenter.iter().map(|e| e.gid).collect::<Vec<_>>(),
+            vec![2],
+            "re-entry re-baselines gid 2"
+        );
     }
 }

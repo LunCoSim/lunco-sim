@@ -14,7 +14,9 @@ use lunco_core::architecture::Port;
 
 /// Spawns a named [`Port`] as a child of the parent.
 pub fn spawn_port(commands: &mut Commands, parent: Entity, name: &str) -> Entity {
-    let port = commands.spawn((Name::new(name.to_string()), Port::default())).id();
+    let port = commands
+        .spawn((Name::new(name.to_string()), Port::default()))
+        .id();
     commands.entity(parent).add_child(port);
     port
 }

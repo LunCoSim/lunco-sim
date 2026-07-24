@@ -98,10 +98,7 @@ pub const DOME_TEXTURE_ATTR: &str = "inputs:texture:file";
 /// `references`d asset is **not** counted, while the ECS sum does see it. Scenes
 /// author their ambient fill directly, so this is the rare case; it would show up
 /// as the ambient slider reading back higher than it was set.
-pub fn untextured_dome_intensity_sum(
-    data: &openusd::sdf::Data,
-    exclude: Option<&SdfPath>,
-) -> f32 {
+pub fn untextured_dome_intensity_sum(data: &openusd::sdf::Data, exclude: Option<&SdfPath>) -> f32 {
     use crate::usd_data::UsdDataExt;
 
     // Collect paths first: `prim_type_name`/`field` re-borrow `data` immutably,
@@ -177,7 +174,11 @@ pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> b
 }
 
 /// Scalar attribute reader tolerant of `float`/`double`/`int` authoring.
-pub(crate) fn get_attribute_as_f32(reader: &crate::StageView<'_>, path: &SdfPath, attr: &str) -> Option<f32> {
+pub(crate) fn get_attribute_as_f32(
+    reader: &crate::StageView<'_>,
+    path: &SdfPath,
+    attr: &str,
+) -> Option<f32> {
     match reader.attr_value(path, attr)? {
         Value::Float(f) => Some(f),
         Value::Double(d) => Some(d as f32),
@@ -196,7 +197,9 @@ pub(crate) fn read_intensity_with_exposure(
     path: &SdfPath,
     default_intensity: f32,
 ) -> f32 {
-    let intensity = reader.real_f32(path, "inputs:intensity").unwrap_or(default_intensity);
+    let intensity = reader
+        .real_f32(path, "inputs:intensity")
+        .unwrap_or(default_intensity);
     let exposure = reader.real_f32(path, "inputs:exposure").unwrap_or(0.0);
     intensity * exposure.exp2()
 }
@@ -287,10 +290,12 @@ pub(crate) fn instantiate_light_prim(
             // environment (materials → usd-bevy forbids the edge), so it carries
             // its own fallback const. Keep it in sync with `LunarSun::default`.
             const DEFAULT_SUN_ANGULAR_DIAMETER_DEG: f32 = 0.53;
-            let angular_diameter_deg = reader.real_f32(sdf_path, "inputs:angle")
+            let angular_diameter_deg = reader
+                .real_f32(sdf_path, "inputs:angle")
                 .unwrap_or(DEFAULT_SUN_ANGULAR_DIAMETER_DEG);
             let sun = LunarSunShadow {
-                maximum_distance: reader.real_f32(sdf_path, "lunco:shadow:maxDistance")
+                maximum_distance: reader
+                    .real_f32(sdf_path, "lunco:shadow:maxDistance")
                     .unwrap_or(d.maximum_distance),
                 first_cascade_far_bound: reader
                     .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
@@ -302,12 +307,15 @@ pub(crate) fn instantiate_light_prim(
                 #[cfg(target_arch = "wasm32")]
                 num_cascades: 2,
                 #[cfg(not(target_arch = "wasm32"))]
-                num_cascades: reader.real_f32(sdf_path, "lunco:shadow:numCascades")
+                num_cascades: reader
+                    .real_f32(sdf_path, "lunco:shadow:numCascades")
                     .map(|n| (n as usize).clamp(1, 4))
                     .unwrap_or(d.num_cascades),
-                depth_bias: reader.real_f32(sdf_path, "lunco:shadow:depthBias")
+                depth_bias: reader
+                    .real_f32(sdf_path, "lunco:shadow:depthBias")
                     .unwrap_or(d.depth_bias),
-                normal_bias: reader.real_f32(sdf_path, "lunco:shadow:normalBias")
+                normal_bias: reader
+                    .real_f32(sdf_path, "lunco:shadow:normalBias")
                     .unwrap_or(d.normal_bias),
                 ..d
             };
@@ -348,7 +356,10 @@ pub(crate) fn instantiate_light_prim(
                 commands
                     .entity(entity)
                     .try_insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
-                info!("[usd-bevy] {} DomeLight ambient={intensity}", sdf_path.as_str());
+                info!(
+                    "[usd-bevy] {} DomeLight ambient={intensity}",
+                    sdf_path.as_str()
+                );
                 return true;
             };
 
@@ -415,8 +426,8 @@ pub(crate) fn instantiate_light_prim(
             // bare 4πr² would instead have silently rescaled every already-calibrated
             // light in the asset library by π on a change that authored nothing.
             const DEFAULT_SPHERE_RADIUS: f32 = 0.5; // UsdLux SphereLight schema default
-            let light_radius =
-                get_attribute_as_f32(reader, sdf_path, "inputs:radius").unwrap_or(DEFAULT_SPHERE_RADIUS);
+            let light_radius = get_attribute_as_f32(reader, sdf_path, "inputs:radius")
+                .unwrap_or(DEFAULT_SPHERE_RADIUS);
             let normalize =
                 get_attribute_as_bool(reader, sdf_path, "inputs:normalize").unwrap_or(false);
             // `max(0)`: a negative radius is meaningless and would still square to a
@@ -444,13 +455,17 @@ pub(crate) fn instantiate_light_prim(
             // still ILLUMINATES; it just doesn't cast. A scene that genuinely
             // wants a hero cast shadow opts in per-light with
             // `inputs:shadow:enable = true`.
-            let shadow_maps_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
+            let shadow_maps_enabled =
+                get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
             let range = read_light_range(reader, sdf_path);
 
             if let Some(cone_angle_deg) = reader.real_f32(sdf_path, "inputs:shaping:cone:angle") {
                 // Spotlight path (UsdLuxShapingAPI applied)
-                let outer_angle = cone_angle_deg.to_radians().clamp(0.0, std::f32::consts::FRAC_PI_2);
-                let softness = reader.real_f32(sdf_path, "inputs:shaping:cone:softness")
+                let outer_angle = cone_angle_deg
+                    .to_radians()
+                    .clamp(0.0, std::f32::consts::FRAC_PI_2);
+                let softness = reader
+                    .real_f32(sdf_path, "inputs:shaping:cone:softness")
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0);
                 let inner_angle = outer_angle * (1.0 - softness);

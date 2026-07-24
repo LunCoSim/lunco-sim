@@ -236,12 +236,18 @@ mod tests {
         register_builtins();
         let names = lunco_tools::names();
         for expected in ["formation", "survey", "debug_viz", "mathx"] {
-            assert!(names.contains(&expected.to_string()), "missing built-in {expected}");
+            assert!(
+                names.contains(&expected.to_string()),
+                "missing built-in {expected}"
+            );
         }
         // Every embedded tool `.rhai` registered under its stem — future files
         // are picked up automatically, this guards the scan against silent drops.
         for (stem, _) in lunco_assets::scripting::tool_libraries() {
-            assert!(names.contains(&stem.to_string()), "embedded {stem}.rhai not registered");
+            assert!(
+                names.contains(&stem.to_string()),
+                "embedded {stem}.rhai not registered"
+            );
         }
     }
 

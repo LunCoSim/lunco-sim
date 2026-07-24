@@ -28,15 +28,15 @@ use bevy::prelude::*;
 // `text_edit` byte-splicer and the `edit_target_spike` proof are gone now that
 // Phase C2/C3 lands the real Stage-backed authoring.
 pub mod attach;
+pub mod commands;
+pub mod document;
+pub mod live_consume;
 /// Lowering a material edit into a real UsdShade network (`Material` +
 /// `UsdPreviewSurface` + `material:binding`). Crate-agnostic op builder — the
 /// Inspector, the command API and scripting all author materials through it, so
 /// none of them can reinvent the non-standard "shader inputs on a geom prim"
 /// spelling.
 pub mod material;
-pub mod commands;
-pub mod document;
-pub mod live_consume;
 pub mod registry;
 pub mod runtime_persistence;
 pub mod schema;
@@ -47,14 +47,13 @@ pub mod ui;
 pub use commands::{ApplyUsdOp, UsdCommandsPlugin, USD_DOCUMENT_KIND};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
 // Registry: use `lunco_doc_bevy::DocumentRegistry<UsdDocument>` — no USD-specific type.
-pub use lunco_usd_bevy::{
-    FallbackSceneLight, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
-    usd_data::UsdDataExt,
-};
 pub use lunco_usd_avian::{BigSpacePhysicsBridgePlugin, UsdAvianPlugin, UsdCollisionFilter};
+pub use lunco_usd_bevy::{
+    usd_data::UsdDataExt, FallbackSceneLight, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
+};
+pub use lunco_usd_sim::cosim::{ClearScene, LoadScene};
 pub use lunco_usd_sim::UsdSimPlugin;
 pub use lunco_usd_sim::{GroundColliderPending, NoRenderVisuals};
-pub use lunco_usd_sim::cosim::{ClearScene, LoadScene};
 
 /// Master plugin that bundles all USD subsystems together.
 ///
@@ -72,11 +71,7 @@ pub struct UsdPlugins;
 
 impl Plugin for UsdPlugins {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            lunco_usd_bevy::UsdBevyPlugin,
-            UsdAvianPlugin,
-            UsdSimPlugin,
-        ));
+        app.add_plugins((lunco_usd_bevy::UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
         // Document/file commands (ApplyUsdOp + OpenFile/NewDocument/SaveDocument
         // observers + the async load pipeline + twin-scene resolver) are
         // headless-safe domain-layer wiring — added unconditionally so server /

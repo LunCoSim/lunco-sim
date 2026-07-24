@@ -435,9 +435,18 @@ impl PressLatch {
     #[must_use]
     pub(crate) fn update(self, any_down: bool, candidate: Option<SceneTarget>) -> Self {
         match (any_down, self.held) {
-            (false, _) => Self { held: false, owner: candidate },
-            (true, false) => Self { held: true, owner: candidate },
-            (true, true) => Self { held: true, owner: self.owner },
+            (false, _) => Self {
+                held: false,
+                owner: candidate,
+            },
+            (true, false) => Self {
+                held: true,
+                owner: candidate,
+            },
+            (true, true) => Self {
+                held: true,
+                owner: self.owner,
+            },
         }
     }
 }
@@ -668,7 +677,11 @@ pub(crate) fn sync_egui_host_msaa(
         (
             With<WorkbenchViewportCamera>,
             Without<WorkbenchEguiHost>,
-            Or<(Changed<Msaa>, Changed<Camera>, Added<WorkbenchViewportCamera>)>,
+            Or<(
+                Changed<Msaa>,
+                Changed<Camera>,
+                Added<WorkbenchViewportCamera>,
+            )>,
         ),
     >,
     mut removed: RemovedComponents<WorkbenchViewportCamera>,
@@ -683,7 +696,10 @@ pub(crate) fn sync_egui_host_msaa(
     // gets a DIFFERENT-format private texture that never shares the (cleared) 3D texture,
     // and stale chrome bakes into it — the ghost that returns on a perspective switch,
     // where only panels change and no camera event fires.
-    mut host: Query<(Entity, &mut Msaa, Has<Hdr>), (With<WorkbenchEguiHost>, Without<WorkbenchViewportCamera>)>,
+    mut host: Query<
+        (Entity, &mut Msaa, Has<Hdr>),
+        (With<WorkbenchEguiHost>, Without<WorkbenchViewportCamera>),
+    >,
     mut commands: Commands,
 ) {
     // A removed scene camera (scene swap) must re-run the sync even though no live
@@ -803,7 +819,10 @@ pub(crate) fn apply_workbench_viewport(
     //       no 3D reaches the framebuffer and no pass-skip leaks it under the UI.
     let (layout_empty, layout_has_viewport) = match layout.as_ref() {
         None => (true, false),
-        Some(l) => (layout_is_empty(l), layout_contains_panel(l, VIEWPORT_PANEL_ID)),
+        Some(l) => (
+            layout_is_empty(l),
+            layout_contains_panel(l, VIEWPORT_PANEL_ID),
+        ),
     };
     let Some(mut vp) = vp else { return };
     // 3D renders full-window: the chrome panels (opaque side/top/bottom)
@@ -1170,8 +1189,7 @@ impl Plugin for WorkbenchViewportPlugin {
             // bevy_egui's own capture system's schedule).
             .add_systems(
                 PostUpdate,
-                egui_viewport_aware_picking
-                    .after(bevy_egui::EguiPostUpdateSet::ProcessOutput),
+                egui_viewport_aware_picking.after(bevy_egui::EguiPostUpdateSet::ProcessOutput),
             )
             // Publish the pointer/keyboard gate into `EguiFocus` (same post-egui
             // slot) so raw scene-input systems can gate on it. See `track_egui_focus`.
@@ -1181,8 +1199,7 @@ impl Plugin for WorkbenchViewportPlugin {
             )
             .add_systems(
                 PostUpdate,
-                apply_workbench_viewport
-                    .before(bevy::camera::CameraUpdateSystems),
+                apply_workbench_viewport.before(bevy::camera::CameraUpdateSystems),
             );
     }
 }
@@ -1216,7 +1233,10 @@ mod tests {
     #[test]
     fn below_the_dock_is_scene() {
         let dock = rect((0.0, 30.0), (800.0, 400.0));
-        let cards = [(rect((0.0, 30.0), (200.0, 400.0)), rect((0.0, 30.0), (200.0, 400.0)))];
+        let cards = [(
+            rect((0.0, 30.0), (200.0, 400.0)),
+            rect((0.0, 30.0), (200.0, 400.0)),
+        )];
         // Below the dock (y = 500) — bare 3D.
         let out = resolve_scene_target(hovering((400.0, 500.0)), None, &cards, Some(dock), None);
         assert_eq!(out, Some(SceneTarget::MainViewport));
@@ -1226,7 +1246,10 @@ mod tests {
     #[test]
     fn dock_furniture_is_chrome() {
         let dock = rect((0.0, 30.0), (800.0, 400.0));
-        let cards = [(rect((0.0, 60.0), (200.0, 400.0)), rect((0.0, 60.0), (200.0, 400.0)))];
+        let cards = [(
+            rect((0.0, 60.0), (200.0, 400.0)),
+            rect((0.0, 60.0), (200.0, 400.0)),
+        )];
         // y = 40 is the leaf's tab-bar strip: inside the dock, outside every body.
         let out = resolve_scene_target(hovering((100.0, 40.0)), None, &cards, Some(dock), None);
         assert_eq!(out, None);
@@ -1321,7 +1344,7 @@ mod tests {
     fn collapsed_viewport_leaf_rect_is_scene() {
         let dock = rect((0.0, 30.0), (800.0, 400.0));
         let vp = rect((200.0, 30.0), (800.0, 400.0)); // the viewport leaf's rect
-        // No scene_leaf (panel didn't render), no chrome card over the centre.
+                                                      // No scene_leaf (panel didn't render), no chrome card over the centre.
         let out = resolve_scene_target(hovering((400.0, 200.0)), None, &[], Some(dock), Some(vp));
         assert_eq!(out, Some(SceneTarget::MainViewport));
     }
@@ -1334,7 +1357,8 @@ mod tests {
         let vp = rect((0.0, 30.0), (800.0, 400.0));
         let body = rect((0.0, 30.0), (200.0, 400.0));
         let cards = [(body, body)]; // opaque panel on the left, over the vp rect
-        let out = resolve_scene_target(hovering((100.0, 200.0)), None, &cards, Some(dock), Some(vp));
+        let out =
+            resolve_scene_target(hovering((100.0, 200.0)), None, &cards, Some(dock), Some(vp));
         assert_eq!(out, None);
     }
 
@@ -1345,9 +1369,21 @@ mod tests {
     fn latch_idle_follows_geometry() {
         let l = PressLatch::default();
         let l = l.update(false, Some(SceneTarget::MainViewport));
-        assert_eq!(l, PressLatch { held: false, owner: Some(SceneTarget::MainViewport) });
+        assert_eq!(
+            l,
+            PressLatch {
+                held: false,
+                owner: Some(SceneTarget::MainViewport)
+            }
+        );
         let l = l.update(false, None);
-        assert_eq!(l, PressLatch { held: false, owner: None });
+        assert_eq!(
+            l,
+            PressLatch {
+                held: false,
+                owner: None
+            }
+        );
     }
 
     /// 6b — press an egui widget, then drag OVER the viewport: egui keeps the
@@ -1361,12 +1397,21 @@ mod tests {
         assert!(l.held);
         // Cursor now travels over the viewport; geometry says "scene".
         l = l.update(true, Some(SceneTarget::MainViewport));
-        assert_eq!(l.owner, None, "chrome must keep the pointer for the whole drag");
+        assert_eq!(
+            l.owner, None,
+            "chrome must keep the pointer for the whole drag"
+        );
         l = l.update(true, Some(SceneTarget::MainViewport));
         assert_eq!(l.owner, None);
         // Release → geometry takes over again.
         l = l.update(false, Some(SceneTarget::MainViewport));
-        assert_eq!(l, PressLatch { held: false, owner: Some(SceneTarget::MainViewport) });
+        assert_eq!(
+            l,
+            PressLatch {
+                held: false,
+                owner: Some(SceneTarget::MainViewport)
+            }
+        );
     }
 
     /// 6b mirror case — press in the 3D scene to orbit, drag into the inspector:
@@ -1382,16 +1427,31 @@ mod tests {
         l = l.update(true, None);
         assert_eq!(l.owner, Some(SceneTarget::MainViewport));
         l = l.update(false, None); // release over the inspector
-        assert_eq!(l, PressLatch { held: false, owner: None });
+        assert_eq!(
+            l,
+            PressLatch {
+                held: false,
+                owner: None
+            }
+        );
     }
 
     /// A press adopts the geometry AT THE PRESS — not the value latched by a
     /// previous drag.
     #[test]
     fn latch_press_adopts_geometry_at_press() {
-        let mut l = PressLatch { held: false, owner: None };
+        let mut l = PressLatch {
+            held: false,
+            owner: None,
+        };
         l = l.update(true, Some(SceneTarget::MainViewport));
-        assert_eq!(l, PressLatch { held: true, owner: Some(SceneTarget::MainViewport) });
+        assert_eq!(
+            l,
+            PressLatch {
+                held: true,
+                owner: Some(SceneTarget::MainViewport)
+            }
+        );
     }
 
     // ── ScenePickGate lifecycle (6e) ────────────────────────────────────────
@@ -1412,7 +1472,10 @@ mod tests {
         // Frame 2: egui pass skipped. Inputs are empty; the gate must hold.
         gate.begin_frame();
         gate.resolve(EguiPointerState::default());
-        assert!(gate.over_main_scene(), "must hold, not re-resolve against empty inputs");
+        assert!(
+            gate.over_main_scene(),
+            "must hold, not re-resolve against empty inputs"
+        );
     }
 
     /// The per-frame inputs really are per-frame: a chrome panel that stops

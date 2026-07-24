@@ -17,35 +17,31 @@
 //! dependency gets only the [`signal`] re-export of `lunco-signal`, so
 //! it stays render-free.
 
+#[cfg(feature = "ui")]
+pub mod kinds;
+#[cfg(feature = "ui")]
+pub mod panel;
+#[cfg(feature = "ui")]
+pub mod plot_fmt;
+#[cfg(feature = "ui")]
+pub mod registry;
 pub mod signal;
 #[cfg(feature = "ui")]
 pub mod view;
 #[cfg(feature = "ui")]
 pub mod viz;
-#[cfg(feature = "ui")]
-pub mod registry;
-#[cfg(feature = "ui")]
-pub mod panel;
-#[cfg(feature = "ui")]
-pub mod kinds;
-#[cfg(feature = "ui")]
-pub mod plot_fmt;
 
-pub use signal::{
-    ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
-};
 #[cfg(feature = "ui")]
-pub use view::{Panel2DCtx, ViewKind, ViewTarget};
-#[cfg(feature = "ui")]
-pub use viz::{
-    RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizId, VizKindId,
-};
-#[cfg(feature = "ui")]
-pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
+pub use kinds::line_plot::{LinePlot, LINE_PLOT_KIND};
 #[cfg(feature = "ui")]
 pub use panel::{VizPanel, VIZ_PANEL_KIND};
 #[cfg(feature = "ui")]
-pub use kinds::line_plot::{LinePlot, LINE_PLOT_KIND};
+pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
+pub use signal::{ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType};
+#[cfg(feature = "ui")]
+pub use view::{Panel2DCtx, ViewKind, ViewTarget};
+#[cfg(feature = "ui")]
+pub use viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizId, VizKindId};
 
 #[cfg(feature = "ui")]
 use bevy::prelude::*;
@@ -81,10 +77,10 @@ impl Plugin for LuncoVizPlugin {
         app.insert_resource(SignalRegistry::with_default_capacity(
             DEFAULT_SIGNAL_HISTORY,
         ))
-            .init_resource::<VisualizationRegistry>()
-            .init_resource::<VizKindCatalog>()
-            .init_resource::<VizFitRequests>()
-            .register_visualization::<LinePlot>()
-            .register_instance_panel(VizPanel::default());
+        .init_resource::<VisualizationRegistry>()
+        .init_resource::<VizKindCatalog>()
+        .init_resource::<VizFitRequests>()
+        .register_visualization::<LinePlot>()
+        .register_instance_panel(VizPanel::default());
     }
 }

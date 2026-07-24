@@ -14,11 +14,9 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_doc::DocumentId;
 use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, VLine};
-use lunco_experiments::{
-    ExperimentId, ExperimentRegistry, RunStatus,
-};
+use lunco_doc::DocumentId;
+use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 use lunco_viz::viz::VizId;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -102,10 +100,7 @@ pub struct PlotPanelStates {
     /// previous twin; returning to that twin restores the picks /
     /// run-visibility / scrub. Without this archive, switching tabs
     /// would discard the prior plot's curve selections entirely.
-    archived: std::collections::HashMap<
-        (VizId, lunco_experiments::TwinId),
-        PlotPanelState,
-    >,
+    archived: std::collections::HashMap<(VizId, lunco_experiments::TwinId), PlotPanelState>,
 }
 
 impl PlotPanelStates {
@@ -252,16 +247,11 @@ impl Panel for ExperimentsPanel {
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // Pin header — follow active tab, or 📌 to lock the
         // experiments view to a specific model.
-        crate::ui::doc_pin::render_pin_header(
-            ui,
-            ctx,
-            crate::ui::doc_pin::PinKind::Experiments,
-        );
+        crate::ui::doc_pin::render_pin_header(ui, ctx, crate::ui::doc_pin::PinKind::Experiments);
         // Scope this panel to the doc-pin-resolved document. Each
         // open doc has its own run history (`twin_id_for_doc`), so
         // switching tabs flips the list automatically.
-        let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx)
-        else {
+        let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx) else {
             ui.label("No active document.");
             return;
         };
@@ -270,8 +260,12 @@ impl Panel for ExperimentsPanel {
         // (installed by WorkbenchPlugin), so this resource is always
         // present.
         let t = ctx.resource_expect::<lunco_theme::Theme>();
-        let (col_success, col_warning, col_error, col_subdued) =
-            (t.tokens.success, t.tokens.warning, t.tokens.error, t.tokens.text_subdued);
+        let (col_success, col_warning, col_error, col_subdued) = (
+            t.tokens.success,
+            t.tokens.warning,
+            t.tokens.error,
+            t.tokens.text_subdued,
+        );
 
         // One outer ScrollArea wraps Setup + Parameter overrides +
         // experiments table + empty-state copy so the user can reach
@@ -832,8 +826,7 @@ impl ExperimentsPanel {
         // Resolve target doc + model class. Honor the experiments
         // pin so a pinned panel keeps its setup form while the user
         // edits a different tab.
-        let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx)
-        else {
+        let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx) else {
             return;
         };
         let (model_name, candidates) = match ctx
@@ -879,11 +872,13 @@ impl ExperimentsPanel {
                 .map(crate::experiments_runner::detect_top_level_inputs)
             })
             .unwrap_or_default();
-        let prefilled_inputs: BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue> =
-            ctx
-                .resource::<crate::experiments_runner::ExperimentDrafts>()
-                .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
-                .unwrap_or_default();
+        let prefilled_inputs: BTreeMap<
+            lunco_experiments::ParamPath,
+            lunco_experiments::ParamValue,
+        > = ctx
+            .resource::<crate::experiments_runner::ExperimentDrafts>()
+            .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
+            .unwrap_or_default();
         // Maintain editable text per input row across frames via a
         // local scratch in the panel — simpler than yet another
         // resource. Reset when model changes.
@@ -896,7 +891,11 @@ impl ExperimentsPanel {
                         lunco_experiments::ParamValue::Real(x) => format!("{x}"),
                         lunco_experiments::ParamValue::Int(x) => format!("{x}"),
                         lunco_experiments::ParamValue::Bool(b) => {
-                            if *b { "true".into() } else { "false".into() }
+                            if *b {
+                                "true".into()
+                            } else {
+                                "false".into()
+                            }
                         }
                         lunco_experiments::ParamValue::String(s) => s.clone(),
                         lunco_experiments::ParamValue::Enum(s) => s.clone(),
@@ -915,7 +914,13 @@ impl ExperimentsPanel {
         // disabled) when the runner is saturated.
         let (running_now, queued_now, max_par) = ctx
             .resource::<crate::ModelicaRunnerResource>()
-            .map(|r| (r.0.in_flight_count(), r.0.queued_count(), r.0.max_parallel()))
+            .map(|r| {
+                (
+                    r.0.in_flight_count(),
+                    r.0.queued_count(),
+                    r.0.max_parallel(),
+                )
+            })
             .unwrap_or((0, 0, 1));
         let any_in_flight = running_now > 0;
 
@@ -969,9 +974,7 @@ impl ExperimentsPanel {
                     .selected_text(model_name.clone())
                     .show_ui(ui, |ui| {
                         for cand in &candidates {
-                            if ui
-                                .selectable_label(*cand == model_name, cand)
-                                .clicked()
+                            if ui.selectable_label(*cand == model_name, cand).clicked()
                                 && *cand != model_name
                             {
                                 pick_class = Some(cand.clone());
@@ -1091,205 +1094,212 @@ impl ExperimentsPanel {
         let detail_label = if input_edits.is_empty() {
             "bounds".to_string()
         } else {
-            format!("bounds + {} input{}", input_edits.len(), if input_edits.len() == 1 { "" } else { "s" })
+            format!(
+                "bounds + {} input{}",
+                input_edits.len(),
+                if input_edits.len() == 1 { "" } else { "s" }
+            )
         };
         egui::CollapsingHeader::new(detail_label)
             .id_salt("setup_detail")
             .default_open(true)
             .show(ui, |ui| {
-
-        // Compact bounds row.
-        ui.horizontal(|ui| {
-            ui.label("t:");
-            if ui.add(egui::DragValue::new(&mut bounds.t_start).speed(0.1)).changed() {
-                bounds_changed = true;
-            }
-            ui.label("→");
-            if ui.add(egui::DragValue::new(&mut bounds.t_end).speed(0.1)).changed() {
-                bounds_changed = true;
-            }
-            ui.label("s");
-            ui.separator();
-            // Output sampling: Adaptive / Interval (s) / Number of intervals
-            // (Modelica's `Interval` vs `NumberOfIntervals`). Mutually exclusive.
-            {
-                #[derive(PartialEq, Clone, Copy)]
-                enum OutMode {
-                    Adaptive,
-                    Interval,
-                    Count,
-                }
-                let mut mode = if bounds.n_intervals.is_some() {
-                    OutMode::Count
-                } else if bounds.dt.is_some() {
-                    OutMode::Interval
-                } else {
-                    OutMode::Adaptive
-                };
-                let span = (bounds.t_end - bounds.t_start).max(0.0);
-                let default_step = if span > 0.0 { span / 500.0 } else { 0.01 };
-                let prev = mode;
-                ui.selectable_value(&mut mode, OutMode::Adaptive, "auto");
-                ui.selectable_value(&mut mode, OutMode::Interval, "Δt");
-                ui.selectable_value(&mut mode, OutMode::Count, "N");
-                if mode != prev {
-                    match mode {
-                        OutMode::Adaptive => {
-                            bounds.dt = None;
-                            bounds.n_intervals = None;
-                        }
-                        OutMode::Interval => {
-                            bounds.n_intervals = None;
-                            bounds.dt = Some(default_step);
-                        }
-                        OutMode::Count => {
-                            bounds.dt = None;
-                            bounds.n_intervals = Some(500);
-                        }
-                    }
-                    bounds_changed = true;
-                }
-                match mode {
-                    OutMode::Adaptive => {}
-                    OutMode::Interval => {
-                        let mut v = bounds.dt.unwrap_or(default_step);
-                        // No upper clamp BY DESIGN: an output interval has no
-                        // meaningful maximum. Speed scales with magnitude.
-                        let speed = (v.abs() * 0.01).max(1e-6);
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut v)
-                                    .speed(speed)
-                                    .range(1e-9..=f64::INFINITY)
-                                    .suffix(" s"),
-                            )
-                            .changed()
-                        {
-                            bounds.dt = Some(v);
-                            bounds_changed = true;
-                        }
-                    }
-                    OutMode::Count => {
-                        let mut n = bounds.n_intervals.unwrap_or(500);
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut n)
-                                    .speed(1.0)
-                                    .range(1..=10_000_000),
-                            )
-                            .changed()
-                        {
-                            bounds.n_intervals = Some(n);
-                            bounds_changed = true;
-                        }
-                    }
-                }
-            }
-
-            // Solver picker. Vocabulary + labels are the single source of
-            // truth `lunco_experiments::SolverChoice`; `None` = "Auto" (backend
-            // default, TR-BDF2). The enum maps to rumoca's (family, tableau)
-            // pair in `experiments_runner::solver_choice_to_rumoca`.
-            ui.separator();
-            ui.label("solver:")
-                .on_hover_text(
-                    "Integration method. Auto picks the stack's default \
-                     (TR-BDF2 — event-robust, recommended). The explicit \
-                     options override it.",
-                );
-            let current = bounds.solver;
-            let sel_label = current.map_or("Auto (TR-BDF2)", |c| c.label());
-            egui::ComboBox::from_id_salt("setup_solver")
-                .selected_text(sel_label)
-                .width(220.0)
-                .show_ui(ui, |ui| {
+                // Compact bounds row.
+                ui.horizontal(|ui| {
+                    ui.label("t:");
                     if ui
-                        .selectable_label(current.is_none(), "Auto (TR-BDF2)")
-                        .on_hover_text(
-                            "Let the backend pick. Currently TR-BDF2 — \
-                             event-robust default for stiff multi-day horizons.",
-                        )
-                        .clicked()
+                        .add(egui::DragValue::new(&mut bounds.t_start).speed(0.1))
+                        .changed()
                     {
-                        bounds.solver = None;
                         bounds_changed = true;
                     }
-                    for c in lunco_experiments::SolverChoice::ALL {
-                        if ui
-                            .selectable_label(current == Some(c), c.label())
-                            .on_hover_text(c.hover())
-                            .clicked()
-                        {
-                            bounds.solver = Some(c);
+                    ui.label("→");
+                    if ui
+                        .add(egui::DragValue::new(&mut bounds.t_end).speed(0.1))
+                        .changed()
+                    {
+                        bounds_changed = true;
+                    }
+                    ui.label("s");
+                    ui.separator();
+                    // Output sampling: Adaptive / Interval (s) / Number of intervals
+                    // (Modelica's `Interval` vs `NumberOfIntervals`). Mutually exclusive.
+                    {
+                        #[derive(PartialEq, Clone, Copy)]
+                        enum OutMode {
+                            Adaptive,
+                            Interval,
+                            Count,
+                        }
+                        let mut mode = if bounds.n_intervals.is_some() {
+                            OutMode::Count
+                        } else if bounds.dt.is_some() {
+                            OutMode::Interval
+                        } else {
+                            OutMode::Adaptive
+                        };
+                        let span = (bounds.t_end - bounds.t_start).max(0.0);
+                        let default_step = if span > 0.0 { span / 500.0 } else { 0.01 };
+                        let prev = mode;
+                        ui.selectable_value(&mut mode, OutMode::Adaptive, "auto");
+                        ui.selectable_value(&mut mode, OutMode::Interval, "Δt");
+                        ui.selectable_value(&mut mode, OutMode::Count, "N");
+                        if mode != prev {
+                            match mode {
+                                OutMode::Adaptive => {
+                                    bounds.dt = None;
+                                    bounds.n_intervals = None;
+                                }
+                                OutMode::Interval => {
+                                    bounds.n_intervals = None;
+                                    bounds.dt = Some(default_step);
+                                }
+                                OutMode::Count => {
+                                    bounds.dt = None;
+                                    bounds.n_intervals = Some(500);
+                                }
+                            }
                             bounds_changed = true;
                         }
+                        match mode {
+                            OutMode::Adaptive => {}
+                            OutMode::Interval => {
+                                let mut v = bounds.dt.unwrap_or(default_step);
+                                // No upper clamp BY DESIGN: an output interval has no
+                                // meaningful maximum. Speed scales with magnitude.
+                                let speed = (v.abs() * 0.01).max(1e-6);
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut v)
+                                            .speed(speed)
+                                            .range(1e-9..=f64::INFINITY)
+                                            .suffix(" s"),
+                                    )
+                                    .changed()
+                                {
+                                    bounds.dt = Some(v);
+                                    bounds_changed = true;
+                                }
+                            }
+                            OutMode::Count => {
+                                let mut n = bounds.n_intervals.unwrap_or(500);
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut n)
+                                            .speed(1.0)
+                                            .range(1..=10_000_000),
+                                    )
+                                    .changed()
+                                {
+                                    bounds.n_intervals = Some(n);
+                                    bounds_changed = true;
+                                }
+                            }
+                        }
                     }
-                });
-        });
 
-        // Inputs row(s). Wrap horizontally — a model with many
-        // inputs scrolls instead of growing vertically.
-        if !input_edits.is_empty() {
-            egui::ScrollArea::horizontal()
-                .id_salt("setup_inputs_scroll")
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.weak("Inputs:")
-                            .on_hover_text(
-                                "Values bound to top-level `input` declarations \
+                    // Solver picker. Vocabulary + labels are the single source of
+                    // truth `lunco_experiments::SolverChoice`; `None` = "Auto" (backend
+                    // default, TR-BDF2). The enum maps to rumoca's (family, tableau)
+                    // pair in `experiments_runner::solver_choice_to_rumoca`.
+                    ui.separator();
+                    ui.label("solver:").on_hover_text(
+                        "Integration method. Auto picks the stack's default \
+                     (TR-BDF2 — event-robust, recommended). The explicit \
+                     options override it.",
+                    );
+                    let current = bounds.solver;
+                    let sel_label = current.map_or("Auto (TR-BDF2)", |c| c.label());
+                    egui::ComboBox::from_id_salt("setup_solver")
+                        .selected_text(sel_label)
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(current.is_none(), "Auto (TR-BDF2)")
+                                .on_hover_text(
+                                    "Let the backend pick. Currently TR-BDF2 — \
+                             event-robust default for stiff multi-day horizons.",
+                                )
+                                .clicked()
+                            {
+                                bounds.solver = None;
+                                bounds_changed = true;
+                            }
+                            for c in lunco_experiments::SolverChoice::ALL {
+                                if ui
+                                    .selectable_label(current == Some(c), c.label())
+                                    .on_hover_text(c.hover())
+                                    .clicked()
+                                {
+                                    bounds.solver = Some(c);
+                                    bounds_changed = true;
+                                }
+                            }
+                        });
+                });
+
+                // Inputs row(s). Wrap horizontally — a model with many
+                // inputs scrolls instead of growing vertically.
+                if !input_edits.is_empty() {
+                    egui::ScrollArea::horizontal()
+                        .id_salt("setup_inputs_scroll")
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.weak("Inputs:").on_hover_text(
+                                    "Values bound to top-level `input` declarations \
                                  before the run. Real → number; Boolean → \
                                  true/false; Integer → number. Empty cells use \
                                  the model's default.",
-                            );
-                        for (name, ty, value_text) in input_edits.iter_mut() {
-                            ui.label(name.as_str());
-                            let s_trim = value_text.trim();
-                            let parses = if s_trim.is_empty() {
-                                true
-                            } else {
-                                match ty.as_str() {
-                                    "Real" => s_trim.parse::<f64>().is_ok(),
-                                    "Integer" | "Int" => s_trim.parse::<i64>().is_ok(),
-                                    "Boolean" | "Bool" => {
-                                        matches!(s_trim, "true" | "false")
+                                );
+                                for (name, ty, value_text) in input_edits.iter_mut() {
+                                    ui.label(name.as_str());
+                                    let s_trim = value_text.trim();
+                                    let parses = if s_trim.is_empty() {
+                                        true
+                                    } else {
+                                        match ty.as_str() {
+                                            "Real" => s_trim.parse::<f64>().is_ok(),
+                                            "Integer" | "Int" => s_trim.parse::<i64>().is_ok(),
+                                            "Boolean" | "Bool" => {
+                                                matches!(s_trim, "true" | "false")
+                                            }
+                                            _ => s_trim.parse::<f64>().is_ok(),
+                                        }
+                                    };
+                                    let mut edit =
+                                        egui::TextEdit::singleline(value_text).desired_width(70.0);
+                                    if !parses {
+                                        edit = edit.text_color(col_error);
                                     }
-                                    _ => s_trim.parse::<f64>().is_ok(),
+                                    let resp = ui.add(edit);
+                                    let resp = if !parses {
+                                        resp.on_hover_text(format!(
+                                            "Cannot parse as {ty}. Expected: {}",
+                                            match ty.as_str() {
+                                                "Real" => "decimal number, e.g. 1.5",
+                                                "Integer" | "Int" => "integer, e.g. 42",
+                                                "Boolean" | "Bool" => "true or false",
+                                                _ => "decimal number",
+                                            }
+                                        ))
+                                    } else {
+                                        resp
+                                    };
+                                    if resp.changed() || resp.lost_focus() {
+                                        inputs_changed = true;
+                                    }
                                 }
-                            };
-                            let mut edit = egui::TextEdit::singleline(value_text)
-                                .desired_width(70.0);
-                            if !parses {
-                                edit = edit.text_color(col_error);
-                            }
-                            let resp = ui.add(edit);
-                            let resp = if !parses {
-                                resp.on_hover_text(format!(
-                                    "Cannot parse as {ty}. Expected: {}",
-                                    match ty.as_str() {
-                                        "Real" => "decimal number, e.g. 1.5",
-                                        "Integer" | "Int" => "integer, e.g. 42",
-                                        "Boolean" | "Bool" => "true or false",
-                                        _ => "decimal number",
-                                    }
-                                ))
-                            } else {
-                                resp
-                            };
-                            if resp.changed() || resp.lost_focus() {
-                                inputs_changed = true;
-                            }
-                        }
-                    });
-                });
-        }
+                            });
+                        });
+                }
             }); // end CollapsingHeader
 
         // Wire the inline ⊘ Cancel button to the runner.
         if cancel_active {
             // Latest in-flight handle.
             ctx.defer(|world| {
-                if let Some(handles) = world
-                    .get_resource::<crate::experiments_runner::PendingHandles>()
+                if let Some(handles) =
+                    world.get_resource::<crate::experiments_runner::PendingHandles>()
                 {
                     if let Some(h) = handles.0.last() {
                         h.cancel();
@@ -1302,8 +1312,8 @@ impl ExperimentsPanel {
         if bounds_changed {
             let model_ref_b = model_ref.clone();
             ctx.defer(move |world| {
-                if let Some(mut drafts) = world
-                    .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
+                if let Some(mut drafts) =
+                    world.get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
                 {
                     drafts.entry(doc, model_ref_b).bounds_override = Some(bounds);
                 }
@@ -1319,22 +1329,31 @@ impl ExperimentsPanel {
                     continue;
                 }
                 let v = match ty.as_str() {
-                    "Real" => s.parse::<f64>().ok().map(lunco_experiments::ParamValue::Real),
-                    "Integer" | "Int" => s.parse::<i64>().ok().map(lunco_experiments::ParamValue::Int),
+                    "Real" => s
+                        .parse::<f64>()
+                        .ok()
+                        .map(lunco_experiments::ParamValue::Real),
+                    "Integer" | "Int" => s
+                        .parse::<i64>()
+                        .ok()
+                        .map(lunco_experiments::ParamValue::Int),
                     "Boolean" | "Bool" => match s {
                         "true" => Some(lunco_experiments::ParamValue::Bool(true)),
                         "false" => Some(lunco_experiments::ParamValue::Bool(false)),
                         _ => None,
                     },
-                    _ => s.parse::<f64>().ok().map(lunco_experiments::ParamValue::Real),
+                    _ => s
+                        .parse::<f64>()
+                        .ok()
+                        .map(lunco_experiments::ParamValue::Real),
                 };
                 if let Some(v) = v {
                     map.insert(lunco_experiments::ParamPath(name.clone()), v);
                 }
             }
             ctx.defer(move |world| {
-                if let Some(mut drafts) = world
-                    .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
+                if let Some(mut drafts) =
+                    world.get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
                 {
                     drafts.entry(doc, model_ref).inputs = map;
                 }
@@ -1348,7 +1367,16 @@ impl ExperimentsPanel {
             ctx.defer(move |world| {
                 world
                     .commands()
-                    .trigger(crate::ui::commands::FastRunActiveModel { doc, class: Some(class), t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
+                    .trigger(crate::ui::commands::FastRunActiveModel {
+                        doc,
+                        class: Some(class),
+                        t_end: None,
+                        dt: None,
+                        n_intervals: None,
+                        tolerance: None,
+                        solver: None,
+                        h0: None,
+                    });
             });
         }
     }
@@ -1358,8 +1386,7 @@ impl ExperimentsPanel {
     /// the source and shows them as an editable table; non-literal
     /// params appear greyed with a tooltip.
     fn render_override_editor(&self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx)
-        else {
+        let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx) else {
             return;
         };
         let registry = match ctx.resource::<crate::state::ModelicaDocumentRegistry>() {
@@ -1404,202 +1431,194 @@ impl ExperimentsPanel {
             "⚙ Parameter overrides ({})",
             detected.iter().filter(|p| p.supportable).count()
         ))
-            .id_salt("experiments_parameter_overrides")
-            .default_open(false)
-            .show(ui, |ui| {
-                use lunco_experiments::{ParamPath, ParamValue};
+        .id_salt("experiments_parameter_overrides")
+        .default_open(false)
+        .show(ui, |ui| {
+            use lunco_experiments::{ParamPath, ParamValue};
 
-                // Parameter overrides
-                let current_overrides: BTreeMap<ParamPath, ParamValue> = ctx
-                    .resource::<crate::experiments_runner::ExperimentDrafts>()
-                    .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.clone()))
-                    .unwrap_or_default();
+            // Parameter overrides
+            let current_overrides: BTreeMap<ParamPath, ParamValue> = ctx
+                .resource::<crate::experiments_runner::ExperimentDrafts>()
+                .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.clone()))
+                .unwrap_or_default();
 
-                let mut updates: Vec<(ParamPath, Option<ParamValue>)> = Vec::new();
+            let mut updates: Vec<(ParamPath, Option<ParamValue>)> = Vec::new();
 
-                egui::Grid::new("override_grid")
-                    .num_columns(4)
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.weak("Type");
-                        ui.weak("Name");
-                        ui.weak("Default");
-                        ui.weak("Override");
-                        ui.end_row();
+            egui::Grid::new("override_grid")
+                .num_columns(4)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.weak("Type");
+                    ui.weak("Name");
+                    ui.weak("Default");
+                    ui.weak("Override");
+                    ui.end_row();
 
-                        for p in &detected {
-                            ui.label(&p.type_name);
-                            // Surface the Modelica description-comment as
-                            // hover help so users know what each parameter
-                            // means without cross-referencing the source.
-                            // Use an explicit hover-sensing Label — a plain
-                            // `ui.label` inside a Grid doesn't reliably
-                            // register hover for tooltips.
-                            let name_label = ui.add(
-                                egui::Label::new(&p.name)
-                                    .sense(egui::Sense::hover()),
+                    for p in &detected {
+                        ui.label(&p.type_name);
+                        // Surface the Modelica description-comment as
+                        // hover help so users know what each parameter
+                        // means without cross-referencing the source.
+                        // Use an explicit hover-sensing Label — a plain
+                        // `ui.label` inside a Grid doesn't reliably
+                        // register hover for tooltips.
+                        let name_label =
+                            ui.add(egui::Label::new(&p.name).sense(egui::Sense::hover()));
+                        if let Some(desc) = &p.description {
+                            name_label.on_hover_text(desc);
+                        }
+                        ui.label(p.default_literal.as_deref().unwrap_or("—"));
+                        let path = ParamPath(p.name.clone());
+                        if !p.supportable {
+                            ui.add_enabled(
+                                false,
+                                egui::TextEdit::singleline(&mut String::from("—"))
+                                    .desired_width(80.0),
+                            )
+                            .on_hover_text(
+                                p.reason.clone().unwrap_or_else(|| "unsupported".into()),
                             );
-                            if let Some(desc) = &p.description {
-                                name_label.on_hover_text(desc);
-                            }
-                            ui.label(p.default_literal.as_deref().unwrap_or("—"));
-                            let path = ParamPath(p.name.clone());
-                            if !p.supportable {
-                                ui.add_enabled(
-                                    false,
-                                    egui::TextEdit::singleline(&mut String::from("—"))
-                                        .desired_width(80.0),
-                                )
-                                .on_hover_text(
-                                    p.reason
-                                        .clone()
-                                        .unwrap_or_else(|| "unsupported".into()),
-                                );
-                            } else {
-                                // No-override state shows an *empty*
-                                // editable cell with the default as
-                                // hint text. Previously the field was
-                                // pre-filled with the default literal,
-                                // which made it indistinguishable from
-                                // a disabled/read-only cell and users
-                                // didn't realize they could click and
-                                // type to override.
-                                let existing = current_overrides.get(&path).cloned();
-                                // Prefill with the current effective
-                                // value — the override if set, else
-                                // the model's default — so the user
-                                // can modify in place (OMEdit-style)
-                                // instead of clearing and retyping.
-                                // The "×" button clears the override
-                                // (revert to default).
-                                let default_text = p
-                                    .default_literal
-                                    .clone()
-                                    .unwrap_or_default();
-                                let committed = match &existing {
-                                    Some(ParamValue::Real(x)) => format!("{x}"),
-                                    Some(ParamValue::Int(x)) => format!("{x}"),
-                                    Some(ParamValue::Bool(b)) => {
-                                        if *b { "true".into() } else { "false".into() }
+                        } else {
+                            // No-override state shows an *empty*
+                            // editable cell with the default as
+                            // hint text. Previously the field was
+                            // pre-filled with the default literal,
+                            // which made it indistinguishable from
+                            // a disabled/read-only cell and users
+                            // didn't realize they could click and
+                            // type to override.
+                            let existing = current_overrides.get(&path).cloned();
+                            // Prefill with the current effective
+                            // value — the override if set, else
+                            // the model's default — so the user
+                            // can modify in place (OMEdit-style)
+                            // instead of clearing and retyping.
+                            // The "×" button clears the override
+                            // (revert to default).
+                            let default_text = p.default_literal.clone().unwrap_or_default();
+                            let committed = match &existing {
+                                Some(ParamValue::Real(x)) => format!("{x}"),
+                                Some(ParamValue::Int(x)) => format!("{x}"),
+                                Some(ParamValue::Bool(b)) => {
+                                    if *b {
+                                        "true".into()
+                                    } else {
+                                        "false".into()
                                     }
-                                    Some(ParamValue::String(s)) => s.clone(),
-                                    Some(ParamValue::Enum(s)) => s.clone(),
-                                    Some(ParamValue::RealArray(_)) => "(array)".into(),
-                                    None => default_text.clone(),
-                                };
-                                // Per-row id so egui can route keystrokes
-                                // and preserve the in-progress edit buffer
-                                // across frames. Without this the auto-id
-                                // collides between rows that start with the
-                                // same empty buffer and the cell silently
-                                // rejects input.
-                                //
-                                // Keyed by (doc, model, param) — NOT the bare
-                                // leaf name. The latch lives in shared egui
-                                // temp memory, so a name-only key leaks an
-                                // in-progress string between two models that
-                                // share a leaf parameter name (or across a
-                                // pin/tab switch), committing a value typed
-                                // for a different row.
-                                let cell_id = egui::Id::new((
-                                    "override_cell",
-                                    doc.raw(),
-                                    model_name.as_str(),
-                                    p.name.as_str(),
-                                ));
-                                // Latched draft: keeps typed characters
-                                // alive across frames. Without this the
-                                // local `text` re-initializes from the
-                                // committed value every frame and wipes
-                                // each keystroke.
-                                let latched: Option<String> =
-                                    ui.data_mut(|d| d.get_temp::<String>(cell_id));
-                                let mut text = latched
-                                    .clone()
-                                    .unwrap_or_else(|| committed.clone());
-                                let resp = ui.add(
-                                    egui::TextEdit::singleline(&mut text)
-                                        .id(cell_id)
-                                        .desired_width(80.0),
-                                );
-                                if resp.has_focus() || resp.changed() {
+                                }
+                                Some(ParamValue::String(s)) => s.clone(),
+                                Some(ParamValue::Enum(s)) => s.clone(),
+                                Some(ParamValue::RealArray(_)) => "(array)".into(),
+                                None => default_text.clone(),
+                            };
+                            // Per-row id so egui can route keystrokes
+                            // and preserve the in-progress edit buffer
+                            // across frames. Without this the auto-id
+                            // collides between rows that start with the
+                            // same empty buffer and the cell silently
+                            // rejects input.
+                            //
+                            // Keyed by (doc, model, param) — NOT the bare
+                            // leaf name. The latch lives in shared egui
+                            // temp memory, so a name-only key leaks an
+                            // in-progress string between two models that
+                            // share a leaf parameter name (or across a
+                            // pin/tab switch), committing a value typed
+                            // for a different row.
+                            let cell_id = egui::Id::new((
+                                "override_cell",
+                                doc.raw(),
+                                model_name.as_str(),
+                                p.name.as_str(),
+                            ));
+                            // Latched draft: keeps typed characters
+                            // alive across frames. Without this the
+                            // local `text` re-initializes from the
+                            // committed value every frame and wipes
+                            // each keystroke.
+                            let latched: Option<String> =
+                                ui.data_mut(|d| d.get_temp::<String>(cell_id));
+                            let mut text = latched.clone().unwrap_or_else(|| committed.clone());
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(&mut text)
+                                    .id(cell_id)
+                                    .desired_width(80.0),
+                            );
+                            if resp.has_focus() || resp.changed() {
+                                ui.data_mut(|d| d.insert_temp(cell_id, text.clone()));
+                            }
+                            // Compare against the *committed* value
+                            // (last value pushed into the draft),
+                            // not the latched in-progress text — the
+                            // latch updates on every keystroke, so
+                            // using it as the baseline makes
+                            // `text != baseline` always false at
+                            // focus-loss time and no commit fires
+                            // unless the user explicitly pressed
+                            // Enter.
+                            let commit = resp.lost_focus()
+                                && (ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    || text != committed);
+                            if commit {
+                                // Typing back the unchanged default
+                                // text shouldn't materialise an
+                                // override — keep the row at "no
+                                // override set".
+                                let matches_default = existing.is_none() && text == default_text;
+                                if matches_default {
+                                    ui.data_mut(|d| d.remove::<String>(cell_id));
+                                } else if let Some(v) = parse_override(&p.type_name, &text) {
+                                    updates.push((path.clone(), Some(v)));
+                                    // Latch the new value so the cell
+                                    // keeps showing it until the draft
+                                    // reflects the commit on the next
+                                    // frame.
                                     ui.data_mut(|d| d.insert_temp(cell_id, text.clone()));
+                                } else if text.trim().is_empty() {
+                                    updates.push((path.clone(), None));
+                                    ui.data_mut(|d| d.remove::<String>(cell_id));
                                 }
-                                // Compare against the *committed* value
-                                // (last value pushed into the draft),
-                                // not the latched in-progress text — the
-                                // latch updates on every keystroke, so
-                                // using it as the baseline makes
-                                // `text != baseline` always false at
-                                // focus-loss time and no commit fires
-                                // unless the user explicitly pressed
-                                // Enter.
-                                let commit = resp.lost_focus()
-                                    && (ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                        || text != committed);
-                                if commit {
-                                    // Typing back the unchanged default
-                                    // text shouldn't materialise an
-                                    // override — keep the row at "no
-                                    // override set".
-                                    let matches_default =
-                                        existing.is_none() && text == default_text;
-                                    if matches_default {
-                                        ui.data_mut(|d| d.remove::<String>(cell_id));
-                                    } else if let Some(v) =
-                                        parse_override(&p.type_name, &text)
-                                    {
-                                        updates.push((path.clone(), Some(v)));
-                                        // Latch the new value so the cell
-                                        // keeps showing it until the draft
-                                        // reflects the commit on the next
-                                        // frame.
-                                        ui.data_mut(|d| d.insert_temp(cell_id, text.clone()));
-                                    } else if text.trim().is_empty() {
-                                        updates.push((path.clone(), None));
-                                        ui.data_mut(|d| d.remove::<String>(cell_id));
-                                    }
-                                } else if !resp.has_focus() {
-                                    // Drop the latch once the committed
-                                    // value catches up.
-                                    if latched.as_deref() == Some(committed.as_str()) {
-                                        ui.data_mut(|d| d.remove::<String>(cell_id));
-                                    }
-                                }
-                                if existing.is_some() {
-                                    if ui
-                                        .small_button("×")
-                                        .on_hover_text("Clear override")
-                                        .clicked()
-                                    {
-                                        updates.push((path, None));
-                                    }
+                            } else if !resp.has_focus() {
+                                // Drop the latch once the committed
+                                // value catches up.
+                                if latched.as_deref() == Some(committed.as_str()) {
+                                    ui.data_mut(|d| d.remove::<String>(cell_id));
                                 }
                             }
-                            ui.end_row();
+                            if existing.is_some() {
+                                if ui
+                                    .small_button("×")
+                                    .on_hover_text("Clear override")
+                                    .clicked()
+                                {
+                                    updates.push((path, None));
+                                }
+                            }
                         }
-                    });
+                        ui.end_row();
+                    }
+                });
 
-                if !updates.is_empty() {
-                    ctx.defer(move |world| {
-                        if let Some(mut drafts) = world
-                            .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-                        {
-                            let entry = drafts.entry(doc, model_ref);
-                            for (path, v) in updates {
-                                match v {
-                                    Some(value) => {
-                                        entry.overrides.insert(path, value);
-                                    }
-                                    None => {
-                                        entry.overrides.remove(&path);
-                                    }
+            if !updates.is_empty() {
+                ctx.defer(move |world| {
+                    if let Some(mut drafts) =
+                        world.get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
+                    {
+                        let entry = drafts.entry(doc, model_ref);
+                        for (path, v) in updates {
+                            match v {
+                                Some(value) => {
+                                    entry.overrides.insert(path, value);
+                                }
+                                None => {
+                                    entry.overrides.remove(&path);
                                 }
                             }
                         }
-                    });
-                }
-            });
+                    }
+                });
+            }
+        });
     }
 }
 
@@ -1760,8 +1779,7 @@ pub fn populate_experiments_view_model(world: &mut World) {
             (lunco_experiments::ExperimentId, String),
             std::sync::Arc<[[f64; 2]]>,
         > = std::collections::HashMap::new();
-        let mut all_vars: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+        let mut all_vars: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for exp in reg.list_for_twin(&twin) {
             let Some(result) = &exp.result else { continue };
             for (var, values) in &result.series {
@@ -1815,9 +1833,8 @@ fn render_empty_plot_frame(ui: &mut egui::Ui, extras: &[PlotExtraLine]) {
         .show(ui, |plot_ui| {
             for ex in extras {
                 let (r, g, b) = ex.color;
-                let line =
-                    Line::new(ex.label.clone(), PlotPoints::from(ex.points.clone()))
-                        .color(egui::Color32::from_rgb(r, g, b));
+                let line = Line::new(ex.label.clone(), PlotPoints::from(ex.points.clone()))
+                    .color(egui::Color32::from_rgb(r, g, b));
                 plot_ui.line(line);
             }
         });
@@ -1851,12 +1868,14 @@ fn render_experiments_plot_inner(
     // resolved yet (boot, welcome screen, no model open) we still
     // render an empty plot widget plus any live overlays so the
     // Graphs tab never collapses to a blank panel.
-    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx)
-    else {
+    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx) else {
         // No doc resolved yet — draw just the doc badge. Action
         // buttons (New / Dup / Fit / CSV) live in the Graphs panel's
         // shared header, rendered above this body in every state.
-        let col_muted = ctx.resource_expect::<lunco_theme::Theme>().tokens.text_subdued;
+        let col_muted = ctx
+            .resource_expect::<lunco_theme::Theme>()
+            .tokens
+            .text_subdued;
         ui.label(
             egui::RichText::new("📈 (no model)  ·  0 vars")
                 .color(col_muted)
@@ -1878,305 +1897,311 @@ fn render_experiments_plot_inner(
     // reinserts it — so all PlotPanelStates access goes through `states`
     // while everything else keeps reading via `ctx`.
     ctx.resource_scope::<PlotPanelStates, _>(|ctx, states| {
-    // Doc switch → archive the previous twin's picks / visibility
-    // and restore any prior stash for the new twin, so returning to
-    // a tab brings back its plot selections instead of dropping them.
-    states.sync_twin(viz_id, &twin);
+        // Doc switch → archive the previous twin's picks / visibility
+        // and restore any prior stash for the new twin, so returning to
+        // a tab brings back its plot selections instead of dropping them.
+        states.sync_twin(viz_id, &twin);
 
-    // Doc badge so the user can tell which model's runs are
-    // plotted (this plot inherits the Experiments panel's pin /
-    // active-doc resolution; there's no per-plot pin).
-    let doc_label = crate::ui::doc_pin::doc_display_name_ctx(ctx, doc_id);
-    let run_count = ctx
-        .resource::<ExperimentRegistry>()
-        .map(|r| r.list_for_twin(&twin).len())
-        .unwrap_or(0);
+        // Doc badge so the user can tell which model's runs are
+        // plotted (this plot inherits the Experiments panel's pin /
+        // active-doc resolution; there's no per-plot pin).
+        let doc_label = crate::ui::doc_pin::doc_display_name_ctx(ctx, doc_id);
+        let run_count = ctx
+            .resource::<ExperimentRegistry>()
+            .map(|r| r.list_for_twin(&twin).len())
+            .unwrap_or(0);
 
-    let (visible, picked_vars) = (states.visible(viz_id), states.picked(viz_id));
-    let color_by_run = states
-        .by_viz
-        .get(&viz_id)
-        .map(|st| st.color_by_run)
-        .unwrap_or(false);
+        let (visible, picked_vars) = (states.visible(viz_id), states.picked(viz_id));
+        let color_by_run = states
+            .by_viz
+            .get(&viz_id)
+            .map(|st| st.color_by_run)
+            .unwrap_or(false);
 
-    // Build var -> unit map from the active doc index.
-    let units: std::collections::HashMap<String, String> =
-        active_doc_units(ctx, &picked_vars);
+        // Build var -> unit map from the active doc index.
+        let units: std::collections::HashMap<String, String> = active_doc_units(ctx, &picked_vars);
 
-    let mut series: Vec<PlotSeries> = Vec::new();
-    let mut total_runs = 0usize;
-    let mut visible_runs = 0usize;
-    let mut shared_unit: Option<String> = None;
-    let mut shared_unit_init = false;
-    // Stable per-variable index so each picked var gets a distinct
-    // colour rotation regardless of run. Sort the picked set so the
-    // mapping doesn't depend on insertion order.
-    let var_idx: std::collections::HashMap<String, usize> = {
-        let mut sorted: Vec<&String> = picked_vars.iter().collect();
-        sorted.sort();
-        sorted.into_iter().enumerate().map(|(i, s)| (s.clone(), i)).collect()
-    };
-    let exp_vm = ctx.resource::<ExperimentsViewModel>();
-    if let Some(reg) = ctx.resource::<ExperimentRegistry>() {
-        for exp in reg.list_for_twin(&twin) {
-            total_runs += 1;
-            if exp.result.is_none() {
-                continue;
-            }
-            if !visible.contains(&exp.id) {
-                continue;
-            }
-            visible_runs += 1;
-            for var in &picked_vars {
-                // Shared samples are precomputed in `ExperimentsViewModel`
-                // (CQ-207) — a pointer-bump clone, not a per-frame re-zip.
-                // Absence means this run has no data for `var`.
-                let Some(pts) =
-                    exp_vm.and_then(|vm| vm.points.get(&(exp.id, var.clone())).cloned())
-                else {
+        let mut series: Vec<PlotSeries> = Vec::new();
+        let mut total_runs = 0usize;
+        let mut visible_runs = 0usize;
+        let mut shared_unit: Option<String> = None;
+        let mut shared_unit_init = false;
+        // Stable per-variable index so each picked var gets a distinct
+        // colour rotation regardless of run. Sort the picked set so the
+        // mapping doesn't depend on insertion order.
+        let var_idx: std::collections::HashMap<String, usize> = {
+            let mut sorted: Vec<&String> = picked_vars.iter().collect();
+            sorted.sort();
+            sorted
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| (s.clone(), i))
+                .collect()
+        };
+        let exp_vm = ctx.resource::<ExperimentsViewModel>();
+        if let Some(reg) = ctx.resource::<ExperimentRegistry>() {
+            for exp in reg.list_for_twin(&twin) {
+                total_runs += 1;
+                if exp.result.is_none() {
                     continue;
-                };
-                let unit = units.get(var).cloned();
-                // Track shared-unit-across-series for the y-axis
-                // label; flip to None on first mismatch.
-                if !shared_unit_init {
-                    shared_unit = unit.clone();
-                    shared_unit_init = true;
-                } else if shared_unit != unit {
-                    shared_unit = None;
                 }
-                // Truncate long dotted paths to keep the legend
-                // readable when nested components are picked.
-                // Keep the leaf + previous segment; collapse the rest as `…`.
-                let var_short = {
-                    let parts: Vec<&str> = var.split('.').collect();
-                    if parts.len() <= 2 {
-                        var.clone()
+                if !visible.contains(&exp.id) {
+                    continue;
+                }
+                visible_runs += 1;
+                for var in &picked_vars {
+                    // Shared samples are precomputed in `ExperimentsViewModel`
+                    // (CQ-207) — a pointer-bump clone, not a per-frame re-zip.
+                    // Absence means this run has no data for `var`.
+                    let Some(pts) =
+                        exp_vm.and_then(|vm| vm.points.get(&(exp.id, var.clone())).cloned())
+                    else {
+                        continue;
+                    };
+                    let unit = units.get(var).cloned();
+                    // Track shared-unit-across-series for the y-axis
+                    // label; flip to None on first mismatch.
+                    if !shared_unit_init {
+                        shared_unit = unit.clone();
+                        shared_unit_init = true;
+                    } else if shared_unit != unit {
+                        shared_unit = None;
+                    }
+                    // Truncate long dotted paths to keep the legend
+                    // readable when nested components are picked.
+                    // Keep the leaf + previous segment; collapse the rest as `…`.
+                    let var_short = {
+                        let parts: Vec<&str> = var.split('.').collect();
+                        if parts.len() <= 2 {
+                            var.clone()
+                        } else {
+                            format!("…{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
+                        }
+                    };
+                    let label = match &unit {
+                        Some(u) if !u.is_empty() => {
+                            format!("{} · {} [{}]", exp.name, var_short, u)
+                        }
+                        _ => format!("{} · {}", exp.name, var_short),
+                    };
+                    // Two encodings, user-selectable via `color_by_run`:
+                    //   default  → colour = variable, style = run.
+                    //   by-run   → colour = run, style = variable.
+                    let v_idx = var_idx.get(var).copied().unwrap_or(0) as u8;
+                    let (color, style_idx) = if color_by_run {
+                        (palette_color(exp.color_hint), v_idx % 4)
                     } else {
-                        format!("…{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
-                    }
-                };
-                let label = match &unit {
-                    Some(u) if !u.is_empty() => {
-                        format!("{} · {} [{}]", exp.name, var_short, u)
-                    }
-                    _ => format!("{} · {}", exp.name, var_short),
-                };
-                // Two encodings, user-selectable via `color_by_run`:
-                //   default  → colour = variable, style = run.
-                //   by-run   → colour = run, style = variable.
-                let v_idx = var_idx.get(var).copied().unwrap_or(0) as u8;
-                let (color, style_idx) = if color_by_run {
-                    (palette_color(exp.color_hint), v_idx % 4)
-                } else {
-                    (palette_color(v_idx), exp.color_hint % 4)
-                };
-                series.push(PlotSeries { label, color, points: pts, style_idx });
+                        (palette_color(v_idx), exp.color_hint % 4)
+                    };
+                    series.push(PlotSeries {
+                        label,
+                        color,
+                        points: pts,
+                        style_idx,
+                    });
+                }
             }
         }
-    }
 
-    let scrub_time = states.scrub(viz_id);
+        let scrub_time = states.scrub(viz_id);
 
-    let mut new_scrub: Option<Option<f64>> = None;
+        let mut new_scrub: Option<Option<f64>> = None;
 
-    // Inline variable picker — surfaces every variable known across
-    // visible runs as a chip-style toggle row, so the user doesn't
-    // need to hunt the Telemetry panel just to swap out a series.
-    // Renders even when nothing is plotted yet so a fresh run lands
-    // with an obvious "tick a chip" affordance.
-    // The variable catalog is precomputed in `ExperimentsViewModel`
-    // (CQ-207) — read it instead of re-walking every run's series keys
-    // each frame. Cloned (a small set of names) so the world is free for
-    // the picker's mutations below.
-    let all_vars: std::collections::BTreeSet<String> = ctx
-        .resource::<ExperimentsViewModel>()
-        .map(|vm| vm.all_vars.clone())
-        .unwrap_or_default();
-    // Variable picker — Dymola / OMEdit-style component tree.
-    // Variables group by their first dotted segment (the component
-    // name). Each group is a CollapsingHeader; leaves are
-    // checkboxes labelled with the leaf name. The whole tree sits
-    // in a small horizontal scroll-row above the plot so the
-    // common case (handful of components) reads at a glance and
-    // scrolls horizontally on long models.
-    // Picker tree + plot controls on a single line. Picker on the
-    // left (component groups, expandable); reset / fit / mixed-units
-    // chips right-aligned. Saves a row of vertical chrome above the
-    // plot.
-    let mut toggle_var: Option<String> = None;
-    let mut reset_clicked = false;
-    // Deferred run-comparison actions, applied after the header (the
-    // menu closures borrow `world`-derived locals, so we collect intent
-    // and mutate `PlotPanelStates` once afterwards).
-    let mut toggle_run: Option<ExperimentId> = None;
-    let mut set_color_by_run: Option<bool> = None;
-    // Completed runs for this twin: (id, name, visible?, colour_hint).
-    // Drives the "▾ Runs" dropdown so the user picks overlays right on
-    // the graph instead of leaving for the Experiments table.
-    let runs_info: Vec<(ExperimentId, String, bool, u8)> = ctx
-        .resource::<ExperimentRegistry>()
-        .map(|reg| {
-            reg.list_for_twin(&twin)
-                .iter()
-                .filter(|e| e.result.is_some())
-                .map(|e| (e.id, e.name.clone(), visible.contains(&e.id), e.color_hint))
-                .collect()
-        })
-        .unwrap_or_default();
-    // Picker filter lives on the shared `ExperimentVisibility`
-    // resource (read into a local for the popup, written back after).
-    // A blank filter shows the whole tree; a non-empty one force-opens
-    // every surviving group so matches are visible without a click.
-    let mut var_filter = ctx
-        .resource::<ExperimentVisibility>()
-        .map(|v| v.var_filter.clone())
-        .unwrap_or_default();
-    // Header — doc badge + var picker chips. Plot action buttons
-    // (New / Dup / Fit / CSV) live in the Graphs panel's shared
-    // header rendered above this body, so they stay reachable in
-    // every state including the pure-live LinePlot mode.
-    let var_count = picked_vars.len();
-    let mut groups: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    for v in &all_vars {
-        let (head, tail) = match v.split_once('.') {
-            Some((h, t)) => (h.to_string(), t.to_string()),
-            None => (String::new(), v.clone()),
-        };
-        groups.entry(head).or_default().push(tail);
-    }
-    // Current log-Y state for the inline toggle button on this row.
-    // Reflects the stored value; the auto-default (mixed units) is
-    // persisted further down, so it shows pressed from the next frame.
-    let log_y_now = states
-        .by_viz
-        .get(&viz_id)
-        .map(|st| st.log_y)
-        .unwrap_or(false);
-    let mut log_y_toggle: Option<bool> = None;
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(format!(
-                "📈 {doc_label}  ·  {var_count} var{}",
-                if var_count == 1 { "" } else { "s" }
-            ))
-            .color(col_muted)
-            .small(),
-        );
-        // Variable picker — a compact menu button that opens the
-        // component tree as a FLOATING popup over the plot. Replaces
-        // the old inline CollapsingHeader strip, which unfolded
-        // downward and (on a 59-variable model) filled the whole dock,
-        // pushing the chart off the bottom. The plot now keeps the
-        // panel's full height in every state; variables are one click
-        // away in the dropdown instead of dumped inline.
-        if !groups.is_empty() {
-            let total_vars = all_vars.len();
-            ui.menu_button(
-                format!("▾ Variables {}/{}", picked_vars.len(), total_vars),
-                |ui| {
-                    ui.set_min_width(240.0);
-                    ui.horizontal(|ui| {
-                        ui.label("🔍");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut var_filter)
-                                .hint_text("filter…")
-                                .desired_width(150.0),
-                        );
-                        if !var_filter.is_empty()
-                            && ui.small_button("✕").on_hover_text("Clear filter").clicked()
-                        {
-                            var_filter.clear();
-                        }
-                    });
-                    let needle = var_filter.to_lowercase();
-                    let filtering = !needle.is_empty();
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt("exp_picker_menu_scroll")
-                        .max_height(360.0)
-                        // Fill the popup's width instead of shrinking to
-                        // the variable names, so the scrollbar sits at the
-                        // right edge with no dead space beside it.
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            for (head, tails) in &groups {
-                                // Filter leaves; hide a group entirely
-                                // when nothing under it matches.
-                                let matching: Vec<&String> = tails
-                                    .iter()
-                                    .filter(|t| {
-                                        if !filtering {
-                                            return true;
-                                        }
-                                        let full = if head.is_empty() {
-                                            (*t).clone()
-                                        } else {
-                                            format!("{head}.{t}")
-                                        };
-                                        full.to_lowercase().contains(&needle)
-                                    })
-                                    .collect();
-                                if matching.is_empty() {
-                                    continue;
-                                }
-                                let picked_in_group = matching
-                                    .iter()
-                                    .filter(|t| {
-                                        let full = if head.is_empty() {
-                                            (**t).clone()
-                                        } else {
-                                            format!("{head}.{t}")
-                                        };
-                                        picked_vars.contains(&full)
-                                    })
-                                    .count();
-                                let label = if head.is_empty() {
-                                    format!("(top) {}/{}", picked_in_group, matching.len())
-                                } else {
-                                    format!("{head} {}/{}", picked_in_group, matching.len())
-                                };
-                                let mut header = egui::CollapsingHeader::new(label)
-                                    .id_salt(format!("exp_picker_group_{head}"))
-                                    .default_open(false);
-                                // While filtering, force every surviving
-                                // group open so matches show without a
-                                // second click.
-                                if filtering {
-                                    header = header.open(Some(true));
-                                }
-                                header.show(ui, |ui| {
-                                    for t in matching {
-                                        let full = if head.is_empty() {
-                                            t.clone()
-                                        } else {
-                                            format!("{head}.{t}")
-                                        };
-                                        let mut on = picked_vars.contains(&full);
-                                        if ui
-                                            .checkbox(&mut on, t)
-                                            .on_hover_text(&full)
-                                            .changed()
-                                        {
-                                            toggle_var = Some(full);
-                                        }
-                                    }
-                                });
+        // Inline variable picker — surfaces every variable known across
+        // visible runs as a chip-style toggle row, so the user doesn't
+        // need to hunt the Telemetry panel just to swap out a series.
+        // Renders even when nothing is plotted yet so a fresh run lands
+        // with an obvious "tick a chip" affordance.
+        // The variable catalog is precomputed in `ExperimentsViewModel`
+        // (CQ-207) — read it instead of re-walking every run's series keys
+        // each frame. Cloned (a small set of names) so the world is free for
+        // the picker's mutations below.
+        let all_vars: std::collections::BTreeSet<String> = ctx
+            .resource::<ExperimentsViewModel>()
+            .map(|vm| vm.all_vars.clone())
+            .unwrap_or_default();
+        // Variable picker — Dymola / OMEdit-style component tree.
+        // Variables group by their first dotted segment (the component
+        // name). Each group is a CollapsingHeader; leaves are
+        // checkboxes labelled with the leaf name. The whole tree sits
+        // in a small horizontal scroll-row above the plot so the
+        // common case (handful of components) reads at a glance and
+        // scrolls horizontally on long models.
+        // Picker tree + plot controls on a single line. Picker on the
+        // left (component groups, expandable); reset / fit / mixed-units
+        // chips right-aligned. Saves a row of vertical chrome above the
+        // plot.
+        let mut toggle_var: Option<String> = None;
+        let mut reset_clicked = false;
+        // Deferred run-comparison actions, applied after the header (the
+        // menu closures borrow `world`-derived locals, so we collect intent
+        // and mutate `PlotPanelStates` once afterwards).
+        let mut toggle_run: Option<ExperimentId> = None;
+        let mut set_color_by_run: Option<bool> = None;
+        // Completed runs for this twin: (id, name, visible?, colour_hint).
+        // Drives the "▾ Runs" dropdown so the user picks overlays right on
+        // the graph instead of leaving for the Experiments table.
+        let runs_info: Vec<(ExperimentId, String, bool, u8)> = ctx
+            .resource::<ExperimentRegistry>()
+            .map(|reg| {
+                reg.list_for_twin(&twin)
+                    .iter()
+                    .filter(|e| e.result.is_some())
+                    .map(|e| (e.id, e.name.clone(), visible.contains(&e.id), e.color_hint))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Picker filter lives on the shared `ExperimentVisibility`
+        // resource (read into a local for the popup, written back after).
+        // A blank filter shows the whole tree; a non-empty one force-opens
+        // every surviving group so matches are visible without a click.
+        let mut var_filter = ctx
+            .resource::<ExperimentVisibility>()
+            .map(|v| v.var_filter.clone())
+            .unwrap_or_default();
+        // Header — doc badge + var picker chips. Plot action buttons
+        // (New / Dup / Fit / CSV) live in the Graphs panel's shared
+        // header rendered above this body, so they stay reachable in
+        // every state including the pure-live LinePlot mode.
+        let var_count = picked_vars.len();
+        let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for v in &all_vars {
+            let (head, tail) = match v.split_once('.') {
+                Some((h, t)) => (h.to_string(), t.to_string()),
+                None => (String::new(), v.clone()),
+            };
+            groups.entry(head).or_default().push(tail);
+        }
+        // Current log-Y state for the inline toggle button on this row.
+        // Reflects the stored value; the auto-default (mixed units) is
+        // persisted further down, so it shows pressed from the next frame.
+        let log_y_now = states
+            .by_viz
+            .get(&viz_id)
+            .map(|st| st.log_y)
+            .unwrap_or(false);
+        let mut log_y_toggle: Option<bool> = None;
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "📈 {doc_label}  ·  {var_count} var{}",
+                    if var_count == 1 { "" } else { "s" }
+                ))
+                .color(col_muted)
+                .small(),
+            );
+            // Variable picker — a compact menu button that opens the
+            // component tree as a FLOATING popup over the plot. Replaces
+            // the old inline CollapsingHeader strip, which unfolded
+            // downward and (on a 59-variable model) filled the whole dock,
+            // pushing the chart off the bottom. The plot now keeps the
+            // panel's full height in every state; variables are one click
+            // away in the dropdown instead of dumped inline.
+            if !groups.is_empty() {
+                let total_vars = all_vars.len();
+                ui.menu_button(
+                    format!("▾ Variables {}/{}", picked_vars.len(), total_vars),
+                    |ui| {
+                        ui.set_min_width(240.0);
+                        ui.horizontal(|ui| {
+                            ui.label("🔍");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut var_filter)
+                                    .hint_text("filter…")
+                                    .desired_width(150.0),
+                            );
+                            if !var_filter.is_empty()
+                                && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+                            {
+                                var_filter.clear();
                             }
                         });
-                },
-            );
-        }
-        // Runs picker — pick which completed runs overlay, right on
-        // the graph. Each row: visibility checkbox + colour swatch +
-        // name. The "Colour by run" toggle at the top flips the curve
-        // palette so a one-variable / many-run sweep is legible.
-        if !runs_info.is_empty() {
-            let vis_n = runs_info.iter().filter(|r| r.2).count();
-            ui.menu_button(
-                format!("▾ Runs {}/{}", vis_n, runs_info.len()),
-                |ui| {
+                        let needle = var_filter.to_lowercase();
+                        let filtering = !needle.is_empty();
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .id_salt("exp_picker_menu_scroll")
+                            .max_height(360.0)
+                            // Fill the popup's width instead of shrinking to
+                            // the variable names, so the scrollbar sits at the
+                            // right edge with no dead space beside it.
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for (head, tails) in &groups {
+                                    // Filter leaves; hide a group entirely
+                                    // when nothing under it matches.
+                                    let matching: Vec<&String> = tails
+                                        .iter()
+                                        .filter(|t| {
+                                            if !filtering {
+                                                return true;
+                                            }
+                                            let full = if head.is_empty() {
+                                                (*t).clone()
+                                            } else {
+                                                format!("{head}.{t}")
+                                            };
+                                            full.to_lowercase().contains(&needle)
+                                        })
+                                        .collect();
+                                    if matching.is_empty() {
+                                        continue;
+                                    }
+                                    let picked_in_group = matching
+                                        .iter()
+                                        .filter(|t| {
+                                            let full = if head.is_empty() {
+                                                (**t).clone()
+                                            } else {
+                                                format!("{head}.{t}")
+                                            };
+                                            picked_vars.contains(&full)
+                                        })
+                                        .count();
+                                    let label = if head.is_empty() {
+                                        format!("(top) {}/{}", picked_in_group, matching.len())
+                                    } else {
+                                        format!("{head} {}/{}", picked_in_group, matching.len())
+                                    };
+                                    let mut header = egui::CollapsingHeader::new(label)
+                                        .id_salt(format!("exp_picker_group_{head}"))
+                                        .default_open(false);
+                                    // While filtering, force every surviving
+                                    // group open so matches show without a
+                                    // second click.
+                                    if filtering {
+                                        header = header.open(Some(true));
+                                    }
+                                    header.show(ui, |ui| {
+                                        for t in matching {
+                                            let full = if head.is_empty() {
+                                                t.clone()
+                                            } else {
+                                                format!("{head}.{t}")
+                                            };
+                                            let mut on = picked_vars.contains(&full);
+                                            if ui
+                                                .checkbox(&mut on, t)
+                                                .on_hover_text(&full)
+                                                .changed()
+                                            {
+                                                toggle_var = Some(full);
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                    },
+                );
+            }
+            // Runs picker — pick which completed runs overlay, right on
+            // the graph. Each row: visibility checkbox + colour swatch +
+            // name. The "Colour by run" toggle at the top flips the curve
+            // palette so a one-variable / many-run sweep is legible.
+            if !runs_info.is_empty() {
+                let vis_n = runs_info.iter().filter(|r| r.2).count();
+                ui.menu_button(format!("▾ Runs {}/{}", vis_n, runs_info.len()), |ui| {
                     ui.set_min_width(200.0);
                     let mut cbr = color_by_run;
                     if ui
@@ -2198,316 +2223,300 @@ fn render_experiments_plot_inner(
                                 toggle_run = Some(*id);
                             }
                             let (r, g, b) = palette_color(*hint);
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(10.0, 10.0),
-                                egui::Sense::hover(),
-                            );
-                            ui.painter().rect_filled(
-                                rect,
-                                2.0,
-                                egui::Color32::from_rgb(r, g, b),
-                            );
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                            ui.painter()
+                                .rect_filled(rect, 2.0, egui::Color32::from_rgb(r, g, b));
                             ui.label(name);
                         });
                     }
-                },
-            );
-        }
-        // Right-aligned status cluster: scrub readout + mixed-units
-        // warning. The picker no longer lives here (it's the menu
-        // button above), so it never competes for the row's width.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Action buttons (New / Dup / Fit / CSV) land rightmost, so the
-            // whole toolbar — pickers on the left, actions + log-Y on the
-            // right — sits on this single line.
-            crate::ui::panels::graphs::plot_action_buttons(ui, ctx, viz_id);
-            // log-Y toggle, styled as a button (framed even when off) and
-            // grouped on the same row as the Variables/Runs pickers.
-            if ui
-                .add(egui::Button::new("log Y").small().selected(log_y_now))
-                .on_hover_text(
-                    "Plot the Y axis on a log₁₀ scale (drops values ≤ 0). \
-                     Auto-enabled on mixed-unit plots until you toggle it.",
-                )
-                .clicked()
-            {
-                log_y_toggle = Some(!log_y_now);
+                });
             }
-            if scrub_time.is_some() {
+            // Right-aligned status cluster: scrub readout + mixed-units
+            // warning. The picker no longer lives here (it's the menu
+            // button above), so it never competes for the row's width.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Action buttons (New / Dup / Fit / CSV) land rightmost, so the
+                // whole toolbar — pickers on the left, actions + log-Y on the
+                // right — sits on this single line.
+                crate::ui::panels::graphs::plot_action_buttons(ui, ctx, viz_id);
+                // log-Y toggle, styled as a button (framed even when off) and
+                // grouped on the same row as the Variables/Runs pickers.
                 if ui
-                    .small_button("↻")
-                    .on_hover_text("Drop scrub cursor")
+                    .add(egui::Button::new("log Y").small().selected(log_y_now))
+                    .on_hover_text(
+                        "Plot the Y axis on a log₁₀ scale (drops values ≤ 0). \
+                     Auto-enabled on mixed-unit plots until you toggle it.",
+                    )
                     .clicked()
                 {
-                    reset_clicked = true;
+                    log_y_toggle = Some(!log_y_now);
                 }
-                if let Some(t) = scrub_time {
+                if scrub_time.is_some() {
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("Drop scrub cursor")
+                        .clicked()
+                    {
+                        reset_clicked = true;
+                    }
+                    if let Some(t) = scrub_time {
+                        ui.label(
+                            egui::RichText::new(format!("⏱ {t:.3}s"))
+                                .size(11.0)
+                                .monospace(),
+                        );
+                    }
+                }
+                if shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1 {
                     ui.label(
-                        egui::RichText::new(format!("⏱ {t:.3}s"))
+                        egui::RichText::new("⚠ mixed units")
                             .size(11.0)
-                            .monospace(),
+                            .color(col_warning),
+                    )
+                    .on_hover_text(
+                        "Picked variables have different units; y-axis label suppressed.",
                     );
                 }
-            }
-            if shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1 {
-                ui.label(
-                    egui::RichText::new("⚠ mixed units")
-                        .size(11.0)
-                        .color(col_warning),
-                )
-                .on_hover_text("Picked variables have different units; y-axis label suppressed.");
-            }
+            });
         });
-    });
-    if let Some(v) = toggle_var {
-        states.toggle_var(viz_id, v);
-    }
-    if let Some(v) = log_y_toggle {
-        let e = states.entry(viz_id);
-        e.log_y = v;
-        e.log_y_user_set = true;
-    }
-    // Persist the popup's filter text back onto the shared resource so
-    // it survives across frames (the menu rebuilds every frame). The
-    // write lands after paint via defer.
-    {
-        let current = ctx
-            .resource::<ExperimentVisibility>()
-            .map(|v| v.var_filter.clone())
-            .unwrap_or_default();
-        if current != var_filter {
+        if let Some(v) = toggle_var {
+            states.toggle_var(viz_id, v);
+        }
+        if let Some(v) = log_y_toggle {
+            let e = states.entry(viz_id);
+            e.log_y = v;
+            e.log_y_user_set = true;
+        }
+        // Persist the popup's filter text back onto the shared resource so
+        // it survives across frames (the menu rebuilds every frame). The
+        // write lands after paint via defer.
+        {
+            let current = ctx
+                .resource::<ExperimentVisibility>()
+                .map(|v| v.var_filter.clone())
+                .unwrap_or_default();
+            if current != var_filter {
+                ctx.defer(move |world| {
+                    if let Some(mut vis) = world.get_resource_mut::<ExperimentVisibility>() {
+                        vis.var_filter = var_filter;
+                    }
+                });
+            }
+        }
+        // Apply deferred run-comparison actions from the Runs dropdown.
+        if let Some(id) = toggle_run {
+            states.toggle_visible(viz_id, id);
+        }
+        if let Some(v) = set_color_by_run {
+            states.entry(viz_id).color_by_run = v;
+        }
+
+        // Auto-plot — every completed run becomes visible exactly once,
+        // automatically, so a finished Fast Run shows its curve without the
+        // user hunting for the 👁 toggle. `auto_shown` records each id we
+        // promote, so a later un-tick sticks (we never re-promote it). This
+        // fires for the first run AND every subsequent completed run, not
+        // just when the plot is empty.
+        let _ = run_count;
+        let pending_auto: Vec<ExperimentId> = {
+            let already = states
+                .by_viz
+                .get(&viz_id)
+                .map(|st| st.auto_shown.clone())
+                .unwrap_or_default();
+            ctx.resource::<ExperimentRegistry>()
+                .map(|reg| {
+                    reg.list_for_twin(&twin)
+                        .iter()
+                        .filter(|e| e.result.is_some() && !already.contains(&e.id))
+                        .map(|e| e.id)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        // Drain any one-shot Fit request for this plot. The Graphs
+        // panel's shared header queues it via `VizFitRequests`; the
+        // LinePlot body drains the same resource, so Fit behaves
+        // identically in both plot modes. Read-only peek during paint,
+        // then clear via a deferred mutation.
+        let fit_requested = ctx
+            .resource::<lunco_viz::VizFitRequests>()
+            .map(|r| r.is_pending(viz_id))
+            .unwrap_or(false);
+        if fit_requested {
             ctx.defer(move |world| {
-                if let Some(mut vis) = world.get_resource_mut::<ExperimentVisibility>() {
-                    vis.var_filter = var_filter;
+                if let Some(mut r) = world.get_resource_mut::<lunco_viz::VizFitRequests>() {
+                    r.take(viz_id);
                 }
             });
         }
-    }
-    // Apply deferred run-comparison actions from the Runs dropdown.
-    if let Some(id) = toggle_run {
-        states.toggle_visible(viz_id, id);
-    }
-    if let Some(v) = set_color_by_run {
-        states.entry(viz_id).color_by_run = v;
-    }
 
-    // Auto-plot — every completed run becomes visible exactly once,
-    // automatically, so a finished Fast Run shows its curve without the
-    // user hunting for the 👁 toggle. `auto_shown` records each id we
-    // promote, so a later un-tick sticks (we never re-promote it). This
-    // fires for the first run AND every subsequent completed run, not
-    // just when the plot is empty.
-    let _ = run_count;
-    let pending_auto: Vec<ExperimentId> = {
-        let already = states
+        // Auto-default to log-Y when the plot mixes units (a strong proxy
+        // for wide magnitude spread — e.g. E_night_kWh ~1e6 next to Isp=360,
+        // which on a linear axis flattens everything but the largest). Only
+        // when it's SAFE — every visible value strictly positive, so log-Y
+        // drops nothing — and only until the user toggles it themselves.
+        let mixed_units = shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1;
+        let all_positive =
+            !series.is_empty() && series.iter().all(|s| s.points.iter().all(|p| p[1] > 0.0));
+        let (stored_log_y, log_y_user_set) = states
             .by_viz
             .get(&viz_id)
-            .map(|st| st.auto_shown.clone())
-            .unwrap_or_default();
-        ctx
-            .resource::<ExperimentRegistry>()
-            .map(|reg| {
-                reg.list_for_twin(&twin)
-                    .iter()
-                    .filter(|e| e.result.is_some() && !already.contains(&e.id))
-                    .map(|e| e.id)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-
-    // Drain any one-shot Fit request for this plot. The Graphs
-    // panel's shared header queues it via `VizFitRequests`; the
-    // LinePlot body drains the same resource, so Fit behaves
-    // identically in both plot modes. Read-only peek during paint,
-    // then clear via a deferred mutation.
-    let fit_requested = ctx
-        .resource::<lunco_viz::VizFitRequests>()
-        .map(|r| r.is_pending(viz_id))
-        .unwrap_or(false);
-    if fit_requested {
-        ctx.defer(move |world| {
-            if let Some(mut r) = world.get_resource_mut::<lunco_viz::VizFitRequests>() {
-                r.take(viz_id);
-            }
-        });
-    }
-
-    // Auto-default to log-Y when the plot mixes units (a strong proxy
-    // for wide magnitude spread — e.g. E_night_kWh ~1e6 next to Isp=360,
-    // which on a linear axis flattens everything but the largest). Only
-    // when it's SAFE — every visible value strictly positive, so log-Y
-    // drops nothing — and only until the user toggles it themselves.
-    let mixed_units =
-        shared_unit.is_none() && !series.is_empty() && picked_vars.len() > 1;
-    let all_positive = !series.is_empty()
-        && series.iter().all(|s| s.points.iter().all(|p| p[1] > 0.0));
-    let (stored_log_y, log_y_user_set) = states
-        .by_viz
-        .get(&viz_id)
-        .map(|st| (st.log_y, st.log_y_user_set))
-        .unwrap_or((false, false));
-    let auto_log = mixed_units && all_positive && !log_y_user_set;
-    // Persist the auto choice so the toggle below reflects it and the
-    // setting survives across frames / tab switches.
-    if auto_log && !stored_log_y {
-        states.entry(viz_id).log_y = true;
-    }
-    let log_y = stored_log_y || auto_log;
-    // The log-Y toggle UI now lives in the shared Graphs header
-    // (`render_plot_header`), grouped top-right with Fit / + / CSV.
-    // This body only computes `log_y` and persists the auto-default.
-
-    // Plot frame always renders. x-axis label dropped: time is
-    // implicit in this panel and the label was burning a row of
-    // pixels for one symbol.
-    {
-        let mut plot = Plot::new("graphs_experiments_plot")
-            .legend(Legend::default())
-            // Don't let the dragger eat clicks — we want clicks to set
-            // the scrub cursor instead of pan/zoom. Box-zoom stays on
-            // the modifier defaults; double-click still resets bounds.
-            .allow_drag(false)
-            // Hover any curve → run·var name + time + de-logged value.
-            // egui_plot 0.36 unified the (name, point) args into `HoverPosition`.
-            .label_formatter(move |pos| {
-                let (name, point) = match pos {
-                    egui_plot::HoverPosition::NearDataPoint { plot_name, position, .. } => {
-                        (*plot_name, position)
-                    }
-                    egui_plot::HoverPosition::Elsewhere { position } => ("", position),
-                };
-                Some(lunco_viz::plot_fmt::hover_label(name, point, log_y))
-            });
-        if fit_requested {
-            plot = plot.reset();
+            .map(|st| (st.log_y, st.log_y_user_set))
+            .unwrap_or((false, false));
+        let auto_log = mixed_units && all_positive && !log_y_user_set;
+        // Persist the auto choice so the toggle below reflects it and the
+        // setting survives across frames / tab switches.
+        if auto_log && !stored_log_y {
+            states.entry(viz_id).log_y = true;
         }
-        if log_y {
-            plot = plot.y_axis_formatter(|mark, _range| {
-                lunco_viz::plot_fmt::log_y_tick(mark.value)
-            });
-        }
-        // Only label the axis with the unit (when shared). The "(log₁₀)"
-        // marker is dropped — it rendered as a wide vertical strip on the
-        // left and the `log Y` toggle button already signals the scale.
-        if let Some(u) = shared_unit.as_ref().filter(|u| !u.is_empty()) {
-            plot = plot.y_axis_label(format!("[{u}]"));
-        }
-        let captured_x: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
-        plot.show(ui, |plot_ui| {
-            for s in &series {
-                let (r, g, b) = s.color;
-                let style = match s.style_idx {
-                    0 => LineStyle::Solid,
-                    1 => LineStyle::dashed_dense(),
-                    2 => LineStyle::dotted_dense(),
-                    _ => LineStyle::dashed_loose(),
-                };
-                let pts = if log_y {
-                    lunco_viz::plot_fmt::log_y_points(&s.points)
-                } else {
-                    // egui_plot wants an owned `Vec`; copy the shared
-                    // samples out once (the per-frame re-zip is gone).
-                    s.points.to_vec()
-                };
-                let line = Line::new(s.label.clone(), PlotPoints::from(pts))
-                    .color(egui::Color32::from_rgb(r, g, b))
-                    .style(style);
-                plot_ui.line(line);
-            }
-            // Live `SignalRegistry` curves overlaid on top of the
-            // run curves so users get a single merged plot instead
-            // of separate "experiment" and "live" widgets.
-            // Visibility is controlled by the "Interactive Live" row
-            // in the experiments table.
-            if visible.contains(&ExperimentId::live()) {
-                for ex in extras {
-                    let (r, g, b) = ex.color;
-                    let pts = if log_y {
-                        lunco_viz::plot_fmt::log_y_points(&ex.points)
-                    } else {
-                        ex.points.clone()
+        let log_y = stored_log_y || auto_log;
+        // The log-Y toggle UI now lives in the shared Graphs header
+        // (`render_plot_header`), grouped top-right with Fit / + / CSV.
+        // This body only computes `log_y` and persists the auto-default.
+
+        // Plot frame always renders. x-axis label dropped: time is
+        // implicit in this panel and the label was burning a row of
+        // pixels for one symbol.
+        {
+            let mut plot = Plot::new("graphs_experiments_plot")
+                .legend(Legend::default())
+                // Don't let the dragger eat clicks — we want clicks to set
+                // the scrub cursor instead of pan/zoom. Box-zoom stays on
+                // the modifier defaults; double-click still resets bounds.
+                .allow_drag(false)
+                // Hover any curve → run·var name + time + de-logged value.
+                // egui_plot 0.36 unified the (name, point) args into `HoverPosition`.
+                .label_formatter(move |pos| {
+                    let (name, point) = match pos {
+                        egui_plot::HoverPosition::NearDataPoint {
+                            plot_name,
+                            position,
+                            ..
+                        } => (*plot_name, position),
+                        egui_plot::HoverPosition::Elsewhere { position } => ("", position),
                     };
-                    let line = Line::new(ex.label.clone(), PlotPoints::from(pts))
-                        .color(egui::Color32::from_rgb(r, g, b));
+                    Some(lunco_viz::plot_fmt::hover_label(name, point, log_y))
+                });
+            if fit_requested {
+                plot = plot.reset();
+            }
+            if log_y {
+                plot = plot
+                    .y_axis_formatter(|mark, _range| lunco_viz::plot_fmt::log_y_tick(mark.value));
+            }
+            // Only label the axis with the unit (when shared). The "(log₁₀)"
+            // marker is dropped — it rendered as a wide vertical strip on the
+            // left and the `log Y` toggle button already signals the scale.
+            if let Some(u) = shared_unit.as_ref().filter(|u| !u.is_empty()) {
+                plot = plot.y_axis_label(format!("[{u}]"));
+            }
+            let captured_x: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
+            plot.show(ui, |plot_ui| {
+                for s in &series {
+                    let (r, g, b) = s.color;
+                    let style = match s.style_idx {
+                        0 => LineStyle::Solid,
+                        1 => LineStyle::dashed_dense(),
+                        2 => LineStyle::dotted_dense(),
+                        _ => LineStyle::dashed_loose(),
+                    };
+                    let pts = if log_y {
+                        lunco_viz::plot_fmt::log_y_points(&s.points)
+                    } else {
+                        // egui_plot wants an owned `Vec`; copy the shared
+                        // samples out once (the per-frame re-zip is gone).
+                        s.points.to_vec()
+                    };
+                    let line = Line::new(s.label.clone(), PlotPoints::from(pts))
+                        .color(egui::Color32::from_rgb(r, g, b))
+                        .style(style);
                     plot_ui.line(line);
                 }
-            }
-            if let Some(t) = scrub_time {
-                plot_ui.vline(
-                    VLine::new("scrub", t)
-                        .color(col_accent)
-                        .width(1.5),
-                );
-            }
-            // Click anywhere on the chart sets the scrub time. Drag
-            // is disabled (allow_drag=false above) so clicks aren't
-            // ambiguous with pan.
-            if plot_ui.response().clicked() {
-                if let Some(p) = plot_ui.pointer_coordinate() {
-                    captured_x.set(Some(p.x));
+                // Live `SignalRegistry` curves overlaid on top of the
+                // run curves so users get a single merged plot instead
+                // of separate "experiment" and "live" widgets.
+                // Visibility is controlled by the "Interactive Live" row
+                // in the experiments table.
+                if visible.contains(&ExperimentId::live()) {
+                    for ex in extras {
+                        let (r, g, b) = ex.color;
+                        let pts = if log_y {
+                            lunco_viz::plot_fmt::log_y_points(&ex.points)
+                        } else {
+                            ex.points.clone()
+                        };
+                        let line = Line::new(ex.label.clone(), PlotPoints::from(pts))
+                            .color(egui::Color32::from_rgb(r, g, b));
+                        plot_ui.line(line);
+                    }
                 }
+                if let Some(t) = scrub_time {
+                    plot_ui.vline(VLine::new("scrub", t).color(col_accent).width(1.5));
+                }
+                // Click anywhere on the chart sets the scrub time. Drag
+                // is disabled (allow_drag=false above) so clicks aren't
+                // ambiguous with pan.
+                if plot_ui.response().clicked() {
+                    if let Some(p) = plot_ui.pointer_coordinate() {
+                        captured_x.set(Some(p.x));
+                    }
+                }
+            });
+            if let Some(x) = captured_x.get() {
+                new_scrub = Some(Some(x));
             }
-        });
-        if let Some(x) = captured_x.get() {
-            new_scrub = Some(Some(x));
         }
-    }
 
-    if let Some(s) = new_scrub {
-        states.set_scrub(viz_id, s);
-    }
-    if !pending_auto.is_empty() {
-        // Auto-pick top-3 dynamic vars (by series variance) from the
-        // most recently completed run, but only if the user hasn't
-        // picked anything yet — mirrors the first-completion behavior.
-        let latest_result = ctx
-            .resource::<ExperimentRegistry>()
-            .and_then(|reg| {
+        if let Some(s) = new_scrub {
+            states.set_scrub(viz_id, s);
+        }
+        if !pending_auto.is_empty() {
+            // Auto-pick top-3 dynamic vars (by series variance) from the
+            // most recently completed run, but only if the user hasn't
+            // picked anything yet — mirrors the first-completion behavior.
+            let latest_result = ctx.resource::<ExperimentRegistry>().and_then(|reg| {
                 reg.list_for_twin(&twin)
                     .into_iter()
                     .rev()
                     .find(|e| e.result.is_some())
                     .and_then(|e| e.result.clone())
             });
-        let entry = states.entry(viz_id);
-        for id in &pending_auto {
-            entry.visible_experiments.insert(*id);
-            entry.auto_shown.insert(*id);
-        }
-        if !entry.auto_show_attempted && entry.picked_vars.is_empty() {
-            if let Some(result) = &latest_result {
-                let mut by_var: Vec<(&String, f64)> = result
-                    .series
-                    .iter()
-                    .map(|(k, v)| {
-                        let n = v.len().max(1) as f64;
-                        let mean = v.iter().copied().sum::<f64>() / n;
-                        let var = v
-                            .iter()
-                            .map(|x| (x - mean) * (x - mean))
-                            .sum::<f64>()
-                            / n;
-                        (k, var)
-                    })
-                    .filter(|(_, v)| v.is_finite() && *v > 1e-12)
-                    .collect();
-                by_var.sort_by(|a, b| {
-                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                });
-                for (k, _) in by_var.into_iter().take(3) {
-                    entry.picked_vars.insert(k.clone());
+            let entry = states.entry(viz_id);
+            for id in &pending_auto {
+                entry.visible_experiments.insert(*id);
+                entry.auto_shown.insert(*id);
+            }
+            if !entry.auto_show_attempted && entry.picked_vars.is_empty() {
+                if let Some(result) = &latest_result {
+                    let mut by_var: Vec<(&String, f64)> = result
+                        .series
+                        .iter()
+                        .map(|(k, v)| {
+                            let n = v.len().max(1) as f64;
+                            let mean = v.iter().copied().sum::<f64>() / n;
+                            let var = v.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / n;
+                            (k, var)
+                        })
+                        .filter(|(_, v)| v.is_finite() && *v > 1e-12)
+                        .collect();
+                    by_var
+                        .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    for (k, _) in by_var.into_iter().take(3) {
+                        entry.picked_vars.insert(k.clone());
+                    }
                 }
             }
+            entry.auto_show_attempted = true;
         }
-        entry.auto_show_attempted = true;
-    }
-    ExpPlotSummary {
-        total_runs,
-        visible_runs,
-        series_drawn: series.len(),
-        picked_vars: picked_vars.len(),
-    }
+        ExpPlotSummary {
+            total_runs,
+            visible_runs,
+            series_drawn: series.len(),
+            picked_vars: picked_vars.len(),
+        }
     })
     .unwrap_or_default()
 }
@@ -2534,9 +2543,7 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
             if let Some(mut console) =
                 world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
             {
-                console.error(
-                    "CSV export: experiment has no result yet (still running or failed)",
-                );
+                console.error("CSV export: experiment has no result yet (still running or failed)");
             }
             return;
         };
@@ -2569,7 +2576,12 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
         // is unambiguous across timezones and easy to glob; the run
         // name is included for readability when filing multiple
         // exports of the same model.
-        let model_short = exp.model_ref.0.rsplit('.').next().unwrap_or(&exp.model_ref.0);
+        let model_short = exp
+            .model_ref
+            .0
+            .rsplit('.')
+            .next()
+            .unwrap_or(&exp.model_ref.0);
         let ts = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -2577,7 +2589,13 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
         let raw = format!("{model_short}_{}_{ts}", exp.name);
         let safe_name: String = raw
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         (safe_name, text)
     };
@@ -2606,12 +2624,14 @@ fn load_run_into_draft(world: &mut World, id: ExperimentId) {
             Some(r) => r,
             None => return,
         };
-        registry.get(id).map(|e| (
+        registry.get(id).map(|e| {
+            (
                 e.model_ref.clone(),
                 e.bounds.clone(),
                 e.inputs.clone(),
                 e.overrides.clone(),
-            ))
+            )
+        })
     };
     let Some((model_ref, bounds, inputs, overrides)) = snapshot else {
         return;
@@ -2624,8 +2644,8 @@ fn load_run_into_draft(world: &mut World, id: ExperimentId) {
         .and_then(|src| src.0.get(&id).copied())
         .or_else(|| crate::ui::doc_pin::resolved_experiments_doc(world));
     let Some(doc) = doc else { return };
-    if let Some(mut drafts) = world
-        .get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
+    if let Some(mut drafts) =
+        world.get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
     {
         let entry = drafts.entry(doc, model_ref);
         entry.bounds_override = Some(bounds);
@@ -2648,16 +2668,14 @@ fn active_doc_units(
     ctx: &lunco_workbench::PanelCtx,
     picked: &std::collections::BTreeSet<String>,
 ) -> std::collections::HashMap<String, String> {
-    let mut out: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let Some(doc) = ctx
         .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
     else {
         return out;
     };
-    let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>()
-    else {
+    let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() else {
         return out;
     };
     let Some(host) = registry.host(doc) else {
@@ -2710,8 +2728,7 @@ pub fn has_experiment_runs(ctx: &mut PanelCtx) -> bool {
         return true;
     }
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
-    ctx
-        .resource::<ExperimentRegistry>()
+    ctx.resource::<ExperimentRegistry>()
         .map(|reg| !reg.list_for_twin(&twin).is_empty())
         .unwrap_or(false)
 }
@@ -2804,7 +2821,13 @@ fn format_overrides_summary(
             let val = match v {
                 ParamValue::Real(x) => format!("{x}"),
                 ParamValue::Int(x) => format!("{x}"),
-                ParamValue::Bool(b) => if *b { "true".into() } else { "false".into() },
+                ParamValue::Bool(b) => {
+                    if *b {
+                        "true".into()
+                    } else {
+                        "false".into()
+                    }
+                }
                 ParamValue::String(s) => format!("\"{s}\""),
                 ParamValue::Enum(s) => s.clone(),
                 ParamValue::RealArray(_) => "[…]".into(),
@@ -2832,14 +2855,14 @@ pub fn palette_color(idx: u8) -> (u8, u8, u8) {
     // 8-color qualitative palette; cycles via modulo so the registry
     // cap (20) doesn't matter for color reuse.
     const PALETTE: &[(u8, u8, u8)] = &[
-        (66, 133, 244),  // blue
-        (219, 68, 55),   // red
-        (244, 180, 0),   // amber
-        (15, 157, 88),   // green
-        (171, 71, 188),  // purple
-        (255, 112, 67),  // orange
-        (38, 166, 154),  // teal
-        (236, 64, 122),  // pink
+        (66, 133, 244), // blue
+        (219, 68, 55),  // red
+        (244, 180, 0),  // amber
+        (15, 157, 88),  // green
+        (171, 71, 188), // purple
+        (255, 112, 67), // orange
+        (38, 166, 154), // teal
+        (236, 64, 122), // pink
     ];
     PALETTE[idx as usize % PALETTE.len()]
 }

@@ -1,9 +1,9 @@
-use bevy::prelude::*;
-use lunco_usd_bevy::*;
-use lunco_usd_avian::*;
-use lunco_usd_sim::*;
 use avian3d::prelude::*;
-use lunco_mobility::{WheelRaycast, Suspension};
+use bevy::prelude::*;
+use lunco_mobility::{Suspension, WheelRaycast};
+use lunco_usd_avian::*;
+use lunco_usd_bevy::*;
+use lunco_usd_sim::*;
 
 fn main() {
     let mut app = App::new();
@@ -17,10 +17,7 @@ fn main() {
     // `UsdBevyPlugin` this harness must provide the resource itself.
     app.init_non_send::<CanonicalStages>();
 
-    app.add_plugins((
-        UsdAvianPlugin,
-        UsdSimPlugin,
-    ));
+    app.add_plugins((UsdAvianPlugin, UsdSimPlugin));
 
     println!("\n--- Loading Rucheyok Rover Physics ---");
 
@@ -32,8 +29,8 @@ fn main() {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
         stages.add(UsdStageAsset { recipe: None })
     };
-    let stage = compose_file_to_stage(std::path::Path::new(path))
-        .expect("Failed to compose rucheyok.usda");
+    let stage =
+        compose_file_to_stage(std::path::Path::new(path)).expect("Failed to compose rucheyok.usda");
     let cstage = CanonicalStage::from_stage(stage, path.to_string());
     app.world_mut()
         .get_non_send_mut::<CanonicalStages>()
@@ -51,13 +48,16 @@ fn main() {
 
     let mut spawned = Vec::new();
     for (name, prim_path) in entities {
-        let id = app.world_mut().spawn((
-            Name::new(name.to_string()),
-            UsdPrimPath {
-                stage_handle: stage_handle.clone(),
-                path: prim_path.to_string(),
-            },
-        )).id();
+        let id = app
+            .world_mut()
+            .spawn((
+                Name::new(name.to_string()),
+                UsdPrimPath {
+                    stage_handle: stage_handle.clone(),
+                    path: prim_path.to_string(),
+                },
+            ))
+            .id();
         spawned.push(id);
     }
 
@@ -74,22 +74,25 @@ fn main() {
         let mass = app.world().get::<Mass>(entity);
 
         let mut report = format!("Entity: {:<15}", name);
-        
-        if let Some(_) = rb { 
+
+        if let Some(_) = rb {
             let m = mass.map(|m| m.0).unwrap_or(0.0);
-            report.push_str(&format!(" | [Avian] RigidBody (Mass: {}kg)", m)); 
+            report.push_str(&format!(" | [Avian] RigidBody (Mass: {}kg)", m));
         }
 
         if let Some(w) = wheel {
-            report.push_str(&format!(" | [Sim] WheelRaycast (Radius: {}m)", w.wheel_radius));
+            report.push_str(&format!(
+                " | [Sim] WheelRaycast (Radius: {}m)",
+                w.wheel_radius
+            ));
         }
 
         if let Some(s) = susp {
             report.push_str(&format!(" | [Sim] Suspension (Spring K: {})", s.spring_k));
         }
-        
+
         println!("{}", report);
     }
-    
+
     println!("\n--- Inspection Complete ---");
 }

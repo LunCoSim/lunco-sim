@@ -185,7 +185,10 @@ fn generation_cell() -> &'static AtomicU64 {
 /// refresh). Returns the id, for convenience.
 pub fn register(hook: RegisteredHook) -> String {
     let id = hook.id.clone();
-    registry().write().unwrap().insert(id.clone(), Arc::new(hook));
+    registry()
+        .write()
+        .unwrap()
+        .insert(id.clone(), Arc::new(hook));
     generation_cell().fetch_add(1, Ordering::Relaxed);
     id
 }

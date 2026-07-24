@@ -175,7 +175,9 @@ pub fn register_native_tool(
     functions: Vec<String>,
     build: impl Fn(&Engine) -> Result<Module, String> + Send + Sync + 'static,
 ) {
-    lunco_tools::register(Arc::new(NativeRhaiTool::new(name, "rust", functions, build)));
+    lunco_tools::register(Arc::new(NativeRhaiTool::new(
+        name, "rust", functions, build,
+    )));
 }
 
 #[cfg(test)]

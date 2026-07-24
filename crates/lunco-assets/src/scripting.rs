@@ -153,9 +153,10 @@ mod tests {
         }
         // Prelude: both the embedded fallback and the (possibly disk-loaded)
         // active set must be non-empty and stem-sorted.
-        for (label, files) in
-            [("prelude-embedded", embedded_prelude_files()), ("prelude-active", prelude_files())]
-        {
+        for (label, files) in [
+            ("prelude-embedded", embedded_prelude_files()),
+            ("prelude-active", prelude_files()),
+        ] {
             assert!(!files.is_empty(), "{label} empty");
             let mut sorted = files.clone();
             sorted.sort_by(|a, b| a.0.cmp(&b.0));

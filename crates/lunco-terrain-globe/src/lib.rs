@@ -37,13 +37,13 @@
 
 use bevy::prelude::*;
 
-pub mod tile;
 pub mod quad_sphere;
 pub mod registry;
+pub mod tile;
 
-pub use tile::*;
 pub use quad_sphere::*;
 pub use registry::*;
+pub use tile::*;
 
 /// Terrain tile configuration resource.
 #[derive(Resource, Reflect)]

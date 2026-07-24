@@ -49,7 +49,9 @@ fn wrap_modelica_into_simcomponent(
     q_new: Query<(Entity, &ModelicaModel), Without<SimComponent>>,
 ) {
     for (entity, model) in q_new.iter() {
-        if model.variables.is_empty() { continue; }
+        if model.variables.is_empty() {
+            continue;
+        }
         commands.entity(entity).try_insert(SimComponent {
             model_name: model.model_name.clone(),
             parameters: model.parameters.clone(),
@@ -114,7 +116,9 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
         bevy::mesh::MeshPlugin,
         PhysicsPlugins::default(),
     ))
-    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+        1.0 / 60.0,
+    )))
     .insert_resource(Gravity::ZERO)
     .insert_resource(Time::<Fixed>::from_hz(60.0));
 
@@ -139,24 +143,31 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     // B: Python amplifier
     let amplifier = app.world_mut().spawn(Name::new("Amplifier")).id();
     // C: Avian sphere (target)
-    let target = app.world_mut().spawn((
-        Name::new("CosimTarget"),
-        Transform::from_xyz(0.0, 5.0, 0.0),
-        RigidBody::Dynamic,
-        Collider::sphere(0.5),
-        Mass(1.0),
-    )).id();
+    let target = app
+        .world_mut()
+        .spawn((
+            Name::new("CosimTarget"),
+            Transform::from_xyz(0.0, 5.0, 0.0),
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            Mass(1.0),
+        ))
+        .id();
 
     // ── Cross-entity wires ──────────────────────────────────────────
     app.world_mut().spawn(SimConnection {
-        start_element: oscillator, start_connector: "signal".into(),
-        end_element:   amplifier,  end_connector:   "signal".into(),
+        start_element: oscillator,
+        start_connector: "signal".into(),
+        end_element: amplifier,
+        end_connector: "signal".into(),
         scale: 1.0,
         offset: 0.0,
     });
     app.world_mut().spawn(SimConnection {
-        start_element: amplifier, start_connector: "scaled".into(),
-        end_element:   target,    end_connector:   "force_y".into(),
+        start_element: amplifier,
+        start_connector: "scaled".into(),
+        end_element: target,
+        end_connector: "force_y".into(),
         scale: 1.0,
         offset: 0.0,
     });
@@ -166,13 +177,17 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     {
         let model_name = extract_model_name(oscillator_mo()).unwrap_or_else(|| "Oscillator".into());
         let parameters = extract_parameters(oscillator_mo());
-        let inputs = extract_inputs_with_defaults(oscillator_mo()).into_iter().collect();
-        app.world_mut().entity_mut(oscillator).insert(ModelicaModel {
-            model_name: model_name.clone(),
-            parameters,
-            inputs,
-            ..default()
-        });
+        let inputs = extract_inputs_with_defaults(oscillator_mo())
+            .into_iter()
+            .collect();
+        app.world_mut()
+            .entity_mut(oscillator)
+            .insert(ModelicaModel {
+                model_name: model_name.clone(),
+                parameters,
+                inputs,
+                ..default()
+            });
         let tx = app.world().resource::<ModelicaChannels>().tx.clone();
         let _ = tx.send(ModelicaCommand::Compile {
             entity: oscillator,
@@ -222,10 +237,16 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     let mut compiled = false;
     for _ in 0..600 {
         app.update();
-        if app.world().get::<SimComponent>(oscillator).is_some() { compiled = true; break; }
+        if app.world().get::<SimComponent>(oscillator).is_some() {
+            compiled = true;
+            break;
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(compiled, "Oscillator never compiled — Modelica path broken?");
+    assert!(
+        compiled,
+        "Oscillator never compiled — Modelica path broken?"
+    );
 
     // ── Step the chain and observe ──────────────────────────────────
     let mut max_signal = 0.0_f64;
@@ -238,22 +259,37 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
 
         if let Some(comp) = app.world().get::<SimComponent>(oscillator) {
             if let Some(&s) = comp.outputs.get("signal") {
-                if s.abs() > max_signal.abs() { max_signal = s; }
+                if s.abs() > max_signal.abs() {
+                    max_signal = s;
+                }
             }
         }
         if let Some(comp) = app.world().get::<SimComponent>(amplifier) {
             if let Some(&s) = comp.outputs.get("scaled") {
-                if s.abs() > max_scaled.abs() { max_scaled = s; }
+                if s.abs() > max_scaled.abs() {
+                    max_scaled = s;
+                }
             }
         }
         if let Some(v) = app.world().get::<LinearVelocity>(target) {
-            if v.0.y.abs() > max_velocity_y.abs() { max_velocity_y = v.0.y; }
+            if v.0.y.abs() > max_velocity_y.abs() {
+                max_velocity_y = v.0.y;
+            }
         }
     }
 
-    eprintln!("test: max |signal|     = {:.4} (Modelica oscillator output)", max_signal.abs());
-    eprintln!("test: max |scaled|     = {:.4} (Python amplifier output, expected ≈ signal*50)", max_scaled.abs());
-    eprintln!("test: max |velocity_y| = {:.4} (Avian integrated force_y from amplified scale)", max_velocity_y.abs());
+    eprintln!(
+        "test: max |signal|     = {:.4} (Modelica oscillator output)",
+        max_signal.abs()
+    );
+    eprintln!(
+        "test: max |scaled|     = {:.4} (Python amplifier output, expected ≈ signal*50)",
+        max_scaled.abs()
+    );
+    eprintln!(
+        "test: max |velocity_y| = {:.4} (Avian integrated force_y from amplified scale)",
+        max_velocity_y.abs()
+    );
 
     assert!(
         max_signal.abs() > 0.5,

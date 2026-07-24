@@ -53,8 +53,8 @@ use bevy_egui::{egui, EguiContexts};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
-use lunco_mobility::WheelRaycast;
 use lunco_core::{Avatar, GlobalEntityId};
+use lunco_mobility::WheelRaycast;
 
 /// Fallback amber threshold, for a vessel whose limits cannot be derived.
 ///
@@ -174,7 +174,9 @@ fn resolve_link(
             return true;
         }
         for _ in 0..MAX_DEPTH {
-            let Ok(parent) = q_parents.get(e) else { return false };
+            let Ok(parent) = q_parents.get(e) else {
+                return false;
+            };
             e = parent.parent();
             if e == vessel {
                 return true;
@@ -201,7 +203,12 @@ fn resolve_link(
         .iter()
         .filter(|p| p.connected)
         .min_by(|a, b| a.range_m.total_cmp(&b.range_m))
-        .or_else(|| state.peers.iter().min_by(|a, b| a.range_m.total_cmp(&b.range_m)))?;
+        .or_else(|| {
+            state
+                .peers
+                .iter()
+                .min_by(|a, b| a.range_m.total_cmp(&b.range_m))
+        })?;
 
     // `LinkPeer` names its peer by GID (identity survives despawn/reload; an Entity
     // would not), so resolve GID → entity → `Name` for a label the driver can read.
@@ -221,7 +228,10 @@ fn resolve_link(
     // code intended `Base`. Truncate to the leaf FIRST, then decide.
     let leaf = |n: &str| n.rsplit('/').next().unwrap_or(n).to_string();
 
-    let peer_ent = q_ids.iter().find(|(_, g)| g.get() == pick.peer).map(|(e, _)| e);
+    let peer_ent = q_ids
+        .iter()
+        .find(|(_, g)| g.get() == pick.peer)
+        .map(|(e, _)| e);
     let peer_label = match peer_ent {
         Some(e) => {
             let own = q_name.get(e).ok().map(|n| leaf(n.as_str()));
@@ -322,7 +332,9 @@ fn resolve_driven(
                 owned = true;
                 break;
             }
-            let Ok((_, link_t)) = q_spatial.get(e) else { break };
+            let Ok((_, link_t)) = q_spatial.get(e) else {
+                break;
+            };
             p = link_t.transform_point(p);
         }
         if !owned {
@@ -345,11 +357,7 @@ fn resolve_driven(
         let (c, d) = tilt_bands(min_mu, half_track, com_above_contact);
         (c, d, true)
     } else {
-        (
-            FALLBACK_CAUTION_TILT_DEG,
-            FALLBACK_DANGER_TILT_DEG,
-            false,
-        )
+        (FALLBACK_CAUTION_TILT_DEG, FALLBACK_DANGER_TILT_DEG, false)
     };
 
     Some(DrivenVessel {
@@ -539,15 +547,30 @@ fn attitude_gauge(ui: &mut egui::Ui, v: &DrivenVessel, pal: &Palette) {
     // Bands, mirrored left and right of vertical.
     for sign in [-1.0_f32, 1.0] {
         arc(&painter, 0.0, sign * caution, pal.band_ok, 5.0);
-        arc(&painter, sign * caution, sign * danger, pal.band_caution, 5.0);
-        arc(&painter, sign * danger, sign * MAX_DEG, pal.band_danger, 5.0);
+        arc(
+            &painter,
+            sign * caution,
+            sign * danger,
+            pal.band_caution,
+            5.0,
+        );
+        arc(
+            &painter,
+            sign * danger,
+            sign * MAX_DEG,
+            pal.band_danger,
+            5.0,
+        );
     }
 
     // Needle: lean direction follows roll, magnitude is total tilt (so a purely
     // pitched-up rover still reads its tilt, it just does not lean).
     let lean = v.roll_deg.signum() * v.tilt_deg.min(MAX_DEG);
     let a = to_screen(lean);
-    let tip = egui::pos2(centre.x + (radius - 8.0) * a.cos(), centre.y + (radius - 8.0) * a.sin());
+    let tip = egui::pos2(
+        centre.x + (radius - 8.0) * a.cos(),
+        centre.y + (radius - 8.0) * a.sin(),
+    );
     // Colour against the UNCLAMPED limits — the reading must go amber at the real
     // slip angle even when that sits past the end of the dial.
     let col = pal.tilt(v.tilt_deg, v.caution_deg, v.danger_deg);
@@ -660,7 +683,12 @@ fn readout(ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32) 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).weak().size(10.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(value).color(color).monospace().size(12.0));
+            ui.label(
+                egui::RichText::new(value)
+                    .color(color)
+                    .monospace()
+                    .size(12.0),
+            );
         });
     });
 }
@@ -696,8 +724,18 @@ pub(crate) fn draw_rover_hud(
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
     let Some(v) = resolve_driven(
-        &q_avatar, &q_name, &q_callsign, &q_gid, &q_vel, &q_parents, &q_grids, &q_spatial,
-        &q_links, &q_ids, &q_wheels, &q_com,
+        &q_avatar,
+        &q_name,
+        &q_callsign,
+        &q_gid,
+        &q_vel,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+        &q_links,
+        &q_ids,
+        &q_wheels,
+        &q_com,
     ) else {
         return;
     };
@@ -725,10 +763,14 @@ pub(crate) fn draw_rover_hud(
                     // two small angles doubled the panel's height for numbers
                     // nobody reads digit-by-digit — the gauge above already
                     // shows attitude; these are the fine print under it.
-                    inline_pairs(ui, &[
-                        ("R", format!("{:+.0}°", v.roll_deg)),
-                        ("P", format!("{:+.0}°", v.pitch_deg)),
-                    ], &pal);
+                    inline_pairs(
+                        ui,
+                        &[
+                            ("R", format!("{:+.0}°", v.roll_deg)),
+                            ("P", format!("{:+.0}°", v.pitch_deg)),
+                        ],
+                        &pal,
+                    );
                 });
         });
 
@@ -750,11 +792,15 @@ pub(crate) fn draw_rover_hud(
                     ui.separator();
                     // Position and heading on ONE line — three stacked rows of
                     // one number each was most of this panel's height.
-                    inline_pairs(ui, &[
-                        ("E", format!("{:+.0}", v.pos.x)),
-                        ("N", format!("{:+.0}", -v.pos.z)),
-                        ("HDG", format!("{:.0}°", v.heading_deg)),
-                    ], &pal);
+                    inline_pairs(
+                        ui,
+                        &[
+                            ("E", format!("{:+.0}", v.pos.x)),
+                            ("N", format!("{:+.0}", -v.pos.z)),
+                            ("HDG", format!("{:.0}°", v.heading_deg)),
+                        ],
+                        &pal,
+                    );
 
                     // COMMS — only for a vessel that actually carries a link node.
                     // A rover with no radio shows nothing rather than a permanent
@@ -811,10 +857,14 @@ pub(crate) fn draw_rover_hud(
                             //
                             // What a driver needs from a link is whether it closes,
                             // to whom, how far and how high — which is what is left.
-                            inline_pairs(ui, &[
-                                ("range", range),
-                                ("elev", format!("{:+.0}°", link.elevation_deg)),
-                            ], &pal);
+                            inline_pairs(
+                                ui,
+                                &[
+                                    ("range", range),
+                                    ("elev", format!("{:+.0}°", link.elevation_deg)),
+                                ],
+                                &pal,
+                            );
                             if !link.connected {
                                 ui.label(
                                     egui::RichText::new("no line of sight — autonomy only")

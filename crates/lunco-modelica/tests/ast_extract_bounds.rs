@@ -16,21 +16,14 @@ fn src() -> &'static str {
 
 #[test]
 fn bounds_extraction_finds_valve_opening_min_max() {
-    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo")
-        .expect("parses");
+    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parses");
     let mut index = lunco_modelica::index::ModelicaIndex::new();
     index.rebuild_from_ast(&ast, src());
     let entry = index
         .find_component_by_leaf("opening")
         .expect("opening not in index");
-    let mn: Option<f64> = entry
-        .modifications
-        .get("min")
-        .and_then(|s| s.parse().ok());
-    let mx: Option<f64> = entry
-        .modifications
-        .get("max")
-        .and_then(|s| s.parse().ok());
+    let mn: Option<f64> = entry.modifications.get("min").and_then(|s| s.parse().ok());
+    let mx: Option<f64> = entry.modifications.get("max").and_then(|s| s.parse().ok());
     assert_eq!(mn, Some(0.0), "expected opening.min=0, got {mn:?}");
     assert_eq!(mx, Some(100.0), "expected opening.max=100, got {mx:?}");
 }

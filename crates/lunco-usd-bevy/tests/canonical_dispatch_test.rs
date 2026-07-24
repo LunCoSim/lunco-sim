@@ -130,7 +130,9 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     let recipe = StageRecipe::from_source("inmemory://scene.usda", SCENE);
     let handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { recipe: Some(recipe) })
+        stages.add(UsdStageAsset {
+            recipe: Some(recipe),
+        })
     };
     let stage_id = handle.id();
 
@@ -140,7 +142,10 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     // canonical stage.
     app.world_mut().spawn((
         Name::new("World"),
-        UsdPrimPath { stage_handle: handle.clone(), path: "/World".to_string() },
+        UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World".to_string(),
+        },
     ));
     // A couple of updates drain any deferred spawns / asset events.
     app.update();
@@ -172,12 +177,30 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
         .get::<PbrLook>(box_e)
         .expect("Box has a PbrLook")
         .clone();
-    assert!(app.world().get::<Mesh3d>(box_e).is_some(), "Box has a Mesh3d");
+    assert!(
+        app.world().get::<Mesh3d>(box_e).is_some(),
+        "Box has a Mesh3d"
+    );
     let lin = look.base_color;
-    assert!((lin.red - 0.1).abs() < 1e-4, "diffuse R off live shader: {}", lin.red);
-    assert!((lin.green - 0.2).abs() < 1e-4, "diffuse G off live shader: {}", lin.green);
-    assert!((lin.blue - 0.8).abs() < 1e-4, "diffuse B off live shader: {}", lin.blue);
-    assert!((look.perceptual_roughness - 0.4).abs() < 1e-4, "roughness off live shader");
+    assert!(
+        (lin.red - 0.1).abs() < 1e-4,
+        "diffuse R off live shader: {}",
+        lin.red
+    );
+    assert!(
+        (lin.green - 0.2).abs() < 1e-4,
+        "diffuse G off live shader: {}",
+        lin.green
+    );
+    assert!(
+        (lin.blue - 0.8).abs() < 1e-4,
+        "diffuse B off live shader: {}",
+        lin.blue
+    );
+    assert!(
+        (look.perceptual_roughness - 0.4).abs() < 1e-4,
+        "roughness off live shader"
+    );
 
     // (c) The UsdLux light extracted off the live stage → a Bevy DirectionalLight.
     let sun_e = entity_at(&mut app, "/World/Sun").expect("Sun prim entity");
@@ -200,7 +223,11 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     // `RectLight::intensity` is luminous POWER in lumens (unlike Point/Spot,
     // which are candela) — the authored 8000 is taken as lumens, unscaled
     // because `inputs:exposure` is unauthored (2^0 = 1).
-    assert!((panel.intensity - 8000.0).abs() < 1e-2, "intensity {}", panel.intensity);
+    assert!(
+        (panel.intensity - 8000.0).abs() < 1e-2,
+        "intensity {}",
+        panel.intensity
+    );
 
     // (e) `UsdGeomBasisCurves` + `widths` → swept-tube geometry. A curve prim
     // carrying a width is a TUBE, not a line, so it must produce a mesh.
@@ -270,14 +297,21 @@ fn recipeless_asset_builds_no_canonical_and_is_skipped() {
     };
     app.world_mut().spawn((
         Name::new("World"),
-        UsdPrimPath { stage_handle: handle.clone(), path: "/World".to_string() },
+        UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World".to_string(),
+        },
     ));
     app.update();
     app.update();
 
     // No recipe ⇒ no canonical stage ⇒ the dispatcher skips (no children spawned).
     assert!(
-        app.world().get_non_send::<CanonicalStages>().unwrap().get(handle.id()).is_none(),
+        app.world()
+            .get_non_send::<CanonicalStages>()
+            .unwrap()
+            .get(handle.id())
+            .is_none(),
         "a recipe-less asset builds no canonical stage"
     );
     assert!(

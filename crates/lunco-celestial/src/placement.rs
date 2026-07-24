@@ -78,7 +78,10 @@ pub fn anchor_solar_frame_to_site(
     q_site_changed: Query<(), Or<(Added<SiteAnchor>, Changed<GeodeticAnchor>)>>,
     // `SolarSystemRoot` also tags the Sun body — the grid filter picks the
     // one Solar Grid entity.
-    mut q_solar: Query<(Entity, &mut CellCoord, &mut Transform), (With<SolarSystemRoot>, With<Grid>)>,
+    mut q_solar: Query<
+        (Entity, &mut CellCoord, &mut Transform),
+        (With<SolarSystemRoot>, With<Grid>),
+    >,
     mut q_align: Query<
         (Entity, &mut Transform),
         (
@@ -89,7 +92,13 @@ pub fn anchor_solar_frame_to_site(
     >,
     mut commands: Commands,
     q_frames_stored: Query<
-        (Entity, &CelestialReferenceFrame, &CellCoord, &Transform, &ChildOf),
+        (
+            Entity,
+            &CelestialReferenceFrame,
+            &CellCoord,
+            &Transform,
+            &ChildOf,
+        ),
         (With<Grid>, Without<SolarSystemRoot>),
     >,
     q_parents: Query<&ChildOf>,
@@ -102,7 +111,9 @@ pub fn anchor_solar_frame_to_site(
     if anchor_opt.is_none() {
         return;
     }
-    let Ok((solar_entity, mut cell, mut tf)) = q_solar.single_mut() else { return };
+    let Ok((solar_entity, mut cell, mut tf)) = q_solar.single_mut() else {
+        return;
+    };
 
     let jd = world_time.epoch_jd;
     // Same cadence as the ephemeris projection + site edits; ordering after
@@ -139,7 +150,10 @@ pub fn anchor_solar_frame_to_site(
         (
             align,
             frame.origin,
-            Some((anchor.body, geodetic_to_body_fixed(&anchor.geodetic, desc.radius_m))),
+            Some((
+                anchor.body,
+                geodetic_to_body_fixed(&anchor.geodetic, desc.radius_m),
+            )),
         )
     } else {
         (DQuat::IDENTITY, DVec3::ZERO, None)
@@ -166,13 +180,17 @@ pub fn anchor_solar_frame_to_site(
         let mut p = p0;
         let mut steps = 0;
         loop {
-            let Some((_, _, c, t, child_of)) = current else { break None };
+            let Some((_, _, c, t, child_of)) = current else {
+                break None;
+            };
             steps += 1;
             if steps > 8 {
                 break None;
             }
             let parent = child_of.parent();
-            let Ok(parent_grid) = q_grids.get(parent) else { break None };
+            let Ok(parent_grid) = q_grids.get(parent) else {
+                break None;
+            };
             let edge = parent_grid.cell_edge_length() as f64;
             p = t.rotation.as_dquat() * p
                 + DVec3::new(c.x as f64, c.y as f64, c.z as f64) * edge
@@ -252,7 +270,9 @@ pub fn anchor_solar_frame_to_site(
         // otherwise indistinguishable from the default a celestial-but-unanchored
         // scene leaves behind, and consumers that cannot tell aim the sun into the
         // ecliptic frame (see `SiteAligned`).
-        commands.entity(align_entity).try_insert(crate::big_space_setup::SiteAligned);
+        commands
+            .entity(align_entity)
+            .try_insert(crate::big_space_setup::SiteAligned);
     }
 
     if let Ok(child_of) = q_parents.get(solar_entity) {
@@ -301,7 +321,11 @@ pub fn orbital_pin_scene_visibility(
     // Plain local scene roots (no celestial binding).
     q_local: Query<
         Entity,
-        (With<lunco_core::GridAnchor>, Without<GeodeticAnchor>, Without<KeplerOrbit>),
+        (
+            With<lunco_core::GridAnchor>,
+            Without<GeodeticAnchor>,
+            Without<KeplerOrbit>,
+        ),
     >,
     // The site-anchored scene root (carries GeodeticAnchor + SiteAnchor).
     q_site_root: Query<Entity, With<SiteAnchor>>,
@@ -427,7 +451,10 @@ pub fn place_celestial_bound_entities(
             // ECLIPTIC pole — 23.4° off Earth's, ±23.4° of ground-track error.
             let p_orbit = orbit.elements.position_bevy_m(desc.gm, jd);
             let p_inertial = equatorial_frame(desc, jd) * p_orbit;
-            (body_rotation(desc, jd).inverse() * p_inertial, Quat::IDENTITY)
+            (
+                body_rotation(desc, jd).inverse() * p_inertial,
+                Quat::IDENTITY,
+            )
         } else {
             continue;
         };
@@ -612,7 +639,10 @@ pub fn sync_terrain_body_curvature(
     // field and the limb, and the punch is the seam between them.
     const SITE_PUNCH_DEG: f64 = 2.0;
     let half_extent = if has_dem {
-        q_dem.iter().map(|(d, _)| d.0.half_extent() as f64).fold(0.0, f64::max)
+        q_dem
+            .iter()
+            .map(|(d, _)| d.0.half_extent() as f64)
+            .fold(0.0, f64::max)
     } else {
         desc.radius_m * SITE_PUNCH_DEG.to_radians().sin()
     };
@@ -639,9 +669,7 @@ pub fn sync_terrain_body_curvature(
         };
         if punch != Some(&next) {
             commands.entity(e).try_insert(next);
-            info!(
-                "globe hole-punched under site DEM (body {body}, footprint ±{half_extent:.0} m)"
-            );
+            info!("globe hole-punched under site DEM (body {body}, footprint ±{half_extent:.0} m)");
         }
     }
 }
@@ -655,7 +683,11 @@ mod tests {
     #[test]
     fn align_rotation_maps_enu_to_scene_axes() {
         let registry = CelestialBodyRegistry::default_system();
-        let desc = registry.bodies.iter().find(|b| b.ephemeris_id == 301).unwrap();
+        let desc = registry
+            .bodies
+            .iter()
+            .find(|b| b.ephemeris_id == 301)
+            .unwrap();
         let center = DVec3::new(1.0e11, 2.0e10, -3.0e10);
         let geo = Geodetic::new(-89.45, -136.7, 1200.0);
         let frame = solar_tangent_frame(desc, &geo, center, 2461000.5);

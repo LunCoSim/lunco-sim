@@ -93,10 +93,16 @@ fn set_placement_leaves_every_other_declaration_alone() {
         after.contains(r#"parameter Real k = 2.0 "stiffness";"#),
         "`k` was rewritten:\n{after}"
     );
-    assert!(after.contains("// a comment on the mass"), "comment lost:\n{after}");
+    assert!(
+        after.contains("// a comment on the mass"),
+        "comment lost:\n{after}"
+    );
     assert!(after.contains("// conservation"), "comment lost:\n{after}");
     // The placement itself actually moved.
-    assert!(after.contains("{{10,20},{30,40}}"), "placement not written:\n{after}");
+    assert!(
+        after.contains("{{10,20},{30,40}}"),
+        "placement not written:\n{after}"
+    );
 }
 
 #[test]
@@ -168,7 +174,10 @@ fn add_component_inserts_and_touches_nothing_else() {
         },
     });
     assert_only_touched(&after, &[]);
-    assert!(after.contains("Real fresh;"), "component not added:\n{after}");
+    assert!(
+        after.contains("Real fresh;"),
+        "component not added:\n{after}"
+    );
 }
 
 #[test]
@@ -178,9 +187,15 @@ fn remove_component_deletes_only_its_own_line() {
         name: "b".into(),
     });
     assert_only_touched(&after, &["Real b;"]);
-    assert!(!after.contains("Real b;"), "component not removed:\n{after}");
+    assert!(
+        !after.contains("Real b;"),
+        "component not removed:\n{after}"
+    );
     // The neighbouring declaration is untouched, not merged into the gap.
-    assert!(after.contains("Real a annotation("), "neighbour damaged:\n{after}");
+    assert!(
+        after.contains("Real a annotation("),
+        "neighbour damaged:\n{after}"
+    );
 }
 
 #[test]
@@ -226,7 +241,10 @@ fn reverse_connection_swaps_endpoints_only() {
         },
     });
     assert_only_touched(&after, &["connect(a, b)"]);
-    assert!(after.contains("connect(b, a)"), "endpoints not swapped:\n{after}");
+    assert!(
+        after.contains("connect(b, a)"),
+        "endpoints not swapped:\n{after}"
+    );
     assert!(
         after.contains("points={{0,0},{1,1}}"),
         "swap disturbed the line annotation:\n{after}"
@@ -250,7 +268,10 @@ fn add_connection_appends_to_the_equation_section() {
         },
     });
     assert_only_touched(&after, &[]);
-    assert!(after.contains("connect(x, k);"), "connection not added:\n{after}");
+    assert!(
+        after.contains("connect(x, k);"),
+        "connection not added:\n{after}"
+    );
 }
 
 #[test]

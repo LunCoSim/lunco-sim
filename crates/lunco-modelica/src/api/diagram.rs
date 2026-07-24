@@ -1,11 +1,11 @@
 //! API handlers for diagram-level operations (Connect, Disconnect).
 
-use bevy::prelude::*;
-use lunco_core::{Command, on_command};
-use lunco_doc::DocumentId;
+use super::util::{parse_port_ref, resolve_doc};
 use crate::document::ModelicaOp;
-use crate::pretty::{ConnectEquation};
-use super::util::{resolve_doc, parse_port_ref};
+use crate::pretty::ConnectEquation;
+use bevy::prelude::*;
+use lunco_core::{on_command, Command};
+use lunco_doc::DocumentId;
 
 /// Add a `connect(a.p, b.q)` equation to a class.
 #[Command(default)]
@@ -19,10 +19,7 @@ pub struct ConnectComponents {
 }
 
 #[on_command(ConnectComponents)]
-pub fn on_connect_components(
-    trigger: On<ConnectComponents>,
-    mut commands: Commands,
-) {
+pub fn on_connect_components(trigger: On<ConnectComponents>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc(world, ev.doc) else {
@@ -103,10 +100,7 @@ pub struct DisconnectComponents {
 }
 
 #[on_command(DisconnectComponents)]
-pub fn on_disconnect_components(
-    trigger: On<DisconnectComponents>,
-    mut commands: Commands,
-) {
+pub fn on_disconnect_components(trigger: On<DisconnectComponents>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc(world, ev.doc) else {

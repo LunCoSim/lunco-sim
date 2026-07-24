@@ -94,7 +94,10 @@ pub fn spawn_asset_server(addr: String, index: AssetIndex) {
 /// `cid` is used purely as a map key — never as a path component — so a crafted
 /// value (`../…`, absolute paths) can only miss the map. Blobs are immutable by
 /// construction (the name *is* the hash), so they're cacheable forever.
-async fn serve_asset(State(index): State<AssetIndex>, Path(cid): Path<String>) -> impl IntoResponse {
+async fn serve_asset(
+    State(index): State<AssetIndex>,
+    Path(cid): Path<String>,
+) -> impl IntoResponse {
     let path = {
         let Ok(map) = index.read() else {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -135,8 +138,10 @@ mod tests {
     use super::*;
 
     fn index_with(entries: &[(&str, PathBuf)]) -> AssetIndex {
-        let map: HashMap<String, PathBuf> =
-            entries.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+        let map: HashMap<String, PathBuf> = entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
         Arc::new(RwLock::new(map))
     }
 
@@ -155,7 +160,11 @@ mod tests {
 
         // A traversal string and an absolute path to a genuinely existing file are
         // NOT keys → 404, even though the file exists and is readable.
-        for hostile in ["../../../../etc/passwd", "/etc/passwd", "bafk-not-advertised"] {
+        for hostile in [
+            "../../../../etc/passwd",
+            "/etc/passwd",
+            "bafk-not-advertised",
+        ] {
             let resp = serve_asset(State(index.clone()), Path(hostile.to_string()))
                 .await
                 .into_response();

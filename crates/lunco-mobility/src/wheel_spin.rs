@@ -5,9 +5,9 @@
 //! This module gives each tire a real rotational state so the spin you *see*
 //! matches the physics the rover is actually experiencing.
 
-use bevy::prelude::*;
-use bevy::math::DVec3;
 use avian3d::prelude::*;
+use bevy::math::DVec3;
+use bevy::prelude::*;
 use lunco_core::CommandInputs;
 
 use crate::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
@@ -47,19 +47,28 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 /// The integrated angle is composed with the steer yaw to drive the mesh:
 /// `R = steer · rollₓ(−θ) · cylinder_base`.
 pub(crate) fn update_wheel_spin(
-    mut q_wheels: Query<(&mut WheelRaycast, &Transform, &GlobalTransform, &RayHits, &ChildOf)>,
+    mut q_wheels: Query<(
+        &mut WheelRaycast,
+        &Transform,
+        &GlobalTransform,
+        &RayHits,
+        &ChildOf,
+    )>,
     q_ports: Query<&lunco_core::architecture::Port>,
-    q_chassis: Query<(
-        &LinearVelocity,
-        &AngularVelocity,
-        &Position,
-        &Rotation,
-        Option<&CommandInputs>,
-        &RigidBody,
-        // Client proxies are Kinematic with avian velocity zeroed; their real
-        // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
-        Option<&lunco_core::ReplicatedChassisMotion>,
-    ), With<crate::kernels::DriveMix>>,
+    q_chassis: Query<
+        (
+            &LinearVelocity,
+            &AngularVelocity,
+            &Position,
+            &Rotation,
+            Option<&CommandInputs>,
+            &RigidBody,
+            // Client proxies are Kinematic with avian velocity zeroed; their real
+            // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
+            Option<&lunco_core::ReplicatedChassisMotion>,
+        ),
+        With<crate::kernels::DriveMix>,
+    >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     time: Res<Time>,
 ) {
@@ -237,7 +246,11 @@ pub(crate) fn update_wheel_spin(
         //     goes where it physically goes: into ω, as visible spin.
         // Nothing is calibrated against anything else, so μ means μ and a tire
         // swapped at runtime behaves like the tire it is.
-        let f_lat = if on_ground { -wheel.lateral_grip_stiffness * v_lat } else { 0.0 };
+        let f_lat = if on_ground {
+            -wheel.lateral_grip_stiffness * v_lat
+        } else {
+            0.0
+        };
         // ONE friction cone for the pair: a tire at its lateral limit has no
         // longitudinal grip left to give, which is what makes hard cornering cost
         // acceleration. `f_long` is already individually bounded by the solve
@@ -271,12 +284,12 @@ pub(crate) fn update_wheel_spin(
 #[cfg(test)]
 mod tests {
     use super::update_wheel_spin;
-    use crate::{WheelRaycast, Suspension};
+    use crate::kernels::DriveMix;
+    use crate::{Suspension, WheelRaycast};
     use avian3d::prelude::*;
     use bevy::math::DVec3;
     use bevy::prelude::*;
     use bevy::time::Time;
-    use crate::kernels::DriveMix;
     use std::time::Duration;
 
     /// Drive `update_wheel_spin` one tick on a single grounded raycast wheel and
@@ -311,7 +324,7 @@ mod tests {
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
-         app.world_mut().spawn((
+        app.world_mut().spawn((
             WheelRaycast {
                 suspension_port: port,
                 drive_port: port,
@@ -343,7 +356,11 @@ mod tests {
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
             // One hit ⇒ the wheel is on the ground (the integrator only checks
             // presence, not distance/normal, for the grip path).
-            RayHits(vec![RayHitData { entity: chassis, distance: 0.5, normal: DVec3::Y }]),
+            RayHits(vec![RayHitData {
+                entity: chassis,
+                distance: 0.5,
+                normal: DVec3::Y,
+            }]),
             ChildOf(chassis),
         ));
 
@@ -437,7 +454,11 @@ mod tests {
         for _ in 0..600 {
             app.update();
         }
-        let w = app.world().get::<WheelRaycast>(wheel).unwrap().spin_velocity;
+        let w = app
+            .world()
+            .get::<WheelRaycast>(wheel)
+            .unwrap()
+            .spin_velocity;
         assert!(
             w <= max_omega + 1e-6,
             "a free wheel must not pass its motor's no-load speed: {w} > {max_omega}"
@@ -473,6 +494,9 @@ mod tests {
         // the proxy test); the implicit grip solve with inertia/dt=10, k_slip·r²=250
         // gives ω = (k_slip·r·v_long)/(inertia/dt + k_slip·r²) = 500/260 ≈ 1.923,
         // and |f_slip|≈38 < μN=100 so the tire grips (no saturation).
-        assert!((near - 1.9231).abs() < 1e-2, "expected gripped ω≈1.923, got {near}");
+        assert!(
+            (near - 1.9231).abs() < 1e-2,
+            "expected gripped ω≈1.923, got {near}"
+        );
     }
 }

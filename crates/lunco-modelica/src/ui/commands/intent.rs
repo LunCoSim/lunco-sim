@@ -1,9 +1,9 @@
 //! Intent resolvers: translate abstract EditorIntent into concrete Modelica commands.
 
-use bevy::prelude::*;
-use lunco_doc_bevy::{EditorIntent, SaveAsDocument, SaveDocument, UndoDocument, RedoDocument};
-use lunco_workbench::file_ops::NewDocument;
 use crate::state::ModelicaDocumentRegistry;
+use bevy::prelude::*;
+use lunco_doc_bevy::{EditorIntent, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument};
+use lunco_workbench::file_ops::NewDocument;
 
 // ─── Observers ───────────────────────────────────────────────────────────────
 
@@ -25,7 +25,10 @@ pub fn resolve_editor_intent(
         EditorIntent::Undo => commands.trigger(UndoDocument { doc }),
         EditorIntent::Redo => commands.trigger(RedoDocument { doc }),
         EditorIntent::Save => commands.trigger(SaveDocument { doc }),
-        EditorIntent::SaveAs => commands.trigger(SaveAsDocument { doc, path: String::new() }),
+        EditorIntent::SaveAs => commands.trigger(SaveAsDocument {
+            doc,
+            path: String::new(),
+        }),
         EditorIntent::Close => {
             commands.queue(move |world: &mut World| {
                 let Some(tab_id) = world
@@ -34,9 +37,7 @@ pub fn resolve_editor_intent(
                 else {
                     return;
                 };
-                if let Some(mut q) = world
-                    .get_resource_mut::<lunco_workbench::PendingTabCloses>()
-                {
+                if let Some(mut q) = world.get_resource_mut::<lunco_workbench::PendingTabCloses>() {
                     q.push(lunco_workbench::TabId::Instance {
                         kind: crate::ui::MODEL_VIEW_KIND,
                         instance: tab_id,

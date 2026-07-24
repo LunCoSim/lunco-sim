@@ -32,7 +32,11 @@ use bevy::prelude::*;
 /// messages/types in that deferred plugin setup.
 pub fn headless_physics_app() -> App {
     let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), PhysicsPlugins::default()));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        PhysicsPlugins::default(),
+    ));
     app.init_asset::<Mesh>();
     app
 }

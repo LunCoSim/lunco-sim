@@ -143,7 +143,10 @@ pub struct DomePlugin;
 
 impl Plugin for DomePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (project_dome_textures, bind_dome_to_cameras).chain());
+        app.add_systems(
+            Update,
+            (project_dome_textures, bind_dome_to_cameras).chain(),
+        );
     }
 }
 
@@ -206,7 +209,8 @@ pub fn read_dome_environment(
         tint: crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
             .map(|c| LinearRgba::rgb(c.x, c.y, c.z))
             .unwrap_or(LinearRgba::WHITE),
-        face_size: reader.real_f32(sdf_path, "lunco:dome:faceSize")
+        face_size: reader
+            .real_f32(sdf_path, "lunco:dome:faceSize")
             .map(|f| f as u32)
             .unwrap_or(DEFAULT_FACE_SIZE),
         skybox: crate::light::get_attribute_as_bool(reader, sdf_path, "lunco:dome:skybox")
@@ -222,9 +226,7 @@ impl UsdDomeEnvironment {
     /// at the camera, so they are free — and that distinction is what keeps a
     /// brightness slider from re-running a 300 ms projection on every drag.
     pub fn needs_reprojection(&self, next: &Self) -> bool {
-        self.texture != next.texture
-            || self.face_size != next.face_size
-            || self.tint != next.tint
+        self.texture != next.texture || self.face_size != next.face_size || self.tint != next.tint
     }
 }
 
@@ -439,14 +441,22 @@ impl Equirect {
                 texels.push(c.to_f32_array());
             }
         }
-        Some(Self { width, height, texels })
+        Some(Self {
+            width,
+            height,
+            texels,
+        })
     }
 
     /// Construct directly from linear texels (tests, and any future
     /// procedurally-generated sky).
     pub fn from_texels(width: u32, height: u32, texels: Vec<[f32; 4]>) -> Self {
         assert_eq!(texels.len(), (width as usize) * (height as usize));
-        Self { width, height, texels }
+        Self {
+            width,
+            height,
+            texels,
+        }
     }
 
     /// Bilinear sample. Wraps in longitude (the seam is continuous — a sky is a
@@ -615,9 +625,8 @@ mod tests {
 
         let data = img.data.as_ref().expect("cubemap has CPU data");
         let read = |face: usize, px: u32, py: u32, ch: usize| -> f32 {
-            let texel = (face * (size * size) as usize)
-                + (py as usize) * (size as usize)
-                + px as usize;
+            let texel =
+                (face * (size * size) as usize) + (py as usize) * (size as usize) + px as usize;
             let off = (texel * 4 + ch) * 2;
             half::f16::from_le_bytes([data[off], data[off + 1]]).to_f32()
         };

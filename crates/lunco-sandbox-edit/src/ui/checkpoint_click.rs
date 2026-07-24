@@ -22,12 +22,10 @@
 //!
 //! That is the whole point of putting it in USD: the feature mostly stops existing.
 
+use bevy::math::DVec3;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use bevy::math::DVec3;
-use serde_json::Value;
-use lunco_render::{PbrLook, SurfaceAlpha};
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{
     append_waypoint_leaf, catmull_rom_path, format_coord_target, insert_waypoint_after,
@@ -35,18 +33,19 @@ use lunco_autopilot::usd_tree::{
     set_waypoint_target, BehaviorXml, ReachedWaypoints, TargetBindings,
 };
 use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, EguiFocus, SpawnToolActive, TerrainToolActive, GlobalEntityId};
-use lunco_core::session::SessionRegistry;
 use lunco_core::commands::SessionId;
-use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::document::UsdDocument;
+use lunco_core::session::SessionRegistry;
+use lunco_core::{Avatar, EguiFocus, GlobalEntityId, SpawnToolActive, TerrainToolActive};
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd::document::UsdDocument;
+use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
+use serde_json::Value;
 
 use crate::spawn::{terrain_ray_hit, TerrainOracles};
 use crate::SelectedEntities;
-
 
 /// Scope the authored waypoints are parented under, beneath the stage's default prim.
 /// A route lives in WORLD space, so it is deliberately NOT a child of the vessel —
@@ -186,9 +185,14 @@ pub struct WaypointDocContext<'w> {
 }
 
 impl<'w> WaypointDocContext<'w> {
-    pub fn resolve_document(&self, stage_handle: &Handle<lunco_usd_bevy::UsdStageAsset>) -> Option<lunco_doc::DocumentId> {
+    pub fn resolve_document(
+        &self,
+        stage_handle: &Handle<lunco_usd_bevy::UsdStageAsset>,
+    ) -> Option<lunco_doc::DocumentId> {
         lunco_usd::twin_projection::scene_document_for(
-            &self.backed, &self.asset_server, stage_handle.id(),
+            &self.backed,
+            &self.asset_server,
+            stage_handle.id(),
         )
         .or_else(|| self.workspace.as_ref().and_then(|w| w.0.active_document))
         .or_else(|| self.usd_registry.ids().next())
@@ -205,8 +209,14 @@ pub struct WaypointClickFrame<'w, 's> {
     pub q_parents: Query<'w, 's, &'static ChildOf>,
     pub q_grids: Query<'w, 's, (Entity, &'static big_space::prelude::Grid)>,
     pub q_grids_only: Query<'w, 's, &'static big_space::prelude::Grid>,
-    pub q_spatial:
-        Query<'w, 's, (Option<&'static big_space::grid::cell::CellCoord>, &'static Transform)>,
+    pub q_spatial: Query<
+        'w,
+        's,
+        (
+            Option<&'static big_space::grid::cell::CellCoord>,
+            &'static Transform,
+        ),
+    >,
     pub q_gt: Query<'w, 's, &'static GlobalTransform>,
 }
 
@@ -226,8 +236,11 @@ impl WaypointClickFrame<'_, '_> {
             &self.q_spatial,
         )
         .unwrap_or(DVec3::ZERO);
-        let grid_floating =
-            self.q_gt.get(grid_entity).map(|gt| gt.translation()).unwrap_or(Vec3::ZERO);
+        let grid_floating = self
+            .q_gt
+            .get(grid_entity)
+            .map(|gt| gt.translation())
+            .unwrap_or(Vec3::ZERO);
         grid_world + (p - grid_floating.as_dvec3())
     }
 }
@@ -253,12 +266,22 @@ fn pick_ground_world(
     let origin = ray.origin.as_dvec3();
     let dir = ray.direction.as_dvec3();
     let phys = raycaster
-        .cast_ray_render(origin, ray.direction, 1.0e6, false, &avian3d::prelude::SpatialQueryFilter::default())
+        .cast_ray_render(
+            origin,
+            ray.direction,
+            1.0e6,
+            false,
+            &avian3d::prelude::SpatialQueryFilter::default(),
+        )
         .map(|h| h.distance);
     let terr = terrain_ray_hit(terrains, origin, dir, 1.0e6);
     let hit_render = match (phys, terr) {
         (Some(pd), Some((td, tp))) => {
-            if td <= pd { tp } else { origin + dir * pd }
+            if td <= pd {
+                tp
+            } else {
+                origin + dir * pd
+            }
         }
         (Some(pd), None) => origin + dir * pd,
         (None, Some((_, tp))) => tp,
@@ -309,7 +332,10 @@ pub fn on_scene_click_checkpoint(
     click.propagate(false);
 
     // Default to the possessed vessel first, then fall back to the selected one, then fall back to the first vessel with a mission tree in the scene
-    let possessed_vessel = avatars.iter().next().and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity));
+    let possessed_vessel = avatars
+        .iter()
+        .next()
+        .and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity));
     let raw_vessel = possessed_vessel
         .or_else(|| selected.primary())
         .or_else(|| q_xml.iter().next().map(|(e, _)| e));
@@ -335,7 +361,10 @@ pub fn on_scene_click_checkpoint(
     }
 
     let Ok(vessel_prim) = q_prim.get(vessel) else {
-        warn!("[waypoint] target vessel {:?} is not a USD prim; cannot author a mission for it", vessel);
+        warn!(
+            "[waypoint] target vessel {:?} is not a USD prim; cannot author a mission for it",
+            vessel
+        );
         return;
     };
 
@@ -345,13 +374,20 @@ pub fn on_scene_click_checkpoint(
         return;
     };
     let Some(host) = doc_ctx.usd_registry.host(doc) else {
-        info!("[waypoint] click ignored: no USD host for document {:?}", doc);
+        info!(
+            "[waypoint] click ignored: no USD host for document {:?}",
+            doc
+        );
         return;
     };
 
-    let Some(hit) =
-        pick_ground_world(&frame, &terrains, &raycaster, &egui_focus, click.pointer_location.position)
-    else {
+    let Some(hit) = pick_ground_world(
+        &frame,
+        &terrains,
+        &raycaster,
+        &egui_focus,
+        click.pointer_location.position,
+    ) else {
         info!("[waypoint] click ignored: no ray / no ground under the cursor");
         return;
     };
@@ -363,7 +399,8 @@ pub fn on_scene_click_checkpoint(
     // is the scene's default prim (e.g. "/Traverse" for traverse.usda). This is
     // more robust than reading defaultPrim from the document layer, which may
     // differ when the vessel is composed from a referenced twin scene.
-    let root = vessel_prim.path
+    let root = vessel_prim
+        .path
         .split('/')
         .nth(1) // first non-empty component after the leading '/'
         .map(|p| format!("/{p}"))
@@ -406,7 +443,10 @@ pub fn on_scene_click_checkpoint(
     // ── Author: update ECS component immediately and persist to USD document ─
     commands.entity(vessel).insert(BehaviorXml(xml.clone()));
     let mission = ensure_mission_program(&mut commands, host, doc, &vessel_prim.path);
-    info!("[waypoint] writing to doc {:?}, mission prim {:?}", doc, mission);
+    info!(
+        "[waypoint] writing to doc {:?}, mission prim {:?}",
+        doc, mission
+    );
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::SetAttribute {
@@ -454,7 +494,9 @@ pub fn on_scene_right_click_waypoint(
                 .unwrap_or(0.0);
             return;
         }
-        let Ok(parent) = q_parents.get(entity) else { break };
+        let Ok(parent) = q_parents.get(entity) else {
+            break;
+        };
         entity = parent.parent();
     }
 }
@@ -483,17 +525,29 @@ pub fn on_scene_click_place_waypoint(
         return; // clicking the menu itself, not the ground
     }
     click.propagate(false);
-    let Some(pending) = placement.0.take() else { return };
-    info!("[waypoint] placement: consuming click for {:?} of '{}'", pending.mode, pending.coord_key);
+    let Some(pending) = placement.0.take() else {
+        return;
+    };
+    info!(
+        "[waypoint] placement: consuming click for {:?} of '{}'",
+        pending.mode, pending.coord_key
+    );
 
-    let Some(world) =
-        pick_ground_world(&frame, &terrains, &raycaster, &egui_focus, click.pointer_location.position)
-    else {
+    let Some(world) = pick_ground_world(
+        &frame,
+        &terrains,
+        &raycaster,
+        &egui_focus,
+        click.pointer_location.position,
+    ) else {
         info!("[waypoint] placement cancelled: no ground under the cursor");
         return;
     };
     let Ok((xml, vessel_prim)) = q_vessel.get(pending.vessel) else {
-        warn!("[waypoint] placement failed: vessel {:?} has no BehaviorXml/UsdPrimPath", pending.vessel);
+        warn!(
+            "[waypoint] placement failed: vessel {:?} has no BehaviorXml/UsdPrimPath",
+            pending.vessel
+        );
         return;
     };
     let Some(doc) = doc_ctx.resolve_document(&vessel_prim.stage_handle) else {
@@ -504,12 +558,16 @@ pub fn on_scene_click_place_waypoint(
     let new_target = format_coord_target(world);
     let edited = match pending.mode {
         PlacementMode::Move => set_waypoint_target(&xml.0, &pending.coord_key, &new_target),
-        PlacementMode::InsertAfter => insert_waypoint_after(&xml.0, &pending.coord_key, &new_target),
+        PlacementMode::InsertAfter => {
+            insert_waypoint_after(&xml.0, &pending.coord_key, &new_target)
+        }
     };
     match edited {
         Ok(new_xml) => {
             info!("[waypoint] {:?} → {}", pending.mode, new_target);
-            commands.entity(pending.vessel).insert(BehaviorXml(new_xml.clone()));
+            commands
+                .entity(pending.vessel)
+                .insert(BehaviorXml(new_xml.clone()));
             commands.trigger(ApplyUsdOp {
                 doc,
                 op: UsdOp::SetAttribute {
@@ -602,7 +660,9 @@ pub fn draw_waypoint_context_menu(
 
                 if ui
                     .button("✋  Move")
-                    .on_hover_text("Then click the ground to put this waypoint there  ·  Esc to cancel")
+                    .on_hover_text(
+                        "Then click the ground to put this waypoint there  ·  Esc to cancel",
+                    )
                     .clicked()
                 {
                     placement.0 = Some(PendingPlacement {
@@ -736,7 +796,9 @@ fn get_waypoint_positions(
         }
         // 2. Try to resolve as USD prim path
         if let Some(&entity) = bindings.0.get(&t) {
-            if let Some(pos) = lunco_core::coords::world_position(entity, q_parents, q_grids, q_spatial) {
+            if let Some(pos) =
+                lunco_core::coords::world_position(entity, q_parents, q_grids, q_spatial)
+            {
                 positions.push(pos);
             }
         }
@@ -782,7 +844,12 @@ pub struct WaypointVisual {
 /// for all coordinate-based waypoints stored in vessels' BehaviorXml.
 /// This prevents polluting the USD stage with waypoint prims.
 pub fn sync_waypoint_visuals(
-    q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>, Option<&ReachedWaypoints>)>,
+    q_vessels: Query<(
+        Entity,
+        &BehaviorXml,
+        Option<&TargetBindings>,
+        Option<&ReachedWaypoints>,
+    )>,
     q_visuals: Query<(Entity, &WaypointVisual)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
@@ -799,15 +866,22 @@ pub fn sync_waypoint_visuals(
     let mut desired: std::collections::HashMap<(Entity, String), (usize, DVec3, bool)> =
         std::collections::HashMap::new();
     for (vessel, xml, bindings, reached) in q_vessels.iter() {
-        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else { continue; };
+        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+            continue;
+        };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
         let mut idx = 0usize;
         for target in &targets {
             let pos = parse_coord_target(target).or_else(|| {
-                bindings
-                    .and_then(|b| b.0.get(target))
-                    .and_then(|&entity| lunco_core::coords::world_position(entity, &q_parents, &q_grids_only, &q_spatial))
+                bindings.and_then(|b| b.0.get(target)).and_then(|&entity| {
+                    lunco_core::coords::world_position(
+                        entity,
+                        &q_parents,
+                        &q_grids_only,
+                        &q_spatial,
+                    )
+                })
             });
             let Some(pos) = pos else { continue };
             let passed = reached.map(|r| r.0.contains(target)).unwrap_or(false);
@@ -821,13 +895,19 @@ pub fn sync_waypoint_visuals(
     let mut existing: std::collections::HashMap<(Entity, String), (Entity, bool)> =
         std::collections::HashMap::new();
     for (entity, visual) in q_visuals.iter() {
-        existing.insert((visual.vessel, visual.coord_key.clone()), (entity, visual.passed));
+        existing.insert(
+            (visual.vessel, visual.coord_key.clone()),
+            (entity, visual.passed),
+        );
     }
 
     // Get active grid for placing visuals.
-    let Some((grid_entity, grid)) = q_grids.iter().next() else { return; };
-    let grid_world = lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
-        .unwrap_or(DVec3::ZERO);
+    let Some((grid_entity, grid)) = q_grids.iter().next() else {
+        return;
+    };
+    let grid_world =
+        lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
+            .unwrap_or(DVec3::ZERO);
 
     // 3. Spawn or update desired visuals.
     for ((vessel, coord_key), (index, pos, passed)) in desired {
@@ -838,45 +918,50 @@ pub fn sync_waypoint_visuals(
                 // Same colour: just update position. `try_insert`, not `insert`: a scene
                 // load can despawn this visual between the query snapshot and command
                 // application, and a bare `insert` on the dead entity panics the schedule.
-                commands.entity(entity).try_insert((
-                    cell,
-                    Transform::from_translation(local_pos),
-                ));
+                commands
+                    .entity(entity)
+                    .try_insert((cell, Transform::from_translation(local_pos)));
                 continue;
             }
             // Passed state changed (green → grey): despawn and fall through to re-spawn.
             commands.entity(entity).despawn();
         }
-            // Colour: green = active target, grey = already visited.
-            let (base_color, emissive) = if passed {
-                (
-                    LinearRgba::new(0.45, 0.45, 0.45, 0.18),
-                    LinearRgba::new(0.3, 0.3, 0.3, 1.0),
-                )
-            } else {
-                (
-                    LinearRgba::new(0.2, 0.95, 0.5, 0.28),
-                    LinearRgba::new(0.12, 0.85, 0.42, 1.0),
-                )
-            };
-            commands.spawn((
-                Mesh3d(meshes.add(Sphere::new(2.5).mesh().ico(5).unwrap())),
-                PbrLook {
-                    base_color,
-                    emissive,
-                    alpha: SurfaceAlpha::Blend,
-                    unlit: true,
-                    // Same reason as the route ribbon: an editor pin must not cast a
-                    // shadow onto the scene it annotates.
-                    no_shadow_cast: true,
-                    ..default()
-                },
-                cell,
-                Transform::from_translation(local_pos),
-                GlobalTransform::default(),
-                ChildOf(grid_entity),
-                WaypointVisual { vessel, coord_key, index, position: pos, passed },
-            ));
+        // Colour: green = active target, grey = already visited.
+        let (base_color, emissive) = if passed {
+            (
+                LinearRgba::new(0.45, 0.45, 0.45, 0.18),
+                LinearRgba::new(0.3, 0.3, 0.3, 1.0),
+            )
+        } else {
+            (
+                LinearRgba::new(0.2, 0.95, 0.5, 0.28),
+                LinearRgba::new(0.12, 0.85, 0.42, 1.0),
+            )
+        };
+        commands.spawn((
+            Mesh3d(meshes.add(Sphere::new(2.5).mesh().ico(5).unwrap())),
+            PbrLook {
+                base_color,
+                emissive,
+                alpha: SurfaceAlpha::Blend,
+                unlit: true,
+                // Same reason as the route ribbon: an editor pin must not cast a
+                // shadow onto the scene it annotates.
+                no_shadow_cast: true,
+                ..default()
+            },
+            cell,
+            Transform::from_translation(local_pos),
+            GlobalTransform::default(),
+            ChildOf(grid_entity),
+            WaypointVisual {
+                vessel,
+                coord_key,
+                index,
+                position: pos,
+                passed,
+            },
+        ));
     }
 
     // 4. Despawn only the visuals whose coord_key is no longer in the XML.
@@ -912,17 +997,21 @@ pub fn draw_waypoint_overlay(
         .next()
         .and_then(|av| q_camera.get(av).ok())
         .or_else(|| q_camera.iter().find(|(_, cam, _)| cam.is_active));
-    let Some((cam_entity, camera, cam_gtf)) = cam_result else { return };
+    let Some((cam_entity, camera, cam_gtf)) = cam_result else {
+        return;
+    };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let origin = ctx.content_rect().min.to_vec2();
 
     // Camera world position for distance-based sizing.
-    let cam_world = lunco_core::coords::world_position(cam_entity, &q_parents, &q_grids, &q_spatial)
-        .unwrap_or(bevy::math::DVec3::ZERO);
+    let cam_world =
+        lunco_core::coords::world_position(cam_entity, &q_parents, &q_grids, &q_spatial)
+            .unwrap_or(bevy::math::DVec3::ZERO);
 
     // Under the chrome, over the 3D — see `billboard_overlay::world_overlay_layer`.
-    let painter =
-        ctx.layer_painter(super::billboard_overlay::world_overlay_layer("waypoint_overlay"));
+    let painter = ctx.layer_painter(super::billboard_overlay::world_overlay_layer(
+        "waypoint_overlay",
+    ));
 
     let primary_selected = selected.primary();
     let possessed_vessel = q_avatar_cam
@@ -936,7 +1025,10 @@ pub fn draw_waypoint_overlay(
 
         let is_possessed = Some(vessel) == possessed_vessel;
         let is_selected = Some(vessel) == primary_selected;
-        if (possessed_vessel.is_some() || primary_selected.is_some()) && !is_possessed && !is_selected {
+        if (possessed_vessel.is_some() || primary_selected.is_some())
+            && !is_possessed
+            && !is_selected
+        {
             continue;
         }
 
@@ -951,7 +1043,8 @@ pub fn draw_waypoint_overlay(
         };
         let label_color = theme.tokens.text;
 
-        let wp_positions = get_waypoint_positions(&xml.0, bindings, &q_parents, &q_grids, &q_spatial);
+        let wp_positions =
+            get_waypoint_positions(&xml.0, bindings, &q_parents, &q_grids, &q_spatial);
 
         // Collect screen-space points for each waypoint that is in front of the camera.
         struct WpScreen {
@@ -968,10 +1061,16 @@ pub fn draw_waypoint_overlay(
             let cam_relative = (wp_world - cam_world).as_vec3();
             let world_f32 = cam_gtf.translation() + cam_relative;
 
-            let Ok(viewport) = camera.world_to_viewport(cam_gtf, world_f32) else { continue };
+            let Ok(viewport) = camera.world_to_viewport(cam_gtf, world_f32) else {
+                continue;
+            };
             let screen = egui::pos2(viewport.x, viewport.y) + origin;
 
-            wp_screens.push(WpScreen { screen, index: i, distance });
+            wp_screens.push(WpScreen {
+                screen,
+                index: i,
+                distance,
+            });
         }
 
         // NOTE: the route LINE is not drawn here. A screen-space overlay stroke has no
@@ -996,7 +1095,10 @@ pub fn draw_waypoint_overlay(
             let text = format!("{}", wp.index + 1);
             let font = egui::FontId::proportional(font_size);
             let tc = egui::Color32::from_rgba_unmultiplied(
-                label_color.r(), label_color.g(), label_color.b(), alpha,
+                label_color.r(),
+                label_color.g(),
+                label_color.b(),
+                alpha,
             );
 
             let galley = painter.layout_no_wrap(text, font, tc);
@@ -1008,7 +1110,11 @@ pub fn draw_waypoint_overlay(
             // Distance-faded chip behind a waypoint number over the 3D scene.
             // `overlay_backdrop` is the nearest token but carries its own fixed
             // alpha, which this needs to modulate per-waypoint.
-            painter.rect_filled(bg, 3.0, egui::Color32::from_black_alpha((180.0 * fade) as u8));
+            painter.rect_filled(
+                bg,
+                3.0,
+                egui::Color32::from_black_alpha((180.0 * fade) as u8),
+            );
             painter.galley(top_left, galley, tc);
         }
     }
@@ -1057,8 +1163,13 @@ fn ensure_mission_program(
 }
 
 /// Whether `path` is already authored in either layer of the document.
-fn prim_exists(host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>, path: &str) -> bool {
-    let Ok(sdf) = lunco_usd_bevy::SdfPath::new(path) else { return false };
+fn prim_exists(
+    host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>,
+    path: &str,
+) -> bool {
+    let Ok(sdf) = lunco_usd_bevy::SdfPath::new(path) else {
+        return false;
+    };
     host.document().data().spec(&sdf).is_some()
         || host.document().runtime_data().spec(&sdf).is_some()
 }
@@ -1076,7 +1187,11 @@ fn parse_coord_target(target: &str) -> Option<DVec3> {
     if p.len() != 3 {
         return None;
     }
-    match (p[0].trim().parse(), p[1].trim().parse(), p[2].trim().parse()) {
+    match (
+        p[0].trim().parse(),
+        p[1].trim().parse(),
+        p[2].trim().parse(),
+    ) {
         (Ok(x), Ok(y), Ok(z)) => Some(DVec3::new(x, y, z)),
         _ => None,
     }
@@ -1111,15 +1226,25 @@ pub fn delete_reached_waypoints(
     mut commands: Commands,
 ) {
     let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document.or_else(|| usd_registry.as_ref().and_then(|r| r.ids().next())) else { return };
+    let Some(doc) = workspace
+        .0
+        .active_document
+        .or_else(|| usd_registry.as_ref().and_then(|r| r.ids().next()))
+    else {
+        return;
+    };
 
     for (vessel, mut xml, bindings, vessel_path, mut reached) in q_vessels.iter_mut() {
-        let Some(vessel_pos) = lunco_core::coords::world_position(vessel, &q_parents, &q_grids, &q_spatial) else {
+        let Some(vessel_pos) =
+            lunco_core::coords::world_position(vessel, &q_parents, &q_grids, &q_spatial)
+        else {
             continue;
         };
 
         // Parse all targets from behavior XML
-        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else { continue; };
+        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+            continue;
+        };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
 
@@ -1128,7 +1253,10 @@ pub fn delete_reached_waypoints(
             // 1. Coordinate waypoint → runtime-only reached set.
             if let Some(wp_pos) = parse_coord_target(target) {
                 if (wp_pos - vessel_pos).length() < WAYPOINT_ARRIVAL {
-                    let known = reached.as_ref().map(|r| r.0.contains(target)).unwrap_or(false);
+                    let known = reached
+                        .as_ref()
+                        .map(|r| r.0.contains(target))
+                        .unwrap_or(false);
                     if !known && !newly_reached.iter().any(|t| t == target) {
                         info!("Waypoint reached (live-only, not persisted): {}", target);
                         newly_reached.push(target.clone());
@@ -1141,7 +1269,9 @@ pub fn delete_reached_waypoints(
             if let Some(bindings) = bindings {
                 if let Some(&wp_entity) = bindings.0.get(target) {
                     if let Ok((entity, prim_path)) = q_waypoints.get(wp_entity) {
-                        let Some(wp_pos) = lunco_core::coords::world_position(entity, &q_parents, &q_grids, &q_spatial) else {
+                        let Some(wp_pos) = lunco_core::coords::world_position(
+                            entity, &q_parents, &q_grids, &q_spatial,
+                        ) else {
                             continue;
                         };
                         let distance = (wp_pos - vessel_pos).length();
@@ -1208,7 +1338,10 @@ pub fn delete_reached_waypoints(
 /// takes over too. Look/Zoom are excluded: moving the camera is not driving.
 pub fn manual_input_disengages_autopilot(
     egui_focus: Res<EguiFocus>,
-    q_ctrl: Query<(&ControllerLink, &leafwing_input_manager::prelude::ActionState<lunco_core::UserIntent>)>,
+    q_ctrl: Query<(
+        &ControllerLink,
+        &leafwing_input_manager::prelude::ActionState<lunco_core::UserIntent>,
+    )>,
     q_autopilot: Query<&lunco_autopilot::Autopilot>,
     q_gid: Query<&GlobalEntityId>,
     mut registry: ResMut<SessionRegistry>,
@@ -1218,8 +1351,14 @@ pub fn manual_input_disengages_autopilot(
         return; // typing in a panel is not driving
     }
     use lunco_core::UserIntent::*;
-    const DRIVE: [lunco_core::UserIntent; 6] =
-        [MoveForward, MoveBackward, MoveLeft, MoveRight, MoveUp, MoveDown];
+    const DRIVE: [lunco_core::UserIntent; 6] = [
+        MoveForward,
+        MoveBackward,
+        MoveLeft,
+        MoveRight,
+        MoveUp,
+        MoveDown,
+    ];
 
     for (link, intents) in q_ctrl.iter() {
         // Edge-triggered: react to the press, not to every frame it's held, so a held
@@ -1262,7 +1401,7 @@ pub fn handle_autopilot_toggle_hotkey(
     }
 }
 
-use lunco_core::{register_commands, Command, on_command};
+use lunco_core::{on_command, register_commands, Command};
 
 /// Command to engage autopilot on a vessel.
 #[Command]
@@ -1350,7 +1489,11 @@ fn on_toggle_autopilot(
     }
 }
 
-register_commands!(on_start_autopilot, on_toggle_autopilot, on_cancel_waypoint_edit);
+register_commands!(
+    on_start_autopilot,
+    on_toggle_autopilot,
+    on_cancel_waypoint_edit
+);
 
 // ── Route ribbon (real 3D geometry, not a screen-space overlay) ───────────────
 
@@ -1393,7 +1536,10 @@ fn route_signature(targets: &[String], smooth: bool, reached: Option<&ReachedWay
     smooth.hash(&mut h);
     for t in targets {
         t.hash(&mut h);
-        reached.map(|r| r.0.contains(t)).unwrap_or(false).hash(&mut h);
+        reached
+            .map(|r| r.0.contains(t))
+            .unwrap_or(false)
+            .hash(&mut h);
     }
     h.finish()
 }
@@ -1418,7 +1564,11 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
         let next = points[(i + 1).min(n - 1)];
         let mut tan = next - prev;
         tan.y = 0.0;
-        let tan = if tan.length_squared() < 1e-9 { DVec3::Z } else { tan.normalize() };
+        let tan = if tan.length_squared() < 1e-9 {
+            DVec3::Z
+        } else {
+            tan.normalize()
+        };
         let mut right = tan.cross(DVec3::Y);
         if right.length_squared() < 1e-9 {
             right = DVec3::X;
@@ -1439,7 +1589,10 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
         let a = (i * 2) as u32;
         idx.extend_from_slice(&[a, a + 1, a + 2, a + 2, a + 1, a + 3]);
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
@@ -1457,7 +1610,12 @@ fn build_ribbon_mesh(points: &[DVec3], anchor: DVec3) -> Option<Mesh> {
 /// driving ([`catmull_rom_path`]), so the ribbon you see is literally the path the
 /// rover follows. Visited legs drop out of the curve, exactly as they do for driving.
 pub fn sync_waypoint_path_mesh(
-    q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>, Option<&ReachedWaypoints>)>,
+    q_vessels: Query<(
+        Entity,
+        &BehaviorXml,
+        Option<&TargetBindings>,
+        Option<&ReachedWaypoints>,
+    )>,
     q_paths: Query<(Entity, &WaypointPathMesh)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
@@ -1466,7 +1624,9 @@ pub fn sync_waypoint_path_mesh(
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    let Some((grid_entity, grid)) = q_grids.iter().next() else { return };
+    let Some((grid_entity, grid)) = q_grids.iter().next() else {
+        return;
+    };
     let grid_world =
         lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
             .unwrap_or(DVec3::ZERO);
@@ -1479,7 +1639,9 @@ pub fn sync_waypoint_path_mesh(
     }
 
     for (vessel, xml, bindings, reached) in q_vessels.iter() {
-        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else { continue };
+        let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
+            continue;
+        };
         let mut targets = Vec::new();
         collect_targets(&value, &mut targets);
         let smooth = route_is_smooth(&xml.0);
@@ -1490,27 +1652,39 @@ pub fn sync_waypoint_path_mesh(
             .iter()
             .filter_map(|t| {
                 let pos = parse_coord_target(t).or_else(|| {
-                    bindings
-                        .and_then(|b| b.0.get(t))
-                        .and_then(|&entity| lunco_core::coords::world_position(entity, &q_parents, &q_grids_only, &q_spatial))
+                    bindings.and_then(|b| b.0.get(t)).and_then(|&entity| {
+                        lunco_core::coords::world_position(
+                            entity,
+                            &q_parents,
+                            &q_grids_only,
+                            &q_spatial,
+                        )
+                    })
                 });
                 pos.map(|p| (p, reached.map(|r| r.0.contains(t)).unwrap_or(false)))
             })
             .collect();
         // The rover consumes the route in order, so the driven part is a prefix. Split
         // there and SHARE the boundary point, so the two ribbons meet with no gap.
-        let driven_upto = pts.iter().rposition(|(_, done)| *done).map(|i| i + 1).unwrap_or(0);
+        let driven_upto = pts
+            .iter()
+            .rposition(|(_, done)| *done)
+            .map(|i| i + 1)
+            .unwrap_or(0);
         let closed = xml.0.contains("forever") && pts.len() > 2;
 
         for part in [PathPart::Driven, PathPart::Remaining] {
             let slice: Vec<DVec3> = match part {
                 // `min(len)` guards the boundary-sharing when everything is driven.
-                PathPart::Driven if driven_upto > 0 => {
-                    pts[..(driven_upto + 1).min(pts.len())].iter().map(|(p, _)| *p).collect()
-                }
-                PathPart::Remaining if driven_upto < pts.len() => {
-                    pts[driven_upto.saturating_sub(1)..].iter().map(|(p, _)| *p).collect()
-                }
+                PathPart::Driven if driven_upto > 0 => pts[..(driven_upto + 1).min(pts.len())]
+                    .iter()
+                    .map(|(p, _)| *p)
+                    .collect(),
+                PathPart::Remaining if driven_upto < pts.len() => pts
+                    [driven_upto.saturating_sub(1)..]
+                    .iter()
+                    .map(|(p, _)| *p)
+                    .collect(),
                 _ => Vec::new(),
             };
 
@@ -1544,7 +1718,9 @@ pub fn sync_waypoint_path_mesh(
             }
 
             let anchor = path[0];
-            let Some(mesh) = build_ribbon_mesh(&path, anchor) else { continue };
+            let Some(mesh) = build_ribbon_mesh(&path, anchor) else {
+                continue;
+            };
             // Driven stays VISIBLE, just dimmed — the mission reads as a whole and you
             // can see where the rover has been; only the colour says "done".
             let (base_color, emissive) = match part {
@@ -1576,7 +1752,11 @@ pub fn sync_waypoint_path_mesh(
                 Transform::from_translation(local),
                 GlobalTransform::default(),
                 ChildOf(grid_entity),
-                WaypointPathMesh { vessel, signature, part },
+                WaypointPathMesh {
+                    vessel,
+                    signature,
+                    part,
+                },
             ));
         }
     }

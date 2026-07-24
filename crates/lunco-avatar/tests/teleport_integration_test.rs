@@ -17,19 +17,16 @@
 //!
 //! Run with: cargo test -p lunco-avatar --test teleport_integration_test -- --nocapture
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 use big_space::prelude::*;
 
+use lunco_avatar::{FreeFlightCamera, OrbitCamera, SurfaceCamera, SurfaceRelativeMode};
 use lunco_celestial::{
-    CelestialBody, CelestialReferenceFrame, PointMassGravity,
-    TerrainTileConfig,
+    CelestialBody, CelestialReferenceFrame, PointMassGravity, TerrainTileConfig,
 };
-use lunco_environment::GravityProvider;
 use lunco_core::Avatar;
-use lunco_avatar::{
-    SurfaceCamera, SurfaceRelativeMode, FreeFlightCamera, OrbitCamera,
-};
+use lunco_environment::GravityProvider;
 
 const MOON_RADIUS: f64 = 1737.0e3;
 const MOON_GRID_CELL_SIZE: f64 = 2_000.0;
@@ -40,10 +37,7 @@ fn test_full_teleport_workflow() {
     let mut app = App::new();
 
     // Headless app: no window, no renderer, no input
-    app.add_plugins((
-        MinimalPlugins,
-        big_space::prelude::BigSpaceDefaultPlugins,
-    ));
+    app.add_plugins((MinimalPlugins, big_space::prelude::BigSpaceDefaultPlugins));
 
     // Resources needed by the app
     app.insert_resource(TerrainTileConfig::default());
@@ -51,75 +45,93 @@ fn test_full_teleport_workflow() {
     // Track test state
     app.insert_resource(TestState::default());
 
-    app.add_systems(Startup, |
-        mut commands: Commands,
-        mut test_state: ResMut<TestState>,
-    | {
-        // ── Build hierarchy ────────────────────────────────────────────────
-        let root = commands.spawn(BigSpace::default()).id();
+    app.add_systems(
+        Startup,
+        |mut commands: Commands, mut test_state: ResMut<TestState>| {
+            // ── Build hierarchy ────────────────────────────────────────────────
+            let root = commands.spawn(BigSpace::default()).id();
 
-        let solar_grid = commands.spawn((
-            CelestialReferenceFrame { ephemeris_id: 10 },
-            Grid::new(2_000.0, 100.0),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        )).id();
-        commands.entity(solar_grid).set_parent_in_place(root);
+            let solar_grid = commands
+                .spawn((
+                    CelestialReferenceFrame { ephemeris_id: 10 },
+                    Grid::new(2_000.0, 100.0),
+                    CellCoord::default(),
+                    Transform::default(),
+                    GlobalTransform::default(),
+                ))
+                .id();
+            commands.entity(solar_grid).set_parent_in_place(root);
 
-        let emb_grid = commands.spawn((
-            CelestialReferenceFrame { ephemeris_id: 3 },
-            Grid::new(2_000.0, 100.0),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        )).id();
-        commands.entity(emb_grid).set_parent_in_place(solar_grid);
+            let emb_grid = commands
+                .spawn((
+                    CelestialReferenceFrame { ephemeris_id: 3 },
+                    Grid::new(2_000.0, 100.0),
+                    CellCoord::default(),
+                    Transform::default(),
+                    GlobalTransform::default(),
+                ))
+                .id();
+            commands.entity(emb_grid).set_parent_in_place(solar_grid);
 
-        let moon_grid = commands.spawn((
-            CelestialReferenceFrame { ephemeris_id: 301 },
-            Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        )).id();
-        commands.entity(moon_grid).set_parent_in_place(emb_grid);
+            let moon_grid = commands
+                .spawn((
+                    CelestialReferenceFrame { ephemeris_id: 301 },
+                    Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32),
+                    CellCoord::default(),
+                    Transform::default(),
+                    GlobalTransform::default(),
+                ))
+                .id();
+            commands.entity(moon_grid).set_parent_in_place(emb_grid);
 
-        // Moon Body: child of Moon Grid, at origin (identity transform)
-        let moon_body = commands.spawn((
-            CelestialBody {
-                name: "Moon".to_string(),
-                ephemeris_id: 301,
-                radius_m: MOON_RADIUS,
-            },
-            GravityProvider {
-                model: Box::new(PointMassGravity { gm: 4.904e12 }),
-            },
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        )).id();
-        commands.entity(moon_body).set_parent_in_place(moon_grid);
+            // Moon Body: child of Moon Grid, at origin (identity transform)
+            let moon_body = commands
+                .spawn((
+                    CelestialBody {
+                        name: "Moon".to_string(),
+                        ephemeris_id: 301,
+                        radius_m: MOON_RADIUS,
+                    },
+                    GravityProvider {
+                        model: Box::new(PointMassGravity { gm: 4.904e12 }),
+                    },
+                    CellCoord::default(),
+                    Transform::default(),
+                    GlobalTransform::default(),
+                ))
+                .id();
+            commands.entity(moon_body).set_parent_in_place(moon_grid);
 
-        // Avatar camera — start on Moon Grid in orbit (far from surface)
-        let orbit_altitude = MOON_RADIUS * 3.0;
-        let avatar = commands.spawn((
-            Camera::default(),
-            Camera3d::default(),
-            Avatar,
-            FreeFlightCamera { yaw: 0.0, pitch: -0.2, damping: None },
-            FloatingOrigin,
-            CellCoord::default(),
-            Transform::from_translation(Vec3::new(0.0, orbit_altitude as f32, orbit_altitude as f32 * 0.5)),
-            GlobalTransform::default(),
-            Name::new("Avatar Camera"),
-        )).id();
-        commands.entity(avatar).set_parent_in_place(moon_grid);
+            // Avatar camera — start on Moon Grid in orbit (far from surface)
+            let orbit_altitude = MOON_RADIUS * 3.0;
+            let avatar = commands
+                .spawn((
+                    Camera::default(),
+                    Camera3d::default(),
+                    Avatar,
+                    FreeFlightCamera {
+                        yaw: 0.0,
+                        pitch: -0.2,
+                        damping: None,
+                    },
+                    FloatingOrigin,
+                    CellCoord::default(),
+                    Transform::from_translation(Vec3::new(
+                        0.0,
+                        orbit_altitude as f32,
+                        orbit_altitude as f32 * 0.5,
+                    )),
+                    GlobalTransform::default(),
+                    Name::new("Avatar Camera"),
+                ))
+                .id();
+            commands.entity(avatar).set_parent_in_place(moon_grid);
 
-        test_state.moon_grid = Some(moon_grid);
-        test_state.moon_body = Some(moon_body);
-        test_state.avatar = Some(avatar);
-    });
+            test_state.moon_grid = Some(moon_grid);
+            test_state.moon_body = Some(moon_body);
+            test_state.avatar = Some(avatar);
+        },
+    );
 
     // Run a few frames to let big_space propagate transforms
     for _ in 0..10 {
@@ -137,7 +149,10 @@ fn test_full_teleport_workflow() {
         };
         let mut q_avatar = world.query::<(&CellCoord, &Transform, Option<&FreeFlightCamera>)>();
         let (_cell, tf, freeflight) = q_avatar.get(world, avatar).unwrap();
-        assert!(freeflight.is_some(), "Camera should have FreeFlightCamera initially");
+        assert!(
+            freeflight.is_some(),
+            "Camera should have FreeFlightCamera initially"
+        );
         // Grid-local position magnitude (not world altitude)
         tf.translation.length()
     };
@@ -169,7 +184,10 @@ fn test_full_teleport_workflow() {
         let mut entity = world.entity_mut(avatar);
         entity.insert(new_cell);
         entity.insert(Transform::from_translation(new_tf_pos).with_rotation(surface_rot));
-        entity.insert(SurfaceCamera { heading: 0.0, pitch: -0.2 });
+        entity.insert(SurfaceCamera {
+            heading: 0.0,
+            pitch: -0.2,
+        });
         entity.insert(SurfaceRelativeMode);
         entity.remove::<FreeFlightCamera>();
         entity.remove::<OrbitCamera>();
@@ -192,16 +210,24 @@ fn test_full_teleport_workflow() {
             test_state.avatar.unwrap()
         };
         let mut q_avatar = world.query::<(
-            &CellCoord, &Transform,
-            Option<&SurfaceCamera>, Option<&SurfaceRelativeMode>,
+            &CellCoord,
+            &Transform,
+            Option<&SurfaceCamera>,
+            Option<&SurfaceRelativeMode>,
         )>();
         let (cell, tf, sc, sm) = q_avatar.get(world, avatar).unwrap();
         (*cell, *tf, sc.is_some(), sm.is_some())
     };
 
     // Camera should be in surface mode
-    assert!(has_surface_camera, "Camera should have SurfaceCamera after teleport");
-    assert!(has_surface_mode, "Camera should have SurfaceRelativeMode after teleport");
+    assert!(
+        has_surface_camera,
+        "Camera should have SurfaceCamera after teleport"
+    );
+    assert!(
+        has_surface_mode,
+        "Camera should have SurfaceRelativeMode after teleport"
+    );
 
     // Reconstruct position from cell + local transform
     let reconstructed = DVec3::new(
@@ -216,7 +242,10 @@ fn test_full_teleport_workflow() {
         (altitude - 50.0).abs() < 10.0,
         "Camera altitude after teleport should be ~50m, got {:.2}m \
          (cell={:?}, local_tf={:?}, reconstructed={:?})",
-        altitude, post_cell, post_tf.translation, reconstructed
+        altitude,
+        post_cell,
+        post_tf.translation,
+        reconstructed
     );
 
     // Verify terrain threshold check would pass (altitude < 100km)
@@ -224,7 +253,8 @@ fn test_full_teleport_workflow() {
     assert!(
         altitude < terrain_threshold,
         "Terrain should spawn at {:.0}m altitude (threshold={})",
-        altitude, terrain_threshold
+        altitude,
+        terrain_threshold
     );
 }
 

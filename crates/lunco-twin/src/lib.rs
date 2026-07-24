@@ -68,14 +68,14 @@ mod error;
 mod file_kind;
 mod manifest;
 
-pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 #[cfg(feature = "bevy")]
 pub use document_kind_registry::DocumentKindRegistryPlugin;
+pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 pub use error::TwinError;
 pub use file_kind::{DocumentKind, FileEntry, FileKind};
 pub use manifest::{
-    glob_matches, JournalManifest, TwinChildRef, TwinManifest, UsdManifest,
-    DEFAULT_SCENE_GLOBS, MANIFEST_FILENAME,
+    glob_matches, JournalManifest, TwinChildRef, TwinManifest, UsdManifest, DEFAULT_SCENE_GLOBS,
+    MANIFEST_FILENAME,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -151,10 +151,7 @@ impl TwinMode {
     /// multi-level cycles (a→b→a) are caught — not just a manifest that
     /// lists its own folder. Without this, a cyclic `twin.toml` graph
     /// recurses forever and overflows the stack (CQ-508).
-    fn open_with_visited(
-        path: &Path,
-        visited: &mut HashSet<PathBuf>,
-    ) -> Result<Self, TwinError> {
+    fn open_with_visited(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<Self, TwinError> {
         let meta = std::fs::metadata(path).map_err(|e| TwinError::Io {
             path: path.to_path_buf(),
             source: e,
@@ -289,7 +286,12 @@ impl Twin {
         match &mut self.manifest {
             Some(manifest) => match &mut manifest.usd {
                 Some(usd) => usd.default_scene = Some(rel),
-                None => manifest.usd = Some(UsdManifest { default_scene: Some(rel), scenes: None }),
+                None => {
+                    manifest.usd = Some(UsdManifest {
+                        default_scene: Some(rel),
+                        scenes: None,
+                    })
+                }
             },
             None => {
                 self.manifest = Some(TwinManifest {
@@ -304,7 +306,10 @@ impl Twin {
                     uuid: None,
                     default_perspective: None,
                     children: Vec::new(),
-                    usd: Some(UsdManifest { default_scene: Some(rel), scenes: None }),
+                    usd: Some(UsdManifest {
+                        default_scene: Some(rel),
+                        scenes: None,
+                    }),
                     journal: None,
                 });
             }
@@ -366,7 +371,10 @@ impl Twin {
             }
 
             let kind = FileKind::classify(&rel);
-            files.push(FileEntry { relative_path: rel, kind });
+            files.push(FileEntry {
+                relative_path: rel,
+                kind,
+            });
         }
 
         // Stable order for reproducibility (tests, UI listings).
@@ -408,17 +416,14 @@ impl Twin {
     /// Only meaningful for [`StorageHandle::File`] today. Other
     /// backends always return `false`.
     pub fn owns(&self, handle: &StorageHandle) -> bool {
-        handle.is_under(&self.root_handle())
-            || self.children.iter().any(|c| c.owns(handle))
+        handle.is_under(&self.root_handle()) || self.children.iter().any(|c| c.owns(handle))
     }
 
     /// Recursively walk every Twin in this tree (self first, then
     /// children depth-first). Useful for "save all", "find Twin owning
     /// this path", and similar workspace-level operations.
     pub fn walk(&self) -> impl Iterator<Item = &Twin> {
-        TwinWalkIter {
-            stack: vec![self],
-        }
+        TwinWalkIter { stack: vec![self] }
     }
 
     /// Locate the deepest Twin in this subtree whose folder contains
@@ -740,8 +745,7 @@ version = "0.1.0"
         };
 
         let top_handle = lunco_storage::StorageHandle::File(root.join("top.mo"));
-        let inner_handle =
-            lunco_storage::StorageHandle::File(root.join("sub/inner.mo"));
+        let inner_handle = lunco_storage::StorageHandle::File(root.join("sub/inner.mo"));
         let outside =
             lunco_storage::StorageHandle::File(tmp.path().parent().unwrap().join("elsewhere.mo"));
 
@@ -754,10 +758,7 @@ version = "0.1.0"
             parent.find_owning(&inner_handle).unwrap().root,
             root.join("sub").canonicalize().unwrap_or(root.join("sub"))
         );
-        assert_eq!(
-            parent.find_owning(&top_handle).unwrap().root,
-            parent.root
-        );
+        assert_eq!(parent.find_owning(&top_handle).unwrap().root, parent.root);
         assert!(parent.find_owning(&outside).is_none());
     }
 
@@ -805,4 +806,3 @@ version = "0.1.0"
         assert_eq!(names, vec!["a", "b", "c"]);
     }
 }
-

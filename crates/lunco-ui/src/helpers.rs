@@ -9,12 +9,11 @@ use bevy_egui::egui;
 /// one step. Prefer [`collapsing_row`] for the common case; reach for
 /// this only when you cannot express the row through that helper.
 pub fn toggle_collapsing(ui: &egui::Ui, id: egui::Id, default_open: bool) {
-    let mut state =
-        egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            id,
-            default_open,
-        );
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        id,
+        default_open,
+    );
     state.toggle(ui);
     state.store(ui.ctx());
 }
@@ -42,12 +41,11 @@ pub fn collapsing_row(
     add_header: impl FnOnce(&mut egui::Ui) -> bool,
     add_body: impl FnOnce(&mut egui::Ui),
 ) {
-    let state =
-        egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            id,
-            default_open,
-        );
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        id,
+        default_open,
+    );
     let mut toggle = false;
     state
         .show_header(ui, |ui| toggle = add_header(ui))

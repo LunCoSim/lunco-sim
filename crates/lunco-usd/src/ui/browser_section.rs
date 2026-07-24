@@ -144,11 +144,7 @@ impl BrowserSection for UsdSceneSection {
 /// Paint one stage's prim-tree body from its pre-derived row. Returns
 /// `true` when the user clicked a prim row (→ retarget the viewport).
 /// Pure read over the cached [`TextReader`]; no world access.
-fn render_stage_body(
-    ui: &mut egui::Ui,
-    row: &UsdStageRow,
-    error_color: egui::Color32,
-) -> bool {
+fn render_stage_body(ui: &mut egui::Ui, row: &UsdStageRow, error_color: egui::Color32) -> bool {
     if let Some(err) = &row.parse_error {
         ui.colored_label(error_color, err);
         return false;

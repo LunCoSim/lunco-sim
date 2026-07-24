@@ -22,7 +22,12 @@ pub struct SizeDist {
 
 impl SizeDist {
     pub const fn new(min: f32, mode: f32, max: f32, sigma: f32) -> Self {
-        Self { min, max, mode, sigma }
+        Self {
+            min,
+            max,
+            mode,
+            sigma,
+        }
     }
 }
 
@@ -98,7 +103,9 @@ impl ObstacleFieldSpec {
 
     /// Expected object count for a per-hectare `density` over this region.
     pub fn count_for_density(&self, density_per_hectare: f32) -> usize {
-        ((density_per_hectare * self.region_area()) / 10_000.0).round().max(0.0) as usize
+        ((density_per_hectare * self.region_area()) / 10_000.0)
+            .round()
+            .max(0.0) as usize
     }
 }
 

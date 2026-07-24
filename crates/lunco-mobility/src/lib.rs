@@ -1,35 +1,35 @@
 //! # Surface Mobility & Traction Physics
 //!
-//! This crate implements the core physics models for planetary rovers and 
-//! surface exploration vehicles. 
+//! This crate implements the core physics models for planetary rovers and
+//! surface exploration vehicles.
 //!
 //! ## The "Why": Raycast-Based Ground Interaction
-//! Traditional mesh-to-mesh collision for wheels is computationally expensive 
-//! and prone to "snagging" on terrain geometry. We use a **Raycast Wheel** 
+//! Traditional mesh-to-mesh collision for wheels is computationally expensive
+//! and prone to "snagging" on terrain geometry. We use a **Raycast Wheel**
 //! model to provide a stable, high-performance alternative:
-//! 1. **Suspension Logic**: An emulated spring-damper system computes normal 
+//! 1. **Suspension Logic**: An emulated spring-damper system computes normal
 //!    forces based on ray length, preventing high-frequency jitter.
-//! 2. **Traction Physics**: Lateral and longitudinal friction are applied 
-//!    at the ray's contact point, allowing for complex skid and slip behaviors 
+//! 2. **Traction Physics**: Lateral and longitudinal friction are applied
+//!    at the ray's contact point, allowing for complex skid and slip behaviors
 //!    without the overhead of continuous contact manifolds.
-//! 3. **Numeric Stability**: By projecting a single ray, we ensure the wheel 
-//!    always "floats" at the correct elevation, even on highly irregular 
+//! 3. **Numeric Stability**: By projecting a single ray, we ensure the wheel
+//!    always "floats" at the correct elevation, even on highly irregular
 //!    procedural terrain.
 //!
 //! ## Control Mixing Models
 //! The crate supports hotswappable steering architectures:
-//! - **Differential (Skid) Drive**: Common for heavy loaders and excavators; 
+//! - **Differential (Skid) Drive**: Common for heavy loaders and excavators;
 //!   turns by varying velocity between left and right tracks.
-//! - **Ackermann Steering**: Standard for high-speed mobility; pivots leading 
+//! - **Ackermann Steering**: Standard for high-speed mobility; pivots leading
 //!   wheels to maintain a common center of rotation, reducing tire scrub.
 
-use bevy::prelude::*;
+use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
-use avian3d::prelude::*;
+use bevy::prelude::*;
+use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::architecture::Port;
 use lunco_core::ports::{PortBackend, PortDirection, PortRef};
-use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::{ActuatorPorts, CommandInputs};
 
 /// they live here rather than in core (see the nothing-into-core rule).
@@ -56,7 +56,9 @@ macro_rules! drive_diag {
 /// also compile out, not just the log call.
 #[cfg(feature = "drive-diag")]
 macro_rules! drive_diag_block {
-    ($body:block) => { $body };
+    ($body:block) => {
+        $body
+    };
 }
 #[cfg(not(feature = "drive-diag"))]
 macro_rules! drive_diag_block {
@@ -76,73 +78,78 @@ impl Plugin for LunCoMobilityPlugin {
         sensing::register_collision_event_bridge(app);
 
         app.register_type::<Suspension>()
-           .register_type::<WheelRaycast>()
-           // `DriveMix` — the kernel-selected allocation spec that replaced the
-           // per-arch `DifferentialDrive`/`AckermannSteer`/`GenericDriveMix`.
-           // Registered here with the kernels it selects between; it is a
-           // vehicle-domain type and core carries no domain.
-           .register_type::<DriveMix>()
-           .register_type::<DifferentialCoupling>()
-           .register_type::<SuspensionPiston>()
-           .register_type::<SuspensionSpring>()
-           .register_type::<ProxyWheelMassFolded>()
-           // A vehicle's mass must not depend on which `drivetrain` variant
-           // realizes its wheels. Ungated: this is a one-shot mass-property
-           // correction per chassis, not a force, so it must land even while
-           // physics is held — a rover that spawns during a cinematic hold is
-           // still the same rover.
-           .add_systems(FixedUpdate, fold_proxy_wheel_mass)
-           // G5 rocker-bogie differential — separate set: it doesn't read the
-           // control ports, only couples two rocker hinges. Idle unless a
-           // `DifferentialCoupling` exists, so it's free for every other vehicle.
-           .add_systems(
-               FixedUpdate,
-               differential_coupling_system
-                   .run_if(any_with_component::<DifferentialCoupling>)
-                   // Applies an equal-and-opposite force pair at the two rocker
-                   // anchors, so it accumulates across a physics hold exactly as the
-                   // wheel systems do. Same gate, same reason.
-                   .run_if(lunco_physics::physics_is_live),
-           )
-           .add_systems(FixedUpdate, (
-                suspension_system,
-                apply_wheel_suspension,
-                update_suspension_visuals,
-                // STEER, then SOLVE THE TIRE, then APPLY IT. Steering first so the
-                // contact basis is this tick's heading; the spin solve produces the
-                // patch force; `apply_wheel_drive` only hands it to the body. The
-                // old order (drive → steer → spin) meant the chassis force was
-                // built from last tick's steer angle and from a spin it could not
-                // see, which is what forced the two independent force fudges.
-                apply_wheel_steering,
-                update_wheel_spin,
-                apply_wheel_drive,
-            ).chain()
-           // Read the actuator `Port` AFTER wire propagation has carried this
-           // tick's command into it (same fixed tick), so actuation isn't
-           // delayed an extra tick. See `lunco_core::ControlDacSet`.
-           .after(lunco_core::ControlDacSet)
-           .run_if(
-               // Run wherever physics is live. On a pure client this used to be
-               // skipped entirely (replicated rovers are server-authoritative
-               // proxies); predict-own now lets the client locally simulate the
-               // ONE rover it possesses. We don't gate by role here — the owned
-               // rover is the only `Dynamic` chassis on a client (every other
-               // replicated body is pinned `Kinematic` by `force_kinematic_proxies`),
-               // and the per-chassis `RigidBody::Kinematic` guard inside each wheel
-               // system already skips those. So host/standalone simulate every
-               // rover (unchanged) and a client simulates only its owned one.
-               //
-               // `physics_is_live`, NOT a bare `Time<Virtual>` check. These systems
-               // write into avian's force accumulator, which only the physics step
-               // clears — and a physics HOLD (a frozen cinematic beat) deliberately
-               // leaves virtual time running, so the old virtual-clock gate was open
-               // for exactly the window that must be closed. Gating on the physics
-               // CLOCK rather than the holds resource also keeps stepped cinematics
-               // drivable: a granted `PhysicsStepRequest` frame unpauses the clock
-               // for exactly the ticks that integrate. It still covers the virtual
-               // pause/speed case it was written for; see `physics_is_live`.
-               lunco_physics::physics_is_live));
+            .register_type::<WheelRaycast>()
+            // `DriveMix` — the kernel-selected allocation spec that replaced the
+            // per-arch `DifferentialDrive`/`AckermannSteer`/`GenericDriveMix`.
+            // Registered here with the kernels it selects between; it is a
+            // vehicle-domain type and core carries no domain.
+            .register_type::<DriveMix>()
+            .register_type::<DifferentialCoupling>()
+            .register_type::<SuspensionPiston>()
+            .register_type::<SuspensionSpring>()
+            .register_type::<ProxyWheelMassFolded>()
+            // A vehicle's mass must not depend on which `drivetrain` variant
+            // realizes its wheels. Ungated: this is a one-shot mass-property
+            // correction per chassis, not a force, so it must land even while
+            // physics is held — a rover that spawns during a cinematic hold is
+            // still the same rover.
+            .add_systems(FixedUpdate, fold_proxy_wheel_mass)
+            // G5 rocker-bogie differential — separate set: it doesn't read the
+            // control ports, only couples two rocker hinges. Idle unless a
+            // `DifferentialCoupling` exists, so it's free for every other vehicle.
+            .add_systems(
+                FixedUpdate,
+                differential_coupling_system
+                    .run_if(any_with_component::<DifferentialCoupling>)
+                    // Applies an equal-and-opposite force pair at the two rocker
+                    // anchors, so it accumulates across a physics hold exactly as the
+                    // wheel systems do. Same gate, same reason.
+                    .run_if(lunco_physics::physics_is_live),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    suspension_system,
+                    apply_wheel_suspension,
+                    update_suspension_visuals,
+                    // STEER, then SOLVE THE TIRE, then APPLY IT. Steering first so the
+                    // contact basis is this tick's heading; the spin solve produces the
+                    // patch force; `apply_wheel_drive` only hands it to the body. The
+                    // old order (drive → steer → spin) meant the chassis force was
+                    // built from last tick's steer angle and from a spin it could not
+                    // see, which is what forced the two independent force fudges.
+                    apply_wheel_steering,
+                    update_wheel_spin,
+                    apply_wheel_drive,
+                )
+                    .chain()
+                    // Read the actuator `Port` AFTER wire propagation has carried this
+                    // tick's command into it (same fixed tick), so actuation isn't
+                    // delayed an extra tick. See `lunco_core::ControlDacSet`.
+                    .after(lunco_core::ControlDacSet)
+                    .run_if(
+                        // Run wherever physics is live. On a pure client this used to be
+                        // skipped entirely (replicated rovers are server-authoritative
+                        // proxies); predict-own now lets the client locally simulate the
+                        // ONE rover it possesses. We don't gate by role here — the owned
+                        // rover is the only `Dynamic` chassis on a client (every other
+                        // replicated body is pinned `Kinematic` by `force_kinematic_proxies`),
+                        // and the per-chassis `RigidBody::Kinematic` guard inside each wheel
+                        // system already skips those. So host/standalone simulate every
+                        // rover (unchanged) and a client simulates only its owned one.
+                        //
+                        // `physics_is_live`, NOT a bare `Time<Virtual>` check. These systems
+                        // write into avian's force accumulator, which only the physics step
+                        // clears — and a physics HOLD (a frozen cinematic beat) deliberately
+                        // leaves virtual time running, so the old virtual-clock gate was open
+                        // for exactly the window that must be closed. Gating on the physics
+                        // CLOCK rather than the holds resource also keeps stepped cinematics
+                        // drivable: a granted `PhysicsStepRequest` frame unpauses the clock
+                        // for exactly the ticks that integrate. It still covers the virtual
+                        // pause/speed case it was written for; see `physics_is_live`.
+                        lunco_physics::physics_is_live,
+                    ),
+            );
 
         // Expose every FSW's logical command ports (a rover's throttle/steer/brake,
         // etc.) through the shared port substrate, so the ONE generic `SetPorts`
@@ -397,7 +404,6 @@ const MAX_SUSPENSION_FORCE_N: f64 = 100_000.0;
 
 // ── Pure force laws (unit-tested; the numerically-sensitive bits live here) ─────
 
-
 /// Contact friction opposing the slip *velocity vector*. Continuous through zero
 /// (no dead-band) so a near-stationary wheel is still damped — a slip dead-band
 /// left sub-threshold motion undamped and produced a stiction limit-cycle (the
@@ -415,7 +421,11 @@ const MAX_SUSPENSION_FORCE_N: f64 = 100_000.0;
 /// with the lean, so decomposing slip/drive in this basis gives the correct
 /// longitudinal/lateral split instead of assuming a flat patch. Falls back to
 /// the raw vectors if the heading is parallel to the normal (degenerate).
-pub(crate) fn contact_plane_basis(wheel_forward: DVec3, wheel_right: DVec3, normal: DVec3) -> (DVec3, DVec3) {
+pub(crate) fn contact_plane_basis(
+    wheel_forward: DVec3,
+    wheel_right: DVec3,
+    normal: DVec3,
+) -> (DVec3, DVec3) {
     let n = normal.normalize_or_zero();
     if n == DVec3::ZERO {
         return (wheel_forward, wheel_right);
@@ -426,7 +436,6 @@ pub(crate) fn contact_plane_basis(wheel_forward: DVec3, wheel_right: DVec3, norm
     let right = forward.cross(n).try_normalize().unwrap_or(wheel_right);
     (forward, right)
 }
-
 
 /// Suspension normal-force magnitude: spring `k·x` plus damping `c·v`, with the
 /// DAMPING bounded to ±spring so the total stays in `[0, 2·spring]` without a
@@ -633,9 +642,9 @@ fn apply_wheel_suspension(
             // tore itself off the ground and reappeared at the grid origin. Report what
             // actually happened — no support — rather than what the spring would have
             // produced had the geometry been real.
-            let contact = hits.iter_sorted().find(|hit| {
-                hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12
-            });
+            let contact = hits
+                .iter_sorted()
+                .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
             if let Some(hit) = contact {
                 let distance = hit.distance;
                 if distance < susp.rest_length {
@@ -759,18 +768,16 @@ fn sync_raycast_wheel_physics_pose(
 /// from sliding like it's on ice and limits drive force to what the tire can
 /// actually grip.
 fn apply_wheel_drive(
-    q_wheels: Query<(
-        &WheelRaycast,
-        &Transform,
-        &RayHits,
-        &ChildOf,
-    )>,
+    q_wheels: Query<(&WheelRaycast, &Transform, &RayHits, &ChildOf)>,
     q_ports: Query<&Port>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut q_chassis: Query<(Forces, &RigidBody, Option<&CommandInputs>), (With<DriveMix>, lunco_physics::Integrable)>,
+    mut q_chassis: Query<
+        (Forces, &RigidBody, Option<&CommandInputs>),
+        (With<DriveMix>, lunco_physics::Integrable),
+    >,
 ) {
     for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
@@ -788,7 +795,9 @@ fn apply_wheel_drive(
                 }
             });
             // Skip forces if body is kinematic
-            if matches!(body, RigidBody::Kinematic) { continue; }
+            if matches!(body, RigidBody::Kinematic) {
+                continue;
+            }
             // Braking: the wheel-spin model locks the spin, but the chassis only
             // stops if the contact grips. We make friction saturate (full cone)
             // while braking so a locked wheel actually decelerates the rover.
@@ -839,8 +848,12 @@ fn apply_wheel_drive(
                     // torque–speed rolloff reads.
                     let chassis_vel = forces.linear_velocity();
                     let chassis_ang_vel = forces.angular_velocity();
-                    let hub_vel =
-                        wheel_hub_velocity(chassis_vel, chassis_ang_vel, hub_pos_world, forces.position().0);
+                    let hub_vel = wheel_hub_velocity(
+                        chassis_vel,
+                        chassis_ang_vel,
+                        hub_pos_world,
+                        forces.position().0,
+                    );
                     let long_vel = hub_vel.dot(forward); // longitudinal slip
                     let lat_vel = hub_vel.dot(right); // lateral slip
 
@@ -862,7 +875,12 @@ fn apply_wheel_drive(
 /// computed `output_angle` and rotates the wheel about local Y; the visual mesh
 /// rotation (steer + roll spin) is composed in `update_wheel_spin`.
 fn apply_wheel_steering(
-    mut q_wheels: Query<(&mut Transform, &ChildOf, &lunco_hardware::SteeringActuator, &WheelRaycast)>,
+    mut q_wheels: Query<(
+        &mut Transform,
+        &ChildOf,
+        &lunco_hardware::SteeringActuator,
+        &WheelRaycast,
+    )>,
     q_chassis: Query<&RigidBody, With<DriveMix>>,
 ) {
     for (mut transform, parent, steer, wheel) in q_wheels.iter_mut() {
@@ -878,7 +896,11 @@ fn apply_wheel_steering(
         // yaw steer; a raked motorcycle fork tilts the axis so the front wheel
         // turns about the steering head, not vertical.
         let raw = wheel.steer_axis.as_vec3();
-        let axis = if raw.length_squared() > 1e-12 { raw.normalize() } else { Vec3::Y };
+        let axis = if raw.length_squared() > 1e-12 {
+            raw.normalize()
+        } else {
+            Vec3::Y
+        };
         transform.rotation = Quat::from_axis_angle(axis, -steer.output_angle as f32);
     }
 }
@@ -1015,7 +1037,11 @@ fn differential_lambda(
     let c = angle_a - ratio * angle_b - rest_offset;
     let explicit = stiffness * c + damping * rate;
     let scale = 1.0 + dt * w * (damping + dt * stiffness);
-    if scale > 0.0 { explicit / scale } else { explicit }
+    if scale > 0.0 {
+        explicit / scale
+    } else {
+        explicit
+    }
 }
 
 /// The constraint's inverse inertia about `axis_world` — the `w` in
@@ -1095,16 +1121,14 @@ fn differential_coupling_system(
         // ċ = (ω_a − r·ω_b − (1 − r)·ω_c) · axis_world.
         let r = coupling.ratio;
         let w_c = chassis.angular_velocity();
-        let rate = (a.angular_velocity() - r * b.angular_velocity() - (1.0 - r) * w_c)
-            .dot(axis_world);
+        let rate =
+            (a.angular_velocity() - r * b.angular_velocity() - (1.0 - r) * w_c).dot(axis_world);
         // `J·M⁻¹·Jᵀ` about the hinge axis, from the three bodies' CURRENT world
         // inertias — recomputed every step because a pitched rocker presents a
         // different inertia about the axis than a level one.
-        let Ok([inertia_a, inertia_b, inertia_c]) = q_inertia.get_many([
-            coupling.rocker_a,
-            coupling.rocker_b,
-            coupling.chassis,
-        ]) else {
+        let Ok([inertia_a, inertia_b, inertia_c]) =
+            q_inertia.get_many([coupling.rocker_a, coupling.rocker_b, coupling.chassis])
+        else {
             continue;
         };
         let w = differential_inverse_inertia(
@@ -1209,9 +1233,12 @@ fn suspension_system(
             // force), negative when extending (reduces force). Clamp total to
             // zero minimum so we never pull bodies together.
             let damping_force_mag: f64 = rel_vel * susp.damping_c;
-            let total_force_mag: f64 = (spring_force_mag + damping_force_mag).clamp(0.0, MAX_SUSPENSION_FORCE_N);
+            let total_force_mag: f64 =
+                (spring_force_mag + damping_force_mag).clamp(0.0, MAX_SUSPENSION_FORCE_N);
 
-            if !total_force_mag.is_finite() { continue; }
+            if !total_force_mag.is_finite() {
+                continue;
+            }
 
             let force_vec: DVec3 = world_axis * total_force_mag;
 
@@ -1237,7 +1264,10 @@ const COMMAND_INPUT_BACKEND: PortBackend = PortBackend {
         }
     },
     read_output: |_w, _e, _n| None,
-    read_input: |w, e, n| w.get::<CommandInputs>(e).and_then(|c| c.values.get(n).copied()),
+    read_input: |w, e, n| {
+        w.get::<CommandInputs>(e)
+            .and_then(|c| c.values.get(n).copied())
+    },
     write_input: |w, e, n, v| {
         if let Some(mut c) = w.get_mut::<CommandInputs>(e) {
             if let Some(slot) = c.values.get_mut(n) {
@@ -1268,7 +1298,10 @@ const COMMAND_INPUT_BACKEND: PortBackend = PortBackend {
 /// run on `Changed<ControlBinding>` regardless of which reader stamped the binding or
 /// the surface, and regardless of spawn order.
 fn sync_command_surface(
-    mut q: Query<(&lunco_core::ControlBinding, &mut CommandInputs), Changed<lunco_core::ControlBinding>>,
+    mut q: Query<
+        (&lunco_core::ControlBinding, &mut CommandInputs),
+        Changed<lunco_core::ControlBinding>,
+    >,
 ) {
     for (binding, mut inputs) in q.iter_mut() {
         for port in binding.ports() {
@@ -1311,7 +1344,9 @@ fn apply_drive_mix(
         inputs.brake_active = brake > 0.5;
         let brake_port_val = if inputs.brake_active { 1.0 } else { 0.0 };
         if let Some(port_b) = actuators.get("brake") {
-            if let Ok(mut p) = q_ports.get_mut(port_b) { p.value = brake_port_val; }
+            if let Ok(mut p) = q_ports.get_mut(port_b) {
+                p.value = brake_port_val;
+            }
         }
 
         drive_diag!("[drive-diag] apply_drive_mix: target {:?} kernel={} throttle={} steer={} brake={} ports={:?}", entity, mix.kernel, throttle, steer, inputs.brake_active, actuators.ports);
@@ -1320,9 +1355,17 @@ fn apply_drive_mix(
         // so brake-coefficient ports engage and drive ports zero out — matching the
         // old per-branch behaviour, now uniform across kernels.
         let drive_inputs = if inputs.brake_active {
-            kernels::DriveInputs { throttle: 0.0, steer: 0.0, brake: 1.0 }
+            kernels::DriveInputs {
+                throttle: 0.0,
+                steer: 0.0,
+                brake: 1.0,
+            }
         } else {
-            kernels::DriveInputs { throttle, steer, brake: 0.0 }
+            kernels::DriveInputs {
+                throttle,
+                steer,
+                brake: 0.0,
+            }
         };
 
         // Allocate command → normalized port writes. A built-in registry kernel
@@ -1365,9 +1408,16 @@ fn apply_drive_mix(
 /// port + `brake_active` friction cone are already applied upstream regardless).
 /// Host-side; a predicted client needs the identical hook, so the scripted-policy
 /// plane (`lunco_networking`) distributes + registers it on every peer.
-fn scripted_drive_mix(hook_id: &str, inputs: &std::collections::HashMap<String, f64>) -> Vec<(String, f64)> {
+fn scripted_drive_mix(
+    hook_id: &str,
+    inputs: &std::collections::HashMap<String, f64>,
+) -> Vec<(String, f64)> {
     use lunco_hooks::HookValue;
-    let ctx = HookValue::map(inputs.iter().map(|(k, v)| (k.clone(), HookValue::Float(*v))));
+    let ctx = HookValue::map(
+        inputs
+            .iter()
+            .map(|(k, v)| (k.clone(), HookValue::Float(*v))),
+    );
     match lunco_hooks::invoke(hook_id, &[ctx]) {
         Some(Ok(HookValue::Map(entries))) => entries
             .into_iter()
@@ -1423,7 +1473,11 @@ mod proxy_wheel_mass_tests {
         app.update();
 
         let mass = app.world().get::<Mass>(chassis).unwrap().0;
-        let inertia = app.world().get::<AngularInertia>(chassis).unwrap().principal;
+        let inertia = app
+            .world()
+            .get::<AngularInertia>(chassis)
+            .unwrap()
+            .principal;
         let com = app
             .world()
             .get::<CenterOfMass>(chassis)
@@ -1509,7 +1563,11 @@ mod proxy_wheel_mass_tests {
         let (mass, inertia, com) = fold_a_four_wheel_rover(0.0);
         assert_eq!(mass, 1000.0, "folded before the wheel parameters arrived");
         assert_eq!(inertia, Vec3::new(1028.0, 1354.0, 341.0));
-        assert_eq!(com, Vec3::ZERO, "centre of mass moved before the fold was due");
+        assert_eq!(
+            com,
+            Vec3::ZERO,
+            "centre of mass moved before the fold was due"
+        );
     }
 
     #[test]
@@ -1521,7 +1579,10 @@ mod proxy_wheel_mass_tests {
             .spawn((DriveMix::default(), Mass(1000.0)))
             .id();
         app.world_mut().spawn((
-            WheelRaycast { mass: 25.0, ..default() },
+            WheelRaycast {
+                mass: 25.0,
+                ..default()
+            },
             Transform::default(),
             ChildOf(chassis),
         ));
@@ -1558,8 +1619,16 @@ mod force_law_tests {
         // must lie in the plane ⟂ to the normal, stay unit, and be orthogonal.
         let n = DVec3::new(0.0, 1.0, 0.4).normalize();
         let (f, r) = contact_plane_basis(DVec3::NEG_Z, DVec3::X, n);
-        assert!(f.dot(n).abs() < 1e-9, "forward not in contact plane: {}", f.dot(n));
-        assert!(r.dot(n).abs() < 1e-9, "right not in contact plane: {}", r.dot(n));
+        assert!(
+            f.dot(n).abs() < 1e-9,
+            "forward not in contact plane: {}",
+            f.dot(n)
+        );
+        assert!(
+            r.dot(n).abs() < 1e-9,
+            "right not in contact plane: {}",
+            r.dot(n)
+        );
         assert!((f.length() - 1.0).abs() < 1e-9 && (r.length() - 1.0).abs() < 1e-9);
         assert!(f.dot(r).abs() < 1e-9, "forward/right not orthogonal");
     }
@@ -1592,8 +1661,14 @@ mod force_law_tests {
         struct TankKernel;
         impl ScriptHook for TankKernel {
             fn invoke(&self, args: &[HookValue]) -> HookResult {
-                let t = args[0].get("throttle").and_then(HookValue::as_f64).unwrap_or(0.0);
-                let s = args[0].get("steer").and_then(HookValue::as_f64).unwrap_or(0.0);
+                let t = args[0]
+                    .get("throttle")
+                    .and_then(HookValue::as_f64)
+                    .unwrap_or(0.0);
+                let s = args[0]
+                    .get("steer")
+                    .and_then(HookValue::as_f64)
+                    .unwrap_or(0.0);
                 Ok(HookValue::map([
                     ("drive_left", HookValue::Float((t + s).clamp(-1.0, 1.0))),
                     ("drive_right", HookValue::Float((t - s).clamp(-1.0, 1.0))),
@@ -1607,14 +1682,21 @@ mod force_law_tests {
             hook: Arc::new(TankKernel),
         });
 
-        let inputs: HashMap<String, f64> =
-            [("throttle".into(), 1.0), ("steer".into(), 0.5), ("brake".into(), 0.0)].into();
+        let inputs: HashMap<String, f64> = [
+            ("throttle".into(), 1.0),
+            ("steer".into(), 0.5),
+            ("brake".into(), 0.0),
+        ]
+        .into();
         let mut out = scripted_drive_mix("test.kernel.tank", &inputs);
         out.sort_by(|a, b| a.0.cmp(&b.0));
         // t+s = 1.5 → clamped to 1.0; t-s = 0.5.
         assert_eq!(
             out,
-            vec![("drive_left".to_string(), 1.0), ("drive_right".to_string(), 0.5)]
+            vec![
+                ("drive_left".to_string(), 1.0),
+                ("drive_right".to_string(), 0.5)
+            ]
         );
 
         // Absent hook → empty (fail-safe coast; ports left untouched).
@@ -1623,27 +1705,24 @@ mod force_law_tests {
         lunco_hooks::unregister("test.kernel.tank");
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
     // ── suspension_force_mag: bounded, never negative, damps both ways ───────
     #[test]
     fn suspension_force_is_nonnegative_and_bounded() {
         let (k, c) = (8000.0, 2800.0);
         let x = 0.05;
         let spring = x * k;
-        assert!(suspension_force_mag(x, k, -1000.0, c) >= 0.0, "ground can't pull");
-        assert!(suspension_force_mag(x, k, 1000.0, c) <= 2.0 * spring + 1e-9, "bounded");
-        assert!((suspension_force_mag(x, k, 0.0, c) - spring).abs() < 1e-9, "at rest = spring");
+        assert!(
+            suspension_force_mag(x, k, -1000.0, c) >= 0.0,
+            "ground can't pull"
+        );
+        assert!(
+            suspension_force_mag(x, k, 1000.0, c) <= 2.0 * spring + 1e-9,
+            "bounded"
+        );
+        assert!(
+            (suspension_force_mag(x, k, 0.0, c) - spring).abs() < 1e-9,
+            "at rest = spring"
+        );
     }
 
     #[test]
@@ -1688,7 +1767,11 @@ mod oracle {
     /// The continuous physics the Rust law approximates (QuarterCar.mo): ideal
     /// linear spring-damper, no clamp. Zero force when out of contact (χ ≤ 0).
     fn reference_force(chi: f64, chi_dot: f64, k: f64, c: f64) -> f64 {
-        if chi > 0.0 { k * chi + c * chi_dot } else { 0.0 }
+        if chi > 0.0 {
+            k * chi + c * chi_dot
+        } else {
+            0.0
+        }
     }
 
     /// Integrate the reference with RK4 at a fine step → ground truth trajectory of
@@ -1763,10 +1846,18 @@ mod oracle {
         let reference = reference_chi(k, c, 0.20, 0.0, 3.0);
         let dev = max_abs_dev(&rust, &reference);
         let chi_eq = M * G / k;
-        println!("[oracle] gentle: max|χ_rust−χ_ref| = {dev:.5} m, χ_end = {:.4} (eq {chi_eq:.4})",
-            rust.last().unwrap());
-        assert!(dev < 8.0e-3, "fixed law diverges from continuous reference: {dev} m");
-        assert!((rust.last().unwrap() - chi_eq).abs() < 2.0e-3, "must settle at m·g/k");
+        println!(
+            "[oracle] gentle: max|χ_rust−χ_ref| = {dev:.5} m, χ_end = {:.4} (eq {chi_eq:.4})",
+            rust.last().unwrap()
+        );
+        assert!(
+            dev < 8.0e-3,
+            "fixed law diverges from continuous reference: {dev} m"
+        );
+        assert!(
+            (rust.last().unwrap() - chi_eq).abs() < 2.0e-3,
+            "must settle at m·g/k"
+        );
     }
 
     #[test]
@@ -1777,12 +1868,16 @@ mod oracle {
         let (k, c) = (8000.0, 400.0);
         let (rust, _f) = step_law(fixed(k, c), 0.15, 0.0, 5.0);
         let win = rust.len() / 5;
-        let p2p = |s: &[f64]| s.iter().cloned().fold(f64::MIN, f64::max)
-            - s.iter().cloned().fold(f64::MAX, f64::min);
+        let p2p = |s: &[f64]| {
+            s.iter().cloned().fold(f64::MIN, f64::max) - s.iter().cloned().fold(f64::MAX, f64::min)
+        };
         let early = p2p(&rust[..win]);
         let late = p2p(&rust[rust.len() - win..]);
         println!("[oracle] settle: early p2p {early:.4} m, late p2p {late:.5} m");
-        assert!(late < 0.15 * early, "ringing must decay (limit-cycle guard): {late} vs {early}");
+        assert!(
+            late < 0.15 * early,
+            "ringing must decay (limit-cycle guard): {late} vs {early}"
+        );
     }
 
     #[test]
@@ -1804,10 +1899,15 @@ mod oracle {
         println!("[oracle] impact tick (χ = {chi_at_impact:.3} m): fixed {sf:.0} N (≤ 2·k·χ = {bound:.0}), cliff {sb:.0} N");
         // The production law obeys its bound; the cliff passes the full c·v spike.
         assert!(sf <= bound + 1.0, "fixed law must stay within 2·k·χ");
-        assert!(sb > 3.0 * sf, "cliff spikes the impact ({sb} N) far past the bounded force ({sf} N)");
-        assert!(sb > 20_000.0, "cliff lets a >20 kN landing transient through");
+        assert!(
+            sb > 3.0 * sf,
+            "cliff spikes the impact ({sb} N) far past the bounded force ({sf} N)"
+        );
+        assert!(
+            sb > 20_000.0,
+            "cliff lets a >20 kN landing transient through"
+        );
     }
-
 }
 
 #[cfg(test)]
@@ -1823,9 +1923,17 @@ mod differential_tests {
     /// A geared pair satisfies `θ_a = r·θ_b + rest_offset` exactly ⇒ no correction.
     #[test]
     fn a_satisfied_gear_needs_no_torque() {
-        for (r, a, b) in [(-1.0, 0.2, -0.2), (1.0, 0.4, 0.4), (2.0, 0.6, 0.3), (-0.5, 0.25, -0.5)] {
+        for (r, a, b) in [
+            (-1.0, 0.2, -0.2),
+            (1.0, 0.4, 0.4),
+            (2.0, 0.6, 0.3),
+            (-0.5, 0.25, -0.5),
+        ] {
             let lambda = differential_lambda(a, b, 0.0, 0.0, r, 1000.0, 100.0, W, DT);
-            assert!(lambda.abs() < 1e-12, "ratio {r}: satisfied gear pulled {lambda}");
+            assert!(
+                lambda.abs() < 1e-12,
+                "ratio {r}: satisfied gear pulled {lambda}"
+            );
         }
     }
 
@@ -1848,7 +1956,10 @@ mod differential_tests {
         let k = 1000.0;
         // θ_a + θ_b = 0.5, and the gear is authored to want exactly that.
         let at_rest = differential_lambda(0.3, 0.2, 0.0, 0.5, -1.0, k, 0.0, W, DT);
-        assert!(at_rest.abs() < 1e-12, "offset target should be satisfied, got {at_rest}");
+        assert!(
+            at_rest.abs() < 1e-12,
+            "offset target should be satisfied, got {at_rest}"
+        );
     }
 
     /// Damping opposes constraint-rate even at zero positional error.
@@ -1939,7 +2050,6 @@ pub struct SuspensionPiston {
     pub initial_y: f32,
 }
 
-
 /// Marker component added to an entity representing the suspension spring visual.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
@@ -1957,10 +2067,19 @@ pub struct SuspensionSpring;
 fn update_suspension_visuals(
     q_wheels: Query<(&WheelRaycast, &Suspension, &RayHits, Option<&Children>)>,
     mut q_piston: Query<(&mut Transform, &SuspensionPiston), Without<WheelRaycast>>,
-    mut q_spring: Query<&mut Transform, (With<SuspensionSpring>, Without<WheelRaycast>, Without<SuspensionPiston>)>,
+    mut q_spring: Query<
+        &mut Transform,
+        (
+            With<SuspensionSpring>,
+            Without<WheelRaycast>,
+            Without<SuspensionPiston>,
+        ),
+    >,
 ) {
     for (wheel, susp, hits, children) in q_wheels.iter() {
-        let Some(children) = children else { continue; };
+        let Some(children) = children else {
+            continue;
+        };
 
         let mut current_distance = susp.rest_length;
         if let Some(hit) = hits.iter_sorted().next() {
@@ -2009,19 +2128,22 @@ mod suspension_visuals_tests {
         time.advance_by(std::time::Duration::from_secs_f64(0.1));
         app.insert_resource(time);
 
-        let chassis = app.world_mut().spawn((
-            RigidBody::Dynamic,
-            Position(DVec3::ZERO),
-            Rotation::default(),
-            LinearVelocity(DVec3::ZERO),
-            AngularVelocity(DVec3::ZERO),
-            ComputedMass::default(),
-            ComputedAngularInertia::default(),
-            ComputedCenterOfMass::default(),
-            VelocityIntegrationData::default(),
-            AccumulatedLocalAcceleration::default(),
-            DriveMix::default(),
-        )).id();
+        let chassis = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Position(DVec3::ZERO),
+                Rotation::default(),
+                LinearVelocity(DVec3::ZERO),
+                AngularVelocity(DVec3::ZERO),
+                ComputedMass::default(),
+                ComputedAngularInertia::default(),
+                ComputedCenterOfMass::default(),
+                VelocityIntegrationData::default(),
+                AccumulatedLocalAcceleration::default(),
+                DriveMix::default(),
+            ))
+            .id();
 
         let visual = app.world_mut().spawn(Transform::default()).id();
 
@@ -2032,41 +2154,57 @@ mod suspension_visuals_tests {
         // Rest positions as `suspensions/standard.usda` authors them: the wheel prim
         // is the AXLE, so the strut rises from it (restLength 0.7 − radius 0.4 =
         // 0.3 m of strut) and the piston/spring sit ABOVE the prim, not below.
-        let piston = app.world_mut().spawn((
-            SuspensionPiston { initial_y: 0.1 },
-            Transform::from_translation(Vec3::new(0.0, 0.1, 0.0)),
-        )).id();
+        let piston = app
+            .world_mut()
+            .spawn((
+                SuspensionPiston { initial_y: 0.1 },
+                Transform::from_translation(Vec3::new(0.0, 0.1, 0.0)),
+            ))
+            .id();
 
-        let spring = app.world_mut().spawn((
-            SuspensionSpring,
-            Transform::from_translation(Vec3::new(0.0, 0.15, 0.0)),
-        )).id();
+        let spring = app
+            .world_mut()
+            .spawn((
+                SuspensionSpring,
+                Transform::from_translation(Vec3::new(0.0, 0.15, 0.0)),
+            ))
+            .id();
 
-        let wheel = app.world_mut().spawn((
-            WheelRaycast {
-                suspension_port: Entity::PLACEHOLDER,
-                drive_port: Entity::PLACEHOLDER,
-                steer_port: Entity::PLACEHOLDER,
-                wheel_radius: 0.4,
-                visual_entity: Some(visual),
-                ..default()
-            },
-            Suspension {
-                rest_length: 0.7,
-                spring_k: 1000.0,
-                damping_c: 100.0,
-                local_axis: DVec3::Y,
-            },
-            Transform::default(),
-            RayHits(vec![RayHitData { entity: chassis, distance: 0.5, normal: DVec3::Y }]),
-            ChildOf(chassis),
-        )).id();
+        let wheel = app
+            .world_mut()
+            .spawn((
+                WheelRaycast {
+                    suspension_port: Entity::PLACEHOLDER,
+                    drive_port: Entity::PLACEHOLDER,
+                    steer_port: Entity::PLACEHOLDER,
+                    wheel_radius: 0.4,
+                    visual_entity: Some(visual),
+                    ..default()
+                },
+                Suspension {
+                    rest_length: 0.7,
+                    spring_k: 1000.0,
+                    damping_c: 100.0,
+                    local_axis: DVec3::Y,
+                },
+                Transform::default(),
+                RayHits(vec![RayHitData {
+                    entity: chassis,
+                    distance: 0.5,
+                    normal: DVec3::Y,
+                }]),
+                ChildOf(chassis),
+            ))
+            .id();
 
         app.world_mut().entity_mut(wheel).add_child(visual);
         app.world_mut().entity_mut(wheel).add_child(piston);
         app.world_mut().entity_mut(wheel).add_child(spring);
 
-        app.add_systems(Update, (apply_wheel_suspension, update_suspension_visuals).chain());
+        app.add_systems(
+            Update,
+            (apply_wheel_suspension, update_suspension_visuals).chain(),
+        );
         app.update(); // Frame 1: animates transforms (markers pre-spawned above)
 
         // 1. The hub rises by the COMPRESSION, because the prim is the axle: the ray

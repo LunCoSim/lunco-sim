@@ -57,7 +57,11 @@ fn rover_has_one_electrical_program_bound_to_its_circuit() {
                 .unwrap_or(false)
         })
         .collect();
-    assert_eq!(programs.len(), 1, "expected one electrical program, got {programs:#?}");
+    assert_eq!(
+        programs.len(),
+        1,
+        "expected one electrical program, got {programs:#?}"
+    );
 }
 
 /// The circuit's parameters are valued in USD; its boundary ports exist for cosim.

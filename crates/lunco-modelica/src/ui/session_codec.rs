@@ -20,9 +20,10 @@ use lunco_workbench::{
     finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot, OpenTab,
 };
 
-use crate::ui::panels::canvas_diagram::CanvasDiagramState;
-use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
+use crate::model_tabs::ModelTabs;
 use crate::state::ModelicaDocumentRegistry;
+use crate::ui::panels::canvas_diagram::CanvasDiagramState;
+use crate::ui::MODEL_VIEW_KIND;
 
 const KIND: &str = "modelica";
 
@@ -56,8 +57,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
                 if let Some(s) = cds.get_for_doc(doc) {
                     let vp = &s.canvas.viewport;
                     let q = |f: f32| (f * 64.0) as i64 as u64;
-                    acc ^= q(vp.zoom)
-                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    acc ^= q(vp.zoom).wrapping_mul(0x9E37_79B9_7F4A_7C15)
                         ^ q(vp.center.x).rotate_left(17)
                         ^ q(vp.center.y).rotate_left(31)
                         ^ doc.raw().wrapping_mul(0x100_0000_01b3);
@@ -140,17 +140,17 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             .get_resource_mut::<ModelicaDocumentRegistry>()?
             .allocate_with_origin(snap.source.clone(), snap.origin.clone());
         let tab_id = world.resource_mut::<ModelTabs>().ensure_for(new_id, None);
-        world
-            .commands()
-            .trigger(OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
+        world.commands().trigger(OpenTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
         Some(new_id.raw())
     }
 
     fn apply_view_state(&self, world: &mut World, live_id: u64, snap: &DocumentSnapshot) {
         // Restore the diagram's zoom/pan (5c). `Viewport` is serde; null
         // view_state (no saved camera) deserializes to Err → skip.
-        let Ok(view) =
-            serde_json::from_value::<lunco_canvas::Viewport>(snap.view_state.clone())
+        let Ok(view) = serde_json::from_value::<lunco_canvas::Viewport>(snap.view_state.clone())
         else {
             return;
         };

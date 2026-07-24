@@ -128,20 +128,28 @@ pub(crate) fn restore_doc_runtime(
     if restored {
         return;
     }
-    let Some(bytes) = read_bytes(&path) else { return };
+    let Some(bytes) = read_bytes(&path) else {
+        return;
+    };
     let data = match String::from_utf8(bytes)
         .ok()
         .and_then(|text| lunco_usd_bevy::author::usda_to_data(&text).ok())
     {
         Some(data) => data,
         None => {
-            warn!("[usd-runtime] could not parse {} — ignoring", path.display());
+            warn!(
+                "[usd-runtime] could not parse {} — ignoring",
+                path.display()
+            );
             return;
         }
     };
     if let Some(host) = registry.host_mut(doc) {
         host.document_mut().restore_runtime(data);
-        info!("[usd-runtime] restored runtime overlay from {}", path.display());
+        info!(
+            "[usd-runtime] restored runtime overlay from {}",
+            path.display()
+        );
     }
 }
 
@@ -181,7 +189,9 @@ pub(crate) fn on_doc_changed_save_runtime(
 ) {
     let doc = trigger.event().doc;
     let Some(workspace) = workspace else { return };
-    let Some(host) = registry.host(doc) else { return };
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
     let Some(path) = doc_runtime_path(&workspace, &registry, doc) else {
         return;
     };
@@ -268,18 +278,30 @@ mod tests {
             TINY,
             DocumentOrigin::writable_file("/tmp/scene.usda"),
         );
-        assert!(!runtime_has_content(reopened.runtime_data()), "fresh doc has empty runtime");
+        assert!(
+            !runtime_has_content(reopened.runtime_data()),
+            "fresh doc has empty runtime"
+        );
 
         let bytes = read_bytes(&rt_file).expect("overlay present");
-        let data = lunco_usd_bevy::author::usda_to_data(&String::from_utf8(bytes).unwrap()).unwrap();
+        let data =
+            lunco_usd_bevy::author::usda_to_data(&String::from_utf8(bytes).unwrap()).unwrap();
         reopened.restore_runtime(data);
 
         // The spawn is back in the runtime layer + composed view, base still clean.
         let prim = SdfPath::new("/World/rover_1").unwrap();
-        assert!(reopened.runtime_data().spec(&prim).is_some(), "runtime spawn restored");
-        assert!(reopened.data().spec(&prim).is_none(), "base untouched by restore");
         assert!(
-            reopened.composed_source().contains("@vessels/rovers/skid_rover.usda@"),
+            reopened.runtime_data().spec(&prim).is_some(),
+            "runtime spawn restored"
+        );
+        assert!(
+            reopened.data().spec(&prim).is_none(),
+            "base untouched by restore"
+        );
+        assert!(
+            reopened
+                .composed_source()
+                .contains("@vessels/rovers/skid_rover.usda@"),
             "restored spawn rides the composed view"
         );
     }
@@ -313,7 +335,11 @@ mod tests {
         })
         .unwrap();
         let text = lunco_usd_bevy::author::data_to_usda(src.runtime_data()).unwrap();
-        write_bytes(&dir.path().join(".lunco/runtime/scene.usda"), text.as_bytes()).unwrap();
+        write_bytes(
+            &dir.path().join(".lunco/runtime/scene.usda"),
+            text.as_bytes(),
+        )
+        .unwrap();
 
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let (doc, _) = registry.open_file(scene_abs, TINY.to_string());

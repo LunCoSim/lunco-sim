@@ -115,7 +115,10 @@ impl EngineParams {
                 EngineParam {
                     name: "display_color",
                     ty: ParamType::Vec3,
-                    source: PrimAttr { attr: "primvars:displayColor", read: Color3fArray0 },
+                    source: PrimAttr {
+                        attr: "primvars:displayColor",
+                        read: Color3fArray0,
+                    },
                     prop_fillable: true,
                     doc: "The prim's authored displayColor — the ONE place a prim's \
                           colour is authored, whether it renders through plain PBR \
@@ -215,7 +218,11 @@ impl EngineParams {
     /// something else — silent garbage — so it is reported loudly rather than
     /// packed.
     pub fn validate_schema(&self, schema: &ParamSchema, shader: &str) {
-        for f in schema.fields.iter().filter(|f| matches!(f.ui, UiKind::Engine)) {
+        for f in schema
+            .fields
+            .iter()
+            .filter(|f| matches!(f.ui, UiKind::Engine))
+        {
             match self.get(&f.name) {
                 None => bevy::log::warn!(
                     "[engine-params] {shader}: `//!@engine {}` is not a registered \
@@ -296,9 +303,15 @@ mod tests {
              struct Material { sun_dir: vec3<f32>, hf_size: f32 }",
         )
         .unwrap();
-        assert!(!r.prop_fillable(&terrain), "terrain-only inputs are not prop-fillable");
+        assert!(
+            !r.prop_fillable(&terrain),
+            "terrain-only inputs are not prop-fillable"
+        );
 
         let unknown = ParamSchema::parse("//!@engine nope\nstruct Material { nope: f32 }").unwrap();
-        assert!(!r.prop_fillable(&unknown), "an unregistered engine input is not fillable");
+        assert!(
+            !r.prop_fillable(&unknown),
+            "an unregistered engine input is not fillable"
+        );
     }
 }

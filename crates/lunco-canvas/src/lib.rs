@@ -73,14 +73,12 @@ pub mod visual;
 pub use canvas::Canvas;
 pub use event::{ContextTarget, InputEvent, Modifiers, MouseButton, SceneEvent};
 #[cfg(feature = "ui")]
-pub use layer::{
-    EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPreviewLayer,
-};
+pub use layer::{EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPreviewLayer};
 #[cfg(feature = "ui")]
 pub use overlay::{Anchor, NavBarOverlay, Overlay, OverlayCtx};
 pub use scene::{
-    empty_node_data, Edge, EdgeHitKind, EdgeId, Node, NodeData, NodeId, NodeHitKind, Port,
-    PortId, PortRef, Pos, Rect, Scene,
+    empty_node_data, Edge, EdgeHitKind, EdgeId, Node, NodeData, NodeHitKind, NodeId, Port, PortId,
+    PortRef, Pos, Rect, Scene,
 };
 pub use selection::{SelectItem, Selection};
 pub use tool::{CanvasOps, DefaultTool, SnapSettings, Tool, ToolOutcome};

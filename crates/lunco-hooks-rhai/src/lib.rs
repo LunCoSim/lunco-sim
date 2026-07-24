@@ -44,7 +44,12 @@ impl RhaiHook {
         engine
             .run_ast_with_scope(&mut scope, &ast)
             .map_err(|e| e.to_string())?;
-        Ok(Self { engine, ast, scope, entry: entry.into() })
+        Ok(Self {
+            engine,
+            ast,
+            scope,
+            entry: entry.into(),
+        })
     }
 }
 
@@ -53,7 +58,9 @@ impl ScriptHook for RhaiHook {
         let dyn_args: Vec<Dynamic> = args.iter().map(hook_to_dynamic).collect();
         // Fresh scope clone per call → no cross-call state (determinism).
         let mut scope = self.scope.clone();
-        let options = rhai::CallFnOptions::new().eval_ast(false).rewind_scope(true);
+        let options = rhai::CallFnOptions::new()
+            .eval_ast(false)
+            .rewind_scope(true);
         let result: Dynamic = self
             .engine
             .call_fn_with_options(options, &mut scope, &self.ast, &self.entry, dyn_args)

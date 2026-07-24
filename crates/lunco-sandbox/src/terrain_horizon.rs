@@ -68,7 +68,12 @@ pub(crate) fn start_streamed_horizon_bakes(
         // (pre-edit) map and re-arms `StreamedHorizonStale` — "map present + stale
         // armed" must therefore re-bake, or the far-field sun-visibility cache stays
         // wrong for the rest of the session (see `mark_streamed_horizon_stale`).
-        (With<TerrainLodViz>, Without<Mesh3d>, Without<StreamedHorizonBake>, Without<RenderLayers>),
+        (
+            With<TerrainLodViz>,
+            Without<Mesh3d>,
+            Without<StreamedHorizonBake>,
+            Without<RenderLayers>,
+        ),
     >,
 ) {
     if cfg!(target_arch = "wasm32") {
@@ -166,8 +171,17 @@ pub(crate) fn mark_streamed_horizon_stale(
     // oracle and re-bake repeatedly per stroke. Match any already-managed terrain
     // (live map OR debounce already armed) and re-arm on every change instead.
     changed: Query<
-        (Entity, Has<HorizonMap>, Has<StreamedHorizonStale>, Has<StreamedHorizonBake>),
-        (Changed<DemHeightField>, With<TerrainLodViz>, Without<Mesh3d>),
+        (
+            Entity,
+            Has<HorizonMap>,
+            Has<StreamedHorizonStale>,
+            Has<StreamedHorizonBake>,
+        ),
+        (
+            Changed<DemHeightField>,
+            With<TerrainLodViz>,
+            Without<Mesh3d>,
+        ),
     >,
 ) {
     let now = time.elapsed_secs_f64();
@@ -206,11 +220,19 @@ pub(crate) fn mark_streamed_horizon_stale(
 pub(crate) fn wire_tile_shadow_cache(
     mut commands: Commands,
     terrains: Query<
-        (Entity, Option<&HorizonShadowCache>, Option<&TileShadowCache>),
+        (
+            Entity,
+            Option<&HorizonShadowCache>,
+            Option<&TileShadowCache>,
+        ),
         (With<TerrainLodViz>, With<HorizonShadowTerrain>),
     >,
     sun: Query<
-        (&DirectionalLight, Option<&CascadeShadowConfig>, Option<&RenderLayers>),
+        (
+            &DirectionalLight,
+            Option<&CascadeShadowConfig>,
+            Option<&RenderLayers>,
+        ),
         With<DirectionalLight>,
     >,
 ) {
@@ -241,7 +263,9 @@ pub(crate) fn wire_tile_shadow_cache(
             }
         };
         if dirty {
-            commands.entity(entity).try_insert(TileShadowCache { image, on, csm_far });
+            commands
+                .entity(entity)
+                .try_insert(TileShadowCache { image, on, csm_far });
         }
     }
 }

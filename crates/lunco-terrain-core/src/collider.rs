@@ -192,14 +192,24 @@ mod tests {
                 let dx = (x as i32 - c) as f64;
                 let dz = (z as i32 - c) as f64;
                 let d = (dx * dx + dz * dz).sqrt() / 20.0; // radius 20 cells
-                let bowl = if d < 1.0 { -8.0 * (1.0 - d * d * d * d) } else { 0.0 };
+                let bowl = if d < 1.0 {
+                    -8.0 * (1.0 - d * d * d * d)
+                } else {
+                    0.0
+                };
                 let rim = 3.0 * (-((d - 0.98) / 0.05).powi(2)).exp(); // very sharp rim
                 h[z * res + x] = bowl + rim;
             }
         }
         slope_limit_grid(&mut h, res, spacing, max_slope);
-        assert!(max_adjacent_diff(&h, res) <= max_slope * spacing + 1e-6, "rim slope not bounded");
-        assert!(h[c as usize * res + c as usize] < -1.0, "bowl centre should stay depressed");
+        assert!(
+            max_adjacent_diff(&h, res) <= max_slope * spacing + 1e-6,
+            "rim slope not bounded"
+        );
+        assert!(
+            h[c as usize * res + c as usize] < -1.0,
+            "bowl centre should stay depressed"
+        );
     }
 
     #[test]

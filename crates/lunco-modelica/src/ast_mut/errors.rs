@@ -107,16 +107,18 @@ impl std::fmt::Display for AstMutError {
                 write!(f, "component `{component}` not found in class `{class}`")
             }
             AstMutError::ValueParseFailed { value } => {
-                write!(f, "could not parse value `{value}` as a Modelica expression")
+                write!(
+                    f,
+                    "could not parse value `{value}` as a Modelica expression"
+                )
             }
             AstMutError::DuplicateComponent { class, component } => write!(
                 f,
                 "component `{component}` already exists in class `{class}`"
             ),
-            AstMutError::DuplicateClass { parent, name } => write!(
-                f,
-                "class `{name}` already exists under `{parent}`"
-            ),
+            AstMutError::DuplicateClass { parent, name } => {
+                write!(f, "class `{name}` already exists under `{parent}`")
+            }
             AstMutError::PlotNodeNotFound { class, signal } => write!(
                 f,
                 "no LunCoAnnotations.PlotNode with signal `{signal}` in class `{class}`"
@@ -129,10 +131,9 @@ impl std::fmt::Display for AstMutError {
                 f,
                 "connection `connect({from}, {to})` not found in class `{class}`"
             ),
-            AstMutError::OverlappingSplice { first, second } => write!(
-                f,
-                "internal: overlapping text splices {first} and {second}"
-            ),
+            AstMutError::OverlappingSplice { first, second } => {
+                write!(f, "internal: overlapping text splices {first} and {second}")
+            }
             AstMutError::SpliceOutOfBounds { end, len } => write!(
                 f,
                 "internal: text splice ends at {end}, past the {len}-byte source (stale AST)"

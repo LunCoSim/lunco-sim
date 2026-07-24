@@ -13,50 +13,70 @@ fn test_balloon_force_propagation() {
 
     // Spawn balloon entity: a rigid body (auto-exposes `height` from Position)
     // plus a SimComponent. The body sits at y=5, so its `height` output is 5.0.
-    let balloon = app.world_mut().spawn((
-        Name::new("Test Balloon"),
-        Transform::from_xyz(0.0, 5.0, 0.0),
-        avian3d::prelude::Position::from_xyz(0.0, 5.0, 0.0),
-        avian3d::prelude::RigidBody::Dynamic,
-        SimComponent {
-            model_name: "Balloon".into(),
-            outputs: [
-                ("netForce".into(), 49.05),
-                ("buoyancy".into(), 98.1),
-                ("volume".into(), 100.0),
-            ].into_iter().collect(),
-            inputs: [
-                ("height".into(), 0.0),
-                ("velocity".into(), 0.0),
-                ("g".into(), 0.0),
-            ].into_iter().collect(),
-            ..default()
-        },
-    )).id();
+    let balloon = app
+        .world_mut()
+        .spawn((
+            Name::new("Test Balloon"),
+            Transform::from_xyz(0.0, 5.0, 0.0),
+            avian3d::prelude::Position::from_xyz(0.0, 5.0, 0.0),
+            avian3d::prelude::RigidBody::Dynamic,
+            SimComponent {
+                model_name: "Balloon".into(),
+                outputs: [
+                    ("netForce".into(), 49.05),
+                    ("buoyancy".into(), 98.1),
+                    ("volume".into(), 100.0),
+                ]
+                .into_iter()
+                .collect(),
+                inputs: [
+                    ("height".into(), 0.0),
+                    ("velocity".into(), 0.0),
+                    ("g".into(), 0.0),
+                ]
+                .into_iter()
+                .collect(),
+                ..default()
+            },
+        ))
+        .id();
 
     // Create connections (exactly as balloon_setup does)
     app.world_mut().spawn(SimConnection {
-        start_element: balloon, start_connector: "netForce".into(),
-        end_element: balloon, end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
+        start_element: balloon,
+        start_connector: "netForce".into(),
+        end_element: balloon,
+        end_connector: "force_y".into(),
+        scale: 1.0,
+        offset: 0.0,
     });
     app.world_mut().spawn(SimConnection {
-        start_element: balloon, start_connector: "height".into(),
-        end_element: balloon, end_connector: "height".into(), scale: 1.0, offset: 0.0,
+        start_element: balloon,
+        start_connector: "height".into(),
+        end_element: balloon,
+        end_connector: "height".into(),
+        scale: 1.0,
+        offset: 0.0,
     });
 
     // Run propagation
-    app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_connections,
-    ).unwrap();
+    app.world_mut()
+        .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
+        .unwrap();
 
     // Verify: SimComponent inputs populated with Avian state (height from Position)
     let comp = app.world().get::<SimComponent>(balloon).unwrap();
-    assert_eq!(comp.inputs["height"], 5.0,
-        "height input should be 5.0 from the body's Position");
+    assert_eq!(
+        comp.inputs["height"], 5.0,
+        "height input should be 5.0 from the body's Position"
+    );
 
     // Verify: the force_y input (in PendingForces) carries the netForce value.
-    assert_eq!(read_input_port(app.world(), balloon, "force_y"), Some(49.05),
-        "force_y should carry the netForce value into Avian");
+    assert_eq!(
+        read_input_port(app.world(), balloon, "force_y"),
+        Some(49.05),
+        "force_y should carry the netForce value into Avian"
+    );
 }
 
 #[test]
@@ -65,39 +85,52 @@ fn test_balloon_connection_accumulation() {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(CoSimPlugin);
 
-    let balloon = app.world_mut().spawn((
-        Name::new("Test Balloon"),
-        Transform::from_xyz(0.0, 0.0, 0.0),
-        avian3d::prelude::Position::from_xyz(0.0, 0.0, 0.0),
-        avian3d::prelude::RigidBody::Dynamic,
-        SimComponent {
-            model_name: "Balloon".into(),
-            parameters: [("mass".into(), 2.0)].into_iter().collect(),
-            outputs: [
-                ("netForce".into(), 50.0),
-                ("buoyancy".into(), 100.0),
-            ].into_iter().collect(),
-            ..default()
-        },
-    )).id();
+    let balloon = app
+        .world_mut()
+        .spawn((
+            Name::new("Test Balloon"),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            avian3d::prelude::Position::from_xyz(0.0, 0.0, 0.0),
+            avian3d::prelude::RigidBody::Dynamic,
+            SimComponent {
+                model_name: "Balloon".into(),
+                parameters: [("mass".into(), 2.0)].into_iter().collect(),
+                outputs: [("netForce".into(), 50.0), ("buoyancy".into(), 100.0)]
+                    .into_iter()
+                    .collect(),
+                ..default()
+            },
+        ))
+        .id();
 
     // Two connections to same target — forces should accumulate (50 + 100 = 150)
     app.world_mut().spawn(SimConnection {
-        start_element: balloon, start_connector: "netForce".into(),
-        end_element: balloon, end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
+        start_element: balloon,
+        start_connector: "netForce".into(),
+        end_element: balloon,
+        end_connector: "force_y".into(),
+        scale: 1.0,
+        offset: 0.0,
     });
     app.world_mut().spawn(SimConnection {
-        start_element: balloon, start_connector: "buoyancy".into(),
-        end_element: balloon, end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
+        start_element: balloon,
+        start_connector: "buoyancy".into(),
+        end_element: balloon,
+        end_connector: "force_y".into(),
+        scale: 1.0,
+        offset: 0.0,
     });
 
     // Run propagation — accumulates into PendingForces.f.y
-    app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_connections,
-    ).unwrap();
+    app.world_mut()
+        .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
+        .unwrap();
 
-    assert_eq!(read_input_port(app.world(), balloon, "force_y"), Some(150.0),
-        "Two connections should accumulate into one input");
+    assert_eq!(
+        read_input_port(app.world(), balloon, "force_y"),
+        Some(150.0),
+        "Two connections should accumulate into one input"
+    );
 }
 
 fn read_input_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
@@ -105,4 +138,3 @@ fn read_input_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
         .resource::<lunco_core::ports::PortRegistry>()
         .read_input_port(world, entity, name)
 }
-

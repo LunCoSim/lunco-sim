@@ -156,7 +156,9 @@ impl WorkerPool {
 
     /// Post raw `bytes` (a fresh `Uint8Array` copy) to worker `idx`.
     pub fn post(&self, idx: usize, bytes: &[u8]) -> Result<(), JsValue> {
-        let worker = self.worker(idx).ok_or_else(|| JsValue::from_str("worker not spawned"))?;
+        let worker = self
+            .worker(idx)
+            .ok_or_else(|| JsValue::from_str("worker not spawned"))?;
         let array = Uint8Array::new_with_length(bytes.len() as u32);
         array.copy_from(bytes);
         worker.post_message(&array)
@@ -165,8 +167,15 @@ impl WorkerPool {
     /// Post `msg` to worker `idx`, TRANSFERRING the buffers in `transfer`
     /// (zero-copy; the source buffers detach). `msg` is any JS value — typically
     /// an object bundling small headers with the transferred `ArrayBuffer`s.
-    pub fn post_transfer(&self, idx: usize, msg: &JsValue, transfer: &Array) -> Result<(), JsValue> {
-        let worker = self.worker(idx).ok_or_else(|| JsValue::from_str("worker not spawned"))?;
+    pub fn post_transfer(
+        &self,
+        idx: usize,
+        msg: &JsValue,
+        transfer: &Array,
+    ) -> Result<(), JsValue> {
+        let worker = self
+            .worker(idx)
+            .ok_or_else(|| JsValue::from_str("worker not spawned"))?;
         worker.post_message_with_transfer(msg, transfer)
     }
 

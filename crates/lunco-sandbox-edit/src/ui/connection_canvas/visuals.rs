@@ -17,7 +17,9 @@ pub(crate) struct UsdPrimNodeVisual {
 
 impl NodeVisual for UsdPrimNodeVisual {
     fn draw(&self, ctx: &mut DrawCtx, node: &Node, selected: bool) {
-        let sr = ctx.viewport.world_rect_to_screen(node.rect, ctx.screen_rect);
+        let sr = ctx
+            .viewport
+            .world_rect_to_screen(node.rect, ctx.screen_rect);
         let rect = egui::Rect::from_min_max(
             egui::pos2(sr.min.x, sr.min.y),
             egui::pos2(sr.max.x, sr.max.y),

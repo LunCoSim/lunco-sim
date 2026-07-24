@@ -7,17 +7,12 @@
 
 use lunco_modelica::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica::pretty::Placement;
-use rumoca_phase_parse::parse_to_ast;
 use rumoca_compile::parsing::ast::{ClassDef, Component, Expression};
+use rumoca_phase_parse::parse_to_ast;
 
 /// End-to-end harness — parse, run `op`, apply its splice, reparse, return the
 /// post-mutation `Component`.
-fn mutate_and_reparse<F>(
-    source: &str,
-    class_name: &str,
-    component_name: &str,
-    op: F,
-) -> Component
+fn mutate_and_reparse<F>(source: &str, class_name: &str, component_name: &str, op: F) -> Component
 where
     F: FnOnce(&mut ClassDef, &mut Edit<'_>),
 {
@@ -60,17 +55,13 @@ fn is_call_named(expr: &Expression, name: &str) -> bool {
 
 #[test]
 fn set_placement_appends_when_no_annotation_exists() {
-    let comp = mutate_and_reparse(
-        "model M\n  Real x;\nend M;\n",
-        "M",
-        "x",
-        |class, e| {
-            ast_mut::set_placement(class, e,"x", &Placement::at(10.0, 20.0))
-                .expect("set_placement");
-        },
-    );
+    let comp = mutate_and_reparse("model M\n  Real x;\nend M;\n", "M", "x", |class, e| {
+        ast_mut::set_placement(class, e, "x", &Placement::at(10.0, 20.0)).expect("set_placement");
+    });
     assert!(
-        comp.annotation.iter().any(|e| is_call_named(e, "Placement")),
+        comp.annotation
+            .iter()
+            .any(|e| is_call_named(e, "Placement")),
         "expected one Placement entry, got {} annotation(s)",
         comp.annotation.len()
     );
@@ -128,7 +119,9 @@ fn set_placement_preserves_non_placement_annotations() {
         comp.annotation.len()
     );
     assert!(
-        comp.annotation.iter().any(|e| is_call_named(e, "Placement")),
+        comp.annotation
+            .iter()
+            .any(|e| is_call_named(e, "Placement")),
         "Placement missing after replace"
     );
 }
@@ -163,7 +156,10 @@ fn set_placement_unknown_component_returns_error() {
     })
     .expect_err("unknown component must fail");
     match err {
-        AstMutError::ComponentNotFound { class: c, component } => {
+        AstMutError::ComponentNotFound {
+            class: c,
+            component,
+        } => {
             assert_eq!(c, "M");
             assert_eq!(component, "nope");
         }

@@ -54,7 +54,10 @@ pub struct SourceMemo<V> {
 
 impl<V> Default for SourceMemo<V> {
     fn default() -> Self {
-        Self { map: HashMap::new(), epoch: source_epoch() }
+        Self {
+            map: HashMap::new(),
+            epoch: source_epoch(),
+        }
     }
 }
 
@@ -107,7 +110,11 @@ mod tests {
         assert_eq!(memo.peek("Modelica.Blocks.Add"), Some(Some(7)));
 
         invalidate_source_memos();
-        assert_eq!(memo.peek("Modelica.Blocks.Add"), None, "stale epoch must miss");
+        assert_eq!(
+            memo.peek("Modelica.Blocks.Add"),
+            None,
+            "stale epoch must miss"
+        );
         assert!(memo.is_empty());
     }
 
@@ -118,7 +125,11 @@ mod tests {
     fn invalidation_drops_a_remembered_negative() {
         let mut memo: SourceMemo<u32> = SourceMemo::default();
         memo.insert("Missing.Icon.png", None);
-        assert_eq!(memo.peek("Missing.Icon.png"), Some(None), "a negative is a hit");
+        assert_eq!(
+            memo.peek("Missing.Icon.png"),
+            Some(None),
+            "a negative is a hit"
+        );
 
         invalidate_source_memos();
         assert_eq!(

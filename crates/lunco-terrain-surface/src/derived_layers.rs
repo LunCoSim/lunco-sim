@@ -177,7 +177,9 @@ fn mark_derived_stale(
             e.try_remove::<(TerrainDerivedMaps, DerivedLayersBuilt)>();
         }
         e.try_remove::<DerivedDirtyRegion>()
-            .try_insert(DerivedMapsStale { since: time.elapsed_secs_f64() });
+            .try_insert(DerivedMapsStale {
+                since: time.elapsed_secs_f64(),
+            });
     }
 }
 
@@ -190,7 +192,12 @@ fn start_derived_bakes(
     images: Option<Res<Assets<Image>>>,
     time: Res<Time>,
     q: Query<
-        (Entity, &DemHeightField, Option<&DerivedMapsStale>, Has<TerrainDerivedMaps>),
+        (
+            Entity,
+            &DemHeightField,
+            Option<&DerivedMapsStale>,
+            Has<TerrainDerivedMaps>,
+        ),
         Without<DerivedBakeTask>,
     >,
 ) {
@@ -298,7 +305,11 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
         if res * res * 4 != surface_rgba.len() || normal_rgba.len() != surface_rgba.len() {
             return None; // corrupt / partial → rebake
         }
-        Some(DerivedMaps { res, surface_rgba, normal_rgba })
+        Some(DerivedMaps {
+            res,
+            surface_rgba,
+            normal_rgba,
+        })
     }
 }
 
@@ -340,8 +351,7 @@ async fn bake_or_load_web(oracle: &SurfaceOracle) -> DerivedMaps {
 /// need no framing.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn encode_derived_blob(maps: &DerivedMaps) -> Vec<u8> {
-    let mut out =
-        Vec::with_capacity(4 + maps.surface_rgba.len() + maps.normal_rgba.len());
+    let mut out = Vec::with_capacity(4 + maps.surface_rgba.len() + maps.normal_rgba.len());
     out.extend_from_slice(&(maps.res as u32).to_le_bytes());
     out.extend_from_slice(&maps.surface_rgba);
     out.extend_from_slice(&maps.normal_rgba);
@@ -370,7 +380,10 @@ fn decode_derived_blob(bytes: &[u8]) -> Option<DerivedMaps> {
 /// pack them.
 fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     let half = oracle.half_extent() as f64;
-    let region = Square { center: [0.0, 0.0], half };
+    let region = Square {
+        center: [0.0, 0.0],
+        half,
+    };
     let res = LAYER_RES;
     let texel = 2.0 * half / res as f64;
     // Gate over-zoom synthesis at the map's texel size via the shared filter
@@ -386,8 +399,14 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     let ao_res = (res / 2).max(1);
     let ao_texel = 2.0 * half / ao_res as f64;
     let ao_limited = SurfaceBand::visual(ao_texel).limited(oracle);
-    let ao_small =
-        ao_map(&ao_limited, &region, ao_res, half * AO_RADIUS_FRAC, AO_DIRS, AO_STEPS);
+    let ao_small = ao_map(
+        &ao_limited,
+        &region,
+        ao_res,
+        half * AO_RADIUS_FRAC,
+        AO_DIRS,
+        AO_STEPS,
+    );
     let ao = lunco_terrain_core::upsample_bilinear(&ao_small, ao_res, res);
     // Tone: 3-texel curvature stencil on a source limited at 2× the stencil.
     // The old 1-texel stencil on the 2-texel-limited source sat exactly AT
@@ -402,8 +421,10 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     .limited(oracle);
     let albedo = albedo_map(&tone_limited, &region, res, TONE_STENCIL_TEXELS);
 
-    let roughness: Vec<f32> =
-        slope.iter().map(|&s| roughness_from_slope(s, ROUGH_BASE, ROUGH_STEEP_RAD)).collect();
+    let roughness: Vec<f32> = slope
+        .iter()
+        .map(|&s| roughness_from_slope(s, ROUGH_BASE, ROUGH_STEEP_RAD))
+        .collect();
 
     DerivedMaps {
         res,
@@ -451,7 +472,11 @@ fn finish_derived_bakes(
         commands
             .entity(entity)
             .try_remove::<DerivedBakeTask>()
-            .try_insert(TerrainDerivedMaps { surface, normal, res });
+            .try_insert(TerrainDerivedMaps {
+                surface,
+                normal,
+                res,
+            });
     }
 }
 
@@ -497,7 +522,11 @@ fn data_texture(res: usize, rgba: Vec<u8>) -> Image {
     // `new_uninit` + manual data: `Image::new` debug-asserts data == base level,
     // but ours carries the whole mip chain.
     let mut image = Image::new_uninit(
-        Extent3d { width: res as u32, height: res as u32, depth_or_array_layers: 1 },
+        Extent3d {
+            width: res as u32,
+            height: res as u32,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
@@ -529,7 +558,11 @@ pub(crate) fn register(app: &mut App) {
         // The static-mesh bind (`lunco-render-bevy`'s `apply_derived_layers`) is no
         // longer in this chain: it names a material, so it lives on the render side.
         // It retries until the async USD material exists, so it needs no ordering.
-        (mark_derived_stale, start_derived_bakes, finish_derived_bakes)
+        (
+            mark_derived_stale,
+            start_derived_bakes,
+            finish_derived_bakes,
+        )
             .chain()
             // The `.after` inserts the sync point that makes `finish_dem_restamp`'s
             // deferred `DerivedDirtyRegion` insert visible in the same frame as its

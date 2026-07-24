@@ -148,7 +148,10 @@ mod tests {
         for _ in 0..1024 {
             let s = random_session_id();
             assert_ne!(s, 0, "session id 0 is reserved for the local/host session");
-            assert!(s < (1 << 53), "session id {s} exceeds the 53-bit JS-safe range");
+            assert!(
+                s < (1 << 53),
+                "session id {s} exceeds the 53-bit JS-safe range"
+            );
         }
     }
 

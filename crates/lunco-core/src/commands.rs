@@ -167,9 +167,7 @@ pub enum SyncChannel {
 /// slider scrub) doesn't need this flag — it uses the `persist_*_to_runtime_layer`
 /// observer pattern: the live edit is the interactive form, and a deferred
 /// observer journals the committed result.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
 pub enum EditIntent {
     /// Live change only — NOT journaled / synced / persisted. Real-time
     /// manipulation and previews.
@@ -478,14 +476,7 @@ impl MarkClientLocalExt for bevy::app::App {
 /// `None` (→ identity) and a missing/unresolved `target` falls back to the first
 /// grid in the handler.
 #[allow(missing_docs)]
-#[derive(
-    bevy::prelude::Event,
-    bevy::prelude::Reflect,
-    Clone,
-    Debug,
-    Serialize,
-    Deserialize,
-)]
+#[derive(bevy::prelude::Event, bevy::prelude::Reflect, Clone, Debug, Serialize, Deserialize)]
 #[reflect(Event, Default)]
 pub struct SpawnEntity {
     /// The grid entity to spawn under. `Entity::PLACEHOLDER` (or an id that

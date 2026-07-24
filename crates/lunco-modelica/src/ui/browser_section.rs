@@ -98,11 +98,9 @@ impl BrowserSection for ModelicaSection {
                     .roots
                     .iter()
                     .filter_map(|root| match root {
-                        crate::package_tree::PackageNode::Category {
-                            id,
-                            name,
-                            ..
-                        } => Some((id.clone(), name.clone())),
+                        crate::package_tree::PackageNode::Category { id, name, .. } => {
+                            Some((id.clone(), name.clone()))
+                        }
                         _ => None,
                     })
                     .collect()
@@ -118,9 +116,7 @@ impl BrowserSection for ModelicaSection {
                 .id_salt(("twin.modelica.library", root_id))
                 .default_open(false)
                 .show(ui, |ui| {
-                    crate::ui::panels::package_browser::render_root_subtree(
-                        ui, ctx, root_id,
-                    );
+                    crate::ui::panels::package_browser::render_root_subtree(ui, ctx, root_id);
                 });
             resp.header_response
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -136,23 +132,23 @@ impl BrowserSection for ModelicaSection {
         let workspace_docs: Vec<(DocumentId, String)> = ctx
             .resource::<ModelicaDocumentRegistry>()
             .map(|registry| {
-            registry
-                .iter()
-                .filter_map(|(doc_id, host)| {
-                    let document = host.document();
-                    let origin = document.origin();
-                    if !(origin.is_writable() || origin.is_untitled()) {
-                        return None;
-                    }
-                    // Doc-row label reflects the *container* (origin
-                    // slug for Untitled drafts, filename for on-disk
-                    // docs). The inner class name is rendered as the
-                    // M-badge child row, so the two stay decoupled —
-                    // renaming the doc row doesn't rewrite source.
-                    let label: String = origin.display_name();
-                    Some((doc_id, label))
-                })
-                .collect()
+                registry
+                    .iter()
+                    .filter_map(|(doc_id, host)| {
+                        let document = host.document();
+                        let origin = document.origin();
+                        if !(origin.is_writable() || origin.is_untitled()) {
+                            return None;
+                        }
+                        // Doc-row label reflects the *container* (origin
+                        // slug for Untitled drafts, filename for on-disk
+                        // docs). The inner class name is rendered as the
+                        // M-badge child row, so the two stay decoupled —
+                        // renaming the doc row doesn't rewrite source.
+                        let label: String = origin.display_name();
+                        Some((doc_id, label))
+                    })
+                    .collect()
             })
             .unwrap_or_default();
 
@@ -217,9 +213,7 @@ fn render_workspace_doc_row(
         let mut buf = draft;
         ui.horizontal(|ui| {
             ui.label("📝");
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut buf).desired_width(180.0),
-            );
+            let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(180.0));
             // One-shot focus grab: only on the first frame after the
             // rename began. Calling `request_focus()` every frame
             // re-steals focus and prevents click-away from working.
@@ -235,8 +229,7 @@ fn render_workspace_doc_row(
                     }
                 });
             }
-            let enter = resp.lost_focus()
-                && resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
+            let enter = resp.lost_focus() && resp.ctx.input(|i| i.key_pressed(egui::Key::Enter));
             let escape = resp.ctx.input(|i| i.key_pressed(egui::Key::Escape));
             if enter || (resp.lost_focus() && !escape) {
                 let trimmed = buf.trim().to_string();
@@ -254,10 +247,7 @@ fn render_workspace_doc_row(
         // Response — `CollapsingHeader::show` returns a header
         // response whose click is consumed by the toggle, so
         // double-click on the bare API never fires reliably.
-        let id = ui.make_persistent_id((
-            "twin.modelica.workspace_doc",
-            doc_id.raw(),
-        ));
+        let id = ui.make_persistent_id(("twin.modelica.workspace_doc", doc_id.raw()));
         // Icon prefix: 📝 untitled draft, 📄 saved on disk. Read
         // the origin once before the header so we don't re-borrow
         // the registry inside the closure.
@@ -279,8 +269,7 @@ fn render_workspace_doc_row(
             |ui| {
                 let resp = ui
                     .add(
-                        egui::Label::new(format!("{icon}  {doc_name}"))
-                            .sense(egui::Sense::click()),
+                        egui::Label::new(format!("{icon}  {doc_name}")).sense(egui::Sense::click()),
                     )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .on_hover_text(
@@ -294,9 +283,7 @@ fn render_workspace_doc_row(
                 }
                 // F2 while the label has keyboard focus also starts a
                 // rename — mirrors the VS Code / OMEdit shortcut.
-                if resp.has_focus()
-                    && resp.ctx.input(|i| i.key_pressed(egui::Key::F2))
-                {
+                if resp.has_focus() && resp.ctx.input(|i| i.key_pressed(egui::Key::F2)) {
                     start_rename = Some(doc_name.to_string());
                 }
                 resp.context_menu(|ui| {
@@ -334,7 +321,10 @@ fn render_workspace_doc_row(
         // Users who want to rename the class itself click the inner
         // M-badge row, which still goes through `RenameModelicaClass`.
         enum RenameTarget {
-            File { twin_root: String, relative_path: String },
+            File {
+                twin_root: String,
+                relative_path: String,
+            },
             UntitledOrigin,
             None,
         }
@@ -344,7 +334,10 @@ fn render_workspace_doc_row(
                 .and_then(|r| r.host(doc_id))
                 .map(|h| h.document().origin().clone());
             match origin {
-                Some(lunco_doc::DocumentOrigin::File { path, writable: true }) => {
+                Some(lunco_doc::DocumentOrigin::File {
+                    path,
+                    writable: true,
+                }) => {
                     let twin_root = ctx
                         .resource::<lunco_workspace::WorkspaceResource>()
                         .and_then(|ws| {
@@ -365,14 +358,15 @@ fn render_workspace_doc_row(
                         RenameTarget::None
                     }
                 }
-                Some(lunco_doc::DocumentOrigin::Untitled { .. }) => {
-                    RenameTarget::UntitledOrigin
-                }
+                Some(lunco_doc::DocumentOrigin::Untitled { .. }) => RenameTarget::UntitledOrigin,
                 _ => RenameTarget::None,
             }
         };
         match target {
-            RenameTarget::File { twin_root, relative_path } => {
+            RenameTarget::File {
+                twin_root,
+                relative_path,
+            } => {
                 let new_file_name = {
                     use std::path::Path;
                     let typed = Path::new(&new_name);
@@ -520,12 +514,7 @@ pub(crate) fn render_workspace_doc(
                 ui.visuals().weak_text_color(),
             )
         };
-        ui.label(
-            egui::RichText::new(text)
-                .color(color)
-                .small()
-                .italics(),
-        );
+        ui.label(egui::RichText::new(text).color(color).small().italics());
         return;
     }
     for class in &classes {
@@ -540,7 +529,6 @@ pub(crate) fn render_workspace_doc(
         );
     }
 }
-
 
 /// Build the same class tree from the per-doc Index. Reads only the
 /// [`crate::index::ClassEntry`]s (no AST walk). Used by the live
@@ -563,10 +551,7 @@ fn classes_from_index(index: &crate::index::ModelicaIndex) -> (Vec<ClassEntry>, 
             ClassKind::OperatorRecord => ClassType::Record,
         }
     }
-    fn build_subtree(
-        index: &crate::index::ModelicaIndex,
-        qualified: &str,
-    ) -> Option<ClassEntry> {
+    fn build_subtree(index: &crate::index::ModelicaIndex, qualified: &str) -> Option<ClassEntry> {
         let entry = index.classes.get(qualified)?;
         let short = entry
             .name
@@ -625,7 +610,6 @@ fn parse_classes(source: &str) -> (Vec<ClassEntry>, bool) {
     classes_from_index(doc.index())
 }
 
-
 /// Sort bucket for `ClassEntry`. Variant order = display order via
 /// derived `Ord`, so adding a new bucket is a one-line edit.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -683,20 +667,26 @@ fn render_class_row(
 ) {
     use crate::ui::theme::ModelicaThemeExt;
     let badge = type_badge(&class.kind, theme);
-    let is_active = Some(doc_id) == active_doc
-        && active_qualified == Some(class.qualified_path.as_str());
+    let is_active =
+        Some(doc_id) == active_doc && active_qualified == Some(class.qualified_path.as_str());
 
     if class.children.is_empty() {
-        let resp = ui.horizontal(|ui| {
-            paint_badge(ui, badge, theme);
-            let label = if is_active {
-                egui::RichText::new(&class.short_name).strong()
-            } else {
-                egui::RichText::new(&class.short_name)
-            };
-            ui.add(egui::Label::new(label).selectable(false).sense(egui::Sense::click()))
+        let resp = ui
+            .horizontal(|ui| {
+                paint_badge(ui, badge, theme);
+                let label = if is_active {
+                    egui::RichText::new(&class.short_name).strong()
+                } else {
+                    egui::RichText::new(&class.short_name)
+                };
+                ui.add(
+                    egui::Label::new(label)
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
+                )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-        }).inner;
+            })
+            .inner;
         // Explicit highlight band — `selectable_label`'s default
         // selected chrome blends into the panel background under a
         // dark egui theme, leaving the user with no visual cue. We
@@ -732,8 +722,7 @@ fn render_class_row(
             });
         }
     } else {
-        let mut header_text =
-            egui::RichText::new(format!("{} {}", badge.letter, class.short_name));
+        let mut header_text = egui::RichText::new(format!("{} {}", badge.letter, class.short_name));
         if is_active {
             header_text = header_text.strong();
         }
@@ -742,29 +731,19 @@ fn render_class_row(
             .default_open(true);
         let resp = header.show(ui, |ui| {
             for child in &class.children {
-                render_class_row(
-                    ui,
-                    child,
-                    doc_id,
-                    active_doc,
-                    active_qualified,
-                    theme,
-                    ctx,
-                );
+                render_class_row(ui, child, doc_id, active_doc, active_qualified, theme, ctx);
             }
         });
         let qualified = class.qualified_path.clone();
         let short = class.short_name.clone();
         let muted = theme.text_muted();
-        let header_resp = resp.header_response.clone()
+        let header_resp = resp
+            .header_response
+            .clone()
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         header_resp.on_hover_ui(move |ui| {
             ui.strong(&short);
-            ui.label(
-                egui::RichText::new(&qualified)
-                    .small()
-                    .color(muted),
-            );
+            ui.label(egui::RichText::new(&qualified).small().color(muted));
         });
         if resp.header_response.clicked() {
             ctx.actions.push(BrowserAction::OpenLoadedClass {
@@ -980,4 +959,3 @@ function F end F;
             .any(|c| c.qualified_path == "AnnotatedRocketStage.Engine"));
     }
 }
-

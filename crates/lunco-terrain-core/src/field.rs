@@ -97,7 +97,11 @@ impl SurfaceField for AspectField {
             return 0.0; // flat → aspect undefined
         }
         let a = dx.atan2(dz); // [−π, π] from +Z toward +X
-        (if a < 0.0 { a + std::f64::consts::TAU } else { a }) as f32
+        (if a < 0.0 {
+            a + std::f64::consts::TAU
+        } else {
+            a
+        }) as f32
     }
     fn id(&self) -> &'static str {
         "aspect"
@@ -134,7 +138,10 @@ mod tests {
     }
 
     fn sq(half: f64) -> Square {
-        Square { center: [0.0, 0.0], half }
+        Square {
+            center: [0.0, 0.0],
+            half,
+        }
     }
 
     #[test]
@@ -188,7 +195,10 @@ mod tests {
     fn deterministic() {
         let src = AnalyticHeightSource::default();
         let region = sq(123.0);
-        assert_eq!(field_map(&SlopeField, &src, &region, 8), field_map(&SlopeField, &src, &region, 8));
+        assert_eq!(
+            field_map(&SlopeField, &src, &region, 8),
+            field_map(&SlopeField, &src, &region, 8)
+        );
     }
 
     #[test]

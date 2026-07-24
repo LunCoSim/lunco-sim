@@ -49,7 +49,11 @@ fn colliderless_dynamic_body_jointed_to_host_stays_finite() {
                 .spawn((RigidBody::Kinematic, Transform::from_xyz(0.0, 5.0, 0.0)))
                 .id();
             let body = world
-                .spawn((RigidBody::Dynamic, Mass(1.0), Transform::from_xyz(0.0, 4.0, 0.0)))
+                .spawn((
+                    RigidBody::Dynamic,
+                    Mass(1.0),
+                    Transform::from_xyz(0.0, 4.0, 0.0),
+                ))
                 .id();
             world.spawn(
                 FixedJoint::new(host, body)
@@ -60,7 +64,10 @@ fn colliderless_dynamic_body_jointed_to_host_stays_finite() {
         60,
     );
 
-    let pos = app.world().get::<Position>(body).expect("body keeps a Position");
+    let pos = app
+        .world()
+        .get::<Position>(body)
+        .expect("body keeps a Position");
     assert!(
         pos.0.is_finite(),
         "jointed colliderless dynamic body must stay finite, got {:?}",
@@ -75,11 +82,22 @@ fn colliderless_dynamic_body_under_gravity_stays_finite() {
     let (app, body) = step_app(
         |world| {
             world
-                .spawn((RigidBody::Dynamic, Mass(2.0), Transform::from_xyz(0.0, 10.0, 0.0)))
+                .spawn((
+                    RigidBody::Dynamic,
+                    Mass(2.0),
+                    Transform::from_xyz(0.0, 10.0, 0.0),
+                ))
                 .id()
         },
         60,
     );
-    let pos = app.world().get::<Position>(body).expect("body keeps a Position");
-    assert!(pos.0.is_finite(), "colliderless dynamic body went non-finite: {:?}", pos.0);
+    let pos = app
+        .world()
+        .get::<Position>(body)
+        .expect("body keeps a Position");
+    assert!(
+        pos.0.is_finite(),
+        "colliderless dynamic body went non-finite: {:?}",
+        pos.0
+    );
 }

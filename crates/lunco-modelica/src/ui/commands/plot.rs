@@ -1,7 +1,7 @@
 //! Visualization/Plotting commands: NewPlotPanel and AddSignalToPlot.
 
 use bevy::prelude::*;
-use lunco_core::{Command, on_command};
+use lunco_core::{on_command, Command};
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -68,7 +68,10 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
         let mut inputs: Vec<SignalBinding> = cloned_inputs;
         for s in &ev.signals {
             let entity = model_entity.unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
-            if inputs.iter().any(|b| b.source.entity == entity && b.source.path == *s) {
+            if inputs
+                .iter()
+                .any(|b| b.source.entity == entity && b.source.path == *s)
+            {
                 continue;
             }
             inputs.push(SignalBinding {
@@ -89,8 +92,8 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
             style: serde_json::Value::Null,
         });
         if !cloned_picked.is_empty() {
-            if let Some(mut states) = world
-                .get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
+            if let Some(mut states) =
+                world.get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
             {
                 states.entry(id).picked_vars = cloned_picked;
             }

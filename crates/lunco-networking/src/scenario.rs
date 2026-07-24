@@ -340,7 +340,10 @@ mod tests {
         // gives; we use raw single-block leaves, cf. `--raw-leaves`).
         let cid = cid_for_content(b"interop check");
         let s = cid.to_string();
-        assert!(s.starts_with("bafk"), "raw-codec CIDv1 base32 starts with bafk…, got {s}");
+        assert!(
+            s.starts_with("bafk"),
+            "raw-codec CIDv1 base32 starts with bafk…, got {s}"
+        );
         // Round-trips through the string too.
         let parsed: Cid = s.parse().expect("parse cid string");
         assert_eq!(parsed.to_bytes(), cid.to_bytes());

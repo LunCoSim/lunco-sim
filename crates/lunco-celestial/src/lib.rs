@@ -7,29 +7,38 @@
 //! - **Terrain**: Dynamic procedural terrain generation for planetary surfaces.
 //! - **Trajectories**: Rendering of orbital paths and mission predictions.
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
 
-pub mod ephemeris;
-pub mod iau;
-pub mod registry;
-pub mod geo;
-pub mod kepler;
-pub mod link;
-pub mod placement;
-pub mod pose;
-pub mod queries;
 mod big_space_setup;
-mod globe_lod;
-mod imagery;
-mod systems;
+/// The frame conversions. `coords` is `pub` because `lunco-celestial-ephemeris` was
+/// re-implementing `ecliptic_to_bevy` by hand for want of access — a conversion people copy
+/// is a conversion that drifts.
+pub mod coords;
+mod embedded_assets;
+pub mod ephemeris;
 /// Coordinate-frame newtypes. Zero-cost, and they make the two silent frame-mix incidents
 /// this crate has already shipped (the Shackleton sun 45° below the horizon; an ecliptic sun
 /// direction published as site-ENU) into COMPILE ERRORS.
 pub mod frames;
+pub mod geo;
+mod globe_lod;
+mod gravity;
+pub mod iau;
+mod imagery;
+pub mod kepler;
+pub mod link;
+mod missions;
+pub mod placement;
+pub mod pose;
+pub mod queries;
+pub mod registry;
+mod soi;
+mod systems;
+mod trajectories;
 /// Frame CONVERSIONS over [`frames`] — hub-and-spoke through `Solar`, like SPICE.
 ///
 /// This file shipped in `acc61943` and was never declared as a module, so it has never
@@ -38,15 +47,6 @@ pub mod frames;
 /// also why its `libration_in_solar` — the only L1/L2 solver in the tree — has never
 /// been reachable from a scene.
 pub mod transform;
-/// The frame conversions. `coords` is `pub` because `lunco-celestial-ephemeris` was
-/// re-implementing `ecliptic_to_bevy` by hand for want of access — a conversion people copy
-/// is a conversion that drifts.
-pub mod coords;
-mod gravity;
-mod soi;
-mod trajectories;
-mod missions;
-mod embedded_assets;
 
 /// Re-export terrain types from lunco-terrain for backward compatibility.
 pub use lunco_terrain_globe::*;
@@ -54,27 +54,27 @@ pub use lunco_terrain_globe::*;
 // Re-export TerrainTileConfig explicitly since it's used by celestial code
 pub use lunco_terrain_globe::TerrainTileConfig;
 
+pub mod commands;
 /// UI panels for celestial time control and body browser.
 #[cfg(feature = "ui")]
 pub mod ui;
-pub mod commands;
 pub use commands::*;
 
+pub use big_space_setup::*;
+pub use embedded_assets::*;
 pub use ephemeris::*;
-pub use iau::*;
-pub use registry::*;
 pub use geo::*;
+pub use gravity::*;
+pub use iau::*;
 pub use kepler::*;
 pub use link::*;
+pub use missions::*;
 pub use placement::*;
 pub use pose::*;
-pub use big_space_setup::*;
-pub use systems::*;
-pub use gravity::*;
+pub use registry::*;
 pub use soi::*;
+pub use systems::*;
 pub use trajectories::*;
-pub use missions::*;
-pub use embedded_assets::*;
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -150,7 +150,9 @@ pub struct CelestialConfig {
 
 impl Default for CelestialConfig {
     fn default() -> Self {
-        Self { spawn_observer_camera: true }
+        Self {
+            spawn_observer_camera: true,
+        }
     }
 }
 
@@ -263,7 +265,8 @@ impl Plugin for CelestialPlugin {
         app.add_systems(
             Update,
             big_space_setup::setup_big_space_hierarchy.run_if(
-                |q_decl: Query<(), With<CelestialBodyDecl>>, q: Query<(), With<SolarSystemRoot>>| {
+                |q_decl: Query<(), With<CelestialBodyDecl>>,
+                 q: Query<(), With<SolarSystemRoot>>| {
                     !q_decl.is_empty() && q.is_empty()
                 },
             ),
@@ -301,25 +304,31 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<placement::OrbitalViewPin>();
         app.init_resource::<systems::SunDirectionWorld>();
 
-        app.add_systems(PreUpdate, (
-            ephemeris_update_system,
-            body_rotation_system,
-            // Star-fixed frames co-located with the rotating body grids (the
-            // orbit camera lives in one). After the ephemeris, whose pose it
-            // copies.
-            systems::sync_inertial_anchors,
-            // Doc 43: site-anchored solar frame + geodetic/orbit placement.
-            // `ephemeris_update_system` never touches the Solar Grid (id 10),
-            // so the pin persists between anchor runs — no mid-chain window
-            // where the hierarchy sits un-anchored.
-            placement::anchor_solar_frame_to_site,
-            placement::place_celestial_bound_entities,
-            // Defeat stale-GT / compat-strobe frames for the celestial
-            // subtree — measured load-bearing; see the system doc (a deletion
-            // attempt on 2026-07-11 strobed the whole tree ~1 frame in 5–9).
-            touch_celestial_transforms,
-            soi_transition_system,
-        ).chain().in_set(CelestialEpochSet).after(lunco_time::TimeSpineSet));
+        app.add_systems(
+            PreUpdate,
+            (
+                ephemeris_update_system,
+                body_rotation_system,
+                // Star-fixed frames co-located with the rotating body grids (the
+                // orbit camera lives in one). After the ephemeris, whose pose it
+                // copies.
+                systems::sync_inertial_anchors,
+                // Doc 43: site-anchored solar frame + geodetic/orbit placement.
+                // `ephemeris_update_system` never touches the Solar Grid (id 10),
+                // so the pin persists between anchor runs — no mid-chain window
+                // where the hierarchy sits un-anchored.
+                placement::anchor_solar_frame_to_site,
+                placement::place_celestial_bound_entities,
+                // Defeat stale-GT / compat-strobe frames for the celestial
+                // subtree — measured load-bearing; see the system doc (a deletion
+                // attempt on 2026-07-11 strobed the whole tree ~1 frame in 5–9).
+                touch_celestial_transforms,
+                soi_transition_system,
+            )
+                .chain()
+                .in_set(CelestialEpochSet)
+                .after(lunco_time::TimeSpineSet),
+        );
 
         app.add_systems(Update, celestial_visuals_system);
         // Hide the local scene (its whole subtree) while the orbital world-pin
@@ -457,10 +466,12 @@ impl Plugin for GravityPlugin {
         // interleave mid-chain and compute gravity from half-updated grids
         // (measured: alternating ~1e11 m body offsets → randomly flipping
         // gravity vector → the "surface jitter" in site-anchored scenes).
-        app.add_systems(PreUpdate, update_local_gravity_field.after(CelestialEpochSet));
+        app.add_systems(
+            PreUpdate,
+            update_local_gravity_field.after(CelestialEpochSet),
+        );
         // NOTE: `gravity_system` (force application to RigidBodies) lives in
         // `lunco-environment`'s `EnvironmentPlugin` and consumes `LocalGravity`.
         // Add EnvironmentPlugin alongside GravityPlugin for full gravity behavior.
     }
 }
-

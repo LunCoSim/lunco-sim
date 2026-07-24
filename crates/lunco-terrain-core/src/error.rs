@@ -132,7 +132,10 @@ mod tests {
     }
 
     fn sq(cx: f64, cz: f64, half: f64) -> Square {
-        Square { center: [cx, cz], half }
+        Square {
+            center: [cx, cz],
+            half,
+        }
     }
 
     #[test]
@@ -145,8 +148,22 @@ mod tests {
     #[test]
     fn feature_gives_positive_error_scaling_with_amplitude() {
         let region = sq(0.0, 0.0, 100.0);
-        let small = measure_node_error(&Bump { amp: 1.0, sigma: 20.0 }, region, 8);
-        let big = measure_node_error(&Bump { amp: 10.0, sigma: 20.0 }, region, 8);
+        let small = measure_node_error(
+            &Bump {
+                amp: 1.0,
+                sigma: 20.0,
+            },
+            region,
+            8,
+        );
+        let big = measure_node_error(
+            &Bump {
+                amp: 10.0,
+                sigma: 20.0,
+            },
+            region,
+            8,
+        );
         assert!(small > 0.0, "a bump must register error");
         assert!(big > small * 5.0, "error scales ~linearly with amplitude");
     }
@@ -154,17 +171,26 @@ mod tests {
     #[test]
     fn error_falls_as_resolution_rises() {
         // A denser mesh captures the bump better → less residual error.
-        let src = Bump { amp: 10.0, sigma: 30.0 };
+        let src = Bump {
+            amp: 10.0,
+            sigma: 30.0,
+        };
         let region = sq(0.0, 0.0, 100.0);
         let coarse = measure_node_error(&src, region, 4);
         let fine = measure_node_error(&src, region, 32);
-        assert!(fine < coarse, "finer mesh {fine} should beat coarse {coarse}");
+        assert!(
+            fine < coarse,
+            "finer mesh {fine} should beat coarse {coarse}"
+        );
     }
 
     #[test]
     fn error_is_local_feature_here_flats_elsewhere() {
         // The bump sits at the origin; a node over it has error, a distant node ≈0.
-        let src = Bump { amp: 10.0, sigma: 15.0 };
+        let src = Bump {
+            amp: 10.0,
+            sigma: 15.0,
+        };
         let over = measure_node_error(&src, sq(0.0, 0.0, 40.0), 8);
         let away = measure_node_error(&src, sq(2000.0, 2000.0, 40.0), 8);
         assert!(over > 1.0, "node over feature should measure real error");
@@ -175,7 +201,10 @@ mod tests {
     fn deterministic() {
         let src = AnalyticHeightSource::default();
         let region = sq(123.0, -456.0, 250.0);
-        assert_eq!(measure_node_error(&src, region, 16), measure_node_error(&src, region, 16));
+        assert_eq!(
+            measure_node_error(&src, region, 16),
+            measure_node_error(&src, region, 16)
+        );
     }
 
     /// A `HeightSource` that re-enters `measure_node_error` from `height_at` — the
@@ -199,7 +228,9 @@ mod tests {
 
     #[test]
     fn a_reentrant_source_does_not_panic() {
-        let src = Reentrant { depth: std::sync::atomic::AtomicU32::new(0) };
+        let src = Reentrant {
+            depth: std::sync::atomic::AtomicU32::new(0),
+        };
         let e = measure_node_error(&src, sq(0.0, 0.0, 100.0), 8);
         assert!(e.is_finite());
     }

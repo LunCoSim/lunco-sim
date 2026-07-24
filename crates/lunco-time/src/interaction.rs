@@ -180,7 +180,6 @@ pub struct InteractionEased {
     curr: Option<Transform>,
 }
 
-
 /// START of the interaction step: restore each eased entity's authoritative pose
 /// (`curr`) into `Transform`, undoing the previous frame's render interpolation.
 ///
@@ -291,10 +290,13 @@ mod tests {
             dts: Vec<f32>,
         }
         app.init_resource::<Seen>();
-        app.add_systems(InteractionSchedule, |time: Res<Time>, mut seen: ResMut<Seen>| {
-            seen.steps += 1;
-            seen.dts.push(time.delta_secs());
-        });
+        app.add_systems(
+            InteractionSchedule,
+            |time: Res<Time>, mut seen: ResMut<Seen>| {
+                seen.steps += 1;
+                seen.dts.push(time.delta_secs());
+            },
+        );
 
         // Advance the WALL clock by exactly 3 steps' worth (120 Hz ⇒ 25 ms).
         let step = app.world().resource::<InteractionStep>().step_secs;
@@ -328,7 +330,10 @@ mod tests {
             .init_resource::<Time>();
         super::build_interaction_cadence(&mut app);
 
-        let e = app.world_mut().spawn((Transform::default(), InteractionEased::default())).id();
+        let e = app
+            .world_mut()
+            .spawn((Transform::default(), InteractionEased::default()))
+            .id();
         // Incremental writer: pos.x += 1 each step, reading pos back from Transform.
         // Ordered BETWEEN restore and record, exactly as the avatar camera chain is —
         // that ordering is what makes the integration see the true pose, not the ease.
@@ -352,8 +357,16 @@ mod tests {
 
         // The AUTHORITATIVE pose advanced exactly 3 — the eased Transform the renderer
         // sees is ≤ 3 (interpolated), but the writer's integration is uncontaminated.
-        let curr = app.world().get::<InteractionEased>(e).unwrap().curr.unwrap();
-        assert_eq!(curr.translation.x, 3.0, "the true pose must advance one per step");
+        let curr = app
+            .world()
+            .get::<InteractionEased>(e)
+            .unwrap()
+            .curr
+            .unwrap();
+        assert_eq!(
+            curr.translation.x, 3.0,
+            "the true pose must advance one per step"
+        );
 
         // A frame with ZERO steps (fast display, or wall time not yet a full step):
         // the writer does not run, the true pose holds, only the render ease moves.
@@ -363,8 +376,16 @@ mod tests {
             .resource_mut::<Time<Real>>()
             .advance_by(Duration::ZERO);
         app.update();
-        let curr2 = app.world().get::<InteractionEased>(e).unwrap().curr.unwrap();
-        assert_eq!(curr2.translation.x, 3.0, "no step ⇒ the true pose must not move");
+        let curr2 = app
+            .world()
+            .get::<InteractionEased>(e)
+            .unwrap()
+            .curr
+            .unwrap();
+        assert_eq!(
+            curr2.translation.x, 3.0,
+            "no step ⇒ the true pose must not move"
+        );
     }
 
     /// A hitch must not spiral: the accumulator is dropped at the cap, not chased.
@@ -387,7 +408,10 @@ mod tests {
             .advance_by(Duration::from_secs(5));
         app.update();
 
-        let cap = app.world().resource::<InteractionStep>().max_steps_per_frame;
+        let cap = app
+            .world()
+            .resource::<InteractionStep>()
+            .max_steps_per_frame;
         assert_eq!(app.world().resource::<Count>().0, cap);
         // …and the backlog is gone, so the next frame is not still catching up.
         assert_eq!(app.world().resource::<InteractionStep>().accumulator, 0.0);

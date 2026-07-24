@@ -18,8 +18,7 @@
 use bevy::prelude::*;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_core::{
-    on_command, register_commands, Ack, Command, GlobalEntityId, OpId,
-    TelemetryEvent,
+    on_command, register_commands, Ack, Command, GlobalEntityId, OpId, TelemetryEvent,
 };
 use lunco_doc::{DocumentHost, DocumentId};
 use lunco_scripting::doc::{ScriptDocument, ScriptLanguage, ScriptedModel};
@@ -72,8 +71,13 @@ fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut
         brakes.0 += 1;
     }
     // A throttle/steer write is a drive sample (mirrors the old `DriveRover` log).
-    if cmd.writes.iter().any(|(n, _)| n == "throttle" || n == "steer") {
-        log.0.push((get("throttle").unwrap_or(0.0), get("steer").unwrap_or(0.0)));
+    if cmd
+        .writes
+        .iter()
+        .any(|(n, _)| n == "throttle" || n == "steer")
+    {
+        log.0
+            .push((get("throttle").unwrap_or(0.0), get("steer").unwrap_or(0.0)));
     }
 }
 
@@ -256,7 +260,8 @@ fn tick(app: &mut App) {
 fn rhai_scenario_drives_real_rover() {
     // The shipped declarative mission — first waypoint is far from the origin,
     // so the rover should be commanded to drive forward toward it.
-    let source = lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
+    let source =
+        lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
     let (mut app, _rover) = setup(source);
 
     tick(&mut app);
@@ -326,7 +331,8 @@ fn run_scenario_command_attaches_and_runs() {
         "rover starts with no scenario"
     );
 
-    let src = lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
+    let src =
+        lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
     app.world_mut().trigger(ApiCommandEvent {
         command: "RunScenario".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "source": src }),
@@ -405,7 +411,10 @@ fn builtin_task_advances_with_no_on_tick() {
     tick(&mut app); // step2 → emit B
 
     let events = &app.world().resource::<EventLog>().0;
-    assert!(events.iter().any(|n| n == "A"), "task step0 should emit A; got {events:?}");
+    assert!(
+        events.iter().any(|n| n == "A"),
+        "task step0 should emit A; got {events:?}"
+    );
     assert!(
         events.iter().any(|n| n == "B"),
         "task should self-advance (no on_tick) and emit B; got {events:?}"
@@ -433,7 +442,11 @@ fn builtin_task_waits_for_event_with_no_on_event() {
 
     tick(&mut app); // emits GO (into inbox); task still on wait_for
     assert!(
-        !app.world().resource::<EventLog>().0.iter().any(|n| n == "DONE"),
+        !app.world()
+            .resource::<EventLog>()
+            .0
+            .iter()
+            .any(|n| n == "DONE"),
         "task must hold on wait_for(GO) before the event arrives"
     );
     tick(&mut app); // GO delivered → task feed advances past wait_for
@@ -447,10 +460,19 @@ fn builtin_task_waits_for_event_with_no_on_event() {
 
 /// Count how many times event `name` was emitted.
 fn event_count(app: &App, name: &str) -> usize {
-    app.world().resource::<EventLog>().0.iter().filter(|n| n.as_str() == name).count()
+    app.world()
+        .resource::<EventLog>()
+        .0
+        .iter()
+        .filter(|n| n.as_str() == name)
+        .count()
 }
 fn emitted(app: &App, name: &str) -> bool {
-    app.world().resource::<EventLog>().0.iter().any(|n| n == name)
+    app.world()
+        .resource::<EventLog>()
+        .0
+        .iter()
+        .any(|n| n == name)
 }
 
 #[test]
@@ -494,11 +516,20 @@ fn builtin_task_par_all_waits_for_every_branch() {
     "#;
     let (mut app, _rover) = setup(source);
     tick(&mut app); // A + B1 fire; GO goes into the inbox; B holds on wait_for
-    assert!(emitted(&app, "A") && emitted(&app, "B1"), "tick1 runs both branches' first step");
-    assert!(!emitted(&app, "TASK_COMPLETE"), "par_all must wait for branch B to pass wait_for");
+    assert!(
+        emitted(&app, "A") && emitted(&app, "B1"),
+        "tick1 runs both branches' first step"
+    );
+    assert!(
+        !emitted(&app, "TASK_COMPLETE"),
+        "par_all must wait for branch B to pass wait_for"
+    );
     tick(&mut app); // GO delivered → B runs through to B2 → all branches done
     assert!(emitted(&app, "B2"), "branch B advances on tick2");
-    assert!(emitted(&app, "TASK_COMPLETE"), "par_all completes once all branches finish");
+    assert!(
+        emitted(&app, "TASK_COMPLETE"),
+        "par_all completes once all branches finish"
+    );
 }
 
 #[test]
@@ -516,7 +547,10 @@ fn builtin_task_par_race_completes_on_first_branch() {
     let (mut app, _rover) = setup(source);
     tick(&mut app);
     assert!(emitted(&app, "WIN"), "the finishing branch ran");
-    assert!(emitted(&app, "TASK_COMPLETE"), "par_race completes on the first finished branch");
+    assert!(
+        emitted(&app, "TASK_COMPLETE"),
+        "par_race completes on the first finished branch"
+    );
 }
 
 #[test]
@@ -526,9 +560,18 @@ fn builtin_task_repeat_runs_body_n_times() {
         fn on_start(me) { this.task = repeat(3, once(|m| emit("R", 1))); }
     "#;
     let (mut app, _rover) = setup(source);
-    for _ in 0..4 { tick(&mut app); }
-    assert_eq!(event_count(&app, "R"), 3, "repeat(3) should run the body exactly 3 times");
-    assert!(emitted(&app, "TASK_COMPLETE"), "repeat completes after the last iteration");
+    for _ in 0..4 {
+        tick(&mut app);
+    }
+    assert_eq!(
+        event_count(&app, "R"),
+        3,
+        "repeat(3) should run the body exactly 3 times"
+    );
+    assert!(
+        emitted(&app, "TASK_COMPLETE"),
+        "repeat completes after the last iteration"
+    );
 }
 
 #[test]
@@ -538,9 +581,18 @@ fn builtin_task_forever_never_completes() {
         fn on_start(me) { this.task = forever(once(|m| emit("F", 1))); }
     "#;
     let (mut app, _rover) = setup(source);
-    for _ in 0..3 { tick(&mut app); }
-    assert_eq!(event_count(&app, "F"), 3, "forever runs the body every tick");
-    assert!(!emitted(&app, "TASK_COMPLETE"), "forever must never complete");
+    for _ in 0..3 {
+        tick(&mut app);
+    }
+    assert_eq!(
+        event_count(&app, "F"),
+        3,
+        "forever runs the body every tick"
+    );
+    assert!(
+        !emitted(&app, "TASK_COMPLETE"),
+        "forever must never complete"
+    );
 }
 
 #[test]
@@ -556,8 +608,11 @@ fn builtin_mission_completes_and_emits() {
     let (mut app, _rover) = setup(source);
     tick(&mut app);
     assert!(emitted(&app, "REACHED"), "on_complete should fire");
-    assert!(emitted(&app, "MISSION_COMPLETE"), "a one-objective mission completes; got {:?}",
-        app.world().resource::<EventLog>().0);
+    assert!(
+        emitted(&app, "MISSION_COMPLETE"),
+        "a one-objective mission completes; got {:?}",
+        app.world().resource::<EventLog>().0
+    );
 }
 
 #[test]
@@ -574,9 +629,17 @@ fn builtin_mission_requires_gate_locked_objectives() {
         }
     "#;
     let (mut app, _rover) = setup(source);
-    for _ in 0..3 { tick(&mut app); }
-    assert!(!emitted(&app, "B_DONE"), "b must stay locked until its prerequisite a completes");
-    assert!(!emitted(&app, "MISSION_COMPLETE"), "mission can't complete while a is unmet");
+    for _ in 0..3 {
+        tick(&mut app);
+    }
+    assert!(
+        !emitted(&app, "B_DONE"),
+        "b must stay locked until its prerequisite a completes"
+    );
+    assert!(
+        !emitted(&app, "MISSION_COMPLETE"),
+        "mission can't complete while a is unmet"
+    );
 }
 
 #[test]
@@ -589,9 +652,15 @@ fn builtin_mission_fails_on_fail_condition() {
     "#;
     let (mut app, _rover) = setup(source);
     tick(&mut app);
-    assert!(emitted(&app, "MISSION_FAILED"), "a failed objective fails the mission; got {:?}",
-        app.world().resource::<EventLog>().0);
-    assert!(!emitted(&app, "MISSION_COMPLETE"), "a failed mission must not also report complete");
+    assert!(
+        emitted(&app, "MISSION_FAILED"),
+        "a failed objective fails the mission; got {:?}",
+        app.world().resource::<EventLog>().0
+    );
+    assert!(
+        !emitted(&app, "MISSION_COMPLETE"),
+        "a failed mission must not also report complete"
+    );
 }
 
 #[test]
@@ -606,9 +675,17 @@ fn builtin_mission_dwell_holds_until_satisfied() {
         }
     "#;
     let (mut app, _rover) = setup(source);
-    for _ in 0..3 { tick(&mut app); }
-    assert!(!emitted(&app, "HELD"), "dwell must hold the condition before completing");
-    assert!(!emitted(&app, "MISSION_COMPLETE"), "mission waits on the dwelling objective");
+    for _ in 0..3 {
+        tick(&mut app);
+    }
+    assert!(
+        !emitted(&app, "HELD"),
+        "dwell must hold the condition before completing"
+    );
+    assert!(
+        !emitted(&app, "MISSION_COMPLETE"),
+        "mission waits on the dwelling objective"
+    );
 }
 
 #[test]
@@ -621,7 +698,10 @@ fn builtin_task_and_mission_run_together() {
     let (mut app, _rover) = setup(source);
     tick(&mut app);
     assert!(emitted(&app, "ACTING"), "the task ran");
-    assert!(emitted(&app, "WON") && emitted(&app, "MISSION_COMPLETE"), "the mission resolved");
+    assert!(
+        emitted(&app, "WON") && emitted(&app, "MISSION_COMPLETE"),
+        "the mission resolved"
+    );
 }
 
 #[test]
@@ -704,7 +784,12 @@ fn registered_tool_library_callable_from_a_hook() {
     });
     app.world_mut().flush();
 
-    run_scenario(&mut app, ROVER_GID, "fn on_tick(me) { drivelib::drive_at(me, 0.7); }", 2);
+    run_scenario(
+        &mut app,
+        ROVER_GID,
+        "fn on_tick(me) { drivelib::drive_at(me, 0.7); }",
+        2,
+    );
     tick(&mut app);
 
     let drives = &app.world().resource::<DriveLog>().0;
@@ -768,7 +853,10 @@ fn script_status_reports_compile_error_then_clears_on_fix() {
     run_scenario(&mut app, ROVER_GID, "fn on_tick(me) { let x = ; }", 1);
     tick(&mut app);
     let s = script_status(&mut app, ROVER_GID);
-    assert_eq!(s["state"], "error", "compile error should be reported; got {s}");
+    assert_eq!(
+        s["state"], "error",
+        "compile error should be reported; got {s}"
+    );
     assert_eq!(s["ok"], false);
     let diags = s["diagnostics"].as_array().expect("diagnostics array");
     assert!(!diags.is_empty(), "expected a diagnostic; got {s}");
@@ -870,7 +958,10 @@ fn script_inspect_reports_live_state_hooks_and_health() {
         .collect();
     assert!(names.contains(&"on_start"), "got {names:?}");
     assert!(names.contains(&"on_tick"), "got {names:?}");
-    assert!(!names.contains(&"on_event"), "on_event undefined; got {names:?}");
+    assert!(
+        !names.contains(&"on_event"),
+        "on_event undefined; got {names:?}"
+    );
 
     // The unified health block rides along, ready (no errors).
     assert_eq!(s["status"]["state"], "ready", "got {s}");
@@ -1007,7 +1098,10 @@ fn timeline_storage_register_discover_and_run() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert!(names.contains(&"approach"), "ListTimelines should include it; got {list}");
+    assert!(
+        names.contains(&"approach"),
+        "ListTimelines should include it; got {list}"
+    );
 
     let provider = app
         .world()
@@ -1075,7 +1169,8 @@ fn client_role_gates_script_execution() {
     use lunco_core::NetworkRole;
     // The shipped mission drives toward its first (far) waypoint on tick 1 — a
     // reliable "did the script run?" probe (cf. rhai_scenario_drives_real_rover).
-    let src = lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
+    let src =
+        lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
 
     // Client → gated off: on_tick never issues a SetPorts drive.
     let (mut app, _r) = setup(src);
@@ -1119,7 +1214,11 @@ fn on_stop_fires_on_despawn() {
     let (mut app, rover) = setup(source);
     tick(&mut app); // on_start
     assert!(
-        app.world().resource::<EventLog>().0.iter().any(|e| e == "STARTED"),
+        app.world()
+            .resource::<EventLog>()
+            .0
+            .iter()
+            .any(|e| e == "STARTED"),
         "on_start should run first"
     );
 
@@ -1181,7 +1280,13 @@ fn set_scenario_paused_halts_and_resumes_on_tick() {
     "#;
     let (mut app, _rover) = setup(source);
     tick(&mut app);
-    let baseline = app.world().resource::<EventLog>().0.iter().filter(|e| *e == "TICK").count();
+    let baseline = app
+        .world()
+        .resource::<EventLog>()
+        .0
+        .iter()
+        .filter(|e| *e == "TICK")
+        .count();
     assert!(baseline >= 1, "on_tick should run before pausing");
 
     // Pause via the command API.
@@ -1197,13 +1302,25 @@ fn set_scenario_paused_halts_and_resumes_on_tick() {
     set_paused(&mut app, true);
     tick(&mut app);
     tick(&mut app);
-    let paused = app.world().resource::<EventLog>().0.iter().filter(|e| *e == "TICK").count();
+    let paused = app
+        .world()
+        .resource::<EventLog>()
+        .0
+        .iter()
+        .filter(|e| *e == "TICK")
+        .count();
     assert_eq!(paused, baseline, "paused scenario must not run on_tick");
 
     // Resume → on_tick fires again.
     set_paused(&mut app, false);
     tick(&mut app);
-    let resumed = app.world().resource::<EventLog>().0.iter().filter(|e| *e == "TICK").count();
+    let resumed = app
+        .world()
+        .resource::<EventLog>()
+        .0
+        .iter()
+        .filter(|e| *e == "TICK")
+        .count();
     assert!(resumed > paused, "resuming should run on_tick again");
 }
 
@@ -1248,9 +1365,11 @@ fn usd_embedded_scenario_attaches_and_runs() {
     let mut app = build_app();
     let rover = spawn_rover(&mut app);
     // Simulate lunco-usd-bevy reading `lunco:script` off the prim.
-    app.world_mut().entity_mut(rover).insert(lunco_core::EmbeddedScenarioSource(
-        r#"fn on_start(self) { emit("EMBEDDED_RAN"); }"#.to_string(),
-    ));
+    app.world_mut()
+        .entity_mut(rover)
+        .insert(lunco_core::EmbeddedScenarioSource(
+            r#"fn on_start(self) { emit("EMBEDDED_RAN"); }"#.to_string(),
+        ));
 
     tick(&mut app); // attach_embedded_scenarios → inserts ScriptedModel
     tick(&mut app); // tick_rhai_scenarios → compile + on_start
@@ -1263,7 +1382,10 @@ fn usd_embedded_scenario_attaches_and_runs() {
     // Attached as a scenario; the marker was consumed.
     assert!(app.world().entity(rover).get::<ScriptedModel>().is_some());
     assert!(
-        app.world().entity(rover).get::<lunco_core::EmbeddedScenarioSource>().is_none(),
+        app.world()
+            .entity(rover)
+            .get::<lunco_core::EmbeddedScenarioSource>()
+            .is_none(),
         "marker should be removed after attach"
     );
 }
@@ -1288,9 +1410,20 @@ fn set_verb_writes_component_fields() {
 
     tick(&mut app);
 
-    let knob = app.world().entity(rover).get::<Knob>().expect("Knob present");
-    assert_eq!(knob.gain, 3.0, "int literal should coerce into the f64 field");
-    assert_eq!(knob.dir, Vec3::new(1.0, 2.0, 3.0), "array should become a Vec3");
+    let knob = app
+        .world()
+        .entity(rover)
+        .get::<Knob>()
+        .expect("Knob present");
+    assert_eq!(
+        knob.gain, 3.0,
+        "int literal should coerce into the f64 field"
+    );
+    assert_eq!(
+        knob.dir,
+        Vec3::new(1.0, 2.0, 3.0),
+        "array should become a Vec3"
+    );
     assert!(knob.armed, "bool field should be set");
     assert_eq!(knob.label, "go", "string field should be set");
 }
@@ -1313,8 +1446,14 @@ fn setting_verbs_read_and_write_resources() {
     tick(&mut app);
 
     let cfg = app.world().resource::<SimConfig>();
-    assert_eq!(cfg.speed, 9.5, "set_setting should write the f64 resource field");
-    assert_eq!(cfg.steps, 7, "set_setting should write the i64 resource field");
+    assert_eq!(
+        cfg.speed, 9.5,
+        "set_setting should write the f64 resource field"
+    );
+    assert_eq!(
+        cfg.steps, 7,
+        "set_setting should write the i64 resource field"
+    );
     assert_eq!(
         app.world().resource::<CapturedData>().0,
         vec![7],
@@ -1338,9 +1477,19 @@ fn set_verb_reports_failure_and_leaves_target_unchanged() {
     tick(&mut app);
 
     let events = &app.world().resource::<EventLog>().0;
-    assert!(events.iter().any(|e| e == "SET_FAILED"), "missing field → false; got {events:?}");
-    assert!(events.iter().any(|e| e == "SETTING_FAILED"), "missing resource → false; got {events:?}");
-    let knob = app.world().entity(rover).get::<Knob>().expect("Knob present");
+    assert!(
+        events.iter().any(|e| e == "SET_FAILED"),
+        "missing field → false; got {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e == "SETTING_FAILED"),
+        "missing resource → false; got {events:?}"
+    );
+    let knob = app
+        .world()
+        .entity(rover)
+        .get::<Knob>()
+        .expect("Knob present");
     assert_eq!(knob.gain, 0.0, "a failed set must not mutate the component");
 }
 
@@ -1356,11 +1505,18 @@ fn add_verb_inserts_reflected_component() {
         }
     "#;
     let (mut app, rover) = setup(source);
-    assert!(app.world().entity(rover).get::<Knob>().is_none(), "rover starts without Knob");
+    assert!(
+        app.world().entity(rover).get::<Knob>().is_none(),
+        "rover starts without Knob"
+    );
 
     tick(&mut app);
 
-    let knob = app.world().entity(rover).get::<Knob>().expect("add() should insert Knob");
+    let knob = app
+        .world()
+        .entity(rover)
+        .get::<Knob>()
+        .expect("add() should insert Knob");
     assert_eq!(knob.gain, 5.0);
     assert!(knob.armed);
     assert_eq!(knob.label, "live");
@@ -1371,7 +1527,10 @@ fn add_verb_inserts_reflected_component() {
 fn remove_verb_strips_component() {
     let source = r#"fn on_start(me) { remove(me, "Knob"); }"#;
     let (mut app, rover) = setup(source);
-    app.world_mut().entity_mut(rover).insert(Knob { gain: 1.0, ..default() });
+    app.world_mut().entity_mut(rover).insert(Knob {
+        gain: 1.0,
+        ..default()
+    });
 
     tick(&mut app);
 
@@ -1391,7 +1550,10 @@ fn despawn_verb_removes_entity() {
     let source = format!(r#"fn on_start(me) {{ despawn({VICTIM_GID}); }}"#);
     let (mut app, _rover) = setup(&source);
     let victim = spawn_typed_rover(&mut app, VICTIM_GID, 50.0);
-    assert!(app.world().get_entity(victim).is_ok(), "victim exists before tick");
+    assert!(
+        app.world().get_entity(victim).is_ok(),
+        "victim exists before tick"
+    );
 
     tick(&mut app);
 
@@ -1418,7 +1580,8 @@ fn rand_is_deterministic_across_runs_and_advances() {
     // One fresh app, pinned to `tick_val`, ticked once → the drawn ints.
     let run_once = |tick_val: u64| -> Vec<i64> {
         let (mut app, _rover) = setup(source);
-        app.world_mut().insert_resource(lunco_core::SimTick(tick_val));
+        app.world_mut()
+            .insert_resource(lunco_core::SimTick(tick_val));
         tick(&mut app);
         app.world().resource::<CapturedData>().0.clone()
     };
@@ -1429,6 +1592,9 @@ fn rand_is_deterministic_across_runs_and_advances() {
 
     assert_eq!(a_t1.len(), 2, "two rand draws per tick");
     assert_ne!(a_t1[0], a_t1[1], "rand() must advance within a tick");
-    assert_eq!(a_t1, b_t1, "same entity+tick → identical sequence across runs (deterministic)");
+    assert_eq!(
+        a_t1, b_t1,
+        "same entity+tick → identical sequence across runs (deterministic)"
+    );
     assert_ne!(a_t1, a_t2, "a different tick must draw a different stream");
 }

@@ -4,9 +4,9 @@
 //! the SysML models, bridging the gap between [Port] values and
 //! the [avian3d] physics engine.
 
-use bevy::prelude::*;
-use bevy::math::{DVec3, DQuat};
 use avian3d::prelude::*;
+use bevy::math::{DQuat, DVec3};
+use bevy::prelude::*;
 use lunco_core::architecture::Port;
 
 /// Plugin for managing physical hardware components (motors, sensors, etc.).
@@ -15,42 +15,53 @@ pub struct LunCoHardwarePlugin;
 impl Plugin for LunCoHardwarePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<MotorActuator>()
-           .register_type::<SteeringActuator>()
-           .register_type::<AngularVelocitySensor>()
-           // A wheel joint driven by an actuator owns its own `motor`; mark it
-           // so the cosim joint backend (`apply_joint_drives`) doesn't also
-           // position-hold it and freeze the wheel. See `ActuatorDrivenJoint`.
-           .add_observer(mark_actuator_driven_motor)
-           .add_observer(mark_actuator_driven_steer)
-           .add_systems(FixedUpdate, (
-               steering_actuator_system,
-               motor_actuator_system,
-               sensor_velocity_system,
-           ).chain().run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0))
-           // Rollback replay: the joint-motor actuators ARE the jointed rover's
-           // drive, so re-simulating an input must re-derive them. Ordered
-           // `.after(ControlDacSet)` — they read the actuator `Port`, which
-           // propagation writes from this tick's command. `sensor_velocity_system`
-           // is excluded: it publishes telemetry, not force, and replay must not
-           // emit sensor readings for ticks that already happened.
-           .add_systems(lunco_core::RollbackReplay, (
-               steering_actuator_system,
-               motor_actuator_system,
-           ).chain().after(lunco_core::ControlDacSet));
+            .register_type::<SteeringActuator>()
+            .register_type::<AngularVelocitySensor>()
+            // A wheel joint driven by an actuator owns its own `motor`; mark it
+            // so the cosim joint backend (`apply_joint_drives`) doesn't also
+            // position-hold it and freeze the wheel. See `ActuatorDrivenJoint`.
+            .add_observer(mark_actuator_driven_motor)
+            .add_observer(mark_actuator_driven_steer)
+            .add_systems(
+                FixedUpdate,
+                (
+                    steering_actuator_system,
+                    motor_actuator_system,
+                    sensor_velocity_system,
+                )
+                    .chain()
+                    .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
+            )
+            // Rollback replay: the joint-motor actuators ARE the jointed rover's
+            // drive, so re-simulating an input must re-derive them. Ordered
+            // `.after(ControlDacSet)` — they read the actuator `Port`, which
+            // propagation writes from this tick's command. `sensor_velocity_system`
+            // is excluded: it publishes telemetry, not force, and replay must not
+            // emit sensor readings for ticks that already happened.
+            .add_systems(
+                lunco_core::RollbackReplay,
+                (steering_actuator_system, motor_actuator_system)
+                    .chain()
+                    .after(lunco_core::ControlDacSet),
+            );
     }
 }
 
 /// Stamp [`lunco_core::ActuatorDrivenJoint`] on any joint that gains a
 /// [`MotorActuator`] — the velocity motor is now the sole owner of `motor`.
 fn mark_actuator_driven_motor(trigger: On<Add, MotorActuator>, mut commands: Commands) {
-    commands.entity(trigger.entity).try_insert(lunco_core::ActuatorDrivenJoint);
+    commands
+        .entity(trigger.entity)
+        .try_insert(lunco_core::ActuatorDrivenJoint);
 }
 
 /// Stamp [`lunco_core::ActuatorDrivenJoint`] on any joint that gains a
 /// [`SteeringActuator`] — the frame-steer owns `motor`/frame, not the cosim
 /// position-hold. (Front wheels carry both actuators; `try_insert` is idempotent.)
 fn mark_actuator_driven_steer(trigger: On<Add, SteeringActuator>, mut commands: Commands) {
-    commands.entity(trigger.entity).try_insert(lunco_core::ActuatorDrivenJoint);
+    commands
+        .entity(trigger.entity)
+        .try_insert(lunco_core::ActuatorDrivenJoint);
 }
 
 /// A wheel-hub motor that drives a rover the **physically correct** way: it
@@ -127,7 +138,9 @@ fn motor_actuator_system(
     mut q_joints: Query<(&MotorActuator, &mut RevoluteJoint)>,
 ) {
     for (motor, mut joint) in q_joints.iter_mut() {
-        let Ok(port) = q_ports.get(motor.port_entity) else { continue };
+        let Ok(port) = q_ports.get(motor.port_entity) else {
+            continue;
+        };
         // Saturate to full scale before scaling by `max_omega`. The raycast path
         // clamps its throttle identically (`update_wheel_spin`), and it is that
         // agreement `drivetrain_parity` measures: unclamped, an over-range command
@@ -214,7 +227,9 @@ fn steering_actuator_system(
     let dt = time.delta_secs_f64();
     let max_step = STEER_SLEW_RATE * dt;
     for (mut steer, joint) in q.iter_mut() {
-        let Ok(port) = q_ports.get(steer.port_entity) else { continue };
+        let Ok(port) = q_ports.get(steer.port_entity) else {
+            continue;
+        };
         // Rate-limit the SHARED centreline reference (keeps both wheels in sync).
         let target_ref = port.value.clamp(-1.0, 1.0) * steer.max_steer_angle;
         let delta = (target_ref - steer.current_ref).clamp(-max_step, max_step);
@@ -273,4 +288,3 @@ fn sensor_velocity_system(
         }
     }
 }
-

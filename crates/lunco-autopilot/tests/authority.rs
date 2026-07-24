@@ -60,12 +60,19 @@ fn autopilot_engages_registers_and_drives_only_what_it_owns() {
         "autopilot must register as an AiAgent session"
     );
     let reg = app.world().resource::<SessionRegistry>();
-    assert!(reg.owns(ap_session, 0x11), "autopilot must own the vessel it engaged");
+    assert!(
+        reg.owns(ap_session, 0x11),
+        "autopilot must own the vessel it engaged"
+    );
 
     // FixedUpdate → drive_autopilots emits one SetPorts for the owned vessel.
     app.world_mut().run_schedule(FixedUpdate);
     let log = app.world().resource::<DriveLog>();
-    assert_eq!(log.0, vec![rover], "engaged autopilot drives the vessel it owns");
+    assert_eq!(
+        log.0,
+        vec![rover],
+        "engaged autopilot drives the vessel it owns"
+    );
 }
 
 #[test]
@@ -113,12 +120,19 @@ fn multi_actor_two_autopilots_own_distinct_vessels() {
     let reg = app.world().resource::<SessionRegistry>();
     assert!(reg.owns(autopilot_session(0), 0xA1));
     assert!(reg.owns(autopilot_session(1), 0xB2));
-    assert_ne!(autopilot_session(0), autopilot_session(1), "distinct actors, distinct sessions");
+    assert_ne!(
+        autopilot_session(0),
+        autopilot_session(1),
+        "distinct actors, distinct sessions"
+    );
 
     app.world_mut().run_schedule(FixedUpdate);
     let mut driven = app.world().resource::<DriveLog>().0.clone();
     driven.sort();
     let mut expected = vec![rover_a, rover_b];
     expected.sort();
-    assert_eq!(driven, expected, "each autopilot drives its own vessel, no interference");
+    assert_eq!(
+        driven, expected,
+        "each autopilot drives its own vessel, no interference"
+    );
 }

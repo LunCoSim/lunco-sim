@@ -18,8 +18,8 @@
 //! The wire is unchanged: `{"type":"QueryEntity","id":…}` still works, because
 //! `lunco-api`'s envelope maps that shape onto this provider.
 
-use bevy::prelude::*;
 use bevy::ecs::system::SystemState;
+use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
@@ -137,7 +137,12 @@ mod tests {
 
         let grid = app
             .world_mut()
-            .spawn((Grid::new(EDGE, 0.0), CellCoord::ZERO, Transform::default(), GlobalTransform::default()))
+            .spawn((
+                Grid::new(EDGE, 0.0),
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
             .id();
         // Two cells up, 53 m down within the cell: grid-absolute Y = 3947.
         let cell = CellCoord::new(0, 2, 0);
@@ -157,11 +162,12 @@ mod tests {
             .resource_mut::<ApiEntityRegistry>()
             .assign(prim, gid);
 
-        let response = QueryEntityProvider.execute(
-            app.world_mut(),
-            &serde_json::json!({ "id": 42 }),
-        );
-        let ApiResponse::Ok { data: Some(data), .. } = response else {
+        let response =
+            QueryEntityProvider.execute(app.world_mut(), &serde_json::json!({ "id": 42 }));
+        let ApiResponse::Ok {
+            data: Some(data), ..
+        } = response
+        else {
             panic!("expected a successful query, got {response:?}");
         };
         let pos = data["position"].as_array().expect("position array");

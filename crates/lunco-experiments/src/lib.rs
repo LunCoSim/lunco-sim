@@ -143,8 +143,7 @@ pub enum SolverChoice {
 
 impl SolverChoice {
     /// All variants, in UI display order.
-    pub const ALL: [SolverChoice; 4] =
-        [Self::Bdf, Self::Esdirk34, Self::TrBdf2, Self::RkLike];
+    pub const ALL: [SolverChoice; 4] = [Self::Bdf, Self::Esdirk34, Self::TrBdf2, Self::RkLike];
 
     /// Canonical lowercase name (matches serde snake_case; round-trips through
     /// [`FromStr`](std::str::FromStr)).
@@ -196,8 +195,9 @@ impl std::str::FromStr for SolverChoice {
             "bdf" | "dassl" | "ida" => Self::Bdf,
             "esdirk34" | "esdirk" | "rk4" => Self::Esdirk34,
             "trbdf2" => Self::TrBdf2,
-            "rklike" | "rk45" | "tsit45" | "dopri" | "rungekutta" | "euler"
-            | "midpoint" => Self::RkLike,
+            "rklike" | "rk45" | "tsit45" | "dopri" | "rungekutta" | "euler" | "midpoint" => {
+                Self::RkLike
+            }
             _ => return Err(format!("unknown solver `{s}`")),
         })
     }
@@ -295,11 +295,18 @@ pub enum RunStatus {
     /// transitions to `Running` when a slot frees, or `Cancelled` if
     /// cancelled while still queued.
     Queued,
-    Running { t_current: f64 },
-    Done { wall_time_ms: u64 },
+    Running {
+        t_current: f64,
+    },
+    Done {
+        wall_time_ms: u64,
+    },
     /// `partial` is true when a partial trajectory was salvaged before
     /// the failure (kept in `result`).
-    Failed { error: String, partial: bool },
+    Failed {
+        error: String,
+        partial: bool,
+    },
     Cancelled,
 }
 
@@ -498,10 +505,7 @@ impl ExperimentRegistry {
     }
 
     pub fn list_for_twin(&self, twin: &TwinId) -> &[Experiment] {
-        self.by_twin
-            .get(twin)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+        self.by_twin.get(twin).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// Rewrite every experiment under `twin` whose `model_ref`
@@ -510,12 +514,7 @@ impl ExperimentRegistry {
     /// `model Foo` → `model Bar` edit in the source doesn't strand
     /// the user's run history under a class name that no longer
     /// exists.
-    pub fn rename_model_ref(
-        &mut self,
-        twin: &TwinId,
-        old: &ModelRef,
-        new: &ModelRef,
-    ) -> usize {
+    pub fn rename_model_ref(&mut self, twin: &TwinId, old: &ModelRef, new: &ModelRef) -> usize {
         let mut hit = 0;
         if let Some(bucket) = self.by_twin.get_mut(twin) {
             for exp in bucket.iter_mut() {
@@ -541,11 +540,7 @@ impl ExperimentRegistry {
     /// no in-flight handles still reference the cleared ids (the
     /// drain system will silently drop updates for missing rows).
     pub fn delete_for_twin(&mut self, twin: &TwinId) -> usize {
-        let removed = self
-            .by_twin
-            .remove(twin)
-            .map(|v| v.len())
-            .unwrap_or(0);
+        let removed = self.by_twin.remove(twin).map(|v| v.len()).unwrap_or(0);
         self.name_counter.retain(|(t, _), _| t != twin);
         self.color_counter.remove(twin);
         removed
@@ -793,10 +788,26 @@ mod tests {
         let mut reg = ExperimentRegistry::new();
         let twin = TwinId("t".into());
         let model = ModelRef("M".into());
-        let id1 = reg.insert_new(twin.clone(), model.clone(), Default::default(), Default::default(), Default::default());
-        let id2 = reg.insert_new(twin.clone(), model.clone(), Default::default(), Default::default(), Default::default());
+        let id1 = reg.insert_new(
+            twin.clone(),
+            model.clone(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
+        let id2 = reg.insert_new(
+            twin.clone(),
+            model.clone(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
         assert_ne!(id1, id2);
-        let names: Vec<_> = reg.list_for_twin(&twin).iter().map(|e| e.name.clone()).collect();
+        let names: Vec<_> = reg
+            .list_for_twin(&twin)
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
         assert_eq!(names, vec!["Run 1", "Run 2"]);
     }
 
@@ -806,7 +817,13 @@ mod tests {
         let twin = TwinId("t".into());
         let model = ModelRef("M".into());
         for _ in 0..(REGISTRY_CAP_PER_TWIN + 5) {
-            let id = reg.insert_new(twin.clone(), model.clone(), Default::default(), Default::default(), Default::default());
+            let id = reg.insert_new(
+                twin.clone(),
+                model.clone(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            );
             reg.set_status(id, RunStatus::Done { wall_time_ms: 0 });
         }
         assert_eq!(reg.list_for_twin(&twin).len(), REGISTRY_CAP_PER_TWIN);
@@ -819,15 +836,33 @@ mod tests {
         let model = ModelRef("M".into());
         // Fill with terminal first
         for _ in 0..REGISTRY_CAP_PER_TWIN {
-            let id = reg.insert_new(twin.clone(), model.clone(), Default::default(), Default::default(), Default::default());
+            let id = reg.insert_new(
+                twin.clone(),
+                model.clone(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            );
             reg.set_status(id, RunStatus::Done { wall_time_ms: 0 });
         }
         // Now add an in-flight one, which should NOT trigger eviction of itself
-        let live = reg.insert_new(twin.clone(), model.clone(), Default::default(), Default::default(), Default::default());
+        let live = reg.insert_new(
+            twin.clone(),
+            model.clone(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
         reg.set_status(live, RunStatus::Running { t_current: 0.0 });
         // Adding more terminal ones should evict from the terminal set
         for _ in 0..3 {
-            let id = reg.insert_new(twin.clone(), model.clone(), Default::default(), Default::default(), Default::default());
+            let id = reg.insert_new(
+                twin.clone(),
+                model.clone(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            );
             reg.set_status(id, RunStatus::Done { wall_time_ms: 0 });
         }
         // Live run still present
@@ -839,7 +874,13 @@ mod tests {
         let mut reg = ExperimentRegistry::new();
         let twin = TwinId("t".into());
         let model = ModelRef("M".into());
-        let id = reg.insert_new(twin, model, Default::default(), Default::default(), Default::default());
+        let id = reg.insert_new(
+            twin,
+            model,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
         // Pending — refuse delete
         assert!(!reg.delete(id));
         reg.set_status(id, RunStatus::Done { wall_time_ms: 0 });

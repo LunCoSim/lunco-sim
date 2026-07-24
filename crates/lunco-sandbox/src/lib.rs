@@ -34,13 +34,13 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use bevy::prelude::*;
-use bevy::asset::{AssetMetaCheck, AssetPlugin};
-use big_space::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
+use bevy::asset::{AssetMetaCheck, AssetPlugin};
+use bevy::prelude::*;
+use big_space::prelude::*;
 
-use lunco_mobility::LunCoMobilityPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
+use lunco_mobility::LunCoMobilityPlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
 use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
@@ -49,28 +49,26 @@ use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
 // AUTHORED layer; the retired flattened reader used to blur the two). Since the
 // terrain projector moved to `lunco-usd-terrain`, the only reader left in this crate
 // is the `ui`-gated terrain layer-map binding.
+use bevy::asset::AssetLoadFailedEvent;
 #[cfg(feature = "ui")]
 use lunco_usd_bevy::UsdRead;
-use bevy::asset::AssetLoadFailedEvent;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
 /// propagate the process exit code (e.g. the startup-scene fail-loud guard).
 pub use bevy::app::AppExit;
-use lunco_terrain_globe::TerrainPlugin;
-use lunco_obstacle_field::ObstacleFieldPlugin;
-use lunco_terrain_surface::TerrainSurfacePlugin;
-use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::LunCoAvatarPlugin;
-use lunco_environment::EnvironmentPlugin;
-use lunco_cosim::CoSimPlugin;
-use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
+use lunco_controller::LunCoControllerPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
+use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
+use lunco_cosim::CoSimPlugin;
+use lunco_environment::EnvironmentPlugin;
+use lunco_obstacle_field::ObstacleFieldPlugin;
+use lunco_terrain_globe::TerrainPlugin;
+use lunco_terrain_surface::TerrainSurfacePlugin;
 // `ModelicaSet` orders the cosim pipeline (always). The egui workbench plugin is
 // added by `SandboxUiPlugin`; headless adds `ModelicaCorePlugin` instead.
 use lunco_modelica::ModelicaSet;
 
-#[cfg(feature = "ui")]
-mod ui;
 /// Engine light-handling policy (`ShadowCastingSettings` + reactive
 /// possession-driven headlight shadow projection). Client render concern, so
 /// `ui`-gated. See [`light_policy`].
@@ -78,6 +76,8 @@ mod ui;
 mod light_policy;
 #[cfg(feature = "ui")]
 mod terrain_horizon;
+#[cfg(feature = "ui")]
+mod ui;
 /// OS `luncosim://` scheme registration (desktop integration). Native + the
 /// networking feature only — there's nothing to dial without the wire.
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
@@ -187,10 +187,7 @@ compositor and the unfocused power-save throttle, not the renderer.",
 /// answering the question.
 #[cfg(not(target_family = "wasm"))]
 fn print_help_if_requested() -> bool {
-    if std::env::args()
-        .skip(1)
-        .any(|a| a == "--help" || a == "-h")
-    {
+    if std::env::args().skip(1).any(|a| a == "--help" || a == "-h") {
         println!("{}", help_text());
         return true;
     }
@@ -243,7 +240,6 @@ fn run_with_mode(headless: bool) -> AppExit {
     if let Some(inbox) = deeplink_inbox {
         app.insert_resource(inbox);
     }
-
 
     #[cfg(feature = "ui")]
     if !headless && !offscreen {
@@ -382,7 +378,11 @@ pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGrou
 
     #[cfg(feature = "ui")]
     let render_creation = if headless {
-        WgpuSettings { backends: None, ..default() }.into()
+        WgpuSettings {
+            backends: None,
+            ..default()
+        }
+        .into()
     } else {
         lunco_workbench::preferred_wgpu_settings().into()
     };
@@ -404,7 +404,10 @@ pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGrou
     // Only a `ui` build has a render stack to configure. Without `ui`, `DefaultPlugins`
     // carries no `RenderPlugin` (bevy_render isn't linked) and there is nothing to set.
     #[cfg(feature = "ui")]
-    let group = group.set(bevy::render::RenderPlugin { render_creation, ..default() });
+    let group = group.set(bevy::render::RenderPlugin {
+        render_creation,
+        ..default()
+    });
 
     #[cfg(feature = "ui")]
     let vertical = std::env::args().any(|a| a == "--vertical");
@@ -521,7 +524,10 @@ fn load_ready_scenario(
         scene,
     );
     info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
-    commands.trigger(LoadScene { path: uri, root_prim: String::new() });
+    commands.trigger(LoadScene {
+        path: uri,
+        root_prim: String::new(),
+    });
     *last_loaded = Some(m.revision);
 }
 
@@ -939,8 +945,7 @@ fn replay_scenario_journal_timeline(
         lunco_twin_journal::DomainKind::Timeline,
     );
     for (id, op) in pending {
-        if let Some((name, timeline)) =
-            lunco_scripting::registration_journal::replay_timeline(&op)
+        if let Some((name, timeline)) = lunco_scripting::registration_journal::replay_timeline(&op)
         {
             store.insert(name, timeline);
         }
@@ -1035,11 +1040,19 @@ fn load_run_result_artifacts(
             Ok(result) => {
                 let wall = result.meta.wall_time_ms;
                 registry.set_result(id, result);
-                registry
-                    .set_status(id, lunco_experiments::RunStatus::Done { wall_time_ms: wall });
-                info!("[experiment] loaded result artifact for {}", id.as_artifact_stem());
+                registry.set_status(
+                    id,
+                    lunco_experiments::RunStatus::Done { wall_time_ms: wall },
+                );
+                info!(
+                    "[experiment] loaded result artifact for {}",
+                    id.as_artifact_stem()
+                );
             }
-            Err(e) => warn!("[experiment] result artifact parse failed for {}: {e}", id.as_artifact_stem()),
+            Err(e) => warn!(
+                "[experiment] result artifact parse failed for {}: {e}",
+                id.as_artifact_stem()
+            ),
         }
     }
 }
@@ -1206,7 +1219,9 @@ fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<Auth
             if view.prim_type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
                 continue;
             }
-            let seam = view.value::<String>(&prim, "lunco:policy:seam").unwrap_or_default();
+            let seam = view
+                .value::<String>(&prim, "lunco:policy:seam")
+                .unwrap_or_default();
             // The schema default for both is empty (`""` / `@@`), so filter empties: an
             // unauthored opinion reads back as the fallback, which is not a real source.
             let inline_source = view
@@ -1214,15 +1229,16 @@ fn extract_usd_policies(canonical: &lunco_usd_bevy::CanonicalStages) -> Vec<Auth
                 .filter(|s| !s.is_empty());
             // `asset`-typed ref — read via `UsdRead::asset` (a `Value::AssetPath`, which a
             // `String` read would miss). UFCS, so no trait import is needed here.
-            let source_path =
-                lunco_usd_bevy::UsdRead::asset(&view, &prim, "info:sourceAsset")
-                    .filter(|s| !s.is_empty());
+            let source_path = lunco_usd_bevy::UsdRead::asset(&view, &prim, "info:sourceAsset")
+                .filter(|s| !s.is_empty());
             if seam.is_empty() || (inline_source.is_none() && source_path.is_none()) {
                 continue;
             }
             out.push(AuthoredPolicy {
                 seam,
-                entry: view.value::<String>(&prim, "lunco:policy:entry").unwrap_or_default(),
+                entry: view
+                    .value::<String>(&prim, "lunco:policy:entry")
+                    .unwrap_or_default(),
                 deterministic: view
                     .value::<bool>(&prim, "lunco:policy:deterministic")
                     .unwrap_or(true),
@@ -1311,7 +1327,10 @@ fn project_usd_policies(
     mut last: Local<Option<(usize, u64)>>,
     mut awaiting: Local<bool>,
 ) {
-    let signal = (canonical.len(), canonical.iter().map(|(_, cs)| cs.generation()).sum());
+    let signal = (
+        canonical.len(),
+        canonical.iter().map(|(_, cs)| cs.generation()).sum(),
+    );
     // Re-run when the stage moved OR a file-backed source is still loading.
     if *last == Some(signal) && !*awaiting {
         return;
@@ -1321,8 +1340,10 @@ fn project_usd_policies(
     let authored = extract_usd_policies(&canonical);
     // Drop cached handles for paths no longer authored, so a removed file-policy stops
     // pinning its asset.
-    let live: std::collections::HashSet<&str> =
-        authored.iter().filter_map(|a| a.source_path.as_deref()).collect();
+    let live: std::collections::HashSet<&str> = authored
+        .iter()
+        .filter_map(|a| a.source_path.as_deref())
+        .collect();
     pending.retain(|p, _| live.contains(p.as_str()));
 
     let mut desired = Vec::with_capacity(authored.len());
@@ -1332,7 +1353,8 @@ fn project_usd_policies(
         let source = if let Some(src) = &a.inline_source {
             src.clone()
         } else if let Some(path) = &a.source_path {
-            match resolve_policy_source_file(path, &asset_server, sources.as_deref(), &mut pending) {
+            match resolve_policy_source_file(path, &asset_server, sources.as_deref(), &mut pending)
+            {
                 PolicySource::Ready(text) => text,
                 PolicySource::Loading => {
                     unresolved = true;
@@ -1425,7 +1447,10 @@ fn project_env_settings(
     mut lunar_sun: Option<ResMut<lunco_environment::LunarSun>>,
     mut last: Local<Option<(usize, u64)>>,
 ) {
-    let signal = (canonical.len(), canonical.iter().map(|(_, cs)| cs.generation()).sum());
+    let signal = (
+        canonical.len(),
+        canonical.iter().map(|(_, cs)| cs.generation()).sum(),
+    );
     if *last == Some(signal) {
         return;
     }
@@ -1533,15 +1558,24 @@ fn on_set_rhai_policy(
     let cmd = trigger.event();
     let docs: Vec<_> = registry.ids().collect();
     let [doc] = docs.as_slice() else {
-        warn!("[policy] SetRhaiPolicy needs exactly one scene document (found {})", docs.len());
+        warn!(
+            "[policy] SetRhaiPolicy needs exactly one scene document (found {})",
+            docs.len()
+        );
         return;
     };
     let doc = *doc;
 
     // USD prim names are identifier-like — sanitize the seam/name into one.
-    let base = if cmd.name.is_empty() { &cmd.seam } else { &cmd.name };
-    let mut name: String =
-        base.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+    let base = if cmd.name.is_empty() {
+        &cmd.seam
+    } else {
+        &cmd.name
+    };
+    let mut name: String = base
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
     if name.is_empty() {
         name = "policy".to_string();
     }
@@ -1600,7 +1634,10 @@ fn on_set_rhai_policy(
     for op in ops {
         commands.trigger(ApplyUsdOp { doc, op });
     }
-    info!("[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects", cmd.seam);
+    info!(
+        "[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects",
+        cmd.seam
+    );
 }
 
 /// Save a live-edited rhai scenario's current source back onto the `LunCoProgram`
@@ -1633,7 +1670,9 @@ impl Default for SaveScenario {
     // `#[Command]` needs a Default for Reflect; `Entity` has none. The placeholder
     // is never dispatched — a real save always carries the selected entity.
     fn default() -> Self {
-        Self { target: Entity::PLACEHOLDER }
+        Self {
+            target: Entity::PLACEHOLDER,
+        }
     }
 }
 
@@ -1670,9 +1709,11 @@ fn on_save_scenario(
         warn!("[save-scenario] entity {target} is not a USD-backed prim — nothing to save onto");
         return;
     };
-    let Some(scene_doc) =
-        lunco_usd::twin_projection::scene_document_for(&backed, &asset_server, upp.stage_handle.id())
-    else {
+    let Some(scene_doc) = lunco_usd::twin_projection::scene_document_for(
+        &backed,
+        &asset_server,
+        upp.stage_handle.id(),
+    ) else {
         warn!(
             "[save-scenario] the scene backing {target} is a raw-file scene (not doc-backed) — \
              open it as a Twin to save scenarios in place"
@@ -1740,7 +1781,10 @@ mod policy_projection_tests {
         assert_eq!(p.seam, "control.authority.take");
         assert_eq!(p.entry, "may_take_control");
         assert!(
-            p.inline_source.as_deref().unwrap_or_default().contains("may_take_control"),
+            p.inline_source
+                .as_deref()
+                .unwrap_or_default()
+                .contains("may_take_control"),
             "inline source carried verbatim"
         );
         assert!(p.source_path.is_none(), "no file ref authored");
@@ -1804,7 +1848,10 @@ mod policy_projection_tests {
             CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
                 .expect("build stage"),
         );
-        assert_eq!(extract_usd_policies(&stages)[0].inline_source.as_deref(), Some("fn drive(c){1}"));
+        assert_eq!(
+            extract_usd_policies(&stages)[0].inline_source.as_deref(),
+            Some("fn drive(c){1}")
+        );
 
         // Dynamically edit the rhai source on the LIVE stage — a `SetAttribute`, no
         // file touched. (Prim path taken from the live stage API, so no openusd import.)
@@ -1905,7 +1952,9 @@ impl Plugin for SandboxCorePlugin {
                 // A video destination (`out.mp4`) needs its PARENT, not itself,
                 // to exist as a directory — see `output_is_video`.
                 let dir_to_create = if lunco_workbench::screenshot::output_is_video(&path) {
-                    path.parent().map(std::path::Path::to_path_buf).unwrap_or_default()
+                    path.parent()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_default()
                 } else {
                     path.clone()
                 };
@@ -1913,9 +1962,16 @@ impl Plugin for SandboxCorePlugin {
                     .then(|| std::fs::create_dir_all(&dir_to_create))
                     .unwrap_or(Ok(()))
                 {
-                    error!("[offline-record] CLI failed to create output directory {}: {e}", dir_to_create.display());
+                    error!(
+                        "[offline-record] CLI failed to create output directory {}: {e}",
+                        dir_to_create.display()
+                    );
                 } else {
-                    info!("[offline-record] CLI mode armed: recording to {} at {} FPS", path.display(), record_fps);
+                    info!(
+                        "[offline-record] CLI mode armed: recording to {} at {} FPS",
+                        path.display(),
+                        record_fps
+                    );
                     // Video destination => stream into ffmpeg; the recorder
                     // demotes to a PNG sequence if ffmpeg is missing (spawn
                     // failure aborts loudly at the first frame).
@@ -1930,7 +1986,6 @@ impl Plugin for SandboxCorePlugin {
                         frame_just_captured: true,
                         // CLI-armed recording starts before `WinitSettings` exists to
                         // override; `StartOfflineRecording` is what forces Continuous.
-
                         prev_present_mode: None,
                         video,
                     });
@@ -2042,11 +2097,9 @@ impl Plugin for SandboxCorePlugin {
             // physical (joint) rover acceptably calm while giving the browser back
             // frame time; native/server stay at 12 for full fidelity + peer
             // determinism (networked play is native/server-authoritative).
-            .insert_resource(avian3d::prelude::SubstepCount(if cfg!(target_arch = "wasm32") {
-                8
-            } else {
-                12
-            }))
+            .insert_resource(avian3d::prelude::SubstepCount(
+                if cfg!(target_arch = "wasm32") { 8 } else { 12 },
+            ))
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
             .add_plugins(lunco_core::WorldShellPlugin)
@@ -2136,12 +2189,16 @@ impl Plugin for SandboxCorePlugin {
             .add_systems(Update, startup_scene_failguard)
             // Cosim pipeline ordering inside FixedUpdate:
             //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
-            .configure_sets(FixedUpdate, (
-                ModelicaSet::HandleResponses,
-                PropagateCosimSet::Propagate,
-                ApplyForcesCosimSet::ApplyForces,
-                ModelicaSet::SpawnRequests,
-            ).chain());
+            .configure_sets(
+                FixedUpdate,
+                (
+                    ModelicaSet::HandleResponses,
+                    PropagateCosimSet::Propagate,
+                    ApplyForcesCosimSet::ApplyForces,
+                    ModelicaSet::SpawnRequests,
+                )
+                    .chain(),
+            );
 
         // Experiment result-artifact persistence — CORE (not networking): a run's
         // trajectory is written to `<twin>/results/<id>.json` through the
@@ -2175,7 +2232,6 @@ impl Plugin for SandboxCorePlugin {
         // in the GUI and the headless compile server alike.
         #[cfg(feature = "lunco-api")]
         app.add_plugins(lunco_api::LunCoApiPlugin::default());
-
 
         // Twin history for headless (`lunco-sandbox-server` / any `--no-ui`
         // host): the SAME twin-folder-scoped persistence the GUI uses — load on
@@ -2423,7 +2479,13 @@ impl Plugin for SandboxCorePlugin {
 fn track_ground_collider_pending(
     time: Res<Time>,
     building: Query<(), With<lunco_terrain_surface::DemTerrainRequest>>,
-    unexamined: Query<(), (With<lunco_usd::UsdPrimPath>, Without<lunco_usd_terrain::DemBridged>)>,
+    unexamined: Query<
+        (),
+        (
+            With<lunco_usd::UsdPrimPath>,
+            Without<lunco_usd_terrain::DemBridged>,
+        ),
+    >,
     mut held_secs: Local<f32>,
     mut pending: ResMut<lunco_usd::GroundColliderPending>,
 ) {
@@ -2566,7 +2628,10 @@ fn read_material_network_layer_maps(
 fn start_camera_paths_when_recording_starts(
     recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
     resolved: Res<lunco_time::ResolvedDomains>,
-    mut gates: Query<(&lunco_usd_bevy::camera_path::CameraPathGate, &mut lunco_time::TimeDomain)>,
+    mut gates: Query<(
+        &lunco_usd_bevy::camera_path::CameraPathGate,
+        &mut lunco_time::TimeDomain,
+    )>,
     // Edge, not level: release exactly on the false→true transition so the gate's
     // origin is a single well-defined instant rather than "every frame we happen to
     // be recording".
@@ -2648,7 +2713,10 @@ fn report_terrain_stream_status(
     if status.wanted > 0 && status.resident < status.wanted {
         bus.push_progress(
             SOURCE,
-            format!("streaming terrain tiles {}/{}", status.resident, status.wanted),
+            format!(
+                "streaming terrain tiles {}/{}",
+                status.resident, status.wanted
+            ),
             status.resident as u64,
             status.wanted as u64,
         );
@@ -2701,8 +2769,15 @@ fn report_scene_spawn_status(
 #[cfg(feature = "ui")]
 fn bind_terrain_layers(
     q: Query<
-        (Entity, &lunco_usd::UsdPrimPath, &MeshMaterial3d<lunco_render_bevy::ShaderMaterial>),
-        (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainLayersBound>),
+        (
+            Entity,
+            &lunco_usd::UsdPrimPath,
+            &MeshMaterial3d<lunco_render_bevy::ShaderMaterial>,
+        ),
+        (
+            With<lunco_terrain_surface::DemTerrainSurface>,
+            Without<TerrainLayersBound>,
+        ),
     >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     asset_server: Res<AssetServer>,
@@ -2720,10 +2795,26 @@ fn bind_terrain_layers(
     let Some(mut mats) = mats else { return };
 
     const ROLES: &[LayerRole] = &[
-        LayerRole { name: "albedo", set_slot: |m, h| m.albedo_map = Some(h), weights: &["weight_albedo"] },
-        LayerRole { name: "mineral", set_slot: |m, h| m.mineral_map = Some(h), weights: &["weight_mineral"] },
-        LayerRole { name: "surface", set_slot: |m, h| m.surface_map = Some(h), weights: &["weight_rough", "weight_ao"] },
-        LayerRole { name: "normal", set_slot: |m, h| m.normal_map = Some(h), weights: &["weight_normal"] },
+        LayerRole {
+            name: "albedo",
+            set_slot: |m, h| m.albedo_map = Some(h),
+            weights: &["weight_albedo"],
+        },
+        LayerRole {
+            name: "mineral",
+            set_slot: |m, h| m.mineral_map = Some(h),
+            weights: &["weight_mineral"],
+        },
+        LayerRole {
+            name: "surface",
+            set_slot: |m, h| m.surface_map = Some(h),
+            weights: &["weight_rough", "weight_ao"],
+        },
+        LayerRole {
+            name: "normal",
+            set_slot: |m, h| m.normal_map = Some(h),
+            weights: &["weight_normal"],
+        },
     ];
 
     for (entity, prim_path, mat3d) in &q {
@@ -2737,7 +2828,10 @@ fn bind_terrain_layers(
         // (`read_material_network_layer_maps`).
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
-            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+            if let Some(recipe) = stages
+                .get(&prim_path.stage_handle)
+                .and_then(|a| a.recipe.clone())
+            {
                 canonical.get_or_build(id, &recipe);
             }
         }
@@ -2766,7 +2860,9 @@ fn bind_terrain_layers(
         // the local demo twin and silently loaded the wrong textures. A scene from
         // a source with no root (a bare default-source asset) has no twin root to
         // resolve against, so binding is skipped and said out loud.
-        let Some(asset_path) = asset_server.get_path(id) else { continue };
+        let Some(asset_path) = asset_server.get_path(id) else {
+            continue;
+        };
         let source = match asset_path.source() {
             bevy::asset::io::AssetSourceId::Name(n) => n.to_string(),
             bevy::asset::io::AssetSourceId::Default => {
@@ -2790,7 +2886,9 @@ fn bind_terrain_layers(
         let base_uri = format!("{source}://{root}");
         // Wait for the material to exist before binding (created async by the USD
         // shader system); retry next frame until it does.
-        let Some(mut material) = mats.get_mut(&mat3d.0) else { continue };
+        let Some(mut material) = mats.get_mut(&mat3d.0) else {
+            continue;
+        };
 
         // PUBLISH alongside binding, because the static mesh is only half the
         // audience: a `lodViz = true` site draws streamed geomorph tiles, whose
@@ -2820,7 +2918,10 @@ fn bind_terrain_layers(
                 // and its per-depth weights are a LOD decision, not the author's.
                 _ => {}
             }
-            info!("[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}", role.name);
+            info!(
+                "[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}",
+                role.name
+            );
         }
         commands.entity(entity).try_insert(published);
         commands.entity(entity).try_insert(TerrainLayersBound);
@@ -2888,10 +2989,7 @@ impl Plugin for SandboxOffscreenPlugin {
 /// Create the offscreen render-target image and expose it to the recorder as
 /// [`lunco_workbench::screenshot::OfflineCaptureTarget`].
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn setup_offscreen_target(
-    mut images: ResMut<Assets<bevy::image::Image>>,
-    mut commands: Commands,
-) {
+fn setup_offscreen_target(mut images: ResMut<Assets<bevy::image::Image>>, mut commands: Commands) {
     let (width, height) = parse_record_size();
     let mut image = bevy::image::Image::new_target_texture(
         width,
@@ -2948,11 +3046,7 @@ fn retarget_cameras_to_offscreen(
 /// loud once-per-run warning rather than a silent black take.
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
 fn activate_offscreen_camera(
-    mut cameras: Query<(
-        Entity,
-        &mut Camera,
-        bevy::ecs::query::Has<Camera3d>,
-    )>,
+    mut cameras: Query<(Entity, &mut Camera, bevy::ecs::query::Has<Camera3d>)>,
     scene_cams: Query<(), With<lunco_render::SceneCamera>>,
     mut warned: Local<bool>,
 ) {
@@ -2960,7 +3054,10 @@ fn activate_offscreen_camera(
     // render graph and draws nothing (the avatar rig spawns one such), so it
     // neither counts as coverage nor may keep the take black by squatting on
     // the active slot.
-    if cameras.iter().any(|(_, c, has_pipeline)| c.is_active && has_pipeline) {
+    if cameras
+        .iter()
+        .any(|(_, c, has_pipeline)| c.is_active && has_pipeline)
+    {
         return;
     }
     let target = cameras
@@ -3163,8 +3260,14 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
     // "the root" is for a given file.
     let twin_root = lunco_twin::root_for_file(&abs_path);
 
-    let scene_file = abs_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    world.insert_resource(StartupSceneGuard { file: scene_file.clone() });
+    let scene_file = abs_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    world.insert_resource(StartupSceneGuard {
+        file: scene_file.clone(),
+    });
 
     // `--scene` is user-supplied, so `twin_root` may not be openable. There is
     // deliberately NO direct-`LoadScene` fallback here: a raw load mounts a
@@ -3234,12 +3337,8 @@ fn startup_scene_failguard(
     let Some(guard) = guard else { return };
 
     for failed in failures.read() {
-        let is_startup_scene = failed
-            .path
-            .path()
-            .file_name()
-            .and_then(|s| s.to_str())
-            == Some(guard.file.as_str());
+        let is_startup_scene =
+            failed.path.path().file_name().and_then(|s| s.to_str()) == Some(guard.file.as_str());
         if is_startup_scene {
             error!(
                 "Startup scene `{}` failed to load: {}. \

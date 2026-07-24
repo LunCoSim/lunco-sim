@@ -150,7 +150,12 @@ pub struct Placement {
 impl Placement {
     /// Centered placement with the standard 20x20 extent.
     pub fn at(x: f32, y: f32) -> Self {
-        Self { x, y, width: 20.0, height: 20.0 }
+        Self {
+            x,
+            y,
+            width: 20.0,
+            height: 20.0,
+        }
     }
 }
 
@@ -185,7 +190,10 @@ pub struct PortRef {
 impl PortRef {
     /// Construct from owned strings.
     pub fn new(component: impl Into<String>, port: impl Into<String>) -> Self {
-        Self { component: component.into(), port: port.into() }
+        Self {
+            component: component.into(),
+            port: port.into(),
+        }
     }
 }
 
@@ -378,11 +386,7 @@ pub fn connect_equation(eq: &ConnectEquation) -> String {
     let opts = options();
     let mut s = String::new();
     s.push_str(&opts.indent);
-    let _ = write!(
-        s,
-        "connect({}, {})",
-        eq.from, eq.to,
-    );
+    let _ = write!(s, "connect({}, {})", eq.from, eq.to,);
     if let Some(line) = &eq.line {
         s.push('\n');
         s.push_str(&opts.continuation_indent);
@@ -470,7 +474,10 @@ pub struct EquationDecl {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GraphicSpec {
     Rectangle {
-        x1: f32, y1: f32, x2: f32, y2: f32,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
         line_color: [u8; 3],
         fill_color: [u8; 3],
         fill_pattern: FillPattern,
@@ -488,7 +495,10 @@ pub enum GraphicSpec {
         pattern: LinePattern,
     },
     Text {
-        x1: f32, y1: f32, x2: f32, y2: f32,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
         text: String,
         color: [u8; 3],
         font_size: f32,
@@ -540,36 +550,68 @@ fn escape_string(s: &str) -> String {
 /// Render the body of one graphic without surrounding whitespace.
 pub fn graphic_inner(g: &GraphicSpec) -> String {
     match g {
-        GraphicSpec::Rectangle { x1, y1, x2, y2, line_color, fill_color, fill_pattern } => {
+        GraphicSpec::Rectangle {
+            x1,
+            y1,
+            x2,
+            y2,
+            line_color,
+            fill_color,
+            fill_pattern,
+        } => {
             format!(
                 "Rectangle(extent={{{},{}}}, lineColor={}, fillColor={}, fillPattern={})",
-                fmt_point(*x1, *y1), fmt_point(*x2, *y2),
-                fmt_color(*line_color), fmt_color(*fill_color),
+                fmt_point(*x1, *y1),
+                fmt_point(*x2, *y2),
+                fmt_color(*line_color),
+                fmt_color(*fill_color),
                 fill_pattern.keyword(),
             )
         }
-        GraphicSpec::Polygon { points, line_color, fill_color, fill_pattern } => {
+        GraphicSpec::Polygon {
+            points,
+            line_color,
+            fill_color,
+            fill_pattern,
+        } => {
             format!(
                 "Polygon(points={}, lineColor={}, fillColor={}, fillPattern={})",
                 fmt_points(points),
-                fmt_color(*line_color), fmt_color(*fill_color),
+                fmt_color(*line_color),
+                fmt_color(*fill_color),
                 fill_pattern.keyword(),
             )
         }
-        GraphicSpec::Line { points, color, thickness, pattern } => {
+        GraphicSpec::Line {
+            points,
+            color,
+            thickness,
+            pattern,
+        } => {
             format!(
                 "Line(points={}, color={}, thickness={}, pattern={})",
                 fmt_points(points),
-                fmt_color(*color), fmt_num(*thickness),
+                fmt_color(*color),
+                fmt_num(*thickness),
                 pattern.keyword(),
             )
         }
-        GraphicSpec::Text { x1, y1, x2, y2, text, color, font_size } => {
+        GraphicSpec::Text {
+            x1,
+            y1,
+            x2,
+            y2,
+            text,
+            color,
+            font_size,
+        } => {
             format!(
                 "Text(extent={{{},{}}}, textString=\"{}\", textColor={}, fontSize={})",
-                fmt_point(*x1, *y1), fmt_point(*x2, *y2),
+                fmt_point(*x1, *y1),
+                fmt_point(*x2, *y2),
                 escape_string(text),
-                fmt_color(*color), fmt_num(*font_size),
+                fmt_color(*color),
+                fmt_num(*font_size),
             )
         }
     }
@@ -593,7 +635,12 @@ pub fn class_header(name: &str, kind: ClassKindSpec, description: &str, partial:
 
 /// Emit a complete empty class block: header + `end <Name>;` separated by
 /// a single newline. Used by `AddClass`.
-pub fn class_block_empty(name: &str, kind: ClassKindSpec, description: &str, partial: bool) -> String {
+pub fn class_block_empty(
+    name: &str,
+    kind: ClassKindSpec,
+    description: &str,
+    partial: bool,
+) -> String {
     format!(
         "{}\n{}end {};\n",
         class_header(name, kind, description, partial),
@@ -891,10 +938,7 @@ mod tests {
             line: None,
         };
         let body = connect_equation(&eq);
-        let source = format!(
-            "model M\n  Real a;\n  Real b;\nequation\n{}end M;\n",
-            body
-        );
+        let source = format!("model M\n  Real a;\n  Real b;\nequation\n{}end M;\n", body);
         let res = rumoca_phase_parse::parse_to_ast(&source, "test.mo");
         assert!(res.is_ok(), "connect(...) should parse: {:?}", res.err());
     }

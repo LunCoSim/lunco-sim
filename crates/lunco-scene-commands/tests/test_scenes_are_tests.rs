@@ -46,7 +46,10 @@ fn usda_files(dir: &Path) -> Vec<(String, PathBuf)> {
         if path.extension().is_none_or(|x| x != "usda") {
             continue;
         }
-        out.push((path.file_stem().unwrap().to_string_lossy().to_string(), path));
+        out.push((
+            path.file_stem().unwrap().to_string_lossy().to_string(),
+            path,
+        ));
     }
     out
 }
@@ -69,7 +72,11 @@ fn every_test_scene_carries_a_scenario() {
         }
     }
 
-    assert!(scenes.len() > 10, "expected the test scenes, found {}", scenes.len());
+    assert!(
+        scenes.len() > 10,
+        "expected the test scenes, found {}",
+        scenes.len()
+    );
     silent.sort();
     assert!(
         silent.is_empty(),

@@ -197,15 +197,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root); // clean slate
 
         let bakes = Cell::new(0);
-        let first = bake_or_load(&Repeat { n: 9, bakes: &bakes }, &root);
-        let second = bake_or_load(&Repeat { n: 9, bakes: &bakes }, &root);
+        let first = bake_or_load(
+            &Repeat {
+                n: 9,
+                bakes: &bakes,
+            },
+            &root,
+        );
+        let second = bake_or_load(
+            &Repeat {
+                n: 9,
+                bakes: &bakes,
+            },
+            &root,
+        );
 
         assert_eq!(first, second);
         assert_eq!(first, vec![9u8; 4]);
-        assert_eq!(bakes.get(), 1, "second call must load from disk, not rebake");
+        assert_eq!(
+            bakes.get(),
+            1,
+            "second call must load from disk, not rebake"
+        );
 
         // A different input is a distinct entry → bakes again.
-        let _other = bake_or_load(&Repeat { n: 10, bakes: &bakes }, &root);
+        let _other = bake_or_load(
+            &Repeat {
+                n: 10,
+                bakes: &bakes,
+            },
+            &root,
+        );
         assert_eq!(bakes.get(), 2);
 
         let _ = std::fs::remove_dir_all(&root);

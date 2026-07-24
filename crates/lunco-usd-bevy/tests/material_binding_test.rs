@@ -69,13 +69,16 @@ def Xform "World"
     });
 
     // Spawn the MeshWithMaterial entity representing the USD prim
-    let test_entity = app.world_mut().spawn((
-        Name::new("MeshWithMaterial"),
-        UsdPrimPath {
-            stage_handle: stage_handle.clone(),
-            path: "/World/MeshWithMaterial".to_string(),
-        },
-    )).id();
+    let test_entity = app
+        .world_mut()
+        .spawn((
+            Name::new("MeshWithMaterial"),
+            UsdPrimPath {
+                stage_handle: stage_handle.clone(),
+                path: "/World/MeshWithMaterial".to_string(),
+            },
+        ))
+        .id();
 
     // Run the systems to trigger visual synchronization
     app.update();
@@ -84,7 +87,9 @@ def Xform "World"
     assert!(app.world().get::<UsdVisualSynced>(test_entity).is_some());
 
     // Verify the appearance intent exists
-    let look = app.world().get::<PbrLook>(test_entity)
+    let look = app
+        .world()
+        .get::<PbrLook>(test_entity)
         .expect("Entity should have a PbrLook component");
 
     // Assert PBR properties parsed from shader network matches expectation
@@ -157,18 +162,23 @@ def Xform "World"
         })
     };
 
-    let test_entity = app.world_mut().spawn((
-        Name::new("MeshWithMaterial"),
-        UsdPrimPath {
-            stage_handle: stage_handle.clone(),
-            path: "/World/MeshWithMaterial".to_string(),
-        },
-    )).id();
+    let test_entity = app
+        .world_mut()
+        .spawn((
+            Name::new("MeshWithMaterial"),
+            UsdPrimPath {
+                stage_handle: stage_handle.clone(),
+                path: "/World/MeshWithMaterial".to_string(),
+            },
+        ))
+        .id();
 
     app.update();
 
     // Verify initial values
-    let look = app.world().get::<PbrLook>(test_entity)
+    let look = app
+        .world()
+        .get::<PbrLook>(test_entity)
         .expect("Entity should have a PbrLook");
     assert!((look.base_color.red - 1.0).abs() < 1e-4);
     assert!((look.perceptual_roughness - 0.75).abs() < 1e-4);
@@ -223,14 +233,22 @@ def Xform "World"
     }
 
     // Trigger visual sync again on the entity by removing UsdVisualSynced and triggering UsdPrimPath addition
-    app.world_mut().entity_mut(test_entity).remove::<UsdVisualSynced>();
-    let prim_path = app.world_mut().entity_mut(test_entity).take::<UsdPrimPath>().unwrap();
+    app.world_mut()
+        .entity_mut(test_entity)
+        .remove::<UsdVisualSynced>();
+    let prim_path = app
+        .world_mut()
+        .entity_mut(test_entity)
+        .take::<UsdPrimPath>()
+        .unwrap();
     app.world_mut().entity_mut(test_entity).insert(prim_path);
 
     app.update();
 
     // Verify updated values
-    let look2 = app.world().get::<PbrLook>(test_entity)
+    let look2 = app
+        .world()
+        .get::<PbrLook>(test_entity)
         .expect("Entity should still have a PbrLook");
 
     // base color should now be blue (0.0, 0.0, 1.0)
@@ -263,7 +281,10 @@ fn material_for(usda: &str, prim_path: &str) -> PbrLook {
         .world_mut()
         .spawn((
             Name::new("Bound"),
-            UsdPrimPath { stage_handle: stage_handle.clone(), path: prim_path.to_string() },
+            UsdPrimPath {
+                stage_handle: stage_handle.clone(),
+                path: prim_path.to_string(),
+            },
         ))
         .id();
     app.update();
@@ -302,8 +323,14 @@ def Xform "World"
 #[test]
 fn opacity_drives_alpha_blend_and_ior() {
     let look = material_for(OPACITY_STAGE, "/World/Pane");
-    assert!((look.base_color.alpha - 0.4).abs() < 1e-4, "alpha from inputs:opacity");
-    assert!(matches!(look.alpha, SurfaceAlpha::Blend), "sub-1 opacity → Blend");
+    assert!(
+        (look.base_color.alpha - 0.4).abs() < 1e-4,
+        "alpha from inputs:opacity"
+    );
+    assert!(
+        matches!(look.alpha, SurfaceAlpha::Blend),
+        "sub-1 opacity → Blend"
+    );
     assert!((look.ior - 1.45).abs() < 1e-4, "ior bound");
 }
 
@@ -344,8 +371,16 @@ fn opacity_threshold_is_alpha_mask() {
 /// transparent pass.
 #[test]
 fn opaque_material_stays_opaque() {
-    let look = material_for(OPACITY_STAGE.replace("float inputs:opacity = 0.4\n", "").as_str(), "/World/Pane");
-    assert!(matches!(look.alpha, SurfaceAlpha::Opaque), "no opacity → Opaque");
+    let look = material_for(
+        OPACITY_STAGE
+            .replace("float inputs:opacity = 0.4\n", "")
+            .as_str(),
+        "/World/Pane",
+    );
+    assert!(
+        matches!(look.alpha, SurfaceAlpha::Opaque),
+        "no opacity → Opaque"
+    );
     assert!((look.base_color.alpha - 1.0).abs() < 1e-4);
 }
 
@@ -385,7 +420,13 @@ def Xform "World"
 #[test]
 fn specular_workflow_and_clearcoat_bind() {
     let look = material_for(SPECULAR_STAGE, "/World/Body");
-    assert!((look.metallic - 0.0).abs() < 1e-4, "specular workflow → metallic 0");
+    assert!(
+        (look.metallic - 0.0).abs() < 1e-4,
+        "specular workflow → metallic 0"
+    );
     assert!((look.clearcoat - 1.0).abs() < 1e-4, "clearcoat bound");
-    assert!((look.clearcoat_perceptual_roughness - 0.2).abs() < 1e-4, "clearcoatRoughness bound");
+    assert!(
+        (look.clearcoat_perceptual_roughness - 0.2).abs() < 1e-4,
+        "clearcoatRoughness bound"
+    );
 }

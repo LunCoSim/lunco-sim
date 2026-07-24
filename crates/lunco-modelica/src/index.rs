@@ -25,9 +25,7 @@ use crate::pretty::Placement;
 use lunco_doc::{NodeId, TextRange};
 use rumoca_compile::parsing::ast::{self as ast};
 use rumoca_compile::parsing::{
-    ClassType as AstClassType,
-    Causality as AstCausality,
-    Variability as AstVariability,
+    Causality as AstCausality, ClassType as AstClassType, Variability as AstVariability,
 };
 use std::collections::HashMap;
 
@@ -254,10 +252,7 @@ impl ClassEntry {
     }
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default,
-    serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ClassKind {
     Model,
@@ -389,10 +384,7 @@ impl ModelicaIndex {
         // Fresh build → restart key allocation from 0 (CQ-402).
         self.next_component_key = 0;
         self.next_connection_key = 0;
-        self.within_path = ast
-            .within
-            .as_ref()
-            .map(|n| format!("{}", n));
+        self.within_path = ast.within.as_ref().map(|n| format!("{}", n));
 
         // Walk top-level classes; nested classes go into their own
         // entry so panels can drill in by qualified name.
@@ -437,7 +429,12 @@ impl ModelicaIndex {
     /// `class` is fully qualified (e.g. `"Rocket.Engine"`). The Index
     /// stores a placeholder entry with no source range / placement —
     /// those fill in on the next AST reconcile.
-    pub fn patch_component_added(&mut self, class: &str, name: &str, type_name: &str) -> ComponentKey {
+    pub fn patch_component_added(
+        &mut self,
+        class: &str,
+        name: &str,
+        type_name: &str,
+    ) -> ComponentKey {
         self.generation = self.generation.saturating_add(1);
         let key = self.alloc_component_key();
         let entry = ComponentEntry {
@@ -654,8 +651,7 @@ impl ModelicaIndex {
         // Drop owned components.
         if let Some(keys) = self.components_by_class.remove(qualified) {
             for key in keys {
-                self.component_by_qualified
-                    .retain(|(_, _), v| *v != key);
+                self.component_by_qualified.retain(|(_, _), v| *v != key);
                 if let Some(pos) = self.components.iter().position(|c| c.key == key) {
                     self.components.remove(pos);
                 }
@@ -749,7 +745,10 @@ impl ModelicaIndex {
             .map(|c| (sim_tier(c, &used_as_subcomponent), c.name.as_str()))
             .collect();
         ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
-        ranked.into_iter().map(|(t, n)| (t, n.to_string())).collect()
+        ranked
+            .into_iter()
+            .map(|(t, n)| (t, n.to_string()))
+            .collect()
     }
 
     /// How many candidates sit in the *best non-empty* tier — i.e.
@@ -834,8 +833,7 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
     // Annotation extraction reuses the existing helpers so Index stays
     // in lockstep with the model_view / canvas_diagram extractors.
     let icon = crate::annotations::extract_icon(&class_def.annotation);
-    let documentation =
-        crate::doc_extract::extract_documentation(&class_def.annotation);
+    let documentation = crate::doc_extract::extract_documentation(&class_def.annotation);
     let experiment = crate::annotations::extract_experiment(&class_def.annotation);
 
     // Count non-trivial equations: skip `Empty` placeholders and
@@ -928,17 +926,13 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
             // `= 9.81` in `comp.binding`; `comp.start` holds the type's
             // default (0.0) unless a `start=` modifier set it. Prefer the
             // binding, fall back to a start *modification* only.
-            binding: comp
-                .binding
-                .as_ref()
-                .map(|e| format!("{e}"))
-                .or_else(|| {
-                    if comp.start_is_modification {
-                        Some(format!("{}", comp.start))
-                    } else {
-                        None
-                    }
-                }),
+            binding: comp.binding.as_ref().map(|e| format!("{e}")).or_else(|| {
+                if comp.start_is_modification {
+                    Some(format!("{}", comp.start))
+                } else {
+                    None
+                }
+            }),
         };
         idx.component_by_qualified
             .insert((qualified.clone(), name.to_string()), key);
@@ -975,9 +969,9 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
                 from,
                 to,
                 waypoints,
-                source_range: lhs.get_location().map(|l| {
-                    TextRange::new(l.start as usize, l.end as usize)
-                }),
+                source_range: lhs
+                    .get_location()
+                    .map(|l| TextRange::new(l.start as usize, l.end as usize)),
             };
             idx.connections_by_class
                 .entry(qualified.clone())
@@ -1001,7 +995,10 @@ fn endpoint_from_component_ref(cr: &ast::ComponentReference) -> ComponentEndpoin
         .map(|p| p.ident.text.to_string())
         .unwrap_or_default();
     let port = cr.parts.get(1).map(|p| p.ident.text.to_string());
-    ComponentEndpoint { component_name, port }
+    ComponentEndpoint {
+        component_name,
+        port,
+    }
 }
 
 fn annotation_placement_to_pretty(p: crate::annotations::Placement) -> Placement {
@@ -1058,18 +1055,32 @@ mod tests {
         idx.rebuild_from_ast(&ast, SRC);
 
         assert_eq!(idx.within_path.as_deref(), Some("Demo"));
-        assert!(idx.classes.contains_key("RC"), "classes: {:?}", idx.classes.keys().collect::<Vec<_>>());
+        assert!(
+            idx.classes.contains_key("RC"),
+            "classes: {:?}",
+            idx.classes.keys().collect::<Vec<_>>()
+        );
         assert_eq!(idx.classes["RC"].kind, ClassKind::Model);
 
         // Three components: R (parameter), x, resistor.
-        assert_eq!(idx.components.len(), 3, "components: {:?}", idx.components.iter().map(|c| &c.name).collect::<Vec<_>>());
+        assert_eq!(
+            idx.components.len(),
+            3,
+            "components: {:?}",
+            idx.components.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
 
         let r = idx.find_component("RC", "R").expect("R present");
         assert_eq!(r.variability, Variability::Parameter);
         assert_eq!(r.type_name, "Real");
 
-        let resistor = idx.find_component("RC", "resistor").expect("resistor present");
-        assert_eq!(resistor.type_name, "Modelica.Electrical.Analog.Basic.Resistor");
+        let resistor = idx
+            .find_component("RC", "resistor")
+            .expect("resistor present");
+        assert_eq!(
+            resistor.type_name,
+            "Modelica.Electrical.Analog.Basic.Resistor"
+        );
         assert_eq!(resistor.causality, Causality::None);
 
         // Per-class iterator preserves declaration order.
@@ -1089,7 +1100,11 @@ mod tests {
 
         idx.patch_component_removed("RC", "extra");
         assert!(idx.find_component("RC", "extra").is_none());
-        assert!(!idx.components_by_class.get("RC").map(|v| !v.is_empty()).unwrap_or(false));
+        assert!(!idx
+            .components_by_class
+            .get("RC")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false));
     }
 
     #[test]
@@ -1104,13 +1119,19 @@ mod tests {
         let key_c = idx.patch_component_added("RC", "c", "Real");
 
         // The newly minted key must not collide with the still-live B.
-        assert_ne!(key_b, key_c, "key reused from Vec::len() aliased a live entry");
+        assert_ne!(
+            key_b, key_c,
+            "key reused from Vec::len() aliased a live entry"
+        );
 
         // Mutating C must land on C, leaving B clean.
         idx.patch_parameter_changed("RC", "c", "R", "42");
         let b = idx.find_component("RC", "b").expect("b present");
         let c = idx.find_component("RC", "c").expect("c present");
-        assert!(b.modifications.is_empty(), "B was clobbered by an aliased key");
+        assert!(
+            b.modifications.is_empty(),
+            "B was clobbered by an aliased key"
+        );
         assert_eq!(c.modifications.get("R").map(String::as_str), Some("42"));
     }
 
@@ -1125,8 +1146,14 @@ mod tests {
         assert_ne!(key2, key3, "connection key reused from Vec::len()");
         // The surviving connection (c→d) is still resolvable and distinct.
         assert_eq!(idx.connections.len(), 2);
-        assert!(idx.connections.iter().any(|c| c.key == key2 && c.from.component_name == "c"));
-        assert!(idx.connections.iter().any(|c| c.key == key3 && c.from.component_name == "e"));
+        assert!(idx
+            .connections
+            .iter()
+            .any(|c| c.key == key2 && c.from.component_name == "c"));
+        assert!(idx
+            .connections
+            .iter()
+            .any(|c| c.key == key3 && c.from.component_name == "e"));
     }
 
     #[test]

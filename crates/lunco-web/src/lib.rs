@@ -48,7 +48,11 @@ fn signal_ready_once_painted(mut frame: Local<u32>) {
         return;
     }
     let Some(win) = web_sys::window() else { return };
-    let Ok(fnval) = js_sys::Reflect::get(&win, &"__lc_app_ready".into()) else { return };
-    let Ok(func) = fnval.dyn_into::<js_sys::Function>() else { return };
+    let Ok(fnval) = js_sys::Reflect::get(&win, &"__lc_app_ready".into()) else {
+        return;
+    };
+    let Ok(func) = fnval.dyn_into::<js_sys::Function>() else {
+        return;
+    };
     let _ = func.call0(&win.into());
 }

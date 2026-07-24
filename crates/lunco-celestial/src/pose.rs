@@ -85,8 +85,12 @@ pub fn update_solar_poses(
     let body_of = |naif: i32| registry.bodies.iter().find(|b| b.ephemeris_id == naif);
     // `None` ⇒ no ephemeris for that body. Callers skip it rather than reporting a pose at the
     // Sun's centre that looks exactly like a real one.
-    let body_center =
-        |naif: i32| ephemeris.provider.global_position(naif, jd).map(ecliptic_to_bevy);
+    let body_center = |naif: i32| {
+        ephemeris
+            .provider
+            .global_position(naif, jd)
+            .map(ecliptic_to_bevy)
+    };
 
     // The site frame (scene-root anchor), for scene-local prims.
     let site = q_site.iter().next().and_then(|anchor| {
@@ -100,17 +104,29 @@ pub fn update_solar_poses(
     for (entity, anchor, orbit, libration) in q_tracked.iter() {
         // (solar pos, up, body) per placement kind; a diverging branch skips.
         let (pos, up, body) = if let Some(a) = anchor {
-            let Some(desc) = body_of(a.body) else { continue };
+            let Some(desc) = body_of(a.body) else {
+                continue;
+            };
             // No ephemeris ⇒ no pose. Skipping beats reporting a pose at the Sun's centre.
-            let Some(center) = body_center(a.body) else { continue };
+            let Some(center) = body_center(a.body) else {
+                continue;
+            };
             let center = center.raw();
             let pos = solar_position_of_geodetic(desc, &a.geodetic, center, jd);
             (pos, (pos - center).normalize_or_zero(), a.body)
         } else if let Some(o) = orbit {
-            let Some(desc) = body_of(o.body) else { continue };
+            let Some(desc) = body_of(o.body) else {
+                continue;
+            };
             {
-                let Some(center) = body_center(o.body) else { continue };
-                (center.raw() + o.elements.position_bevy_m(desc.gm, jd), DVec3::ZERO, o.body)
+                let Some(center) = body_center(o.body) else {
+                    continue;
+                };
+                (
+                    center.raw() + o.elements.position_bevy_m(desc.gm, jd),
+                    DVec3::ZERO,
+                    o.body,
+                )
             }
         } else if let Some(l) = libration {
             // A libration point of a PAIR — Earth–Moon L1/L2 for a relay. Resolved by
@@ -126,7 +142,9 @@ pub fn update_solar_poses(
             // wants to know about.
             (pos.raw(), DVec3::ZERO, l.secondary)
         } else if let Some((body, frame)) = &site {
-            let Ok((cell, tf)) = q_spatial.get(entity) else { continue };
+            let Ok((cell, tf)) = q_spatial.get(entity) else {
+                continue;
+            };
             let cell = cell.copied().unwrap_or_default();
             let local = lunco_core::coords::world_position_seeded(
                 entity, &cell, tf, &q_parents, &q_grids, &q_spatial,
@@ -137,7 +155,12 @@ pub fn update_solar_poses(
         };
         // Site-local position (terrain frame); = solar pos when unanchored.
         let local = site.as_ref().map(|(_, f)| f.from_frame(pos)).unwrap_or(pos);
-        let pose = SolarFramePose { pos, local, up, body };
+        let pose = SolarFramePose {
+            pos,
+            local,
+            up,
+            body,
+        };
 
         // Update in place (avoid per-tick insert churn); insert on first sight.
         if let Ok(mut existing) = q_pose.get_mut(entity) {

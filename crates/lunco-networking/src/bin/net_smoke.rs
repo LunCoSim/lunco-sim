@@ -148,9 +148,11 @@ fn main() {
     // (Update) subsamples the client's per-fixed-tick input stream — reproducing
     // the render-cadence input loss the buffer fixes. The client runs unthrottled.
     if is_host {
-        app.add_plugins(MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
-            std::time::Duration::from_secs_f64(1.0 / HOST_UPDATE_HZ),
-        )));
+        app.add_plugins(
+            MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
+                std::time::Duration::from_secs_f64(1.0 / HOST_UPDATE_HZ),
+            )),
+        );
     } else {
         app.add_plugins(MinimalPlugins);
     }
@@ -174,7 +176,10 @@ fn main() {
     // inbound merge arm) are live. The host stamps author "host" at Startup; the
     // client stamps "peer-<session>" on handshake. Faithful to the full app's
     // `TwinJournalPlugin`; inserted directly to keep the harness minimal.
-    app.insert_resource(JournalResource::new(TwinId::new("smoke"), AuthorId::local()));
+    app.insert_resource(JournalResource::new(
+        TwinId::new("smoke"),
+        AuthorId::local(),
+    ));
     app.add_plugins(lunco_core::LunCoCorePlugin);
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
     app.add_plugins(LunCoNetworkingPlugin { mode: Some(mode) });
@@ -190,7 +195,14 @@ fn main() {
 
     if is_host {
         let buffer_on = std::env::var("LUNCO_INPUT_BUFFER").as_deref() == Ok("1");
-        info!("[test] HOST input buffer: {}", if buffer_on { "ON" } else { "OFF (render-cadence subsample)" });
+        info!(
+            "[test] HOST input buffer: {}",
+            if buffer_on {
+                "ON"
+            } else {
+                "OFF (render-cadence subsample)"
+            }
+        );
         app.insert_resource(BufferEnabled(buffer_on));
         app.add_systems(Startup, host_spawn_rovers);
         app.add_observer(host_on_possess);
@@ -200,7 +212,12 @@ fn main() {
         app.add_systems(FixedUpdate, host_apply_and_integrate);
         app.add_systems(
             Update,
-            (host_report, host_despawn_g3, host_author_journal_entry, host_journal_report),
+            (
+                host_report,
+                host_despawn_g3,
+                host_author_journal_entry,
+                host_journal_report,
+            ),
         );
     } else {
         app.init_resource::<MaxProxyX>();
@@ -210,7 +227,12 @@ fn main() {
         app.add_systems(FixedUpdate, client_drive_cadence);
         app.add_systems(
             Update,
-            (client_act, test_apply_snapshots, client_report, client_author_journal_entry),
+            (
+                client_act,
+                test_apply_snapshots,
+                client_report,
+                client_author_journal_entry,
+            ),
         );
     }
 
@@ -243,7 +265,11 @@ fn host_spawn_rovers(mut commands: Commands) {
     // The host claims its own rover (G1) through the real possession observer.
     // `guard` is None here → the claim is attributed to the host's `LocalSession`
     // (`SessionId::LOCAL`). The client must NOT be able to take it.
-    commands.trigger(lunco_avatar::PossessVessel { avatar: Some(g1), target: g1, bind_camera: true });
+    commands.trigger(lunco_avatar::PossessVessel {
+        avatar: Some(g1),
+        target: g1,
+        bind_camera: true,
+    });
     info!("[test] host rovers spawned g1(self)={G1_GID:#x} g2(free)={G2_GID:#x}");
 }
 
@@ -261,7 +287,10 @@ fn host_on_possess(
     let origin = guard.0.unwrap_or(local.0);
     match q_gid.get(cmd.target) {
         Ok(g) => match reg.claim(origin, g.get()) {
-            Ok(()) => info!("[test] possession CLAIMED gid={:#x} by session={origin}", g.get()),
+            Ok(()) => info!(
+                "[test] possession CLAIMED gid={:#x} by session={origin}",
+                g.get()
+            ),
             Err(c) => warn!(
                 "[test] possession DENIED gid={:#x} for {origin} (owned by {c})",
                 g.get()
@@ -343,7 +372,10 @@ fn host_report(
     if *t > 1.0 {
         *t = 0.0;
         for (gid, tf, v) in q.iter() {
-            info!("[test] host rover {:#x} x={:.2} drive={:.2}", gid.0, tf.translation.x, v.0);
+            info!(
+                "[test] host rover {:#x} x={:.2} drive={:.2}",
+                gid.0, tf.translation.x, v.0
+            );
         }
     }
 }
@@ -388,16 +420,29 @@ fn client_act(
     };
     if !*acted {
         // Claim the free rover…
-        commands.trigger(lunco_avatar::PossessVessel { avatar: Some(rovers.g2), target: rovers.g2, bind_camera: true });
+        commands.trigger(lunco_avatar::PossessVessel {
+            avatar: Some(rovers.g2),
+            target: rovers.g2,
+            bind_camera: true,
+        });
         // …and attempt to steal the host's rover (must be refused).
-        commands.trigger(lunco_avatar::PossessVessel { avatar: Some(rovers.g1), target: rovers.g1, bind_camera: true });
+        commands.trigger(lunco_avatar::PossessVessel {
+            avatar: Some(rovers.g1),
+            target: rovers.g1,
+            bind_camera: true,
+        });
         *acted = true;
         info!("[test] client requested possession of G2 (free) and G1 (host-owned)");
     }
     // Drive G1 (host-owned) — must be REJECTED by the host authority gate (the
     // client never owns it). G2 (owned) is driven by `client_drive_cadence` on the
     // fixed clock — the seq-stamped sweep that the cadence sub-test measures.
-    commands.trigger(lunco_cosim::SetPorts { target: rovers.g1, writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)], seq: 0, tick: 0 });
+    commands.trigger(lunco_cosim::SetPorts {
+        target: rovers.g1,
+        writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)],
+        seq: 0,
+        tick: 0,
+    });
 }
 
 /// Client cadence drive (FIXED clock): once possessed, send ONE seq-stamped
@@ -480,7 +525,11 @@ fn client_report(
         // CADENCE metric: host's actual G2 x (via snapshot) vs the client's ideal
         // integral of the sweep it sent. ratio → 1.0 means the host applied every
         // input (buffer ON / no subsample); ratio < 1 is dropped-input cadence loss.
-        let ratio = if ideal.0 > 0.01 { g2_now / ideal.0 } else { 1.0 };
+        let ratio = if ideal.0 > 0.01 {
+            g2_now / ideal.0
+        } else {
+            1.0
+        };
         info!(
             "[test] CADENCE g2_actual={:.2} ideal={:.2} ratio={:.3} (g1={:.2})",
             g2_now, ideal.0, ratio, maxx.g1
@@ -513,7 +562,9 @@ fn activate_smoke_merge_policy(journal: Option<Res<JournalResource>>) {
         "cmp",
         SMOKE_MERGE_SRC,
     ) {
-        Ok(()) => info!("[test] activated scripted merge policy '{SMOKE_MERGE_HOOK}' (author-descending)"),
+        Ok(()) => {
+            info!("[test] activated scripted merge policy '{SMOKE_MERGE_HOOK}' (author-descending)")
+        }
         Err(e) => warn!("[test] scripted merge policy failed to compile: {e}"),
     }
 }
@@ -565,7 +616,10 @@ fn host_journal_report(time: Res<Time>, mut t: Local<f32>, journal: Option<Res<J
     if let Some(j) = journal {
         let (total, peers) = j.with_read(|jj| {
             let me = jj.local_author();
-            (jj.len(), jj.entries().filter(|e| &e.id.author != me).count())
+            (
+                jj.len(),
+                jj.entries().filter(|e| &e.id.author != me).count(),
+            )
         });
         info!("[test] HOST-JOURNAL total={total} peer_entries={peers}");
     }
@@ -629,7 +683,7 @@ fn exit_after_timeout(
         let g1_still = m.g1 < 0.1; // unauthorized drive rejected → no motion
         let g2_mine = g2_owner == Some(me); // ownership broadcast adopted
         let g1_host = g1_owner == Some(SessionId::LOCAL); // host kept its rover
-        // B5: the host despawned G3 mid-run; its proxy must be gone on the client.
+                                                          // B5: the host despawned G3 mid-run; its proxy must be gone on the client.
         let g3_despawned = !q_proxies.iter().any(|g| g.0 == G3_GID);
 
         // Journal plane: the host's authored edit (marker `H1`) must have
@@ -685,7 +739,14 @@ fn exit_after_timeout(
             m.g2, m.g1
         );
 
-        if g2_moved && g1_still && g2_mine && g1_host && g3_despawned && journal_from_host && policy_active {
+        if g2_moved
+            && g1_still
+            && g2_mine
+            && g1_host
+            && g3_despawned
+            && journal_from_host
+            && policy_active
+        {
             info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync + despawn-repl + journal-sync (scripted merge policy) all hold");
         } else {
             warn!("[test] RESULT: FAIL — see checks above");

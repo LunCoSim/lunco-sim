@@ -95,7 +95,14 @@ fn links_prelude_exposes_the_routing_surface() {
         .expect("links.rhai parses");
     let defined: Vec<String> = ast.iter_functions().map(|f| f.name.to_string()).collect();
 
-    for f in ["links", "link_ids", "neighbours", "reachable", "link_path", "can_reach"] {
+    for f in [
+        "links",
+        "link_ids",
+        "neighbours",
+        "reachable",
+        "link_path",
+        "can_reach",
+    ] {
         assert!(
             defined.contains(&f.to_string()),
             "links.rhai must define `{f}` (doc 49 §5): {defined:?}"
@@ -147,7 +154,11 @@ fn readiness_policy_agrees_with_the_engines_builtin() {
         (kinds::PROGRAM_COMPILE, Subject::Entity(entity), 0.5),
         (kinds::PROGRAM_COMPILE, Subject::World, 0.5),
         (kinds::PARTICIPANT_INIT, Subject::Entity(entity), 2.0),
-        (kinds::PARTICIPANT_INIT, Subject::Entity(entity), Action::DEADLINE_S),
+        (
+            kinds::PARTICIPANT_INIT,
+            Subject::Entity(entity),
+            Action::DEADLINE_S,
+        ),
         ("something_nobody_implemented", Subject::World, 0.0),
     ];
 

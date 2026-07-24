@@ -16,7 +16,16 @@
 use celestial_time::{
     // `UTC`/`TDB` are named directly; `TAI`/`TT`/`UT1` flow through by inference.
     // The `To*` traits are imported for their `to_*` methods on the scale newtypes.
-    JulianDate, ToTAI, ToTDB, ToTT, ToTTFromTDB, ToUT1WithDUT1, ToUTC, GMST, TDB, UTC,
+    JulianDate,
+    ToTAI,
+    ToTDB,
+    ToTT,
+    ToTTFromTDB,
+    ToUT1WithDUT1,
+    ToUTC,
+    GMST,
+    TDB,
+    UTC,
 };
 
 use crate::SECS_PER_DAY;
@@ -127,11 +136,20 @@ impl TimeScales {
         let ut1_jd = ut1.as_ref().map_or(utc_jd, |u| u.to_julian_date().to_f64());
 
         let gmst_rad = match (ut1.as_ref(), tt.as_ref()) {
-            (Some(u), Some(t)) => GMST::from_ut1_and_tt(u, t).map(|g| g.radians()).unwrap_or(0.0),
+            (Some(u), Some(t)) => GMST::from_ut1_and_tt(u, t)
+                .map(|g| g.radians())
+                .unwrap_or(0.0),
             _ => 0.0,
         };
 
-        Self { tdb_jd, tt_jd, tai_jd, utc_jd, ut1_jd, gmst_rad }
+        Self {
+            tdb_jd,
+            tt_jd,
+            tai_jd,
+            utc_jd,
+            ut1_jd,
+            gmst_rad,
+        }
     }
 }
 
@@ -225,7 +243,10 @@ mod seek_parse_tests {
         let back = utc_string_to_tdb_jd(&printed).expect("its own output must parse");
         // Printing rounds to whole seconds, so the round trip is second-exact.
         let err_secs = (back - tdb).abs() * SECS_PER_DAY;
-        assert!(err_secs < 1.0, "round trip drifted {err_secs} s via '{printed}'");
+        assert!(
+            err_secs < 1.0,
+            "round trip drifted {err_secs} s via '{printed}'"
+        );
     }
 
     /// Civil time is NOT the ephemeris epoch: a naive parse that skipped the
@@ -235,7 +256,10 @@ mod seek_parse_tests {
         let tdb = utc_string_to_tdb_jd("2000-01-01 12:00:00").unwrap();
         let raw_utc_jd = 2_451_545.0;
         let offset = (tdb - raw_utc_jd) * SECS_PER_DAY;
-        assert!((offset - 64.184).abs() < 0.5, "TDB−UTC should be ≈64.184 s, got {offset}");
+        assert!(
+            (offset - 64.184).abs() < 0.5,
+            "TDB−UTC should be ≈64.184 s, got {offset}"
+        );
     }
 
     #[test]

@@ -8,8 +8,8 @@
 use bevy::math::Vec2;
 use rand::seq::SliceRandom;
 use rand::RngExt;
-use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 
 use crate::spec::{Pattern, SizeDist};
 
@@ -205,23 +205,67 @@ mod tests {
 
     #[test]
     fn deterministic_same_seed() {
-        let a = sample_layer(42, salt::ROCKS, Pattern::Uniform, 50.0, 100, spec_size(), 0.1);
-        let b = sample_layer(42, salt::ROCKS, Pattern::Uniform, 50.0, 100, spec_size(), 0.1);
+        let a = sample_layer(
+            42,
+            salt::ROCKS,
+            Pattern::Uniform,
+            50.0,
+            100,
+            spec_size(),
+            0.1,
+        );
+        let b = sample_layer(
+            42,
+            salt::ROCKS,
+            Pattern::Uniform,
+            50.0,
+            100,
+            spec_size(),
+            0.1,
+        );
         assert_eq!(a, b, "same seed must produce identical placements");
     }
 
     #[test]
     fn different_seed_differs() {
-        let a = sample_layer(1, salt::ROCKS, Pattern::Uniform, 50.0, 100, spec_size(), 0.1);
-        let b = sample_layer(2, salt::ROCKS, Pattern::Uniform, 50.0, 100, spec_size(), 0.1);
+        let a = sample_layer(
+            1,
+            salt::ROCKS,
+            Pattern::Uniform,
+            50.0,
+            100,
+            spec_size(),
+            0.1,
+        );
+        let b = sample_layer(
+            2,
+            salt::ROCKS,
+            Pattern::Uniform,
+            50.0,
+            100,
+            spec_size(),
+            0.1,
+        );
         assert_ne!(a, b);
     }
 
     #[test]
     fn sizes_in_bounds() {
-        let p = sample_layer(7, salt::ROCKS, Pattern::Uniform, 50.0, 500, spec_size(), 0.0);
+        let p = sample_layer(
+            7,
+            salt::ROCKS,
+            Pattern::Uniform,
+            50.0,
+            500,
+            spec_size(),
+            0.0,
+        );
         for pl in &p {
-            assert!(pl.size >= 0.5 && pl.size <= 4.0, "size {} out of bounds", pl.size);
+            assert!(
+                pl.size >= 0.5 && pl.size <= 4.0,
+                "size {} out of bounds",
+                pl.size
+            );
             assert!(pl.pos.x.abs() <= 50.0 && pl.pos.y.abs() <= 50.0);
         }
     }
@@ -239,7 +283,15 @@ mod tests {
 
     #[test]
     fn dynamic_fraction_roughly_honoured() {
-        let p = sample_layer(3, salt::ROCKS, Pattern::Uniform, 50.0, 1000, spec_size(), 0.25);
+        let p = sample_layer(
+            3,
+            salt::ROCKS,
+            Pattern::Uniform,
+            50.0,
+            1000,
+            spec_size(),
+            0.25,
+        );
         let dyn_count = p.iter().filter(|p| p.dynamic).count();
         let frac = dyn_count as f32 / p.len() as f32;
         assert!((frac - 0.25).abs() < 0.05, "dynamic fraction {frac} off");

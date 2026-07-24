@@ -141,13 +141,11 @@ pub(crate) fn populate_entity_tree_view(
         .map(|(e, n)| (e, n.as_str().to_string()))
         .collect();
     let named_set: HashSet<Entity> = named.iter().map(|(e, _)| *e).collect();
-    let labels: HashMap<Entity, String> =
-        named.iter().map(|(e, full)| (*e, leaf(full))).collect();
+    let labels: HashMap<Entity, String> = named.iter().map(|(e, full)| (*e, leaf(full))).collect();
 
     // Parent of each entity (full graph, not just named) so unnamed grid/wrapper
     // entities can be skipped over when finding an entity's display parent.
-    let child_of: HashMap<Entity, Entity> =
-        child_q.iter().map(|(e, c)| (e, c.parent())).collect();
+    let child_of: HashMap<Entity, Entity> = child_q.iter().map(|(e, c)| (e, c.parent())).collect();
 
     // "Interesting" = something a user would edit: a selectable object or any
     // mesh-bearing part. Everything else (cosim wires, ports, empty transform
@@ -201,8 +199,11 @@ pub(crate) fn populate_entity_tree_view(
     };
     let mut pruned: HashMap<Entity, Vec<Entity>> = HashMap::new();
     for (parent, cs) in &kids {
-        let mut v: Vec<Entity> =
-            cs.iter().copied().filter(|c| *shown.get(c).unwrap_or(&false)).collect();
+        let mut v: Vec<Entity> = cs
+            .iter()
+            .copied()
+            .filter(|c| *shown.get(c).unwrap_or(&false))
+            .collect();
         if v.is_empty() {
             continue;
         }
@@ -233,8 +234,20 @@ pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
-    changed: Query<(), (Or<(Changed<Name>, Changed<ChildOf>)>, Without<lunco_core::SystemManaged>)>,
-    changed_system: Query<(), (Or<(Changed<Name>, Changed<ChildOf>)>, With<lunco_core::SystemManaged>)>,
+    changed: Query<
+        (),
+        (
+            Or<(Changed<Name>, Changed<ChildOf>)>,
+            Without<lunco_core::SystemManaged>,
+        ),
+    >,
+    changed_system: Query<
+        (),
+        (
+            Or<(Changed<Name>, Changed<ChildOf>)>,
+            With<lunco_core::SystemManaged>,
+        ),
+    >,
     added: Query<
         (),
         (
@@ -283,13 +296,21 @@ pub(crate) fn scene_topology_changed(
 pub struct EntityList;
 
 impl Panel for EntityList {
-    fn id(&self) -> PanelId { PanelId("entity_list") }
-    fn title(&self) -> String { "Entities".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    fn id(&self) -> PanelId {
+        PanelId("entity_list")
+    }
+    fn title(&self) -> String {
+        "Entities".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::SideBrowser
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn transparent_background(&self) -> bool { true }
+    fn transparent_background(&self) -> bool {
+        true
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
@@ -411,7 +432,12 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             world.resource_scope(|world, mut selected: Mut<crate::SelectedEntities>| {
                 let mut commands = world.commands();
                 crate::selection::apply_selection(
-                    &mut commands, &mut selected, old, entity, shift_held, shift_held,
+                    &mut commands,
+                    &mut selected,
+                    old,
+                    entity,
+                    shift_held,
+                    shift_held,
                 );
             });
             world.flush();
@@ -428,7 +454,10 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                 .and_then(|r| r.api_id_for(entity))
                 .map(|g| g.get())
             {
-                world.trigger(crate::commands::FocusEntityById { entity_id: id, distance: 0.0 });
+                world.trigger(crate::commands::FocusEntityById {
+                    entity_id: id,
+                    distance: 0.0,
+                });
             }
         });
     }

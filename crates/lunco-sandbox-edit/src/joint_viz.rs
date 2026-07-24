@@ -27,7 +27,7 @@ use avian3d::prelude::{
     RevoluteJoint,
 };
 use bevy::prelude::*;
-use lunco_core::{register_commands, Command, on_command};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_mobility::WheelRaycast;
 use lunco_usd_sim::PhysicalWheel;
 
@@ -110,7 +110,11 @@ fn draw_joint_gizmo(
     gizmos.line(a1, a2, LINK_COLOR);
     if let Some((local_axis, body_tf)) = axis {
         let dir = body_tf.rotation()
-            * Vec3::new(local_axis.x as f32, local_axis.y as f32, local_axis.z as f32);
+            * Vec3::new(
+                local_axis.x as f32,
+                local_axis.y as f32,
+                local_axis.z as f32,
+            );
         let dir = dir.normalize_or_zero() * AXIS_LEN;
         gizmos.arrow(a1 - dir, a1 + dir, AXIS_COLOR);
     }
@@ -218,18 +222,24 @@ pub fn draw_joint_viz(
 pub fn draw_wheel_force_viz(
     mut gizmos: Gizmos,
     settings: Res<JointVizSettings>,
-    q_physical: Query<(
-        &GlobalTransform,
-        Option<&LinearVelocity>,
-        Option<&VelocityIntegrationData>,
-        Option<&ComputedMass>,
-    ), With<PhysicalWheel>>,
-    q_raycast: Query<(
-        &GlobalTransform,
-        Option<&LinearVelocity>,
-        Option<&VelocityIntegrationData>,
-        Option<&ComputedMass>,
-    ), With<WheelRaycast>>,
+    q_physical: Query<
+        (
+            &GlobalTransform,
+            Option<&LinearVelocity>,
+            Option<&VelocityIntegrationData>,
+            Option<&ComputedMass>,
+        ),
+        With<PhysicalWheel>,
+    >,
+    q_raycast: Query<
+        (
+            &GlobalTransform,
+            Option<&LinearVelocity>,
+            Option<&VelocityIntegrationData>,
+            Option<&ComputedMass>,
+        ),
+        With<WheelRaycast>,
+    >,
 ) {
     if !settings.show_wheel_forces {
         return;

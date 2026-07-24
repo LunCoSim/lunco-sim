@@ -15,7 +15,10 @@ use super::clause;
 use super::edit::Edit;
 use super::errors::AstMutError;
 use super::text;
-use super::util::{graphic_entry_arg, is_graphic_entry_named, read_text_spec, render_text_spec, string_literal_value};
+use super::util::{
+    graphic_entry_arg, is_graphic_entry_named, read_text_spec, render_text_spec,
+    string_literal_value,
+};
 use crate::pretty;
 
 // ---------------------------------------------------------------------------
@@ -42,10 +45,9 @@ pub fn set_placement(
             component: component.to_string(),
         })?;
     let source = edit.source();
-    let stmt =
-        text::component_extent(source, comp).ok_or_else(|| AstMutError::AnchorNotFound {
-            what: format!("declaration of component `{component}`"),
-        })?;
+    let stmt = text::component_extent(source, comp).ok_or_else(|| AstMutError::AnchorNotFound {
+        what: format!("declaration of component `{component}`"),
+    })?;
     let rendered = pretty::placement_inner(placement);
 
     match text::annotation_clause(source, stmt.clone()) {
@@ -92,11 +94,10 @@ fn resolve_array(
 
     let Some((_, annotation)) = text::class_annotation_clause(source, class) else {
         // No class annotation at all: create the whole path.
-        let at = text::class_tail_anchor(source, class).ok_or_else(|| {
-            AstMutError::AnchorNotFound {
+        let at =
+            text::class_tail_anchor(source, class).ok_or_else(|| AstMutError::AnchorNotFound {
                 what: format!("end of class `{}`", class.name.text),
-            }
-        })?;
+            })?;
         let indent = pretty::options().indent;
         edit.insert(
             at,
@@ -128,12 +129,7 @@ fn resolve_array(
             Ok(Some(value))
         }
         None => {
-            clause::upsert_arg(
-                edit,
-                section_group,
-                key,
-                &format!("{key}={{{seed}}}"),
-            );
+            clause::upsert_arg(edit, section_group, key, &format!("{key}={{{seed}}}"));
             Ok(None)
         }
     }
@@ -269,8 +265,7 @@ fn diagram_text_entry(
         index,
     };
     let source = edit.source();
-    let (_, annotation) =
-        text::class_annotation_clause(source, class).ok_or_else(out_of_range)?;
+    let (_, annotation) = text::class_annotation_clause(source, class).ok_or_else(out_of_range)?;
     let section = clause::call_group(source, annotation, "Diagram").ok_or_else(out_of_range)?;
     let array = clause::arg_value(source, section, "graphics").ok_or_else(out_of_range)?;
     let args = text::split_args(source, array.clone());
@@ -349,7 +344,8 @@ pub fn remove_plot_node(
     };
     let source = edit.source();
     let (_, annotation) = text::class_annotation_clause(source, class).ok_or_else(not_found)?;
-    let section = clause::call_group(source, annotation.clone(), "__LunCo").ok_or_else(not_found)?;
+    let section =
+        clause::call_group(source, annotation.clone(), "__LunCo").ok_or_else(not_found)?;
     let array = clause::arg_value(source, section.clone(), "plotNodes").ok_or_else(not_found)?;
     let args = text::split_args(source, array.clone());
     let i = plot_node_arg(source, &args, signal_path).ok_or_else(not_found)?;
@@ -455,7 +451,10 @@ where
 
 /// Index of the `LunCoAnnotations.PlotNode(signal="…")` arg matching `signal`.
 fn plot_node_arg(source: &str, args: &[Range<usize>], signal: &str) -> Option<usize> {
-    let needle = format!("signal=\"{}\"", signal.replace('\\', "\\\\").replace('"', "\\\""));
+    let needle = format!(
+        "signal=\"{}\"",
+        signal.replace('\\', "\\\\").replace('"', "\\\"")
+    );
     let squished = |s: &str| s.split_whitespace().collect::<String>();
     args.iter()
         .position(|r| squished(&source[r.clone()]).contains(&squished(&needle)))
@@ -481,7 +480,10 @@ fn read_plot_node_spec(expr: &Expression) -> pretty::LunCoPlotNodeSpec {
         }
     }
     if let Some(v) = graphic_entry_arg(expr, "extent") {
-        if let Expression::Array { elements: outer, .. } = v {
+        if let Expression::Array {
+            elements: outer, ..
+        } = v
+        {
             if outer.len() == 2 {
                 if let (Some((x1, y1)), Some((x2, y2))) = (
                     super::util::point_pair(&outer[0]),

@@ -15,13 +15,16 @@
 //!
 //! Transitions use `FrameBlend` with pre-computed endpoints for smooth "frame handoffs."
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
+use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 use leafwing_input_manager::prelude::*;
-use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, CelestialBody, Spacecraft, register_commands, on_command, SessionProfiles, LocalSession, NetworkRole, LocalAvatar};
+use lunco_core::{
+    on_command, register_commands, Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole,
+    SessionProfiles, Spacecraft,
+};
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
 /// backend (`SimComponent`).
@@ -38,11 +41,11 @@ type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim::SimComponent>,
 )>;
+use lunco_celestial::{LeaveSurface, LocalGravityField, TeleportToSurface};
 use lunco_core::attach::migrate_to_grid;
-use lunco_celestial::{LocalGravityField, TeleportToSurface, LeaveSurface};
-use lunco_time::{TimeTransport, TransportMode, WorldTime};
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings};
+use lunco_time::{TimeTransport, TransportMode, WorldTime};
 
 pub mod commands;
 pub use commands::*;
@@ -110,7 +113,9 @@ pub struct MouseSensitivity {
 
 impl Default for MouseSensitivity {
     fn default() -> Self {
-        Self { sensitivity: 0.1125 }
+        Self {
+            sensitivity: 0.1125,
+        }
     }
 }
 
@@ -471,9 +476,14 @@ fn record_possession_authority(
         // disagree about whether this possession is allowed. Here it decides whether to
         // evict the current owner; there it decides whether to attach the camera.
         if let Some(cur) = registry.owner_of(gid.get()) {
-            if cur != origin && lunco_core::session::may_control(&registry, &rbac, origin, gid.get()) {
+            if cur != origin
+                && lunco_core::session::may_control(&registry, &rbac, origin, gid.get())
+            {
                 registry.release_session(cur);
-                info!("[auth] session {origin} took control of entity {} from {cur} (policy allowed)", gid.get());
+                info!(
+                    "[auth] session {origin} took control of entity {} from {cur} (policy allowed)",
+                    gid.get()
+                );
             }
         }
         // One vessel per player. If the new target is claimable (free, or already
@@ -561,8 +571,8 @@ fn enforce_ownership(
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseSensitivity>()
-           .init_resource::<CameraDefaults>()
-           .init_resource::<SurfaceModeThreshold>();
+            .init_resource::<CameraDefaults>()
+            .init_resource::<SurfaceModeThreshold>();
         // The render-rate camera systems (free-flight, the paused-follow twin) read the
         // wall-rooted `lunco_time::InteractionTime` so they keep moving while the sim is
         // paused. That clock is part of the time spine, so guarantee the spine rather
@@ -625,20 +635,20 @@ impl Plugin for LunCoAvatarPlugin {
         // bug). `register_commands!` now does both halves in one step, so the two
         // can't drift apart again.
         app.register_type::<SpringArmCamera>()
-           .register_type::<FollowAttitude>()
-           .register_type::<OrbitCamera>()
-           .register_type::<FreeFlightCamera>()
-           .register_type::<FrameBlend>()
-           .register_type::<AdaptiveNearPlane>()
-           .register_type::<ProvisionalAvatarCamera>()
-           .register_type::<SurfaceRelativeMode>()
-           .register_type::<SurfaceCamera>()
-           .register_type::<SurfaceModeThreshold>()
-           .register_type::<MouseSensitivity>();
+            .register_type::<FollowAttitude>()
+            .register_type::<OrbitCamera>()
+            .register_type::<FreeFlightCamera>()
+            .register_type::<FrameBlend>()
+            .register_type::<AdaptiveNearPlane>()
+            .register_type::<ProvisionalAvatarCamera>()
+            .register_type::<SurfaceRelativeMode>()
+            .register_type::<SurfaceCamera>()
+            .register_type::<SurfaceModeThreshold>()
+            .register_type::<MouseSensitivity>();
 
         app.register_settings_section::<ProfileSettings>();
         app.init_resource::<RoverNameTagSettings>()
-           .register_type::<RoverNameTagSettings>();
+            .register_type::<RoverNameTagSettings>();
 
         // On-screen notifications (rhai `notify(...)` → `ShowNotification`). The
         // command itself is registered as a REAL command via `register_commands!`
@@ -667,24 +677,27 @@ impl Plugin for LunCoAvatarPlugin {
             });
         }
 
-        app.add_systems(Update, (
-            avatar_init_system,
-            surface_mode_transition_system,
-            enforce_ownership,
-            sync_profile,
-            tick_notifications,
-            // Mouse-wheel → per-avatar zoom accumulator, sourced from the `Zoom`
-            // intent and gated on egui pointer capture (replaces the old egui
-            // `CameraScroll` bridges). Runs before the camera systems consume it.
-            collect_camera_zoom,
-        ));
+        app.add_systems(
+            Update,
+            (
+                avatar_init_system,
+                surface_mode_transition_system,
+                enforce_ownership,
+                sync_profile,
+                tick_notifications,
+                // Mouse-wheel → per-avatar zoom accumulator, sourced from the `Zoom`
+                // intent and gated on egui pointer capture (replaces the old egui
+                // `CameraScroll` bridges). Runs before the camera systems consume it.
+                collect_camera_zoom,
+            ),
+        );
         // Mouse-look capture + apply. Pointer intents — gated internally on
         // `EguiFocus.wants_pointer` (look_delta is zeroed while a panel holds the
         // pointer), NOT on keyboard focus, so typing never freezes the camera.
-        app.add_systems(Update, (
-            capture_avatar_intent,
-            avatar_behavior_input_system,
-        ));
+        app.add_systems(
+            Update,
+            (capture_avatar_intent, avatar_behavior_input_system),
+        );
 
         // Headless drag simulator: `LUNCO_AUTO_ORBIT=<rad/s>`.
         //
@@ -713,19 +726,25 @@ impl Plugin for LunCoAvatarPlugin {
         // fire them. `Cancel`/Backspace is the two-step Esc pattern: while a field
         // is focused egui consumes the key (guard suppresses the intent); once
         // defocused, the next press acts.
-        app.add_systems(Update, (
-            avatar_escape_possession,
-            avatar_global_hotkeys,
-        ).run_if(scene_keyboard_active));
+        app.add_systems(
+            Update,
+            (avatar_escape_possession, avatar_global_hotkeys).run_if(scene_keyboard_active),
+        );
 
         // Possessed-rover name tags: an egui screen-space overlay (the scene has
         // only a `Camera3d`, so world-anchored `Text2d` never renders). Registered
         // here — not in `AvatarUiPlugin` — because the sandbox adds only
         // `LunCoAvatarPlugin`; `AvatarUiPlugin` is luncosim-only.
         #[cfg(feature = "ui")]
-        app.add_systems(bevy_egui::EguiPrimaryContextPass, crate::ui::draw_rover_name_tags);
+        app.add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            crate::ui::draw_rover_name_tags,
+        );
         #[cfg(feature = "ui")]
-        app.add_systems(bevy_egui::EguiPrimaryContextPass, crate::ui::draw_notifications);
+        app.add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            crate::ui::draw_notifications,
+        );
 
         // The CHASE camera shares the followed body's FIXED-STEP time domain: it runs in
         // `FixedPostUpdate`, reads the body's pose on the SAME cadence avian integrates
@@ -755,31 +774,40 @@ impl Plugin for LunCoAvatarPlugin {
         // those systems are the same-frame protection; this is the cleanup.
         app.add_systems(PreUpdate, strip_camera_modes_from_locked);
 
-        app.add_systems(PostUpdate, (
-            orbital_exit_restore_system,
-            // Entry half of the scroll transit — must see the free-flight scroll BEFORE
-            // orbit_system's zoom consumption; its mode swap lands next frame (commands).
-            freeflight_scroll_transit_system,
-            freeflight_system,
-            surface_camera_system,
-            apply_fly,
-            // The ORBIT (survey) camera belongs here, not in `FixedPostUpdate` where it
-            // used to sit next to `spring_arm_system`. It already reads `InteractionTime`
-            // — a per-FRAME wall delta — so running it on the fixed cadence applied one
-            // whole frame's delta once PER SUBSTEP: at 4x its smoothing converged ~4x too
-            // fast, and when paused it froze outright (unlike the chase camera it has no
-            // paused twin). Its own doc asks for "a constant `dt` that does not rate-scale
-            // with the sim"; the registration was what defeated that. It is a star-fixed
-            // survey camera, so it does not need the chase camera's interpolation lockstep.
-            orbit_system,
-            update_avatar_clip_planes_system,
-            // Paused-follow twin: `FixedPostUpdate` stops when the sim pauses, so this
-            // render-rate twin keeps the follow camera live on the wall clock while
-            // paused. Gated so it and `spring_arm_system` never both write the camera.
-            spring_arm_paused_system.run_if(|transport: Option<Res<lunco_time::TimeTransport>>| {
-                transport.map_or(false, |t| matches!(t.mode, lunco_time::TransportMode::Paused))
-            }),
-        ).chain().in_set(AvatarCameraSet));
+        app.add_systems(
+            PostUpdate,
+            (
+                orbital_exit_restore_system,
+                // Entry half of the scroll transit — must see the free-flight scroll BEFORE
+                // orbit_system's zoom consumption; its mode swap lands next frame (commands).
+                freeflight_scroll_transit_system,
+                freeflight_system,
+                surface_camera_system,
+                apply_fly,
+                // The ORBIT (survey) camera belongs here, not in `FixedPostUpdate` where it
+                // used to sit next to `spring_arm_system`. It already reads `InteractionTime`
+                // — a per-FRAME wall delta — so running it on the fixed cadence applied one
+                // whole frame's delta once PER SUBSTEP: at 4x its smoothing converged ~4x too
+                // fast, and when paused it froze outright (unlike the chase camera it has no
+                // paused twin). Its own doc asks for "a constant `dt` that does not rate-scale
+                // with the sim"; the registration was what defeated that. It is a star-fixed
+                // survey camera, so it does not need the chase camera's interpolation lockstep.
+                orbit_system,
+                update_avatar_clip_planes_system,
+                // Paused-follow twin: `FixedPostUpdate` stops when the sim pauses, so this
+                // render-rate twin keeps the follow camera live on the wall clock while
+                // paused. Gated so it and `spring_arm_system` never both write the camera.
+                spring_arm_paused_system.run_if(
+                    |transport: Option<Res<lunco_time::TimeTransport>>| {
+                        transport.map_or(false, |t| {
+                            matches!(t.mode, lunco_time::TransportMode::Paused)
+                        })
+                    },
+                ),
+            )
+                .chain()
+                .in_set(AvatarCameraSet),
+        );
 
         app.configure_sets(
             PostUpdate,
@@ -843,24 +871,30 @@ pub fn spawn_avatar_camera(
     // attached headless, where the camera stays a fully-formed scene entity (pose,
     // projection, tracking, mounts) with no GPU pipeline. See
     // `lunco_render::camera` and docs/architecture/render-decoupling.md.
-    commands.spawn((
-        // Nested: a bundle tuple maxes out at 16 elements, and `SceneCamera` made 17.
-        (Camera::default(), lunco_render::SceneCamera::default()),
-        FreeFlightCamera { yaw, pitch, damping: None },
-        AdaptiveNearPlane,
-        Transform::from_translation(initial_offset.as_vec3()),
-        GlobalTransform::default(),
-        FloatingOrigin,
-        CellCoord::default(),
-        Avatar,
-        LocalAvatar,
-        IntentAnalogState::default(),
-        ActionState::<lunco_core::UserIntent>::default(),
-        lunco_controller::get_avatar_input_map(),
-        CameraZoomInput::default(),
-        Name::new("Avatar Camera"),
-        ChildOf(grid_entity),
-    )).id()
+    commands
+        .spawn((
+            // Nested: a bundle tuple maxes out at 16 elements, and `SceneCamera` made 17.
+            (Camera::default(), lunco_render::SceneCamera::default()),
+            FreeFlightCamera {
+                yaw,
+                pitch,
+                damping: None,
+            },
+            AdaptiveNearPlane,
+            Transform::from_translation(initial_offset.as_vec3()),
+            GlobalTransform::default(),
+            FloatingOrigin,
+            CellCoord::default(),
+            Avatar,
+            LocalAvatar,
+            IntentAnalogState::default(),
+            ActionState::<lunco_core::UserIntent>::default(),
+            lunco_controller::get_avatar_input_map(),
+            CameraZoomInput::default(),
+            Name::new("Avatar Camera"),
+            ChildOf(grid_entity),
+        ))
+        .id()
 }
 
 /// The local avatar is a **controllable described like a rover**: it carries a
@@ -925,7 +959,9 @@ fn site_body_center(
     q_bodies: &Query<(Entity, &CelestialBody)>,
 ) -> Option<(Entity, f64, DVec3)> {
     let anchor = q_site.iter().next()?;
-    let (ent, body) = q_bodies.iter().find(|(_, b)| b.ephemeris_id == anchor.body)?;
+    let (ent, body) = q_bodies
+        .iter()
+        .find(|(_, b)| b.ephemeris_id == anchor.body)?;
     Some((
         ent,
         body.radius_m,
@@ -957,7 +993,11 @@ fn surface_up(pos: DVec3, parent_is_world_grid: bool, site_center: Option<DVec3>
 /// Consolidates the CQ-113 duplicate tangent-frame math that was byte-identical
 /// in `spring_arm_system` and `surface_camera_system`.
 fn tangent_frame(up: Vec3, heading: f32, pitch: f32) -> Quat {
-    let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 { Vec3::Y } else { Vec3::Z };
+    let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 {
+        Vec3::Y
+    } else {
+        Vec3::Z
+    };
     let east = up.cross(ref_dir).normalize();
     let north = east.cross(up).normalize();
     let heading_q = Quat::from_axis_angle(up, heading);
@@ -974,7 +1014,13 @@ fn tangent_frame(up: Vec3, heading: f32, pitch: f32) -> Quat {
 ///
 /// Consolidates the CQ-113 duplicate zoom math shared by the spring-arm, chase,
 /// and orbit camera systems (they differed only in the clamp bounds).
-fn apply_scroll_zoom(distance: &mut f64, scroll_delta: &mut f32, sens: f32, min_dist: f64, max_dist: f64) {
+fn apply_scroll_zoom(
+    distance: &mut f64,
+    scroll_delta: &mut f32,
+    sens: f32,
+    min_dist: f64,
+    max_dist: f64,
+) {
     if *scroll_delta != 0.0 {
         let zoom_factor = (-*scroll_delta as f64 * sens as f64 * 0.01).exp();
         *distance = (*distance * zoom_factor).clamp(min_dist, max_dist);
@@ -1003,7 +1049,12 @@ fn migrate_avatar_to_target_grid(
         if tg != Entity::PLACEHOLDER {
             if let Ok(target_grid_ref) = q_grids.get(tg) {
                 let target_grid_abs = lunco_core::coords::world_position_seeded(
-                    tg, &CellCoord::default(), &Transform::default(), q_parents, q_grids, q_spatial,
+                    tg,
+                    &CellCoord::default(),
+                    &Transform::default(),
+                    q_parents,
+                    q_grids,
+                    q_spatial,
                 );
                 let (new_cell, new_translation) =
                     target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
@@ -1075,7 +1126,8 @@ pub fn vessel_collision_exclusions_for_test(world: &mut World, target: Entity) -
         },
     );
     sys.initialize(world);
-    sys.run((), world).expect("exclusion query cannot fail — it only reads")
+    sys.run((), world)
+        .expect("exclusion query cannot fail — it only reads")
 }
 
 /// Everything the spring arm must NOT collide with while following `target`: the
@@ -1125,15 +1177,22 @@ fn vessel_collision_exclusions(
 /// [`spring_arm_paused_system`] (paused) — same follow math, different clock.
 fn update_spring_arm_impl(
     dt: f32,
-    mut q_avatar: Query<(
-        Entity,
-        &mut Transform,
-        &mut CellCoord,
-        &mut SpringArmCamera,
-        &ChildOf,
-        Option<&SurfaceRelativeMode>,
-        &mut CameraZoomInput,
-    ), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
+    mut q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &mut SpringArmCamera,
+            &ChildOf,
+            Option<&SurfaceRelativeMode>,
+            &mut CameraZoomInput,
+        ),
+        (
+            With<Avatar>,
+            Without<FrameBlend>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
@@ -1143,16 +1202,26 @@ fn update_spring_arm_impl(
     spatial_query: &Option<avian3d::prelude::SpatialQuery>,
     joints: &VesselJoints,
 ) {
-    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
+    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
+        return;
+    }
 
-    for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode, mut zoom) in q_avatar.iter_mut() {
+    for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode, mut zoom) in
+        q_avatar.iter_mut()
+    {
         // Skip follow while the target is being dragged by the editor gizmo
         // (marker set by sandbox-edit; never present on a headless server).
-        if q_dragging.get(arm.target).is_ok() { continue; }
+        if q_dragging.get(arm.target).is_ok() {
+            continue;
+        }
 
-        let Ok((t_cell, t_tf)) = q_spatial.get(arm.target) else { continue; };
+        let Ok((t_cell, t_tf)) = q_spatial.get(arm.target) else {
+            continue;
+        };
         let t_cell = t_cell.copied().unwrap_or_default();
-        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
+        let Ok(grid) = q_grids.get(child_of.0) else {
+            continue;
+        };
 
         // Target position in grid-local coordinates.
         let target_pos = grid.grid_position_double(&t_cell, t_tf);
@@ -1160,7 +1229,13 @@ fn update_spring_arm_impl(
         // Multiplicative zoom using exponential scaling — same formula as
         // ChaseCamera/OrbitCamera so raw pixel scroll deltas stay well-scaled.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        apply_scroll_zoom(&mut arm.distance, &mut zoom.delta, ZOOM_SENSITIVITY, 5.0, 200.0);
+        apply_scroll_zoom(
+            &mut arm.distance,
+            &mut zoom.delta,
+            ZOOM_SENSITIVITY,
+            5.0,
+            200.0,
+        );
 
         // Resolve rover heading in double-precision to eliminate quantization
         // jitter. The rover Transform is already render-frame-interpolated by
@@ -1185,9 +1260,7 @@ fn update_spring_arm_impl(
             // Stable external frame: ignore the body's attitude entirely, so a
             // 6-DOF flyer tumbles inside a steady view. World-up, user yaw/pitch
             // (was the celestial `OrbitCamera`, reused wrongly for vessels).
-            FollowAttitude::WorldLocked => {
-                Quat::from_euler(EulerRot::YXZ, arm.yaw, arm.pitch, 0.0)
-            }
+            FollowAttitude::WorldLocked => Quat::from_euler(EulerRot::YXZ, arm.yaw, arm.pitch, 0.0),
             // Heading-follow: yaw from the body's forward (steerable vehicles),
             // up = surface normal or world-Y.
             FollowAttitude::Heading => {
@@ -1195,7 +1268,9 @@ fn update_spring_arm_impl(
                     let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
                     if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
                         -target_fwd_d.x.atan2(-target_fwd_d.z)
-                    } else { 0.0 }
+                    } else {
+                        0.0
+                    }
                 } else {
                     0.0
                 };
@@ -1300,15 +1375,22 @@ fn update_spring_arm_impl(
 /// render-rate twin that keeps the follow camera live on the wall clock while paused.
 fn spring_arm_system(
     time: Res<Time>,
-    q_avatar: Query<(
-        Entity,
-        &mut Transform,
-        &mut CellCoord,
-        &mut SpringArmCamera,
-        &ChildOf,
-        Option<&SurfaceRelativeMode>,
-        &mut CameraZoomInput,
-    ), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
+    q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &mut SpringArmCamera,
+            &ChildOf,
+            Option<&SurfaceRelativeMode>,
+            &mut CameraZoomInput,
+        ),
+        (
+            With<Avatar>,
+            Without<FrameBlend>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
@@ -1338,15 +1420,22 @@ fn spring_arm_system(
 /// (gated at registration), so it never fights the fixed-step system for the camera.
 fn spring_arm_paused_system(
     time_real: lunco_time::InteractionTime,
-    q_avatar: Query<(
-        Entity,
-        &mut Transform,
-        &mut CellCoord,
-        &mut SpringArmCamera,
-        &ChildOf,
-        Option<&SurfaceRelativeMode>,
-        &mut CameraZoomInput,
-    ), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
+    q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &mut SpringArmCamera,
+            &ChildOf,
+            Option<&SurfaceRelativeMode>,
+            &mut CameraZoomInput,
+        ),
+        (
+            With<Avatar>,
+            Without<FrameBlend>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
@@ -1435,7 +1524,9 @@ fn sample_orbit_frame(
             let mut g = orbit.target;
             let mut found = None;
             for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-                if q_grids.contains(g) { found = Some(g); }
+                if q_grids.contains(g) {
+                    found = Some(g);
+                }
                 match q_parents.get(g) {
                     Ok(parent) => g = parent.parent(),
                     Err(_) => break,
@@ -1448,7 +1539,9 @@ fn sample_orbit_frame(
                 q_globals.get(avatar_ent),
                 q_globals.get(orbit.target),
                 q_globals.get(root),
-            ) else { return None };
+            ) else {
+                return None;
+            };
             let root_inv = root_gt.rotation().inverse();
             // Camera's exact position at sample time (cell math when it is
             // already on the root grid — consistent with the same-frame GTs,
@@ -1593,8 +1686,12 @@ fn orbital_exit_restore_system(
     if pin.active {
         return;
     }
-    let Some(root) = q_world_grid.iter().next() else { return };
-    let Ok(root_grid) = q_grids.get(root) else { return };
+    let Some(root) = q_world_grid.iter().next() else {
+        return;
+    };
+    let Ok(root_grid) = q_grids.get(root) else {
+        return;
+    };
     for avatar_ent in q_avatar.iter() {
         let (cell, translation) = root_grid.translation_to_grid(pin.anchor_world);
         migrate_to_grid(
@@ -1618,7 +1715,22 @@ fn orbit_system(
     // Wall-rooted interaction clock: orbit smoothing (`alpha = 1 - exp(-rate·dt)`) wants
     // a constant `dt` that does not rate-scale with the sim.
     time: lunco_time::InteractionTime,
-    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf, &mut CameraZoomInput, Option<&OrbitFrameSample>), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
+    mut q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &mut OrbitCamera,
+            &ChildOf,
+            &mut CameraZoomInput,
+            Option<&OrbitFrameSample>,
+        ),
+        (
+            With<Avatar>,
+            Without<FrameBlend>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<&CelestialBody>,
@@ -1634,21 +1746,28 @@ fn orbit_system(
     mut last_pose: (Local<f32>, Local<f32>),
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
 ) {
-    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
+    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
+        return;
+    }
 
     let dt = time.delta_secs();
 
-    for (avatar_ent, mut tf, mut cell, mut orbit, child_of, mut zoom, sample) in q_avatar.iter_mut() {
+    for (avatar_ent, mut tf, mut cell, mut orbit, child_of, mut zoom, sample) in q_avatar.iter_mut()
+    {
         // Skip follow while the target is being dragged by the editor gizmo
         // (marker set by sandbox-edit; never present on a headless server).
-        if q_dragging.get(orbit.target).is_ok() { continue; }
+        if q_dragging.get(orbit.target).is_ok() {
+            continue;
+        }
 
         // Spatial inputs come exclusively from the `First`-schedule sample —
         // GlobalTransforms are NOT frame-consistent at this point of the
         // frame (see `OrbitFrameSample`). No sample yet (focus landed this
         // frame) or a stale one (target changed) → wait one frame.
         let Some(sample) = sample else { continue };
-        if sample.target != orbit.target { continue; }
+        if sample.target != orbit.target {
+            continue;
+        }
 
         // The orbit camera ALWAYS lives on the ROOT grid (WorldGrid), NOT the
         // target body's grid. big_space rebases every entity relative to the
@@ -1666,15 +1785,22 @@ fn orbit_system(
             let mut g = orbit.target;
             let mut found = None;
             for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-                if q_grids.contains(g) { found = Some(g); }
+                if q_grids.contains(g) {
+                    found = Some(g);
+                }
                 match q_parents.get(g) {
                     Ok(parent) => g = parent.parent(),
                     Err(_) => break,
                 }
             }
-            match found { Some(g) => g, None => continue }
+            match found {
+                Some(g) => g,
+                None => continue,
+            }
         };
-        let Ok(root_ref) = q_grids.get(root_grid) else { continue };
+        let Ok(root_ref) = q_grids.get(root_grid) else {
+            continue;
+        };
 
         // Compute minimum distance to prevent zooming inside the target body.
         // For a celestial body the floor sits ~50 km above the surface — low
@@ -1750,7 +1876,13 @@ fn orbit_system(
                 info!("ORBITAL SCROLL-THROUGH: exiting to surface at current pose");
                 continue;
             }
-            apply_scroll_zoom(&mut orbit.distance, &mut zoom.delta, ZOOM_SENSITIVITY, min_dist, 1.0e11);
+            apply_scroll_zoom(
+                &mut orbit.distance,
+                &mut zoom.delta,
+                ZOOM_SENSITIVITY,
+                min_dist,
+                1.0e11,
+            );
             let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
             let dir = rotation.mul_vec3(Vec3::Z).as_dvec3();
 
@@ -1770,7 +1902,9 @@ fn orbit_system(
             let mut pose_ent = physical_target;
             let mut host = None;
             for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-                let Ok(child_of_walk) = q_parents.get(pose_ent) else { break };
+                let Ok(child_of_walk) = q_parents.get(pose_ent) else {
+                    break;
+                };
                 let parent = child_of_walk.parent();
                 if q_grids.contains(parent) {
                     let own_spinning_frame = q_frames_ids
@@ -1787,8 +1921,12 @@ fn orbit_system(
                 pose_ent = parent;
             }
             let Some(host_grid) = host else { continue };
-            let Ok(host_ref) = q_grids.get(host_grid) else { continue };
-            let Ok((p_cell, p_tf)) = q_spatial.get(pose_ent) else { continue };
+            let Ok(host_ref) = q_grids.get(host_grid) else {
+                continue;
+            };
+            let Ok((p_cell, p_tf)) = q_spatial.get(pose_ent) else {
+                continue;
+            };
 
             // The camera pose is expressed DIRECTLY in the host grid's axes:
             // inertial grids carry identity rotation, so host +Y is the
@@ -1818,9 +1956,9 @@ fn orbit_system(
             let arm_len = if child_of.parent() != host_grid {
                 orbit.distance
             } else {
-                let cam_local =
-                    bevy::math::DVec3::new(cell.x as f64, cell.y as f64, cell.z as f64) * edge
-                        + tf.translation.as_dvec3();
+                let cam_local = bevy::math::DVec3::new(cell.x as f64, cell.y as f64, cell.z as f64)
+                    * edge
+                    + tf.translation.as_dvec3();
                 let current_len = (cam_local - body_local).length();
                 let err = (orbit.distance - current_len).abs();
                 if err < orbit.distance * 5e-4 {
@@ -1870,9 +2008,15 @@ fn orbit_system(
             } else {
                 // Guarded writes: a parked view stays byte-identical, so
                 // big_space's change-gated propagation can skip cleanly.
-                if *cell != new_cell { *cell = new_cell; }
-                if tf.translation != new_translation { tf.translation = new_translation; }
-                if tf.rotation != local_rot { tf.rotation = local_rot; }
+                if *cell != new_cell {
+                    *cell = new_cell;
+                }
+                if tf.translation != new_translation {
+                    tf.translation = new_translation;
+                }
+                if tf.rotation != local_rot {
+                    tf.rotation = local_rot;
+                }
             }
             continue;
         }
@@ -1909,7 +2053,13 @@ fn orbit_system(
 
         // Multiplicative zoom: proportional to current distance using exponential scaling.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        apply_scroll_zoom(&mut orbit.distance, &mut zoom.delta, ZOOM_SENSITIVITY, min_dist, 1.0e11);
+        apply_scroll_zoom(
+            &mut orbit.distance,
+            &mut zoom.delta,
+            ZOOM_SENSITIVITY,
+            min_dist,
+            1.0e11,
+        );
 
         // Camera rotation from user yaw/pitch (ecliptic-locked).
         let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
@@ -1943,7 +2093,8 @@ fn orbit_system(
         // once the arm error passes the dead band.
         let view_changed = orbit.yaw != *last_pose.0 || orbit.pitch != *last_pose.1;
         let arm_err = (current_len - orbit.distance).abs();
-        let settled = arm_err < orbit.distance * 5e-3 && (desired_len - orbit.distance).abs() < orbit.distance * 5e-3;
+        let settled = arm_err < orbit.distance * 5e-3
+            && (desired_len - orbit.distance).abs() < orbit.distance * 5e-3;
         if settled && !view_changed {
             *log_countdown = log_countdown.saturating_sub(1);
             continue;
@@ -2049,13 +2200,21 @@ fn freeflight_system(
     // frame and they fight — the camera drifts and the view jitters. Make the
     // exclusion structural rather than relying on every insert site to strip the
     // other mode first.
-    mut q_avatar: Query<(
-        &mut Transform,
-        &mut FreeFlightCamera,
-        &CellCoord,
-        &ChildOf,
-        Option<&SurfaceRelativeMode>,
-    ), (With<Avatar>, Without<FrameBlend>, Without<OrbitCamera>, Without<lunco_core::CinematicCameraLock>)>,
+    mut q_avatar: Query<
+        (
+            &mut Transform,
+            &mut FreeFlightCamera,
+            &CellCoord,
+            &ChildOf,
+            Option<&SurfaceRelativeMode>,
+        ),
+        (
+            With<Avatar>,
+            Without<FrameBlend>,
+            Without<OrbitCamera>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
     q_grids: Query<&Grid>,
     q_world: Query<(), With<lunco_core::WorldGrid>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
@@ -2072,7 +2231,9 @@ fn freeflight_system(
                     q_world.contains(child_of.0),
                     site_center,
                 )
-            } else { Vec3::Y };
+            } else {
+                Vec3::Y
+            };
 
             // In surface mode, apply yaw/pitch as incremental rotations.
             let yaw_q = Quat::from_axis_angle(up_v, ff.yaw);
@@ -2223,12 +2384,14 @@ fn freeflight_scroll_transit_system(
 /// Only runs when `SurfaceCamera` is present (replaces `FreeFlightCamera`
 /// while on a body's surface).
 fn surface_camera_system(
-    mut q_avatar: Query<(
-        &mut Transform,
-        &SurfaceCamera,
-        &CellCoord,
-        &ChildOf,
-    ), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
+    mut q_avatar: Query<
+        (&mut Transform, &SurfaceCamera, &CellCoord, &ChildOf),
+        (
+            With<Avatar>,
+            Without<FrameBlend>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
     q_grids: Query<&Grid>,
     q_world: Query<(), With<lunco_core::WorldGrid>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
@@ -2236,7 +2399,9 @@ fn surface_camera_system(
 ) {
     let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
     for (mut tf, cam, cell, child_of) in q_avatar.iter_mut() {
-        let Ok(grid) = q_grids.get(child_of.0) else { continue };
+        let Ok(grid) = q_grids.get(child_of.0) else {
+            continue;
+        };
 
         // Surface normal under the camera — body-centre aware (see `surface_up`).
         let up = surface_up(
@@ -2266,16 +2431,19 @@ fn surface_camera_system(
 /// plane. Runs in PostUpdate at render rate on wall-clock time, so the ghost camera
 /// keeps moving even when the sim's virtual clock is paused/slowed.
 fn apply_fly(
-    mut q_avatar: Query<(
-        Entity,
-        &mut Transform,
-        &mut CellCoord,
-        &ChildOf,
-        &lunco_core::CommandInputs,
-        Has<FreeFlightCamera>,
-        Has<SurfaceCamera>,
-        Option<&SurfaceRelativeMode>,
-    ), (With<Avatar>, Without<lunco_core::CinematicCameraLock>)>,
+    mut q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &ChildOf,
+            &lunco_core::CommandInputs,
+            Has<FreeFlightCamera>,
+            Has<SurfaceCamera>,
+            Option<&SurfaceRelativeMode>,
+        ),
+        (With<Avatar>, Without<lunco_core::CinematicCameraLock>),
+    >,
     q_grids: Query<&Grid>,
     q_world: Query<(), With<lunco_core::WorldGrid>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
@@ -2289,14 +2457,32 @@ fn apply_fly(
 ) {
     let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-    let boost = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { 10.0 } else { 1.0 };
+    let boost = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+        10.0
+    } else {
+        1.0
+    };
 
-    for (entity, mut tf, mut cell, child_of, inputs, has_freeflight, has_surface_camera, surface_mode) in q_avatar.iter_mut() {
-        let Ok(grid) = q_grids.get(child_of.0) else { continue };
+    for (
+        entity,
+        mut tf,
+        mut cell,
+        child_of,
+        inputs,
+        has_freeflight,
+        has_surface_camera,
+        surface_mode,
+    ) in q_avatar.iter_mut()
+    {
+        let Ok(grid) = q_grids.get(child_of.0) else {
+            continue;
+        };
         let current_pos = grid.grid_position_double(&cell, &tf);
 
         // Only move if we have a camera mode or CTRL-overlay.
-        if !has_freeflight && !has_surface_camera && !ctrl_pressed { continue; }
+        if !has_freeflight && !has_surface_camera && !ctrl_pressed {
+            continue;
+        }
 
         // Command inputs off the command surface (each −1..=1 from the
         // `ControlBinding`), then boosted. When free (no ControllerLink)
@@ -2305,7 +2491,9 @@ fn apply_fly(
         let forward = (inputs.cmd("forward") * boost) as f32;
         let side = (inputs.cmd("side") * boost) as f32;
         let elevation = (inputs.cmd("up") * boost) as f32;
-        if forward.abs() < 0.01 && side.abs() < 0.01 && elevation.abs() < 0.01 { continue; }
+        if forward.abs() < 0.01 && side.abs() < 0.01 && elevation.abs() < 0.01 {
+            continue;
+        }
 
         // Actively moving → cancel any idle auto-action.
         commands.entity(entity).remove::<lunco_core::ActiveAction>();
@@ -2354,15 +2542,18 @@ fn capture_avatar_intent(
     // A waypoint context menu counts too, and needs its own flag: `wants_pointer` only
     // goes true once the cursor is already ON the menu, so the camera would spin all
     // the way there and the menu could never be reached comfortably.
-    let pointer_captured = egui_focus.wants_pointer
-        || waypoint_menu_open.map(|m| m.0).unwrap_or(false);
+    let pointer_captured =
+        egui_focus.wants_pointer || waypoint_menu_open.map(|m| m.0).unwrap_or(false);
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let mut delta = Vec2::ZERO;
         let mut mouse_moved = false;
         if !pointer_captured {
             let d = intent_state.axis_pair(&UserIntent::Look);
-            if d.length_squared() > 0.00001 { delta = d * 10.0; mouse_moved = true; }
+            if d.length_squared() > 0.00001 {
+                delta = d * 10.0;
+                mouse_moved = true;
+            }
         }
 
         analog.look_delta = delta;
@@ -2424,18 +2615,31 @@ fn avatar_behavior_input_system(
     mut q_orbit: Query<&mut OrbitCamera, With<Avatar>>,
     mut q_freeflight: Query<&mut FreeFlightCamera, With<Avatar>>,
     mut q_surface: Query<&mut SurfaceCamera, With<Avatar>>,
-    mut q_tf: Query<(&mut Transform, &CellCoord, &ChildOf), (With<Avatar>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
+    mut q_tf: Query<
+        (&mut Transform, &CellCoord, &ChildOf),
+        (
+            With<Avatar>,
+            Without<FrameBlend>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
     q_grids: Query<&Grid>,
     sensitivity: Res<MouseSensitivity>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     // Only process look input when right mouse button is held.
-    if !mouse.pressed(MouseButton::Right) { return; }
+    if !mouse.pressed(MouseButton::Right) {
+        return;
+    }
 
-    let Some((analog, surface_mode)) = q_avatar.iter().next() else { return; };
+    let Some((analog, surface_mode)) = q_avatar.iter().next() else {
+        return;
+    };
     let look_delta = analog.look_delta;
-    if look_delta.length_squared() < 0.0001 { return; }
+    if look_delta.length_squared() < 0.0001 {
+        return;
+    }
 
     let delta_yaw = -look_delta.x * sensitivity.sensitivity * 0.01;
     let delta_pitch = -look_delta.y * sensitivity.sensitivity * 0.01;
@@ -2448,7 +2652,9 @@ fn avatar_behavior_input_system(
                 // "Up" = camera's grid-local position (body center → camera direction).
                 let up_v = if let Ok(grid) = q_grids.get(child_of.0) {
                     radial_up(grid.grid_position_double(cell, &tf))
-                } else { Vec3::Y };
+                } else {
+                    Vec3::Y
+                };
                 let yaw_q = Quat::from_axis_angle(up_v, delta_yaw);
                 let right: Vec3 = *tf.right();
                 let right_yawed = yaw_q.mul_vec3(right);
@@ -2457,7 +2663,12 @@ fn avatar_behavior_input_system(
             } else {
                 // Ecliptic: YXZ euler decomposition
                 let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-                tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw + delta_yaw, (pitch + delta_pitch).clamp(-1.5, 1.5), 0.0);
+                tf.rotation = Quat::from_euler(
+                    EulerRot::YXZ,
+                    yaw + delta_yaw,
+                    (pitch + delta_pitch).clamp(-1.5, 1.5),
+                    0.0,
+                );
             }
         }
     } else {
@@ -2518,8 +2729,12 @@ fn find_clickable_from_hit(
     q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
     for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-        if q_ground.get(entity).is_ok() { return None; }
-        if q_selectable.get(entity).is_ok() { return Some(entity); }
+        if q_ground.get(entity).is_ok() {
+            return None;
+        }
+        if q_selectable.get(entity).is_ok() {
+            return Some(entity);
+        }
         if let Ok(parent) = q_parents.get(entity) {
             entity = parent.parent();
         } else {
@@ -2570,29 +2785,45 @@ pub fn avatar_raycast_possession(
 ) {
     use bevy::picking::pointer::PointerButton;
     // Left button only.
-    if click.button != PointerButton::Primary { return; }
+    if click.button != PointerButton::Primary {
+        return;
+    }
     // Shift+click is reserved for entity selection / gizmo multi-select in
     // lunco-sandbox-edit (`on_scene_click_select`, the other global
     // `Pointer<Click>` observer). A plain left-click possesses/follows/focuses;
     // a Shift+click never does. This modifier split is what keeps the two
     // observers from both acting on a single click.
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { return; }
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        return;
+    }
     // Alt-click is likewise reserved for the editor.
-    if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) { return; }
+    if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
+        return;
+    }
     // Ctrl-click appends a patrol checkpoint (`on_scene_click_checkpoint`, the
     // third global `Pointer<Click>` observer). Both observers see the same click
     // — `propagate(false)` stops bubbling, not sibling observers — so without
     // this guard every checkpoint placement would ALSO possess/follow whatever
     // the ray hit, yanking the camera onto the terrain.
-    if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) { return; }
+    if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
+        return;
+    }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
-    if drag_mode_active.active { return; }
+    if drag_mode_active.active {
+        return;
+    }
     // Spawn placement tool armed: clicks place objects, don't possess.
-    if spawn_tool_active.0 { return; }
+    if spawn_tool_active.0 {
+        return;
+    }
     // Terrain brush armed: clicks sculpt the terrain, don't possess.
-    if terrain_tool_active.0 { return; }
+    if terrain_tool_active.0 {
+        return;
+    }
     // Waypoint Move/Insert armed: that click places the waypoint, don't possess.
-    if waypoint_tool_active.0 { return; }
+    if waypoint_tool_active.0 {
+        return;
+    }
 
     // This observer handles the plain click now (it passed every guard above), so
     // stop the auto-propagation to ancestor entities — otherwise a global
@@ -2606,8 +2837,17 @@ pub fn avatar_raycast_possession(
     // `hit.position.is_none()` chrome check). Returns `None` on an egui-chrome
     // click; the ray drives the analytic hit-sphere tests (celestial bodies /
     // spacecraft, which have no pickable mesh) alongside the mesh pick.
-    let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else { return; };
-    let Some(ray) = lunco_core::scene_click_ray(&egui_focus, camera, cam_gtf, click.pointer_location.position) else { return; };
+    let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else {
+        return;
+    };
+    let Some(ray) = lunco_core::scene_click_ray(
+        &egui_focus,
+        camera,
+        cam_gtf,
+        click.pointer_location.position,
+    ) else {
+        return;
+    };
 
     // The mesh the pick resolved to (rover, prop, ground, …); resolve to its
     // clickable root. `hit.depth` is the along-ray distance to compare against
@@ -2621,9 +2861,14 @@ pub fn avatar_raycast_possession(
     // passed `t < min_t` and the click "leaked" through the ground into a
     // `FocusTarget` on the planet.
     let mut nearest_clickable: Option<Entity> = None;
-    let mut min_t = if click.hit.position.is_some() { click.hit.depth } else { f32::INFINITY };
+    let mut min_t = if click.hit.position.is_some() {
+        click.hit.depth
+    } else {
+        f32::INFINITY
+    };
 
-    if let Some(root) = find_clickable_from_hit(click.entity, &q_parents, &q_selectable, &q_ground) {
+    if let Some(root) = find_clickable_from_hit(click.entity, &q_parents, &q_selectable, &q_ground)
+    {
         nearest_clickable = Some(root);
     }
 
@@ -2663,14 +2908,28 @@ pub fn avatar_raycast_possession(
     }
 
     if let Some(target) = body_hit {
-        commands.trigger(FocusTarget { avatar: Some(avatar_entity), target });
+        commands.trigger(FocusTarget {
+            avatar: Some(avatar_entity),
+            target,
+        });
     } else if let Some(target) = spacecraft_hit {
-        commands.trigger(PossessVessel { avatar: Some(avatar_entity), target, bind_camera: true });
+        commands.trigger(PossessVessel {
+            avatar: Some(avatar_entity),
+            target,
+            bind_camera: true,
+        });
     } else if let Some(target) = nearest_clickable {
         if q_vessel.get(target).is_ok() {
-            commands.trigger(PossessVessel { avatar: Some(avatar_entity), target, bind_camera: true });
+            commands.trigger(PossessVessel {
+                avatar: Some(avatar_entity),
+                target,
+                bind_camera: true,
+            });
         } else {
-            commands.trigger(FollowTarget { avatar: Some(avatar_entity), target });
+            commands.trigger(FollowTarget {
+                avatar: Some(avatar_entity),
+                target,
+            });
         }
     }
 }
@@ -2685,7 +2944,17 @@ pub fn avatar_raycast_possession(
 /// a `Backspace` typed into a focused egui field edits text instead (the two-step
 /// Esc/defocus pattern).
 fn avatar_escape_possession(
-    q_avatar: Query<(Entity, &IntentState), (With<Avatar>, Or<(With<ControllerLink>, With<SpringArmCamera>, With<OrbitCamera>)>)>,
+    q_avatar: Query<
+        (Entity, &IntentState),
+        (
+            With<Avatar>,
+            Or<(
+                With<ControllerLink>,
+                With<SpringArmCamera>,
+                With<OrbitCamera>,
+            )>,
+        ),
+    >,
     cursor_mode: lunco_core::CursorModeActive,
     mut commands: Commands,
 ) {
@@ -2715,7 +2984,14 @@ fn avatar_escape_possession(
 fn on_release_command(
     trigger: On<ReleaseVessel>,
     mut commands: Commands,
-    q_avatar: Query<(&Transform, Option<&ControllerLink>, Option<&SurfaceRelativeMode>), With<Avatar>>,
+    q_avatar: Query<
+        (
+            &Transform,
+            Option<&ControllerLink>,
+            Option<&SurfaceRelativeMode>,
+        ),
+        With<Avatar>,
+    >,
     guard: Res<lunco_core::SyncApplyGuard>,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
@@ -2750,11 +3026,14 @@ fn on_release_command(
     }
     let cmd = trigger.event();
     let avatar_ent = cmd.target;
-    let (yaw, pitch, opt_link, is_surface) = if let Ok((tf, link, surface)) = q_avatar.get(avatar_ent) {
-        let rot = restored_from_orbit.map(|(_, r)| r).unwrap_or(tf.rotation);
-        let (y, p, _) = rot.to_euler(EulerRot::YXZ);
-        (y, p, link, surface.is_some())
-    } else { (0.0, 0.0, None, false) };
+    let (yaw, pitch, opt_link, is_surface) =
+        if let Ok((tf, link, surface)) = q_avatar.get(avatar_ent) {
+            let rot = restored_from_orbit.map(|(_, r)| r).unwrap_or(tf.rotation);
+            let (y, p, _) = rot.to_euler(EulerRot::YXZ);
+            (y, p, link, surface.is_some())
+        } else {
+            (0.0, 0.0, None, false)
+        };
 
     // Hard stop the rover upon disengaging control: zero throttle/steer, full brake.
     if let Some(link) = opt_link {
@@ -2772,7 +3051,8 @@ fn on_release_command(
 
     // Dropping the `ControllerLink` stops `drive_from_bindings` (the vessel keeps
     // its own `ControlBinding` for the next possession).
-    commands.entity(avatar_ent)
+    commands
+        .entity(avatar_ent)
         .remove::<ControllerLink>()
         .remove::<SpringArmCamera>()
         .remove::<OrbitCamera>()
@@ -2806,14 +3086,22 @@ fn on_release_command(
         // resume doesn't visibly rotate the view.
         let up = (anchor_world - center).normalize_or_zero().as_vec3();
         let fwd = rot * Vec3::NEG_Z;
-        let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 { Vec3::Y } else { Vec3::Z };
+        let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 {
+            Vec3::Y
+        } else {
+            Vec3::Z
+        };
         let east = up.cross(ref_dir).normalize();
         let north = east.cross(up).normalize();
         let heading = fwd.dot(east).atan2(fwd.dot(north));
         let s_pitch = fwd.dot(up).clamp(-1.0, 1.0).asin();
-        commands
-            .entity(avatar_ent)
-            .try_insert((SurfaceCamera { heading, pitch: s_pitch }, SurfaceRelativeMode));
+        commands.entity(avatar_ent).try_insert((
+            SurfaceCamera {
+                heading,
+                pitch: s_pitch,
+            },
+            SurfaceRelativeMode,
+        ));
     } else {
         commands.entity(avatar_ent).try_insert(FreeFlightCamera {
             yaw,
@@ -2834,7 +3122,10 @@ fn on_release_command(
     if let Some(vp) = viewport.as_mut() {
         vp.active_camera = None;
     }
-    info!("Released possession → camera at current position (surface={})", is_surface);
+    info!(
+        "Released possession → camera at current position (surface={})",
+        is_surface
+    );
 }
 
 /// No-op placeholder.
@@ -2874,7 +3165,16 @@ fn get_grid_for_entity(
 fn on_possess_command(
     trigger: On<PossessVessel>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&ControllerLink>), With<Avatar>>,
+    q_avatar: Query<
+        (
+            Entity,
+            &Transform,
+            &CellCoord,
+            &ChildOf,
+            Option<&ControllerLink>,
+        ),
+        With<Avatar>,
+    >,
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -2925,14 +3225,19 @@ fn on_possess_command(
     // names a live one, else any local avatar. With no avatar at all (headless /
     // direct control) there is nothing to bind — the authority claim already
     // ran in `record_possession_authority`, so just skip the camera work.
-    let resolved = cmd.avatar
+    let resolved = cmd
+        .avatar
         .and_then(|a| q_avatar.get(a).ok())
         .or_else(|| q_avatar.iter().next());
-    let Some((avatar_ent, cam_tf, cam_cell, _child_of, existing_link)) = resolved else { return; };
+    let Some((avatar_ent, cam_tf, cam_cell, _child_of, existing_link)) = resolved else {
+        return;
+    };
 
     // Idempotent: already controlling this exact target — no-op.
     if let Some(link) = existing_link {
-        if link.vessel_entity == cmd.target { return; }
+        if link.vessel_entity == cmd.target {
+            return;
+        }
     }
 
     // Camera-less possession. The authority claim — what actually flips the
@@ -2945,22 +3250,32 @@ fn on_possess_command(
     // (`draw_rover_hud` shows exactly when the avatar carries one) — so it is
     // still bound before bailing.
     if !cmd.bind_camera {
-        commands
-            .entity(avatar_ent)
-            .try_insert(ControllerLink { vessel_entity: cmd.target });
+        commands.entity(avatar_ent).try_insert(ControllerLink {
+            vessel_entity: cmd.target,
+        });
         return;
     }
 
     // Compute camera absolute position in root frame.
     let cam_abs = lunco_core::coords::world_position_seeded(
-        avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
+        avatar_ent,
+        cam_cell,
+        cam_tf,
+        &q_parents,
+        &q_grids,
+        &q_spatial_abs,
     );
 
     // Compute target absolute position.
     let target_abs = if let Ok((t_cell, t_tf)) = q_spatial_abs.get(cmd.target) {
         let cell = t_cell.copied().unwrap_or_default();
         lunco_core::coords::world_position_seeded(
-            cmd.target, &cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+            cmd.target,
+            &cell,
+            t_tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial_abs,
         )
     } else {
         cam_abs // Fallback
@@ -3000,8 +3315,14 @@ fn on_possess_command(
 
     // Migrate to target grid immediately
     migrate_avatar_to_target_grid(
-        &mut commands, avatar_ent, target_grid, final_abs_pos, final_rot,
-        &q_grids, &q_parents, &q_spatial_abs,
+        &mut commands,
+        avatar_ent,
+        target_grid,
+        final_abs_pos,
+        final_rot,
+        &q_grids,
+        &q_parents,
+        &q_spatial_abs,
     );
 
     // The controller link goes on the **avatar** (it carries the shared
@@ -3012,9 +3333,9 @@ fn on_possess_command(
     // drivable iff its USD carries that scope. `drive_from_bindings` reads the
     // binding off the vessel and skips any vessel that has none, so possession is a
     // pure camera+link bind here.
-    commands
-        .entity(avatar_ent)
-        .try_insert(ControllerLink { vessel_entity: cmd.target });
+    commands.entity(avatar_ent).try_insert(ControllerLink {
+        vessel_entity: cmd.target,
+    });
 
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
     let is_surface_vehicle = q_vessel_gravity.get(cmd.target).is_ok();
@@ -3037,28 +3358,30 @@ fn on_possess_command(
         // Heading-follow: yaw only, surface-normal up. Ground vehicles. Only
         // steerable vessels have a meaningful heading; a ball/prop tumbles, so
         // track user yaw only there.
-        CF::Heading => (FollowAttitude::Heading, q_vessel.contains(cmd.target), Some(0.05)),
+        CF::Heading => (
+            FollowAttitude::Heading,
+            q_vessel.contains(cmd.target),
+            Some(0.05),
+        ),
     };
     let mut cmd_ent = commands.entity(avatar_ent);
-    cmd_ent
-        .remove::<OrbitCamera>()
-        .try_insert((
-            SpringArmCamera {
-                target: cmd.target,
-                distance: end_distance,
-                yaw: init_yaw,
-                pitch: init_pitch,
-                damping,
-                vertical_offset: end_vert_off,
-                track_heading,
-                attitude,
-            },
-            // The follow camera runs in `FixedPostUpdate`; ease its Transform between
-            // fixed samples so it renders in lockstep with the followed body (same
-            // avian mechanism the body uses) instead of staircasing at 60 Hz.
-            avian3d::prelude::TranslationInterpolation,
-            avian3d::prelude::RotationInterpolation,
-        ));
+    cmd_ent.remove::<OrbitCamera>().try_insert((
+        SpringArmCamera {
+            target: cmd.target,
+            distance: end_distance,
+            yaw: init_yaw,
+            pitch: init_pitch,
+            damping,
+            vertical_offset: end_vert_off,
+            track_heading,
+            attitude,
+        },
+        // The follow camera runs in `FixedPostUpdate`; ease its Transform between
+        // fixed samples so it renders in lockstep with the followed body (same
+        // avian mechanism the body uses) instead of staircasing at 60 Hz.
+        avian3d::prelude::TranslationInterpolation,
+        avian3d::prelude::RotationInterpolation,
+    ));
     // Surface-relative up only makes sense for Heading-follow ground vehicles;
     // the flyer frames (Orbit/Chase) keep world/body up. Strip it otherwise so a
     // prior possession's surface mode doesn't leak in.
@@ -3071,7 +3394,8 @@ fn on_possess_command(
         cmd_ent.remove::<SurfaceRelativeMode>();
     }
 
-    commands.entity(avatar_ent)
+    commands
+        .entity(avatar_ent)
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
         .remove::<FrameBlend>();
@@ -3088,7 +3412,16 @@ fn on_possess_command(
 fn on_follow_command(
     trigger: On<FollowTarget>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&SpringArmCamera>), With<Avatar>>,
+    q_avatar: Query<
+        (
+            Entity,
+            &Transform,
+            &CellCoord,
+            &ChildOf,
+            Option<&SpringArmCamera>,
+        ),
+        With<Avatar>,
+    >,
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -3097,26 +3430,41 @@ fn on_follow_command(
     q_vessel_gravity: Query<&GravityBody>,
 ) {
     let cmd = trigger.event();
-    let resolved = cmd.avatar
+    let resolved = cmd
+        .avatar
         .and_then(|a| q_avatar.get(a).ok())
         .or_else(|| q_avatar.iter().next());
-    let Some((avatar_ent, cam_tf, cam_cell, _child_of, existing_spring)) = resolved else { return; };
+    let Some((avatar_ent, cam_tf, cam_cell, _child_of, existing_spring)) = resolved else {
+        return;
+    };
 
     // Idempotent: already following this target — no-op.
     if let Some(arm) = existing_spring {
-        if arm.target == cmd.target { return; }
+        if arm.target == cmd.target {
+            return;
+        }
     }
 
     // Target absolute position in root frame.
     let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(cmd.target) {
         let cell = t_cell.copied().unwrap_or_default();
         lunco_core::coords::world_position_seeded(
-            cmd.target, &cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+            cmd.target,
+            &cell,
+            t_tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial_abs,
         )
     } else {
         // Fallback: keep camera where it is.
         lunco_core::coords::world_position_seeded(
-            avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
+            avatar_ent,
+            cam_cell,
+            cam_tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial_abs,
         )
     };
 
@@ -3131,8 +3479,14 @@ fn on_follow_command(
     let final_abs_pos = target_abs + final_offset + Vec3::Y.as_dvec3() * end_vert_off as f64;
 
     migrate_avatar_to_target_grid(
-        &mut commands, avatar_ent, target_grid, final_abs_pos, final_rot,
-        &q_grids, &q_parents, &q_spatial_abs,
+        &mut commands,
+        avatar_ent,
+        target_grid,
+        final_abs_pos,
+        final_rot,
+        &q_grids,
+        &q_parents,
+        &q_spatial_abs,
     );
 
     // Drop the controller link — follow ≠ possess (the vessel keeps its own
@@ -3195,11 +3549,18 @@ fn on_focus_command(
     // doesn't name one (API/rhai path) — scenes can contain Avatar-tagged
     // prims (spawn points, `is_active: false` spawn cameras) that must not
     // steal the focus.
-    let resolved = cmd.avatar
+    let resolved = cmd
+        .avatar
         .and_then(|a| q_avatar.get(a).ok())
-        .or_else(|| q_avatar.iter().find(|(_, _, cam, _)| cam.is_some_and(|c| c.is_active)))
+        .or_else(|| {
+            q_avatar
+                .iter()
+                .find(|(_, _, cam, _)| cam.is_some_and(|c| c.is_active))
+        })
         .or_else(|| q_avatar.iter().next());
-    let Some((avatar_ent, cam_tf, _, current_orbit)) = resolved else { return; };
+    let Some((avatar_ent, cam_tf, _, current_orbit)) = resolved else {
+        return;
+    };
 
     // Compute distance based on target type.
     let mut distance = 20.0;
@@ -3270,7 +3631,17 @@ fn on_focus_command(
 /// (terrain/sky visuals raced and lost) and multiplied run time.
 fn avatar_init_system(
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform), (With<Avatar>, Without<SpringArmCamera>, Without<OrbitCamera>, Without<FreeFlightCamera>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
+    q_avatar: Query<
+        (Entity, &Transform),
+        (
+            With<Avatar>,
+            Without<SpringArmCamera>,
+            Without<OrbitCamera>,
+            Without<FreeFlightCamera>,
+            Without<FrameBlend>,
+            Without<lunco_core::CinematicCameraLock>,
+        ),
+    >,
     q_proj: Query<Entity, (With<Avatar>, Without<AdaptiveNearPlane>, With<Projection>)>,
 ) {
     for (entity, tf) in q_avatar.iter() {
@@ -3289,7 +3660,10 @@ fn avatar_init_system(
 // ─── Clip Planes ─────────────────────────────────────────────────────────────
 
 fn update_avatar_clip_planes_system(
-    mut q_camera: Query<(&mut Projection, &GlobalTransform), (With<Camera>, With<AdaptiveNearPlane>)>,
+    mut q_camera: Query<
+        (&mut Projection, &GlobalTransform),
+        (With<Camera>, With<AdaptiveNearPlane>),
+    >,
     q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
 ) {
     for (mut projection, cam_gt) in q_camera.iter_mut() {
@@ -3329,8 +3703,12 @@ fn update_avatar_clip_planes_system(
                 let center_d = cam_pos.distance(b_gt.translation().as_dvec3());
                 let near_edge = center_d - body.radius_m;
                 let far_edge = center_d + body.radius_m;
-                if near_edge < min_dist { min_dist = near_edge; }
-                if far_edge > max_far { max_far = far_edge; }
+                if near_edge < min_dist {
+                    min_dist = near_edge;
+                }
+                if far_edge > max_far {
+                    max_far = far_edge;
+                }
             }
             let (near, far) = if max_far <= 0.0 {
                 // No `CelestialBody` contributed (flat sandbox scene, or the
@@ -3423,7 +3801,10 @@ fn on_surface_teleport_command(
         debug!("TELEPORT: found body {:?} radius={:.0}m", e, b.radius_m);
         (e, b.radius_m)
     } else {
-        warn!("TELEPORT: body entity {:?} not found in q_bodies", body_entity);
+        warn!(
+            "TELEPORT: body entity {:?} not found in q_bodies",
+            body_entity
+        );
         return;
     };
 
@@ -3435,10 +3816,13 @@ fn on_surface_teleport_command(
     debug!("TELEPORT: triggered for avatar {:?}", avatar_ent);
 
     // Get camera cell for position lookup
-    let Some((_, cam_tf, _cam_cell, _cam_child_of)) = q_avatar.iter().next() else { return };
+    let Some((_, cam_tf, _cam_cell, _cam_child_of)) = q_avatar.iter().next() else {
+        return;
+    };
 
     // Find the Body's Grid (the inertial anchor that the Body is a child of).
-    let body_grid = q_parents.get(body_entity)
+    let body_grid = q_parents
+        .get(body_entity)
         .ok()
         .map(|c| c.0)
         .filter(|e| q_grids.contains(*e));
@@ -3474,18 +3858,22 @@ fn on_surface_teleport_command(
         // Since the camera is on the Grid (identity rotation), world-space = local-space.
         let up_n = surface_normal.normalize();
         let up_v = up_n.as_vec3();
-        let ref_north = if up_n.abs().dot(DVec3::Y) < 0.9 { DVec3::Y } else { DVec3::Z };
+        let ref_north = if up_n.abs().dot(DVec3::Y) < 0.9 {
+            DVec3::Y
+        } else {
+            DVec3::Z
+        };
         let right_v = up_n.cross(ref_north).normalize().as_vec3();
         let fwd_v = up_v.cross(right_v);
         let surface_rot = Quat::from_mat3(&Mat3::from_cols(right_v, up_v, -fwd_v));
 
         // Parent camera to the Body's Grid (inertial), NOT the Body.
         // FloatingOrigin must be on a Grid.
-        let local_tf =
-            Transform::from_translation(new_tf_translation).with_rotation(surface_rot);
+        let local_tf = Transform::from_translation(new_tf_translation).with_rotation(surface_rot);
         migrate_to_grid(&mut commands, avatar_ent, grid_entity, new_cell, local_tf);
 
-        commands.entity(avatar_ent)
+        commands
+            .entity(avatar_ent)
             .try_insert(GravityBody { body_entity })
             .try_insert(SurfaceRelativeMode)
             .try_insert(SurfaceCamera {
@@ -3503,7 +3891,10 @@ fn on_surface_teleport_command(
         field.surface_g = surface_g;
         field.up = surface_normal;
 
-        debug!("TELEPORT: done — camera now on grid {:?} at alt ~50m", grid_entity);
+        debug!(
+            "TELEPORT: done — camera now on grid {:?} at alt ~50m",
+            grid_entity
+        );
     } else {
         warn!("TELEPORT: grid entity {:?} not found", grid_entity);
     }
@@ -3526,19 +3917,27 @@ fn on_leave_surface_command(
     let cmd = trigger.event();
     let avatar_ent = cmd.target;
 
-    let Some((_, cam_tf, gravity_body)) = q_avatar.iter().next() else { return };
+    let Some((_, cam_tf, gravity_body)) = q_avatar.iter().next() else {
+        return;
+    };
 
     // Find the body we're leaving
-    let body_entity = gravity_body.map(|gb| gb.body_entity)
+    let body_entity = gravity_body
+        .map(|gb| gb.body_entity)
         .unwrap_or(Entity::PLACEHOLDER);
 
-    let body_radius = q_bodies.get(body_entity)
+    let body_radius = q_bodies
+        .get(body_entity)
         .map(|(_, b)| b.radius_m)
         .unwrap_or(EARTH_RADIUS_M_FALLBACK);
 
     // Find EMB Grid (the star-fixed orbit frame)
-    let Some(emb_grid) = q_emb.iter().next() else { return; };
-    let Ok(emb_grid_ref) = q_grids.get(emb_grid) else { return; };
+    let Some(emb_grid) = q_emb.iter().next() else {
+        return;
+    };
+    let Ok(emb_grid_ref) = q_grids.get(emb_grid) else {
+        return;
+    };
 
     // Teleport to 3x body radius altitude, relative to EMB Grid.
     let altitude = body_radius * 3.0;
@@ -3548,7 +3947,8 @@ fn on_leave_surface_command(
     let local_tf = Transform::from_translation(new_tf).with_rotation(cam_tf.rotation);
     migrate_to_grid(&mut commands, avatar_ent, emb_grid, new_cell, local_tf);
 
-    commands.entity(avatar_ent)
+    commands
+        .entity(avatar_ent)
         .try_insert(OrbitCamera {
             target: body_entity,
             distance: altitude,
@@ -3585,11 +3985,17 @@ fn on_leave_surface_command(
 /// avatar's `GravityBody` binding. Runs in `Update` so camera systems
 /// see the mode change immediately.
 fn surface_mode_transition_system(
-    q_avatar: Query<(
-        Entity, &GlobalTransform,
-        Option<&GravityBody>, Option<&SurfaceRelativeMode>,
-        Option<&FreeFlightCamera>, Option<&SurfaceCamera>,
-    ), (With<Avatar>, Without<OrbitCamera>)>,
+    q_avatar: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            Option<&GravityBody>,
+            Option<&SurfaceRelativeMode>,
+            Option<&FreeFlightCamera>,
+            Option<&SurfaceCamera>,
+        ),
+        (With<Avatar>, Without<OrbitCamera>),
+    >,
     q_globals: Query<&GlobalTransform>,
     q_bodies: Query<&CelestialBody>,
     thresholds: Res<SurfaceModeThreshold>,
@@ -3607,7 +4013,11 @@ fn surface_mode_transition_system(
     // flew the view away ("right click moved somewhere else"), while the two
     // writers alternating produced the residual per-frame wobble. An orbital
     // view owns the camera; leave it alone.
-    let Some((avatar_ent, cam_gt, maybe_gb, maybe_mode, maybe_ff, maybe_sc)) = q_avatar.iter().next() else { return };
+    let Some((avatar_ent, cam_gt, maybe_gb, maybe_mode, maybe_ff, maybe_sc)) =
+        q_avatar.iter().next()
+    else {
+        return;
+    };
 
     // Altitude from a same-instant GlobalTransform DELTA: its LENGTH is
     // convention-independent (whatever origin/phase big_space is in cancels
@@ -3650,7 +4060,8 @@ fn surface_mode_transition_system(
         if let Some(sc) = maybe_sc {
             // Note: heading→yaw is approximate (different reference frames)
             // but provides a reasonable starting orientation.
-            commands.entity(avatar_ent)
+            commands
+                .entity(avatar_ent)
                 .remove::<SurfaceCamera>()
                 .try_insert(FreeFlightCamera {
                     yaw: sc.heading,
@@ -3665,7 +4076,8 @@ fn surface_mode_transition_system(
             commands.entity(avatar_ent).try_insert(SurfaceRelativeMode);
             // Swap FreeFlightCamera → SurfaceCamera.
             if let Some(ff) = maybe_ff {
-                commands.entity(avatar_ent)
+                commands
+                    .entity(avatar_ent)
                     .remove::<FreeFlightCamera>()
                     .try_insert(SurfaceCamera {
                         heading: ff.yaw,
@@ -3677,8 +4089,8 @@ fn surface_mode_transition_system(
 }
 
 /// Resolves a focus target (which might be a Grid/Frame) to its primary physical Body.
-/// 
-/// If the entity itself has a `CelestialBody`, it is returned. 
+///
+/// If the entity itself has a `CelestialBody`, it is returned.
 /// Otherwise, its immediate children are searched for a `CelestialBody`.
 fn get_physical_body(
     target: Entity,
@@ -3686,8 +4098,10 @@ fn get_physical_body(
     bodies: &Query<&CelestialBody>,
 ) -> Entity {
     // If the target itself is the body, we are done.
-    if bodies.contains(target) { return target; }
-    
+    if bodies.contains(target) {
+        return target;
+    }
+
     // Search children (one level deep is enough for our current Grid -> Body setup).
     if let Ok(children) = q_children.get(target) {
         for child in children.iter() {
@@ -3696,7 +4110,7 @@ fn get_physical_body(
             }
         }
     }
-    
+
     target // Fallback
 }
 
@@ -3771,8 +4185,14 @@ fn on_update_profile(
     mut profiles: ResMut<SessionProfiles>,
 ) {
     let origin = guard.0.unwrap_or(local.0);
-    profiles.profiles.insert(origin.0, trigger.event().name.clone());
-    info!("[net] session {} set name to '{}'", origin.0, trigger.event().name);
+    profiles
+        .profiles
+        .insert(origin.0, trigger.event().name.clone());
+    info!(
+        "[net] session {} set name to '{}'",
+        origin.0,
+        trigger.event().name
+    );
 }
 
 /// One active on-screen toast (see [`ScreenNotifications`]).
@@ -3801,9 +4221,18 @@ pub struct ScreenNotifications {
 #[on_command(ShowNotification)]
 pub fn on_show_notification(trigger: On<ShowNotification>, mut notes: ResMut<ScreenNotifications>) {
     let secs = if cmd.secs > 0.0 { cmd.secs } else { 4.5 };
-    let kind = if cmd.kind.is_empty() { "info" } else { cmd.kind.as_str() }.to_string();
+    let kind = if cmd.kind.is_empty() {
+        "info"
+    } else {
+        cmd.kind.as_str()
+    }
+    .to_string();
     info!("[notify:{kind}] {}", cmd.text);
-    notes.toasts.push(Toast { text: cmd.text.clone(), kind, remaining: secs });
+    notes.toasts.push(Toast {
+        text: cmd.text.clone(),
+        kind,
+        remaining: secs,
+    });
     // Cap the backlog so a chatty script can't grow it unbounded.
     let overflow = notes.toasts.len().saturating_sub(6);
     if overflow > 0 {
@@ -3823,7 +4252,6 @@ fn tick_notifications(mut notes: ResMut<ScreenNotifications>, time: Res<Time<Rea
     notes.toasts.retain(|t| t.remaining > 0.0);
 }
 
-
 fn sync_profile(
     role: Res<NetworkRole>,
     local: Res<LocalSession>,
@@ -3832,21 +4260,22 @@ fn sync_profile(
     mut last_name: Local<Option<String>>,
     mut commands: Commands,
 ) {
-    let session = local.0.0;
+    let session = local.0 .0;
     if *role == NetworkRole::Client && session == 0 {
         *last_sent = None;
         return;
     }
     let current_name = settings.username.clone();
-    let should_send = last_sent.is_none_or(|s| s != session) 
+    let should_send = last_sent.is_none_or(|s| s != session)
         || last_name.as_ref().is_none_or(|n| *n != current_name);
     if should_send {
-        commands.trigger(UpdateProfile { name: current_name.clone() });
+        commands.trigger(UpdateProfile {
+            name: current_name.clone(),
+        });
         *last_sent = Some(session);
         *last_name = Some(current_name);
     }
 }
-
 
 // ── Command Registration ────────────────────────────────────────────────────────
 
@@ -3871,7 +4300,10 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
         let ents: Vec<Entity> = q.iter(world).collect();
         info!("[inspect] {} commandable vessel(s)", ents.len());
         for e in ents {
-            let name = world.get::<Name>(e).map(|n| n.as_str().to_string()).unwrap_or_default();
+            let name = world
+                .get::<Name>(e)
+                .map(|n| n.as_str().to_string())
+                .unwrap_or_default();
             let gid = world.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get());
             let has_cmd = world.get::<lunco_core::CommandInputs>(e).is_some();
             let has_sim = world.get::<lunco_cosim::SimComponent>(e).is_some();
@@ -3881,7 +4313,9 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
                 (b.binds.len(), ports.join(","))
             });
             let owner = gid.and_then(|g| {
-                world.get_resource::<lunco_core::SessionRegistry>().and_then(|r| r.owner_of(g))
+                world
+                    .get_resource::<lunco_core::SessionRegistry>()
+                    .and_then(|r| r.owner_of(g))
             });
             info!(
                 "[inspect] {e:?} name={name:?} gid={gid:?} cmd_surface={has_cmd} sim={has_sim} \

@@ -63,7 +63,9 @@ fn run(threads: usize) -> Vec<DVec3> {
     .insert_resource(Gravity(DVec3::new(0.0, -9.81, 0.0)))
     .insert_resource(SubstepCount(12))
     .insert_resource(Time::<Fixed>::from_hz(60.0))
-    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+        1.0 / 60.0,
+    )))
     .add_systems(Startup, setup);
     app.finish();
     app.cleanup();
@@ -124,8 +126,16 @@ fn main() {
         let d = total_diff(&r1, &r2);
         // Sanity: the pile must actually MOVE (fall + settle), else 0.0 is trivial.
         let motion: f64 = r1.iter().map(|p| p.length()).sum();
-        let tag = if threads == 1 { "SINGLE-thread" } else { "MULTI-thread " };
-        let verdict = if d < 1e-9 { "DETERMINISTIC" } else { "NON-deterministic" };
+        let tag = if threads == 1 {
+            "SINGLE-thread"
+        } else {
+            "MULTI-thread "
+        };
+        let verdict = if d < 1e-9 {
+            "DETERMINISTIC"
+        } else {
+            "NON-deterministic"
+        };
         println!(
             "{tag} (compute={threads:>2}): run-to-run pos diff = {d:.3e} m  => {verdict}  \
              (settled-pile motion metric = {motion:.2})"

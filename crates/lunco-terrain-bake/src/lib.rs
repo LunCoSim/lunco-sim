@@ -132,14 +132,25 @@ pub fn finish_bake(raw: &HeightGrid, site: &str, job: &DemBakeJob, stage: BakeSt
     // with `detail_upsample` that is ~19 MB per bake.
     let base_grid = match stage {
         BakeStage::Full => tile.clone(),
-        BakeStage::Coarse => HeightGrid { res: 0, half_extent: tile.half_extent, heights: Vec::new() },
+        BakeStage::Coarse => HeightGrid {
+            res: 0,
+            half_extent: tile.half_extent,
+            heights: Vec::new(),
+        },
     };
     // Apply the geometry STAMP layers (craters, …) into the working grid so both
     // the streamed tiles and the heightfield collider carry the same features.
     for stamp in &job.stamps {
         stamp.apply(&mut tile);
     }
-    BakedGrid { grid: tile, base_grid, site: site.to_string(), native_res, res, stage }
+    BakedGrid {
+        grid: tile,
+        base_grid,
+        site: site.to_string(),
+        native_res,
+        res,
+        stage,
+    }
 }
 
 /// Full single-pass bake (native path): decode + the Full stage in one call.
@@ -189,7 +200,9 @@ pub fn grid_cache_key(meta_yaml: &[u8], tif: &[u8], job: &DemBakeJob) -> u64 {
     h.write_bytes(tif);
     // Serialization of this plain struct can't fail; fold empty on the
     // impossible error rather than panicking a cache path.
-    h.write_bytes(&bincode::serde::encode_to_vec(job, bincode::config::standard()).unwrap_or_default());
+    h.write_bytes(
+        &bincode::serde::encode_to_vec(job, bincode::config::standard()).unwrap_or_default(),
+    );
     h.finish()
 }
 
@@ -223,7 +236,14 @@ pub fn decode_grid_blob(bytes: &[u8]) -> Option<(HeightGrid, usize)> {
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes(c.try_into().expect("chunks_exact(4)")) as f64)
         .collect();
-    Some((HeightGrid { res, half_extent, heights }, native_res))
+    Some((
+        HeightGrid {
+            res,
+            half_extent,
+            heights,
+        },
+        native_res,
+    ))
 }
 
 #[cfg(test)]
@@ -274,8 +294,11 @@ mod tests {
 
     #[test]
     fn grid_blob_rejects_truncation() {
-        let grid =
-            HeightGrid { res: 2, half_extent: 10.0, heights: vec![1.0, 2.0, 3.0, 4.0] };
+        let grid = HeightGrid {
+            res: 2,
+            half_extent: 10.0,
+            heights: vec![1.0, 2.0, 3.0, 4.0],
+        };
         let blob = encode_grid_blob(&grid, 2);
         assert!(decode_grid_blob(&blob[..blob.len() - 1]).is_none());
         assert!(decode_grid_blob(&blob[..8]).is_none());

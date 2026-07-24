@@ -42,7 +42,11 @@ pub struct Geodetic {
 
 impl Geodetic {
     pub fn new(lat_deg: f64, lon_deg: f64, height_m: f64) -> Self {
-        Self { lat_deg, lon_deg, height_m }
+        Self {
+            lat_deg,
+            lon_deg,
+            height_m,
+        }
     }
 }
 
@@ -145,7 +149,12 @@ impl LocalTangentFrame {
         // Re-orthogonalize east (up is not exactly perpendicular to the
         // equatorial east direction off the equator).
         let east = north.cross(up).normalize_or_zero();
-        Self { origin, east, north, up }
+        Self {
+            origin,
+            east,
+            north,
+            up,
+        }
     }
 
     /// Rotate + translate the frame into another frame.
@@ -233,7 +242,11 @@ pub fn geodetic_to_local(anchor: &Geodetic, radius_m: f64, geo: &Geodetic) -> DV
     let d_lon = wrap_lon_deg(geo.lon_deg - anchor.lon_deg).to_radians();
     let cos_lat = geo.lat_deg.to_radians().cos();
 
-    DVec3::new(d_lon * r * cos_lat, geo.height_m - anchor.height_m, -(d_lat * r))
+    DVec3::new(
+        d_lon * r * cos_lat,
+        geo.height_m - anchor.height_m,
+        -(d_lat * r),
+    )
 }
 
 /// Normalize a longitude to (−180, 180].
@@ -381,10 +394,22 @@ mod tests {
 
     #[test]
     fn obb_hit_and_miss() {
-        assert!(unit_box(DVec3::new(-5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 0.0)), "straight through");
-        assert!(!unit_box(DVec3::new(-5.0, 9.0, 0.0), DVec3::new(5.0, 9.0, 0.0)), "passes well above");
-        assert!(unit_box(DVec3::ZERO, DVec3::new(5.0, 0.0, 0.0)), "starts inside");
-        assert!(unit_box(DVec3::splat(-0.1), DVec3::splat(0.1)), "entirely inside");
+        assert!(
+            unit_box(DVec3::new(-5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 0.0)),
+            "straight through"
+        );
+        assert!(
+            !unit_box(DVec3::new(-5.0, 9.0, 0.0), DVec3::new(5.0, 9.0, 0.0)),
+            "passes well above"
+        );
+        assert!(
+            unit_box(DVec3::ZERO, DVec3::new(5.0, 0.0, 0.0)),
+            "starts inside"
+        );
+        assert!(
+            unit_box(DVec3::splat(-0.1), DVec3::splat(0.1)),
+            "entirely inside"
+        );
     }
 
     /// The segment is FINITE: geometry behind an endpoint does not occlude. A ray
@@ -397,7 +422,10 @@ mod tests {
             "a box behind both endpoints must not occlude"
         );
         // …and the same segment reversed.
-        assert!(!unit_box(DVec3::new(10.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 0.0)));
+        assert!(!unit_box(
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(5.0, 0.0, 0.0)
+        ));
     }
 
     /// Rotation is applied — the box is oriented, not an AABB. A long thin slab
@@ -409,7 +437,13 @@ mod tests {
 
         // Unrotated: the slab spans z ∈ [-4, 4] and x ∈ [-0.25, 0.25] → the
         // segment starts at x = 0 (inside the slab) → hit.
-        assert!(segment_hits_obb(seg.0, seg.1, DVec3::ZERO, DQuat::IDENTITY, he));
+        assert!(segment_hits_obb(
+            seg.0,
+            seg.1,
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            he
+        ));
 
         // Yawed 90°: X and Z extents swap, so the slab now spans x ∈ [-4, 4],
         // z ∈ [-0.25, 0.25] — and z = 3 is well outside → miss.
@@ -423,7 +457,13 @@ mod tests {
     #[test]
     fn obb_degenerate_box_occludes_nothing() {
         let seg = (DVec3::new(-5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 0.0));
-        assert!(!segment_hits_obb(seg.0, seg.1, DVec3::ZERO, DQuat::IDENTITY, DVec3::ZERO));
+        assert!(!segment_hits_obb(
+            seg.0,
+            seg.1,
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            DVec3::ZERO
+        ));
         assert!(!segment_hits_obb(
             seg.0,
             seg.1,
@@ -440,13 +480,22 @@ mod tests {
         let center = DVec3::new(1_737_400.0, 250.0, -900.0); // lunar-scale coordinate
         let he = DVec3::new(4.0, 2.0, 0.5);
         let rot = DQuat::from_rotation_y(0.3);
-        let through = (center + DVec3::new(0.0, 0.0, -20.0), center + DVec3::new(0.0, 0.0, 20.0));
+        let through = (
+            center + DVec3::new(0.0, 0.0, -20.0),
+            center + DVec3::new(0.0, 0.0, 20.0),
+        );
         let past = (
             center + DVec3::new(0.0, 40.0, -20.0),
             center + DVec3::new(0.0, 40.0, 20.0),
         );
-        assert!(segment_hits_obb(through.0, through.1, center, rot, he), "through the box");
-        assert!(!segment_hits_obb(past.0, past.1, center, rot, he), "40 m above the box");
+        assert!(
+            segment_hits_obb(through.0, through.1, center, rot, he),
+            "through the box"
+        );
+        assert!(
+            !segment_hits_obb(past.0, past.1, center, rot, he),
+            "40 m above the box"
+        );
     }
 
     #[test]
@@ -460,7 +509,10 @@ mod tests {
         ] {
             let p = geodetic_to_body_fixed(&geo, r);
             let back = body_fixed_to_geodetic(p, r);
-            assert!((back.lat_deg - geo.lat_deg).abs() < 1e-9, "{geo:?} → {back:?}");
+            assert!(
+                (back.lat_deg - geo.lat_deg).abs() < 1e-9,
+                "{geo:?} → {back:?}"
+            );
             assert!(
                 (back.lon_deg - geo.lon_deg).abs() < 1e-9 || geo.lat_deg.abs() > 89.999,
                 "{geo:?} → {back:?}"
@@ -513,8 +565,8 @@ mod tests {
     #[test]
     fn local_geodetic_round_trips_at_both_shipped_sites() {
         for anchor in [
-            Geodetic::new(26.0371, 3.6584, -1920.0),      // Apollo 15, near side
-            Geodetic::new(-45.4446, 177.5991, -5925.0),   // Chang'e-4, far side
+            Geodetic::new(26.0371, 3.6584, -1920.0), // Apollo 15, near side
+            Geodetic::new(-45.4446, 177.5991, -5925.0), // Chang'e-4, far side
         ] {
             for local in [
                 DVec3::ZERO,
@@ -545,21 +597,33 @@ mod tests {
         );
         // And the inverse still reports the true 60 km, not a near-global offset.
         let back = geodetic_to_local(&anchor, R_MOON, &far_east);
-        assert!((back.x - 60_000.0).abs() < 1.0, "wrapped round trip: {back:?}");
+        assert!(
+            (back.x - 60_000.0).abs() < 1.0,
+            "wrapped round trip: {back:?}"
+        );
     }
 
     #[test]
     fn enu_is_orthonormal_and_north_points_to_pole() {
         let f = LocalTangentFrame::body_fixed(&Geodetic::new(0.0, 0.0, 0.0), 1.0);
         assert!((f.up - DVec3::X).length() < 1e-12);
-        assert!((f.north - DVec3::Y).length() < 1e-12, "north at equator = pole dir, got {:?}", f.north);
+        assert!(
+            (f.north - DVec3::Y).length() < 1e-12,
+            "north at equator = pole dir, got {:?}",
+            f.north
+        );
         assert!((f.east - DVec3::new(0.0, 0.0, -1.0)).length() < 1e-12);
-        for geo in [Geodetic::new(30.0, 50.0, 0.0), Geodetic::new(-89.45, -136.7, 0.0)] {
+        for geo in [
+            Geodetic::new(30.0, 50.0, 0.0),
+            Geodetic::new(-89.45, -136.7, 0.0),
+        ] {
             let f = LocalTangentFrame::body_fixed(&geo, 1737.0e3);
             assert!(f.east.dot(f.north).abs() < 1e-12);
             assert!(f.east.dot(f.up).abs() < 1e-12);
             assert!(f.north.dot(f.up).abs() < 1e-12);
-            assert!((f.east.cross(f.north) - f.up * f.east.cross(f.north).dot(f.up)).length() < 1e-9);
+            assert!(
+                (f.east.cross(f.north) - f.up * f.east.cross(f.north).dot(f.up)).length() < 1e-9
+            );
         }
     }
 
@@ -584,7 +648,10 @@ mod tests {
         let delta = (lon_at(jd0 + quarter_day) - lon_at(jd0)).rem_euclid(360.0);
         // Tolerance covers the pole's own slow motion + lunar physical libration
         // over the quarter turn (~6.8 d), both of which are now modelled.
-        assert!((delta - 90.0).abs() < 0.5, "quarter turn should advance lon by 90°, got {delta}");
+        assert!(
+            (delta - 90.0).abs() < 0.5,
+            "quarter turn should advance lon by 90°, got {delta}"
+        );
     }
 
     /// **P2 regression — the missing prime-meridian epoch (`W₀`).**
@@ -603,7 +670,8 @@ mod tests {
         // Where lon 0 actually points, expressed in the body's equatorial frame
         // (whose +X is the engine's equinox direction, tilted onto the equator).
         let pm = equatorial_frame(&desc, jd).inverse()
-            * (body_rotation(&desc, jd) * geodetic_to_body_fixed(&Geodetic::new(0.0, 0.0, 0.0), 1.0));
+            * (body_rotation(&desc, jd)
+                * geodetic_to_body_fixed(&Geodetic::new(0.0, 0.0, 0.0), 1.0));
         let angle = (-pm.z).atan2(pm.x).to_degrees().rem_euclid(360.0);
         assert!(
             (angle - 38.3).abs() < 1.5,
@@ -658,10 +726,19 @@ mod tests {
     fn tangent_frame_round_trips_local_points() {
         let desc = moon();
         let center = DVec3::new(1.0e11, -2.0e10, 3.0e10);
-        let f = solar_tangent_frame(&desc, &Geodetic::new(-89.45, -136.7, 1239.0), center, 2461000.5);
+        let f = solar_tangent_frame(
+            &desc,
+            &Geodetic::new(-89.45, -136.7, 1239.0),
+            center,
+            2461000.5,
+        );
         let local = DVec3::new(12.0, 3.5, -40.0);
         let back = f.from_frame(f.to_frame(local));
         // f64 rounding at heliocentric magnitudes (~1e11 m) is ~2e-5 m.
-        assert!((back - local).length() < 1e-3, "round-trip error {}", (back - local).length());
+        assert!(
+            (back - local).length() < 1e-3,
+            "round-trip error {}",
+            (back - local).length()
+        );
     }
 }

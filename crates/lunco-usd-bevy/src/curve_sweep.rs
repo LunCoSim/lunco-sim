@@ -131,7 +131,10 @@ pub fn rotation_minimizing_frames(points: &[Vec3]) -> Vec<Frame> {
         let c1 = v1.dot(v1);
         if c1 <= f32::EPSILON {
             // Coincident points: nothing to carry the frame along, so keep it.
-            frames.push(Frame { tangent: tangents[i + 1], normal: prev.normal });
+            frames.push(Frame {
+                tangent: tangents[i + 1],
+                normal: prev.normal,
+            });
             continue;
         }
         let r_l = prev.normal - (2.0 / c1) * v1.dot(prev.normal) * v1;
@@ -152,7 +155,11 @@ pub fn rotation_minimizing_frames(points: &[Vec3]) -> Vec<Frame> {
         // theory; this only sheds accumulated f32 drift over a long run.
         let t = tangents[i + 1];
         let normal = (normal - t * t.dot(normal)).normalize_or_zero();
-        let normal = if normal == Vec3::ZERO { any_perpendicular(t) } else { normal };
+        let normal = if normal == Vec3::ZERO {
+            any_perpendicular(t)
+        } else {
+            normal
+        };
 
         frames.push(Frame { tangent: t, normal });
     }
@@ -230,9 +237,21 @@ mod tests {
     use super::*;
 
     fn assert_orthonormal(f: &Frame, ctx: &str) {
-        assert!((f.tangent.length() - 1.0).abs() < 1e-4, "{ctx}: |t| = {}", f.tangent.length());
-        assert!((f.normal.length() - 1.0).abs() < 1e-4, "{ctx}: |n| = {}", f.normal.length());
-        assert!(f.tangent.dot(f.normal).abs() < 1e-4, "{ctx}: t·n = {}", f.tangent.dot(f.normal));
+        assert!(
+            (f.tangent.length() - 1.0).abs() < 1e-4,
+            "{ctx}: |t| = {}",
+            f.tangent.length()
+        );
+        assert!(
+            (f.normal.length() - 1.0).abs() < 1e-4,
+            "{ctx}: |n| = {}",
+            f.normal.length()
+        );
+        assert!(
+            f.tangent.dot(f.normal).abs() < 1e-4,
+            "{ctx}: t·n = {}",
+            f.tangent.dot(f.normal)
+        );
     }
 
     /// The case Frenet cannot do at all: a perfectly straight line has zero
@@ -345,7 +364,11 @@ mod tests {
             Some(Indices::U32(v)) => v.len(),
             _ => 0,
         };
-        assert_eq!(count(&closed), count(&open) + 6 * 6, "closed adds one ring gap");
+        assert_eq!(
+            count(&closed),
+            count(&open) + 6 * 6,
+            "closed adds one ring gap"
+        );
     }
 
     /// `widths` may be authored per-vertex, so the profile must taper.
@@ -353,10 +376,18 @@ mod tests {
     fn per_point_radii_taper_the_tube() {
         let pts: Vec<Vec3> = (0..3).map(|i| Vec3::new(0.0, 0.0, i as f32)).collect();
         let mesh = sweep_tube(&pts, &[1.0, 2.0, 3.0], 4, false).unwrap();
-        let pos = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap();
+        let pos = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
         // First ring sits at radius 1 from the axis, last at radius 3.
         let r_of = |v: &[f32; 3]| (v[0] * v[0] + v[1] * v[1]).sqrt();
-        assert!((r_of(&pos[0]) - 1.0).abs() < 1e-4, "first ring r = {}", r_of(&pos[0]));
+        assert!(
+            (r_of(&pos[0]) - 1.0).abs() < 1e-4,
+            "first ring r = {}",
+            r_of(&pos[0])
+        );
         assert!((r_of(&pos[pos.len() - 1]) - 3.0).abs() < 1e-4);
     }
 
@@ -370,7 +401,10 @@ mod tests {
         // Repeated points must not produce NaN frames.
         let dup = [Vec3::ZERO, Vec3::ZERO, Vec3::Z, Vec3::Z];
         for f in rotation_minimizing_frames(&dup) {
-            assert!(f.normal.is_finite() && f.tangent.is_finite(), "NaN frame: {f:?}");
+            assert!(
+                f.normal.is_finite() && f.tangent.is_finite(),
+                "NaN frame: {f:?}"
+            );
         }
     }
 }

@@ -69,8 +69,8 @@
 //! ROUND instead of an octagon. Dropping those weights turns a 0.58 m rim into a
 //! 0.62 m bulge at the diagonals; see the rationality tests in [`crate::nurbs`].
 
-use bevy::prelude::*;
 use crate::read::UsdRead;
+use bevy::prelude::*;
 
 /// √2/2 — the weight on a rational circle's diagonal control points. A quarter
 /// circle is *exactly* a rational quadratic with this middle weight and is not
@@ -179,7 +179,10 @@ impl NurbsSurface {
         }
         flip_if_left_handed(self.left_handed, &mut normals, &mut indices);
 
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -260,7 +263,10 @@ impl LatheProfile {
                 // fractional exponent is NaN, and NaN control points make the whole
                 // patch vanish with no mesh and no obvious cause.
                 let t = s.clamp(0.0, 1.0).powf(contour.max(1e-6));
-                (throat_radius + (exit_radius - throat_radius) * t, -length * s)
+                (
+                    throat_radius + (exit_radius - throat_radius) * t,
+                    -length * s,
+                )
             }
             LatheProfile::Paraboloid {
                 apex_radius,
@@ -349,9 +355,7 @@ impl UsdLathe {
                 [r, y, -r],
                 [r, y, 0.0],
             ]);
-            weights.extend_from_slice(&[
-                1.0, DIAG_W, 1.0, DIAG_W, 1.0, DIAG_W, 1.0, DIAG_W, 1.0,
-            ]);
+            weights.extend_from_slice(&[1.0, DIAG_W, 1.0, DIAG_W, 1.0, DIAG_W, 1.0, DIAG_W, 1.0]);
         }
 
         NurbsSurface {
@@ -381,10 +385,7 @@ impl UsdLathe {
 /// `real` throughout, not `scalar::<f64>` — `float lunco:lathe:contour = 0.55` is
 /// the natural authoring and a strict `double` read of it is indistinguishable from
 /// "unauthored", which would silently substitute a default.
-pub fn read_lathe(
-    reader: &crate::StageView<'_>,
-    path: &openusd::sdf::Path,
-) -> Option<UsdLathe> {
+pub fn read_lathe(reader: &crate::StageView<'_>, path: &openusd::sdf::Path) -> Option<UsdLathe> {
     let kind = reader.text(path, "lunco:lathe:profile")?;
     let p = |name: &str, default: f32| -> f32 {
         reader.real(path, name).map(|v| v as f32).unwrap_or(default)
@@ -424,7 +425,10 @@ pub fn read_lathe(
     // `profile`, `throatRadius`, `contour` and friends.
     Some(UsdLathe {
         profile,
-        rings: reader.scalar::<i32>(path, "vVertexCount").unwrap_or(4).max(2) as u32,
+        rings: reader
+            .scalar::<i32>(path, "vVertexCount")
+            .unwrap_or(4)
+            .max(2) as u32,
         v_order: reader.scalar::<i32>(path, "vOrder").unwrap_or(3).max(2) as u32,
         left_handed: reader.text(path, "orientation").as_deref() == Some("leftHanded"),
     })
@@ -639,7 +643,10 @@ mod tests {
         assert_ne!(before, after, "a changed parameter must change the net");
         assert!((after.points[27][0] - 2.0).abs() < 1e-6, "new exit radius");
         // ...and the untouched end must NOT have moved.
-        assert!((after.points[0][0] - 0.35).abs() < 1e-6, "throat is unchanged");
+        assert!(
+            (after.points[0][0] - 0.35).abs() < 1e-6,
+            "throat is unchanged"
+        );
     }
 
     /// A profile with a wild exponent must not produce NaN control points. A NaN in
@@ -668,7 +675,10 @@ mod tests {
             }
             .surface();
             for p in &s.points {
-                assert!(p.iter().all(|c| c.is_finite()), "non-finite control point {p:?}");
+                assert!(
+                    p.iter().all(|c| c.is_finite()),
+                    "non-finite control point {p:?}"
+                );
             }
         }
     }

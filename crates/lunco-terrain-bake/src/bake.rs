@@ -34,7 +34,11 @@ pub fn crop_centered(grid: &HeightGrid, half_window: f64) -> HeightGrid {
     // written `!(half_window > 0.0)`, which catches NaN by the same negation
     // trick but relies on the reader spotting it — and clippy's suggested
     // "simplification" of that form drops the NaN case outright.
-    if !half_window.is_finite() || half_window <= 0.0 || half_window >= grid.half_extent as f64 || s <= 0.0 {
+    if !half_window.is_finite()
+        || half_window <= 0.0
+        || half_window >= grid.half_extent as f64
+        || s <= 0.0
+    {
         return grid.clone();
     }
     let k = (half_window / s).floor() as usize; // native cells each side of centre
@@ -49,7 +53,11 @@ pub fn crop_centered(grid: &HeightGrid, half_window: f64) -> HeightGrid {
         }
     }
     let half_extent = ((res - 1) as f64 * 0.5 * s) as f32;
-    HeightGrid { res, half_extent, heights }
+    HeightGrid {
+        res,
+        half_extent,
+        heights,
+    }
 }
 
 /// Sample `src` into a square, origin-centred `res`×`res` grid spanning
@@ -67,7 +75,11 @@ pub fn resample(src: &dyn HeightSource, half_extent: f64, res: usize) -> HeightG
             heights[iz * res + ix] = src.height_at(x, z);
         }
     }
-    HeightGrid { res, half_extent: half_extent as f32, heights }
+    HeightGrid {
+        res,
+        half_extent: half_extent as f32,
+        heights,
+    }
 }
 
 #[cfg(test)]
@@ -84,17 +96,28 @@ mod tests {
                 heights[iz * 5 + ix] = (iz * 5 + ix) as f64;
             }
         }
-        let src = HeightGrid { res: 5, half_extent: 2.0, heights };
+        let src = HeightGrid {
+            res: 5,
+            half_extent: 2.0,
+            heights,
+        };
         let c = crop_centered(&src, 1.0);
         assert_eq!(c.res, 3);
         assert_eq!(c.half_extent, 1.0);
         // central block rows/cols 1..=3 — exact values, no interpolation.
-        assert_eq!(c.heights, vec![6.0, 7.0, 8.0, 11.0, 12.0, 13.0, 16.0, 17.0, 18.0]);
+        assert_eq!(
+            c.heights,
+            vec![6.0, 7.0, 8.0, 11.0, 12.0, 13.0, 16.0, 17.0, 18.0]
+        );
     }
 
     #[test]
     fn crop_full_when_window_covers_grid() {
-        let src = HeightGrid { res: 4, half_extent: 3.0, heights: (0..16).map(|i| i as f64).collect() };
+        let src = HeightGrid {
+            res: 4,
+            half_extent: 3.0,
+            heights: (0..16).map(|i| i as f64).collect(),
+        };
         // window ≥ extent, zero, and non-finite all return the whole grid.
         assert_eq!(crop_centered(&src, 100.0).heights, src.heights);
         assert_eq!(crop_centered(&src, 0.0).res, src.res);
@@ -132,7 +155,11 @@ mod tests {
                 heights[iz * 5 + ix] = ix as f64; // 0..4 across X
             }
         }
-        let src = HeightGrid { res: 5, half_extent: 2.0, heights };
+        let src = HeightGrid {
+            res: 5,
+            half_extent: 2.0,
+            heights,
+        };
         let g = resample(&src, 2.0, 3);
         // Corners of the 3×3 land on x = -2, 0, +2 → source ix = 0, 2, 4.
         assert_eq!(g.height_at(-2.0, 0.0), 0.0);

@@ -261,7 +261,12 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             world.resource_scope(|world, mut selected: Mut<crate::SelectedEntities>| {
                 let mut commands = world.commands();
                 crate::selection::apply_selection(
-                    &mut commands, &mut selected, old, entity, false, false,
+                    &mut commands,
+                    &mut selected,
+                    old,
+                    entity,
+                    false,
+                    false,
                 );
             });
             world.flush();

@@ -44,7 +44,11 @@ pub enum CarvePrimitive {
     /// A ball — a chamber or a skylight bulb.
     Sphere { center: [f64; 3], radius: f64 },
     /// A capsule (round-ended cylinder) from `a` to `b` — a tunnel / lava-tube segment.
-    Capsule { a: [f64; 3], b: [f64; 3], radius: f64 },
+    Capsule {
+        a: [f64; 3],
+        b: [f64; 3],
+        radius: f64,
+    },
 }
 
 impl CarvePrimitive {
@@ -57,7 +61,11 @@ impl CarvePrimitive {
                 let ba = sub(b, a);
                 let bb = dot(ba, ba);
                 // Project p onto the segment, clamped to its ends.
-                let t = if bb > 0.0 { (dot(pa, ba) / bb).clamp(0.0, 1.0) } else { 0.0 };
+                let t = if bb > 0.0 {
+                    (dot(pa, ba) / bb).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
                 let closest = [a[0] + ba[0] * t, a[1] + ba[1] * t, a[2] + ba[2] * t];
                 length(sub(p, closest)) - radius
             }
@@ -68,9 +76,12 @@ impl CarvePrimitive {
     /// shadow on the ground plane, radius included. Used to bucket the primitive.
     fn xz_bounds(&self) -> (f64, f64, f64, f64) {
         match *self {
-            CarvePrimitive::Sphere { center, radius } => {
-                (center[0] - radius, center[2] - radius, center[0] + radius, center[2] + radius)
-            }
+            CarvePrimitive::Sphere { center, radius } => (
+                center[0] - radius,
+                center[2] - radius,
+                center[0] + radius,
+                center[2] + radius,
+            ),
             CarvePrimitive::Capsule { a, b, radius } => (
                 a[0].min(b[0]) - radius,
                 a[2].min(b[2]) - radius,
@@ -91,7 +102,9 @@ impl CarvePrimitive {
     /// index; see [`MAX_COORD`]. Non-bucketable primitives are dropped.
     fn is_bucketable(&self) -> bool {
         let (x0, z0, x1, z1) = self.xz_bounds();
-        [x0, z0, x1, z1].iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD)
+        [x0, z0, x1, z1]
+            .iter()
+            .all(|v| v.is_finite() && v.abs() <= MAX_COORD)
     }
 }
 
@@ -217,7 +230,16 @@ impl CarveField {
                 }
             }
         }
-        Self { prims, smooth_k, inv_cell_size, bucket_min, bucket_nx, bucket_nz, bucket_starts, bucket_entries }
+        Self {
+            prims,
+            smooth_k,
+            inv_cell_size,
+            bucket_min,
+            bucket_nx,
+            bucket_nz,
+            bucket_starts,
+            bucket_entries,
+        }
     }
 
     /// Candidate primitives for bucket cell `(cx, cz)` — empty outside the grid AABB.
@@ -322,7 +344,10 @@ mod tests {
     use super::*;
 
     fn sphere(c: [f64; 3], r: f64) -> CarvePrimitive {
-        CarvePrimitive::Sphere { center: c, radius: r }
+        CarvePrimitive::Sphere {
+            center: c,
+            radius: r,
+        }
     }
 
     #[test]
@@ -347,7 +372,11 @@ mod tests {
     #[test]
     fn capsule_is_a_tunnel() {
         // A horizontal tube 4 m below the surface, radius 3.
-        let tube = CarvePrimitive::Capsule { a: [-50.0, -4.0, 0.0], b: [50.0, -4.0, 0.0], radius: 3.0 };
+        let tube = CarvePrimitive::Capsule {
+            a: [-50.0, -4.0, 0.0],
+            b: [50.0, -4.0, 0.0],
+            radius: 3.0,
+        };
         let f = CarveField::new(vec![tube], 0.0);
         assert!(f.is_carved([0.0, -4.0, 0.0]), "on the axis → void");
         assert!(f.is_carved([25.0, -4.0, 1.0]), "near the axis → void");
@@ -365,7 +394,10 @@ mod tests {
         let hard = CarveField::new(prims.clone(), 0.0);
         let soft = CarveField::new(prims, 4.0);
         let seam = [0.0, 0.0, 0.0];
-        assert!(soft.sdf(seam) <= hard.sdf(seam) + 1e-12, "smooth union must not be shallower");
+        assert!(
+            soft.sdf(seam) <= hard.sdf(seam) + 1e-12,
+            "smooth union must not be shallower"
+        );
     }
 
     #[test]
@@ -379,14 +411,20 @@ mod tests {
         let prims = vec![
             sphere([0.0, 0.0, 0.0], 8.0),
             sphere([30.0, 2.0, -10.0], 12.0),
-            CarvePrimitive::Capsule { a: [-40.0, -3.0, 20.0], b: [10.0, -3.0, 20.0], radius: 4.0 },
+            CarvePrimitive::Capsule {
+                a: [-40.0, -3.0, 20.0],
+                b: [10.0, -3.0, 20.0],
+                radius: 4.0,
+            },
         ];
         let k = 3.0;
         let f = CarveField::new(prims.clone(), k);
         for gx in -60..60 {
             for gz in -60..60 {
                 let p = [gx as f64 * 1.7, 0.0, gz as f64 * 1.7];
-                let brute = prims.iter().fold(f64::INFINITY, |d, pr| smin(d, pr.sdf(p), k));
+                let brute = prims
+                    .iter()
+                    .fold(f64::INFINITY, |d, pr| smin(d, pr.sdf(p), k));
                 // Sign is exact everywhere.
                 assert_eq!(f.is_carved(p), brute < 0.0, "sign mismatch at {p:?}");
                 // Value is exact wherever the field matters (nearest surface ≤ 2k).
@@ -408,9 +446,16 @@ mod tests {
         let before = CarveField::new(vec![sphere([0.0, 0.0, 0.0], 5.0)], 0.0);
         assert!(!before.is_carved([40.0, -4.0, 0.0]));
         let mut prims = vec![sphere([0.0, 0.0, 0.0], 5.0)];
-        prims.push(CarvePrimitive::Capsule { a: [0.0, -4.0, 0.0], b: [80.0, -4.0, 0.0], radius: 3.0 });
+        prims.push(CarvePrimitive::Capsule {
+            a: [0.0, -4.0, 0.0],
+            b: [80.0, -4.0, 0.0],
+            radius: 3.0,
+        });
         let after = CarveField::new(prims, 0.0);
-        assert!(after.is_carved([40.0, -4.0, 0.0]), "the new tunnel carves the point");
+        assert!(
+            after.is_carved([40.0, -4.0, 0.0]),
+            "the new tunnel carves the point"
+        );
     }
 
     #[test]
@@ -429,11 +474,23 @@ mod tests {
             sphere([f64::INFINITY, 0.0, 0.0], 10.0),
             sphere([f64::NEG_INFINITY, 0.0, f64::NAN], 10.0),
             sphere([1e300, 0.0, 0.0], 1e300),
-            CarvePrimitive::Capsule { a: [0.0, 0.0, 0.0], b: [f64::INFINITY, 0.0, 0.0], radius: 2.0 },
-            CarvePrimitive::Capsule { a: [0.0, 0.0, 0.0], b: [1.0, 0.0, 0.0], radius: f64::INFINITY },
+            CarvePrimitive::Capsule {
+                a: [0.0, 0.0, 0.0],
+                b: [f64::INFINITY, 0.0, 0.0],
+                radius: 2.0,
+            },
+            CarvePrimitive::Capsule {
+                a: [0.0, 0.0, 0.0],
+                b: [1.0, 0.0, 0.0],
+                radius: f64::INFINITY,
+            },
         ] {
             let f = CarveField::new(vec![bad], 3.0);
-            assert_eq!(f.primitive_count(), 0, "non-finite primitive must be dropped: {bad:?}");
+            assert_eq!(
+                f.primitive_count(),
+                0,
+                "non-finite primitive must be dropped: {bad:?}"
+            );
             assert!(f.sdf([0.0, 0.0, 0.0]).is_infinite());
             assert!(!f.is_carved([0.0, 0.0, 0.0]));
         }
@@ -444,7 +501,10 @@ mod tests {
         let good = sphere([0.0, 0.0, 0.0], 10.0);
         let f = CarveField::new(vec![sphere([0.0, 0.0, 0.0], f64::INFINITY), good], 0.0);
         assert_eq!(f.primitive_count(), 1);
-        assert!(f.is_carved([0.0, 0.0, 0.0]), "the finite sphere still carves");
+        assert!(
+            f.is_carved([0.0, 0.0, 0.0]),
+            "the finite sphere still carves"
+        );
         assert!(!f.is_carved([100.0, 0.0, 0.0]));
     }
 
@@ -456,7 +516,11 @@ mod tests {
         let prims = vec![
             sphere([0.0, 0.0, 0.0], 8.0),
             sphere([6.0, 0.0, 3.0], 9.0),
-            CarvePrimitive::Capsule { a: [-20.0, 0.0, 0.0], b: [20.0, 0.0, 0.0], radius: 5.0 },
+            CarvePrimitive::Capsule {
+                a: [-20.0, 0.0, 0.0],
+                b: [20.0, 0.0, 0.0],
+                radius: 5.0,
+            },
             sphere([-10.0, 0.0, -4.0], 7.0),
         ];
         let f = CarveField::new(prims.clone(), 2.0);
@@ -464,18 +528,26 @@ mod tests {
         for cz in 0..f.bucket_nz as i64 {
             for cx in 0..f.bucket_nx as i64 {
                 let b = f.bucket(cx + f.bucket_min.0, cz + f.bucket_min.1);
-                assert!(b.windows(2).all(|w| w[0] < w[1]), "bucket not ascending: {b:?}");
+                assert!(
+                    b.windows(2).all(|w| w[0] < w[1]),
+                    "bucket not ascending: {b:?}"
+                );
                 seen += b.len();
             }
         }
-        assert!(seen >= prims.len(), "every primitive must be bucketed somewhere");
+        assert!(
+            seen >= prims.len(),
+            "every primitive must be bucketed somewhere"
+        );
         // …and the fold matches the brute-force ascending fold BIT-for-bit where the
         // bucket holds every primitive (the near field).
         let k = 2.0;
         for gx in -10..10 {
             for gz in -10..10 {
                 let p = [gx as f64, 0.0, gz as f64];
-                let brute = prims.iter().fold(f64::INFINITY, |d, pr| smin(d, pr.sdf(p), k));
+                let brute = prims
+                    .iter()
+                    .fold(f64::INFINITY, |d, pr| smin(d, pr.sdf(p), k));
                 if brute < 2.0 * k {
                     assert_eq!(f.sdf(p), brute, "fold order diverged at {p:?}");
                 }
@@ -490,7 +562,10 @@ mod tests {
         let src = AnalyticHeightSource::new(9, 5.0, 64.0, 4);
         let y = src.height_at(0.0, 0.0);
         let f = CarveField::new(vec![sphere([0.0, y, 0.0], 8.0)], 0.0);
-        assert!(f.is_open_on(&src, 0.0, 0.0), "void on the surface should breach it");
+        assert!(
+            f.is_open_on(&src, 0.0, 0.0),
+            "void on the surface should breach it"
+        );
         assert!(!f.is_open_on(&src, 200.0, 200.0), "far column is untouched");
     }
 }

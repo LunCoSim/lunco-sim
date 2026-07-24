@@ -88,8 +88,10 @@ impl DocumentSessionCodec for UsdSessionCodec {
         // SHADOW an externally-edited file with a stale buffer — the bug where the
         // moonbase scene rendered a pre-migration version and ignored disk edits. So the
         // local/host build never looks at the cache; it re-reads the file every open.
-        let is_client =
-            matches!(world.get_resource::<lunco_core::NetworkRole>(), Some(lunco_core::NetworkRole::Client));
+        let is_client = matches!(
+            world.get_resource::<lunco_core::NetworkRole>(),
+            Some(lunco_core::NetworkRole::Client)
+        );
         if !is_client {
             return None;
         }

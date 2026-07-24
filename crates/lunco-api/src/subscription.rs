@@ -1,10 +1,10 @@
 //! Telemetry subscription system — streams telemetry events to API subscribers.
 
-use bevy::prelude::*;
 use crate::{
     executor::ApiResponseEvent,
     schema::{ApiResponse, TelemetryFilter, TelemetryResponse},
 };
+use bevy::prelude::*;
 
 /// Telemetry events ride the same `ApiResponseEvent` channel as HTTP
 /// request/response, but they are server-pushed packets, not replies to a
@@ -50,7 +50,10 @@ impl TelemetrySubscriptions {
     pub fn subscribe(&mut self, filter: Option<TelemetryFilter>) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
-        self.subscriptions.push(TelemetrySubscription { id, filter: filter.unwrap_or_default() });
+        self.subscriptions.push(TelemetrySubscription {
+            id,
+            filter: filter.unwrap_or_default(),
+        });
         id
     }
     pub fn unsubscribe(&mut self, id: u64) {
@@ -105,13 +108,17 @@ impl TelemetrySubscriptions {
     }
 
     fn mark_sent(&mut self, name: &str, source_bits: u64, sim_secs: f64) -> bool {
-        self.last_sent.insert((name.to_string(), source_bits), sim_secs);
+        self.last_sent
+            .insert((name.to_string(), source_bits), sim_secs);
         true
     }
     fn should_broadcast(&self, name: &str, severity: Option<lunco_core::Severity>) -> bool {
-        if self.subscriptions.is_empty() { return false; }
+        if self.subscriptions.is_empty() {
+            return false;
+        }
         self.subscriptions.iter().any(|sub| {
-            let name_ok = sub.filter.names.is_empty() || sub.filter.names.contains(&name.to_string());
+            let name_ok =
+                sub.filter.names.is_empty() || sub.filter.names.contains(&name.to_string());
             let severity_ok = match (severity, &sub.filter.min_severity) {
                 (None, _) => true,
                 (Some(_), None) => true,
@@ -166,7 +173,9 @@ pub fn telemetry_event_observer(
     mut commands: Commands,
 ) {
     let event = trigger.event();
-    if !subscriptions.should_broadcast(&event.name, Some(event.severity)) { return; }
+    if !subscriptions.should_broadcast(&event.name, Some(event.severity)) {
+        return;
+    }
     let correlation_id = subscriptions.next_correlation_id();
     commands.trigger(ApiResponseEvent {
         correlation_id,
@@ -224,8 +233,14 @@ mod tests {
         // telemetry id landing there would steal a pending request's reply.
         for _ in 0..1000 {
             let cid = subs.next_correlation_id();
-            assert!(cid & TELEMETRY_CORRELATION_FLAG != 0, "telemetry id {cid} lacks disjoint flag");
-            assert!(cid > u32::MAX as u64, "telemetry id {cid} collides with HTTP low-id range");
+            assert!(
+                cid & TELEMETRY_CORRELATION_FLAG != 0,
+                "telemetry id {cid} lacks disjoint flag"
+            );
+            assert!(
+                cid > u32::MAX as u64,
+                "telemetry id {cid} collides with HTTP low-id range"
+            );
         }
     }
 
@@ -241,9 +256,18 @@ mod tests {
             rate_hz: Some(2.0), // one sample per 0.5 s of sim time
         }));
 
-        assert!(subs.should_send_sample("p", 1, 0.0), "the first sample always goes");
-        assert!(!subs.should_send_sample("p", 1, 0.1), "0.1 s < 0.5 s ⇒ dropped");
-        assert!(!subs.should_send_sample("p", 1, 0.4), "still inside the period");
+        assert!(
+            subs.should_send_sample("p", 1, 0.0),
+            "the first sample always goes"
+        );
+        assert!(
+            !subs.should_send_sample("p", 1, 0.1),
+            "0.1 s < 0.5 s ⇒ dropped"
+        );
+        assert!(
+            !subs.should_send_sample("p", 1, 0.4),
+            "still inside the period"
+        );
         assert!(subs.should_send_sample("p", 1, 0.6), "0.6 s ≥ 0.5 s ⇒ sent");
     }
 
@@ -270,10 +294,21 @@ mod tests {
     #[test]
     fn an_uncapped_subscriber_is_not_throttled_by_a_slow_one() {
         let mut subs = TelemetrySubscriptions::default();
-        subs.subscribe(Some(TelemetryFilter { names: vec![], min_severity: None, rate_hz: Some(0.1) }));
-        subs.subscribe(Some(TelemetryFilter { names: vec![], min_severity: None, rate_hz: None }));
+        subs.subscribe(Some(TelemetryFilter {
+            names: vec![],
+            min_severity: None,
+            rate_hz: Some(0.1),
+        }));
+        subs.subscribe(Some(TelemetryFilter {
+            names: vec![],
+            min_severity: None,
+            rate_hz: None,
+        }));
         assert!(subs.should_send_sample("p", 1, 0.0));
-        assert!(subs.should_send_sample("p", 1, 0.001), "the uncapped subscriber wins");
+        assert!(
+            subs.should_send_sample("p", 1, 0.001),
+            "the uncapped subscriber wins"
+        );
     }
 
     /// A nonsense cap must not mute a channel forever.
@@ -287,7 +322,10 @@ mod tests {
                 rate_hz: Some(bad),
             }));
             assert!(subs.should_send_sample("p", 1, 0.0));
-            assert!(subs.should_send_sample("p", 1, 0.001), "rate {bad} must not mute the channel");
+            assert!(
+                subs.should_send_sample("p", 1, 0.001),
+                "rate {bad} must not mute the channel"
+            );
         }
     }
 

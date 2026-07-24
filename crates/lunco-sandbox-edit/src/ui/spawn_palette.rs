@@ -14,13 +14,21 @@ use crate::SpawnState;
 pub struct SpawnPalette;
 
 impl Panel for SpawnPalette {
-    fn id(&self) -> PanelId { PanelId("spawn_palette") }
-    fn title(&self) -> String { "Spawn".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::Bottom }
+    fn id(&self) -> PanelId {
+        PanelId("spawn_palette")
+    }
+    fn title(&self) -> String {
+        "Spawn".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::Bottom
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn transparent_background(&self) -> bool { true }
+    fn transparent_background(&self) -> bool {
+        true
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let Some((mantle, tokens)) = ctx
@@ -35,7 +43,9 @@ impl Panel for SpawnPalette {
             .fill(mantle)
             .inner_margin(8.0)
             .corner_radius(4)
-            .show(ui, |ui| { spawn_palette_content(self, ui, ctx, &tokens); });
+            .show(ui, |ui| {
+                spawn_palette_content(self, ui, ctx, &tokens);
+            });
     }
 }
 
@@ -45,51 +55,53 @@ fn spawn_palette_content(
     ctx: &mut PanelCtx,
     tokens: &lunco_theme::DesignTokens,
 ) {
-        ui.heading("Spawn");
+    ui.heading("Spawn");
 
-        // Read current state
-        let is_selecting = ctx.resource::<SpawnState>()
-            .map(|s| matches!(*s, SpawnState::Selecting { .. }))
-            .unwrap_or(false);
-        let selecting_id = ctx.resource::<SpawnState>()
-            .and_then(|s| match s {
-                SpawnState::Selecting { entry_id } => Some(entry_id.clone()),
-                _ => None,
+    // Read current state
+    let is_selecting = ctx
+        .resource::<SpawnState>()
+        .map(|s| matches!(*s, SpawnState::Selecting { .. }))
+        .unwrap_or(false);
+    let selecting_id = ctx.resource::<SpawnState>().and_then(|s| match s {
+        SpawnState::Selecting { entry_id } => Some(entry_id.clone()),
+        _ => None,
+    });
+
+    if is_selecting {
+        if let Some(id) = &selecting_id {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("Placing: {id}")).color(tokens.success));
+                if ui.button("Cancel").clicked() {
+                    ctx.defer(|world| {
+                        if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
+                            *state = SpawnState::Idle;
+                        }
+                    });
+                }
             });
-
-        if is_selecting {
-            if let Some(id) = &selecting_id {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Placing: {id}"))
-                        .color(tokens.success));
-                    if ui.button("Cancel").clicked() {
-                        ctx.defer(|world| {
-                            if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
-                                *state = SpawnState::Idle;
-                            }
-                        });
-                    }
-                });
-                ui.separator();
-            }
+            ui.separator();
         }
+    }
 
-        // Read catalog — group by whatever dynamic category labels exist
-        // (derived from content folders), so new content needs no UI change.
-        let categories: Vec<(String, Vec<_>)> = {
-            let Some(catalog) = ctx.resource::<SpawnCatalog>() else { return };
-            catalog.categories()
-                .into_iter()
-                .map(|cat| {
-                    let entries: Vec<_> = catalog.by_category(&cat).cloned().collect();
-                    (cat, entries)
-                })
-                .filter(|(_, entries)| !entries.is_empty())
-                .collect()
+    // Read catalog — group by whatever dynamic category labels exist
+    // (derived from content folders), so new content needs no UI change.
+    let categories: Vec<(String, Vec<_>)> = {
+        let Some(catalog) = ctx.resource::<SpawnCatalog>() else {
+            return;
         };
+        catalog
+            .categories()
+            .into_iter()
+            .map(|cat| {
+                let entries: Vec<_> = catalog.by_category(&cat).cloned().collect();
+                (cat, entries)
+            })
+            .filter(|(_, entries)| !entries.is_empty())
+            .collect()
+    };
 
-        for (category, entries) in categories {
-            ui.collapsing(category.to_string(), |ui| {
+    for (category, entries) in categories {
+        ui.collapsing(category.to_string(), |ui| {
                 for entry in &entries {
                     let selected = ctx.resource::<SpawnState>()
                         .map(|s| matches!(s, SpawnState::Selecting { entry_id } if *entry_id == entry.id))
@@ -133,19 +145,19 @@ fn spawn_palette_content(
                     }
                 }
             });
-        }
-
-        ui.separator();
-        ui.small("Click to select, then click in scene to place.");
-        ui.small("Or drag an item from here, then click in scene to place.");
-        ui.small("Press Escape to cancel.");
-
-        // Escape key handling
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) && is_selecting {
-            ctx.defer(|world| {
-                if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
-                    *state = SpawnState::Idle;
-                }
-            });
-        }
     }
+
+    ui.separator();
+    ui.small("Click to select, then click in scene to place.");
+    ui.small("Or drag an item from here, then click in scene to place.");
+    ui.small("Press Escape to cancel.");
+
+    // Escape key handling
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) && is_selecting {
+        ctx.defer(|world| {
+            if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
+                *state = SpawnState::Idle;
+            }
+        });
+    }
+}

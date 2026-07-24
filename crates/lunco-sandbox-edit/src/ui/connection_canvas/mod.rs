@@ -38,10 +38,10 @@ use lunco_canvas::{Canvas, EdgeId, NodeId, PortRef, Scene, SceneEvent, VisualReg
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_doc::{DocumentId, DocumentOrigin};
-use lunco_usd::commands::ApplyUsdOp;
-use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::document::UsdDocument;
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd::document::UsdDocument;
+use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 
@@ -54,22 +54,22 @@ pub const USD_CANVAS_PANEL_ID: PanelId = PanelId("usd_connection_canvas");
 /// Build the visual registry for the USD canvas — one node kind, one edge kind.
 fn build_registry() -> VisualRegistry {
     let mut reg = VisualRegistry::new();
-    reg.register_node_kind(NODE_KIND, |data: &lunco_canvas::NodeData| {
-        match data.downcast_ref::<UsdPrimNodeData>() {
-            Some(d) => visuals::node_visual(d),
-            None => visuals::UsdPrimNodeVisual {
-                type_name: String::new(),
-                is_body: false,
-            },
-        }
+    reg.register_node_kind(NODE_KIND, |data: &lunco_canvas::NodeData| match data
+        .downcast_ref::<UsdPrimNodeData>()
+    {
+        Some(d) => visuals::node_visual(d),
+        None => visuals::UsdPrimNodeVisual {
+            type_name: String::new(),
+            is_body: false,
+        },
     });
-    reg.register_edge_kind(EDGE_KIND, |data: &lunco_canvas::NodeData| {
-        match data.downcast_ref::<UsdWireData>() {
-            Some(d) => visuals::edge_visual(d),
-            None => visuals::UsdWireVisual {
-                kind: WireKind::Dataflow,
-            },
-        }
+    reg.register_edge_kind(EDGE_KIND, |data: &lunco_canvas::NodeData| match data
+        .downcast_ref::<UsdWireData>()
+    {
+        Some(d) => visuals::edge_visual(d),
+        None => visuals::UsdWireVisual {
+            kind: WireKind::Dataflow,
+        },
     });
     reg
 }
@@ -111,10 +111,7 @@ impl Default for UsdCanvasState {
 /// Order-stable hash of the projected topology (paths + connectors + wires).
 /// Node positions and selection are intentionally excluded so a drag doesn't
 /// trigger a re-layout.
-fn topology_hash(
-    nodes: &[projection::PrimNode],
-    wires: &[projection::Wire],
-) -> u64 {
+fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> u64 {
     let mut keys: Vec<String> = Vec::with_capacity(nodes.len() + wires.len());
     for n in nodes {
         keys.push(format!(

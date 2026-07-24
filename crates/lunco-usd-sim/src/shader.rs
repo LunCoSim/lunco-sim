@@ -32,15 +32,15 @@
 //! twice. Replacing the material is not enough; the intent must be removed.
 
 use bevy::prelude::*;
-use lunco_usd_bevy::{
-    get_attribute_as_vec3, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced,
-};
-use openusd::sdf::Path as SdfPath;
 use lunco_materials::engine_params::prim_color_value;
 use lunco_materials::{
     to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_usd_bevy::{
+    get_attribute_as_vec3, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced,
+};
+use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
 
 /// Marks a prim whose `ShaderLook` authoring has been evaluated, so the
@@ -72,19 +72,29 @@ pub fn apply_usd_shader_materials(
     for (entity, prim_path) in q.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
-            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+            if let Some(recipe) = stages
+                .get(&prim_path.stage_handle)
+                .and_then(|a| a.recipe.clone())
+            {
                 canonical.get_or_build(id, &recipe);
             }
         }
         // No live stage (asset carries no recipe / build failed) yet → retry next
         // frame (do NOT mark resolved).
-        let Some(cs) = canonical.get(id) else { continue };
+        let Some(cs) = canonical.get(id) else {
+            continue;
+        };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             commands.entity(entity).try_insert(UsdShaderResolved);
             continue;
         };
         apply_usd_shader_material_read(
-            &cs.view(), entity, prim_path, &sdf_path, &mut commands, enable_shaders,
+            &cs.view(),
+            entity,
+            prim_path,
+            &sdf_path,
+            &mut commands,
+            enable_shaders,
             &asset_server,
         );
     }
@@ -137,7 +147,9 @@ fn apply_usd_shader_material_read(
     // shader is left schemed and passes through untouched.
     let shader_path = lunco_assets::engine_asset_rel(&raw_shader_path).to_string();
 
-    if !enable_shaders && (shader_path == "shaders/regolith.wgsl" || shader_path == "shaders/terrain_layered.wgsl") {
+    if !enable_shaders
+        && (shader_path == "shaders/regolith.wgsl" || shader_path == "shaders/terrain_layered.wgsl")
+    {
         return;
     }
 
@@ -200,7 +212,10 @@ fn apply_usd_shader_material_read(
     #[cfg(not(target_arch = "wasm32"))]
     let resolved_shader_path = shader_path;
 
-    debug!("[shader] applied {} to {}", resolved_shader_path, prim_path.path);
+    debug!(
+        "[shader] applied {} to {}",
+        resolved_shader_path, prim_path.path
+    );
     // A path, not a `Handle<Shader>`: `bevy::shader` pulls naga. The binder loads it.
     // Route a bare built-in reference (`shaders/wheel.wgsl`) through the `lunco://`
     // engine library so it resolves from ANYWHERE — including with an external Twin
@@ -254,8 +269,7 @@ fn apply_usd_shader_material_read(
             _ => SurfaceAlpha::Opaque,
         }
     };
-    let look =
-        ShaderLook {
+    let look = ShaderLook {
         shader,
         values,
         textures,
@@ -267,10 +281,7 @@ fn apply_usd_shader_material_read(
     };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
-    commands
-        .entity(entity)
-        .remove::<PbrLook>()
-        .try_insert(look);
+    commands.entity(entity).remove::<PbrLook>().try_insert(look);
 }
 
 /// True if `shader_path` is a usable material shader — i.e. it declares a
@@ -340,7 +351,9 @@ fn fill_prim_engine_params(
         if values.contains_key(p.name) {
             continue;
         }
-        let EngineSource::PrimAttr { attr, read } = p.source else { continue };
+        let EngineSource::PrimAttr { attr, read } = p.source else {
+            continue;
+        };
         let v = match read {
             // `color3f[]`, `constant` interpolation → element 0. The dedicated
             // ARRAY reader, not the scalar one: `color3f primvars:displayColor`
@@ -407,7 +420,9 @@ fn read_shader_inputs(
 ) -> BTreeMap<String, ParamValue> {
     let mut values = BTreeMap::new();
     for attr in reader.attr_names(shader_prim) {
-        let Some(name) = attr.strip_prefix("inputs:") else { continue };
+        let Some(name) = attr.strip_prefix("inputs:") else {
+            continue;
+        };
         if !reader.connections(shader_prim, &attr).is_empty() {
             continue;
         }
@@ -448,8 +463,12 @@ fn read_shader_texture_inputs(
 ) -> Vec<(TextureLayer, String)> {
     let mut out = Vec::new();
     for attr in reader.attr_names(shader_prim) {
-        let Some(name) = attr.strip_prefix("inputs:") else { continue };
-        let Some(layer) = texture_layer_for_input(&to_snake_case(name)) else { continue };
+        let Some(name) = attr.strip_prefix("inputs:") else {
+            continue;
+        };
+        let Some(layer) = texture_layer_for_input(&to_snake_case(name)) else {
+            continue;
+        };
         if !reader.connections(shader_prim, &attr).is_empty() {
             continue;
         }

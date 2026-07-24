@@ -57,7 +57,11 @@ pub struct WorldLabel {
 
 impl WorldLabel {
     pub fn new(text: impl Into<String>, size_px: f32) -> Self {
-        Self { text: text.into(), size_px, color: LinearRgba::WHITE }
+        Self {
+            text: text.into(),
+            size_px,
+            color: LinearRgba::WHITE,
+        }
     }
 }
 
@@ -91,7 +95,10 @@ pub struct BloomLook {
 
 impl Default for BloomLook {
     fn default() -> Self {
-        Self { intensity: 0.15, low_frequency_boost: 0.7 }
+        Self {
+            intensity: 0.15,
+            low_frequency_boost: 0.7,
+        }
     }
 }
 
@@ -120,7 +127,11 @@ impl Default for SceneCamera {
             // R4: MSAA was never set, so WebGL2 silently ran 4×. Off on the web —
             // the terrain shader's own footprint fades already do the AA that
             // actually matters at this scale.
-            msaa: if cfg!(target_arch = "wasm32") { MsaaLevel::Off } else { MsaaLevel::X2 },
+            msaa: if cfg!(target_arch = "wasm32") {
+                MsaaLevel::Off
+            } else {
+                MsaaLevel::X2
+            },
             hdr: false,
             bloom: None,
         }
@@ -130,7 +141,10 @@ impl Default for SceneCamera {
 impl SceneCamera {
     /// A camera with AgX tonemapping — what the USD scene cameras author.
     pub fn agx() -> Self {
-        Self { tone_map: ToneMap::AgX, ..Default::default() }
+        Self {
+            tone_map: ToneMap::AgX,
+            ..Default::default()
+        }
     }
 
     /// Enable HDR **and** bloom together. They are one decision, not two: bloom

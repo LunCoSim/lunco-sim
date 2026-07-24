@@ -53,7 +53,10 @@ fn reference_geometry_composes() {
         "/SandboxScene/Skid_Raycast_1/Wheel_FL",
         "/SandboxScene/Skid_Raycast_1/Wheel_RR",
     ] {
-        assert!(view.has_prim(&SdfPath::new(p).unwrap()), "missing composed prim {p}");
+        assert!(
+            view.has_prim(&SdfPath::new(p).unwrap()),
+            "missing composed prim {p}"
+        );
     }
 }
 
@@ -74,8 +77,10 @@ fn over_color_override_composes() {
     // The scene's `over "Chassis"` authors crimson; the referenced base is
     // (0.25, 0.22, 0.18). Matching the override — well clear of the base — is what
     // proves the opinion composed and won.
-    assert!((c[0] - 0.85).abs() < 0.01 && (c[1] - 0.15).abs() < 0.01 && (c[2] - 0.12).abs() < 0.01,
-        "override colour must be (0.85,0.15,0.12), got {c:?}");
+    assert!(
+        (c[0] - 0.85).abs() < 0.01 && (c[1] - 0.15).abs() < 0.01 && (c[2] - 0.12).abs() < 0.01,
+        "override colour must be (0.85,0.15,0.12), got {c:?}"
+    );
 }
 
 /// apiSchemas compose across the reference: the physical skid rover carries the
@@ -88,7 +93,10 @@ fn api_schemas_compose() {
         &SdfPath::new("/SandboxScene/Skid_Physical_1").unwrap(),
         "PhysxVehicleTankDifferentialAPI",
     );
-    assert!(ok, "Skid_Physical_1 must compose PhysxVehicleTankDifferentialAPI");
+    assert!(
+        ok,
+        "Skid_Physical_1 must compose PhysxVehicleTankDifferentialAPI"
+    );
 }
 
 /// Relationship targets survive composition (the physical rover's wheel hinge
@@ -97,9 +105,15 @@ fn api_schemas_compose() {
 fn joint_relationship_targets_survive() {
     let cs = compose("scenes/sandbox/sandbox_scene.usda");
     let view = cs.view();
-    let target = first_rel_target(&view, "/SandboxScene/Skid_Physical_1/Wheel_FL_Hinge.physics:body1")
-        .expect("Wheel_FL_Hinge must have a physics:body1 target");
-    assert_eq!(target, "/SandboxScene/Skid_Physical_1/Wheel_FL", "joint body1 target");
+    let target = first_rel_target(
+        &view,
+        "/SandboxScene/Skid_Physical_1/Wheel_FL_Hinge.physics:body1",
+    )
+    .expect("Wheel_FL_Hinge must have a physics:body1 target");
+    assert_eq!(
+        target, "/SandboxScene/Skid_Physical_1/Wheel_FL",
+        "joint body1 target"
+    );
 }
 
 /// Standalone rover composition (as the Bevy-pipeline tests do): the root's
@@ -114,14 +128,23 @@ fn standalone_rover_reader_is_complete() {
     // Root children — the exact list `children` returns, which is what
     // `instantiate_usd_prim` iterates in production.
     let kids = view.children(&SdfPath::new("/SkidRover").unwrap());
-    let names: Vec<String> = kids.iter().filter_map(|p| p.name().map(str::to_string)).collect();
+    let names: Vec<String> = kids
+        .iter()
+        .filter_map(|p| p.name().map(str::to_string))
+        .collect();
     for w in ["Chassis", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
-        assert!(names.iter().any(|n| n == w), "SkidRover children missing {w}; got {names:?}");
+        assert!(
+            names.iter().any(|n| n == w),
+            "SkidRover children missing {w}; got {names:?}"
+        );
     }
 
     // Vehicle-type detection.
     assert!(
-        view.has_api_schema(&SdfPath::new("/SkidRover").unwrap(), "PhysxVehicleTankDifferentialAPI"),
+        view.has_api_schema(
+            &SdfPath::new("/SkidRover").unwrap(),
+            "PhysxVehicleTankDifferentialAPI"
+        ),
         "SkidRover must compose PhysxVehicleTankDifferentialAPI"
     );
 
@@ -232,5 +255,8 @@ fn gltf_resolved_asset_synthesized() {
     let uri = view
         .resolved_asset(&visual)
         .expect("Perseverance/Visual missing lunco:resolvedAsset");
-    assert!(uri.contains("perseverance.glb"), "resolved URI should be the glb, got {uri}");
+    assert!(
+        uri.contains("perseverance.glb"),
+        "resolved URI should be the glb, got {uri}"
+    );
 }

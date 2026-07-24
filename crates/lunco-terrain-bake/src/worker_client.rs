@@ -203,7 +203,11 @@ fn handle_reply(data: JsValue) {
                         header.res
                     ))
                 } else {
-                    Ok(HeightGrid { res: header.res, half_extent: header.half_extent, heights })
+                    Ok(HeightGrid {
+                        res: header.res,
+                        half_extent: header.half_extent,
+                        heights,
+                    })
                 }
             }
             _ => Err("worker reply missing heights buffer".to_string()),
@@ -251,7 +255,12 @@ pub fn dispatch(id: u32, job: &DemBakeJob, site_id: &str, tif: &[u8]) -> Result<
     Reflect::set(&obj, &"tif".into(), &tif_buf)?;
 
     let transfer = Array::of1(&tif_buf);
-    POOL.with(|p| p.borrow().as_ref().unwrap().post_transfer(0, &obj, &transfer))?;
+    POOL.with(|p| {
+        p.borrow()
+            .as_ref()
+            .unwrap()
+            .post_transfer(0, &obj, &transfer)
+    })?;
     INFLIGHT.with(|f| f.borrow_mut().insert(id));
     Ok(())
 }

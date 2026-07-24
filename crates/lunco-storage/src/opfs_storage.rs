@@ -79,9 +79,7 @@ impl OpfsStorage {
             .map_err(|_| StorageError::NotFound)?
             .dyn_into::<web_sys::File>()
             .map_err(|_| unsupported("getFile did not return a File"))?;
-        let buf = JsFuture::from(file.array_buffer())
-            .await
-            .map_err(js_err)?;
+        let buf = JsFuture::from(file.array_buffer()).await.map_err(js_err)?;
         let array = js_sys::Uint8Array::new(&buf);
         Ok(array.to_vec())
     }
@@ -151,13 +149,17 @@ async fn resolve_dir(
     let mut dir = root.clone();
     for seg in segments {
         let opts = get_options(create);
-        let next = JsFuture::from(
-            dir.get_directory_handle_with_options(seg, opts.unchecked_ref()),
-        )
-        .await
-        .map_err(|e| if create { js_err(e) } else { StorageError::NotFound })?
-        .dyn_into::<web_sys::FileSystemDirectoryHandle>()
-        .map_err(|_| unsupported("getDirectoryHandle returned a non-directory"))?;
+        let next = JsFuture::from(dir.get_directory_handle_with_options(seg, opts.unchecked_ref()))
+            .await
+            .map_err(|e| {
+                if create {
+                    js_err(e)
+                } else {
+                    StorageError::NotFound
+                }
+            })?
+            .dyn_into::<web_sys::FileSystemDirectoryHandle>()
+            .map_err(|_| unsupported("getDirectoryHandle returned a non-directory"))?;
         dir = next;
     }
     Ok(dir)
@@ -172,7 +174,13 @@ async fn get_file(
     let opts = get_options(create);
     JsFuture::from(dir.get_file_handle_with_options(name, opts.unchecked_ref()))
         .await
-        .map_err(|e| if create { js_err(e) } else { StorageError::NotFound })?
+        .map_err(|e| {
+            if create {
+                js_err(e)
+            } else {
+                StorageError::NotFound
+            }
+        })?
         .dyn_into::<web_sys::FileSystemFileHandle>()
         .map_err(|_| unsupported("getFileHandle returned a non-file"))
 }

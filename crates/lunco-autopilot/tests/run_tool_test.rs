@@ -5,10 +5,8 @@
 //! would spam `ToolFired` events.
 
 use bevy::math::Vec3;
+use lunco_autopilot::{AutopilotBehavior, BehaviorSpec, DriveCtx, RunToolNode, ToolInvocation};
 use lunco_behavior::{Node, Status};
-use lunco_autopilot::{
-    AutopilotBehavior, BehaviorSpec, DriveCtx, RunToolNode, ToolInvocation,
-};
 
 fn ctx() -> DriveCtx {
     DriveCtx {
@@ -30,12 +28,21 @@ fn fires_exactly_once_then_latches() {
     let mut c = ctx();
     assert_eq!(node.tick(&mut c), Status::Success);
     assert_eq!(c.fired.len(), 1);
-    assert_eq!(c.fired[0], ToolInvocation { tool: "science::take_photo".into(), args: "{}".into() });
+    assert_eq!(
+        c.fired[0],
+        ToolInvocation {
+            tool: "science::take_photo".into(),
+            args: "{}".into()
+        }
+    );
 
     // Tick 2 + 3 on the same activation: latch holds — no re-fire.
     let mut c2 = ctx();
     assert_eq!(node.tick(&mut c2), Status::Success);
-    assert!(c2.fired.is_empty(), "latch must suppress re-fire on same activation");
+    assert!(
+        c2.fired.is_empty(),
+        "latch must suppress re-fire on same activation"
+    );
     let mut c3 = ctx();
     node.tick(&mut c3);
     assert!(c3.fired.is_empty());
@@ -53,7 +60,11 @@ fn reset_re_arms_for_next_activation() {
     // Second activation: fires again — reset re-armed the latch.
     let mut c2 = ctx();
     node.tick(&mut c2);
-    assert_eq!(c2.fired.len(), 1, "reset must re-arm so it fires on the next activation");
+    assert_eq!(
+        c2.fired.len(),
+        1,
+        "reset must re-arm so it fires on the next activation"
+    );
     // Third tick on the second activation: latched again.
     let mut c3 = ctx();
     node.tick(&mut c3);
@@ -67,7 +78,11 @@ fn holds_position_while_firing() {
     let mut c = ctx();
     c.out = (0.5, 0.1, 0.0); // pretend we were driving
     node.tick(&mut c);
-    assert_eq!(c.out, (0.0, 0.0, 1.0), "RunToolNode must brake (out = hold) while firing");
+    assert_eq!(
+        c.out,
+        (0.0, 0.0, 1.0),
+        "RunToolNode must brake (out = hold) while firing"
+    );
 }
 
 #[test]
@@ -158,8 +173,16 @@ fn patrol_refires_on_the_next_lap_after_leaving_the_waypoint() {
     };
     let spec = BehaviorSpec::Patrol {
         waypoints: vec![
-            PatrolWaypoint { pos: [0.0, 0.0, 0.0], dwell: None, on_arrival: photo() },
-            PatrolWaypoint { pos: [100.0, 0.0, 0.0], dwell: None, on_arrival: vec![] },
+            PatrolWaypoint {
+                pos: [0.0, 0.0, 0.0],
+                dwell: None,
+                on_arrival: photo(),
+            },
+            PatrolWaypoint {
+                pos: [100.0, 0.0, 0.0],
+                dwell: None,
+                on_arrival: vec![],
+            },
         ],
         speed: 0.5,
         radius: 2.0,
@@ -222,5 +245,8 @@ fn patrol_on_arrival_does_not_fire_before_arrival() {
     let mut c = ctx();
     c.pos = Vec3::ZERO; // vessel at origin, waypoint at x=100 → not arrived
     tree.0.tick(&mut c);
-    assert!(c.fired.is_empty(), "on_arrival must NOT fire before the vessel arrives");
+    assert!(
+        c.fired.is_empty(),
+        "on_arrival must NOT fire before the vessel arrives"
+    );
 }

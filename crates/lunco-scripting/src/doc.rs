@@ -251,8 +251,13 @@ impl Document for ScriptDocument {
                 self.display_name()
             )));
         }
-        if self.language == ScriptLanguage::Python && crate::python::get_python_status() != crate::python::PythonStatus::Available {
-            return Err(DocumentError::ValidationFailed("Python is not available on this system. Editing Python scripts is disabled.".to_string()));
+        if self.language == ScriptLanguage::Python
+            && crate::python::get_python_status() != crate::python::PythonStatus::Available
+        {
+            return Err(DocumentError::ValidationFailed(
+                "Python is not available on this system. Editing Python scripts is disabled."
+                    .to_string(),
+            ));
         }
 
         let inverse = match op {
@@ -263,27 +268,39 @@ impl Document for ScriptDocument {
             }
             ScriptOp::AddInput(name) => {
                 if self.inputs.contains(&name) {
-                    return Err(DocumentError::ValidationFailed(format!("Input '{}' already exists", name)));
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "Input '{}' already exists",
+                        name
+                    )));
                 }
                 self.inputs.push(name.clone());
                 ScriptOp::RemoveInput(name)
             }
             ScriptOp::RemoveInput(name) => {
-                let pos = self.inputs.iter().position(|x| x == &name)
-                    .ok_or_else(|| DocumentError::ValidationFailed(format!("Input '{}' not found", name)))?;
+                let pos = self.inputs.iter().position(|x| x == &name).ok_or_else(|| {
+                    DocumentError::ValidationFailed(format!("Input '{}' not found", name))
+                })?;
                 self.inputs.remove(pos);
                 ScriptOp::AddInput(name)
             }
             ScriptOp::AddOutput(name) => {
                 if self.outputs.contains(&name) {
-                    return Err(DocumentError::ValidationFailed(format!("Output '{}' already exists", name)));
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "Output '{}' already exists",
+                        name
+                    )));
                 }
                 self.outputs.push(name.clone());
                 ScriptOp::RemoveOutput(name)
             }
             ScriptOp::RemoveOutput(name) => {
-                let pos = self.outputs.iter().position(|x| x == &name)
-                    .ok_or_else(|| DocumentError::ValidationFailed(format!("Output '{}' not found", name)))?;
+                let pos = self
+                    .outputs
+                    .iter()
+                    .position(|x| x == &name)
+                    .ok_or_else(|| {
+                        DocumentError::ValidationFailed(format!("Output '{}' not found", name))
+                    })?;
                 self.outputs.remove(pos);
                 ScriptOp::AddOutput(name)
             }
@@ -358,7 +375,10 @@ mod tests {
         let id = DocumentId::new(42);
         app.world_mut()
             .resource_mut::<crate::ScriptRegistry>()
-            .insert_document(id, ScriptDocument::new(42, ScriptLanguage::Rhai, "print(1);"));
+            .insert_document(
+                id,
+                ScriptDocument::new(42, ScriptLanguage::Rhai, "print(1);"),
+            );
 
         let entity = app
             .world_mut()

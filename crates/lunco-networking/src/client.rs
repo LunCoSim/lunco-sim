@@ -81,7 +81,10 @@ fn seed_pending_from_deep_link_arg(
     else {
         return;
     };
-    info!("[net] deep link → pending connect to {} (awaiting confirm)", link.address);
+    info!(
+        "[net] deep link → pending connect to {} (awaiting confirm)",
+        link.address
+    );
     pending.request = Some(lunco_core::session::PendingConnectRequest {
         address: link.address,
         digest: link.digest,
@@ -191,7 +194,12 @@ fn on_join_server(
         commands.entity(e).try_despawn();
     }
     let address = crate::normalize_addr(&cmd.address);
-    spawn_client(&mut commands, &address, crate::next_client_id(), &cmd.digest);
+    spawn_client(
+        &mut commands,
+        &address,
+        crate::next_client_id(),
+        &cmd.digest,
+    );
     // Standalone→Client: authority follows the role automatically
     // (`is_authoritative()` is now false), so a joined client stops minting ids —
     // no separate flag to flip in lock-step.

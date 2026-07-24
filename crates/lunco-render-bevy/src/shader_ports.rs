@@ -77,7 +77,10 @@ use crate::shader_material::ShaderMaterial;
 /// Returns `None` while the material or its shader is still loading — the schema
 /// is reflected from WGSL source by `reflect_shader_schemas`, which cannot have run
 /// before the asset exists.
-fn schema_of(world: &World, entity: Entity) -> Option<std::sync::Arc<lunco_materials::dyn_params::ParamSchema>> {
+fn schema_of(
+    world: &World,
+    entity: Entity,
+) -> Option<std::sync::Arc<lunco_materials::dyn_params::ParamSchema>> {
     let handle = world.get::<MeshMaterial3d<ShaderMaterial>>(entity)?;
     let assets = world.get_resource::<Assets<ShaderMaterial>>()?;
     let mat = assets.get(&handle.0)?;
@@ -132,7 +135,9 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         if world.get::<ShaderLook>(entity).is_none() {
             return;
         }
-        let Some(schema) = schema_of(world, entity) else { return };
+        let Some(schema) = schema_of(world, entity) else {
+            return;
+        };
         for f in &schema.fields {
             // EVERY declared field is listed, whether or not it currently holds a
             // value — the shader's parameters are what the prim HAS, and a field
@@ -268,9 +273,19 @@ mod tests {
         app.world_mut().clear_trackers();
 
         assert!(reg.write_port(app.world_mut(), e, "glow", 0.25));
-        assert!(!app.world().entity(e).get_ref::<ShaderLook>().unwrap().is_changed());
+        assert!(!app
+            .world()
+            .entity(e)
+            .get_ref::<ShaderLook>()
+            .unwrap()
+            .is_changed());
 
         assert!(reg.write_port(app.world_mut(), e, "glow", 0.75));
-        assert!(app.world().entity(e).get_ref::<ShaderLook>().unwrap().is_changed());
+        assert!(app
+            .world()
+            .entity(e)
+            .get_ref::<ShaderLook>()
+            .unwrap()
+            .is_changed());
     }
 }

@@ -64,6 +64,7 @@ use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
 mod panel;
+mod editor_tabs;
 mod perspective;
 mod perspective_help;
 mod render_robustness;
@@ -201,6 +202,7 @@ impl HelpAnchors {
     }
 }
 pub use files_panel::{FilesPanel, FILES_PANEL_ID};
+pub use editor_tabs::{EditorTab, EditorTabId, EditorTabs};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserSection, BrowserSectionRegistry,
     FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
@@ -294,21 +296,39 @@ pub struct FocusPanel {
     pub id: String,
 }
 
+/// Focus requests emitted while the dock layout is scoped out during egui
+/// rendering. Drained on the next `Update`, when `WorkbenchLayout` is present.
+#[derive(Resource, Default)]
+struct PendingPanelFocus(Vec<String>);
+
 #[on_command(FocusPanel)]
-fn on_focus_panel(trigger: On<FocusPanel>, layout: Option<ResMut<WorkbenchLayout>>) {
+fn on_focus_panel(
+    trigger: On<FocusPanel>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+    pending: Option<ResMut<PendingPanelFocus>>,
+) {
     // `FocusPanel` is safe to fire at any time (e.g. an asset-browser click
     // before the workbench has finished setting up, or in a host config that
     // doesn't add the full workbench). `WorkbenchLayout` is only present once
     // `WorkbenchPlugin` has run; treat its absence as a no-op rather than
     // panicking — there is no dock to focus into.
     let Some(mut layout) = layout else {
+        if let Some(mut pending) = pending {
+            let id = trigger.event().id.clone();
+            if !pending.0.contains(&id) {
+                pending.0.push(id);
+            }
+        }
         bevy::log::debug!(
-            "[FocusPanel] id={:?} ignored — WorkbenchLayout not present",
+            "[FocusPanel] id={:?} queued — WorkbenchLayout temporarily unavailable",
             trigger.event().id
         );
         return;
     };
-    let want = trigger.event().id.as_str();
+    focus_panel_now(&mut layout, &trigger.event().id);
+}
+
+fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
     // PanelId wraps `&'static str`; we can't construct one from a
     // runtime String, so probe each tab in the dock and match by
     // value.
@@ -351,6 +371,15 @@ fn on_focus_panel(trigger: On<FocusPanel>, layout: Option<ResMut<WorkbenchLayout
     }
 }
 
+fn drain_pending_panel_focus(
+    mut pending: ResMut<PendingPanelFocus>,
+    mut layout: ResMut<WorkbenchLayout>,
+) {
+    for id in std::mem::take(&mut pending.0) {
+        focus_panel_now(&mut layout, &id);
+    }
+}
+
 register_commands!(on_focus_panel,);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -375,6 +404,30 @@ pub struct OpenSourceView {
     /// Registered `AssetFile::asset_path`; arbitrary filesystem paths are not
     /// accepted by this library-only command.
     pub asset_path: String,
+}
+
+/// Open one file belonging to an open Twin in the editable source panel.
+#[Command(default)]
+pub struct OpenTwinSource {
+    /// Absolute root of the already-open Twin.
+    pub twin_root: String,
+    /// File path relative to that root.
+    pub relative_path: String,
+    /// Keep the file open when another preview is selected.
+    pub pinned: bool,
+}
+
+/// Persist the editable source buffer, optionally refreshing its owning domain.
+#[Command(default)]
+pub struct SaveSourceText {
+    /// Absolute root of the already-open Twin.
+    pub twin_root: String,
+    /// File path relative to that root.
+    pub relative_path: String,
+    /// Complete UTF-8 source text.
+    pub text: String,
+    /// Re-dispatch `OpenFile` after writing so the owning domain updates.
+    pub update: bool,
 }
 
 pub use perspective::{Perspective, PerspectiveId};
@@ -527,6 +580,7 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(perspective_help::PerspectiveHelpPlugin);
         }
         app.init_resource::<WorkbenchLayout>()
+            .init_resource::<PendingPanelFocus>()
             .init_resource::<HelpAnchors>()
             .init_resource::<DockSizes>()
             .init_resource::<PendingTabCloses>()
@@ -538,8 +592,10 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<BrowserSectionRegistry>()
             .init_resource::<BrowserActions>()
             .init_resource::<UnsavedDocs>()
-            .init_resource::<source_viewer::SourceViewerState>()
+            .init_resource::<EditorTabs<source_viewer::SourceTabState>>()
+            .init_resource::<source_viewer::PendingSourceRequests>()
             .init_resource::<source_viewer::PendingSourceReads>()
+            .init_resource::<source_viewer::PendingSourceWrites>()
             // Cross-domain URI registry. Starts empty; each domain
             // plugin (lunco-modelica, a future lunco-usd, …) pushes
             // its own handler on build. See `uri.rs` for the trait.
@@ -547,18 +603,32 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<CurrentSceneName>()
             .add_observer(on_open_tab)
             .add_observer(on_close_tab)
-            .add_systems(Update, source_viewer::drain_pending_source_reads);
+            .add_systems(
+                Update,
+                (
+                    source_viewer::drain_pending_source_requests,
+                    source_viewer::drain_pending_source_reads,
+                    source_viewer::drain_pending_source_writes,
+                    source_viewer::drain_source_tab_closes,
+                )
+                    .chain(),
+            );
         register_all_commands(app);
         source_viewer::__register_on_open_file_for_text(app);
         source_viewer::__register_on_open_source_view(app);
-        app.register_panel(source_viewer::SourceViewerPanel);
+        source_viewer::__register_on_open_twin_source(app);
+        source_viewer::__register_on_save_source_text(app);
+        app.register_instance_panel(source_viewer::SourceEditorPanel);
         app.add_systems(
             EguiPrimaryContextPass,
             render_workbench.in_set(WorkbenchRenderSet),
         )
         // Scene picking is handled by bevy_picking (egui occlusion via
         // bevy_egui's picking backend) — no scene-pointer resource, no gate.
-        .add_systems(bevy::prelude::Update, maintain_dock_widths)
+        .add_systems(
+            bevy::prelude::Update,
+            (maintain_dock_widths, drain_pending_panel_focus),
+        )
         .add_systems(Startup, register_terrain_settings_menu);
 
         // Built-in Files section ships with the workbench so apps get
@@ -4281,6 +4351,20 @@ mod tests {
         app.world_mut().trigger(FocusPanel {
             id: "not_mounted".into(),
         });
+    }
+
+    #[test]
+    fn focus_panel_is_queued_while_layout_is_scoped_out() {
+        let mut app = App::new();
+        app.init_resource::<PendingPanelFocus>();
+        app.add_observer(on_focus_panel);
+        app.world_mut().trigger(FocusPanel {
+            id: "source_viewer".into(),
+        });
+        assert_eq!(
+            app.world().resource::<PendingPanelFocus>().0,
+            ["source_viewer"]
+        );
     }
 
     struct TestPerspective {

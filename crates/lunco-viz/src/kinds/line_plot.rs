@@ -22,9 +22,9 @@ use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 use serde::{Deserialize, Serialize};
 
 use crate::registry::{VisualizationRegistry, VizFitRequests};
-use crate::signal::{SignalRegistry, SignalRef, SignalType, ScalarSample};
+use crate::signal::{ScalarSample, SignalRef, SignalRegistry, SignalType};
 use crate::view::{Panel2DCtx, ViewKind};
-use crate::viz::{RoleSpec, SignalBinding, VisualizationConfig, Visualization, VizKindId};
+use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
 
 /// LinePlot-specific options stashed in
 /// [`VisualizationConfig::style`]. Serialised as JSON for on-disk
@@ -72,10 +72,18 @@ const ROLE_Y: RoleSpec = RoleSpec {
 pub struct LinePlot;
 
 impl Visualization for LinePlot {
-    fn kind_id(&self) -> VizKindId { LINE_PLOT_KIND }
-    fn display_name(&self) -> &'static str { "Line plot (time-series)" }
-    fn role_schema(&self) -> &'static [RoleSpec] { &[ROLE_Y] }
-    fn compatible_views(&self) -> &'static [ViewKind] { &[ViewKind::Panel2D] }
+    fn kind_id(&self) -> VizKindId {
+        LINE_PLOT_KIND
+    }
+    fn display_name(&self) -> &'static str {
+        "Line plot (time-series)"
+    }
+    fn role_schema(&self) -> &'static [RoleSpec] {
+        &[ROLE_Y]
+    }
+    fn compatible_views(&self) -> &'static [ViewKind] {
+        &[ViewKind::Panel2D]
+    }
 
     fn render_panel_2d(&self, ctx: &mut Panel2DCtx, config: &VisualizationConfig) {
         // Series colours come from the active THEME (`PlotTokens::series`), published
@@ -121,10 +129,7 @@ impl Visualization for LinePlot {
                 .unwrap_or((egui::Color32::GRAY, egui::Color32::DARK_GRAY));
             ctx.ui.vertical_centered(|ui| {
                 ui.add_space(20.0);
-                ui.label(
-                    egui::RichText::new("No signals bound.")
-                        .color(text),
-                );
+                ui.label(egui::RichText::new("No signals bound.").color(text));
                 ui.label(
                     egui::RichText::new(
                         "Add one from the ➕ picker above, or drag a \
@@ -179,7 +184,10 @@ impl Visualization for LinePlot {
                 // has no per-item hover hook — inlining the
                 // description text is the only way to surface it.)
                 let label = b.label.clone().unwrap_or_else(|| {
-                    match registry.meta(&b.source).and_then(|m| m.description.as_deref()) {
+                    match registry
+                        .meta(&b.source)
+                        .and_then(|m| m.description.as_deref())
+                    {
                         Some(desc) if !desc.trim().is_empty() => {
                             format!("{} ({})", b.source.path, desc.trim())
                         }
@@ -220,10 +228,13 @@ impl Visualization for LinePlot {
         // first binding path when only one Y is bound, else
         // "(see legend)" so the plot doesn't mislabel a multi-line
         // chart with the first signal's name).
-        let x_label = style.x_label.clone().unwrap_or_else(|| match &style.x_signal {
-            None => "time (s)".to_string(),
-            Some(xs) => xs.path.clone(),
-        });
+        let x_label = style
+            .x_label
+            .clone()
+            .unwrap_or_else(|| match &style.x_signal {
+                None => "time (s)".to_string(),
+                Some(xs) => xs.path.clone(),
+            });
         let mut y_label = style.y_label.unwrap_or_else(|| {
             if y_bindings.len() == 1 {
                 y_bindings[0].source.path.clone()
@@ -250,9 +261,11 @@ impl Visualization for LinePlot {
             .label_formatter(move |pos| {
                 // egui_plot 0.36 unified the (name, point) args into `HoverPosition`.
                 let (name, point) = match pos {
-                    egui_plot::HoverPosition::NearDataPoint { plot_name, position, .. } => {
-                        (*plot_name, position)
-                    }
+                    egui_plot::HoverPosition::NearDataPoint {
+                        plot_name,
+                        position,
+                        ..
+                    } => (*plot_name, position),
                     egui_plot::HoverPosition::Elsewhere { position } => ("", position),
                 };
                 Some(crate::plot_fmt::hover_label(name, point, log_y))
@@ -338,9 +351,7 @@ fn render_toolbar(ctx: &mut Panel2DCtx, config: &VisualizationConfig) -> Option<
                 }
                 for sig in &available {
                     let selected = style.x_signal.as_ref() == Some(sig);
-                    if ui.selectable_label(selected, &sig.path).clicked()
-                        && !selected
-                    {
+                    if ui.selectable_label(selected, &sig.path).clicked() && !selected {
                         edit = Some(Edit::SetX(Some(sig.clone())));
                     }
                 }
@@ -470,11 +481,26 @@ mod tests {
     #[test]
     fn pair_by_time_emits_one_point_per_y_after_first_x() {
         let xs = vec![s(0.0, 10.0), s(1.0, 20.0), s(2.0, 30.0)];
-        let ys = vec![s(0.0, 100.0), s(0.5, 110.0), s(1.0, 120.0), s(1.5, 130.0), s(2.0, 140.0)];
+        let ys = vec![
+            s(0.0, 100.0),
+            s(0.5, 110.0),
+            s(1.0, 120.0),
+            s(1.5, 130.0),
+            s(2.0, 140.0),
+        ];
         let got = pair_by_time(&xs, ys);
         // piecewise-constant X: y@0 pairs with x@0=10; y@0.5 still with x@0=10;
         // y@1 with x@1=20; y@1.5 still with x@1=20; y@2 with x@2=30.
-        assert_eq!(got, vec![[10.0, 100.0], [10.0, 110.0], [20.0, 120.0], [20.0, 130.0], [30.0, 140.0]]);
+        assert_eq!(
+            got,
+            vec![
+                [10.0, 100.0],
+                [10.0, 110.0],
+                [20.0, 120.0],
+                [20.0, 130.0],
+                [30.0, 140.0]
+            ]
+        );
     }
 
     #[test]

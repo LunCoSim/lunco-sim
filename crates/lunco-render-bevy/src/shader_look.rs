@@ -30,14 +30,14 @@
 //! by name, and is repacked the moment the schema lands. That machinery is
 //! untouched.
 
+use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
+use crate::shader_material::{build_shader_material, ShaderMaterial};
 use bevy::asset::AssetId;
 use bevy::light::NotShadowCaster;
 use bevy::pbr::MeshMaterial3d;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::shader::Shader;
-use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
-use crate::shader_material::{build_shader_material, ShaderMaterial};
 use lunco_materials::{ShaderLook, ShaderLookKey, TextureLayer};
 use lunco_render::SurfaceAlpha;
 
@@ -69,7 +69,12 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
             .map(|p| asset_server.load::<Shader>(p)),
         // `live` params are real shader params — they are merely absent from the
         // sharing key, so a freshly-built material still has to carry them.
-        values: look.values.iter().chain(look.live.iter()).map(|(k, v)| (k.clone(), *v)).collect(),
+        values: look
+            .values
+            .iter()
+            .chain(look.live.iter())
+            .map(|(k, v)| (k.clone(), *v))
+            .collect(),
         // The same mapping `lunco-render-bevy`'s PBR binder applies to a `PbrLook`,
         // so a prim's authored transparency means the same thing on either path.
         alpha_mode: match look.alpha {
@@ -212,7 +217,9 @@ fn rebind_changed_shader_look(
         }
         let handle = material_for(look, &mut cache, &mut materials, &asset_server);
         let same_material = current.is_some_and(|m| m.0.id() == handle.id());
-        commands.entity(e).try_insert(MeshMaterial3d(handle.clone()));
+        commands
+            .entity(e)
+            .try_insert(MeshMaterial3d(handle.clone()));
 
         // The look changed but resolved to the material it is ALREADY on ⇒ only
         // `live` params moved (they are outside the key). Write them into that
@@ -220,7 +227,11 @@ fn rebind_changed_shader_look(
         // unprepared material every slider tick and makes the terrain flicker.
         if same_material && !look.live.is_empty() && written.insert(handle.id()) {
             if let Some(mut mat) = materials.get_mut(&handle) {
-                mat.set_many(look.live.iter().map(|(name, value)| (name.as_str(), *value)));
+                mat.set_many(
+                    look.live
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), *value)),
+                );
             }
         }
     }
@@ -302,7 +313,9 @@ mod tests {
             .with_vertex_shader("shaders/terrain_geomorph.wgsl")
             .with("morph_start", ParamValue::F32(0.7))
             .with("morph_end", ParamValue::F32(1.0));
-        let ids: Vec<Entity> = (0..64).map(|_| app.world_mut().spawn(look.clone()).id()).collect();
+        let ids: Vec<Entity> = (0..64)
+            .map(|_| app.world_mut().spawn(look.clone()).id())
+            .collect();
         app.update();
 
         let handles: Vec<_> = ids.iter().map(|&e| material_of(&app, e)).collect();
@@ -319,13 +332,16 @@ mod tests {
     fn different_looks_get_different_materials() {
         let mut app = app();
         app.world_mut().spawn(
-            ShaderLook::new("shaders/terrain_geomorph.wgsl").with("morph_start", ParamValue::F32(0.0)),
+            ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                .with("morph_start", ParamValue::F32(0.0)),
         );
         app.world_mut().spawn(
-            ShaderLook::new("shaders/terrain_geomorph.wgsl").with("morph_start", ParamValue::F32(1.0)),
+            ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                .with("morph_start", ParamValue::F32(1.0)),
         );
         // A different shader path is also a different material.
-        app.world_mut().spawn(ShaderLook::new("shaders/terrain_geomorph_flat.wgsl"));
+        app.world_mut()
+            .spawn(ShaderLook::new("shaders/terrain_geomorph_flat.wgsl"));
         app.update();
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 3);
     }
@@ -337,7 +353,10 @@ mod tests {
         let mut app = app();
         let e = app
             .world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl").with("morph_start", ParamValue::F32(0.0)))
+            .spawn(
+                ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                    .with("morph_start", ParamValue::F32(0.0)),
+            )
             .id();
         app.update();
         let first = material_of(&app, e);
@@ -351,7 +370,10 @@ mod tests {
             .insert("morph_start".into(), ParamValue::F32(0.5));
         app.update();
         let second = material_of(&app, e);
-        assert_ne!(first, second, "a changed look must bind a different material");
+        assert_ne!(
+            first, second,
+            "a changed look must bind a different material"
+        );
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 2);
 
         // …and stepping BACK to a look already seen reuses the cached material
@@ -383,7 +405,8 @@ mod tests {
                     .with_texture(TextureLayer::Normal, normal.clone()),
             )
             .id();
-        app.world_mut().spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl"));
+        app.world_mut()
+            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl"));
         app.update();
 
         let h = material_of(&app, e);

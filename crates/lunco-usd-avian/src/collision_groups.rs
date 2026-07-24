@@ -126,19 +126,34 @@ impl CollisionGroupTable {
         paths.sort();
 
         for path in paths {
-            let Ok(prim) = SdfPath::new(&path) else { continue };
+            let Ok(prim) = SdfPath::new(&path) else {
+                continue;
+            };
             let merge = reader
                 .text(&prim, ptok::A_MERGE_GROUP)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            let key = if merge.is_empty() { path.clone() } else { format!("merge:{merge}") };
+            let key = if merge.is_empty() {
+                path.clone()
+            } else {
+                format!("merge:{merge}")
+            };
 
-            let includes = rel_paths(reader, &prim, &format!("collection:{COLLIDERS_COLLECTION}:includes"));
-            let excludes = rel_paths(reader, &prim, &format!("collection:{COLLIDERS_COLLECTION}:excludes"));
+            let includes = rel_paths(
+                reader,
+                &prim,
+                &format!("collection:{COLLIDERS_COLLECTION}:includes"),
+            );
+            let excludes = rel_paths(
+                reader,
+                &prim,
+                &format!("collection:{COLLIDERS_COLLECTION}:excludes"),
+            );
             let filtered = rel_paths(reader, &prim, ptok::A_FILTERED_GROUPS);
-            let invert =
-                reader.scalar::<bool>(&prim, ptok::A_INVERT_FILTERED_GROUPS).unwrap_or(false);
+            let invert = reader
+                .scalar::<bool>(&prim, ptok::A_INVERT_FILTERED_GROUPS)
+                .unwrap_or(false);
 
             let entry = by_key.entry(key.clone()).or_insert_with(|| {
                 order.push(key.clone());
@@ -225,7 +240,11 @@ impl CollisionGroupTable {
                 })
                 .map(|b| 1u32 << b)
                 .fold(0, |a, b| a | b);
-            blocked[i] = if g.invert { all_group_bits & !listed } else { listed };
+            blocked[i] = if g.invert {
+                all_group_bits & !listed
+            } else {
+                listed
+            };
         }
         // Symmetry pass: if A blocks B, B blocks A.
         let bit_index: HashMap<u32, usize> =
@@ -266,7 +285,10 @@ impl CollisionGroupTable {
         if memberships == 0 {
             return None;
         }
-        Some(CollisionLayers::new(LayerMask(memberships), LayerMask(!blocked)))
+        Some(CollisionLayers::new(
+            LayerMask(memberships),
+            LayerMask(!blocked),
+        ))
     }
 
     /// Group membership as `(prim, [group keys])`, for diagnostics and tests.
@@ -330,7 +352,10 @@ impl CollisionGroupTables {
         stage: AssetId<lunco_usd_bevy::UsdStageAsset>,
         reader: &StageView<'_>,
     ) -> &CollisionGroupTable {
-        let table = self.by_stage.entry(stage).or_insert_with(|| CollisionGroupTable::read(reader));
+        let table = self
+            .by_stage
+            .entry(stage)
+            .or_insert_with(|| CollisionGroupTable::read(reader));
         if !table.is_empty() && self.announced.insert(stage) {
             info!(
                 "[usd-avian] {} collision group(s) on this stage",

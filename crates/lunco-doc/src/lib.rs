@@ -94,8 +94,7 @@ pub use refindex::RefIndex;
 /// **binding documents** (cross-format links) can store
 /// `(DocumentId, SymbolPath)` pairs without depending on domain crates.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord,
-    serde::Serialize, serde::Deserialize,
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 pub struct SymbolPath(String);
 
@@ -172,9 +171,18 @@ pub trait Resolver {
 /// boundary. `bevy_reflect` is already in our dep tree via `lunco-core`,
 /// so this adds no new dependency cost.
 #[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
     bevy_reflect::Reflect,
-    serde::Serialize, serde::Deserialize,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 pub struct DocumentId(pub u64);
 
@@ -327,7 +335,9 @@ impl DocumentOrigin {
 
     /// Shorthand: a bundled example doc.
     pub fn bundled(filename: impl Into<String>) -> Self {
-        Self::Bundled { filename: filename.into() }
+        Self::Bundled {
+            filename: filename.into(),
+        }
     }
 
     /// Filesystem path, if any. `None` for [`Untitled`](Self::Untitled)
@@ -461,10 +471,7 @@ impl fmt::Display for DocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
-            Self::ReadOnly => write!(
-                f,
-                "document is read-only — duplicate to workspace to edit"
-            ),
+            Self::ReadOnly => write!(f, "document is read-only — duplicate to workspace to edit"),
             Self::Internal(msg) => write!(f, "Internal error: {}", msg),
         }
     }
@@ -764,10 +771,7 @@ impl<D: Document> DocumentHost<D> {
     /// stacks are untouched, and the op-id is **not** added to the
     /// seen-ops ring (so a retry of the same op-id can succeed once
     /// the underlying problem is fixed).
-    pub fn apply<M: Into<Mutation<D::Op>>>(
-        &mut self,
-        mutation: M,
-    ) -> Result<Ack, Reject> {
+    pub fn apply<M: Into<Mutation<D::Op>>>(&mut self, mutation: M) -> Result<Ack, Reject> {
         let mutation: Mutation<D::Op> = mutation.into();
         if self.seen_ops.contains(&mutation.id) {
             return Err(Reject::Duplicate);
@@ -925,7 +929,10 @@ mod tests {
                     let old_text = self.text[pos..pos + len].to_string();
                     self.text.replace_range(pos..pos + len, "");
                     self.generation += 1;
-                    Ok(TextOp::Insert { pos, text: old_text })
+                    Ok(TextOp::Insert {
+                        pos,
+                        text: old_text,
+                    })
                 }
             }
         }
@@ -967,7 +974,10 @@ mod tests {
         struct VecRecorder(Mutex<Vec<(TextOp, TextOp)>>);
         impl OpRecorder<TextOp> for VecRecorder {
             fn record(&self, forward: &TextOp, inverse: &TextOp) {
-                self.0.lock().unwrap().push((forward.clone(), inverse.clone()));
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((forward.clone(), inverse.clone()));
             }
         }
 
@@ -981,21 +991,42 @@ mod tests {
         host.set_recorder(rec.clone());
         assert!(host.has_recorder());
 
-        host.apply(Mutation::local(TextOp::Insert { pos: 2, text: "!".into() }))
-            .unwrap();
+        host.apply(Mutation::local(TextOp::Insert {
+            pos: 2,
+            text: "!".into(),
+        }))
+        .unwrap();
         host.undo().unwrap();
         host.redo().unwrap();
 
         let log = rec.0.lock().unwrap();
         assert_eq!(log.len(), 3, "apply + undo + redo each record one pair");
         // apply: forward Insert, inverse Delete.
-        assert_eq!(log[0].0, TextOp::Insert { pos: 2, text: "!".into() });
+        assert_eq!(
+            log[0].0,
+            TextOp::Insert {
+                pos: 2,
+                text: "!".into()
+            }
+        );
         assert_eq!(log[0].1, TextOp::Delete { pos: 2, len: 1 });
         // undo: forward is the inverse Delete, inverse is the re-Insert.
         assert_eq!(log[1].0, TextOp::Delete { pos: 2, len: 1 });
-        assert_eq!(log[1].1, TextOp::Insert { pos: 2, text: "!".into() });
+        assert_eq!(
+            log[1].1,
+            TextOp::Insert {
+                pos: 2,
+                text: "!".into()
+            }
+        );
         // redo: forward Insert again.
-        assert_eq!(log[2].0, TextOp::Insert { pos: 2, text: "!".into() });
+        assert_eq!(
+            log[2].0,
+            TextOp::Insert {
+                pos: 2,
+                text: "!".into()
+            }
+        );
     }
 
     #[test]

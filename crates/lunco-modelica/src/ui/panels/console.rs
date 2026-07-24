@@ -241,12 +241,7 @@ impl Panel for ConsolePanel {
                             .unwrap_or(0.0);
                         let ts = format!("[+{offset:>6.2}s]");
                         ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(&ts)
-                                    .monospace()
-                                    .size(10.0)
-                                    .color(muted),
-                            );
+                            ui.label(egui::RichText::new(&ts).monospace().size(10.0).color(muted));
                             ui.label(
                                 egui::RichText::new(msg.level.tag())
                                     .monospace()

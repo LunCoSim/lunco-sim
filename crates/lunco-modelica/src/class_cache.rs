@@ -58,10 +58,7 @@ pub enum MslLookupMode {
 
 impl MslLookupMode {
     /// Resolve `qualified` using this mode's policy.
-    pub fn lookup(
-        self,
-        qualified: &str,
-    ) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
+    pub fn lookup(self, qualified: &str) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
         match self {
             Self::Cached => peek_msl_class_cached(qualified),
             Self::Loading => peek_or_load_msl_class_blocking(qualified),
@@ -109,8 +106,7 @@ pub fn peek_or_load_msl_class_blocking(
     // main-thread system that touches the engine
     // (`drive_engine_sync`, icon lookups, inspector queries) would
     // block until the parse completed. Parse first, install second.
-    let path = resolve_class_path_indexed(qualified)
-        .or_else(|| locate_library_file(qualified))?;
+    let path = resolve_class_path_indexed(qualified).or_else(|| locate_library_file(qualified))?;
     let uri = lunco_assets::asset_path::slashed(&path);
 
     // Pre-parsed MSL bundle: AST is parsed by the indexer, no rumoca
@@ -118,8 +114,11 @@ pub fn peek_or_load_msl_class_blocking(
     // `parsed-msl.bin` on native (and reuses the wasm-decoded slot),
     // so a drill-in is an in-memory lookup on both targets instead of a
     // per-file parse.
-    let cached_ast = crate::msl_remote::parsed_msl_bundle()
-        .and_then(|b| b.iter().find(|(k, _)| k == &uri).map(|(_, ast)| ast.clone()));
+    let cached_ast = crate::msl_remote::parsed_msl_bundle().and_then(|b| {
+        b.iter()
+            .find(|(k, _)| k == &uri)
+            .map(|(_, ast)| ast.clone())
+    });
 
     let parsed_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = match cached_ast {
         Some(ast) => Some(ast),
@@ -163,7 +162,9 @@ pub fn peek_or_load_msl_class_blocking(
     // (per-class loading mutex) is more state for negligible win.
     let mut engine = handle.lock();
     if !engine.has_class(qualified) {
-        engine.session_mut().add_parsed_batch(vec![(uri, parsed_ast)]);
+        engine
+            .session_mut()
+            .add_parsed_batch(vec![(uri, parsed_ast)]);
     }
     engine.class_def(qualified).map(Arc::new)
 }

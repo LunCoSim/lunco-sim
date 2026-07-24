@@ -180,9 +180,14 @@ mod tests {
         app.update();
 
         let doc_id = {
-            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-            reg.open_file("/tmp/scene.usda", "#usda 1.0\ndef Xform \"World\" {}\n".to_string())
-                .0
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            reg.open_file(
+                "/tmp/scene.usda",
+                "#usda 1.0\ndef Xform \"World\" {}\n".to_string(),
+            )
+            .0
         };
         // Drain pending events → DocumentOpened trigger → observer
         // registers the WorkspaceStage. Two updates so the trigger
@@ -208,15 +213,15 @@ mod tests {
         app.update();
 
         let doc_id = {
-            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-            reg.open_file("/tmp/scene.usda", "#usda 1.0\n".to_string()).0
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
+            reg.open_file("/tmp/scene.usda", "#usda 1.0\n".to_string())
+                .0
         };
         app.update();
         app.update();
-        assert_eq!(
-            app.world().resource::<LoadedUsdStages>().entries.len(),
-            1
-        );
+        assert_eq!(app.world().resource::<LoadedUsdStages>().entries.len(), 1);
 
         // Remove from registry → drains as DocumentClosed → observer
         // drops the stage entry.
@@ -226,10 +231,6 @@ mod tests {
         app.update();
         app.update();
 
-        assert!(app
-            .world()
-            .resource::<LoadedUsdStages>()
-            .entries
-            .is_empty());
+        assert!(app.world().resource::<LoadedUsdStages>().entries.is_empty());
     }
 }

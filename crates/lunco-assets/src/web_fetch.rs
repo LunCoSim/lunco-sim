@@ -192,7 +192,9 @@ pub async fn fetch_cached_with_progress(
 /// `Err` so callers can degrade to an uncached network fetch.
 pub async fn open_cache(bucket: &str) -> Result<web_sys::Cache, String> {
     let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
-    let caches = window.caches().map_err(|e| format!("window.caches: {e:?}"))?;
+    let caches = window
+        .caches()
+        .map_err(|e| format!("window.caches: {e:?}"))?;
     // Guard the insecure-context case where `caches` is really `undefined`.
     if caches.is_undefined() || caches.is_null() {
         return Err("Cache Storage unavailable (insecure context)".to_string());
@@ -365,7 +367,9 @@ pub async fn fetch_bytes_revalidated(bucket: &str, path: &str) -> Result<Vec<u8>
         Ok(bytes) => Ok(bytes),
         Err(net_err) => match cache_lookup(&cache, path).await {
             Ok(Some(bytes)) => {
-                bevy::log::warn!("[web_fetch] {path}: network fetch failed ({net_err}); using cached copy");
+                bevy::log::warn!(
+                    "[web_fetch] {path}: network fetch failed ({net_err}); using cached copy"
+                );
                 Ok(bytes)
             }
             _ => Err(net_err),
@@ -476,8 +480,7 @@ async fn conditional_revalidate(bucket: &str, path: &str) -> Result<(), String> 
     let opts = RequestInit::new();
     opts.set_method("GET");
     opts.set_mode(RequestMode::SameOrigin);
-    let req_headers =
-        web_sys::Headers::new().map_err(|e| format!("Headers::new: {e:?}"))?;
+    let req_headers = web_sys::Headers::new().map_err(|e| format!("Headers::new: {e:?}"))?;
     req_headers
         .set(cond_header, &validator)
         .map_err(|e| format!("Headers::set {cond_header}: {e:?}"))?;
@@ -573,8 +576,8 @@ pub fn unpack_tar_zst(
     bundle: &[u8],
     capacity_hint: usize,
 ) -> Result<HashMap<PathBuf, Vec<u8>>, String> {
-    let decoder = ruzstd::StreamingDecoder::new(bundle)
-        .map_err(|e| format!("zstd decoder: {e}"))?;
+    let decoder =
+        ruzstd::StreamingDecoder::new(bundle).map_err(|e| format!("zstd decoder: {e}"))?;
     let mut archive = tar::Archive::new(decoder);
     let mut out: HashMap<PathBuf, Vec<u8>> = HashMap::with_capacity(capacity_hint);
     for entry in archive.entries().map_err(|e| format!("tar entries: {e}"))? {

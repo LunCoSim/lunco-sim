@@ -52,7 +52,10 @@ impl ApiQueryProvider for ScriptStatusProvider {
         };
 
         // No scenario attached → idle (not an error — the entity simply isn't scripted).
-        let Some(doc_raw) = world.get::<ScriptedModel>(entity).and_then(|m| m.document_id) else {
+        let Some(doc_raw) = world
+            .get::<ScriptedModel>(entity)
+            .and_then(|m| m.document_id)
+        else {
             return ApiResponse::ok(status_json(None));
         };
         let doc = DocumentId::new(doc_raw);

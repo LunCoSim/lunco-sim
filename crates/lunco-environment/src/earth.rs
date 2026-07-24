@@ -147,9 +147,7 @@ fn wrap_pi(a: f64) -> f64 {
 ///
 /// Writes every tick rather than on change, because a model's own output sync
 /// rewrites its outputs map — same reasoning as the gravity and solar bridges.
-pub fn inject_local_earth_into_cosim(
-    mut q: Query<(&LocalEarth, &mut lunco_cosim::SimComponent)>,
-) {
+pub fn inject_local_earth_into_cosim(mut q: Query<(&LocalEarth, &mut lunco_cosim::SimComponent)>) {
     for (earth, mut comp) in &mut q {
         comp.outputs
             .insert(EARTH_AZIMUTH_CONNECTOR.to_string(), earth.azimuth);
@@ -191,7 +189,12 @@ mod tests {
         let mut app = App::new();
         // Due EAST, 30° up: East=+X, Up=+Y.
         app.insert_resource(EarthDirectionWorld(
-            Vec3::new(30.0_f32.to_radians().cos(), 30.0_f32.to_radians().sin(), 0.0).normalize(),
+            Vec3::new(
+                30.0_f32.to_radians().cos(),
+                30.0_f32.to_radians().sin(),
+                0.0,
+            )
+            .normalize(),
         ));
         app.add_systems(Update, compute_local_earth);
         let e = app
@@ -199,7 +202,11 @@ mod tests {
             .spawn(lunco_cosim::SimComponent::default())
             .id();
         app.update();
-        let got = app.world().get::<LocalEarth>(e).copied().expect("published");
+        let got = app
+            .world()
+            .get::<LocalEarth>(e)
+            .copied()
+            .expect("published");
         assert!(
             (got.azimuth - std::f64::consts::FRAC_PI_2).abs() < 1e-6,
             "Earth due east must read +π/2 (clockwise from NORTH), got {}",
@@ -223,9 +230,8 @@ mod tests {
         app.insert_resource(EarthDirectionWorld(Vec3::NEG_Z));
         app.add_systems(Update, compute_local_earth);
         // …on a vessel yawed 90° to face EAST (+X).
-        let facing_east = Transform::from_rotation(Quat::from_rotation_y(
-            -std::f32::consts::FRAC_PI_2,
-        ));
+        let facing_east =
+            Transform::from_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2));
         let e = app
             .world_mut()
             .spawn((
@@ -234,7 +240,11 @@ mod tests {
             ))
             .id();
         app.update();
-        let got = app.world().get::<LocalEarth>(e).copied().expect("published");
+        let got = app
+            .world()
+            .get::<LocalEarth>(e)
+            .copied()
+            .expect("published");
         assert!(
             (got.azimuth + std::f64::consts::FRAC_PI_2).abs() < 1e-5,
             "facing east with Earth due north, the dish must swing to its own LEFT \

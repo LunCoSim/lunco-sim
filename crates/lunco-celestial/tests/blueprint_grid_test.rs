@@ -10,8 +10,14 @@ fn wgsl_fract(x: f32) -> f32 {
 }
 
 /// Simulates the WGSL cartesian grid computation exactly as in the shader.
-fn compute_grid_mask(body_local: [f32; 3], major_spacing: f32, minor_spacing: f32,
-                     major_line_width: f32, minor_line_width: f32, minor_line_fade: f32) -> f32 {
+fn compute_grid_mask(
+    body_local: [f32; 3],
+    major_spacing: f32,
+    minor_spacing: f32,
+    major_line_width: f32,
+    minor_line_width: f32,
+    minor_line_fade: f32,
+) -> f32 {
     let bx = body_local[0];
     let by = body_local[1];
     let bz = body_local[2];
@@ -24,14 +30,18 @@ fn compute_grid_mask(body_local: [f32; 3], major_spacing: f32, minor_spacing: f3
     // fwidth approximation (~1 world unit per pixel at close range)
     let world_per_px = 1.0f32;
 
-    let major_px = (gx / world_per_px).min(gy / world_per_px).min(gz / world_per_px);
+    let major_px = (gx / world_per_px)
+        .min(gy / world_per_px)
+        .min(gz / world_per_px);
     let major_m = 1.0 - smoothstep(0.0, major_line_width, major_px);
 
     // Minor grid
     let gx2 = ((wgsl_fract(bx / minor_spacing - 0.5).abs() - 0.5).abs()) * minor_spacing;
     let gy2 = ((wgsl_fract(by / minor_spacing - 0.5).abs() - 0.5).abs()) * minor_spacing;
     let gz2 = ((wgsl_fract(bz / minor_spacing - 0.5).abs() - 0.5).abs()) * minor_spacing;
-    let minor_px = (gx2 / world_per_px).min(gy2 / world_per_px).min(gz2 / world_per_px);
+    let minor_px = (gx2 / world_per_px)
+        .min(gy2 / world_per_px)
+        .min(gz2 / world_per_px);
     let minor_raw = 1.0 - smoothstep(0.0, minor_line_width, minor_px);
     let minor_m = minor_raw * minor_line_fade * (1.0 - major_m);
 
@@ -48,14 +58,22 @@ const MOON_R: f32 = 1_737_000.0;
 #[test]
 fn test_grid_visible_at_face_centers() {
     let face_centers = [
-        [MOON_R, 0.0, 0.0], [-MOON_R, 0.0, 0.0],
-        [0.0, MOON_R, 0.0], [0.0, -MOON_R, 0.0],
-        [0.0, 0.0, MOON_R], [0.0, 0.0, -MOON_R],
+        [MOON_R, 0.0, 0.0],
+        [-MOON_R, 0.0, 0.0],
+        [0.0, MOON_R, 0.0],
+        [0.0, -MOON_R, 0.0],
+        [0.0, 0.0, MOON_R],
+        [0.0, 0.0, -MOON_R],
     ];
     for (i, pos) in face_centers.iter().enumerate() {
         let mask = compute_grid_mask(*pos, 1000.0, 500.0, 0.75, 0.4, 0.3);
-        assert!(mask > 0.5,
-            "Face center {} {:?} should be on a grid line, mask={:.4}", i, pos, mask);
+        assert!(
+            mask > 0.5,
+            "Face center {} {:?} should be on a grid line, mask={:.4}",
+            i,
+            pos,
+            mask
+        );
     }
 }
 
@@ -85,13 +103,19 @@ fn test_grid_visible_at_surface_points() {
             for dy in -5..=5i32 {
                 let shifted = [pos[0] + dx as f32, pos[1] + dy as f32, pos[2]];
                 let m = compute_grid_mask(shifted, 1000.0, 500.0, 0.75, 0.4, 0.3);
-                if m > max_mask { max_mask = m; }
+                if m > max_mask {
+                    max_mask = m;
+                }
             }
         }
 
-        assert!(max_mask > 0.1,
+        assert!(
+            max_mask > 0.1,
             "Grid should be visible near {} pos={:?} max_mask={:.4}",
-            desc, pos, max_mask);
+            desc,
+            pos,
+            max_mask
+        );
     }
 }
 
@@ -99,7 +123,11 @@ fn test_grid_visible_at_surface_points() {
 fn test_grid_has_gaps_between_lines() {
     let pos = [250.0, 250.0, 250.0];
     let mask = compute_grid_mask(pos, 1000.0, 500.0, 0.75, 0.4, 0.3);
-    assert!(mask < 0.5, "Should have gaps between grid lines, got {}", mask);
+    assert!(
+        mask < 0.5,
+        "Should have gaps between grid lines, got {}",
+        mask
+    );
 }
 
 #[test]
@@ -108,6 +136,10 @@ fn test_grid_periodic() {
     let shifted = [1_738_000.0, 100.0, 100.0];
     let m1 = compute_grid_mask(base, 1000.0, 500.0, 0.75, 0.4, 0.3);
     let m2 = compute_grid_mask(shifted, 1000.0, 500.0, 0.75, 0.4, 0.3);
-    assert!((m1 - m2).abs() < 0.01,
-        "Grid should repeat every 1000m: before={:.4}, after={:.4}", m1, m2);
+    assert!(
+        (m1 - m2).abs() < 0.01,
+        "Grid should repeat every 1000m: before={:.4}, after={:.4}",
+        m1,
+        m2
+    );
 }

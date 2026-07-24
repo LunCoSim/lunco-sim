@@ -100,7 +100,10 @@ pub fn insert_celestial_comms_components(
             commands.entity(entity).try_insert(SiteAnchor);
             info!(
                 "[usd-celestial] site anchor {}: body {} lat {:.4} lon {:.4} h {:.1} m",
-                prim_path_str, body, anchor.geodetic.lat_deg, anchor.geodetic.lon_deg,
+                prim_path_str,
+                body,
+                anchor.geodetic.lat_deg,
+                anchor.geodetic.lon_deg,
                 anchor.geodetic.height_m
             );
             // Scene-authored date: `double lunco:time:epochJd` picks the world
@@ -130,13 +133,15 @@ pub fn insert_celestial_comms_components(
         let name = reader
             .text(sdf_path, "lunco:mission:name")
             .unwrap_or_else(|| id.clone());
-        commands.entity(entity).try_insert(lunco_celestial::MissionDecl {
-            id: id.clone(),
-            name: name.clone(),
-            description: reader
-                .text(sdf_path, "lunco:mission:description")
-                .unwrap_or_default(),
-        });
+        commands
+            .entity(entity)
+            .try_insert(lunco_celestial::MissionDecl {
+                id: id.clone(),
+                name: name.clone(),
+                description: reader
+                    .text(sdf_path, "lunco:mission:description")
+                    .unwrap_or_default(),
+            });
         info!("[usd-celestial] scene declares mission {name} ({id}) at {prim_path_str}");
     }
 
@@ -148,7 +153,12 @@ pub fn insert_celestial_comms_components(
     // where the spacecraft is. Keyed on `trackedId` — without a target there is
     // nothing to plot.
     if let Some(tracked_id) = reader.scalar::<i32>(sdf_path, "lunco:trajectory:trackedId") {
-        let color = read_rgba(reader, sdf_path, "lunco:trajectory:color", [1.0, 1.0, 1.0, 1.0]);
+        let color = read_rgba(
+            reader,
+            sdf_path,
+            "lunco:trajectory:color",
+            [1.0, 1.0, 1.0, 1.0],
+        );
         commands
             .entity(entity)
             .try_insert(lunco_celestial::MissionTrajectoryDecl {
@@ -217,21 +227,32 @@ pub fn insert_celestial_comms_components(
             .unwrap_or(DEFAULT_ANCHOR_BODY);
         let elements = KeplerianElements {
             semi_major_axis_m: a_m,
-            eccentricity: reader.real(sdf_path, "lunco:orbit:eccentricity").unwrap_or(0.0),
-            inclination_deg: reader.real(sdf_path, "lunco:orbit:inclinationDeg").unwrap_or(0.0),
+            eccentricity: reader
+                .real(sdf_path, "lunco:orbit:eccentricity")
+                .unwrap_or(0.0),
+            inclination_deg: reader
+                .real(sdf_path, "lunco:orbit:inclinationDeg")
+                .unwrap_or(0.0),
             raan_deg: reader.real(sdf_path, "lunco:orbit:raanDeg").unwrap_or(0.0),
             arg_periapsis_deg: reader
                 .real(sdf_path, "lunco:orbit:argPeriapsisDeg")
                 .unwrap_or(0.0),
-            mean_anomaly_deg: reader.real(sdf_path, "lunco:orbit:meanAnomalyDeg").unwrap_or(0.0),
+            mean_anomaly_deg: reader
+                .real(sdf_path, "lunco:orbit:meanAnomalyDeg")
+                .unwrap_or(0.0),
             epoch_jd: reader
                 .real(sdf_path, "lunco:orbit:epochJd")
                 .unwrap_or(lunco_time::J2000_JD),
         };
-        commands.entity(entity).try_insert(KeplerOrbit { body, elements });
+        commands
+            .entity(entity)
+            .try_insert(KeplerOrbit { body, elements });
         info!(
             "[usd-celestial] orbit {}: body {} a {:.0} km e {:.2} i {:.1}°",
-            prim_path_str, body, elements.semi_major_axis_m / 1000.0, elements.eccentricity,
+            prim_path_str,
+            body,
+            elements.semi_major_axis_m / 1000.0,
+            elements.eccentricity,
             elements.inclination_deg
         );
     }
@@ -263,9 +284,11 @@ pub fn insert_celestial_comms_components(
             );
             return;
         };
-        commands
-            .entity(entity)
-            .try_insert(LibrationAnchor { primary, secondary, point });
+        commands.entity(entity).try_insert(LibrationAnchor {
+            primary,
+            secondary,
+            point,
+        });
         info!(
             "[usd-celestial] libration {}: {:?} of pair {}/{}",
             prim_path_str, point, primary, secondary
@@ -296,15 +319,17 @@ pub fn insert_celestial_comms_components(
         .unwrap_or(false)
     {
         let d = lunco_celestial::link::LinkNode::default();
-        commands.entity(entity).try_insert(lunco_celestial::link::LinkNode {
-            max_range_m: reader
-                .real(sdf_path, "lunco:link:maxRangeM")
-                .unwrap_or(d.max_range_m),
-            min_elevation_deg: reader
-                .real(sdf_path, "lunco:link:minElevationDeg")
-                .unwrap_or(d.min_elevation_deg),
-            class: reader.text(sdf_path, "lunco:link:class"),
-        });
+        commands
+            .entity(entity)
+            .try_insert(lunco_celestial::link::LinkNode {
+                max_range_m: reader
+                    .real(sdf_path, "lunco:link:maxRangeM")
+                    .unwrap_or(d.max_range_m),
+                min_elevation_deg: reader
+                    .real(sdf_path, "lunco:link:minElevationDeg")
+                    .unwrap_or(d.min_elevation_deg),
+                class: reader.text(sdf_path, "lunco:link:class"),
+            });
     }
 
     // --- Sight-line occluder (generic geometry, not a comms concept) ---

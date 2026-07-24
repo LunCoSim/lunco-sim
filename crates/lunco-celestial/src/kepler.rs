@@ -180,11 +180,18 @@ mod tests {
         assert!((p0.length() - 2000.0e3).abs() < 1.0);
         for frac in [0.25, 0.5, 0.75] {
             let p = el.position_bevy_m(GM_MOON, el.epoch_jd + frac * period_days);
-            assert!((p.length() - 2000.0e3).abs() < 1.0, "radius drifted at {frac}");
+            assert!(
+                (p.length() - 2000.0e3).abs() < 1.0,
+                "radius drifted at {frac}"
+            );
         }
         // Full period returns to the start.
         let p1 = el.position_bevy_m(GM_MOON, el.epoch_jd + period_days);
-        assert!((p1 - p0).length() < 10.0, "period return error {}", (p1 - p0).length());
+        assert!(
+            (p1 - p0).length() < 10.0,
+            "period return error {}",
+            (p1 - p0).length()
+        );
     }
 
     #[test]
@@ -225,6 +232,9 @@ mod tests {
             let lat = (p.y / p.length()).asin().to_degrees();
             max_lat = max_lat.max(lat.abs());
         }
-        assert!((max_lat - 30.0).abs() < 0.5, "max |lat| {max_lat} for i=30°");
+        assert!(
+            (max_lat - 30.0).abs() < 0.5,
+            "max |lat| {max_lat} for i=30°"
+        );
     }
 }

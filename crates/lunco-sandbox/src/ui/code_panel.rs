@@ -15,20 +15,28 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica::state::ModelicaDocumentRegistry;
 use lunco_sandbox_edit::SelectedEntities;
-use lunco_scripting::ScriptRegistry;
 use lunco_scripting::doc::ScriptedModel;
+use lunco_scripting::ScriptRegistry;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub(crate) struct CodePanel;
 
 impl Panel for CodePanel {
-    fn id(&self) -> PanelId { PanelId("rover_code") }
-    fn title(&self) -> String { "📄 Code".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn id(&self) -> PanelId {
+        PanelId("rover_code")
+    }
+    fn title(&self) -> String {
+        "📄 Code".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn transparent_background(&self) -> bool { true }
+    fn transparent_background(&self) -> bool {
+        true
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let mantle = ctx
@@ -46,22 +54,17 @@ impl Panel for CodePanel {
 fn code_panel_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.heading("Code");
 
-    let Some(entity) = ctx
-        .resource::<SelectedEntities>()
-        .and_then(|s| s.primary())
-    else {
+    let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
         ui.label("No entity selected.");
         ui.label(egui::RichText::new("Shift+click an object to select.").weak());
         return;
     };
 
     // Try Modelica first — resolve entity → DocumentId → source.
-    let modelica = ctx
-        .resource::<ModelicaDocumentRegistry>()
-        .and_then(|r| {
-            let doc = r.document_of(entity)?;
-            r.host(doc).map(|h| h.document().source().to_string())
-        });
+    let modelica = ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| {
+        let doc = r.document_of(entity)?;
+        r.host(doc).map(|h| h.document().source().to_string())
+    });
 
     if let Some(source) = modelica {
         ui.label(egui::RichText::new("Modelica").small().weak());
@@ -71,18 +74,14 @@ fn code_panel_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     }
 
     // Otherwise look for a ScriptedModel component → ScriptRegistry.
-    let script_doc_id = ctx
-        .get::<ScriptedModel>(entity)
-        .and_then(|m| m.document_id);
+    let script_doc_id = ctx.get::<ScriptedModel>(entity).and_then(|m| m.document_id);
 
     if let Some(doc_id) = script_doc_id {
-        let script_source = ctx
-            .resource::<ScriptRegistry>()
-            .and_then(|r| {
-                r.documents
-                    .get(&DocumentId::new(doc_id))
-                    .map(|h| h.document().source.clone())
-            });
+        let script_source = ctx.resource::<ScriptRegistry>().and_then(|r| {
+            r.documents
+                .get(&DocumentId::new(doc_id))
+                .map(|h| h.document().source.clone())
+        });
         if let Some(source) = script_source {
             ui.label(egui::RichText::new("Python").small().weak());
             ui.separator();

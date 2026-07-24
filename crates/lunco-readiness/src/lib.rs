@@ -230,7 +230,14 @@ impl ReadinessRegistry {
         debug!("[readiness] begin {kind} {subject:?} {label}");
         self.items.insert(
             id,
-            PendingItem { subject, kind, label, elapsed_s: 0.0, action, warned: false },
+            PendingItem {
+                subject,
+                kind,
+                label,
+                elapsed_s: 0.0,
+                action,
+                warned: false,
+            },
         );
         ReadinessTicket(id)
     }
@@ -387,7 +394,10 @@ pub fn evaluate_readiness(
     held.sort_unstable();
     held.dedup();
 
-    let next = ReadinessState { world_hold, held_entities: held };
+    let next = ReadinessState {
+        world_hold,
+        held_entities: held,
+    };
     if *state != next {
         *state = next;
     }
@@ -577,7 +587,11 @@ mod tests {
         app.world_mut().despawn(e);
         app.update();
         assert!(app.world().resource::<ReadinessRegistry>().is_empty());
-        assert!(app.world().resource::<ReadinessState>().held_entities.is_empty());
+        assert!(app
+            .world()
+            .resource::<ReadinessState>()
+            .held_entities
+            .is_empty());
     }
 
     /// Policy overrides the built-in rule, and re-registering it takes effect on

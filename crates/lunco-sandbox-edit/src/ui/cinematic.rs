@@ -26,12 +26,12 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::SceneCamera;
 use lunco_time::{AnimationPreview, ControlAnimation, Playback, TransportMode};
 use lunco_usd::commands::ApplyUsdOp;
-use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd::document::UsdDocument;
-use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::camera_path::{eval_curve, AimMode, CameraPath};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -57,10 +57,7 @@ pub struct CinematicTarget {
 ///
 /// One path today. With several, this becomes "the selected path" — the panel is
 /// already written against whatever this resource points at.
-pub fn track_active_camera_path(
-    q_paths: Query<&CameraPath>,
-    mut target: ResMut<CinematicTarget>,
-) {
+pub fn track_active_camera_path(q_paths: Query<&CameraPath>, mut target: ResMut<CinematicTarget>) {
     let first = q_paths.iter().next().map(|p| p.domain);
     if target.domain != first {
         target.domain = first;
@@ -113,10 +110,7 @@ pub fn draw_camera_paths(
         return;
     }
     // The camera you are looking through, if any.
-    let looking_through = q_active
-        .iter()
-        .find(|(_, c)| c.is_active)
-        .map(|(e, _)| e);
+    let looking_through = q_active.iter().find(|(_, c)| c.is_active).map(|(e, _)| e);
 
     for (path, gt) in q_paths.iter() {
         // Don't draw a path you are flying. Every marker would land on the eye:
@@ -128,7 +122,8 @@ pub fn draw_camera_paths(
         if looking_through == Some(path.camera) {
             continue;
         }
-        let at = |u: f32| gt.transform_point(eval_curve(&path.points, path.basis, path.periodic, u));
+        let at =
+            |u: f32| gt.transform_point(eval_curve(&path.points, path.basis, path.periodic, u));
 
         let pts: Vec<Vec3> = (0..=PATH_SAMPLES)
             .map(|i| at(i as f32 / PATH_SAMPLES as f32))
@@ -187,7 +182,10 @@ pub fn draw_camera_paths(
 
 /// The path clock's `[start, end]`, if it has one.
 fn span_of(q_playback: &Query<&Playback>, path: &CameraPath) -> Option<(f64, f64)> {
-    q_playback.get(path.domain).ok().map(|pb| (pb.start, pb.end))
+    q_playback
+        .get(path.domain)
+        .ok()
+        .map(|pb| (pb.start, pb.end))
 }
 
 /// Capture the active viewport camera's pose as a new `def Camera` prim.
@@ -227,7 +225,8 @@ fn on_add_camera_here(
     // authored frame directly — do NOT read the camera's `GlobalTransform`,
     // which is the render/floating-origin frame and would author a pose that
     // silently drifts with the origin (doc 50 §5; the repo's classic frame bug).
-    let Some((pos, rot)) = lunco_core::coords::world_pose(cam_entity, &q_parents, &q_grids, &q_spatial)
+    let Some((pos, rot)) =
+        lunco_core::coords::world_pose(cam_entity, &q_parents, &q_grids, &q_spatial)
     else {
         warn!("[cinematic] camera {cam_entity:?} has no resolvable grid pose");
         return;
@@ -386,7 +385,9 @@ impl Panel for CinematicPanel {
                 let mut show_mut = show;
                 if ui
                     .checkbox(&mut show_mut, "Show camera paths")
-                    .on_hover_text("Draw each animated camera's authored trajectory in the viewport")
+                    .on_hover_text(
+                        "Draw each animated camera's authored trajectory in the viewport",
+                    )
                     .changed()
                 {
                     ctx.defer(move |world| {
@@ -443,7 +444,11 @@ fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                 ..default()
             });
         }
-        let (icon, hint) = if playing { ("⏸", "Pause") } else { ("▶", "Play") };
+        let (icon, hint) = if playing {
+            ("⏸", "Pause")
+        } else {
+            ("▶", "Play")
+        };
         if ui.button(icon).on_hover_text(hint).clicked() {
             ctx.trigger(ControlAnimation {
                 target,
@@ -474,7 +479,12 @@ fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // Scrub — the other half of the author loop (scrub → fly → capture).
     let mut t = head;
     if ui
-        .add(egui::Slider::new(&mut t, start..=end).fixed_decimals(1).suffix(" s").text("Time"))
+        .add(
+            egui::Slider::new(&mut t, start..=end)
+                .fixed_decimals(1)
+                .suffix(" s")
+                .text("Time"),
+        )
         .changed()
     {
         ctx.trigger(ControlAnimation {
@@ -485,7 +495,12 @@ fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     }
     let mut r = rate;
     if ui
-        .add(egui::Slider::new(&mut r, 0.0..=4.0).fixed_decimals(2).suffix("×").text("Rate"))
+        .add(
+            egui::Slider::new(&mut r, 0.0..=4.0)
+                .fixed_decimals(2)
+                .suffix("×")
+                .text("Rate"),
+        )
         .changed()
     {
         ctx.trigger(ControlAnimation {

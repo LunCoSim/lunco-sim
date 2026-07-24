@@ -190,10 +190,7 @@ mod tests {
         fn resolve(&self, uri: &str) -> UriResolution {
             UriResolution::OpenDocument {
                 doc_kind: "fake",
-                identifier: uri
-                    .strip_prefix("fake://")
-                    .unwrap_or(uri)
-                    .to_string(),
+                identifier: uri.strip_prefix("fake://").unwrap_or(uri).to_string(),
             }
         }
     }
@@ -201,10 +198,7 @@ mod tests {
     #[test]
     fn unknown_scheme_returns_not_handled() {
         let reg = UriRegistry::default();
-        assert_eq!(
-            reg.dispatch("modelica://Foo"),
-            UriResolution::NotHandled
-        );
+        assert_eq!(reg.dispatch("modelica://Foo"), UriResolution::NotHandled);
     }
 
     #[test]

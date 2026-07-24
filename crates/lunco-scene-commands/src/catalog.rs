@@ -63,7 +63,9 @@ impl Default for SpawnCatalog {
         // Per-asset data (category from its folder, `spawn_lift` from a
         // `float lunco:spawnLift` attribute) is read from the USD, so no Rust
         // code is aware of any specific content type.
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 }
 
@@ -236,7 +238,9 @@ pub fn spawn_usd_entry(
     // correct scene-root-relative local transform.
     ent.insert(ChildOf(anchor.entity()));
 
-    SpawnResult { root_entity: ent.id() }
+    SpawnResult {
+        root_entity: ent.id(),
+    }
 }
 
 /// Derive a dynamic category label from a discovered asset's path — the name
@@ -347,7 +351,10 @@ pub async fn read_asset_meta(asset: &AssetFile) -> SpawnMeta {
     match lunco_assets::asset_read::read_asset_text(asset).await {
         Ok(src) => parse_spawn_meta(&src),
         Err(e) => {
-            warn!("CATALOG: {} unreadable, treating as not-spawnable: {e}", asset.rel);
+            warn!(
+                "CATALOG: {} unreadable, treating as not-spawnable: {e}",
+                asset.rel
+            );
             SpawnMeta::default()
         }
     }
@@ -571,7 +578,9 @@ mod tests {
 
     #[test]
     fn test_add_unique_dedups() {
-        let mut c = SpawnCatalog { entries: Vec::new() };
+        let mut c = SpawnCatalog {
+            entries: Vec::new(),
+        };
         let mk = |id: &str| SpawnableEntry {
             id: id.into(),
             display_name: id.into(),
@@ -593,7 +602,9 @@ mod tests {
 
     #[test]
     fn test_categories_distinct_sorted() {
-        let mut c = SpawnCatalog { entries: Vec::new() };
+        let mut c = SpawnCatalog {
+            entries: Vec::new(),
+        };
         let mk = |id: &str, cat: &str| SpawnableEntry {
             id: id.into(),
             display_name: id.into(),
@@ -605,7 +616,10 @@ mod tests {
         c.add_unique(mk("a", "Rovers"));
         c.add_unique(mk("b", "Structures"));
         c.add_unique(mk("c", "Rovers"));
-        assert_eq!(c.categories(), vec!["Rovers".to_string(), "Structures".to_string()]);
+        assert_eq!(
+            c.categories(),
+            vec!["Rovers".to_string(), "Structures".to_string()]
+        );
         assert_eq!(c.by_category("Rovers").count(), 2);
     }
 
@@ -621,8 +635,8 @@ mod tests {
     /// *data*, so it does its own read and asserts on the meaning.
     #[test]
     fn test_every_sandbox_scene_has_description() {
-        let scenes_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/scenes/sandbox");
+        let scenes_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/sandbox");
         let mut count = 0;
         for e in std::fs::read_dir(&scenes_dir).expect("sandbox scenes dir exists") {
             let p = e.unwrap().path();
@@ -634,7 +648,11 @@ mod tests {
             let desc = parse_spawn_meta(&src).description.unwrap_or_else(|| {
                 panic!("scene {} has no `lunco:description` attribute", p.display())
             });
-            assert!(!desc.trim().is_empty(), "scene {} has an empty description", p.display());
+            assert!(
+                !desc.trim().is_empty(),
+                "scene {} has an empty description",
+                p.display()
+            );
         }
         assert!(count >= 4, "expected the sandbox scene set, found {count}");
     }
@@ -650,7 +668,11 @@ mod tests {
         assert!(store.get("scenes/sandbox/x.usda").is_none());
         store.by_path.insert(
             "scenes/sandbox/x.usda".into(),
-            SpawnMeta { spawnable: false, lift: 0.0, description: None },
+            SpawnMeta {
+                spawnable: false,
+                lift: 0.0,
+                description: None,
+            },
         );
         assert!(store.get("scenes/sandbox/x.usda").is_some());
         assert_eq!(store.description("scenes/sandbox/x.usda"), None);

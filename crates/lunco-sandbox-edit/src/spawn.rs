@@ -1,10 +1,10 @@
 //! Spawn system — click-to-place with ghost preview.
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use std::collections::HashMap;
 use lunco_usd_bevy::UsdStageAsset;
+use std::collections::HashMap;
 
 use crate::catalog::{prim_path_from_entry_id, SpawnCatalog, SpawnSource};
 use crate::SpawnState;
@@ -58,7 +58,11 @@ impl Default for ResolvedFootprint {
     fn default() -> Self {
         // Sensible fallback used only before the stage has loaded (a frame or
         // two during selection); replaced by the real value once composed.
-        Self { half_w: 0.75, half_l: 1.0, lift: 0.5 }
+        Self {
+            half_w: 0.75,
+            half_l: 1.0,
+            lift: 0.5,
+        }
     }
 }
 
@@ -67,7 +71,9 @@ impl FootprintCache {
     /// depth for any asset with colliders, the authored `lunco:spawnLift` as a
     /// fallback for pure-visual assets, or a default if not yet loaded.
     fn resolve(&self, entry_id: &str) -> ResolvedFootprint {
-        let Some(c) = self.map.get(entry_id) else { return ResolvedFootprint::default() };
+        let Some(c) = self.map.get(entry_id) else {
+            return ResolvedFootprint::default();
+        };
         match c.footprint {
             // Rest on the lowest collision point (+ a small skin gap), with the
             // footprint box from the collider extents — general across landers,
@@ -131,7 +137,10 @@ fn ensure_footprint(
             if let Some(aabb) = cached.footprint {
                 info!(
                     "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",
-                    entry_id, aabb.half_w(), aabb.half_l(), aabb.rest_depth()
+                    entry_id,
+                    aabb.half_w(),
+                    aabb.half_l(),
+                    aabb.rest_depth()
                 );
             }
         }
@@ -140,18 +149,20 @@ fn ensure_footprint(
 }
 
 /// Computes a world-space ray from the camera through the cursor position.
-fn cursor_ray(
-    camera: &Camera,
-    cam_tf: &GlobalTransform,
-    cursor: Vec2,
-) -> Option<(DVec3, Dir3)> {
+fn cursor_ray(camera: &Camera, cam_tf: &GlobalTransform, cursor: Vec2) -> Option<(DVec3, Dir3)> {
     let ray = camera.viewport_to_world(cam_tf, cursor).ok()?;
     Some((ray.origin.as_dvec3(), ray.direction))
 }
 
 /// Query alias: every streamed DEM terrain's height oracle + its frame.
-pub(crate) type TerrainOracles<'w, 's> =
-    Query<'w, 's, (&'static lunco_terrain_surface::DemHeightField, &'static GlobalTransform)>;
+pub(crate) type TerrainOracles<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static lunco_terrain_surface::DemHeightField,
+        &'static GlobalTransform,
+    ),
+>;
 
 /// Nearest ANALYTIC-terrain hit along a world ray, across all DEM terrains —
 /// `(distance, world point)`. This, not a physics raycast, is the ground truth
@@ -173,7 +184,10 @@ pub(crate) fn terrain_ray_hit(
         let Some(hit_local) = lunco_terrain_surface::raycast_surface(&hf.0, lo, ld, max_t) else {
             continue;
         };
-        let hit_world = t_gt.affine().transform_point3(hit_local.as_vec3()).as_dvec3();
+        let hit_world = t_gt
+            .affine()
+            .transform_point3(hit_local.as_vec3())
+            .as_dvec3();
         let t = (hit_world - origin).length();
         if best.map(|(bt, _)| t < bt).unwrap_or(true) {
             best = Some((t, hit_world));
@@ -195,7 +209,9 @@ pub(crate) fn terrain_height_at(terrains: &TerrainOracles, world: DVec3) -> Opti
             continue;
         }
         let h = hf.0.height_at(l.x, l.z);
-        let w = t_gt.affine().transform_point3(bevy::math::Vec3::new(l.x as f32, h as f32, l.z as f32));
+        let w = t_gt
+            .affine()
+            .transform_point3(bevy::math::Vec3::new(l.x as f32, h as f32, l.z as f32));
         return Some(w.y as f64);
     }
     None
@@ -212,7 +228,13 @@ pub fn update_spawn_ghost(
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut footprint_cache: ResMut<FootprintCache>,
     cameras: Query<
-        (&Camera, &GlobalTransform, &bevy::camera::RenderTarget, &CellCoord, &Transform),
+        (
+            &Camera,
+            &GlobalTransform,
+            &bevy::camera::RenderTarget,
+            &CellCoord,
+            &Transform,
+        ),
         With<Camera3d>,
     >,
     windows: Query<&Window>,
@@ -234,7 +256,14 @@ pub fn update_spawn_ghost(
     // Derive the wheel footprint from the live USD geometry (cached). Until the
     // stage finishes loading the fallback default is used, then the ghost
     // snaps to the real slope-fit once available.
-    let fp = ensure_footprint(&mut *footprint_cache, &catalog, &asset_server, &stages, &mut canonical, entry_id);
+    let fp = ensure_footprint(
+        &mut *footprint_cache,
+        &catalog,
+        &asset_server,
+        &stages,
+        &mut canonical,
+        entry_id,
+    );
 
     // Ray through the ACTIVE window camera (the one you're looking through) —
     // not merely the first Camera3d, which may now be an inactive scene camera.
@@ -252,14 +281,24 @@ pub fn update_spawn_ghost(
         Some(w) => w,
         None => return,
     };
-    let Some(cursor) = window.cursor_position() else { return };
-    let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else {
+        return;
+    };
 
     // Physics colliders (props, structures, rocks) AND the analytic terrain
     // surface, nearest wins. The terrain must come from the oracle, not the
     // collider ring — see `terrain_ray_hit`.
     let phys = raycaster
-        .cast_ray_render(origin, direction, 1000.0, false, &avian3d::prelude::SpatialQueryFilter::default())
+        .cast_ray_render(
+            origin,
+            direction,
+            1000.0,
+            false,
+            &avian3d::prelude::SpatialQueryFilter::default(),
+        )
         .map(|h| h.distance);
     let terr = terrain_ray_hit(&terrains, origin, direction.as_dvec3(), 1000.0);
     let (hit, terrain_primary) = match (phys, terr) {
@@ -276,7 +315,6 @@ pub fn update_spawn_ghost(
     };
 
     if let Some(point) = hit {
-
         // --- Terrain-conforming placement (footprint derived in real time) ---
         let half_w = fp.half_w;
         let half_l = fp.half_l;
@@ -386,7 +424,9 @@ pub fn update_spawn_ghost(
         // (0,0,0), so on an elevated site (origin at cell.y≠0) it rendered ~one
         // whole cell (~2 km) underground — "the ghost never appears on the
         // ground". This lands it on the real surface at any origin cell.
-        let Some((grid_ent, grid)) = grids.iter().next() else { return };
+        let Some((grid_ent, grid)) = grids.iter().next() else {
+            return;
+        };
         // Render→grid-absolute via the physics frame shift (recovered from a live
         // body), NOT `grid_position_double(cam_cell, …)`. The ray camera is not
         // guaranteed to be the `FloatingOrigin` holder after a possession/takeover —
@@ -400,14 +440,22 @@ pub fn update_spawn_ghost(
         if let Some((ghost, _)) = q_ghost.iter().next() {
             commands.entity(ghost).try_insert((
                 ghost_cell,
-                Transform { translation: ghost_local, rotation, ..default() },
+                Transform {
+                    translation: ghost_local,
+                    rotation,
+                    ..default()
+                },
             ));
         } else {
             commands.spawn((
                 Name::new("SpawnGhost"),
                 SpawnGhost,
                 ghost_cell,
-                Transform { translation: ghost_local, rotation, ..default() },
+                Transform {
+                    translation: ghost_local,
+                    rotation,
+                    ..default()
+                },
                 Mesh3d(meshes.add(Sphere::new(0.5).mesh().ico(8).unwrap())),
                 // Appearance INTENT — the render binder turns this into a
                 // `StandardMaterial`. `perceptual_roughness: 0.5` reproduces
@@ -493,10 +541,17 @@ pub fn on_scene_click_spawn(
     // cast the ray against colliders so placement works on streamed terrain even
     // when no pickable tile is under the cursor (the old `hit.position` guard
     // silently rejected those clicks — the "can't place on the ground" bug).
-    let Some((camera, cam_gtf, _cam_cell, _cam_local)) = cameras.iter().find(|(c, _, _, _)| c.is_active) else {
+    let Some((camera, cam_gtf, _cam_cell, _cam_local)) =
+        cameras.iter().find(|(c, _, _, _)| c.is_active)
+    else {
         return;
     };
-    let Some(ray) = lunco_core::scene_click_ray(&egui_focus, camera, cam_gtf, click.pointer_location.position) else {
+    let Some(ray) = lunco_core::scene_click_ray(
+        &egui_focus,
+        camera,
+        cam_gtf,
+        click.pointer_location.position,
+    ) else {
         return;
     };
     // Terrain-as-source-of-truth placement: ray-march the terrain ORACLE and the
@@ -509,12 +564,22 @@ pub fn on_scene_click_spawn(
     let origin = ray.origin.as_dvec3();
     let dir = ray.direction.as_dvec3();
     let phys = raycaster
-        .cast_ray_render(origin, ray.direction, 1.0e6, false, &avian3d::prelude::SpatialQueryFilter::default())
+        .cast_ray_render(
+            origin,
+            ray.direction,
+            1.0e6,
+            false,
+            &avian3d::prelude::SpatialQueryFilter::default(),
+        )
         .map(|h| h.distance);
     let terr = terrain_ray_hit(&terrains, origin, dir, 1.0e6);
     let (point_d, terrain_primary) = match (phys, terr) {
         (Some(pd), Some((td, tp))) => {
-            if td <= pd { (tp, true) } else { (origin + dir * pd, false) }
+            if td <= pd {
+                (tp, true)
+            } else {
+                (origin + dir * pd, false)
+            }
         }
         (Some(pd), None) => (origin + dir * pd, false),
         (None, Some((_, tp))) => (tp, true),
@@ -573,8 +638,12 @@ pub fn on_scene_click_spawn(
                 .map(|h| (ray_origin + DVec3::NEG_Y * h.distance).y)
         };
         let terr_y = || terrain_height_at(&terrains, corner);
-        let y = if terrain_primary { terr_y().or_else(phys_y) } else { phys_y().or_else(terr_y) }
-            .unwrap_or(point_d.y);
+        let y = if terrain_primary {
+            terr_y().or_else(phys_y)
+        } else {
+            phys_y().or_else(terr_y)
+        }
+        .unwrap_or(point_d.y);
         hit_points.push(DVec3::new(corner.x, y, corner.z));
     }
 
@@ -656,7 +725,10 @@ pub fn on_scene_click_spawn(
         position: point3,
         rotation: Some(rotation),
     });
-    info!("Spawn request: {} at {:?} with rot {:?}", entry_id, point3, rotation);
+    info!(
+        "Spawn request: {} at {:?} with rot {:?}",
+        entry_id, point3, rotation
+    );
 
     let sticky = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     if !sticky {
@@ -676,7 +748,9 @@ mod tests {
         let mut state = SpawnState::Idle;
         assert!(matches!(state, SpawnState::Idle));
 
-        state = SpawnState::Selecting { entry_id: "ball_dynamic".into() };
+        state = SpawnState::Selecting {
+            entry_id: "ball_dynamic".into(),
+        };
         assert!(matches!(state, SpawnState::Selecting { .. }));
 
         state = SpawnState::Idle;

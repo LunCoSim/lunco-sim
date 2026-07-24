@@ -46,7 +46,10 @@ fn app_with_registry() -> App {
     app.insert_resource(lunco_celestial::registry::CelestialBodyRegistry {
         bodies: vec![body("Moon", MOON, MOON_R), body("Earth", EARTH, EARTH_R)],
     });
-    app.add_systems(Update, lunco_celestial::placement::sync_terrain_body_curvature);
+    app.add_systems(
+        Update,
+        lunco_celestial::placement::sync_terrain_body_curvature,
+    );
     app
 }
 
@@ -57,13 +60,19 @@ fn curvature_with_anchor_order(anchors: &[i32]) -> f64 {
     for &body in anchors {
         app.world_mut().spawn((
             SiteAnchor,
-            GeodeticAnchor { body, geodetic: Geodetic::new(0.0, 0.0, 0.0) },
+            GeodeticAnchor {
+                body,
+                geodetic: Geodetic::new(0.0, 0.0, 0.0),
+            },
         ));
     }
     // The terrain itself authors the Moon — that is the document's answer.
     app.world_mut().spawn((
         dem_height_field(),
-        TerrainGeoref { body: MOON, ..Default::default() },
+        TerrainGeoref {
+            body: MOON,
+            ..Default::default()
+        },
     ));
     app.update();
     app.world()
@@ -103,15 +112,24 @@ fn terrain_body_selects_the_radius() {
     let mut app = app_with_registry();
     app.world_mut().spawn((
         SiteAnchor,
-        GeodeticAnchor { body: MOON, geodetic: Geodetic::new(0.0, 0.0, 0.0) },
+        GeodeticAnchor {
+            body: MOON,
+            geodetic: Geodetic::new(0.0, 0.0, 0.0),
+        },
     ));
     app.world_mut().spawn((
         dem_height_field(),
-        TerrainGeoref { body: EARTH, ..Default::default() },
+        TerrainGeoref {
+            body: EARTH,
+            ..Default::default()
+        },
     ));
     app.update();
     assert_eq!(
-        app.world().get_resource::<TerrainBodyCurvature>().unwrap().radius_m,
+        app.world()
+            .get_resource::<TerrainBodyCurvature>()
+            .unwrap()
+            .radius_m,
         EARTH_R,
         "an Earth-authored terrain curves to Earth even under a Moon site anchor"
     );
@@ -124,15 +142,24 @@ fn unauthored_terrain_defaults_to_moon() {
     let mut app = app_with_registry();
     app.world_mut().spawn((
         SiteAnchor,
-        GeodeticAnchor { body: EARTH, geodetic: Geodetic::new(0.0, 0.0, 0.0) },
+        GeodeticAnchor {
+            body: EARTH,
+            geodetic: Geodetic::new(0.0, 0.0, 0.0),
+        },
     ));
     app.world_mut().spawn(dem_height_field());
     app.update();
     assert_eq!(
-        app.world().get_resource::<TerrainBodyCurvature>().unwrap().radius_m,
+        app.world()
+            .get_resource::<TerrainBodyCurvature>()
+            .unwrap()
+            .radius_m,
         MOON_R
     );
-    assert_eq!(TerrainGeoref::default().body, lunco_terrain_surface::DEFAULT_ANCHOR_BODY);
+    assert_eq!(
+        TerrainGeoref::default().body,
+        lunco_terrain_surface::DEFAULT_ANCHOR_BODY
+    );
 }
 
 /// No site anchor → no curvature (the gate is unchanged by the fix).
@@ -141,7 +168,10 @@ fn no_site_anchor_means_no_curvature() {
     let mut app = app_with_registry();
     app.world_mut().spawn((
         dem_height_field(),
-        TerrainGeoref { body: MOON, ..Default::default() },
+        TerrainGeoref {
+            body: MOON,
+            ..Default::default()
+        },
     ));
     app.update();
     assert!(app.world().get_resource::<TerrainBodyCurvature>().is_none());

@@ -97,7 +97,10 @@ mod tests {
     fn learning_paths_parse_as_json() {
         let v: serde_json::Value = serde_json::from_str(learning_paths_json())
             .expect("learning_paths.json must be valid JSON");
-        assert!(v.get("paths").and_then(|p| p.as_array()).is_some_and(|a| !a.is_empty()));
+        assert!(v
+            .get("paths")
+            .and_then(|p| p.as_array())
+            .is_some_and(|a| !a.is_empty()));
     }
 
     /// Every track manifest parses, and every lesson it names actually resolves.
@@ -118,7 +121,10 @@ mod tests {
             let src = f.contents_utf8().expect("manifest is utf8");
             let metas: Vec<serde_json::Value> = serde_json::from_str(src)
                 .unwrap_or_else(|e| panic!("tutorials/{track}/tutorials.json is invalid: {e}"));
-            assert!(!metas.is_empty(), "tutorials/{track}/tutorials.json is empty");
+            assert!(
+                !metas.is_empty(),
+                "tutorials/{track}/tutorials.json is empty"
+            );
             manifests += 1;
 
             for m in metas {
@@ -133,6 +139,9 @@ mod tests {
                 );
             }
         }
-        assert!(manifests >= 2, "expected at least the basic + sandbox tracks, found {manifests}");
+        assert!(
+            manifests >= 2,
+            "expected at least the basic + sandbox tracks, found {manifests}"
+        );
     }
 }

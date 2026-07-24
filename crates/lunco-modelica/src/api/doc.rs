@@ -1,11 +1,11 @@
 //! API handlers for document-level operations.
 
-use bevy::prelude::*;
-use lunco_core::{Command, on_command};
-use lunco_doc::DocumentId;
+use super::util::resolve_doc;
 use crate::document::ModelicaOp;
 use crate::state::ModelicaDocumentRegistry;
-use super::util::resolve_doc;
+use bevy::prelude::*;
+use lunco_core::{on_command, Command};
+use lunco_doc::DocumentId;
 
 /// Replace an open document's entire source text.
 #[Command(default)]
@@ -16,10 +16,7 @@ pub struct SetDocumentSource {
 
 /// Experiment ids with a live (non-terminal: Pending/Queued/Running) run
 /// originating from `doc`. Empty when the doc has no in-flight run.
-fn live_runs_for_doc(
-    world: &World,
-    doc: DocumentId,
-) -> Vec<lunco_experiments::ExperimentId> {
+fn live_runs_for_doc(world: &World, doc: DocumentId) -> Vec<lunco_experiments::ExperimentId> {
     let (Some(sources), Some(registry)) = (
         world.get_resource::<crate::experiments_runner::ExperimentSources>(),
         world.get_resource::<lunco_experiments::ExperimentRegistry>(),
@@ -74,10 +71,7 @@ fn stop_live_runs_for_doc(world: &mut World, doc: DocumentId) -> usize {
 }
 
 #[on_command(SetDocumentSource)]
-pub fn on_set_document_source(
-    trigger: On<SetDocumentSource>,
-    mut commands: Commands,
-) {
+pub fn on_set_document_source(trigger: On<SetDocumentSource>, mut commands: Commands) {
     let doc_raw = trigger.event().doc;
     let source = trigger.event().source.clone();
     commands.queue(move |world: &mut World| {
@@ -154,7 +148,10 @@ mod tests {
     #[test]
     fn selects_live_runs_on_the_target_doc() {
         let doc = DocumentId(2);
-        assert_eq!(live_runs(doc, doc, RunStatus::Running { t_current: 162.0 }).len(), 1);
+        assert_eq!(
+            live_runs(doc, doc, RunStatus::Running { t_current: 162.0 }).len(),
+            1
+        );
         assert_eq!(live_runs(doc, doc, RunStatus::Queued).len(), 1);
         assert_eq!(live_runs(doc, doc, RunStatus::Pending).len(), 1);
     }
@@ -164,19 +161,26 @@ mod tests {
         let doc = DocumentId(2);
         assert!(live_runs(doc, doc, RunStatus::Done { wall_time_ms: 5 }).is_empty());
         assert!(live_runs(doc, doc, RunStatus::Cancelled).is_empty());
-        assert!(
-            live_runs(doc, doc, RunStatus::Failed { error: "x".into(), partial: false })
-                .is_empty()
-        );
+        assert!(live_runs(
+            doc,
+            doc,
+            RunStatus::Failed {
+                error: "x".into(),
+                partial: false
+            }
+        )
+        .is_empty());
     }
 
     #[test]
     fn ignores_live_run_on_a_different_document() {
         // A live run on doc 3 must not be cancelled when editing doc 2.
-        assert!(
-            live_runs(DocumentId(2), DocumentId(3), RunStatus::Running { t_current: 1.0 })
-                .is_empty()
-        );
+        assert!(live_runs(
+            DocumentId(2),
+            DocumentId(3),
+            RunStatus::Running { t_current: 1.0 }
+        )
+        .is_empty());
     }
 
     #[test]
@@ -242,7 +246,11 @@ mod tests {
 
         let stopped = stop_live_runs_for_doc(&mut world, doc);
         assert_eq!(stopped, 1);
-        assert_eq!(hits.load(Ordering::SeqCst), 1, "only the target doc's run is cancelled");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "only the target doc's run is cancelled"
+        );
 
         let reg = world.resource::<ExperimentRegistry>();
         assert_eq!(reg.get(target_id).unwrap().status, RunStatus::Cancelled);

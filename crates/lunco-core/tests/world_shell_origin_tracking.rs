@@ -32,9 +32,7 @@ fn world_grid_global_transform_tracks_traveling_origin() {
     app.update();
 
     let world_grid = {
-        let mut q = app
-            .world_mut()
-            .query_filtered::<Entity, With<WorldGrid>>();
+        let mut q = app.world_mut().query_filtered::<Entity, With<WorldGrid>>();
         q.single(app.world()).unwrap()
     };
 
@@ -61,7 +59,9 @@ fn world_grid_global_transform_tracks_traveling_origin() {
             .query_filtered::<Entity, With<OriginAnchor>>();
         q.single(app.world()).unwrap()
     };
-    app.world_mut().entity_mut(anchor).remove::<FloatingOrigin>();
+    app.world_mut()
+        .entity_mut(anchor)
+        .remove::<FloatingOrigin>();
     app.world_mut().entity_mut(camera).insert(FloatingOrigin);
 
     app.update();
@@ -105,7 +105,10 @@ fn world_grid_global_transform_tracks_traveling_origin() {
         *q.get(app.world(), prop).unwrap()
     };
     let x = gt.translation().x as f64;
-    println!("low-precision child GT.x = {x:.3e}, expected ≈ {:.3e}", expected + 5.0);
+    println!(
+        "low-precision child GT.x = {x:.3e}, expected ≈ {:.3e}",
+        expected + 5.0
+    );
     // Tolerance is ULP-scale: GlobalTransform is f32, and at 2e8 magnitude one
     // ULP is 16 m — a 5 m local offset is below representable resolution. The
     // assertion guards the CONVENTION (origin-relative vs the compat pass's

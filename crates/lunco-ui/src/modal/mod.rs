@@ -134,12 +134,8 @@ mod tests {
         let mut q = ModalQueue::default();
         let id = q.request(req("A"));
         // Simulate the host resolving the modal.
-        q.results
-            .insert(id, ModalOutcome::Confirmed("OK".into()));
-        assert_eq!(
-            q.poll(id),
-            Some(ModalOutcome::Confirmed("OK".into()))
-        );
+        q.results.insert(id, ModalOutcome::Confirmed("OK".into()));
+        assert_eq!(q.poll(id), Some(ModalOutcome::Confirmed("OK".into())));
         assert_eq!(q.poll(id), None);
     }
 
@@ -157,8 +153,7 @@ mod tests {
     fn cancel_drops_unpolled_outcome() {
         let mut q = ModalQueue::default();
         let id = q.request(req("A"));
-        q.results
-            .insert(id, ModalOutcome::Confirmed("OK".into()));
+        q.results.insert(id, ModalOutcome::Confirmed("OK".into()));
         q.cancel(id);
         assert_eq!(q.poll(id), None);
     }
@@ -176,10 +171,7 @@ mod tests {
     #[test]
     fn pending_order_preserved() {
         let mut q = ModalQueue::default();
-        let ids: Vec<_> = ["A", "B", "C"]
-            .iter()
-            .map(|t| q.request(req(t)))
-            .collect();
+        let ids: Vec<_> = ["A", "B", "C"].iter().map(|t| q.request(req(t))).collect();
         let order: Vec<_> = q.pending.iter().map(|(id, _)| *id).collect();
         assert_eq!(order, ids);
     }

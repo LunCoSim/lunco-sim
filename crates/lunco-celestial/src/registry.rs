@@ -1,29 +1,29 @@
 //! # Celestial Registry & Reference Frame Definitions
 //!
-//! This module acts as the "Master Manifest" for all gravitational bodies 
-//! in the solar system. 
+//! This module acts as the "Master Manifest" for all gravitational bodies
+//! in the solar system.
 //!
 //! ## The "Why": Standardized Interplanetary Navigation
-//! To maintain compatibility with real-world aerospace tools (like GMAT, 
-//! SPICE, or Orekit), LunCoSim uses the **NAIF ID** system (e.g., 399 for 
-//! Earth, 301 for the Moon). 
+//! To maintain compatibility with real-world aerospace tools (like GMAT,
+//! SPICE, or Orekit), LunCoSim uses the **NAIF ID** system (e.g., 399 for
+//! Earth, 301 for the Moon).
 //!
 //! ## Reference Frame Anchoring
-//! The [CelestialReferenceFrame] is the "Anchor" component. It marks an 
-//! entity as the center of a localized [big_space] coordinate system. 
-//! All physics and rendering calculations within a body's [SOI] are 
-//! calculated relative to this frame, effectively implementing the 
-//! **Heliocentric -> Geocentric -> Body-Fixed** transition hierarchy 
+//! The [CelestialReferenceFrame] is the "Anchor" component. It marks an
+//! entity as the center of a localized [big_space] coordinate system.
+//! All physics and rendering calculations within a body's [SOI] are
+//! calculated relative to this frame, effectively implementing the
+//! **Heliocentric -> Geocentric -> Body-Fixed** transition hierarchy
 //! required for long-duration spaceflight.
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 
 use crate::iau::IauRotation;
 
 /// Centralized catalog of all celestial bodies and their physical constants.
 ///
-/// This resource is initialized during startup and serves as the 
+/// This resource is initialized during startup and serves as the
 /// single source of truth for the [EphemerisProvider] and gravity systems.
 #[derive(Resource, Clone, Reflect)]
 #[reflect(Resource)]
@@ -36,7 +36,7 @@ pub use lunco_core::CelestialBody;
 
 /// Component that identifies an entity as a center of a celestial reference frame.
 ///
-/// **Why**: Essential for the ephemeris system to resolve absolute 
+/// **Why**: Essential for the ephemeris system to resolve absolute
 /// positions back to a specific body's local coordinate system.
 #[derive(Component, Debug, Clone)]
 pub struct CelestialReferenceFrame {
@@ -109,7 +109,9 @@ impl BodyDescriptor {
 
     /// Sidereal rotation rate (rad/day), from the IAU elements. `0` if it does not spin.
     pub fn rotation_rate_rad_per_day(&self) -> f64 {
-        self.iau.as_ref().map_or(0.0, |i| i.rotation_rate_rad_per_day())
+        self.iau
+            .as_ref()
+            .map_or(0.0, |i| i.rotation_rate_rad_per_day())
     }
 }
 
@@ -223,7 +225,10 @@ mod tests {
         let moon = reg.bodies.iter().find(|b| b.ephemeris_id == 301).unwrap();
 
         let e = earth.polar_axis(lunco_time::J2000_JD);
-        assert!((e - DVec3::new(0.0, 0.917_482_1, -0.397_776_9)).length() < 1e-6, "{e:?}");
+        assert!(
+            (e - DVec3::new(0.0, 0.917_482_1, -0.397_776_9)).length() < 1e-6,
+            "{e:?}"
+        );
 
         // The retired lunar snapshot was authored for mid-2026; compare there.
         let m = moon.polar_axis(2_461_228.5);
@@ -235,4 +240,3 @@ mod tests {
         );
     }
 }
-

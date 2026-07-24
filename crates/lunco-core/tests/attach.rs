@@ -85,7 +85,10 @@ fn migrate_to_grid_overwrites_prior_parent_and_cell() {
     app.world_mut().flush();
 
     assert_eq!(app.world().get::<ChildOf>(entity).unwrap().parent(), grid_b);
-    assert_eq!(*app.world().get::<CellCoord>(entity).unwrap(), CellCoord::default());
+    assert_eq!(
+        *app.world().get::<CellCoord>(entity).unwrap(),
+        CellCoord::default()
+    );
     assert_eq!(
         app.world().get::<Transform>(entity).unwrap().translation,
         Vec3::ZERO

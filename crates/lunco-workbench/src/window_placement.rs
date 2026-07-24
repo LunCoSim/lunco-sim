@@ -175,7 +175,10 @@ fn apply_window_placement(
     let sf = mon.scale_factor.max(0.1);
     let (fx, fy, fw, fh) = placement.rect();
     let (mw, mh) = (mon.physical_width as f64, mon.physical_height as f64);
-    let (ox, oy) = (mon.physical_position.x as f64, mon.physical_position.y as f64);
+    let (ox, oy) = (
+        mon.physical_position.x as f64,
+        mon.physical_position.y as f64,
+    );
     let phys_x = (ox + fx * mw).round() as i32;
     let phys_y = (oy + fy * mh).round() as i32;
     // `WindowResolution` is logical points; convert from physical via the

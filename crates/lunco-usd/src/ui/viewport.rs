@@ -67,18 +67,18 @@
 //!   docs walk only the root layer until the composer is wired into
 //!   the in-place rebuild path.
 
-use bevy::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::Image;
+use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
-use bevy::camera::visibility::RenderLayers;
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
 use lunco_assets::twin_source::TwinRoots;
+use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
-use lunco_core::{Command, on_command, register_commands};
 use lunco_workbench::{
     Panel, PanelCtx, PanelId, PanelRects, PanelSlot, ScenePickGate, SceneTarget, WorkbenchAppExt,
 };
@@ -197,8 +197,8 @@ impl OrbitCamera {
     /// convention).
     pub fn apply_drag(&mut self, delta: egui::Vec2) {
         self.yaw -= delta.x * self.drag_sensitivity;
-        self.pitch =
-            (self.pitch + delta.y * self.drag_sensitivity).clamp(-self.pitch_clamp, self.pitch_clamp);
+        self.pitch = (self.pitch + delta.y * self.drag_sensitivity)
+            .clamp(-self.pitch_clamp, self.pitch_clamp);
     }
 
     /// Apply a scroll delta (vertical scroll wheel, pixels).
@@ -479,13 +479,13 @@ pub struct SetActiveUsdViewport {
 }
 
 #[on_command(SetActiveUsdViewport)]
-fn on_set_active_usd_viewport(
-    trigger: On<SetActiveUsdViewport>,
-    mut commands: Commands,
-) {
+fn on_set_active_usd_viewport(trigger: On<SetActiveUsdViewport>, mut commands: Commands) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        if !world.resource::<DocumentRegistry<UsdDocument>>().contains(doc) {
+        if !world
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(doc)
+        {
             return;
         }
         if world.resource::<UsdViewportState>().active_doc == Some(doc) {
@@ -512,14 +512,14 @@ register_commands!(on_set_active_usd_viewport,);
 // Document lifecycle observers
 // ─────────────────────────────────────────────────────────────────────
 
-fn on_doc_opened_for_viewport(
-    trigger: On<DocumentOpened>,
-    mut commands: Commands,
-) {
+fn on_doc_opened_for_viewport(trigger: On<DocumentOpened>, mut commands: Commands) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
         // Gate on USD ownership so Modelica / SysML opens skip.
-        if !world.resource::<DocumentRegistry<UsdDocument>>().contains(doc) {
+        if !world
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(doc)
+        {
             return;
         }
         // Make this the active doc if nothing else is showing. The
@@ -538,10 +538,7 @@ fn on_doc_changed_for_viewport(_trigger: On<DocumentChanged>) {
     // asset, re-projecting the preview. Nothing to do here per edit.
 }
 
-fn on_doc_closed_for_viewport(
-    trigger: On<DocumentClosed>,
-    mut commands: Commands,
-) {
+fn on_doc_closed_for_viewport(trigger: On<DocumentClosed>, mut commands: Commands) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
         let mut state = world.resource_mut::<UsdViewportState>();
@@ -582,7 +579,10 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
         .host(doc)
         .map(|h| h.document().generation());
     let Some((name, rel)) = viewport_twin_coords(world, doc) else {
-        bevy::log::warn!("[UsdViewport] no composed source for {} — not mounting", doc);
+        bevy::log::warn!(
+            "[UsdViewport] no composed source for {} — not mounting",
+            doc
+        );
         return;
     };
     let handle = world
@@ -622,7 +622,9 @@ fn viewport_twin_coords(world: &World, doc: DocumentId) -> Option<(String, Strin
     {
         return Some(coords);
     }
-    let host = world.resource::<DocumentRegistry<UsdDocument>>().host(doc)?;
+    let host = world
+        .resource::<DocumentRegistry<UsdDocument>>()
+        .host(doc)?;
     let composed = host.document().composed_source();
     let (base, rel) = match host.document().origin() {
         DocumentOrigin::File { path, .. } => (
@@ -638,8 +640,8 @@ fn viewport_twin_coords(world: &World, doc: DocumentId) -> Option<(String, Strin
         _ => (std::path::PathBuf::from("."), "scene.usda".to_string()),
     };
     // A stable, URI-safe synthetic twin name for this document.
-    let name = format!("__viewport_{doc}")
-        .replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_");
+    let name =
+        format!("__viewport_{doc}").replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_");
     let roots = world.resource::<TwinRoots>();
     // Use the ASSIGNED name: if this synthetic name is already bound to a
     // different base (same doc re-registered from a new location), the registry
@@ -753,10 +755,7 @@ impl Panel for UsdViewportPanel {
         let over_scene = ui.rect_contains_pointer(response.rect);
         ctx.defer(move |world| {
             if let Some(mut gate) = world.get_resource_mut::<ScenePickGate>() {
-                gate.record_scene_leaf(
-                    SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
-                    over_scene,
-                );
+                gate.record_scene_leaf(SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID), over_scene);
             }
         });
 
@@ -811,7 +810,9 @@ mod tests {
         app.update();
 
         let _doc = {
-            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.open_file("/tmp/x.usda", "#usda 1.0\n".to_string()).0
         };
         // Drain pending events twice so the DocumentOpened trigger

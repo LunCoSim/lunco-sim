@@ -1,7 +1,7 @@
-use bevy::prelude::*;
-use lunco_usd::*;
 use avian3d::prelude::*;
+use bevy::prelude::*;
 use lunco_mobility::*;
+use lunco_usd::*;
 
 fn main() {
     App::new()
@@ -53,22 +53,19 @@ fn setup_scene(
         Transform::from_xyz(400.0, 200.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
         OrbitCamera,
     ));
-    
+
     println!("\n--- Visual Inspection ---");
 }
 
 #[derive(Component)]
 struct OrbitCamera;
 
-fn orbit_camera(
-    time: Res<Time>,
-    mut query: Query<&mut Transform, With<OrbitCamera>>,
-) {
+fn orbit_camera(time: Res<Time>, mut query: Query<&mut Transform, With<OrbitCamera>>) {
     if let Ok(mut transform) = query.single_mut() {
         let angle = time.elapsed_secs() * 0.15;
         let distance = 500.0;
         let height = 200.0;
-        
+
         let target = Vec3::ZERO;
         transform.translation.x = target.x + angle.cos() * distance;
         transform.translation.z = target.z + angle.sin() * distance;
@@ -79,7 +76,7 @@ fn orbit_camera(
 
 fn setup_rover(mut commands: Commands, asset_server: Res<AssetServer>) {
     let stage_handle = asset_server.load("assets/vessels/rovers/rucheyok/rucheyok.usda");
-    
+
     commands.spawn((
         Name::new("RucheyokRover"),
         UsdPrimPath {
@@ -94,14 +91,18 @@ fn setup_rover(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 }
 
-fn debug_rover_presence(
-    query: Query<(&Name, &UsdPrimPath, Option<&Mesh3d>), Added<UsdPrimPath>>,
-) {
+fn debug_rover_presence(query: Query<(&Name, &UsdPrimPath, Option<&Mesh3d>), Added<UsdPrimPath>>) {
     for (name, path, mesh) in query.iter() {
         if mesh.is_some() {
-            println!("SUCCESS: Entity '{}' ({}) has a visual mesh attached.", name, path.path);
+            println!(
+                "SUCCESS: Entity '{}' ({}) has a visual mesh attached.",
+                name, path.path
+            );
         } else {
-            println!("INFO: Entity '{}' ({}) discovered (no mesh yet).", name, path.path);
+            println!(
+                "INFO: Entity '{}' ({}) discovered (no mesh yet).",
+                name, path.path
+            );
         }
     }
 }

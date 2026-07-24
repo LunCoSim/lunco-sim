@@ -105,7 +105,9 @@ impl ApiQueryProvider for TerrainHeightProvider {
             }
 
             let (lx, lz) = (local.x as f64, local.z as f64);
-            let eps = eps_override.unwrap_or_else(|| oracle.spacing() as f64).max(1e-6);
+            let eps = eps_override
+                .unwrap_or_else(|| oracle.spacing() as f64)
+                .max(1e-6);
             let h = HeightSource::height_at(oracle.as_ref(), lx, lz);
             let n = HeightSource::normal_at(oracle.as_ref(), lx, lz, eps);
             let slope = HeightSource::slope_at(oracle.as_ref(), lx, lz, eps);
@@ -176,7 +178,10 @@ impl ApiQueryProvider for TerrainFieldProvider {
     }
 
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
-        let field_id = params.get("field").and_then(serde_json::Value::as_str).unwrap_or("slope");
+        let field_id = params
+            .get("field")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("slope");
         let Some(field) = field_by_id(field_id) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -207,8 +212,10 @@ impl ApiQueryProvider for TerrainFieldProvider {
 
         // Snapshot DEM terrains, releasing the world borrow (see `TerrainHeight`).
         let mut q = world.query::<(Entity, &GlobalTransform, &DemHeightField)>();
-        let terrains: Vec<(GlobalTransform, Arc<SurfaceOracle>)> =
-            q.iter(world).map(|(_, gt, hf)| (*gt, hf.0.clone())).collect();
+        let terrains: Vec<(GlobalTransform, Arc<SurfaceOracle>)> = q
+            .iter(world)
+            .map(|(_, gt, hf)| (*gt, hf.0.clone()))
+            .collect();
 
         // First terrain whose footprint covers the region centre wins. The field is
         // evaluated in the terrain's LOCAL XZ frame — an origin-anchored DEM makes
@@ -220,7 +227,10 @@ impl ApiQueryProvider for TerrainFieldProvider {
             if local.x.abs() > hx || local.z.abs() > hx {
                 continue;
             }
-            let region = Square { center: [local.x as f64, local.z as f64], half };
+            let region = Square {
+                center: [local.x as f64, local.z as f64],
+                half,
+            };
             let data = field_map(field.as_ref(), oracle.as_ref(), &region, res);
             let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
             for &v in &data {
@@ -306,7 +316,10 @@ impl ApiQueryProvider for TerrainRaycastProvider {
                     "TerrainRaycast: `dir` must be non-zero".to_string(),
                 );
             }
-            let max = params.get("max").and_then(serde_json::Value::as_f64).unwrap_or(1.0e6) as f32;
+            let max = params
+                .get("max")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(1.0e6) as f32;
             (d, max)
         } else {
             return ApiResponse::error(
@@ -391,7 +404,11 @@ mod tests {
     fn tilted_terrain(world: &mut World) -> Entity {
         // sample x at ix 0,1,2 = -10, 0, 10 → height -1, 0, 1, every row.
         let heights = vec![-1.0, 0.0, 1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0];
-        let grid = lunco_obstacle_field::field::HeightGrid { res: 3, half_extent: 10.0, heights };
+        let grid = lunco_obstacle_field::field::HeightGrid {
+            res: 3,
+            half_extent: 10.0,
+            heights,
+        };
         world
             .spawn((
                 GlobalTransform::IDENTITY,
@@ -419,9 +436,15 @@ mod tests {
             TerrainHeightProvider.execute(&mut world, &json!({"x": 5.0, "z": 0.0, "eps": 1.0})),
         );
         assert_eq!(d["found"], json!(true));
-        assert!((d["height"].as_f64().unwrap() - 0.5).abs() < 1e-4, "height {d}");
+        assert!(
+            (d["height"].as_f64().unwrap() - 0.5).abs() < 1e-4,
+            "height {d}"
+        );
         // slope = atan(0.1) ≈ 0.0997 rad from the constant 0.1 gradient.
-        assert!((d["slope"].as_f64().unwrap() - 0.1f64.atan()).abs() < 1e-3, "slope {d}");
+        assert!(
+            (d["slope"].as_f64().unwrap() - 0.1f64.atan()).abs() < 1e-3,
+            "slope {d}"
+        );
         // Up-normal tilts away from the climb (−x), still mostly +Y.
         let n = d["normal"].as_array().unwrap();
         assert!(n[0].as_f64().unwrap() < 0.0 && n[1].as_f64().unwrap() > 0.9);
@@ -461,7 +484,9 @@ mod tests {
         assert!((d["max"].as_f64().unwrap() - want).abs() < 1e-3, "max {d}");
         let data = d["data"].as_array().unwrap();
         assert_eq!(data.len(), 16); // res*res
-        assert!(data.iter().all(|v| (v.as_f64().unwrap() - want).abs() < 1e-3));
+        assert!(data
+            .iter()
+            .all(|v| (v.as_f64().unwrap() - want).abs() < 1e-3));
     }
 
     #[test]
@@ -479,11 +504,15 @@ mod tests {
     fn field_unknown_id_and_bad_half_error() {
         let mut world = World::new();
         tilted_terrain(&mut world);
-        let bad_field = TerrainFieldProvider
-            .execute(&mut world, &json!({"field": "mineral", "x": 0.0, "z": 0.0, "half": 5.0}));
+        let bad_field = TerrainFieldProvider.execute(
+            &mut world,
+            &json!({"field": "mineral", "x": 0.0, "z": 0.0, "half": 5.0}),
+        );
         assert!(matches!(bad_field, ApiResponse::Error { .. }));
-        let bad_half = TerrainFieldProvider
-            .execute(&mut world, &json!({"field": "slope", "x": 0.0, "z": 0.0, "half": 0.0}));
+        let bad_half = TerrainFieldProvider.execute(
+            &mut world,
+            &json!({"field": "slope", "x": 0.0, "z": 0.0, "half": 0.0}),
+        );
         assert!(matches!(bad_half, ApiResponse::Error { .. }));
     }
 
@@ -513,7 +542,10 @@ mod tests {
         ));
         assert_eq!(d["hit"], json!(true), "{d}");
         let p = d["point"].as_array().unwrap();
-        assert!((p[0].as_f64().unwrap() - 8.0).abs() < 0.5, "intercept x {d}");
+        assert!(
+            (p[0].as_f64().unwrap() - 8.0).abs() < 0.5,
+            "intercept x {d}"
+        );
         let dist = d["distance"].as_f64().unwrap();
         assert!(dist > 6.0 && dist < 9.0, "distance {d}");
     }

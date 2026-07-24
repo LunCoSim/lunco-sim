@@ -12,8 +12,8 @@
 
 use lunco_modelica::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica::pretty::{ComponentDecl, ConnectEquation, PortRef};
-use rumoca_phase_parse::parse_to_ast;
 use rumoca_compile::parsing::ast::{ClassDef, Component, Equation};
+use rumoca_phase_parse::parse_to_ast;
 
 /// Run `op` against `class_name`, apply the resulting splice to `source`, and
 /// reparse — the same route `Document::apply` takes.
@@ -45,8 +45,7 @@ where
     F: FnOnce(&mut ClassDef, &mut Edit<'_>) -> Result<(), AstMutError>,
 {
     let sd = parse_to_ast(source, "test.mo").expect("first parse");
-    ast_mut::class_patch(source, &sd, class_name, op)
-        .expect_err("expected the mutation to fail")
+    ast_mut::class_patch(source, &sd, class_name, op).expect_err("expected the mutation to fail")
 }
 
 fn decl(type_name: &str, name: &str) -> ComponentDecl {
@@ -65,7 +64,13 @@ fn port(component: &str, port: &str) -> PortRef {
     }
 }
 
-fn is_connect(eq: &Equation, from_comp: &str, from_port: &str, to_comp: &str, to_port: &str) -> bool {
+fn is_connect(
+    eq: &Equation,
+    from_comp: &str,
+    from_port: &str,
+    to_comp: &str,
+    to_port: &str,
+) -> bool {
     matches!(
         eq,
         Equation::Connect { lhs, rhs, .. }
@@ -97,7 +102,10 @@ fn add_component_preserves_existing_components() {
     let class = mutate_and_reparse_class("model M\n  Real a;\nend M;\n", "M", |c, e| {
         ast_mut::add_component(c, e, &decl("Real", "b"))
     });
-    assert!(class.components.contains_key("a"), "existing component dropped");
+    assert!(
+        class.components.contains_key("a"),
+        "existing component dropped"
+    );
     assert!(class.components.contains_key("b"), "new component missing");
 }
 
@@ -152,16 +160,26 @@ fn add_connection_appends_to_equation_section() {
             ast_mut::add_connection(
                 c,
                 e,
-                &ConnectEquation { from: port("a", "p"), to: port("b", "q"), line: None },
+                &ConnectEquation {
+                    from: port("a", "p"),
+                    to: port("b", "q"),
+                    line: None,
+                },
             )
         },
     );
     assert!(
-        class.equations.iter().any(|eq| is_connect(eq, "a", "p", "b", "q")),
+        class
+            .equations
+            .iter()
+            .any(|eq| is_connect(eq, "a", "p", "b", "q")),
         "expected connect(a.p, b.q) in equations"
     );
     assert!(
-        class.equations.iter().any(|eq| is_connect(eq, "a", "z", "b", "z")),
+        class
+            .equations
+            .iter()
+            .any(|eq| is_connect(eq, "a", "z", "b", "z")),
         "the existing connect was dropped"
     );
 }
@@ -173,11 +191,18 @@ fn add_connection_creates_equation_section_when_missing() {
         ast_mut::add_connection(
             c,
             e,
-            &ConnectEquation { from: port("a", "p"), to: port("a", "q"), line: None },
+            &ConnectEquation {
+                from: port("a", "p"),
+                to: port("a", "q"),
+                line: None,
+            },
         )
     });
     assert!(
-        class.equations.iter().any(|eq| is_connect(eq, "a", "p", "a", "q")),
+        class
+            .equations
+            .iter()
+            .any(|eq| is_connect(eq, "a", "p", "a", "q")),
         "expected connect equation in (newly created) equation section"
     );
 }
@@ -196,7 +221,10 @@ fn remove_connection_drops_matching_equation() {
     // Expecting no remaining connect for (a,b). `remove_connection`
     // matches on `component.port`; with empty port the AST ref is
     // single-segment, so we use a slightly different comparison.
-    let any_connect = class.equations.iter().any(|eq| matches!(eq, Equation::Connect { .. }));
+    let any_connect = class
+        .equations
+        .iter()
+        .any(|eq| matches!(eq, Equation::Connect { .. }));
     assert!(!any_connect, "connect equation still present after remove");
 }
 
@@ -212,7 +240,12 @@ fn remove_connection_preserves_other_connections() {
         .iter()
         .filter(|eq| matches!(eq, Equation::Connect { .. }))
         .collect();
-    assert_eq!(connects.len(), 1, "expected 1 remaining connect, got {}", connects.len());
+    assert_eq!(
+        connects.len(),
+        1,
+        "expected 1 remaining connect, got {}",
+        connects.len()
+    );
 }
 
 #[test]

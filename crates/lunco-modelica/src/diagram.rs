@@ -21,10 +21,10 @@
 //!     .build();
 //! ```
 
-use lunco_core::diagram::{
-    ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind,
+use lunco_core::diagram::{ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind};
+use rumoca_compile::parsing::ast::{
+    ClassDef, Component, Equation, Expression, Name, StoredDefinition,
 };
-use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, Name, StoredDefinition};
 use rumoca_compile::parsing::{Causality, ClassType, Variability};
 use std::collections::HashMap;
 
@@ -161,17 +161,12 @@ impl ModelicaComponentBuilder {
                     crate::class_cache::MslLookupMode::Cached,
                 );
                 let qualified = format!("{}.{}", target, comp_name);
-                let node_id = graph.add_node_named(
-                    NodeKind::Component,
-                    comp_name,
-                    qualified,
-                    ports,
-                );
+                let node_id =
+                    graph.add_node_named(NodeKind::Component, comp_name, qualified, ports);
                 // Store component type name in meta for display
-                graph.nodes[node_id.0 as usize].meta.insert(
-                    "type_name".to_string(),
-                    comp.type_name.to_string(),
-                );
+                graph.nodes[node_id.0 as usize]
+                    .meta
+                    .insert("type_name".to_string(), comp.type_name.to_string());
                 name_to_id.insert(comp_name.to_string(), node_id);
             }
 
@@ -197,16 +192,14 @@ impl ModelicaComponentBuilder {
                         // so the wire actually gets built. Without
                         // this, every MSL connect from a model-level
                         // connector silently drops out of the diagram.
-                        let resolve_port = |
-                            n: &lunco_core::diagram::ComponentNode,
-                            port: &str,
-                        | -> Option<usize> {
-                            if port.is_empty() && !n.ports.is_empty() {
-                                Some(0)
-                            } else {
-                                n.port_index(port).map(|p| p as usize)
-                            }
-                        };
+                        let resolve_port =
+                            |n: &lunco_core::diagram::ComponentNode, port: &str| -> Option<usize> {
+                                if port.is_empty() && !n.ports.is_empty() {
+                                    Some(0)
+                                } else {
+                                    n.port_index(port).map(|p| p as usize)
+                                }
+                            };
                         if let (Some(sp), Some(tp)) = (
                             resolve_port(src_node_ref, &src_port),
                             resolve_port(tgt_node_ref, &tgt_port),
@@ -257,11 +250,13 @@ impl ModelicaComponentBuilder {
                 let conn_ports = get_connector_port_names(comp);
                 for conn_name in &conn_ports {
                     let key = format!("{}.{}", comp_name, conn_name);
-                    connector_registry.entry(key.clone()).or_insert_with(|| ConnectorInfo {
-                        comp_name: comp_name.to_string(),
-                        port_name: conn_name.clone(),
-                        port_type: comp.type_name.to_string(),
-                    });
+                    connector_registry
+                        .entry(key.clone())
+                        .or_insert_with(|| ConnectorInfo {
+                            comp_name: comp_name.to_string(),
+                            port_name: conn_name.clone(),
+                            port_type: comp.type_name.to_string(),
+                        });
                 }
             }
 
@@ -320,7 +315,11 @@ impl ModelicaComponentBuilder {
                         (name_to_id.get(&src_key), name_to_id.get(&tgt_key))
                     {
                         graph.connect_labeled(
-                            src_id, 0, tgt_id, 0, EdgeKind::Connect,
+                            src_id,
+                            0,
+                            tgt_id,
+                            0,
+                            EdgeKind::Connect,
                             format!("{} ↔ {}", src_key, tgt_key),
                         );
                     }
@@ -388,7 +387,13 @@ impl ModelicaComponentBuilder {
                             idx
                         });
 
-                        graph.connect(parent_id, source_port, child_id, target_port, EdgeKind::Contains);
+                        graph.connect(
+                            parent_id,
+                            source_port,
+                            child_id,
+                            target_port,
+                            EdgeKind::Contains,
+                        );
                     }
                 }
             }
@@ -405,7 +410,9 @@ impl ModelicaComponentBuilder {
         if let Some(w) = &self.ast.within {
             format!("{}.{}", w, self.target_class.as_deref().unwrap_or("?"))
         } else {
-            self.target_class.clone().unwrap_or_else(|| "Model".to_string())
+            self.target_class
+                .clone()
+                .unwrap_or_else(|| "Model".to_string())
         }
     }
 
@@ -438,22 +445,17 @@ impl ModelicaComponentBuilder {
 ///   3. any non-package class (connectors, records, types) — last resort
 ///
 /// Returns `None` only when the AST has no classes at all.
-pub fn resolve_primary_target(
-    ast: &StoredDefinition,
-) -> Option<String> {
+pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
     let within_prefix: String = ast
         .within
         .as_ref()
         .map(|w| w.to_string())
         .unwrap_or_default();
-    let qualify = |short: &str| -> String {
-        crate::ast_extract::qualify(&within_prefix, short)
-    };
+    let qualify = |short: &str| -> String { crate::ast_extract::qualify(&within_prefix, short) };
     // Models are the canonical "open this in the canvas" choice;
     // connectors and types alone have no diagram.
-    let is_diagrammable = |t: ClassType| {
-        matches!(t, ClassType::Model | ClassType::Block | ClassType::Class)
-    };
+    let is_diagrammable =
+        |t: ClassType| matches!(t, ClassType::Model | ClassType::Block | ClassType::Class);
     for (name, class) in &ast.classes {
         if is_diagrammable(class.class_type.clone()) {
             return Some(qualify(name));
@@ -513,7 +515,9 @@ pub fn resolve_primary_target(
 /// `within = "AnnotatedRocketStage"` does *not* strip the leading
 /// `AnnotatedRocketStage` out of `AnnotatedRocketStageCopy.X`.
 pub fn strip_within_prefix<'a>(qualified: &'a str, within: Option<&Name>) -> &'a str {
-    let Some(within) = within else { return qualified };
+    let Some(within) = within else {
+        return qualified;
+    };
     let within_str = within.to_string();
     qualified
         .strip_prefix(&within_str)
@@ -664,23 +668,16 @@ pub(crate) fn collect_inherited_components_with(
             // dropped. Pre-resolve to a fully-qualified path here so
             // the palette lookup succeeds.
             let mut comp = comp.clone();
-            let resolved = resolve_type_in_scope(
-                &comp.type_name.to_string(),
-                &base_qpath,
-                msl_mode,
-            );
+            let resolved =
+                resolve_type_in_scope(&comp.type_name.to_string(), &base_qpath, msl_mode);
             if let Some(q) = resolved {
                 comp.type_name = rumoca_compile::parsing::ast::Name::from_string(&q);
             }
             out.push((name.clone(), comp));
         }
-        for (name, comp) in collect_inherited_components_with(
-            base,
-            Some(&base_qpath),
-            &shim,
-            depth + 1,
-            msl_mode,
-        ) {
+        for (name, comp) in
+            collect_inherited_components_with(base, Some(&base_qpath), &shim, depth + 1, msl_mode)
+        {
             if breaks.contains(name.as_str()) || seen.contains(&name) {
                 continue;
             }
@@ -752,8 +749,11 @@ fn ports_for_component(
     // hot-path cost (this runs once per component node, per projection).
     let inherited =
         collect_inherited_components_with(type_class, Some(type_qpath), ast, 0, msl_mode);
-    let direct_names: std::collections::HashSet<&str> =
-        type_class.components.iter().map(|(n, _)| n.as_str()).collect();
+    let direct_names: std::collections::HashSet<&str> = type_class
+        .components
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect();
     let sub_components: Vec<(&str, &Component)> = type_class
         .components
         .iter()
@@ -999,7 +999,9 @@ fn get_connector_port_names(comp: &Component) -> Vec<String> {
 ///
 /// Handles simple two-part references (component.port). For more complex
 /// paths like `a.b.c.p`, returns the last two parts.
-fn parse_connect_reference(comp_ref: &rumoca_compile::parsing::ast::ComponentReference) -> (String, String) {
+fn parse_connect_reference(
+    comp_ref: &rumoca_compile::parsing::ast::ComponentReference,
+) -> (String, String) {
     let parts: Vec<String> = comp_ref
         .parts
         .iter()
@@ -1090,9 +1092,18 @@ end VoltageSource;
         assert_eq!(graph.edge_count(), 3, "Should have 3 connect() equations");
 
         // find_node searches by qualified_name
-        assert!(graph.find_node("RC_Circuit.R1").is_some(), "Should have R1 node");
-        assert!(graph.find_node("RC_Circuit.C1").is_some(), "Should have C1 node");
-        assert!(graph.find_node("RC_Circuit.V1").is_some(), "Should have V1 node");
+        assert!(
+            graph.find_node("RC_Circuit.R1").is_some(),
+            "Should have R1 node"
+        );
+        assert!(
+            graph.find_node("RC_Circuit.C1").is_some(),
+            "Should have C1 node"
+        );
+        assert!(
+            graph.find_node("RC_Circuit.V1").is_some(),
+            "Should have V1 node"
+        );
     }
 
     #[test]
@@ -1165,9 +1176,7 @@ package MyLib
 end MyLib;
 "#;
         let builder = ModelicaComponentBuilder::from_source(source).unwrap();
-        let graph = builder
-            .diagram_type(DiagramType::PackageHierarchy)
-            .build();
+        let graph = builder.diagram_type(DiagramType::PackageHierarchy).build();
 
         // Should have MyLib, Components, Resistor, Circuits, RC
         assert!(graph.node_count() >= 3);
@@ -1251,9 +1260,18 @@ end Gain;
         // depends on per-type port introspection (see
         // `extract_component_ports` / `get_connector_port_names`),
         // which is a separate gap.
-        assert!(graph.find_node("PID.u").is_some(), "u (inherited from SISO) must be a node");
-        assert!(graph.find_node("PID.y").is_some(), "y (inherited from SISO) must be a node");
-        assert!(graph.find_node("PID.k").is_some(), "k (direct) must be a node");
+        assert!(
+            graph.find_node("PID.u").is_some(),
+            "u (inherited from SISO) must be a node"
+        );
+        assert!(
+            graph.find_node("PID.y").is_some(),
+            "y (inherited from SISO) must be a node"
+        );
+        assert!(
+            graph.find_node("PID.k").is_some(),
+            "k (direct) must be a node"
+        );
     }
 
     /// End-to-end check: load the real `Modelica.Blocks.Continuous.PID`
@@ -1262,9 +1280,9 @@ end Gain;
     /// being materialised so CI without MSL doesn't fail.
     #[test]
     fn test_real_msl_pid_has_inherited_u_y() {
-        let Some(pid) = crate::class_cache::peek_or_load_msl_class_blocking(
-            "Modelica.Blocks.Continuous.PID",
-        ) else {
+        let Some(pid) =
+            crate::class_cache::peek_or_load_msl_class_blocking("Modelica.Blocks.Continuous.PID")
+        else {
             eprintln!("MSL cache not materialised — skipping");
             return;
         };
@@ -1277,8 +1295,16 @@ end Gain;
             crate::class_cache::MslLookupMode::Loading,
         );
         let names: Vec<&str> = inherited.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(names.contains(&"u"), "PID must inherit u from SISO; got {:?}", names);
-        assert!(names.contains(&"y"), "PID must inherit y from SISO; got {:?}", names);
+        assert!(
+            names.contains(&"u"),
+            "PID must inherit u from SISO; got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"y"),
+            "PID must inherit y from SISO; got {:?}",
+            names
+        );
     }
 
     #[test]

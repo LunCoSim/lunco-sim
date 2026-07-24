@@ -78,7 +78,11 @@ pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> 
         Some(rel) => Some(assets_root?.join(rel)),
         None => {
             let p = PathBuf::from(id);
-            Some(if p.is_absolute() { p } else { Path::new("/").join(id) })
+            Some(if p.is_absolute() {
+                p
+            } else {
+                Path::new("/").join(id)
+            })
         }
     }
 }
@@ -126,7 +130,9 @@ macro_rules! try_both {
         let mut last = None;
         for reader in &$self.readers {
             match reader.$method($path).await {
-                Err(AssetReaderError::NotFound(p)) => last = Some(Err(AssetReaderError::NotFound(p))),
+                Err(AssetReaderError::NotFound(p)) => {
+                    last = Some(Err(AssetReaderError::NotFound(p)))
+                }
                 other => return other,
             }
         }

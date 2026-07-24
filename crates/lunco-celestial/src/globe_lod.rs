@@ -18,9 +18,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bevy::prelude::*;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_materials::ShaderLook;
 use lunco_render::SceneCamera;
@@ -181,8 +181,12 @@ pub fn update_globe_lod(
         // Camera relative to the body centre (= the surface grid origin, inertial),
         // in the frame the tiles live in. f32 render-space is plenty for choosing
         // the LOD; tile PLACEMENT below stays f64-precise via `translation_to_grid`.
-        let Ok(sg_gt) = transforms.get(lod.surface_grid) else { continue };
-        let Ok(sg_grid) = grids.get(lod.surface_grid) else { continue };
+        let Ok(sg_gt) = transforms.get(lod.surface_grid) else {
+            continue;
+        };
+        let Ok(sg_grid) = grids.get(lod.surface_grid) else {
+            continue;
+        };
         let camera_body_local = cam_pos - sg_gt.translation().as_dvec3();
 
         // Desired leaf set: recurse all six faces from the root. The resident
@@ -227,8 +231,11 @@ pub fn update_globe_lod(
             .collect();
         missing.sort_by(|a, b| {
             a.level.cmp(&b.level).then_with(|| {
-                tile_dist2(a, lod.radius_m, camera_body_local)
-                    .total_cmp(&tile_dist2(b, lod.radius_m, camera_body_local))
+                tile_dist2(a, lod.radius_m, camera_body_local).total_cmp(&tile_dist2(
+                    b,
+                    lod.radius_m,
+                    camera_body_local,
+                ))
             })
         });
         // INITIAL fill is unbudgeted: with no resident tiles there is no old
@@ -236,7 +243,11 @@ pub fn update_globe_lod(
         // budgeted first fill shows a partially-tiled globe for ~15 frames at
         // scene load. One synchronous fill there is the old (pre-budget)
         // behavior and is hidden behind scene loading anyway.
-        let budget = if tiles.resident.is_empty() { usize::MAX } else { TILE_SPAWN_BUDGET };
+        let budget = if tiles.resident.is_empty() {
+            usize::MAX
+        } else {
+            TILE_SPAWN_BUDGET
+        };
         for coord in missing.into_iter().take(budget) {
             let (u, v) = tile_center_uv(coord.face, coord.level, coord.i, coord.j);
             let tile_center_dir = cube_to_sphere(coord.face, u, v);
@@ -252,7 +263,14 @@ pub fn update_globe_lod(
             // coords also keep vertex magnitudes small (≪ radius), avoiding f32
             // precision loss at 6.4e6 m.
             let mesh = create_quadsphere_tile_mesh(
-                body_ent, coord.face, coord.level, coord.i, coord.j, lod.radius_m, lod.res, tile_body_local,
+                body_ent,
+                coord.face,
+                coord.level,
+                coord.i,
+                coord.j,
+                lod.radius_m,
+                lod.res,
+                tile_body_local,
             );
             // Atomic (ChildOf, CellCoord, Transform) — the authored grid-local
             // pose IS the placement. `set_parent_in_place` here was the globe
@@ -283,7 +301,10 @@ pub fn update_globe_lod(
                     // flipped lit↔dark frame to frame ("still blinking"). Same
                     // treatment as the Sun body mesh.
                     bevy::light::NotShadowCaster,
-                    Name::new(format!("Globe tile f{} L{} {},{}", coord.face, coord.level, coord.i, coord.j)),
+                    Name::new(format!(
+                        "Globe tile f{} L{} {},{}",
+                        coord.face, coord.level, coord.i, coord.j
+                    )),
                     // Streamed runtime detail — hidden from author-facing lists.
                     lunco_core::SystemManaged,
                     ChildOf(lod.surface_grid),
@@ -351,15 +372,23 @@ pub fn update_globe_lod(
                 if punch.is_some_and(|p| tile_fully_in_punch(face, level, i, j, p)) {
                     return true;
                 }
-                if set.contains(&TileCoord { body, face, level, i, j }) {
+                if set.contains(&TileCoord {
+                    body,
+                    face,
+                    level,
+                    i,
+                    j,
+                }) {
                     return true;
                 }
                 if level > 12 {
                     return false;
                 }
-                (0..2).all(|di| (0..2).all(|dj| {
-                    covered(set, punch, body, face, level + 1, i * 2 + di, j * 2 + dj)
-                }))
+                (0..2).all(|di| {
+                    (0..2).all(|dj| {
+                        covered(set, punch, body, face, level + 1, i * 2 + di, j * 2 + dj)
+                    })
+                })
             }
             for face in 0..6u8 {
                 if !covered(&resident, punch, body_ent, face, 0, 0, 0) {

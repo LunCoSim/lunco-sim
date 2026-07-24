@@ -19,8 +19,8 @@
 //! assert on `LinearVelocity` — the step that actually moves `Position` is
 //! covered by Avian's own tests and by manual verification in the running app.
 
-use bevy::prelude::*;
 use bevy::app::ScheduleRunnerPlugin;
+use bevy::prelude::*;
 use bevy::time::TimePlugin;
 use std::time::Duration;
 
@@ -42,8 +42,8 @@ fn capture_force_y(q: Query<&PendingForces>, mut witness: ResMut<ForceYWitness>)
     }
 }
 use lunco_modelica::{
-    ModelicaCorePlugin, ModelicaModel, ModelicaCommand, ModelicaChannels,
-    extract_model_name, extract_parameters, extract_inputs_with_defaults,
+    extract_inputs_with_defaults, extract_model_name, extract_parameters, ModelicaChannels,
+    ModelicaCommand, ModelicaCorePlugin, ModelicaModel,
 };
 use lunco_scene_commands::catalog::BalloonModelMarker;
 
@@ -93,7 +93,10 @@ fn compile_balloon_model(
 
 fn setup_balloon_wires(
     mut commands: Commands,
-    q_new: Query<(Entity, &Name, &ModelicaModel), (With<BalloonModelMarker>, Without<SimComponent>)>,
+    q_new: Query<
+        (Entity, &Name, &ModelicaModel),
+        (With<BalloonModelMarker>, Without<SimComponent>),
+    >,
 ) {
     for (entity, name, model) in &q_new {
         if model.variables.is_empty() {
@@ -115,16 +118,28 @@ fn setup_balloon_wires(
         commands.entity(entity).try_insert(comp);
 
         commands.spawn(SimConnection {
-            start_element: entity, start_connector: "netForce".into(),
-            end_element: entity, end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
+            start_element: entity,
+            start_connector: "netForce".into(),
+            end_element: entity,
+            end_connector: "force_y".into(),
+            scale: 1.0,
+            offset: 0.0,
         });
         commands.spawn(SimConnection {
-            start_element: entity, start_connector: "height".into(),
-            end_element: entity, end_connector: "height".into(), scale: 1.0, offset: 0.0,
+            start_element: entity,
+            start_connector: "height".into(),
+            end_element: entity,
+            end_connector: "height".into(),
+            scale: 1.0,
+            offset: 0.0,
         });
         commands.spawn(SimConnection {
-            start_element: entity, start_connector: "velocity_y".into(),
-            end_element: entity, end_connector: "velocity".into(), scale: 1.0, offset: 0.0,
+            start_element: entity,
+            start_connector: "velocity_y".into(),
+            end_element: entity,
+            end_connector: "velocity".into(),
+            scale: 1.0,
+            offset: 0.0,
         });
 
         commands.entity(entity).remove::<BalloonModelMarker>();
@@ -158,7 +173,9 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     app.add_plugins((
         MinimalPlugins
             .set(TimePlugin)
-            .set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(0.016))),
+            .set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+                0.016,
+            ))),
         bevy::asset::AssetPlugin::default(),
     ));
 
@@ -192,13 +209,16 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
 
     // Spawn balloon with the full component stack that apply_sim_forces expects.
     // We skip PhysicsPlugins, but the components themselves are just data.
-    let balloon = app.world_mut().spawn((
-        Name::new("Test Balloon"),
-        Transform::from_xyz(0.0, 15.0, 0.0),
-        Position::from_xyz(0.0, 15.0, 0.0),
-        RigidBody::Dynamic,
-        BalloonModelMarker::default(),
-    )).id();
+    let balloon = app
+        .world_mut()
+        .spawn((
+            Name::new("Test Balloon"),
+            Transform::from_xyz(0.0, 15.0, 0.0),
+            Position::from_xyz(0.0, 15.0, 0.0),
+            RigidBody::Dynamic,
+            BalloonModelMarker::default(),
+        ))
+        .id();
 
     // The Modelica worker runs on a separate thread. Loop `app.update()` with
     // a short real-time sleep until the balloon receives its SimComponent
@@ -220,7 +240,10 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(compiled, "balloon never received a SimComponent within 300 updates");
+    assert!(
+        compiled,
+        "balloon never received a SimComponent within 300 updates"
+    );
 
     // Now keep ticking to let:
     //   - spawn_modelica_requests send Step commands
@@ -264,10 +287,16 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     }
     if let Some(model) = app.world().get::<ModelicaModel>(balloon) {
         eprintln!("test: ModelicaModel.paused = {}", model.paused);
-        eprintln!("test: ModelicaModel.variables keys = {:?}", model.variables.keys().collect::<Vec<_>>());
+        eprintln!(
+            "test: ModelicaModel.variables keys = {:?}",
+            model.variables.keys().collect::<Vec<_>>()
+        );
     }
     eprintln!("test: last Modelica netForce = {}", last_netforce);
-    eprintln!("test: max |force_y| through connection = {}", last_force_y_seen.abs());
+    eprintln!(
+        "test: max |force_y| through connection = {}",
+        last_force_y_seen.abs()
+    );
 
     // Chain assertions — each one localizes the failure.
     assert!(

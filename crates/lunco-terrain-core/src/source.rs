@@ -69,7 +69,12 @@ impl Default for AnalyticHeightSource {
 
 impl AnalyticHeightSource {
     pub fn new(seed: u64, amplitude_m: f64, feature_size_m: f64, octaves: u32) -> Self {
-        Self { seed, amplitude_m, feature_size_m, octaves }
+        Self {
+            seed,
+            amplitude_m,
+            feature_size_m,
+            octaves,
+        }
     }
 }
 
@@ -79,7 +84,12 @@ impl HeightSource for AnalyticHeightSource {
         let mut amp = self.amplitude_m;
         let mut h = 0.0;
         for o in 0..self.octaves {
-            h += amp * vnoise(x * freq, z * freq, self.seed ^ (o as u64).wrapping_mul(0x9E37_79B9));
+            h += amp
+                * vnoise(
+                    x * freq,
+                    z * freq,
+                    self.seed ^ (o as u64).wrapping_mul(0x9E37_79B9),
+                );
             freq *= 2.0; // lacunarity 2
             amp *= 0.5; // gain 0.5
         }
@@ -114,7 +124,12 @@ pub struct CompositeHeightSource<S, G> {
 
 impl<S, G> CompositeHeightSource<S, G> {
     pub fn new(site: S, globe: G, region: Square, blend_m: f64) -> Self {
-        Self { site, globe, region, blend_m: blend_m.max(0.0) }
+        Self {
+            site,
+            globe,
+            region,
+            blend_m: blend_m.max(0.0),
+        }
     }
 }
 
@@ -237,7 +252,15 @@ mod tests {
 
     fn composite() -> CompositeHeightSource<Flat, Flat> {
         // site = 100 m inside a 200 m square at origin; globe = 0 m; 50 m collar.
-        CompositeHeightSource::new(Flat(100.0), Flat(0.0), Square { center: [0.0, 0.0], half: 100.0 }, 50.0)
+        CompositeHeightSource::new(
+            Flat(100.0),
+            Flat(0.0),
+            Square {
+                center: [0.0, 0.0],
+                half: 100.0,
+            },
+            50.0,
+        )
     }
 
     #[test]
@@ -258,7 +281,10 @@ mod tests {
         let c = composite();
         // Midway through the collar (edge 100 + 25 = x 125) → strictly between.
         let mid = c.height_at(125.0, 0.0);
-        assert!(mid > 0.0 && mid < 100.0, "collar midpoint {mid} not between");
+        assert!(
+            mid > 0.0 && mid < 100.0,
+            "collar midpoint {mid} not between"
+        );
         // Monotone decreasing site→globe across the collar.
         let mut prev = f64::INFINITY;
         for k in 0..=10 {
@@ -282,7 +308,15 @@ mod tests {
 
     #[test]
     fn composite_zero_blend_is_hard_switch() {
-        let c = CompositeHeightSource::new(Flat(100.0), Flat(0.0), Square { center: [0.0, 0.0], half: 100.0 }, 0.0);
+        let c = CompositeHeightSource::new(
+            Flat(100.0),
+            Flat(0.0),
+            Square {
+                center: [0.0, 0.0],
+                half: 100.0,
+            },
+            0.0,
+        );
         assert_eq!(c.height_at(100.0, 0.0), 100.0); // inside/edge
         assert_eq!(c.height_at(100.1, 0.0), 0.0); // just outside → globe
     }

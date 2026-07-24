@@ -17,9 +17,9 @@
 //! until the async USD material exists, then marks the terrain `DerivedLayersBuilt`
 //! and stops scanning.
 
+use crate::shader_material::ShaderMaterial;
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
-use crate::shader_material::ShaderMaterial;
 use lunco_materials::ParamValue;
 use lunco_terrain_surface::{DerivedLayersBuilt, TerrainDerivedMaps};
 
@@ -33,9 +33,13 @@ fn apply_derived_layers(
     >,
     materials: Option<ResMut<Assets<ShaderMaterial>>>,
 ) {
-    let Some(mut materials) = materials else { return };
+    let Some(mut materials) = materials else {
+        return;
+    };
     for (entity, handles, mat3d) in &q {
-        let Some(mut material) = materials.get_mut(&mat3d.0) else { continue };
+        let Some(mut material) = materials.get_mut(&mat3d.0) else {
+            continue;
+        };
         // Yield to an authored map: a Material network's `inputs:surface_map` /
         // `inputs:normal_map` (bound elsewhere) takes precedence — only fill a
         // slot still empty, so the derived bake is the fallback, not an override.
@@ -53,7 +57,10 @@ fn apply_derived_layers(
             material.set_many(weights);
         }
         commands.entity(entity).try_insert(DerivedLayersBuilt);
-        info!("[terrain-layers] bound DEM-derived surface+normal layers ({}²)", handles.res);
+        info!(
+            "[terrain-layers] bound DEM-derived surface+normal layers ({}²)",
+            handles.res
+        );
     }
 }
 

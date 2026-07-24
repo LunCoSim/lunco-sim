@@ -55,7 +55,9 @@ pub fn apply_obstacle_spec_to_stack(
     // The Inspector owns a single crater/rock config, so this path legitimately
     // replaces them by kind (multiple same-kind layers come from USD prims, which
     // build a fresh stack and are addressed by their `LayerId` prim path instead).
-    stack.0.retain(|e| !matches!(e.layer.id(), "craters" | "rocks"));
+    stack
+        .0
+        .retain(|e| !matches!(e.layer.id(), "craters" | "rocks"));
     if spec.craters.enabled && spec.craters.density > 0.0 {
         stack.push_layer("craters", crater_layer(spec.craters, spec.seed));
     }
@@ -71,7 +73,12 @@ pub fn apply_obstacle_spec_to_stack(
         // is O(count). Poisson stays available for the small standalone arena path.
         stack.push_layer(
             "rocks",
-            rock_layer(spec.rocks, f32::MAX, lunco_obstacle_field::spec::Pattern::Uniform, spec.seed),
+            rock_layer(
+                spec.rocks,
+                f32::MAX,
+                lunco_obstacle_field::spec::Pattern::Uniform,
+                spec.seed,
+            ),
         );
     }
 }
@@ -127,7 +134,10 @@ pub struct TerrainLayerStack(pub Vec<LayerEntry>);
 impl TerrainLayerStack {
     /// Append a layer under an explicit identity.
     pub fn push_layer(&mut self, id: impl Into<LayerId>, layer: Arc<dyn TerrainLayer>) {
-        self.0.push(LayerEntry { id: id.into(), layer });
+        self.0.push(LayerEntry {
+            id: id.into(),
+            layer,
+        });
     }
 
     /// Remove the layer with this identity; returns whether one was removed.
@@ -358,11 +368,26 @@ pub struct TerrainLayerParserRegistry {
 impl Default for TerrainLayerParserRegistry {
     fn default() -> Self {
         let mut parsers = HashMap::new();
-        parsers.insert("craters".to_string(), craters::parse_crater_layer as TerrainLayerParser);
-        parsers.insert("overzoom".to_string(), overzoom::parse_overzoom_layer as TerrainLayerParser);
-        parsers.insert("rocks".to_string(), rocks::parse_rock_layer as TerrainLayerParser);
-        parsers.insert("rock".to_string(), rocks::parse_rock_instance as TerrainLayerParser);
-        parsers.insert("shader".to_string(), shader::parse_shader_layer as TerrainLayerParser);
+        parsers.insert(
+            "craters".to_string(),
+            craters::parse_crater_layer as TerrainLayerParser,
+        );
+        parsers.insert(
+            "overzoom".to_string(),
+            overzoom::parse_overzoom_layer as TerrainLayerParser,
+        );
+        parsers.insert(
+            "rocks".to_string(),
+            rocks::parse_rock_layer as TerrainLayerParser,
+        );
+        parsers.insert(
+            "rock".to_string(),
+            rocks::parse_rock_instance as TerrainLayerParser,
+        );
+        parsers.insert(
+            "shader".to_string(),
+            shader::parse_shader_layer as TerrainLayerParser,
+        );
         Self { parsers }
     }
 }
@@ -370,7 +395,11 @@ impl Default for TerrainLayerParserRegistry {
 impl TerrainLayerParserRegistry {
     /// Parse one child layer prim of the given `lunco:layer` type. `None` if the type
     /// is unknown or the layer is disabled.
-    pub fn parse(&self, layer_type: &str, attrs: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    pub fn parse(
+        &self,
+        layer_type: &str,
+        attrs: &dyn LayerAttrSource,
+    ) -> Option<Arc<dyn TerrainLayer>> {
         self.parsers.get(layer_type).and_then(|p| p(attrs))
     }
 
@@ -405,10 +434,7 @@ pub fn scatter_terrain_layers(
     meshes: Option<ResMut<Assets<Mesh>>>,
     asset_server: Res<AssetServer>,
     mut rock_assets: ResMut<SharedRockAssets>,
-    q: Query<
-        (Entity, &DemHeightField, &TerrainLayerStack),
-        Without<TerrainLayersApplied>,
-    >,
+    q: Query<(Entity, &DemHeightField, &TerrainLayerStack), Without<TerrainLayersApplied>>,
 ) {
     if q.is_empty() {
         return;
@@ -418,9 +444,10 @@ pub fn scatter_terrain_layers(
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
         // this terrain in the same frame, so the entity may be gone by the time
         // these deferred commands apply — skip silently rather than panic.
-        commands
-            .entity(entity)
-            .try_insert((TerrainLayersApplied, ScatteredContent(stack.scatter_fingerprint())));
+        commands.entity(entity).try_insert((
+            TerrainLayersApplied,
+            ScatteredContent(stack.scatter_fingerprint()),
+        ));
         // Material/shader layers configure the terrain entity first…
         for entry in &stack.0 {
             entry.layer.configure(entity, &mut commands);

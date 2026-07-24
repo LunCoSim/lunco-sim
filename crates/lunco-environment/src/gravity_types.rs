@@ -16,8 +16,8 @@
 //!   Direction = `-normalize(entity_body_local_position)`; magnitude looked up
 //!   from the body's [`GravityProvider`]. Entities need [`GravityBody`].
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gravity models (orbital / multi-body)

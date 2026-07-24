@@ -63,8 +63,12 @@ pub mod overlay_mode {
 
 impl OverlayUniforms {
     /// The disabled state — every tile builds with this until an overlay is armed.
-    pub const OFF: Self =
-        Self { mode: overlay_mode::OFF, opacity: 0.0, safe_rad: 0.0, cliff_rad: 0.0 };
+    pub const OFF: Self = Self {
+        mode: overlay_mode::OFF,
+        opacity: 0.0,
+        safe_rad: 0.0,
+        cliff_rad: 0.0,
+    };
 
     /// Write the four params onto a tile's [`ShaderLook`] as **live** params — the
     /// overlay is a *uniform*, not a re-bake (`D2`).
@@ -109,7 +113,13 @@ impl Default for TerrainOverlayParams {
     fn default() -> Self {
         // Off by default (normal rendering is untouched); the angles match the
         // derived-map hazard bake defaults so arming it looks consistent.
-        Self { enabled: false, safe_deg: 15.0, cliff_deg: 30.0, opacity: 0.6, lod_depth: false }
+        Self {
+            enabled: false,
+            safe_deg: 15.0,
+            cliff_deg: 30.0,
+            opacity: 0.6,
+            lod_depth: false,
+        }
     }
 }
 
@@ -237,10 +247,14 @@ mod tests {
     #[test]
     fn retuning_an_angle_does_not_disarm_the_overlay() {
         let mut app = test_app();
-        app.world_mut().resource_mut::<TerrainOverlayParams>().enabled = true;
-
         app.world_mut()
-            .trigger(SetTerrainOverlay { cliff_deg: Some(25.0), ..default() });
+            .resource_mut::<TerrainOverlayParams>()
+            .enabled = true;
+
+        app.world_mut().trigger(SetTerrainOverlay {
+            cliff_deg: Some(25.0),
+            ..default()
+        });
         app.world_mut().flush();
 
         let p = *app.world().resource::<TerrainOverlayParams>();
@@ -254,8 +268,10 @@ mod tests {
     #[test]
     fn opacity_zero_is_settable() {
         let mut app = test_app();
-        app.world_mut()
-            .trigger(SetTerrainOverlay { opacity: Some(0.0), ..default() });
+        app.world_mut().trigger(SetTerrainOverlay {
+            opacity: Some(0.0),
+            ..default()
+        });
         app.world_mut().flush();
         assert_eq!(app.world().resource::<TerrainOverlayParams>().opacity, 0.0);
     }
@@ -264,9 +280,13 @@ mod tests {
     #[test]
     fn explicit_disable_still_works() {
         let mut app = test_app();
-        app.world_mut().resource_mut::<TerrainOverlayParams>().enabled = true;
         app.world_mut()
-            .trigger(SetTerrainOverlay { enabled: Some(false), ..default() });
+            .resource_mut::<TerrainOverlayParams>()
+            .enabled = true;
+        app.world_mut().trigger(SetTerrainOverlay {
+            enabled: Some(false),
+            ..default()
+        });
         app.world_mut().flush();
         assert!(!app.world().resource::<TerrainOverlayParams>().enabled);
     }

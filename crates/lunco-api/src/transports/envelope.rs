@@ -4,8 +4,8 @@
 //! serde — no axum, no tokio — so they are shared by the native HTTP transport
 //! and the wasm JS bridge alike. Only the axum *handlers* live in `http.rs`.
 
-use serde::{Deserialize, Serialize};
 use crate::schema::{ApiRequest, ApiResponse};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 pub struct ApiResponseEnvelope {
@@ -33,7 +33,10 @@ pub struct LegacyCommandRequest {
 
 impl From<LegacyCommandRequest> for ApiRequest {
     fn from(req: LegacyCommandRequest) -> Self {
-        ApiRequest::ExecuteCommand { command: req.command, params: req.params.unwrap_or_default() }
+        ApiRequest::ExecuteCommand {
+            command: req.command,
+            params: req.params.unwrap_or_default(),
+        }
     }
 }
 
@@ -130,7 +133,9 @@ mod tests {
     use super::*;
 
     fn parse(json: &str) -> ApiRequest {
-        serde_json::from_str::<ApiRequestUnified>(json).unwrap().into()
+        serde_json::from_str::<ApiRequestUnified>(json)
+            .unwrap()
+            .into()
     }
 
     /// The legacy `{"type":"QueryEntity"}` wire shape still reaches the provider
@@ -153,8 +158,10 @@ mod tests {
     fn query_entity_string_id_is_rejected() {
         // No legacy string-id form — a stringified id must NOT silently parse.
         assert!(
-            serde_json::from_str::<ApiRequestUnified>(r#"{"type":"QueryEntity","id":"98466552102768"}"#)
-                .is_err(),
+            serde_json::from_str::<ApiRequestUnified>(
+                r#"{"type":"QueryEntity","id":"98466552102768"}"#
+            )
+            .is_err(),
             "string ids should be rejected; ids are numbers"
         );
     }
@@ -171,10 +178,30 @@ mod tests {
 impl From<ApiResponse> for ApiResponseEnvelope {
     fn from(response: ApiResponse) -> Self {
         match response {
-            ApiResponse::Ok { command_id, data } => ApiResponseEnvelope { command_id, data, error: None, error_code: None },
-            ApiResponse::Error { code, message } => ApiResponseEnvelope { command_id: None, data: None, error: Some(message), error_code: Some(code) },
-            ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope { command_id: None, data: Some(serde_json::json!(event)), error: None, error_code: None },
-            ApiResponse::Screenshot { .. } => ApiResponseEnvelope { command_id: None, data: None, error: Some("unexpected screenshot response".into()), error_code: Some(crate::schema::ApiErrorCode::InternalError as u16) },
+            ApiResponse::Ok { command_id, data } => ApiResponseEnvelope {
+                command_id,
+                data,
+                error: None,
+                error_code: None,
+            },
+            ApiResponse::Error { code, message } => ApiResponseEnvelope {
+                command_id: None,
+                data: None,
+                error: Some(message),
+                error_code: Some(code),
+            },
+            ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope {
+                command_id: None,
+                data: Some(serde_json::json!(event)),
+                error: None,
+                error_code: None,
+            },
+            ApiResponse::Screenshot { .. } => ApiResponseEnvelope {
+                command_id: None,
+                data: None,
+                error: Some("unexpected screenshot response".into()),
+                error_code: Some(crate::schema::ApiErrorCode::InternalError as u16),
+            },
         }
     }
 }

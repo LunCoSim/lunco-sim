@@ -5,15 +5,17 @@ pub fn extract_documentation(
 ) -> (Option<String>, Option<String>) {
     use rumoca_compile::parsing::ast::Expression;
     let call = annotations.iter().find(|e| match e {
-        Expression::FunctionCall { comp, .. } | Expression::ClassModification { target: comp, .. } => {
-            comp.parts
-                .first()
-                .map(|p| p.ident.text.as_ref() == "Documentation")
-                .unwrap_or(false)
-        }
+        Expression::FunctionCall { comp, .. }
+        | Expression::ClassModification { target: comp, .. } => comp
+            .parts
+            .first()
+            .map(|p| p.ident.text.as_ref() == "Documentation")
+            .unwrap_or(false),
         _ => false,
     });
-    let Some(call) = call else { return (None, None) };
+    let Some(call) = call else {
+        return (None, None);
+    };
     let args: &[Expression] = match call {
         Expression::FunctionCall { args, .. } => args.as_slice(),
         Expression::ClassModification { modifications, .. } => modifications.as_slice(),
@@ -26,7 +28,11 @@ pub fn extract_documentation(
                     (name.text.as_ref(), value.as_ref())
                 }
                 Expression::Modification { target, value, .. } => (
-                    target.parts.first().map(|p| p.ident.text.as_ref()).unwrap_or(""),
+                    target
+                        .parts
+                        .first()
+                        .map(|p| p.ident.text.as_ref())
+                        .unwrap_or(""),
                     value.as_ref(),
                 ),
                 _ => continue,

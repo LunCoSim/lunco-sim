@@ -33,7 +33,10 @@ fn app() -> App {
 fn scene(app: &mut App, pin_pos: Vec3) -> (Entity, Entity) {
     let pin = app
         .world_mut()
-        .spawn((Transform::from_translation(pin_pos), GlobalTransform::from_translation(pin_pos)))
+        .spawn((
+            Transform::from_translation(pin_pos),
+            GlobalTransform::from_translation(pin_pos),
+        ))
         .id();
     let mut bindings = TargetBindings::default();
     bindings
@@ -98,7 +101,10 @@ fn append_waypoint_to_top_level_sequence_mission() {
     let updated = append_waypoint_leaf(Some(sequence_xml), "/Traverse/Route/W2").unwrap();
     assert_eq!(
         target_paths(&updated),
-        vec!["/Traverse/Route/W1".to_string(), "/Traverse/Route/W2".to_string()],
+        vec![
+            "/Traverse/Route/W1".to_string(),
+            "/Traverse/Route/W2".to_string()
+        ],
         "must append waypoint leaf to top-level sequence mission"
     );
 }
@@ -135,7 +141,9 @@ fn waypoint_prim_position_is_baked_into_the_tree() {
     );
     // The tool leaf survived the bake untouched.
     let spec = app.world().get::<AutopilotBehaviorSpec>(vessel).unwrap();
-    let BehaviorSpec::Sequence { children } = &spec.0 else { unreachable!() };
+    let BehaviorSpec::Sequence { children } = &spec.0 else {
+        unreachable!()
+    };
     assert!(
         matches!(&children[1], BehaviorSpec::RunTool { tool, .. } if tool == "science::take_photo"),
         "run_tool leaf must round-trip through the XML"
@@ -196,10 +204,14 @@ fn remove_waypoint_leaf_removes_from_route() {
     let one = append_waypoint_leaf(None, "/W/B/wp1").unwrap();
     let two = append_waypoint_leaf(Some(&one), "/W/B/wp2").unwrap();
     let three = append_waypoint_leaf(Some(&two), "/W/B/wp3").unwrap();
-    
+
     assert_eq!(
         target_paths(&three),
-        vec!["/W/B/wp1".to_string(), "/W/B/wp2".to_string(), "/W/B/wp3".to_string()]
+        vec![
+            "/W/B/wp1".to_string(),
+            "/W/B/wp2".to_string(),
+            "/W/B/wp3".to_string()
+        ]
     );
 
     let removed = remove_waypoint_leaf(&three, "/W/B/wp2").unwrap();

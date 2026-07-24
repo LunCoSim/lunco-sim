@@ -60,21 +60,39 @@ pub fn subdivide_face(
     let dist = camera_body_local.distance(tile_center_local);
     let tile_size = (body_radius * std::f64::consts::PI * 0.5) / tiles_at_level as f64;
 
-    let is_resident_leaf = resident.contains(&crate::TileCoord { body: body_ent, face, level, i, j });
-    let threshold = tile_size
-        * lod_distance_factor
-        * if is_resident_leaf { 0.95 } else { 1.05 };
+    let is_resident_leaf = resident.contains(&crate::TileCoord {
+        body: body_ent,
+        face,
+        level,
+        i,
+        j,
+    });
+    let threshold = tile_size * lod_distance_factor * if is_resident_leaf { 0.95 } else { 1.05 };
     if level < max_lod && dist < threshold {
         for di in 0..2 {
             for dj in 0..2 {
                 subdivide_face(
-                    desired, resident, body_ent, face, level + 1,
-                    i * 2 + di, j * 2 + dj,
-                    camera_body_local, body_radius, max_lod, lod_distance_factor,
+                    desired,
+                    resident,
+                    body_ent,
+                    face,
+                    level + 1,
+                    i * 2 + di,
+                    j * 2 + dj,
+                    camera_body_local,
+                    body_radius,
+                    max_lod,
+                    lod_distance_factor,
                 );
             }
         }
     } else {
-        desired.insert(crate::TileCoord { body: body_ent, face, level, i, j });
+        desired.insert(crate::TileCoord {
+            body: body_ent,
+            face,
+            level,
+            i,
+            j,
+        });
     }
 }

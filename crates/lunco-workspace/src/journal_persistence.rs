@@ -161,7 +161,9 @@ pub(crate) fn on_twin_added_load_journal(
     journal: Option<Res<JournalResource>>,
 ) {
     let Some(journal) = journal else { return };
-    let Some(root) = twin_root(&workspace, trigger.event().twin) else { return };
+    let Some(root) = twin_root(&workspace, trigger.event().twin) else {
+        return;
+    };
     let target_id = journal_twin_id(&root);
 
     // 1. Flush the outgoing journal to *its own* Twin's folder before clobber,
@@ -173,7 +175,10 @@ pub(crate) fn on_twin_added_load_journal(
         match (persisting_root_for_journal_id(&workspace, &old_id), bytes) {
             (Some(old_root), Ok(bytes)) => {
                 if let Err(err) = write_journal_bytes(&old_root, &bytes) {
-                    warn!("[journal] flush of outgoing twin {} failed: {err}", old_id.0);
+                    warn!(
+                        "[journal] flush of outgoing twin {} failed: {err}",
+                        old_id.0
+                    );
                 }
             }
             // Its Twin is closed, or is session-only — nothing to flush to.
@@ -400,7 +405,11 @@ mod tests {
         // A journal bound to A's identity (as `on_twin_added_load_journal` would
         // stamp it) with one entry.
         let mut j = CanonicalJournal::new(journal_twin_id(dir_a.path()), AuthorId::local());
-        j.record_lifecycle(AuthorTag::local_user(), DocumentId::new(1), LifecycleKind::Saved);
+        j.record_lifecycle(
+            AuthorTag::local_user(),
+            DocumentId::new(1),
+            LifecycleKind::Saved,
+        );
 
         // Routing resolves A's folder from the journal's own id, *not* `active_twin`.
         let root = persisting_root_for_journal_id(&ws, j.twin())
@@ -458,7 +467,11 @@ mod tests {
         // A journal written before stable ids existed carries a placeholder id.
         let dir = tempfile::tempdir().unwrap();
         let mut legacy = CanonicalJournal::new(JournalTwinId::new("local-twin"), AuthorId::local());
-        legacy.record_lifecycle(AuthorTag::local_user(), DocumentId::new(1), LifecycleKind::Saved);
+        legacy.record_lifecycle(
+            AuthorTag::local_user(),
+            DocumentId::new(1),
+            LifecycleKind::Saved,
+        );
 
         // Loading it for `dir` re-stamps it so future saves route back here.
         legacy.set_twin(journal_twin_id(dir.path()));

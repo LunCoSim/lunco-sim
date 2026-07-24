@@ -86,7 +86,11 @@ impl DriveMix {
     /// on the vessel (one prim per term, named by its actuator port); the USD
     /// reader walks that scope and hands the terms here already sorted by port.
     pub fn linear(entries: Vec<MixEntry>) -> Self {
-        Self { kernel: "linear".to_string(), ports: Vec::new(), entries }
+        Self {
+            kernel: "linear".to_string(),
+            ports: Vec::new(),
+            entries,
+        }
     }
 
     /// A **scripted (rhai) kernel**: `kernel` names a `lunco_hooks` hook id (the
@@ -95,7 +99,11 @@ impl DriveMix {
     /// empty. `apply_drive_mix` falls back to the hook when the name isn't a
     /// registered built-in — the "control policy in rhai" path.
     pub fn scripted(hook_id: &str) -> Self {
-        Self { kernel: hook_id.to_string(), ports: Vec::new(), entries: Vec::new() }
+        Self {
+            kernel: hook_id.to_string(),
+            ports: Vec::new(),
+            entries: Vec::new(),
+        }
     }
 }
 
@@ -250,6 +258,9 @@ mod tests {
         // (not clamped to 0) is the point — it lets the rover pivot under throttle.
         let (l, r) = skid_mix_norm(1.0, 1.0);
         assert!((l - 1.0).abs() < 1e-9, "outer l={l}");
-        assert!(r < 0.0 && (r + 1.0 / 3.0).abs() < 1e-9, "inner should counter-rotate, r={r}");
+        assert!(
+            r < 0.0 && (r + 1.0 / 3.0).abs() < 1e-9,
+            "inner should counter-rotate, r={r}"
+        );
     }
 }

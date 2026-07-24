@@ -28,7 +28,8 @@ fn test_surface_altitude_50m() {
     let altitude = pos.length() - MOON_RADIUS;
     assert!(
         (altitude - 50.0).abs() < 1.0,
-        "Altitude should be ~50m, got {:.2}m", altitude
+        "Altitude should be ~50m, got {:.2}m",
+        altitude
     );
 }
 
@@ -79,14 +80,18 @@ fn test_grid_decomposition_preserves_altitude() {
     // Must match original position
     assert!(
         (reconstructed - pos).length() < 1.0,
-        "Reconstruction mismatch: diff={:.2}", (reconstructed - pos).length()
+        "Reconstruction mismatch: diff={:.2}",
+        (reconstructed - pos).length()
     );
 
     // Altitude must be preserved
     let alt = reconstructed.length() - MOON_RADIUS;
     assert!(
         (alt - 50.0).abs() < 1.0,
-        "Altitude not preserved: got {:.2}m (cell={:?}, local={:?})", alt, cell, local_tf
+        "Altitude not preserved: got {:.2}m (cell={:?}, local={:?})",
+        alt,
+        cell,
+        local_tf
     );
 }
 
@@ -101,7 +106,8 @@ fn test_terrain_altitude_from_grid_local() {
     let altitude = body_relative.length() - MOON_RADIUS;
     assert!(
         (altitude - 50.0).abs() < 1.0,
-        "Terrain altitude should be ~50m, got {:.2}m", altitude
+        "Terrain altitude should be ~50m, got {:.2}m",
+        altitude
     );
 }
 

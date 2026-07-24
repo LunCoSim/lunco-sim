@@ -8,10 +8,10 @@
 //!   (MCP tools, automated tests) drive entity motion exactly the
 //!   way a human would with the gizmo.
 
-use bevy::prelude::*;
-use bevy::math::DVec3;
-use avian3d::prelude::{LinearVelocity, RigidBody};
 use avian3d::physics_transform::Position;
+use avian3d::prelude::{LinearVelocity, RigidBody};
+use bevy::math::DVec3;
+use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_obstacle_field::ObstacleFieldRoot;
@@ -19,16 +19,20 @@ use lunco_obstacle_field::ObstacleFieldRoot;
 // and its shader keys mutate `ShaderLook`; the render binders re-materialise on
 // `Changed<PbrLook>` / `Changed<ShaderLook>`. This file names no material type —
 // see `docs/architecture/render-decoupling.md`.
+use crate::catalog::{
+    prim_path_from_entry_id, spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource,
+};
+use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
-use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::document::UsdDocument;
-use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, CanonicalStages, collision_aabb, SPAWN_GROUND_CLEARANCE};
-use lunco_doc::{DocumentId, DocumentOrigin};
-use lunco_doc_bevy::{RedoDocument, UndoDocument};
-use crate::catalog::{SpawnAnchor, SpawnCatalog, SpawnSource, spawn_usd_entry, prim_path_from_entry_id};
+use lunco_usd::document::{LayerId, UsdOp};
+use lunco_usd_bevy::{
+    collision_aabb, CanonicalStages, UsdPrimPath, UsdStageAsset, SPAWN_GROUND_CLEARANCE,
+};
 
 /// Spawn an entity from the catalog at a given world position.
 ///
@@ -61,7 +65,6 @@ impl Default for DetachJoint {
     }
 }
 
-
 /// Force a re-scan of project USD files into the spawn catalog. Picks up
 /// `*.usda` dropped into an already-open Twin mid-session (twin-open is
 /// auto-scanned; this covers new files after that). Idempotent.
@@ -89,14 +92,14 @@ pub fn on_rescan_spawn_catalog(
 /// Observer that handles DetachJoint commands — despawns the live joint entity in
 /// BOTH modes (the visible effect). Persistence is a decoupled observer below.
 #[on_command(DetachJoint)]
-pub fn on_detach_joint(
-    trigger: On<DetachJoint>,
-    mut commands: Commands,
-) {
+pub fn on_detach_joint(trigger: On<DetachJoint>, mut commands: Commands) {
     let cmd = trigger.event();
     if let Ok(mut entity) = commands.get_entity(cmd.target) {
         entity.try_despawn();
-        info!("DETACH_JOINT: despawned joint entity {:?} ({:?})", cmd.target, cmd.intent);
+        info!(
+            "DETACH_JOINT: despawned joint entity {:?} ({:?})",
+            cmd.target, cmd.intent
+        );
     }
 }
 
@@ -128,15 +131,21 @@ const RELEASE_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortB
         }
     },
     read_output: |w, e, n| {
-        if n != "release" { return None; }
+        if n != "release" {
+            return None;
+        }
         w.get::<ReleaseActuator>(e).map(|a| a.cmd as f64)
     },
     read_input: |w, e, n| {
-        if n != "release" { return None; }
+        if n != "release" {
+            return None;
+        }
         w.get::<ReleaseActuator>(e).map(|a| a.cmd as f64)
     },
     write_input: |w, e, n, v| {
-        if n != "release" { return false; }
+        if n != "release" {
+            return false;
+        }
         if let Some(mut a) = w.get_mut::<ReleaseActuator>(e) {
             a.cmd = v as f32;
             return true;
@@ -191,9 +200,9 @@ fn joint_release_system(
                 // Bridge control-entity → physics-body by shared USD path: detach any
                 // fixed joint whose bodies resolve to this vessel's prim path.
                 for (je, j) in &joints {
-                    let hit = [j.body1, j.body2].into_iter().any(|b| {
-                        body_paths.get(b).is_ok_and(|p| p.path == vpath.path)
-                    });
+                    let hit = [j.body1, j.body2]
+                        .into_iter()
+                        .any(|b| body_paths.get(b).is_ok_and(|p| p.path == vpath.path));
                     if hit {
                         info!("RELEASE: vessel {} detaching joint {je:?}", vpath.path);
                         // Runtime undock (a live physics action, not an authored scene
@@ -267,7 +276,10 @@ fn spawn_rest_depth(
         canonical.get_or_build(id, &recipe);
     }
     let root_prim = prim_path_from_entry_id(&entry.id);
-    match canonical.get(id).and_then(|cs| collision_aabb(&cs.view(), &root_prim)) {
+    match canonical
+        .get(id)
+        .and_then(|cs| collision_aabb(&cs.view(), &root_prim))
+    {
         Some(a) => RestDepth::Ready(a.rest_depth()),
         None => RestDepth::NoCollision,
     }
@@ -317,7 +329,10 @@ pub fn drain_deferred_spawns(
             .get_load_state(&handle)
             .is_some_and(|s| matches!(s, bevy::asset::LoadState::Failed(_)))
         {
-            warn!("SPAWN_ENTITY: stage for '{}' failed to load; dropping spawn", cmd.entry_id);
+            warn!(
+                "SPAWN_ENTITY: stage for '{}' failed to load; dropping spawn",
+                cmd.entry_id
+            );
         } else {
             // Still loading — keep BOTH the command and its handle alive.
             deferred.0.push((cmd, handle));
@@ -336,7 +351,10 @@ pub fn drain_deferred_spawns(
 /// casting from `position` itself would miss upward and silently keep an embedded
 /// spawn.
 fn ground_height_under(
-    dem: &Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
+    dem: &Query<(
+        &GlobalTransform,
+        &lunco_terrain_surface::stream_viz::DemHeightField,
+    )>,
     raycaster: &lunco_physics::GridSpatialQuery,
     position: Vec3,
 ) -> Option<f64> {
@@ -349,7 +367,11 @@ fn ground_height_under(
     }
     const PROBE_ABOVE: f64 = 1_000.0;
     const PROBE_RANGE: f64 = 5_000.0;
-    let origin = DVec3::new(position.x as f64, position.y as f64 + PROBE_ABOVE, position.z as f64);
+    let origin = DVec3::new(
+        position.x as f64,
+        position.y as f64 + PROBE_ABOVE,
+        position.z as f64,
+    );
     // `raw()`, NOT `cast_ray_render`: a spawn position is grid-local, and a fresh
     // spawn sits at cell 0, so it is ALREADY grid-absolute — the frame avian's
     // colliders live in. Casting it through `cast_ray_render` would add the
@@ -381,7 +403,10 @@ pub fn on_spawn_entity_command(
     // arrives mid-load that the anchor is COMING rather than absent.
     scene_loading: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
     role: Res<lunco_core::NetworkRole>,
-    dem: Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
+    dem: Query<(
+        &GlobalTransform,
+        &lunco_terrain_surface::stream_viz::DemHeightField,
+    )>,
     // Ground fallback for scenes with no streamed DEM (the sandbox's flat slab).
     // Render-space origins → grid-absolute colliders, so this must be the grid-aware
     // wrapper, never a raw `SpatialQuery`.
@@ -413,7 +438,11 @@ pub fn on_spawn_entity_command(
 
     // Prefer the requested grid; fall back to the first grid (a wire-applied
     // spawn may carry a grid id that doesn't resolve on this peer).
-    let grid = match q_grids.get(cmd.target).ok().or_else(|| q_grids.iter().next()) {
+    let grid = match q_grids
+        .get(cmd.target)
+        .ok()
+        .or_else(|| q_grids.iter().next())
+    {
         Some(g) => g,
         None => {
             warn!("SPAWN_ENTITY: no grid to spawn under");
@@ -451,7 +480,9 @@ pub fn on_spawn_entity_command(
             let SpawnSource::UsdFile(path) = &entry.source;
             // Park the STRONG handle with the command so the load actually
             // completes instead of being dropped and restarted every retry.
-            deferred.0.push((cmd.clone(), asset_server.load(path.clone())));
+            deferred
+                .0
+                .push((cmd.clone(), asset_server.load(path.clone())));
             return;
         }
     };
@@ -481,7 +512,9 @@ pub fn on_spawn_entity_command(
     let Some(scene_root) = q_scene_root.iter().next() else {
         if scene_loading.is_some() {
             let SpawnSource::UsdFile(path) = &entry.source;
-            deferred.0.push((cmd.clone(), asset_server.load(path.clone())));
+            deferred
+                .0
+                .push((cmd.clone(), asset_server.load(path.clone())));
         } else {
             warn!(
                 "SPAWN_ENTITY: no scene mounted — nothing to anchor '{}' under",
@@ -638,7 +671,10 @@ pub fn on_move_entity_command(
         return;
     };
     let Ok((mut tf, cell, pos_opt, lin_vel_opt)) = q.get_mut(target) else {
-        warn!("MOVE_ENTITY: entity {:?} (api_id={}) has no Transform", target, cmd.entity_id);
+        warn!(
+            "MOVE_ENTITY: entity {:?} (api_id={}) has no Transform",
+            target, cmd.entity_id
+        );
         return;
     };
 
@@ -720,7 +756,9 @@ pub fn on_move_entity_command(
     if let Some(mut lin_vel) = lin_vel_opt {
         lin_vel.0 = delta / dt;
     }
-    commands.entity(target).try_insert(JustMovedKinematic { restore });
+    commands
+        .entity(target)
+        .try_insert(JustMovedKinematic { restore });
 
     info!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
@@ -750,7 +788,9 @@ pub fn persist_move_to_runtime_layer(
 ) {
     let cmd = trigger.event();
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = api_registry.resolve(&global_id) else { return };
+    let Some(target) = api_registry.resolve(&global_id) else {
+        return;
+    };
     let Some((doc, path)) = authorable_prim(target, &q_prim, &usd_registry, workspace.as_deref())
     else {
         return;
@@ -955,7 +995,10 @@ pub fn persist_property_to_runtime_layer(
     // reads BOTH back on reload (vec3 first, then scalar), so both round-trip with
     // no loader change. Any other arity (or a non-numeric value) stays live-only.
     let parts: Vec<&str> = cmd.value.split(',').collect();
-    let floats: Vec<f32> = parts.iter().filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+    let floats: Vec<f32> = parts
+        .iter()
+        .filter_map(|s| s.trim().parse::<f32>().ok())
+        .collect();
     if floats.len() != parts.len() {
         return;
     }
@@ -968,11 +1011,17 @@ pub fn persist_property_to_runtime_layer(
         _ => return,
     };
     let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else { return };
-    let Some(host) = usd_registry.host(doc) else { return };
+    let Some(doc) = workspace.0.active_document else {
+        return;
+    };
+    let Some(host) = usd_registry.host(doc) else {
+        return;
+    };
 
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = api_registry.resolve(&global_id) else { return };
+    let Some(target) = api_registry.resolve(&global_id) else {
+        return;
+    };
     // Only shader-look prims (the layer-tuning case) — not PBR ones.
     if q_shader.get(target).is_err() {
         return;
@@ -981,7 +1030,9 @@ pub fn persist_property_to_runtime_layer(
 
     // Ownership guard: only author for prims the active document actually holds
     // (base or runtime), so palette/sim spawns never get stray opinions.
-    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else { return };
+    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
+        return;
+    };
     let owned = host.document().data().spec(&prim_sdf).is_some()
         || host.document().runtime_data().spec(&prim_sdf).is_some();
     if !owned {
@@ -1042,7 +1093,11 @@ pub fn on_set_usd_connection(
             edit_target: LayerId::runtime(),
             path,
             name: cmd.name.clone(),
-            type_name: if cmd.type_name.is_empty() { "float".to_string() } else { cmd.type_name.clone() },
+            type_name: if cmd.type_name.is_empty() {
+                "float".to_string()
+            } else {
+                cmd.type_name.clone()
+            },
             sources: cmd.sources.clone(),
         },
     });
@@ -1145,74 +1200,86 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
     let cmd = trigger.event();
 
     // Route the property to a USD attribute the loader reads back.
-    let authored: Option<(String, &str, String)> =
-        if let Some(param) = wheel_param(&cmd.property) {
-            // Wheel dynamics → the single `WHEEL_PARAMS` row's USD attribute.
-            cmd.value
-                .trim()
-                .parse::<f32>()
-                .ok()
-                .map(|v| (param.usd_attr.to_string(), "float", v.to_string()))
-        } else if matches!(cmd.property.as_str(), "rest_length" | "spring_k" | "spring_stiffness" | "damping_c" | "spring_damping") {
-            // `springStrength` / `springDamperRate` are NVIDIA's canonical
-            // PhysxVehicleSuspensionAPI names; `restLength` has no PhysX
-            // equivalent, so it lives under the lunco: namespace.
-            let usd_attr = match cmd.property.as_str() {
-                "rest_length" => "lunco:suspension:restLength",
-                "spring_k" | "spring_stiffness" => "physxVehicleSuspension:springStrength",
-                "damping_c" | "spring_damping" => "physxVehicleSuspension:springDamperRate",
-                _ => unreachable!(),
-            };
-            cmd.value
-                .trim()
-                .parse::<f32>()
-                .ok()
-                .map(|v| (usd_attr.to_string(), "float", v.to_string()))
-        } else if cmd.property == "visible" {
-            // Visibility → standard USD `token visibility`, which the prim
-            // instantiator already reads back (`inherited` / `invisible`), so a
-            // hide survives reload instead of being a live-only ECS `Visibility`
-            // write. A `token` literal is QUOTED in USD.
-            let hidden = matches!(cmd.value.trim(), "false" | "0" | "hidden");
-            let tok = if hidden { "invisible" } else { "inherited" };
-            Some(("visibility".to_string(), "token", format!("\"{tok}\"")))
-        } else if cmd.property == "base_color" {
-            // PBR base colour → `primvars:displayColor` (the loader reads it back
-            // into the prim's `PbrLook`). Linear r,g,b (drop any alpha).
-            let f: Vec<f32> = cmd
-                .value
-                .split(',')
-                .filter_map(|s| s.trim().parse::<f32>().ok())
-                .collect();
-            // ARRAY-valued: `UsdGeomGprim` declares `color3f[] primvars:displayColor`
-            // with `constant` interpolation — one element for the whole prim. A
-            // scalar `color3f` here is a type mismatch every other DCC falls back
-            // to grey on.
-            (f.len() >= 3).then(|| {
-                (
-                    "primvars:displayColor".to_string(),
-                    "color3f[]",
-                    format!("[({}, {}, {})]", f[0], f[1], f[2]),
-                )
-            })
-        } else {
-            None
+    let authored: Option<(String, &str, String)> = if let Some(param) = wheel_param(&cmd.property) {
+        // Wheel dynamics → the single `WHEEL_PARAMS` row's USD attribute.
+        cmd.value
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| (param.usd_attr.to_string(), "float", v.to_string()))
+    } else if matches!(
+        cmd.property.as_str(),
+        "rest_length" | "spring_k" | "spring_stiffness" | "damping_c" | "spring_damping"
+    ) {
+        // `springStrength` / `springDamperRate` are NVIDIA's canonical
+        // PhysxVehicleSuspensionAPI names; `restLength` has no PhysX
+        // equivalent, so it lives under the lunco: namespace.
+        let usd_attr = match cmd.property.as_str() {
+            "rest_length" => "lunco:suspension:restLength",
+            "spring_k" | "spring_stiffness" => "physxVehicleSuspension:springStrength",
+            "damping_c" | "spring_damping" => "physxVehicleSuspension:springDamperRate",
+            _ => unreachable!(),
         };
-    let Some((name, type_name, value)) = authored else { return };
+        cmd.value
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| (usd_attr.to_string(), "float", v.to_string()))
+    } else if cmd.property == "visible" {
+        // Visibility → standard USD `token visibility`, which the prim
+        // instantiator already reads back (`inherited` / `invisible`), so a
+        // hide survives reload instead of being a live-only ECS `Visibility`
+        // write. A `token` literal is QUOTED in USD.
+        let hidden = matches!(cmd.value.trim(), "false" | "0" | "hidden");
+        let tok = if hidden { "invisible" } else { "inherited" };
+        Some(("visibility".to_string(), "token", format!("\"{tok}\"")))
+    } else if cmd.property == "base_color" {
+        // PBR base colour → `primvars:displayColor` (the loader reads it back
+        // into the prim's `PbrLook`). Linear r,g,b (drop any alpha).
+        let f: Vec<f32> = cmd
+            .value
+            .split(',')
+            .filter_map(|s| s.trim().parse::<f32>().ok())
+            .collect();
+        // ARRAY-valued: `UsdGeomGprim` declares `color3f[] primvars:displayColor`
+        // with `constant` interpolation — one element for the whole prim. A
+        // scalar `color3f` here is a type mismatch every other DCC falls back
+        // to grey on.
+        (f.len() >= 3).then(|| {
+            (
+                "primvars:displayColor".to_string(),
+                "color3f[]",
+                format!("[({}, {}, {})]", f[0], f[1], f[2]),
+            )
+        })
+    } else {
+        None
+    };
+    let Some((name, type_name, value)) = authored else {
+        return;
+    };
 
     // `base_color` only applies to PBR prims; wheel params resolve
     // regardless (the guard is cheap and disjoint from the shader persister).
     let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else { return };
-    let Some(host) = usd_registry.host(doc) else { return };
+    let Some(doc) = workspace.0.active_document else {
+        return;
+    };
+    let Some(host) = usd_registry.host(doc) else {
+        return;
+    };
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = api_registry.resolve(&global_id) else { return };
+    let Some(target) = api_registry.resolve(&global_id) else {
+        return;
+    };
     if cmd.property == "base_color" && q_std_mat.get(target).is_err() {
         return;
     }
     let Ok(prim) = q_prim.get(target) else { return };
 
-    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else { return };
+    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
+        return;
+    };
     let owned = host.document().data().spec(&prim_sdf).is_some()
         || host.document().runtime_data().spec(&prim_sdf).is_some();
     if !owned {
@@ -1272,8 +1339,12 @@ pub fn persist_environment_light_to_runtime_layer(
 ) {
     let cmd = trigger.event();
     let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else { return };
-    let Some(host) = usd_registry.host(doc) else { return };
+    let Some(doc) = workspace.0.active_document else {
+        return;
+    };
+    let Some(host) = usd_registry.host(doc) else {
+        return;
+    };
 
     // Collect only the fields that HAVE a matching loader reader, so every attr
     // authored here round-trips on reload (name, USD type, USD-literal value).
@@ -1455,8 +1526,7 @@ pub fn persist_environment_light_to_runtime_layer(
         // itself, which would ratchet the value down on every drag.
         let composed = host.document().composed_arc();
         let fill_sdf = lunco_usd_bevy::SdfPath::new(&fill_path).ok();
-        let others =
-            lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref());
+        let others = lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref());
         let intensity = lunco_usd_bevy::ambient_fill_intensity(requested, others);
 
         if lunco_usd_bevy::ambient_fill_saturates(requested, others) {
@@ -1532,9 +1602,15 @@ pub fn persist_spawn_to_runtime_layer(
         return;
     }
     let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else { return };
-    let Some(host) = usd_registry.host(doc) else { return };
-    let Some(entry) = catalog.get(&cmd.entry_id) else { return };
+    let Some(doc) = workspace.0.active_document else {
+        return;
+    };
+    let Some(host) = usd_registry.host(doc) else {
+        return;
+    };
+    let Some(entry) = catalog.get(&cmd.entry_id) else {
+        return;
+    };
     // The asset this spawn references (the only `SpawnSource` variant today).
     let SpawnSource::UsdFile(asset_path) = &entry.source;
 
@@ -1784,7 +1860,10 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
             }
         }
         for op in ops {
-            world.trigger(ApplyUsdOp { doc, op: op.clone() });
+            world.trigger(ApplyUsdOp {
+                doc,
+                op: op.clone(),
+            });
         }
     });
 }
@@ -1835,7 +1914,11 @@ fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
             let Some(v) = f.first() else { return false };
             let v = v.clamp(0.0, 1.0);
             look.base_color.alpha = v;
-            look.alpha = if v >= 1.0 { SurfaceAlpha::Opaque } else { SurfaceAlpha::Blend };
+            look.alpha = if v >= 1.0 {
+                SurfaceAlpha::Opaque
+            } else {
+                SurfaceAlpha::Blend
+            };
         }
         "unlit" => look.unlit = parse_bool(value),
         "double_sided" => look.double_sided = parse_bool(value),
@@ -1873,18 +1956,23 @@ fn shader_schema(
 /// takes `r,g,b` and is stored as a `Vec4` with alpha 1, which is what
 /// `ShaderMaterial::set_color` did and what the shader's uniform block expects.
 fn shader_param_value(schema: Option<&ParamSchema>, key: &str, value: &str) -> Option<ParamValue> {
-    let ty = schema.and_then(|s| s.field(key)).map(|f| f.ty).unwrap_or_else(|| {
-        match value.split(',').filter(|s| !s.trim().is_empty()).count() {
-            0 | 1 => ParamType::F32,
-            2 => ParamType::Vec2,
-            3 => ParamType::Vec3,
-            _ => ParamType::Vec4,
-        }
-    });
+    let ty = schema
+        .and_then(|s| s.field(key))
+        .map(|f| f.ty)
+        .unwrap_or_else(
+            || match value.split(',').filter(|s| !s.trim().is_empty()).count() {
+                0 | 1 => ParamType::F32,
+                2 => ParamType::Vec2,
+                3 => ParamType::Vec3,
+                _ => ParamType::Vec4,
+            },
+        );
     match ty {
         ParamType::Vec3 | ParamType::Vec4 => {
-            let n: Vec<f32> =
-                value.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+            let n: Vec<f32> = value
+                .split(',')
+                .filter_map(|s| s.trim().parse::<f32>().ok())
+                .collect();
             (n.len() >= 3).then(|| ParamValue::Vec4([n[0], n[1], n[2], 1.0]))
         }
         _ => ParamValue::parse(ty, value),
@@ -1922,7 +2010,9 @@ pub(crate) fn author_shader_look(
 /// day `lunco-render-bevy` grows an `On<Remove, PbrLook>` observer that unbinds its
 /// own material, which is where this really belongs.
 pub fn drop_bound_pbr_material(world: &mut World, e: Entity) {
-    let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
+    let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        return;
+    };
     let reflect_component = {
         let reg = registry.read();
         reg.get_with_short_type_path("MeshMaterial3d<StandardMaterial>")
@@ -1961,20 +2051,35 @@ pub fn on_set_object_property(
     match cmd.property.as_str() {
         "rest_length" | "spring_k" | "spring_stiffness" | "damping_c" | "spring_damping" => {
             let Ok(value) = cmd.value.trim().parse::<f64>() else {
-                warn!("SET_PROPERTY: '{}' expects a number, got '{}'", cmd.property, cmd.value);
+                warn!(
+                    "SET_PROPERTY: '{}' expects a number, got '{}'",
+                    cmd.property, cmd.value
+                );
                 return;
             };
             let Ok(mut susp) = q_susp.get_mut(target) else {
-                warn!("SET_PROPERTY: entity {} has no Suspension component", cmd.entity_id);
+                warn!(
+                    "SET_PROPERTY: entity {} has no Suspension component",
+                    cmd.entity_id
+                );
                 return;
             };
             match cmd.property.as_str() {
-                "rest_length" => { susp.rest_length = value; }
-                "spring_k" | "spring_stiffness" => { susp.spring_k = value; }
-                "damping_c" | "spring_damping" => { susp.damping_c = value; }
+                "rest_length" => {
+                    susp.rest_length = value;
+                }
+                "spring_k" | "spring_stiffness" => {
+                    susp.spring_k = value;
+                }
+                "damping_c" | "spring_damping" => {
+                    susp.damping_c = value;
+                }
                 _ => {}
             }
-            info!("SET_PROPERTY: suspension {} {} = {}", cmd.entity_id, cmd.property, value);
+            info!(
+                "SET_PROPERTY: suspension {} {} = {}",
+                cmd.entity_id, cmd.property, value
+            );
             return;
         }
         _ => {}
@@ -1984,7 +2089,10 @@ pub fn on_set_object_property(
     // a single `api_id` sets the field on just that wheel — independent control.
     if let Some(param) = wheel_param(&cmd.property) {
         let Ok(value) = cmd.value.trim().parse::<f64>() else {
-            warn!("SET_PROPERTY: '{}' expects a number, got '{}'", cmd.property, cmd.value);
+            warn!(
+                "SET_PROPERTY: '{}' expects a number, got '{}'",
+                cmd.property, cmd.value
+            );
             return;
         };
         let Ok(mut wheel) = q_wheel.get_mut(target) else {
@@ -1992,7 +2100,10 @@ pub fn on_set_object_property(
             return;
         };
         (param.set)(&mut wheel, value);
-        info!("SET_PROPERTY: wheel {} {} = {}", cmd.entity_id, cmd.property, value);
+        info!(
+            "SET_PROPERTY: wheel {} {} = {}",
+            cmd.entity_id, cmd.property, value
+        );
         return;
     }
 
@@ -2037,29 +2148,47 @@ pub fn on_set_object_property(
                     // Every edit goes through `ApplyUsdOp`; this one was quietly
                     // exempt.
                     author_look_to_usd(&mut commands, target, key, &look);
-                    info!("SET_PROPERTY: {} look {} = {}", cmd.entity_id, cmd.property, cmd.value);
+                    info!(
+                        "SET_PROPERTY: {} look {} = {}",
+                        cmd.entity_id, cmd.property, cmd.value
+                    );
                 } else {
-                    warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
+                    warn!(
+                        "SET_PROPERTY: bad value '{}' for pbr '{}'",
+                        cmd.value, cmd.property
+                    );
                 }
                 return;
             }
             if q_mesh.get(target).is_err() {
-                warn!("SET_PROPERTY: entity {} has no PbrLook / mesh", cmd.entity_id);
+                warn!(
+                    "SET_PROPERTY: entity {} has no PbrLook / mesh",
+                    cmd.entity_id
+                );
                 return;
             }
             let mut look = PbrLook::default();
             if apply_pbr_look(&mut look, key, &cmd.value) {
                 commands.entity(target).try_insert(look);
-                info!("SET_PROPERTY: {} adopted a PbrLook, {} = {}", cmd.entity_id, cmd.property, cmd.value);
+                info!(
+                    "SET_PROPERTY: {} adopted a PbrLook, {} = {}",
+                    cmd.entity_id, cmd.property, cmd.value
+                );
             } else {
-                warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
+                warn!(
+                    "SET_PROPERTY: bad value '{}' for pbr '{}'",
+                    cmd.value, cmd.property
+                );
             }
         }
         key => {
             // param/color → set the named value on the entity's shader look. The
             // binder swaps in the material for the new look (`Changed<ShaderLook>`).
             let Ok(mut look) = q_shader_look.get_mut(target) else {
-                warn!("SET_PROPERTY: entity {} has no shader look — set 'shader' first", cmd.entity_id);
+                warn!(
+                    "SET_PROPERTY: entity {} has no shader look — set 'shader' first",
+                    cmd.entity_id
+                );
                 return;
             };
             // USD authors params camelCase, WGSL declares them snake_case.
@@ -2121,8 +2250,14 @@ pub fn on_focus_entity_by_id(
         warn!("FOCUS_ENTITY: no api_id={} in registry", cmd.entity_id);
         return;
     };
-    commands.insert_resource(PendingFocus { target, distance: cmd.distance });
-    info!("FOCUS_ENTITY: queued focus on {target:?} at {} m", cmd.distance);
+    commands.insert_resource(PendingFocus {
+        target,
+        distance: cmd.distance,
+    });
+    info!(
+        "FOCUS_ENTITY: queued focus on {target:?} at {} m",
+        cmd.distance
+    );
 }
 
 /// Applies a [`PendingFocus`] with frame-consistent transforms (`First`
@@ -2154,7 +2289,10 @@ pub fn apply_pending_focus(
     // metre-scale subjects (wheels, rovers, props).
     if q_celestial.get(target).is_ok() {
         commands.remove_resource::<PendingFocus>();
-        commands.trigger(lunco_avatar::FocusTarget { avatar: None, target });
+        commands.trigger(lunco_avatar::FocusTarget {
+            avatar: None,
+            target,
+        });
         info!("FOCUS_ENTITY: celestial target {target:?} → orbit focus");
         return;
     }
@@ -2173,7 +2311,10 @@ pub fn apply_pending_focus(
         }
     }
     commands.remove_resource::<PendingFocus>();
-    let cmd = FocusEntityById { entity_id: 0, distance };
+    let cmd = FocusEntityById {
+        entity_id: 0,
+        distance,
+    };
     let Ok(target_gt) = q_target.get(target) else {
         warn!("FOCUS_ENTITY: target {:?} has no GlobalTransform", target);
         return;
@@ -2184,7 +2325,9 @@ pub fn apply_pending_focus(
     // fallback) — both surfaced as "no Avatar" and killed double-click focus.
     // Take the first avatar; the FreeFlightCamera is now optional.
     let avatar_count = q_avatar.iter().count();
-    let Some((avatar_ent, mut tf, mut cell, child_of, avatar_gt, ff_opt)) = q_avatar.iter_mut().next() else {
+    let Some((avatar_ent, mut tf, mut cell, child_of, avatar_gt, ff_opt)) =
+        q_avatar.iter_mut().next()
+    else {
         warn!("FOCUS_ENTITY: no Avatar entity in the scene (count={avatar_count})");
         return;
     };
@@ -2197,7 +2340,11 @@ pub fn apply_pending_focus(
     // applied to the avatar's LOCAL translation, which is valid because the
     // avatar's parent grid (WorldGrid) is unrotated wrt render space.
     let delta = target_gt.translation() - avatar_gt.translation();
-    let dist = if cmd.distance > 0.1 { cmd.distance } else { 6.0 };
+    let dist = if cmd.distance > 0.1 {
+        cmd.distance
+    } else {
+        6.0
+    };
     // Camera sits mostly to the SIDE (+X, the wheel axle direction → we see
     // the spoke face) plus a little up and forward. (Celestial targets never
     // reach here — they take the orbit-focus early return above.)
@@ -2243,7 +2390,11 @@ pub fn apply_pending_focus(
                 .remove::<lunco_avatar::SurfaceCamera>()
                 .remove::<lunco_avatar::SurfaceRelativeMode>()
                 .remove::<lunco_avatar::FrameBlend>()
-                .try_insert(lunco_avatar::FreeFlightCamera { yaw, pitch, damping: None });
+                .try_insert(lunco_avatar::FreeFlightCamera {
+                    yaw,
+                    pitch,
+                    damping: None,
+                });
         }
     }
     info!(
@@ -2349,7 +2500,11 @@ pub fn on_set_camera_look_at(
             .remove::<lunco_avatar::SurfaceCamera>()
             .remove::<lunco_avatar::SurfaceRelativeMode>()
             .remove::<lunco_avatar::FrameBlend>()
-            .try_insert(lunco_avatar::FreeFlightCamera { yaw, pitch, damping: None });
+            .try_insert(lunco_avatar::FreeFlightCamera {
+                yaw,
+                pitch,
+                damping: None,
+            });
     }
     info!(
         "SET_CAMERA: eye=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2})",
@@ -2373,10 +2528,14 @@ pub struct ReloadShader {
 pub fn on_reload_shader(trigger: On<ReloadShader>, asset_server: Res<AssetServer>) {
     let p = trigger.event().path.trim().to_string();
     let paths: Vec<String> = if p.is_empty() {
-        ["shaders/wheel.wgsl", "shaders/balloon.wgsl", "shaders/solar_panel.wgsl"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+        [
+            "shaders/wheel.wgsl",
+            "shaders/balloon.wgsl",
+            "shaders/solar_panel.wgsl",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
     } else {
         vec![p]
     };
@@ -2466,10 +2625,20 @@ pub fn sanitize_stem(s: &str) -> String {
     let out: String = s
         .trim()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     let out = out.trim_matches('_').to_string();
-    if out.is_empty() { "shader".to_string() } else { out }
+    if out.is_empty() {
+        "shader".to_string()
+    } else {
+        out
+    }
 }
 
 /// Core of [`CreateShader`]/[`ImportShader`]: validate the WGSL is a
@@ -2513,7 +2682,9 @@ fn install_shader(
             ),
             None => (
                 format!("shaders/{stem}.wgsl"),
-                lunco_assets::assets_dir_abs().join("shaders").join(format!("{stem}.wgsl")),
+                lunco_assets::assets_dir_abs()
+                    .join("shaders")
+                    .join(format!("{stem}.wgsl")),
             ),
         };
 
@@ -2744,7 +2915,9 @@ pub fn maintain_catalogs(
     mut shaders: ResMut<lunco_materials::ShaderCatalog>,
     mut last_twins: Local<Vec<String>>,
 ) {
-    let Some(roots) = twin_roots.as_deref() else { return };
+    let Some(roots) = twin_roots.as_deref() else {
+        return;
+    };
 
     let names = roots.names();
     let twins_changed = names != *last_twins;
@@ -2881,10 +3054,12 @@ fn doc_for_stage(
     let asset_path = asset_server.get_path(stage_handle.id())?;
     let path_str = asset_path.path().to_string_lossy().into_owned();
     registry.ids().find(|id| {
-        registry.host(*id).is_some_and(|h| match h.document().origin() {
-            DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),
-            _ => false,
-        })
+        registry
+            .host(*id)
+            .is_some_and(|h| match h.document().origin() {
+                DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),
+                _ => false,
+            })
     })
 }
 
@@ -3093,9 +3268,9 @@ mod tests {
     /// and the moonbase (2 km cells) teleported a dragged prim out of sight.
     #[test]
     fn move_entity_splits_a_grid_absolute_target_across_cells() {
+        use super::*;
         use bevy::prelude::*;
         use big_space::prelude::{CellCoord, Grid};
-        use super::*;
 
         const EDGE: f32 = 2000.0;
         let mut app = App::new();
@@ -3105,7 +3280,12 @@ mod tests {
 
         let grid = app
             .world_mut()
-            .spawn((Grid::new(EDGE, 0.0), CellCoord::ZERO, Transform::default(), GlobalTransform::default()))
+            .spawn((
+                Grid::new(EDGE, 0.0),
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
             .id();
         // Starts at grid-absolute (0, 3947, 0) = cell y=2 + local y=-53.
         let body = app
@@ -3150,9 +3330,9 @@ mod tests {
     /// authored value and no cell may be invented for it.
     #[test]
     fn move_entity_leaves_a_cell_less_entity_alone() {
+        use super::*;
         use bevy::prelude::*;
         use big_space::prelude::CellCoord;
-        use super::*;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -3189,8 +3369,8 @@ mod tests {
         prim_path: &str,
         api_id: u64,
     ) -> (bevy::prelude::App, lunco_doc::DocumentId) {
-        use bevy::prelude::*;
         use super::*;
+        use bevy::prelude::*;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -3201,7 +3381,9 @@ mod tests {
         app.add_observer(persist_move_to_runtime_layer);
 
         let doc = {
-            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\ndef Xform \"World\"\n{\n}\n".to_string(),
                 lunco_doc::PathlessOrigin::untitled("Scene.usda"),
@@ -3227,8 +3409,8 @@ mod tests {
 
     #[test]
     fn move_of_authored_prim_persists_to_runtime_layer() {
-        use bevy::prelude::*;
         use super::*;
+        use bevy::prelude::*;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
         let (mut app, doc) = app_with_runtime_producer("/World", 42);
@@ -3255,7 +3437,10 @@ mod tests {
         // ...and the base layer (what Save writes) stays clean.
         let attr = lunco_usd_bevy::SdfPath::new("/World.xformOp:translate").unwrap();
         assert!(docu.data().spec(&attr).is_none(), "base layer untouched");
-        assert!(!docu.source().contains("xformOp:translate"), "save excludes runtime move");
+        assert!(
+            !docu.source().contains("xformOp:translate"),
+            "save excludes runtime move"
+        );
     }
 
     // ── A10: ONE wheel-param table ──────────────────────────────────────
@@ -3274,8 +3459,15 @@ mod tests {
         let mut seen_attr: HashSet<&str> = HashSet::new();
         for p in WHEEL_PARAMS {
             assert!(!p.aliases.is_empty(), "a param with no name is unreachable");
-            assert!(!p.usd_attr.is_empty(), "every param must round-trip through USD");
-            assert!(seen_attr.insert(p.usd_attr), "duplicate USD attr {}", p.usd_attr);
+            assert!(
+                !p.usd_attr.is_empty(),
+                "every param must round-trip through USD"
+            );
+            assert!(
+                seen_attr.insert(p.usd_attr),
+                "duplicate USD attr {}",
+                p.usd_attr
+            );
             for a in p.aliases {
                 assert!(seen_alias.insert(a), "duplicate alias {a}");
                 // Both consumers (live setter + USD persister) resolve through the
@@ -3307,8 +3499,8 @@ mod tests {
     /// journal and the editor can no longer disagree.
     #[test]
     fn undo_document_reverts_the_last_usd_op() {
-        use bevy::prelude::*;
         use super::*;
+        use bevy::prelude::*;
         use lunco_doc::Document;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
@@ -3357,8 +3549,8 @@ mod tests {
 
     #[test]
     fn move_of_unowned_entity_is_skipped() {
-        use bevy::prelude::*;
         use super::*;
+        use bevy::prelude::*;
         use lunco_doc::Document;
 
         // Entity bound to a prim the document does NOT contain (e.g. a palette
@@ -3386,8 +3578,8 @@ mod tests {
 
     #[test]
     fn spawn_persists_referenced_prim_to_runtime_layer() {
-        use bevy::prelude::*;
         use super::*;
+        use bevy::prelude::*;
         use lunco_usd_bevy::usd_data::UsdDataExt;
 
         let mut app = App::new();
@@ -3415,9 +3607,12 @@ mod tests {
 
         // Active USD doc whose default prim is /World.
         let doc = {
-            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
-                "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n".to_string(),
+                "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n"
+                    .to_string(),
                 lunco_doc::PathlessOrigin::untitled("Scene.usda"),
             )
         };
@@ -3442,11 +3637,18 @@ mod tests {
         let docu = reg.host(doc).expect("doc alive").document();
         let prim = lunco_usd_bevy::SdfPath::new("/World/test_rover_1").unwrap();
         // The referenced spawn prim landed under the default prim, in RUNTIME...
-        assert!(docu.runtime_data().spec(&prim).is_some(), "spawn prim authored in runtime layer");
-        assert!(docu.data().spec(&prim).is_none(), "base layer untouched by spawn");
+        assert!(
+            docu.runtime_data().spec(&prim).is_some(),
+            "spawn prim authored in runtime layer"
+        );
+        assert!(
+            docu.data().spec(&prim).is_none(),
+            "base layer untouched by spawn"
+        );
         // `UsdDataExt` on purpose — see the layer-targeting note above.
         assert_eq!(
-            docu.runtime_data().prim_attribute_value::<[f64; 3]>(&prim, "xformOp:translate"),
+            docu.runtime_data()
+                .prim_attribute_value::<[f64; 3]>(&prim, "xformOp:translate"),
             Some([2.0, 0.0, 7.0]),
             "spawn drop position recorded in runtime layer"
         );
@@ -3457,6 +3659,10 @@ mod tests {
             "composed view must carry the spawn reference:\n{composed}"
         );
         // ...and is excluded from Save (base only).
-        assert!(!docu.source().contains("test_rover"), "spawn leaked into save:\n{}", docu.source());
+        assert!(
+            !docu.source().contains("test_rover"),
+            "spawn leaked into save:\n{}",
+            docu.source()
+        );
     }
 }

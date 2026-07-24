@@ -7,15 +7,17 @@
 //! - Disabling physics interpolation during manual dragging
 //! - Restoring dynamic bodies and origin tracking when drag ends
 //!
-//! **Architectural Note**: This module provides the "Golden Path" for 
-//! high-precision manual editing. It ensures the coordinate system 
+//! **Architectural Note**: This module provides the "Golden Path" for
+//! high-precision manual editing. It ensures the coordinate system
 //! remains stable by temporarily pausing origin re-centering.
 
-use bevy::prelude::*;
-use bevy::math::DVec3;
+use avian3d::prelude::{
+    LinearVelocity, RigidBody, RotationInterpolation, TranslationInterpolation,
+};
 use bevy::camera::RenderTarget;
+use bevy::math::DVec3;
+use bevy::prelude::*;
 use big_space::prelude::FloatingOrigin;
-use avian3d::prelude::{LinearVelocity, RigidBody, TranslationInterpolation, RotationInterpolation};
 use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTarget};
 
 /// Tracks the previous parent-local position and metadata for drag lifecycle.
@@ -240,31 +242,45 @@ pub fn capture_gizmo_start(
     let mut captured_any = false;
     for (link, gizmo_target) in gizmo_targets.iter() {
         let entity = link.target;
-        if !gizmo_target.is_active() { continue; }
-        if q_prev_pos.get(entity).is_ok() { continue; }
+        if !gizmo_target.is_active() {
+            continue;
+        }
+        if q_prev_pos.get(entity).is_ok() {
+            continue;
+        }
         captured_any = true;
 
         // 2. DISABLE INTERPOLATION
         // Remove interpolation components so the visual mesh doesn't "fight" the gizmo.
         let (had_translation, had_rotation) = q_interpolation.get(entity).unwrap_or((false, false));
-        if had_translation { commands.entity(entity).remove::<TranslationInterpolation>(); }
-        if had_rotation { commands.entity(entity).remove::<RotationInterpolation>(); }
+        if had_translation {
+            commands.entity(entity).remove::<TranslationInterpolation>();
+        }
+        if had_rotation {
+            commands.entity(entity).remove::<RotationInterpolation>();
+        }
 
         let original_body = q_rigid_bodies.get(entity).copied().ok();
 
         // Resolve initial parent-local position, and the absolute pose the drag
         // velocity is differenced from (see `GizmoPrevPos::abs_pos`).
-        let Ok((_, tf)) = q_spatial.get(entity) else { continue; };
+        let Ok((_, tf)) = q_spatial.get(entity) else {
+            continue;
+        };
         let local_pos = tf.translation.as_dvec3();
         let abs_pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
             .unwrap_or(local_pos);
 
-        info!("GIZMO: drag started for {:?}, local_pos={:?}", entity, local_pos);
+        info!(
+            "GIZMO: drag started for {:?}, local_pos={:?}",
+            entity, local_pos
+        );
 
-        commands.entity(entity)
+        commands
+            .entity(entity)
             .try_insert(RigidBody::Kinematic)
-            .try_insert(GizmoPrevPos { 
-                local_pos, 
+            .try_insert(GizmoPrevPos {
+                local_pos,
                 abs_pos,
                 original_body,
                 had_translation_interpolation: had_translation,
@@ -274,7 +290,7 @@ pub fn capture_gizmo_start(
 
     if captured_any {
         // 1. FREEZE COORDINATE SYSTEM
-        // Remove FloatingOrigin from the camera. This stops big_space from shifting 
+        // Remove FloatingOrigin from the camera. This stops big_space from shifting
         // the world while we drag, breaking the positive feedback loop with the camera.
         for cam_ent in q_floating_origin.iter() {
             commands.entity(cam_ent).try_remove::<FloatingOrigin>();
@@ -282,8 +298,6 @@ pub fn capture_gizmo_start(
         }
     }
 }
-
-
 
 /// Syncs Avian `Position` and computes velocity from local coordinates.
 pub fn sync_gizmo_transforms(
@@ -297,9 +311,13 @@ pub fn sync_gizmo_transforms(
 ) {
     for (link, gizmo_target) in gizmo_targets.iter() {
         let entity = link.target;
-        if !gizmo_target.is_active() { continue; }
+        if !gizmo_target.is_active() {
+            continue;
+        }
 
-        let Ok((_, tf)) = q_spatial.get(entity) else { continue; };
+        let Ok((_, tf)) = q_spatial.get(entity) else {
+            continue;
+        };
         let local_pos = tf.translation.as_dvec3();
 
         // NO `Position`/`Rotation` write. Those are the BigSpace ROOT frame;
@@ -322,8 +340,9 @@ pub fn sync_gizmo_transforms(
         // stays gated on dt.
         if let Ok(mut prev) = q_prev_pos.get_mut(entity) {
             // ABSOLUTE, not the cell remainder — see `GizmoPrevPos::abs_pos`.
-            let abs_pos = lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
-                .unwrap_or(local_pos);
+            let abs_pos =
+                lunco_core::coords::grid_absolute(entity, &q_parents, &q_grids, &q_spatial)
+                    .unwrap_or(local_pos);
             let dt = time.delta_secs();
             if dt > 1e-6 {
                 let delta = abs_pos - prev.abs_pos;
@@ -363,9 +382,7 @@ pub fn sync_gizmo_transforms(
 /// manual positioning of kinematic bodies with implicit velocity calculation for
 /// joints *without* running the integrator step) or a way to disable writeback
 /// on a per-entity basis, this system should be replaced with that native API.
-pub fn restore_dragged_transform(
-    mut q: Query<(&mut Transform, &GizmoPrevPos)>,
-) {
+pub fn restore_dragged_transform(mut q: Query<(&mut Transform, &GizmoPrevPos)>) {
     for (mut tf, prev) in q.iter_mut() {
         tf.translation = prev.local_pos.as_vec3();
     }
@@ -421,7 +438,10 @@ pub fn restore_gizmo_dynamic(
 
         restored_any = true;
 
-        info!("GIZMO: drag ended for {:?}, restoring coordinate systems", entity);
+        info!(
+            "GIZMO: drag ended for {:?}, restoring coordinate systems",
+            entity
+        );
 
         // The pose to author is GRID-ABSOLUTE — the frame `xformOp:translate`
         // means on a grid-direct prim (spawn plants its whole value at cell 0
@@ -466,8 +486,12 @@ pub fn restore_gizmo_dynamic(
         }
 
         // 2. RESTORE INTERPOLATION
-        if prev.had_translation_interpolation { commands.entity(entity).try_insert(TranslationInterpolation); }
-        if prev.had_rotation_interpolation { commands.entity(entity).try_insert(RotationInterpolation); }
+        if prev.had_translation_interpolation {
+            commands.entity(entity).try_insert(TranslationInterpolation);
+        }
+        if prev.had_rotation_interpolation {
+            commands.entity(entity).try_insert(RotationInterpolation);
+        }
 
         if let Ok(mut vel) = q_lin_vel.get_mut(entity) {
             vel.0 = DVec3::ZERO;
@@ -477,8 +501,12 @@ pub fn restore_gizmo_dynamic(
         // gets the drag's Kinematic taken away again rather than being handed a
         // fabricated `Dynamic` — see `GizmoPrevPos::original_body`.
         match prev.original_body {
-            Some(body) => { commands.entity(entity).try_insert(body); }
-            None => { commands.entity(entity).try_remove::<RigidBody>(); }
+            Some(body) => {
+                commands.entity(entity).try_insert(body);
+            }
+            None => {
+                commands.entity(entity).try_remove::<RigidBody>();
+            }
         }
         commands.entity(entity).try_remove::<GizmoPrevPos>();
 
@@ -520,7 +548,10 @@ pub fn restore_gizmo_dynamic(
         // Re-attach FloatingOrigin to the avatar camera.
         for av_ent in q_avatar.iter() {
             commands.entity(av_ent).try_insert(FloatingOrigin);
-            info!("GIZMO: restored FloatingOrigin on avatar camera {:?}", av_ent);
+            info!(
+                "GIZMO: restored FloatingOrigin on avatar camera {:?}",
+                av_ent
+            );
         }
     }
 }
@@ -594,8 +625,8 @@ mod tests {
 
     #[test]
     fn test_gizmo_prev_pos_component() {
-        let pos = GizmoPrevPos { 
-            local_pos: DVec3::new(1.0, 2.0, 3.0), 
+        let pos = GizmoPrevPos {
+            local_pos: DVec3::new(1.0, 2.0, 3.0),
             abs_pos: DVec3::new(1.0, 2.0, 3.0),
             original_body: Some(RigidBody::Dynamic),
             had_translation_interpolation: false,
@@ -607,31 +638,42 @@ mod tests {
     #[test]
     fn test_possessed_entity_gizmo_restoration() {
         use crate::SelectedEntities;
-        
+
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();
         app.add_systems(Update, restore_gizmo_dynamic);
 
-        let vessel = app.world_mut().spawn((
-            Transform::from_translation(Vec3::ZERO),
-            RigidBody::Kinematic,
-            GizmoTarget::default(),
-            GizmoPrevPos { 
-                local_pos: DVec3::ZERO, 
-                abs_pos: DVec3::ZERO,
-                original_body: Some(RigidBody::Dynamic),
-                had_translation_interpolation: false,
-                had_rotation_interpolation: false,
-            },
-            LinearVelocity::default(),
-        )).id();
-        
-        app.world_mut().spawn(ControllerLink { vessel_entity: vessel });
-        app.world_mut().resource_mut::<SelectedEntities>().entities.push(vessel);
+        let vessel = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::ZERO),
+                RigidBody::Kinematic,
+                GizmoTarget::default(),
+                GizmoPrevPos {
+                    local_pos: DVec3::ZERO,
+                    abs_pos: DVec3::ZERO,
+                    original_body: Some(RigidBody::Dynamic),
+                    had_translation_interpolation: false,
+                    had_rotation_interpolation: false,
+                },
+                LinearVelocity::default(),
+            ))
+            .id();
+
+        app.world_mut().spawn(ControllerLink {
+            vessel_entity: vessel,
+        });
+        app.world_mut()
+            .resource_mut::<SelectedEntities>()
+            .entities
+            .push(vessel);
 
         app.update();
 
-        assert_eq!(app.world().get::<RigidBody>(vessel), Some(&RigidBody::Dynamic));
+        assert_eq!(
+            app.world().get::<RigidBody>(vessel),
+            Some(&RigidBody::Dynamic)
+        );
         assert!(app.world().get::<GizmoPrevPos>(vessel).is_none());
     }
 
@@ -707,7 +749,9 @@ mod tests {
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let doc = {
-            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+            let mut reg = app
+                .world_mut()
+                .resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\ndef Xform \"World\"\n{\n}\n".to_string(),
                 lunco_doc::PathlessOrigin::untitled("Scene.usda"),

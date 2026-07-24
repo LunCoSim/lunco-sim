@@ -57,17 +57,17 @@ pub mod modal;
 
 /// Common exports. Use `use lunco_ui::prelude::*;`
 pub mod prelude {
-    pub use bevy_egui::egui;
-    pub use crate::WidgetId;
-    pub use crate::WidgetSystem;
+    pub use crate::diagrams::{time_series_plot, ChartSeries};
     pub use crate::widget;
-    pub use crate::WidgetCache;
+    pub use crate::Label3D;
     pub use crate::UiContext;
     pub use crate::UiSelection;
+    pub use crate::WidgetCache;
+    pub use crate::WidgetId;
+    pub use crate::WidgetSystem;
     pub use crate::WorldPanel;
-    pub use crate::Label3D;
+    pub use bevy_egui::egui;
     pub use lunco_theme::{Theme, ThemeMode, ThemePlugin};
-    pub use crate::diagrams::{time_series_plot, ChartSeries};
 }
 
 /// Minimal plugin that initializes LunCoSim-specific UI resources.
@@ -87,10 +87,9 @@ impl Plugin for LuncoUiPlugin {
         // and the host renders the head with `egui::Modal`. Registered
         // in `EguiPrimaryContextPass` because the host pulls
         // `EguiContexts` to paint on the active egui context.
-        app.init_resource::<modal::ModalQueue>()
-            .add_systems(
-                bevy_egui::EguiPrimaryContextPass,
-                modal::host::render_modal_host,
-            );
+        app.init_resource::<modal::ModalQueue>().add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            modal::host::render_modal_host,
+        );
     }
 }

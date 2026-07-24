@@ -186,7 +186,10 @@ fn dyn_f64s(v: &Dynamic, n: usize) -> Result<Vec<f64>, String> {
 /// concrete type drives the coercion (scalars widen/truncate as needed; arrays
 /// become glam vectors/quats), so `native → reflect` happens in one hop with no
 /// JSON. Unsupported field types return an error the script verb surfaces.
-fn apply_dynamic(field: &mut dyn bevy::reflect::PartialReflect, value: &Dynamic) -> Result<(), String> {
+fn apply_dynamic(
+    field: &mut dyn bevy::reflect::PartialReflect,
+    value: &Dynamic,
+) -> Result<(), String> {
     use bevy::math::{DVec2, DVec3, Quat, Vec2, Vec3};
     let any = field
         .try_as_reflect_mut()
@@ -210,7 +213,10 @@ fn apply_dynamic(field: &mut dyn bevy::reflect::PartialReflect, value: &Dynamic)
     } else if let Some(s) = any.downcast_mut::<bool>() {
         *s = value.as_bool().map_err(|_| "expected a bool".to_string())?;
     } else if let Some(s) = any.downcast_mut::<String>() {
-        *s = value.clone().into_string().map_err(|_| "expected a string".to_string())?;
+        *s = value
+            .clone()
+            .into_string()
+            .map_err(|_| "expected a string".to_string())?;
     } else if let Some(v) = any.downcast_mut::<Vec3>() {
         let a = dyn_f64s(value, 3)?;
         *v = Vec3::new(a[0] as f32, a[1] as f32, a[2] as f32);
@@ -227,7 +233,10 @@ fn apply_dynamic(field: &mut dyn bevy::reflect::PartialReflect, value: &Dynamic)
         let a = dyn_f64s(value, 2)?;
         *v = DVec2::new(a[0], a[1]);
     } else {
-        return Err(format!("set: unsupported field type '{}'", field.reflect_type_path()));
+        return Err(format!(
+            "set: unsupported field type '{}'",
+            field.reflect_type_path()
+        ));
     }
     Ok(())
 }
@@ -235,7 +244,10 @@ fn apply_dynamic(field: &mut dyn bevy::reflect::PartialReflect, value: &Dynamic)
 /// Patch a default-constructed component with a rhai field map — each `key: val`
 /// is written onto the matching reflected field via [`apply_dynamic`]. Used by the
 /// `add` verb to build a component natively (no JSON).
-fn apply_dynamic_fields(component: &mut dyn bevy::reflect::Reflect, fields: &Map) -> Result<(), String> {
+fn apply_dynamic_fields(
+    component: &mut dyn bevy::reflect::Reflect,
+    fields: &Map,
+) -> Result<(), String> {
     for (k, v) in fields.iter() {
         let path = format!(".{k}");
         let field = component
@@ -259,11 +271,13 @@ fn apply_dynamic_fields(component: &mut dyn bevy::reflect::Reflect, fields: &Map
 /// per-frame mutation.)
 fn scenario_debug() -> bool {
     static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DEBUG.get_or_init(|| match std::env::var("LUNCO_SCENARIO_DEBUG").ok().as_deref() {
-        Some("1") | Some("true") => true,
-        Some("0") | Some("false") => false,
-        _ => cfg!(debug_assertions),
-    })
+    *DEBUG.get_or_init(
+        || match std::env::var("LUNCO_SCENARIO_DEBUG").ok().as_deref() {
+            Some("1") | Some("true") => true,
+            Some("0") | Some("false") => false,
+            _ => cfg!(debug_assertions),
+        },
+    )
 }
 
 /// Compile the split prelude into one AST (per-file compile + `AST::merge`).
@@ -595,10 +609,12 @@ fn compile_prelude_set(
     let mut acc: Option<AST> = None;
     for (name, src) in files {
         match compile_with_script_consts(engine, &src) {
-            Ok(part) => acc = Some(match acc {
-                Some(a) => a.merge(&part),
-                None => part,
-            }),
+            Ok(part) => {
+                acc = Some(match acc {
+                    Some(a) => a.merge(&part),
+                    None => part,
+                })
+            }
             Err(e) => {
                 error!("[rhai] prelude/{name}.rhai failed to parse: {e}");
                 return Err(e);
@@ -653,7 +669,9 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // domain-specific authoring (§4.2: one input shape, one entry point).
     engine.register_fn("to_json", |m: Map| -> ImmutableString {
         let v = map_to_json(m);
-        serde_json::to_string(&v).unwrap_or_else(|_| "null".into()).into()
+        serde_json::to_string(&v)
+            .unwrap_or_else(|_| "null".into())
+            .into()
     });
 
     // Vector + angle math, in Rust. Scripts pass the same `[x, y, z]` arrays
@@ -840,9 +858,12 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // param(id, "key", default) -> f64 — read a per-prim numeric script param
     // (USD `lunco:params`) via ScriptParams. The typed, fast per-instance-config
     // read; falls back to `default` when absent. Use this, NOT name(me) scanning.
-    engine.register_fn("param", |id: i64, key: ImmutableString, default: f64| -> f64 {
-        bridge_core::script_param(id as u64, key.as_str()).unwrap_or(default)
-    });
+    engine.register_fn(
+        "param",
+        |id: i64, key: ImmutableString, default: f64| -> f64 {
+            bridge_core::script_param(id as u64, key.as_str()).unwrap_or(default)
+        },
+    );
     // param(id, "key") -> f64 | () — same, but () when the param is absent.
     engine.register_fn("param", |id: i64, key: ImmutableString| -> Dynamic {
         match bridge_core::script_param(id as u64, key.as_str()) {
@@ -861,15 +882,18 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // set_setting("Resource.field", value) -> bool — write a GLOBAL setting (the
     // resource twin of set()). Makes every reflect-registered resource field
     // tunable from a scenario with no per-setting command. Host-authoritative.
-    engine.register_fn("set_setting", |path: ImmutableString, value: Dynamic| -> bool {
-        match bridge_core::set_resource_field(path.as_str(), |f| apply_dynamic(f, &value)) {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("[rhai] set_setting(\"{path}\") failed: {e}");
-                false
+    engine.register_fn(
+        "set_setting",
+        |path: ImmutableString, value: Dynamic| -> bool {
+            match bridge_core::set_resource_field(path.as_str(), |f| apply_dynamic(f, &value)) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!("[rhai] set_setting(\"{path}\") failed: {e}");
+                    false
+                }
             }
-        }
-    });
+        },
+    );
 
     // list_entities() -> [#{ id, name, type, pos }] for every registered entity.
     engine.register_fn("list_entities", || -> Dynamic {
@@ -880,15 +904,20 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // add(id, "Comp", #{fields}) -> bool — insert/replace a reflected component
     // built from its default + the field map (native → reflect). false on bad
     // entity/type/field, or if the type has no ReflectDefault.
-    engine.register_fn("add", |id: i64, comp: ImmutableString, fields: Map| -> bool {
-        match bridge_core::add_component(id as u64, comp.as_str(), |c| apply_dynamic_fields(c, &fields)) {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("[rhai] add({id}, \"{comp}\") failed: {e}");
-                false
+    engine.register_fn(
+        "add",
+        |id: i64, comp: ImmutableString, fields: Map| -> bool {
+            match bridge_core::add_component(id as u64, comp.as_str(), |c| {
+                apply_dynamic_fields(c, &fields)
+            }) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!("[rhai] add({id}, \"{comp}\") failed: {e}");
+                    false
+                }
             }
-        }
-    });
+        },
+    );
     // add(id, "Comp") -> bool — insert the default component (no field overrides).
     engine.register_fn("add", |id: i64, comp: ImmutableString| -> bool {
         match bridge_core::add_component(id as u64, comp.as_str(), |_| Ok(())) {
@@ -944,13 +973,17 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // reverse of find(name): turn an id (from list_entities/nearest/children/…)
     // back into a human label for logging/UI.
     engine.register_fn("name", |id: i64| -> Dynamic {
-        bridge_core::name_of(id as u64).map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+        bridge_core::name_of(id as u64)
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT)
     });
 
     // parent(id) -> parent entity id (i64), or () if it has no parent or the
     // parent isn't a registered (script-visible) entity. Hierarchy traversal up.
     engine.register_fn("parent", |id: i64| -> Dynamic {
-        bridge_core::parent_of(id as u64).map(Dynamic::from_int).unwrap_or(Dynamic::UNIT)
+        bridge_core::parent_of(id as u64)
+            .map(Dynamic::from_int)
+            .unwrap_or(Dynamic::UNIT)
     });
 
     // children(id) -> [id, ...] of the entity's DIRECT children that are
@@ -972,12 +1005,16 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // driven — uniformly across a human and an autopilot (which is just a user with
     // a specialty).
     engine.register_fn("owner_of", |id: i64| -> Dynamic {
-        bridge_core::owner_of(id as u64).map(|s| Dynamic::from_int(s as i64)).unwrap_or(Dynamic::UNIT)
+        bridge_core::owner_of(id as u64)
+            .map(|s| Dynamic::from_int(s as i64))
+            .unwrap_or(Dynamic::UNIT)
     });
     // controller(id) -> role string of the driver ("AiAgent" = autopilot, "Owner"/
     // "Operator" = human), or () if unowned. The human-vs-AI test.
     engine.register_fn("controller", |id: i64| -> Dynamic {
-        bridge_core::controller_role(id as u64).map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+        bridge_core::controller_role(id as u64)
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT)
     });
     // is_controlled(id) -> bool — true if any session (human or autopilot) drives it.
     engine.register_fn("is_controlled", |id: i64| -> bool {
@@ -1030,7 +1067,9 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // second-based timeouts / rate limits (`this.t0`-relative dwell, etc.). Uses
     // the fixed clock's elapsed time (advances only while the sim steps), 0.0 if
     // unavailable.
-    engine.register_fn("elapsed_seconds", || -> f64 { bridge_core::elapsed_seconds() });
+    engine.register_fn("elapsed_seconds", || -> f64 {
+        bridge_core::elapsed_seconds()
+    });
 
     // twin_root() -> String — absolute path of the ACTIVE twin's folder, i.e. the
     // directory a path-loaded scene lives in ("" if none). Lets a scenario name a
@@ -1255,7 +1294,10 @@ impl SubsAccum {
         if self.exact.is_empty() && self.prefixes.is_empty() {
             EventFilter::All
         } else {
-            EventFilter::Named { exact: self.exact.into_iter().collect(), prefixes: self.prefixes }
+            EventFilter::Named {
+                exact: self.exact.into_iter().collect(),
+                prefixes: self.prefixes,
+            }
         }
     }
 }
@@ -1432,7 +1474,11 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         let ast = self.prelude_ast.merge(&ast);
                         let mask = ProgramMask::from_ast(&ast);
                         let imports_ast = build_hoisted_ast(&self.engine, source, &ast, asset_id);
-                        let p = Arc::new(CompiledProgram { ast, imports_ast, mask });
+                        let p = Arc::new(CompiledProgram {
+                            ast,
+                            imports_ast,
+                            mask,
+                        });
                         self.compiled.insert(key, CacheEntry::Ok(p.clone()));
                         p
                     }
@@ -1443,7 +1489,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         return CompileOutcome::Failed(d);
                     }
                 }
-            },
+            }
         };
 
         // ── State: seed a FRESH scope + `this` for THIS entity — never shared.
@@ -1453,7 +1499,10 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // Expose scenario parameters as a read-only `params` constant (native
         // JSON→Dynamic, one hop). Empty / bad JSON → empty map, so `params` is
         // always a readable object.
-        let params_value = match (params.is_empty(), serde_json::from_str::<serde_json::Value>(params)) {
+        let params_value = match (
+            params.is_empty(),
+            serde_json::from_str::<serde_json::Value>(params),
+        ) {
             (true, _) => RhaiBuilder.map(Vec::new()),
             (false, Ok(v)) => bridge_core::build_from_json(&RhaiBuilder, &v),
             (false, Err(e)) => {
@@ -1511,7 +1560,15 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // mask bit — no AST scan). The built-in drivers below run regardless.
         let (hook_ast, eval_ast) = st.program.hook_target();
         let user = if st.program.mask.has(hook) {
-            call_hook(&self.engine, &mut st.scope, hook_ast, eval_ast, name, self_gid, &mut st.this)
+            call_hook(
+                &self.engine,
+                &mut st.scope,
+                hook_ast,
+                eval_ast,
+                name,
+                self_gid,
+                &mut st.this,
+            )
         } else {
             None
         };
@@ -1557,7 +1614,8 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 }
             }
         }
-        user.or(driver_err).map(|(msg, pos)| rhai_diagnostic(msg, pos))
+        user.or(driver_err)
+            .map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 
     fn deliver_event(
@@ -1579,7 +1637,8 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // Buffer for the native task tree's `wait_for` leaves (drained every
         // tick by `tick_native_task`). Capped defensively: a scenario that stops
         // ticking while events keep arriving must not grow this unboundedly.
-        st.task_events.push((event.name.as_str().into(), event.source as i64));
+        st.task_events
+            .push((event.name.as_str().into(), event.source as i64));
         if st.task_events.len() > 256 {
             let excess = st.task_events.len() - 256;
             st.task_events.drain(..excess);
@@ -1590,7 +1649,15 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // call entirely; the built-in task driver below still sees every event.
         let (hook_ast, eval_ast) = st.program.hook_target();
         let user = if st.program.mask.event && st.filter.matches(&event.name) {
-            call_event_hook(&self.engine, &mut st.scope, hook_ast, eval_ast, self_gid, &mut st.this, evt.clone())
+            call_event_hook(
+                &self.engine,
+                &mut st.scope,
+                hook_ast,
+                eval_ast,
+                self_gid,
+                &mut st.this,
+                evt.clone(),
+            )
         } else {
             None
         };
@@ -1731,7 +1798,6 @@ fn call_event_hook(
         }
     }
 }
-
 
 /// Call a built-in PRELUDE driver function `name` (a global-module fn, NOT in the
 /// user's AST) with `this` bound — for engine-driven hooks like task auto-advance
@@ -1876,7 +1942,9 @@ fn tick_native_task(
     }
 
     let program = st.program.clone();
-    let Some(ct) = st.task.as_mut() else { return None };
+    let Some(ct) = st.task.as_mut() else {
+        return None;
+    };
     if ct.done {
         return None;
     }
@@ -2055,12 +2123,12 @@ mod tests {
         // Simulate the re-entrant call: something else (a task ctx, a nested
         // script call) is holding the engine while a tool library is (re)registered.
         let borrowed = rt.engine.clone();
-        crate::tool_libs::register_tool_library(
-            "h6_reentrancy_probe",
-            "fn h6_probe() { 42 }",
-        );
+        crate::tool_libs::register_tool_library("h6_reentrancy_probe", "fn h6_probe() { 42 }");
         let bumped = crate::tool_libs::generation();
-        assert_ne!(rt.tool_gen, bumped, "registering a library must bump the generation");
+        assert_ne!(
+            rt.tool_gen, bumped,
+            "registering a library must bump the generation"
+        );
 
         // The line under test. Before the fix: panic → app down.
         rt.maintain();
@@ -2078,24 +2146,32 @@ mod tests {
         // refresh it deferred: degraded, not dropped.
         drop(borrowed);
         rt.maintain();
-        assert_eq!(rt.tool_gen, bumped, "the deferred hot-reload lands on the next tick");
+        assert_eq!(
+            rt.tool_gen, bumped,
+            "the deferred hot-reload lands on the next tick"
+        );
     }
 
     #[test]
     fn get_returns_vectors_as_arrays() {
         use bevy::math::{Quat, Vec3};
         // Vec3 → [x,y,z]
-        let d = crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &Vec3::new(1.0, 2.0, 3.0)).unwrap();
+        let d =
+            crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &Vec3::new(1.0, 2.0, 3.0))
+                .unwrap();
         let a = d.into_array().expect("Vec3 should become a rhai array");
         assert_eq!(a.len(), 3);
         assert_eq!(a[0].as_float().unwrap(), 1.0);
         assert_eq!(a[2].as_float().unwrap(), 3.0);
 
         // Quat → [x,y,z,w]
-        let q = crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &Quat::from_xyzw(0.0, 0.0, 0.0, 1.0))
-            .unwrap()
-            .into_array()
-            .expect("Quat should become a rhai array");
+        let q = crate::bridge_core::build_from_reflect(
+            &super::RhaiBuilder,
+            &Quat::from_xyzw(0.0, 0.0, 0.0, 1.0),
+        )
+        .unwrap()
+        .into_array()
+        .expect("Quat should become a rhai array");
         assert_eq!(q.len(), 4);
         assert_eq!(q[3].as_float().unwrap(), 1.0);
 
@@ -2162,7 +2238,9 @@ mod tests {
         );
 
         let folded = super::compile_with_script_consts(&engine, src).unwrap();
-        let got: f64 = engine.eval_ast(&folded).expect("const should fold into the fn body");
+        let got: f64 = engine
+            .eval_ast(&folded)
+            .expect("const should fold into the fn body");
         assert!((got - 0.654).abs() < 1e-9, "got {got}");
     }
 
@@ -2212,7 +2290,9 @@ mod tests {
         // Sourced, exactly as `RhaiScenarioRuntime::compile` does it.
         let mut ast = super::compile_with_script_consts(&engine, src).unwrap();
         ast.set_source("twin://ep1/main.rhai");
-        let got: i64 = engine.eval_ast(&ast).expect("relative import should resolve");
+        let got: i64 = engine
+            .eval_ast(&ast)
+            .expect("relative import should resolve");
         assert_eq!(got, 7);
     }
 
@@ -2239,7 +2319,9 @@ mod tests {
         let mut scope = rhai::Scope::new();
         let err = engine
             .call_fn_with_options::<rhai::Dynamic>(
-                rhai::CallFnOptions::new().eval_ast(false).rewind_scope(false),
+                rhai::CallFnOptions::new()
+                    .eval_ast(false)
+                    .rewind_scope(false),
                 &mut scope,
                 &full,
                 "on_tick",
@@ -2252,12 +2334,15 @@ mod tests {
         );
 
         // The fix: hook calls run against imports-only + all functions.
-        let imports_ast = super::build_hoisted_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
-            .expect("script has a top-level import, so an imports AST must be built");
+        let imports_ast =
+            super::build_hoisted_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
+                .expect("script has a top-level import, so an imports AST must be built");
         let mut scope = rhai::Scope::new();
         let got = engine
             .call_fn_with_options::<i64>(
-                rhai::CallFnOptions::new().eval_ast(true).rewind_scope(false),
+                rhai::CallFnOptions::new()
+                    .eval_ast(true)
+                    .rewind_scope(false),
                 &mut scope,
                 &imports_ast,
                 "on_tick",
@@ -2293,16 +2378,24 @@ mod tests {
             import "b" as b;
         "#;
         let got = super::top_level_hoist_source(src).expect("two imports + one const");
-        assert!(got.contains(r#"import "twin://ep1/a" as a;"#), "got:\n{got}");
+        assert!(
+            got.contains(r#"import "twin://ep1/a" as a;"#),
+            "got:\n{got}"
+        );
         assert!(got.contains(r#"import "b" as b;"#), "got:\n{got}");
         assert!(!got.contains("commented"), "comment leaked:\n{got}");
-        assert!(!got.contains("nested"), "an in-function import was hoisted:\n{got}");
+        assert!(
+            !got.contains("nested"),
+            "an in-function import was hoisted:\n{got}"
+        );
         // `const S` IS hoisted (it is a top-level const), carried whole. The point
         // is that the `import` inside its string literal did not become a statement
         // of its own — one const line, not a const line plus a bogus import.
         assert!(got.contains(r#"const S = "#), "const not hoisted:\n{got}");
         assert_eq!(
-            got.lines().filter(|l| l.trim_start().starts_with("import")).count(),
+            got.lines()
+                .filter(|l| l.trim_start().starts_with("import"))
+                .count(),
             2,
             "string literal leaked as an import:\n{got}"
         );
@@ -2364,7 +2457,10 @@ mod tests {
             fn go() { global::P.hover }
         "#;
         let got = super::top_level_hoist_source(src).expect("two top-level consts");
-        assert!(got.contains("const P = #{ hover: 0.327, tip: 40.0 };"), "got:\n{got}");
+        assert!(
+            got.contains("const P = #{ hover: 0.327, tip: 40.0 };"),
+            "got:\n{got}"
+        );
         assert!(got.contains("const R = [1, 2, 3];"), "got:\n{got}");
         assert!(!got.contains("fn go"), "a fn body was hoisted:\n{got}");
         assert_eq!(got.lines().count(), 2, "got:\n{got}");
@@ -2431,7 +2527,10 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        assert!((dt - lunco_core::SECS_PER_TICK).abs() < 1e-12, "dt() was {dt}");
+        assert!(
+            (dt - lunco_core::SECS_PER_TICK).abs() < 1e-12,
+            "dt() was {dt}"
+        );
     }
 
     #[test]

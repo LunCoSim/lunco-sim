@@ -56,13 +56,21 @@ impl PendingAttachment {
 pub(crate) struct ModelsPalette;
 
 impl Panel for ModelsPalette {
-    fn id(&self) -> PanelId { PanelId("rover_models") }
-    fn title(&self) -> String { "🧩 Models".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    fn id(&self) -> PanelId {
+        PanelId("rover_models")
+    }
+    fn title(&self) -> String {
+        "🧩 Models".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::SideBrowser
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn transparent_background(&self) -> bool { true }
+    fn transparent_background(&self) -> bool {
+        true
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let Some((mantle, tokens)) = ctx
@@ -79,7 +87,11 @@ impl Panel for ModelsPalette {
     }
 }
 
-fn models_palette_content(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::DesignTokens) {
+fn models_palette_content(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    tokens: &lunco_theme::DesignTokens,
+) {
     ui.heading("Models");
 
     // Current attach state (for highlighting selected row + status banner).
@@ -93,7 +105,9 @@ fn models_palette_content(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_
 
     if let Some(p) = pending {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Attach:").color(tokens.success_subdued.linear_multiply(2.0))); // A bit brighter than background
+            ui.label(
+                egui::RichText::new("Attach:").color(tokens.success_subdued.linear_multiply(2.0)),
+            ); // A bit brighter than background
             ui.label(egui::RichText::new(p.title()).strong());
             if ui.button("Cancel").clicked() {
                 ctx.defer(|world| {
@@ -111,7 +125,10 @@ fn models_palette_content(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_
         ui.separator();
     }
 
-    for item in [PendingAttachment::ModelicaBalloon, PendingAttachment::PythonBalloon] {
+    for item in [
+        PendingAttachment::ModelicaBalloon,
+        PendingAttachment::PythonBalloon,
+    ] {
         let is_selected = pending == Some(item);
         let mut label = format!("{}  ({})", item.title(), item.language_label());
 
@@ -124,7 +141,9 @@ fn models_palette_content(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_
             }
         }
 
-        let button = egui::Button::new(label).selected(is_selected).min_size(egui::vec2(ui.available_width(), 24.0));
+        let button = egui::Button::new(label)
+            .selected(is_selected)
+            .min_size(egui::vec2(ui.available_width(), 24.0));
         if ui.add_enabled(enabled, button).clicked() {
             let new_state = if is_selected {
                 AttachState::Idle
@@ -169,34 +188,41 @@ pub(crate) fn on_scene_click_attach(
     mut commands: Commands,
 ) {
     use bevy::picking::pointer::PointerButton;
-    let AttachState::Pending(pending) = *state else { return };
+    let AttachState::Pending(pending) = *state else {
+        return;
+    };
     // Stop the click bubbling to ancestors (global observer re-fires up the tree).
     click.propagate(false);
-    if click.button != PointerButton::Primary { return; }
+    if click.button != PointerButton::Primary {
+        return;
+    }
     // Chrome guard — egui's pick has no world position.
-    if click.hit.position.is_none() { return; }
+    if click.hit.position.is_none() {
+        return;
+    }
     // Shift is reserved (no attach on shift-click).
-    if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { return; }
+    if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+        return;
+    }
 
     // Walk up to the nearest SelectableRoot so attach lands on the user-facing
     // entity (the ball root), not an internal mesh child.
-    let target = find_selectable(click.entity, &q_selectable, &q_parents)
-        .unwrap_or(click.entity);
+    let target = find_selectable(click.entity, &q_selectable, &q_parents).unwrap_or(click.entity);
     // Don't attach to terrain/ground (old ray-cast excluded ground entities).
-    if q_ground.get(target).is_ok() { return; }
+    if q_ground.get(target).is_ok() {
+        return;
+    }
 
     match pending {
         PendingAttachment::ModelicaBalloon => {
-            commands.entity(target).try_insert((
-                Name::new("Red Balloon (Modelica)"),
-                BalloonModelMarker,
-            ));
+            commands
+                .entity(target)
+                .try_insert((Name::new("Red Balloon (Modelica)"), BalloonModelMarker));
         }
         PendingAttachment::PythonBalloon => {
-            commands.entity(target).try_insert((
-                Name::new("Green Balloon (Python)"),
-                PythonBalloonMarker,
-            ));
+            commands
+                .entity(target)
+                .try_insert((Name::new("Green Balloon (Python)"), PythonBalloonMarker));
         }
     }
 

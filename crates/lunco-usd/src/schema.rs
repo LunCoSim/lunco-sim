@@ -82,7 +82,10 @@ const CORE_SCHEMAS: &[(&str, &str)] = &[
     // `…TankDifferentialAPI`) and the suspension/wheel/compliance APIs the spec
     // (doc 53) needs are all defined here, so they stop being unregistered
     // typeNames the registry is blind to.
-    ("physxSchema", include_str!("../schema/core/physxSchema.usda")),
+    (
+        "physxSchema",
+        include_str!("../schema/core/physxSchema.usda"),
+    ),
 ];
 
 /// A `typeName` field is authored as a token; accept a plain string too rather
@@ -126,37 +129,157 @@ pub enum LinearUnit {
 /// loads; a name core does not declare does not belong here.
 const CORE_LINEAR_UNITS: &[(&str, &str, LinearUnit)] = &[
     // Gprim dimensions — plain lengths in stage linear units.
-    ("Sphere", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Cube", "size", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Cylinder", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Cylinder", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Cone", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Cone", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Capsule", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Capsule", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    (
+        "Sphere",
+        "radius",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Cube",
+        "size",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Cylinder",
+        "radius",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Cylinder",
+        "height",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Cone",
+        "radius",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Cone",
+        "height",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Capsule",
+        "radius",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Capsule",
+        "height",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
     // `Cylinder_1` / `Capsule_1` are USD's own axis-agnostic successors, declared
     // in the same file. Omitting them would leave the successor schema silently
     // unannotated while its predecessor resolved.
-    ("Cylinder_1", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Cylinder_1", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Capsule_1", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Capsule_1", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Plane", "width", LinearUnit::Length { stage_units_per_unit: 1.0 }),
-    ("Plane", "length", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    (
+        "Cylinder_1",
+        "radius",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Cylinder_1",
+        "height",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Capsule_1",
+        "radius",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Capsule_1",
+        "height",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Plane",
+        "width",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
+    (
+        "Plane",
+        "length",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
     // `UsdGeomCamera` states its focal length and aperture in TENTHS of a world
     // unit, so that the schema's default 50 / 20.955 / 15.2908 read as the
     // photographer's millimetres on a stage authored in centimetres. This is USD's
     // documented convention, not a rounding of ours — see the class documentation
     // in `usdGeom`'s generated schema.
-    ("Camera", "focalLength", LinearUnit::Length { stage_units_per_unit: 0.1 }),
-    ("Camera", "horizontalAperture", LinearUnit::Length { stage_units_per_unit: 0.1 }),
-    ("Camera", "verticalAperture", LinearUnit::Length { stage_units_per_unit: 0.1 }),
-    ("Camera", "horizontalApertureOffset", LinearUnit::Length { stage_units_per_unit: 0.1 }),
-    ("Camera", "verticalApertureOffset", LinearUnit::Length { stage_units_per_unit: 0.1 }),
+    (
+        "Camera",
+        "focalLength",
+        LinearUnit::Length {
+            stage_units_per_unit: 0.1,
+        },
+    ),
+    (
+        "Camera",
+        "horizontalAperture",
+        LinearUnit::Length {
+            stage_units_per_unit: 0.1,
+        },
+    ),
+    (
+        "Camera",
+        "verticalAperture",
+        LinearUnit::Length {
+            stage_units_per_unit: 0.1,
+        },
+    ),
+    (
+        "Camera",
+        "horizontalApertureOffset",
+        LinearUnit::Length {
+            stage_units_per_unit: 0.1,
+        },
+    ),
+    (
+        "Camera",
+        "verticalApertureOffset",
+        LinearUnit::Length {
+            stage_units_per_unit: 0.1,
+        },
+    ),
     // `focusDistance` is a distance in the scene, not through the lens, so it is an
     // ordinary world-unit length — the exception that makes the tenths above easy
     // to get wrong.
-    ("Camera", "focusDistance", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    (
+        "Camera",
+        "focusDistance",
+        LinearUnit::Length {
+            stage_units_per_unit: 1.0,
+        },
+    ),
 ];
 
 /// What a schema declares about one property.
@@ -348,7 +471,8 @@ impl SchemaRegistry {
                         continue;
                     };
                     let Some(prim) = prim.name() else { continue };
-                    let Some(type_name) = spec.get("typeName").cloned().and_then(token_or_string) else {
+                    let Some(type_name) = spec.get("typeName").cloned().and_then(token_or_string)
+                    else {
                         continue;
                     };
                     // `customData` is USD's per-spec escape hatch: a dictionary any
@@ -359,24 +483,24 @@ impl SchemaRegistry {
                     // from `CORE_LINEAR_UNITS` instead.
                     let (linear, ui_hint) = match spec.get("customData") {
                         Some(sdf::Value::Dictionary(d)) => {
-                            let linear = match d.get("lunco:unit").cloned().and_then(token_or_string)
-                            {
-                                None => LinearUnit::None,
-                                Some(u) if u == "length" => {
-                                    LinearUnit::Length { stage_units_per_unit: 1.0 }
-                                }
-                                // A typo here would otherwise degrade to "not a length"
-                                // in silence, which is indistinguishable from an
-                                // attribute nobody annotated.
-                                Some(other) => {
-                                    bevy::log::warn!(
-                                        "[schema] {}.{name}: unrecognised lunco:unit \
+                            let linear =
+                                match d.get("lunco:unit").cloned().and_then(token_or_string) {
+                                    None => LinearUnit::None,
+                                    Some(u) if u == "length" => LinearUnit::Length {
+                                        stage_units_per_unit: 1.0,
+                                    },
+                                    // A typo here would otherwise degrade to "not a length"
+                                    // in silence, which is indistinguishable from an
+                                    // attribute nobody annotated.
+                                    Some(other) => {
+                                        bevy::log::warn!(
+                                            "[schema] {}.{name}: unrecognised lunco:unit \
                                          '{other}' — treated as not a linear quantity",
-                                        prim,
-                                    );
-                                    LinearUnit::None
-                                }
-                            };
+                                            prim,
+                                        );
+                                        LinearUnit::None
+                                    }
+                                };
                             // Schema-declared slider bounds — the ONE decoder
                             // (`AttrUiHint::from_dict`) shared with the composed-
                             // stage per-asset read.
@@ -403,7 +527,9 @@ impl SchemaRegistry {
                     // different schema): the tie-break resolves it, nobody
                     // authored it deliberately.
                     if let Some((prev_schema, _)) = reg.by_name.get(name) {
-                        if let Some(prev) = reg.properties.get(&(prev_schema.clone(), name.to_string())) {
+                        if let Some(prev) =
+                            reg.properties.get(&(prev_schema.clone(), name.to_string()))
+                        {
                             if *prev_schema != prop.declared_by
                                 && (prev.type_name != prop.type_name
                                     || prev.variability != prop.variability)
@@ -652,8 +778,10 @@ mod tests {
         // schema hint (produce_usd_param_view asks the composed attr FIRST) —
         // nothing to assert here at registry level, but the registry must not
         // invent hints for un-annotated names.
-        assert!(reg.ui_hint("lunco:wheel:index").is_none(),
-            "lunco:wheel:index should carry no slider hint (wiring identity, not a knob)");
+        assert!(
+            reg.ui_hint("lunco:wheel:index").is_none(),
+            "lunco:wheel:index should carry no slider hint (wiring identity, not a knob)"
+        );
     }
 
     /// The physxVehicle attributes the wheel reader requires must ALSO surface
@@ -725,8 +853,14 @@ mod tests {
     #[test]
     fn variability_is_read_from_the_schema() {
         // Declared `uniform` in luncoSchema.
-        assert_eq!(variability_of("lunco:cameraMode"), sdf::Variability::Uniform);
-        assert_eq!(variability_of("lunco:policy:seam"), sdf::Variability::Uniform);
+        assert_eq!(
+            variability_of("lunco:cameraMode"),
+            sdf::Variability::Uniform
+        );
+        assert_eq!(
+            variability_of("lunco:policy:seam"),
+            sdf::Variability::Uniform
+        );
         assert_eq!(variability_of("lunco:layer"), sdf::Variability::Uniform);
         // Declared `varying` in luncoSchema.
         assert_eq!(
@@ -738,17 +872,28 @@ mod tests {
         assert_eq!(variability_of("info:id"), sdf::Variability::Uniform);
         assert_eq!(variability_of("physics:axis"), sdf::Variability::Uniform);
         assert_eq!(variability_of("xformOpOrder"), sdf::Variability::Uniform);
-        assert_eq!(variability_of("subdivisionScheme"), sdf::Variability::Uniform);
+        assert_eq!(
+            variability_of("subdivisionScheme"),
+            sdf::Variability::Uniform
+        );
         assert_eq!(variability_of("purpose"), sdf::Variability::Uniform);
         // `physics:mass` is `varying` — and we now KNOW that, rather than defaulting
         // to it because we'd never heard of the property. The hand table this
         // replaced could not tell those two cases apart, which is exactly why a core
         // `uniform` property missing from it was authored wrong in silence.
         assert_eq!(variability_of("physics:mass"), sdf::Variability::Varying);
-        assert!(SchemaRegistry::global().read().unwrap().property("physics:mass").is_some());
+        assert!(SchemaRegistry::global()
+            .read()
+            .unwrap()
+            .property("physics:mass")
+            .is_some());
         // Genuinely unknown (no schema we vendor declares it) → USD's default.
         assert_eq!(variability_of("nonesuch:madeUp"), sdf::Variability::Varying);
-        assert!(SchemaRegistry::global().read().unwrap().property("nonesuch:madeUp").is_none());
+        assert!(SchemaRegistry::global()
+            .read()
+            .unwrap()
+            .property("nonesuch:madeUp")
+            .is_none());
     }
 
     /// An ASSET-SHIPPED schema library registers at runtime.
@@ -785,7 +930,10 @@ class "HabitatShieldingAPI" (
             "precondition: the habitat library must not already be registered"
         );
 
-        assert!(SchemaRegistry::register_extension(HABITAT_SCHEMA), "extension must ingest");
+        assert!(
+            SchemaRegistry::register_extension(HABITAT_SCHEMA),
+            "extension must ingest"
+        );
 
         let reg = SchemaRegistry::global().read().unwrap();
         let medium = reg
@@ -798,12 +946,15 @@ class "HabitatShieldingAPI" (
             "the DECLARED uniform must win over USD's varying default"
         );
         assert_eq!(
-            reg.property("habitat:shielding:thicknessM").unwrap().type_name,
+            reg.property("habitat:shielding:thicknessM")
+                .unwrap()
+                .type_name,
             "double"
         );
         // The library's API schema is now a REGISTERED type, not a custom one.
         assert!(
-            reg.api_schemas().contains(&"HabitatShieldingAPI".to_string()),
+            reg.api_schemas()
+                .contains(&"HabitatShieldingAPI".to_string()),
             "api schemas: {:?}",
             reg.api_schemas()
         );
@@ -824,7 +975,10 @@ class "HabitatShieldingAPI" (
             "radius is declared by several core schemas, got {declarers:?}"
         );
         for schema in declarers {
-            assert_eq!(reg.property_in(schema, "radius").unwrap().type_name, "double");
+            assert_eq!(
+                reg.property_in(schema, "radius").unwrap().type_name,
+                "double"
+            );
         }
         // The bare-name lookup still answers, and answers with a real declarer.
         let resolved = reg.property("radius").unwrap();
@@ -865,7 +1019,10 @@ class "SquatterAPI" (
         assert_eq!(reg.property("xformOpOrder").unwrap().type_name, "token[]");
         assert_eq!(reg.property("radius").unwrap().type_name, "double");
         // …and each cites the schema that actually declares it.
-        assert_eq!(reg.property("subdivisionScheme").unwrap().declared_by, "Mesh");
+        assert_eq!(
+            reg.property("subdivisionScheme").unwrap().declared_by,
+            "Mesh"
+        );
     }
 
     /// Types come from the schema too, so a scene authoring the wrong type can be
@@ -873,7 +1030,10 @@ class "SquatterAPI" (
     #[test]
     fn schema_declares_property_types() {
         let reg = SchemaRegistry::global().read().unwrap();
-        assert_eq!(reg.property("lunco:env:exposureEv100").unwrap().type_name, "float");
+        assert_eq!(
+            reg.property("lunco:env:exposureEv100").unwrap().type_name,
+            "float"
+        );
         assert_eq!(
             reg.property("lunco:env:earthshineColor").unwrap().type_name,
             "color3f"
@@ -899,7 +1059,9 @@ class "SquatterAPI" (
             sdf::Variability::Uniform
         );
         assert_eq!(
-            reg.property("lunco:terrain:horizonShadows").unwrap().type_name,
+            reg.property("lunco:terrain:horizonShadows")
+                .unwrap()
+                .type_name,
             "bool"
         );
         // The LunCo vehicle extension attrs (doc 53) — LunCo-specific concepts with
@@ -910,19 +1072,22 @@ class "SquatterAPI" (
         // loader reads it through the precision-tolerant `UsdRead::real()`, so a
         // schema/asset type split would go unnoticed at runtime — pin it here.
         assert_eq!(
-            reg.property("lunco:suspension:restLength").unwrap().type_name,
+            reg.property("lunco:suspension:restLength")
+                .unwrap()
+                .type_name,
             "float",
         );
+        assert_eq!(reg.property("lunco:wheel:index").unwrap().type_name, "int",);
         assert_eq!(
-            reg.property("lunco:wheel:index").unwrap().type_name,
-            "int",
-        );
-        assert_eq!(
-            reg.property("lunco:suspensionVisual:role").unwrap().type_name,
+            reg.property("lunco:suspensionVisual:role")
+                .unwrap()
+                .type_name,
             "token",
         );
         assert_eq!(
-            reg.property("lunco:suspensionVisual:role").unwrap().variability,
+            reg.property("lunco:suspensionVisual:role")
+                .unwrap()
+                .variability,
             sdf::Variability::Uniform,
         );
     }
@@ -940,27 +1105,37 @@ class "SquatterAPI" (
 
         assert_eq!(
             reg.linear_unit("Sphere", "radius"),
-            LinearUnit::Length { stage_units_per_unit: 1.0 }
+            LinearUnit::Length {
+                stage_units_per_unit: 1.0
+            }
         );
         assert_eq!(
             reg.linear_unit("Plane", "width"),
-            LinearUnit::Length { stage_units_per_unit: 1.0 }
+            LinearUnit::Length {
+                stage_units_per_unit: 1.0
+            }
         );
 
         // `UsdGeomCamera` defines these in TENTHS of a world unit. Getting the factor
         // wrong is a 10x field of view, and nothing about the `float` says so.
         assert_eq!(
             reg.linear_unit("Camera", "focalLength"),
-            LinearUnit::Length { stage_units_per_unit: 0.1 }
+            LinearUnit::Length {
+                stage_units_per_unit: 0.1
+            }
         );
         assert_eq!(
             reg.linear_unit("Camera", "horizontalAperture"),
-            LinearUnit::Length { stage_units_per_unit: 0.1 }
+            LinearUnit::Length {
+                stage_units_per_unit: 0.1
+            }
         );
         // …but the focus distance is a distance in the SCENE, so it is not.
         assert_eq!(
             reg.linear_unit("Camera", "focusDistance"),
-            LinearUnit::Length { stage_units_per_unit: 1.0 }
+            LinearUnit::Length {
+                stage_units_per_unit: 1.0
+            }
         );
 
         // Unannotated properties are left alone rather than guessed at — including
@@ -981,7 +1156,9 @@ class "SquatterAPI" (
         for schema in ["Sphere", "Cylinder", "Cone", "Capsule"] {
             assert_eq!(
                 reg.linear_unit(schema, "radius"),
-                LinearUnit::Length { stage_units_per_unit: 1.0 },
+                LinearUnit::Length {
+                    stage_units_per_unit: 1.0
+                },
                 "{schema}.radius must resolve independently"
             );
         }
@@ -990,7 +1167,9 @@ class "SquatterAPI" (
         // multiple entirely.
         assert_eq!(
             reg.linear_unit("Cylinder", "height"),
-            LinearUnit::Length { stage_units_per_unit: 1.0 }
+            LinearUnit::Length {
+                stage_units_per_unit: 1.0
+            }
         );
         assert_ne!(
             reg.linear_unit("Camera", "focalLength"),
@@ -1028,13 +1207,21 @@ class "RigUnitsAPI" (
 
         assert_eq!(
             reg.linear_unit("RigUnitsAPI", "rig:boomLength"),
-            LinearUnit::Length { stage_units_per_unit: 1.0 }
+            LinearUnit::Length {
+                stage_units_per_unit: 1.0
+            }
         );
         // Declared, but says nothing about units — so nothing is claimed.
-        assert_eq!(reg.linear_unit("RigUnitsAPI", "rig:gearRatio"), LinearUnit::None);
+        assert_eq!(
+            reg.linear_unit("RigUnitsAPI", "rig:gearRatio"),
+            LinearUnit::None
+        );
         // An unrecognised value is not a length either; it warns at ingest so the
         // typo is visible rather than silently reading as "unannotated".
-        assert_eq!(reg.linear_unit("RigUnitsAPI", "rig:mystery"), LinearUnit::None);
+        assert_eq!(
+            reg.linear_unit("RigUnitsAPI", "rig:mystery"),
+            LinearUnit::None
+        );
     }
 
     /// `custom` is asserted only where we can know it — inside our own namespace.
@@ -1187,11 +1374,13 @@ class "RigUnitsAPI" (
         // Non-canonical PhysX names must be absent: their presence would mean the
         // reconstruction squats a name the real schema does not define.
         assert!(
-            reg.property("physxVehicleSuspension:springStiffness").is_none(),
+            reg.property("physxVehicleSuspension:springStiffness")
+                .is_none(),
             "springStiffness is not a canonical PhysX name; use springStrength"
         );
         assert!(
-            reg.property("physxVehicleSuspension:springDamping").is_none(),
+            reg.property("physxVehicleSuspension:springDamping")
+                .is_none(),
             "springDamping is not a canonical PhysX name; use springDamperRate"
         );
         assert!(

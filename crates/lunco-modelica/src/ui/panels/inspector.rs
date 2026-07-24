@@ -61,11 +61,7 @@ impl Panel for InspectorPanel {
         // Follow-active by default; honor the panel's pin if set
         // (see `doc_pin::DocPinState`). Pin header below lets the
         // user toggle.
-        crate::ui::doc_pin::render_pin_header(
-            ui,
-            ctx,
-            crate::ui::doc_pin::PinKind::Inspector,
-        );
+        crate::ui::doc_pin::render_pin_header(ui, ctx, crate::ui::doc_pin::PinKind::Inspector);
         let Some(doc_id) = crate::ui::doc_pin::resolved_inspector_doc_ctx(ctx) else {
             placeholder(ui, "No active document.");
             return;
@@ -134,11 +130,10 @@ impl Panel for InspectorPanel {
         //
         // Mirrors `canvas_diagram::active_class_for_doc`: the
         // drilled-in pin wins when set, otherwise the document's
-        // default simulation class (which prefers `experiment()` 
+        // default simulation class (which prefers `experiment()`
         // annotated models).
-        let target_class =
-            crate::sim_default::drilled_class_for_doc_ctx(ctx, doc_id)
-                .or_else(|| crate::sim_default::default_simulation_class_ctx(ctx, doc_id));
+        let target_class = crate::sim_default::drilled_class_for_doc_ctx(ctx, doc_id)
+            .or_else(|| crate::sim_default::default_simulation_class_ctx(ctx, doc_id));
 
         // Resolve the target class + component via the per-document
         // [`crate::index::ModelicaIndex`]. The Index is patched
@@ -146,9 +141,7 @@ impl Panel for InspectorPanel {
         // `ModelicaDocument::apply_patch`) so this read sees fresh
         // state even during the 2.5 s AST-reparse debounce.
         let (component_info, class, param_desc) = {
-            let Some(registry) =
-                ctx.resource::<crate::state::ModelicaDocumentRegistry>()
-            else {
+            let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() else {
                 placeholder(ui, "Document not in registry.");
                 return;
             };
@@ -170,9 +163,7 @@ impl Panel for InspectorPanel {
                 let short = class.rsplit('.').next().unwrap_or(&class);
                 placeholder(
                     ui,
-                    &format!(
-                        "Selected node `{instance_name}` not declared in `{short}`."
-                    ),
+                    &format!("Selected node `{instance_name}` not declared in `{short}`."),
                 );
                 return;
             };
@@ -208,8 +199,7 @@ impl Panel for InspectorPanel {
                     for key in keys {
                         if let Some(comp) = index.components.get(key.0 as usize) {
                             if !comp.description.is_empty() {
-                                param_desc
-                                    .insert(comp.name.clone(), comp.description.clone());
+                                param_desc.insert(comp.name.clone(), comp.description.clone());
                             }
                         }
                     }
@@ -231,11 +221,9 @@ impl Panel for InspectorPanel {
         }
         if read_only {
             ui.label(
-                egui::RichText::new(
-                    "🔒 Read-only library tab — duplicate to workspace to edit.",
-                )
-                .italics()
-                .color(warning),
+                egui::RichText::new("🔒 Read-only library tab — duplicate to workspace to edit.")
+                    .italics()
+                    .color(warning),
             );
         }
         ui.separator();
@@ -264,8 +252,7 @@ impl Panel for InspectorPanel {
                 .spacing([10.0, 4.0])
                 .show(ui, |ui| {
                     for (k, v) in entries {
-                        let name_resp =
-                            ui.add(egui::Label::new(k).sense(egui::Sense::hover()));
+                        let name_resp = ui.add(egui::Label::new(k).sense(egui::Sense::hover()));
                         if let Some(d) = param_desc.get(k) {
                             name_resp.on_hover_text(d);
                         }
@@ -273,10 +260,7 @@ impl Panel for InspectorPanel {
                         // `add_enabled` disables the input on read-only
                         // tabs — egui dims it and ignores keystrokes,
                         // so the user clearly sees they can't edit.
-                        let resp = ui.add_enabled(
-                            !read_only,
-                            egui::TextEdit::singleline(&mut buf),
-                        );
+                        let resp = ui.add_enabled(!read_only, egui::TextEdit::singleline(&mut buf));
                         if let Some(d) = param_desc.get(k) {
                             resp.clone().on_hover_text(d);
                         }
@@ -356,10 +340,7 @@ fn render_plot_node_editor(
                 .color(egui::Color32::GRAY),
         );
     } else {
-        ui.label(
-            egui::RichText::new(format!("Bound to: {}", current.signal_path))
-                .small(),
-        );
+        ui.label(egui::RichText::new(format!("Bound to: {}", current.signal_path)).small());
         if ui.button("Unbind").clicked() {
             ctx.defer(move |world| apply_plot_binding(world, doc_id, node_id, 0, ""));
         }
@@ -380,8 +361,7 @@ fn render_plot_node_editor(
                 .hint_text(&current.signal_path)
                 .desired_width(f32::INFINITY),
         );
-        let committed = resp.lost_focus()
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        let committed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
             || (resp.lost_focus() && !resp.has_focus());
         if resp.changed() {
             ui.memory_mut(|m| m.data.insert_temp(buf_id, buf.clone()));
@@ -427,9 +407,7 @@ fn render_plot_node_editor(
                 if resp.clicked() && !is_current {
                     let bits = entity.to_bits();
                     let path = path.clone();
-                    ctx.defer(move |world| {
-                        apply_plot_binding(world, doc_id, node_id, bits, &path)
-                    });
+                    ctx.defer(move |world| apply_plot_binding(world, doc_id, node_id, bits, &path));
                 }
             }
         });
@@ -448,10 +426,11 @@ fn apply_plot_title(
     // when the node isn't a plot or has no binding (no source row
     // to update).
     let signal_path = {
-        let state = world
-            .resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
+        let state = world.resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
         let scene = &state.get(Some(doc_id)).canvas.scene;
-        let Some(node) = scene.node(node_id) else { return };
+        let Some(node) = scene.node(node_id) else {
+            return;
+        };
         if node.kind != lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND {
             return;
         }
@@ -515,10 +494,11 @@ fn apply_plot_binding(
     // binding mode (Pinned vs Doc) across the rebind, and keep the
     // optimistic in-memory swap consistent with the source rewrite.
     let (prev_signal, prev_binding, rect, kind_is_plot) = {
-        let state = world
-            .resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
+        let state = world.resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
         let scene = &state.get(Some(doc_id)).canvas.scene;
-        let Some(node) = scene.node(node_id) else { return };
+        let Some(node) = scene.node(node_id) else {
+            return;
+        };
         let prev_data = node.data.downcast_ref::<PlotNodeData>();
         let prev_sig = prev_data.map(|d| d.signal_path.clone()).unwrap_or_default();
         let prev_bind = prev_data
@@ -540,7 +520,9 @@ fn apply_plot_binding(
     use lunco_viz::kinds::canvas_plot_node::PlotBinding;
     let binding = match prev_binding {
         PlotBinding::Doc { .. } => prev_binding,
-        PlotBinding::Pinned { .. } => PlotBinding::Pinned { entity: entity_bits },
+        PlotBinding::Pinned { .. } => PlotBinding::Pinned {
+            entity: entity_bits,
+        },
     };
     let payload = PlotNodeData {
         binding,
@@ -614,13 +596,14 @@ fn render_text_node_editor(
     use crate::ui::text_node::TextNodeData;
 
     let (current_text, idx_opt) = {
-        let Some(state) =
-            ctx.resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
+        let Some(state) = ctx.resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
         else {
             return;
         };
         let scene = &state.get(Some(doc_id)).canvas.scene;
-        let Some(node) = scene.node(node_id) else { return };
+        let Some(node) = scene.node(node_id) else {
+            return;
+        };
         let text = node
             .data
             .downcast_ref::<TextNodeData>()
@@ -660,9 +643,7 @@ fn render_text_node_editor(
         || (resp.lost_focus() && !resp.has_focus());
     if committed && buf != current_text {
         let text = buf.clone();
-        ctx.defer(move |world| {
-            apply_diagram_text_string(world, doc_id, node_id, idx, &text)
-        });
+        ctx.defer(move |world| apply_diagram_text_string(world, doc_id, node_id, idx, &text));
         ui.memory_mut(|m| m.data.remove::<String>(buf_id));
     }
 }
@@ -679,8 +660,8 @@ fn apply_diagram_text_string(
 
     // Optimistic in-memory swap so the visual updates this frame.
     {
-        let mut state = world
-            .resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
+        let mut state =
+            world.resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
         let docstate = state.get_mut(Some(doc_id));
         if let Some(node) = docstate.canvas.scene.node_mut(node_id) {
             if let Some(prev) = node.data.downcast_ref::<TextNodeData>() {
@@ -712,4 +693,3 @@ fn apply_diagram_text_string(
         }],
     );
 }
-

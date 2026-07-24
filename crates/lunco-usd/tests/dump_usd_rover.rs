@@ -1,20 +1,23 @@
+use avian3d::prelude::*;
+use bevy::asset::AssetPlugin;
 /// Dump USD rover component state for debugging.
 /// Shows EXACTLY what components each entity has and their values.
-
 use bevy::prelude::*;
-use bevy::asset::AssetPlugin;
-use lunco_usd_bevy::*;
-use lunco_usd_avian::*;
-use lunco_usd_sim::*;
-use avian3d::prelude::*;
-use lunco_mobility::{WheelRaycast, Suspension};
-use lunco_core::ActuatorPorts;
-use std::path::Path;
 use big_space::prelude::CellCoord;
+use lunco_core::ActuatorPorts;
+use lunco_mobility::{Suspension, WheelRaycast};
+use lunco_usd_avian::*;
+use lunco_usd_bevy::*;
+use lunco_usd_sim::*;
+use std::path::Path;
 
 #[test]
 fn test_dump_usd_rover_state() {
-    let usd_path = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap()
+    let usd_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join("assets/vessels/rovers/skid_rover.usda");
 
     let mut app = App::new();
@@ -40,18 +43,21 @@ fn test_dump_usd_rover_state() {
         .insert(handle.id(), cstage);
 
     // Spawn with position
-    let rover = app.world_mut().spawn((
-        Name::new("USD_Rover"),
-        UsdPrimPath {
-            stage_handle: handle,
-            path: "/SandboxRover".to_string(),
-        },
-        Transform::from_translation(Vec3::new(-15.0, 6.0, -10.0)),
-        CellCoord::default(),
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        ViewVisibility::default(),
-    )).id();
+    let rover = app
+        .world_mut()
+        .spawn((
+            Name::new("USD_Rover"),
+            UsdPrimPath {
+                stage_handle: handle,
+                path: "/SandboxRover".to_string(),
+            },
+            Transform::from_translation(Vec3::new(-15.0, 6.0, -10.0)),
+            CellCoord::default(),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+        ))
+        .id();
 
     // Process
     for _ in 0..20 {
@@ -62,7 +68,7 @@ fn test_dump_usd_rover_state() {
     // Dump rover entity
     println!("\n========== ROVER ENTITY (id={:?}) ==========", rover);
     dump_components(&app, rover);
-    
+
     // Check FSW ports
     if let Some(actuators) = app.world().get::<ActuatorPorts>(rover) {
         println!("\n========== ACTUATOR PORTS ==========");
@@ -70,24 +76,39 @@ fn test_dump_usd_rover_state() {
             println!("  {} -> {:?}", name, port_ent);
         }
     }
-    
+
     // Dump wires
     println!("\n========== ALL WIRES ==========");
     {
         let mut q_wires = app.world_mut().query_filtered::<(Entity, &lunco_cosim::SimConnection), With<lunco_cosim::SimConnection>>();
         for (wire_ent, wire) in q_wires.iter(app.world()) {
-            let src_name = app.world().get::<Name>(wire.start_element).map(|n| n.as_str().to_string()).unwrap_or_else(|| "unknown".to_string());
-            let tgt_name = app.world().get::<Name>(wire.end_element).map(|n| n.as_str().to_string()).unwrap_or_else(|| "unknown".to_string());
-            println!("  Wire {:?}: {} ({:?}) -> {} ({:?}) scale={}",
-                wire_ent, src_name, wire.start_element, tgt_name, wire.end_element, wire.scale);
+            let src_name = app
+                .world()
+                .get::<Name>(wire.start_element)
+                .map(|n| n.as_str().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let tgt_name = app
+                .world()
+                .get::<Name>(wire.end_element)
+                .map(|n| n.as_str().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            println!(
+                "  Wire {:?}: {} ({:?}) -> {} ({:?}) scale={}",
+                wire_ent, src_name, wire.start_element, tgt_name, wire.end_element, wire.scale
+            );
         }
     }
 
     // Dump children
-    let child_entities: Vec<Entity> = app.world().get::<Children>(rover)
+    let child_entities: Vec<Entity> = app
+        .world()
+        .get::<Children>(rover)
         .map(|c| c.iter().collect())
         .unwrap_or_default();
-    println!("\n========== CHILDREN (count={}) ==========", child_entities.len());
+    println!(
+        "\n========== CHILDREN (count={}) ==========",
+        child_entities.len()
+    );
     for child in child_entities {
         if let Some(name) = app.world().get::<Name>(child) {
             let name_str = name.as_str();
@@ -95,7 +116,9 @@ fn test_dump_usd_rover_state() {
             dump_components(&app, child);
 
             // Check for visual grandchildren
-            let gc_entities: Vec<Entity> = app.world().get::<Children>(child)
+            let gc_entities: Vec<Entity> = app
+                .world()
+                .get::<Children>(child)
                 .map(|c| c.iter().collect())
                 .unwrap_or_default();
             if !gc_entities.is_empty() {
@@ -113,14 +136,18 @@ fn test_dump_usd_rover_state() {
                 let drive_port = wheel.drive_port;
                 let steer_port = wheel.steer_port;
                 let visual_ent = wheel.visual_entity;
-                println!("  WheelRaycast wiring: drive_port={:?}, steer_port={:?}, visual={:?}",
-                    drive_port, steer_port, visual_ent);
+                println!(
+                    "  WheelRaycast wiring: drive_port={:?}, steer_port={:?}, visual={:?}",
+                    drive_port, steer_port, visual_ent
+                );
                 // Check what wires connect to this wheel's drive_port
                 let mut q_wires = app.world_mut().query_filtered::<(Entity, &lunco_cosim::SimConnection), With<lunco_cosim::SimConnection>>();
                 for (wire_ent, wire) in q_wires.iter(app.world()) {
                     if wire.end_element == drive_port {
-                        println!("    Wire {:?}: start_element={:?} -> end_element={:?} (scale={})",
-                            wire_ent, wire.start_element, wire.end_element, wire.scale);
+                        println!(
+                            "    Wire {:?}: start_element={:?} -> end_element={:?} (scale={})",
+                            wire_ent, wire.start_element, wire.end_element, wire.scale
+                        );
                         // Find what digital port this is
                         if let Some(name) = app.world().get::<Name>(wire.start_element) {
                             println!("      Source name: {}", name.as_str());
@@ -138,8 +165,16 @@ fn test_dump_usd_rover_state() {
         for child in children.iter() {
             if let Some(wheel) = app.world().get::<WheelRaycast>(child) {
                 wheel_count += 1;
-                let name = app.world().get::<Name>(child).map(|n| n.as_str().to_string()).unwrap_or_default();
-                let tf = app.world().get::<Transform>(child).cloned().unwrap_or_default();
+                let name = app
+                    .world()
+                    .get::<Name>(child)
+                    .map(|n| n.as_str().to_string())
+                    .unwrap_or_default();
+                let tf = app
+                    .world()
+                    .get::<Transform>(child)
+                    .cloned()
+                    .unwrap_or_default();
                 let rc_dir = app.world().get::<RayCaster>(child).map(|r| r.direction);
                 wheel_details.push((name, tf.translation, tf.rotation, rc_dir));
             }
@@ -148,7 +183,10 @@ fn test_dump_usd_rover_state() {
     println!("\n========== SUMMARY ==========");
     println!("Wheels with WheelRaycast: {}", wheel_count);
     for (name, pos, rot, rc_dir) in &wheel_details {
-        println!("  {} - pos={:?}, rot={:?}, ray_dir={:?}", name, pos, rot, rc_dir);
+        println!(
+            "  {} - pos={:?}, rot={:?}, ray_dir={:?}",
+            name, pos, rot, rc_dir
+        );
     }
 
     // Verify wheel transforms
@@ -156,15 +194,22 @@ fn test_dump_usd_rover_state() {
         let angle_from_identity = rot.angle_between(Quat::IDENTITY);
         let angle_from_90z = rot.angle_between(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
         println!("\n  {} rotation analysis:", name);
-        println!("    Angle from IDENTITY: {:.2}°", angle_from_identity.to_degrees());
+        println!(
+            "    Angle from IDENTITY: {:.2}°",
+            angle_from_identity.to_degrees()
+        );
         println!("    Angle from 90° Z: {:.2}°", angle_from_90z.to_degrees());
     }
 }
 
 fn dump_components(app: &App, entity: Entity) {
     if let Some(tf) = app.world().get::<Transform>(entity) {
-        println!("  Transform: pos={:?}, rot={:?} ({:.2}° from identity)",
-            tf.translation, tf.rotation, tf.rotation.angle_between(Quat::IDENTITY).to_degrees());
+        println!(
+            "  Transform: pos={:?}, rot={:?} ({:.2}° from identity)",
+            tf.translation,
+            tf.rotation,
+            tf.rotation.angle_between(Quat::IDENTITY).to_degrees()
+        );
     }
     if let Some(rb) = app.world().get::<RigidBody>(entity) {
         println!("  RigidBody: {:?}", rb);
@@ -194,8 +239,10 @@ fn dump_components(app: &App, entity: Entity) {
         println!("  WheelRaycast: radius={}", wheel.wheel_radius);
     }
     if let Some(susp) = app.world().get::<Suspension>(entity) {
-        println!("  Suspension: rest={}, k={}, c={}",
-            susp.rest_length, susp.spring_k, susp.damping_c);
+        println!(
+            "  Suspension: rest={}, k={}, c={}",
+            susp.rest_length, susp.spring_k, susp.damping_c
+        );
     }
     if let Some(rc) = app.world().get::<RayCaster>(entity) {
         println!("  RayCaster: dir={:?}", rc.direction);

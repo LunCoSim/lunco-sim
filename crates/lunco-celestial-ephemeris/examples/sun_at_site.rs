@@ -41,7 +41,8 @@ fn az_el(
     jd: f64,
 ) -> Option<(f64, f64)> {
     let desc = registry.bodies.iter().find(|b| b.ephemeris_id == body)?;
-    let p_body = lunco_celestial::coords::ecliptic_to_bevy(provider.global_position(body, jd)?).raw();
+    let p_body =
+        lunco_celestial::coords::ecliptic_to_bevy(provider.global_position(body, jd)?).raw();
     let p_target =
         lunco_celestial::coords::ecliptic_to_bevy(provider.global_position(target, jd)?).raw();
     let frame = solar_tangent_frame(desc, geo, p_body, jd);
@@ -52,7 +53,10 @@ fn az_el(
     let e = to_target.dot(frame.east);
     let n = to_target.dot(frame.north);
     let u = to_target.dot(frame.up);
-    Some((e.atan2(n).to_degrees().rem_euclid(360.0), u.asin().to_degrees()))
+    Some((
+        e.atan2(n).to_degrees().rem_euclid(360.0),
+        u.asin().to_degrees(),
+    ))
 }
 
 /// Circular difference in degrees, in [-180, 180].
@@ -87,7 +91,10 @@ fn main() {
     if solve {
         let want_az: f64 = args[3].parse().expect("azDeg");
         let want_el: f64 = args[4].parse().expect("elDeg");
-        let jd0: f64 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(default_jd0);
+        let jd0: f64 = args
+            .get(5)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default_jd0);
         let days: f64 = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(60.0);
 
         // Coarse sweep for the best hour, then bisect-free refine by minute.
@@ -125,20 +132,26 @@ fn main() {
         return;
     }
 
-    let jd0: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(default_jd0);
+    let jd0: f64 = args
+        .get(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default_jd0);
     let days: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(29.5);
     let step: f64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0.5);
 
     println!("site {lat:.4} {lon:.4}   (az = deg clockwise from north)");
-    println!("{:>12}  {:>8} {:>8}   {:>8} {:>8}", "JD", "sun_az", "sun_el", "earth_az", "earth_el");
+    println!(
+        "{:>12}  {:>8} {:>8}   {:>8} {:>8}",
+        "JD", "sun_az", "sun_el", "earth_az", "earth_el"
+    );
     let mut jd = jd0;
     while jd < jd0 + days {
         let s = az_el(&provider, &registry, MOON, &geo, SUN, jd);
         let e = az_el(&provider, &registry, MOON, &geo, EARTH, jd);
         match (s, e) {
-            (Some((saz, sel)), Some((eaz, eel))) => println!(
-                "{jd:>12.4}  {saz:>8.2} {sel:>8.2}   {eaz:>8.2} {eel:>8.2}"
-            ),
+            (Some((saz, sel)), Some((eaz, eel))) => {
+                println!("{jd:>12.4}  {saz:>8.2} {sel:>8.2}   {eaz:>8.2} {eel:>8.2}")
+            }
             _ => println!("{jd:>12.4}  (no ephemeris)"),
         }
         jd += step;

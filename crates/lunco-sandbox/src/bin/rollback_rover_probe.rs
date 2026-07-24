@@ -208,15 +208,33 @@ fn read_assembly(app: &mut App) -> Assembly {
             With<Chassis>,
         >();
         let (p, r, lv, av) = q.single(app.world()).expect("one chassis");
-        RbState { pos: p.0, rot: r.0, lv: lv.0, av: av.0 }
+        RbState {
+            pos: p.0,
+            rot: r.0,
+            lv: lv.0,
+            av: av.0,
+        }
     };
     let mut links: Vec<(usize, RbState)> = {
-        let mut q = app.world_mut().query_filtered::<
-            (&WheelId, &Position, &Rotation, &LinearVelocity, &AngularVelocity),
-            With<RigidBody>,
-        >();
+        let mut q = app.world_mut().query_filtered::<(
+            &WheelId,
+            &Position,
+            &Rotation,
+            &LinearVelocity,
+            &AngularVelocity,
+        ), With<RigidBody>>();
         q.iter(app.world())
-            .map(|(w, p, r, lv, av)| (w.0, RbState { pos: p.0, rot: r.0, lv: lv.0, av: av.0 }))
+            .map(|(w, p, r, lv, av)| {
+                (
+                    w.0,
+                    RbState {
+                        pos: p.0,
+                        rot: r.0,
+                        lv: lv.0,
+                        av: av.0,
+                    },
+                )
+            })
             .collect()
     };
     links.sort_by_key(|(i, _)| *i);
@@ -228,10 +246,12 @@ fn read_assembly(app: &mut App) -> Assembly {
 
 fn write_assembly(app: &mut App, a: &Assembly) {
     {
-        let mut q = app.world_mut().query_filtered::<
-            (&mut Position, &mut Rotation, &mut LinearVelocity, &mut AngularVelocity),
-            With<Chassis>,
-        >();
+        let mut q = app.world_mut().query_filtered::<(
+            &mut Position,
+            &mut Rotation,
+            &mut LinearVelocity,
+            &mut AngularVelocity,
+        ), With<Chassis>>();
         let world = app.world_mut();
         let (mut p, mut r, mut lv, mut av) = q.single_mut(world).expect("one chassis");
         p.0 = a.chassis.pos;
@@ -242,10 +262,13 @@ fn write_assembly(app: &mut App, a: &Assembly) {
     if a.links.is_empty() {
         return; // CHASSIS_ONLY: deliberately leave the wheels behind — the live bug.
     }
-    let mut q = app.world_mut().query_filtered::<
-        (&WheelId, &mut Position, &mut Rotation, &mut LinearVelocity, &mut AngularVelocity),
-        With<RigidBody>,
-    >();
+    let mut q = app.world_mut().query_filtered::<(
+        &WheelId,
+        &mut Position,
+        &mut Rotation,
+        &mut LinearVelocity,
+        &mut AngularVelocity,
+    ), With<RigidBody>>();
     let world = app.world_mut();
     for (w, mut p, mut r, mut lv, mut av) in q.iter_mut(world) {
         let Some(s) = a.links.get(w.0) else { continue };
@@ -271,7 +294,10 @@ fn reframe(pred: &Assembly, auth: RbState) -> Assembly {
             av: auth.av + d_rot * (l.av - pred.chassis.av),
         })
         .collect();
-    Assembly { chassis: auth, links }
+    Assembly {
+        chassis: auth,
+        links,
+    }
 }
 
 /// Worst wheel drift from its rest mount on the chassis. ~0 ⇒ vehicle intact; large ⇒
@@ -405,12 +431,16 @@ fn tail_mean(v: &[f64]) -> f64 {
 fn main() {
     let threads = 8usize;
     println!("=== rollback probe: ARTICULATED ROVER (chassis + 4 jointed wheels) ===");
-    println!("    {TICKS} ticks | ack delay {ACK_DELAY} | snapshots every {SNAPSHOT_INTERVAL} ticks\n");
+    println!(
+        "    {TICKS} ticks | ack delay {ACK_DELAY} | snapshots every {SNAPSHOT_INTERVAL} ticks\n"
+    );
 
     let (inputs, host) = run_host(threads);
     let drove = (host.last().unwrap().chassis.pos - host[0].chassis.pos).length();
     let base_strain = tail_mean(&host.iter().map(joint_strain).collect::<Vec<_>>());
-    println!("host drove {drove:.2} m | joint_strain={base_strain:.4} m  (baseline: intact vehicle)\n");
+    println!(
+        "host drove {drove:.2} m | joint_strain={base_strain:.4} m  (baseline: intact vehicle)\n"
+    );
 
     // A rover that barely moves makes every strategy look good — reconciling a parked
     // vehicle is trivial and would hide exactly the turning dynamics that broke live.
@@ -425,8 +455,14 @@ fn main() {
     for (name, strat) in [
         ("NONE           (no reconcile)      ", Strategy::None),
         ("CHASSIS_ONLY   (THE LIVE BUG)      ", Strategy::ChassisOnly),
-        ("FULL_ASSEMBLY  (chassis authority) ", Strategy::FullAssembly),
-        ("FULL_AUTHORITY (+ wheels on wire)  ", Strategy::FullAuthority),
+        (
+            "FULL_ASSEMBLY  (chassis authority) ",
+            Strategy::FullAssembly,
+        ),
+        (
+            "FULL_AUTHORITY (+ wheels on wire)  ",
+            Strategy::FullAuthority,
+        ),
     ] {
         let (errs, strains) = run_client(strat, &inputs, &host, threads);
         let blew_up = errs.iter().any(|e| !e.is_finite());

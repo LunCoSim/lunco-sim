@@ -42,8 +42,8 @@
 use bevy::prelude::Transform;
 use openusd::sdf::Path as SdfPath;
 
-use crate::read::UsdRead;
 use crate::local_transform_at;
+use crate::read::UsdRead;
 
 /// A socket advertised by a host body — `<host>/Mounts/<name>` carrying
 /// `lunco:mount:socket`. What a snap reads to place the part it holds.
@@ -100,7 +100,11 @@ fn compose(a: Transform, b: Transform) -> Transform {
 /// of local transforms from `body_root`'s child down to `mount_prim`, i.e. every
 /// intermediate `Mounts` xform is folded in, but `body_root`'s own placement is
 /// **not** (we want a body-local frame). An unauthored xform reads as identity.
-pub fn frame_in_body(reader: &crate::StageView<'_>, body_root: &str, mount_prim: &SdfPath) -> Transform {
+pub fn frame_in_body(
+    reader: &crate::StageView<'_>,
+    body_root: &str,
+    mount_prim: &SdfPath,
+) -> Transform {
     let body_root = body_root.trim_end_matches('/');
     let mut acc = local_transform_at(reader, mount_prim, 0.0).unwrap_or(Transform::IDENTITY);
     let mut cur = mount_prim.clone();
@@ -110,8 +114,11 @@ pub fn frame_in_body(reader: &crate::StageView<'_>, body_root: &str, mount_prim:
         if parent == body_root {
             break;
         }
-        let Ok(parent_path) = SdfPath::new(&parent) else { break };
-        let parent_local = local_transform_at(reader, &parent_path, 0.0).unwrap_or(Transform::IDENTITY);
+        let Ok(parent_path) = SdfPath::new(&parent) else {
+            break;
+        };
+        let parent_local =
+            local_transform_at(reader, &parent_path, 0.0).unwrap_or(Transform::IDENTITY);
         acc = compose(parent_local, acc);
         cur = parent_path;
     }
@@ -268,7 +275,11 @@ def Xform "World"
         assert_eq!(s.part.as_deref(), Some("/World/Base/Arm"));
         // Frame is BODY-LOCAL: the socket sits 2.5 up from Base's origin, NOT at
         // world (5, 8.5, 5) — Base's own (5,6,5) placement is excluded.
-        assert!(close(s.frame.translation, [0.0, 2.5, 0.0]), "socket frame {:?}", s.frame.translation);
+        assert!(
+            close(s.frame.translation, [0.0, 2.5, 0.0]),
+            "socket frame {:?}",
+            s.frame.translation
+        );
     }
 
     #[test]
@@ -280,7 +291,11 @@ def Xform "World"
         let plug = read_plug_frame(&view, "/World/Base/Arm").expect("Arm advertises a plug");
         // Plug is PART-LOCAL: the hub offset (0.1,0.2,0.3), NOT folded with Arm's
         // own (2,0,0) placement — a plug frame is expressed in the part's space.
-        assert!(close(plug.translation, [0.1, 0.2, 0.3]), "plug frame {:?}", plug.translation);
+        assert!(
+            close(plug.translation, [0.1, 0.2, 0.3]),
+            "plug frame {:?}",
+            plug.translation
+        );
     }
 
     #[test]

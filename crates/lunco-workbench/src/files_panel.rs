@@ -23,9 +23,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::panel::{Panel, PanelCtx, PanelId, PanelSlot};
-use crate::twin_browser::{
-    BrowserActions, BrowserCtx, BrowserScope, BrowserSectionRegistry,
-};
+use crate::twin_browser::{BrowserActions, BrowserCtx, BrowserScope, BrowserSectionRegistry};
 
 /// Stable id of the Files panel.
 pub const FILES_PANEL_ID: PanelId = PanelId("lunco.workbench.files");
@@ -112,10 +110,7 @@ impl Panel for FilesPanel {
                 .resource::<lunco_theme::Theme>()
                 .map(|t| t.tokens.error)
                 .unwrap_or(egui::Color32::LIGHT_RED);
-            ui.colored_label(
-                error_color,
-                "BrowserSectionRegistry resource missing",
-            );
+            ui.colored_label(error_color, "BrowserSectionRegistry resource missing");
         }
     }
 }

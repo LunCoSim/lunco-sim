@@ -131,7 +131,9 @@ fn the_two_realizations_compose_the_same_vehicle() {
         if key.ends_with(".primvars:displayColor") {
             continue;
         }
-        diffs.push(format!("  {key}\n      raycast : {va}\n      physical: {vb}"));
+        diffs.push(format!(
+            "  {key}\n      raycast : {va}\n      physical: {vb}"
+        ));
     }
 
     assert!(
@@ -181,7 +183,10 @@ fn the_wheels_sit_at_the_same_place_on_the_vehicle() {
 
     // A silent zero-comparison run is not a pass — a `find` that resolves nothing
     // looks exactly like a clean run.
-    assert_eq!(checked, 4, "expected to compare four wheel mounts, compared {checked}");
+    assert_eq!(
+        checked, 4,
+        "expected to compare four wheel mounts, compared {checked}"
+    );
 }
 
 #[test]
@@ -203,7 +208,10 @@ fn the_chassis_masses_the_same_either_way() {
         "physxRigidBody:angularDamping",
     ] {
         let (x, y) = (view.real(&ra, attr), view.real(&rp, attr));
-        assert!(x.is_some(), "{attr} not authored — the test is checking nothing");
+        assert!(
+            x.is_some(),
+            "{attr} not authored — the test is checking nothing"
+        );
         assert_eq!(x, y, "{attr} differs between drivetrain variants");
     }
 
@@ -212,7 +220,10 @@ fn the_chassis_masses_the_same_either_way() {
         vec3(&view, &rp, "physics:diagonalInertia"),
     );
     assert!(ia_.is_some(), "diagonalInertia not authored");
-    assert_eq!(ia_, ib_, "diagonalInertia differs between drivetrain variants");
+    assert_eq!(
+        ia_, ib_,
+        "diagonalInertia differs between drivetrain variants"
+    );
 }
 
 #[test]
@@ -248,9 +259,15 @@ fn every_wheel_reads_the_same_parameters_in_both_realizations() {
                     pa.max_rotation_speed, pb.max_rotation_speed,
                     "{wheel} no-load speed — the ONE top-speed parameter"
                 );
-                assert_eq!(pa.bearing_damping, pb.bearing_damping, "{wheel} bearing drag");
+                assert_eq!(
+                    pa.bearing_damping, pb.bearing_damping,
+                    "{wheel} bearing drag"
+                );
                 assert_eq!(pa.friction_mu, pb.friction_mu, "{wheel} tire friction");
-                assert_eq!(pa.slip_stiffness, pb.slip_stiffness, "{wheel} slip stiffness");
+                assert_eq!(
+                    pa.slip_stiffness, pb.slip_stiffness,
+                    "{wheel} slip stiffness"
+                );
                 assert_eq!(
                     pa.lateral_stiffness, pb.lateral_stiffness,
                     "{wheel} lateral stiffness"

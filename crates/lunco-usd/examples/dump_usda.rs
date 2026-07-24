@@ -11,12 +11,12 @@ fn main() {
     // Single-layer parse (uncomposed) — mirrors the old `TextReader::read`.
     let text = std::fs::read_to_string(path).expect("Failed to read USD file");
     let reader = usda::parse(&text).expect("Failed to parse USD file");
-    
+
     println!("\n=== Parsed Prims ===\n");
     for (prim_path, spec) in reader.iter() {
         println!("Path: {}", prim_path);
         println!("  SpecType: {:?}", spec.ty);
-        
+
         // Show all fields
         for (field_name, value) in &spec.fields {
             println!("  {}: {:?}", field_name, value);

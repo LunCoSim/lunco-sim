@@ -27,7 +27,9 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_core::subsystems::{SubsystemToggles, SUBSYSTEMS};
-use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::{
+    on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
+};
 use lunco_doc_bevy::EditorIntent;
 use lunco_settings::AppSettingsExt;
 use lunco_workbench::tutorial_overlay::TutorialHud;
@@ -316,7 +318,10 @@ fn on_set_subsystem_enabled(
 ) {
     let ev = trigger.event();
     if !SubsystemToggles::is_known(&ev.name) {
-        warn!("[subsystem] unknown subsystem '{}' (allow-list: {:?}) — ignored", ev.name, SUBSYSTEMS);
+        warn!(
+            "[subsystem] unknown subsystem '{}' (allow-list: {:?}) — ignored",
+            ev.name, SUBSYSTEMS
+        );
         return;
     }
     toggles.set(ev.name.clone(), ev.on);
@@ -330,7 +335,11 @@ fn on_set_subsystem_enabled(
     });
 }
 
-register_commands!(on_start_tutorial, on_skip_tutorial, on_set_subsystem_enabled,);
+register_commands!(
+    on_start_tutorial,
+    on_skip_tutorial,
+    on_set_subsystem_enabled,
+);
 
 /// On `MISSION_COMPLETE`, record the completion and advance the chain by starting
 /// the current tutorial's [`TutorialMeta::next`] — the chain lives entirely in
@@ -359,7 +368,9 @@ fn on_mission_complete(
     };
     if progress.autoproceed {
         info!("[tutorial] auto-advancing → '{next}'");
-        commands.trigger(StartTutorial { id: next.to_string() });
+        commands.trigger(StartTutorial {
+            id: next.to_string(),
+        });
     } else {
         info!("[tutorial] complete — awaiting confirm to advance → '{next}'");
         pending.0 = Some(next.to_string());
@@ -368,7 +379,10 @@ fn on_mission_complete(
 
 /// A tidy display name for a tutorial id: prefer its registered title, else the id.
 fn pretty_tutorial(registry: &TutorialRegistry, id: &str) -> String {
-    registry.get(id).map(|m| m.title.to_string()).unwrap_or_else(|| id.to_string())
+    registry
+        .get(id)
+        .map(|m| m.title.to_string())
+        .unwrap_or_else(|| id.to_string())
 }
 
 /// Modal confirm popup shown when a tutorial finishes and a successor is queued
@@ -515,11 +529,17 @@ fn hookvalue_to_json(v: &lunco_hooks::HookValue) -> serde_json::Value {
     match v {
         H::Unit => J::Null,
         H::Int(i) => J::from(*i),
-        H::Float(f) => serde_json::Number::from_f64(*f).map(J::Number).unwrap_or(J::Null),
+        H::Float(f) => serde_json::Number::from_f64(*f)
+            .map(J::Number)
+            .unwrap_or(J::Null),
         H::Bool(b) => J::Bool(*b),
         H::Str(s) => J::String(s.clone()),
         H::Array(a) => J::Array(a.iter().map(hookvalue_to_json).collect()),
-        H::Map(m) => J::Object(m.iter().map(|(k, v)| (k.clone(), hookvalue_to_json(v))).collect()),
+        H::Map(m) => J::Object(
+            m.iter()
+                .map(|(k, v)| (k.clone(), hookvalue_to_json(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -535,10 +555,16 @@ fn hookvalue_to_json(v: &lunco_hooks::HookValue) -> serde_json::Value {
 /// (e.g. the shared [`boot_seam`] after a sandbox's own `consult_boot`) no-ops.
 pub fn consult_boot(world: &mut World, has_scene_arg: bool, automated: bool) -> bool {
     use lunco_hooks::HookValue as H;
-    let onboarded = world.get_resource::<TutorialSeen>().map(|s| s.onboarded).unwrap_or(false);
-    let first_start_id = world
-        .get_resource::<TutorialRegistry>()
-        .and_then(|r| r.tutorials.iter().find(|t| t.first_start).map(|t| t.id.to_string()));
+    let onboarded = world
+        .get_resource::<TutorialSeen>()
+        .map(|s| s.onboarded)
+        .unwrap_or(false);
+    let first_start_id = world.get_resource::<TutorialRegistry>().and_then(|r| {
+        r.tutorials
+            .iter()
+            .find(|t| t.first_start)
+            .map(|t| t.id.to_string())
+    });
     let mut ctx = vec![
         ("onboarded".to_string(), H::Bool(onboarded)),
         ("has_scene_arg".to_string(), H::Bool(has_scene_arg)),
@@ -559,7 +585,11 @@ pub fn consult_boot(world: &mut World, has_scene_arg: bool, automated: bool) -> 
         .map(hookvalue_to_json)
         .unwrap_or(serde_json::Value::Object(Default::default()));
     info!("[tutorial] boot policy → {command}");
-    world.trigger(lunco_api::ApiCommandEvent { command: command.to_string(), params, id: 0 });
+    world.trigger(lunco_api::ApiCommandEvent {
+        command: command.to_string(),
+        params,
+        id: 0,
+    });
     if let Some(mut s) = world.get_resource_mut::<TutorialSeen>() {
         s.onboarded = true;
     }
@@ -630,7 +660,10 @@ fn sync_twin_tutorials(
                 m.from_twin = Some(id);
                 registry.register_tutorial(m);
             }
-            info!("[tutorial] loaded {n} lesson(s) from twin at {}", twin.root.display());
+            info!(
+                "[tutorial] loaded {n} lesson(s) from twin at {}",
+                twin.root.display()
+            );
         }
         // Say so. A malformed manifest previously failed silently, and the lessons
         // simply never appeared — with nothing anywhere to say why.
@@ -647,16 +680,31 @@ fn register_tutorials_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("🎓 Tutorials", |ui, world| {
-        let registry = world.get_resource::<TutorialRegistry>().cloned().unwrap_or_default();
-        let progress = world.get_resource::<TutorialProgress>().cloned().unwrap_or_default();
+        let registry = world
+            .get_resource::<TutorialRegistry>()
+            .cloned()
+            .unwrap_or_default();
+        let progress = world
+            .get_resource::<TutorialProgress>()
+            .cloned()
+            .unwrap_or_default();
         if registry.tutorials.is_empty() {
-            ui.label(egui::RichText::new("(no tutorials registered)").weak().italics());
+            ui.label(
+                egui::RichText::new("(no tutorials registered)")
+                    .weak()
+                    .italics(),
+            );
             return;
         }
-        ui.label(egui::RichText::new("Interactive, scripted lessons").weak().small());
+        ui.label(
+            egui::RichText::new("Interactive, scripted lessons")
+                .weak()
+                .small(),
+        );
         ui.separator();
 
-        let mut grouped: std::collections::HashMap<String, Vec<&TutorialMeta>> = std::collections::HashMap::new();
+        let mut grouped: std::collections::HashMap<String, Vec<&TutorialMeta>> =
+            std::collections::HashMap::new();
         for meta in registry.ordered() {
             grouped.entry(meta.app.clone()).or_default().push(meta);
         }
@@ -686,7 +734,9 @@ fn register_tutorials_menu(world: &mut World) {
                             .on_hover_text(meta.blurb.as_str())
                             .clicked()
                         {
-                            world.trigger(StartTutorial { id: meta.id.to_string() });
+                            world.trigger(StartTutorial {
+                                id: meta.id.to_string(),
+                            });
                             ui.close();
                         }
                     }
@@ -706,7 +756,9 @@ fn register_tutorials_menu(world: &mut World) {
                             .on_hover_text(meta.blurb.as_str())
                             .clicked()
                         {
-                            world.trigger(StartTutorial { id: meta.id.to_string() });
+                            world.trigger(StartTutorial {
+                                id: meta.id.to_string(),
+                            });
                             ui.close();
                         }
                     }
@@ -747,12 +799,22 @@ impl Panel for TutorialsPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let registry = ctx.resource::<TutorialRegistry>().cloned().unwrap_or_default();
-        let progress = ctx.resource::<TutorialProgress>().cloned().unwrap_or_default();
+        let registry = ctx
+            .resource::<TutorialRegistry>()
+            .cloned()
+            .unwrap_or_default();
+        let progress = ctx
+            .resource::<TutorialProgress>()
+            .cloned()
+            .unwrap_or_default();
 
         ui.add_space(4.0);
         ui.heading("🎓 Tutorials");
-        ui.label(egui::RichText::new("Interactive, scripted lessons.").weak().small());
+        ui.label(
+            egui::RichText::new("Interactive, scripted lessons.")
+                .weak()
+                .small(),
+        );
 
         let mut auto = progress.autoproceed;
         if ui
@@ -770,12 +832,18 @@ impl Panel for TutorialsPanel {
         }
 
         if let Some(cur) = &progress.current {
-            let title = registry.get(cur).map(|m| m.title.to_string()).unwrap_or_else(|| cur.clone());
+            let title = registry
+                .get(cur)
+                .map(|m| m.title.to_string())
+                .unwrap_or_else(|| cur.clone());
             ui.horizontal(|ui| {
                 // TODO(theme): migrate to lunco-theme once the token set covers this.
                 // "Currently running" accent for the launcher row. Blocked on the
                 // dep, as above.
-                ui.label(egui::RichText::new(format!("▶ Running: {title}")).color(egui::Color32::from_rgb(120, 200, 255)));
+                ui.label(
+                    egui::RichText::new(format!("▶ Running: {title}"))
+                        .color(egui::Color32::from_rgb(120, 200, 255)),
+                );
                 if ui.small_button("Stop").clicked() {
                     ctx.trigger(SkipTutorial {});
                 }
@@ -791,7 +859,11 @@ impl Panel for TutorialsPanel {
                         if done {
                             // TODO(theme): migrate to lunco-theme once the token set covers this.
                             // Completed-tutorial tick -> `tokens.success`. Blocked on the dep.
-                            ui.label(egui::RichText::new("✓").color(egui::Color32::from_rgb(120, 210, 140)).strong());
+                            ui.label(
+                                egui::RichText::new("✓")
+                                    .color(egui::Color32::from_rgb(120, 210, 140))
+                                    .strong(),
+                            );
                         }
                         ui.label(egui::RichText::new(meta.title.as_str()).strong());
                         ui.label(egui::RichText::new(meta.difficulty.as_str()).weak().small());
@@ -800,9 +872,15 @@ impl Panel for TutorialsPanel {
                     ui.horizontal(|ui| {
                         let label = if done { "Replay" } else { "Start" };
                         if ui.button(label).clicked() {
-                            ctx.trigger(StartTutorial { id: meta.id.to_string() });
+                            ctx.trigger(StartTutorial {
+                                id: meta.id.to_string(),
+                            });
                         }
-                        ui.label(egui::RichText::new(format!("· {}", meta.app)).weak().small());
+                        ui.label(
+                            egui::RichText::new(format!("· {}", meta.app))
+                                .weak()
+                                .small(),
+                        );
                     });
                 });
                 ui.add_space(4.0);

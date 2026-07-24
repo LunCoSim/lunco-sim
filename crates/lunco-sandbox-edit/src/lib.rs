@@ -38,7 +38,9 @@
 // linking the editor. Re-exported here under their old paths: everything below is
 // the in-scene editor (gizmo/picking/egui), gated on `ui`, and it reaches for them
 // as `crate::catalog::…` / `crate::SelectedEntities` exactly as before.
-pub use lunco_scene_commands::{catalog, commands, doc_resolve, shader_doc, spawn_meta, SelectedEntities};
+pub use lunco_scene_commands::{
+    catalog, commands, doc_resolve, shader_doc, spawn_meta, SelectedEntities,
+};
 
 #[cfg(feature = "ui")]
 pub mod gizmo;
@@ -98,11 +100,14 @@ impl Plugin for SandboxEditPlugin {
         app.add_systems(Update, selection::handle_deselect_keys);
 
         // Terrain-sculpt tools — arm/disarm gate, brush sizing, cursor ghost.
-        app.add_systems(Update, (
-            terrain_tools::terrain_tool_state_system,
-            terrain_tools::terrain_brush_size_input,
-            terrain_tools::update_terrain_brush_ghost,
-        ));
+        app.add_systems(
+            Update,
+            (
+                terrain_tools::terrain_tool_state_system,
+                terrain_tools::terrain_brush_size_input,
+                terrain_tools::update_terrain_brush_ghost,
+            ),
+        );
 
         // Scene picking is bevy_picking-driven (egui occlusion handled by the
         // framework's egui picking backend) — no hand-rolled gate, no manual
@@ -124,11 +129,14 @@ impl Plugin for SandboxEditPlugin {
         //
         // NOTE: TransformGizmoPlugin is added before this plugin, so its update_gizmos
         // system runs first in the Last schedule (systems run in registration order).
-        app.add_systems(Last, (
-            gizmo::capture_gizmo_start,
-            gizmo::sync_gizmo_transforms.after(gizmo::capture_gizmo_start),
-            gizmo::restore_gizmo_dynamic.after(gizmo::sync_gizmo_transforms),
-        ));
+        app.add_systems(
+            Last,
+            (
+                gizmo::capture_gizmo_start,
+                gizmo::sync_gizmo_transforms.after(gizmo::capture_gizmo_start),
+                gizmo::restore_gizmo_dynamic.after(gizmo::sync_gizmo_transforms),
+            ),
+        );
         app.add_systems(
             PostUpdate,
             gizmo::restore_dragged_transform
@@ -142,7 +150,10 @@ impl Plugin for SandboxEditPlugin {
         // the sandbox only because that scene sits in the origin cell). The
         // `GizmoTarget` therefore lives on an unparented proxy whose `Transform`
         // IS its render-frame pose; the drag comes back as a delta.
-        app.add_systems(Update, (gizmo::spawn_gizmo_proxies, gizmo::despawn_gizmo_proxies));
+        app.add_systems(
+            Update,
+            (gizmo::spawn_gizmo_proxies, gizmo::despawn_gizmo_proxies),
+        );
         app.add_systems(
             PostUpdate,
             gizmo::sync_gizmo_proxies.after(bevy::transform::TransformSystems::Propagate),

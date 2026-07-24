@@ -209,7 +209,10 @@ impl ClassRef {
             return Some(parse_bundled(tail));
         }
         if let Some(rest) = s.strip_prefix("file://") {
-            return Some(ClassRef::user_file(PathBuf::from(rest), Vec::<String>::new()));
+            return Some(ClassRef::user_file(
+                PathBuf::from(rest),
+                Vec::<String>::new(),
+            ));
         }
         // mem:// identifiers don't carry a DocumentId; resolution
         // requires consulting the in-memory model cache.
@@ -223,7 +226,10 @@ impl ClassRef {
                 .map(|e| e.eq_ignore_ascii_case("mo"))
                 .unwrap_or(false)
         {
-            return Some(ClassRef::user_file(path.to_path_buf(), Vec::<String>::new()));
+            return Some(ClassRef::user_file(
+                path.to_path_buf(),
+                Vec::<String>::new(),
+            ));
         }
         None
     }
@@ -292,13 +298,10 @@ mod tests {
 
     #[test]
     fn third_party_msl_path_routes_to_third_party_variant() {
-        let c = ClassRef::parse_tree_id("msl_path:ThermofluidStream.Boundaries.CreateState")
-            .unwrap();
+        let c =
+            ClassRef::parse_tree_id("msl_path:ThermofluidStream.Boundaries.CreateState").unwrap();
         match &c.library {
-            Library::ThirdParty {
-                cache_subdir,
-                root,
-            } => {
+            Library::ThirdParty { cache_subdir, root } => {
                 assert_eq!(cache_subdir, "thermofluidstream");
                 assert_eq!(root, "ThermofluidStream");
             }
@@ -322,10 +325,9 @@ mod tests {
 
     #[test]
     fn bundled_fragment_already_prefixed_does_not_double() {
-        let c = ClassRef::parse_tree_id(
-            "bundled://AnnotatedRocketStage.mo#AnnotatedRocketStage.Tank",
-        )
-        .unwrap();
+        let c =
+            ClassRef::parse_tree_id("bundled://AnnotatedRocketStage.mo#AnnotatedRocketStage.Tank")
+                .unwrap();
         // Stem ("AnnotatedRocketStage") matches frag head — don't
         // produce "AnnotatedRocketStage.AnnotatedRocketStage.Tank".
         assert_eq!(c.path, vec!["AnnotatedRocketStage", "Tank"]);
@@ -415,6 +417,9 @@ mod tests {
         let b = ClassRef::third_party("foo", "Foo", ["X"]);
         let c = ClassRef::third_party("bar", "Foo", ["X"]);
         assert_eq!(a, b);
-        assert_ne!(a, c, "ThirdParty libraries with different cache subdirs must not compare equal");
+        assert_ne!(
+            a, c,
+            "ThirdParty libraries with different cache subdirs must not compare equal"
+        );
     }
 }

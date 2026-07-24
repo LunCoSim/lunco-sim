@@ -142,14 +142,18 @@ pub fn add_variable(
     }
     let body = pretty::variable_decl(decl);
     let stub = format!("model {FRAGMENT_CLASS_NAME}\n{body}end {FRAGMENT_CLASS_NAME};\n");
-    let parsed = super::parsing::parse_stub_cached(&stub)
-        .ok_or_else(|| AstMutError::ValueParseFailed { value: body.clone() })?;
+    let parsed =
+        super::parsing::parse_stub_cached(&stub).ok_or_else(|| AstMutError::ValueParseFailed {
+            value: body.clone(),
+        })?;
     let new_component = parsed
         .classes
         .get(FRAGMENT_CLASS_NAME)
         .and_then(|c| c.components.get(&decl.name))
         .cloned()
-        .ok_or_else(|| AstMutError::ValueParseFailed { value: body.clone() })?;
+        .ok_or_else(|| AstMutError::ValueParseFailed {
+            value: body.clone(),
+        })?;
     insert_declaration(class, edit, &body)?;
     class.components.insert(decl.name.clone(), new_component);
     Ok(())
@@ -185,11 +189,10 @@ pub fn remove_component(
             class: class_name.clone(),
             component: name.to_string(),
         })?;
-    let stmt = text::component_extent(edit.source(), comp).ok_or_else(|| {
-        AstMutError::AnchorNotFound {
+    let stmt =
+        text::component_extent(edit.source(), comp).ok_or_else(|| AstMutError::AnchorNotFound {
             what: format!("declaration of component `{name}`"),
-        }
-    })?;
+        })?;
     edit.delete(text::line_extent(edit.source(), stmt));
     class.components.shift_remove(name);
     Ok(())

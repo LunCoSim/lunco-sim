@@ -2,10 +2,10 @@ pub mod reflect;
 #[cfg(test)]
 mod tests;
 
+use bevy::prelude::*;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 use std::sync::OnceLock;
-use bevy::prelude::*;
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PythonStatus {
@@ -49,10 +49,22 @@ pub fn get_python_status() -> PythonStatus {
         #[cfg(feature = "python")]
         {
             let lib_path = {
-                #[cfg(target_os = "linux")] { find_libpython_linux() }
-                #[cfg(target_os = "macos")] { find_libpython_macos() }
-                #[cfg(target_os = "windows")] { find_libpython_windows() }
-                #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))] { None }
+                #[cfg(target_os = "linux")]
+                {
+                    find_libpython_linux()
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    find_libpython_macos()
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    find_libpython_windows()
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+                {
+                    None
+                }
             };
 
             if let Some(path) = lib_path {
@@ -89,7 +101,11 @@ fn find_libpython_linux() -> Option<std::path::PathBuf> {
 fn find_libpython_macos() -> Option<std::path::PathBuf> {
     find_libpython_via_python3().or_else(|| {
         let p = std::path::PathBuf::from("/usr/local/lib/libpython3.dylib");
-        if p.exists() { Some(p) } else { None }
+        if p.exists() {
+            Some(p)
+        } else {
+            None
+        }
     })
 }
 
@@ -117,7 +133,9 @@ fn find_libpython_via_python3() -> Option<std::path::PathBuf> {
         )
         .output()
         .ok()?;
-    if !output.status.success() { return None; }
+    if !output.status.success() {
+        return None;
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut lines = stdout.lines();
@@ -127,7 +145,9 @@ fn find_libpython_via_python3() -> Option<std::path::PathBuf> {
 
     let libdir_path = std::path::PathBuf::from(&libdir);
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    if !inst_soname.is_empty() { candidates.push(libdir_path.join(&inst_soname)); }
+    if !inst_soname.is_empty() {
+        candidates.push(libdir_path.join(&inst_soname));
+    }
     if !ld_library.is_empty() {
         candidates.push(libdir_path.join(&ld_library));
         // Versioned-symlink fallbacks for distros that don't ship the

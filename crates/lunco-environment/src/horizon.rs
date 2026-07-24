@@ -127,7 +127,12 @@ impl HeightField {
     /// covers, exactly like the mesh-bake path derives from vertex bounds.
     pub fn from_grid(resolution: u32, min: Vec2, size: Vec2, heights: Arc<Vec<f32>>) -> Self {
         debug_assert_eq!(heights.len(), (resolution * resolution) as usize);
-        Self { resolution, min, size: size.max(Vec2::splat(f32::EPSILON)), heights }
+        Self {
+            resolution,
+            min,
+            size: size.max(Vec2::splat(f32::EPSILON)),
+            heights,
+        }
     }
 
     /// Bilinear height at grid coords `g` (clamped to the grid).
@@ -282,11 +287,14 @@ impl HeightField {
                     // the shadow behind a ridge leaked at the border. Clamping supersamples
                     // a real edge texel slightly inward, which is exactly right — there is
                     // no terrain out there to average in.
-                    let g = (Vec2::new(x as f32, y as f32) + s).clamp(Vec2::ZERO, Vec2::splat(max_g));
+                    let g =
+                        (Vec2::new(x as f32, y as f32) + s).clamp(Vec2::ZERO, Vec2::splat(max_g));
                     let local_xz = self.min + g * inv * self.size;
                     // Now always in-bounds; `unwrap_or` is belt-and-braces against fp edge
                     // cases, not a real path.
-                    vis += self.sun_visibility(local_xz, sun_local, tan_sun_r).unwrap_or(1.0);
+                    vis += self
+                        .sun_visibility(local_xz, sun_local, tan_sun_r)
+                        .unwrap_or(1.0);
                 }
                 bytes[(y as usize) * (res as usize) + (x as usize)] =
                     (vis * 0.25 * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -356,7 +364,10 @@ impl Default for HorizonShadowCacheConfig {
         let enabled = false;
         #[cfg(not(target_arch = "wasm32"))]
         let enabled = true;
-        Self { enabled, sun_threshold_deg: 0.05 }
+        Self {
+            enabled,
+            sun_threshold_deg: 0.05,
+        }
     }
 }
 
@@ -417,11 +428,17 @@ pub fn start_horizon_bakes(
         // `Without<RenderLayers>` mirrors `pick_sun`: terrain spawned under the
         // RTT preview `scene_root` carries a RenderLayers and must NOT bake into
         // the main scene (ARC-1 — cross-scene contamination + wasted bake).
-        (Without<HorizonMap>, Without<HorizonBakeTask>, Without<RenderLayers>),
+        (
+            Without<HorizonMap>,
+            Without<HorizonBakeTask>,
+            Without<RenderLayers>,
+        ),
     >,
 ) {
     for (entity, cfg, mesh3d) in &q {
-        let Some(mesh) = meshes.get(&mesh3d.0) else { continue }; // not loaded yet
+        let Some(mesh) = meshes.get(&mesh3d.0) else {
+            continue;
+        }; // not loaded yet
         let Some(VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
@@ -502,11 +519,19 @@ fn bake_heightfield(positions: &[[f32; 3]], indices: &[u32], resolution: u32) ->
         ];
         let g: [Vec2; 3] = [0, 1, 2].map(|i| (Vec2::new(p[i].x, p[i].z) - min) * to_grid);
         let (lo_x, hi_x) = (
-            g.iter().map(|v| v.x).fold(f32::MAX, f32::min).floor().max(0.0) as usize,
+            g.iter()
+                .map(|v| v.x)
+                .fold(f32::MAX, f32::min)
+                .floor()
+                .max(0.0) as usize,
             (g.iter().map(|v| v.x).fold(f32::MIN, f32::max).ceil() as usize).min(r - 1),
         );
         let (lo_y, hi_y) = (
-            g.iter().map(|v| v.y).fold(f32::MAX, f32::min).floor().max(0.0) as usize,
+            g.iter()
+                .map(|v| v.y)
+                .fold(f32::MAX, f32::min)
+                .floor()
+                .max(0.0) as usize,
             (g.iter().map(|v| v.y).fold(f32::MIN, f32::max).ceil() as usize).min(r - 1),
         );
         let d = (g[1] - g[0]).perp_dot(g[2] - g[0]);
@@ -529,7 +554,11 @@ fn bake_heightfield(positions: &[[f32; 3]], indices: &[u32], resolution: u32) ->
     }
     // Cells no triangle covered: lowest terrain, so they never fabricate
     // obstructions.
-    let floor = heights.iter().copied().filter(|h| h.is_finite()).fold(f32::MAX, f32::min);
+    let floor = heights
+        .iter()
+        .copied()
+        .filter(|h| h.is_finite())
+        .fold(f32::MAX, f32::min);
     for h in &mut heights {
         if !h.is_finite() {
             *h = floor;
@@ -537,7 +566,12 @@ fn bake_heightfield(positions: &[[f32; 3]], indices: &[u32], resolution: u32) ->
     }
 
     BakeResult {
-        field: HeightField { resolution, min, size, heights: Arc::new(heights) },
+        field: HeightField {
+            resolution,
+            min,
+            size,
+            heights: Arc::new(heights),
+        },
         millis: start.elapsed().as_millis(),
     }
 }
@@ -556,7 +590,9 @@ pub fn finish_horizon_bakes(
 ) {
     use bevy::tasks::futures_lite::future;
     for (entity, mut task, mesh3d) in &mut q {
-        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else { continue };
+        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
+            continue;
+        };
         install_horizon_map(
             &mut commands,
             &mut meshes,
@@ -621,7 +657,11 @@ pub fn install_horizon_map_from_field(
 ) {
     let bytes: Vec<u8> = field.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
     let image = images.add(Image::new(
-        Extent3d { width: field.resolution, height: field.resolution, depth_or_array_layers: 1 },
+        Extent3d {
+            width: field.resolution,
+            height: field.resolution,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         bytes,
         TextureFormat::R32Float,
@@ -633,7 +673,10 @@ pub fn install_horizon_map_from_field(
          ray-march shadows active (near field stays on CSM)",
         field.resolution, millis
     );
-    commands.entity(entity).remove::<HorizonBakeTask>().try_insert(HorizonMap { field, image });
+    commands
+        .entity(entity)
+        .remove::<HorizonBakeTask>()
+        .try_insert(HorizonMap { field, image });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -646,7 +689,11 @@ pub fn install_horizon_map_from_field(
 /// is visually lossless and avoids per-texel march edges).
 fn make_shadow_cache_image(images: &mut Assets<Image>, bytes: Vec<u8>, res: u32) -> Handle<Image> {
     let mut image = Image::new(
-        Extent3d { width: res, height: res, depth_or_array_layers: 1 },
+        Extent3d {
+            width: res,
+            height: res,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         bytes,
         TextureFormat::R8Unorm,
@@ -684,14 +731,21 @@ pub fn start_shadow_cache_bake(
     cfg: Res<HorizonShadowCacheConfig>,
     sun: SunQuery,
     terrains: Query<
-        (Entity, &GlobalTransform, &HorizonMap, Option<&HorizonShadowCache>),
+        (
+            Entity,
+            &GlobalTransform,
+            &HorizonMap,
+            Option<&HorizonShadowCache>,
+        ),
         (Without<RenderLayers>, Without<ShadowCacheBakeTask>),
     >,
 ) {
     if !cfg.enabled {
         return;
     }
-    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
+    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else {
+        return;
+    };
     let to_sun_world: Vec3 = sun_gt.back().into();
     let cos_thresh = cfg.sun_threshold_deg.to_radians().cos();
 
@@ -731,7 +785,12 @@ pub fn start_shadow_cache_bake(
             let task = AsyncComputeTaskPool::get().spawn(async move {
                 let start = Instant::now();
                 let bytes = field.bake_visibility_cache(sun_local, tan_r, target_res);
-                ShadowCacheResult { bytes, resolution: target_res, sun_local, millis: start.elapsed().as_millis() }
+                ShadowCacheResult {
+                    bytes,
+                    resolution: target_res,
+                    sun_local,
+                    millis: start.elapsed().as_millis(),
+                }
             });
             commands.entity(entity).insert(ShadowCacheBakeTask(task));
         }
@@ -741,9 +800,19 @@ pub fn start_shadow_cache_bake(
             // threshold crossing, at a capped resolution. The threshold makes
             // it rare; the cap keeps it a hitch, not a stall.
             let start = Instant::now();
-            let bytes = map.field.bake_visibility_cache(sun_local, tan_r, target_res);
+            let bytes = map
+                .field
+                .bake_visibility_cache(sun_local, tan_r, target_res);
             let millis = start.elapsed().as_millis();
-            install_shadow_cache(&mut commands, &mut images, entity, bytes, target_res, sun_local, millis);
+            install_shadow_cache(
+                &mut commands,
+                &mut images,
+                entity,
+                bytes,
+                target_res,
+                sun_local,
+                millis,
+            );
         }
     }
 }
@@ -760,7 +829,9 @@ pub fn finish_shadow_cache_bake(
 ) {
     use bevy::tasks::futures_lite::future;
     for (entity, mut task) in &mut q {
-        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else { continue };
+        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
+            continue;
+        };
         install_shadow_cache(
             &mut commands,
             &mut images,
@@ -788,13 +859,14 @@ fn install_shadow_cache(
     millis: u128,
 ) {
     let image = make_shadow_cache_image(images, bytes, resolution);
-    debug!(
-        "[horizon] shadow cache baked for {entity:?}: {resolution}² in {millis} ms"
-    );
+    debug!("[horizon] shadow cache baked for {entity:?}: {resolution}² in {millis} ms");
     commands
         .entity(entity)
         .remove::<ShadowCacheBakeTask>()
-        .try_insert(HorizonShadowCache { image, last_sun_local: sun_local });
+        .try_insert(HorizonShadowCache {
+            image,
+            last_sun_local: sun_local,
+        });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -828,8 +900,9 @@ pub type SunQuery<'w, 's> = Query<
 /// metres (0 when the sun casts no cascade shadows — the march then covers the
 /// whole range).
 pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)> {
-    sun.iter().max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance)).map(
-        |(gt, light, ang, csm)| {
+    sun.iter()
+        .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
+        .map(|(gt, light, ang, csm)| {
             let csm_far = if light.shadow_maps_enabled {
                 csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
             } else {
@@ -839,8 +912,7 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
             // (→ div-by-zero in the march). Default to Sol's ~0.53° diameter.
             let diameter_deg = ang.map(|a| a.0).filter(|d| *d > 0.0).unwrap_or(0.53);
             (gt, tan_sun_radius(diameter_deg), csm_far)
-        },
-    )
+        })
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -888,7 +960,12 @@ mod tests {
 
     fn make_field(res: u32, min: Vec2, size: Vec2, heights: Vec<f32>) -> HeightField {
         assert_eq!(heights.len(), (res * res) as usize);
-        HeightField { resolution: res, min, size, heights: Arc::new(heights) }
+        HeightField {
+            resolution: res,
+            min,
+            size,
+            heights: Arc::new(heights),
+        }
     }
 
     /// Zenith sun (straight up): every texel is fully lit — the march
@@ -972,7 +1049,10 @@ mod tests {
         let bytes = field.bake_visibility_cache(sun, 0.0046, 4);
         assert_eq!(bytes.len(), 16);
         // Cache texel (3, 0) → world (7, 0): beyond the ridge → shadowed.
-        assert_eq!(bytes[3], 0, "coarse-cache texel beyond the ridge is shadowed");
+        assert_eq!(
+            bytes[3], 0,
+            "coarse-cache texel beyond the ridge is shadowed"
+        );
         // Cache texel (0, 0) → world (0, 0): sun-facing → lit.
         assert_eq!(bytes[0], 255, "coarse-cache sun-facing texel is lit");
     }

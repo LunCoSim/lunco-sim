@@ -22,14 +22,19 @@ fn vessel_with_no_camera_does_not_capture() {
     let mut app = App::new();
     wire(&mut app);
     let vessel = app.world_mut().spawn_empty().id(); // no Camera3d child
-    app.world_mut().trigger(CaptureFromCamera { target: Some(vessel) });
+    app.world_mut().trigger(CaptureFromCamera {
+        target: Some(vessel),
+    });
     app.world_mut().flush();
     let screenshots = app
         .world_mut()
         .query::<&Screenshot>()
         .iter(app.world())
         .count();
-    assert_eq!(screenshots, 0, "vessel with no camera must not spawn a Screenshot");
+    assert_eq!(
+        screenshots, 0,
+        "vessel with no camera must not spawn a Screenshot"
+    );
 }
 
 #[test]
@@ -46,5 +51,8 @@ fn no_target_falls_back_to_primary_window() {
         .query::<&Screenshot>()
         .iter(app.world())
         .count();
-    assert_eq!(screenshots, 1, "target: None falls back to a primary-window capture");
+    assert_eq!(
+        screenshots, 1,
+        "target: None falls back to a primary-window capture"
+    );
 }

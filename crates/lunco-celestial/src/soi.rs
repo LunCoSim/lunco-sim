@@ -32,16 +32,31 @@ pub fn soi_transition_system(
     mut commands: Commands,
     q_migrants: Query<
         (Entity, &CellCoord, &Transform, &ChildOf),
-        (With<SoiMigrant>, Without<crate::registry::CelestialBody>, Without<Grid>),
+        (
+            With<SoiMigrant>,
+            Without<crate::registry::CelestialBody>,
+            Without<Grid>,
+        ),
     >,
-    q_bodies: Query<(Entity, &CellCoord, &Transform, &SOI, &crate::registry::CelestialBody)>,
+    q_bodies: Query<(
+        Entity,
+        &CellCoord,
+        &Transform,
+        &SOI,
+        &crate::registry::CelestialBody,
+    )>,
     q_all_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
     for (entity, cell, tf, child_of) in q_migrants.iter() {
         let current_pos = lunco_core::coords::world_position_seeded(
-            entity, cell, tf, &q_parents, &q_all_grids, &q_spatial,
+            entity,
+            cell,
+            tf,
+            &q_parents,
+            &q_all_grids,
+            &q_spatial,
         );
         let current_grid = child_of.parent();
 
@@ -50,7 +65,12 @@ pub fn soi_transition_system(
 
         for (body_ent, b_cell, b_tf, soi, _) in q_bodies.iter() {
             let body_pos = lunco_core::coords::world_position_seeded(
-                body_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial,
+                body_ent,
+                b_cell,
+                b_tf,
+                &q_parents,
+                &q_all_grids,
+                &q_spatial,
             );
             let dist = (current_pos - body_pos).length();
             if dist < soi.radius_m && dist < min_dist {
@@ -59,11 +79,18 @@ pub fn soi_transition_system(
             }
         }
 
-        let Some((new_grid_ent, new_grid_pos)) = best else { continue };
-        if new_grid_ent == current_grid { continue };
-        let Ok(new_grid) = q_all_grids.get(new_grid_ent) else { continue };
+        let Some((new_grid_ent, new_grid_pos)) = best else {
+            continue;
+        };
+        if new_grid_ent == current_grid {
+            continue;
+        };
+        let Ok(new_grid) = q_all_grids.get(new_grid_ent) else {
+            continue;
+        };
 
-        let (new_cell, local_translation) = new_grid.translation_to_grid(current_pos - new_grid_pos);
+        let (new_cell, local_translation) =
+            new_grid.translation_to_grid(current_pos - new_grid_pos);
         let local_tf = Transform::from_translation(local_translation).with_rotation(tf.rotation);
         migrate_to_grid(&mut commands, entity, new_grid_ent, new_cell, local_tf);
     }

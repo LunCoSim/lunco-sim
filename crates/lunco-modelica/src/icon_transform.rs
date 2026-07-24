@@ -146,10 +146,7 @@ impl IconTransform {
     /// Modelica icon-local coords (-100..100).
     pub fn apply(&self, lx: f32, ly: f32) -> (f32, f32) {
         let m = &self.m;
-        (
-            m[0] * lx + m[1] * ly + m[2],
-            m[3] * lx + m[4] * ly + m[5],
-        )
+        (m[0] * lx + m[1] * ly + m[2], m[3] * lx + m[4] * ly + m[5])
     }
 
     /// Apply only the linear part (no translation) — used to map
@@ -225,9 +222,10 @@ mod tests {
     fn flip_only_negates_y() {
         // No rotation, no mirror — extent (-10,-10)..(10,10) at origin.
         let t = IconTransform::from_placement(
-            (0.0, 0.0),    // extent centre at parent origin
-            (20.0, 20.0),  // extent size (in Modelica)
-            false, false,
+            (0.0, 0.0),   // extent centre at parent origin
+            (20.0, 20.0), // extent size (in Modelica)
+            false,
+            false,
             0.0,
             (0.0, 0.0),
         );
@@ -244,7 +242,8 @@ mod tests {
         let t = IconTransform::from_placement(
             (0.0, 0.0),
             (20.0, 20.0),
-            true, false,   // mirror X
+            true,
+            false, // mirror X
             0.0,
             (0.0, 0.0),
         );
@@ -256,13 +255,8 @@ mod tests {
     #[test]
     fn rotation_90_swaps_axes_and_y_flips() {
         // Centre at (0,0), 20×20 extent, rotation=90° CCW (Modelica frame).
-        let t = IconTransform::from_placement(
-            (0.0, 0.0),
-            (20.0, 20.0),
-            false, false,
-            90.0,
-            (0.0, 0.0),
-        );
+        let t =
+            IconTransform::from_placement((0.0, 0.0), (20.0, 20.0), false, false, 90.0, (0.0, 0.0));
         // Local (100, 0) → after 90° CCW rotation in Modelica frame,
         // points to (0, +10) Modelica → (0, -10) screen.
         close(t.apply(100.0, 0.0), (0.0, -10.0));
@@ -276,7 +270,8 @@ mod tests {
         let t = IconTransform::from_placement(
             (50.0, 30.0),
             (20.0, 20.0),
-            false, false,
+            false,
+            false,
             0.0,
             (0.0, 0.0),
         );
@@ -291,9 +286,10 @@ mod tests {
         // Integrator's `reset` connector: extent (-20,-20)..(20,20),
         // origin (60, -120), rotation 90.
         let t = IconTransform::from_placement(
-            (0.0, 0.0),       // extent centre
-            (40.0, 40.0),     // extent size
-            false, false,
+            (0.0, 0.0),   // extent centre
+            (40.0, 40.0), // extent size
+            false,
+            false,
             90.0,
             (60.0, -120.0),
         );
@@ -309,12 +305,12 @@ mod tests {
         let t = IconTransform::from_placement(
             (0.0, 0.0),
             (200.0, 100.0),
-            false, false,
+            false,
+            false,
             45.0,
             (0.0, 0.0),
         );
-        let ((minx, miny), (maxx, maxy)) =
-            t.local_aabb(-100.0, -100.0, 100.0, 100.0);
+        let ((minx, miny), (maxx, maxy)) = t.local_aabb(-100.0, -100.0, 100.0, 100.0);
         let w = maxx - minx;
         let h = maxy - miny;
         // Rotated 200×100 → both dimensions ≈ (200+100)/√2 ≈ 212
@@ -327,7 +323,8 @@ mod tests {
         let t = IconTransform::from_placement(
             (50.0, 30.0),
             (20.0, 20.0),
-            false, false,
+            false,
+            false,
             0.0,
             (0.0, 0.0),
         );

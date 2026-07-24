@@ -69,11 +69,7 @@ pub trait ApiQueryProvider: Send + Sync + 'static {
     /// deferred HTTP response. Cap any blocking work at a few hundred
     /// milliseconds and prefer returning a "not ready yet" response over
     /// blocking on a background task.
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse;
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse;
 }
 
 /// Registry of named query providers. Domain crates push impls here at
@@ -241,10 +237,10 @@ impl ApiQueryProvider for ReadPortsProvider {
         "ReadPorts"
     }
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
-        let Some(api_id) = params
-            .get("api_id")
-            .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        else {
+        let Some(api_id) = params.get("api_id").and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        }) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
                 "ReadPorts: `api_id` (u64) required".to_string(),

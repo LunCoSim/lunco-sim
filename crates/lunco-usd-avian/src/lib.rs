@@ -41,19 +41,19 @@
 //! may not be loaded yet (async loading). The `process_usd_avian_prims` system runs in the
 //! `Update` schedule and retries every frame until the asset is available.
 
-use bevy::prelude::*;
+use avian3d::physics_transform::{Position, Rotation};
+use avian3d::prelude::*;
 use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
-use avian3d::prelude::*;
-use avian3d::physics_transform::{Position, Rotation};
+use bevy::prelude::*;
 use lunco_usd_bevy::{
     instance_key, local_transform_at, read_shape_dims, read_transform_from_usd,
     read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView, UsdAnimated, UsdRead,
     UsdVisualSynced,
 };
-pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
+pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
 // module. Hand-written `"physics:…"` string literals are how `physics:friction`
@@ -185,8 +185,7 @@ impl Plugin for UsdAvianPlugin {
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
                 (
-                    build_usd_physics_joints
-                        .run_if(any_with_component::<PendingUsdJoint>),
+                    build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
                     // Same window, same reason: avian's broad phase never
                     // re-filters a pair already in the contact graph, so a filter
                     // armed after the first narrow phase does not apply to the
@@ -224,10 +223,7 @@ impl Plugin for UsdAvianPlugin {
 /// aware transition handling and is a documented follow-up.
 fn project_mobility_to_rigid_body(
     mut commands: Commands,
-    q: Query<
-        (Entity, &lunco_core::Mobility),
-        (Changed<lunco_core::Mobility>, Without<RigidBody>),
-    >,
+    q: Query<(Entity, &lunco_core::Mobility), (Changed<lunco_core::Mobility>, Without<RigidBody>)>,
 ) {
     for (entity, mobility) in &q {
         let body = match mobility {
@@ -259,7 +255,10 @@ mod mobility_tests {
 
         app.update();
 
-        assert_eq!(app.world().get::<RigidBody>(bare), Some(&RigidBody::Dynamic));
+        assert_eq!(
+            app.world().get::<RigidBody>(bare),
+            Some(&RigidBody::Dynamic)
+        );
         assert_eq!(
             app.world().get::<RigidBody>(managed),
             Some(&RigidBody::Kinematic),
@@ -283,7 +282,10 @@ fn enforce_kinematic_on_animated(
     mut commands: Commands,
     q: Query<
         (Entity, &RigidBody),
-        (With<UsdAnimated>, Or<(Added<RigidBody>, Added<UsdAnimated>)>),
+        (
+            With<UsdAnimated>,
+            Or<(Added<RigidBody>, Added<UsdAnimated>)>,
+        ),
     >,
 ) {
     for (entity, body) in &q {
@@ -499,7 +501,9 @@ fn collect_child_colliders_from_usd(
     // all: `proxy` wins over `render` for physics, exactly as `render` wins over
     // `proxy` for drawing.
     let children: Vec<SdfPath> = reader.children(parent_path).into_iter().collect();
-    let has_proxy = children.iter().any(|c| effective_purpose(reader, c) == Purpose::Proxy);
+    let has_proxy = children
+        .iter()
+        .any(|c| effective_purpose(reader, c) == Purpose::Proxy);
 
     for child_path in children {
         // `guide` is annotation — a debug axis, a sensor cone, a planned path. It
@@ -519,7 +523,10 @@ fn collect_child_colliders_from_usd(
         // body), NOT collider pieces of the chassis compound. The
         // `physxVehicleWheel:radius` attribute is the canonical marker
         // (matches the same skip in `process_usd_avian_prims`).
-        if reader.real_f32(&child_path, "physxVehicleWheel:radius").is_some() {
+        if reader
+            .real_f32(&child_path, "physxVehicleWheel:radius")
+            .is_some()
+        {
             continue;
         }
 
@@ -541,7 +548,9 @@ fn collect_child_colliders_from_usd(
         let child_collision = reader
             .scalar::<bool>(&child_path, ptok::A_COLLISION_ENABLED)
             .unwrap_or(true);
-        if !child_collision { continue; }
+        if !child_collision {
+            continue;
+        }
 
         // Read child's local transform (canonical decoder, shared with usd-bevy).
         let mut child_tf = read_transform_from_usd(reader, &child_path);
@@ -623,8 +632,10 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
     // scale tail applies unchanged.
     if ty == "Mesh" {
         let (verts, tris) = read_usd_mesh_indexed(reader, sdf_path)?;
-        let verts: Vec<DVec3> =
-            verts.into_iter().map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64)).collect();
+        let verts: Vec<DVec3> = verts
+            .into_iter()
+            .map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64))
+            .collect();
         // Standard `UsdPhysicsMeshCollisionAPI physics:approximation` selects how
         // the render mesh becomes a collider. Default (unauthored / `none` /
         // `meshSimplification`) = exact triangle mesh — correct for STATIC terrain.
@@ -632,9 +643,8 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
         // body needs (a trimesh can't be a moving rigid body in parry). Read via
         // the standard token so it works off either the live stage or the flatten.
         let collider = match reader.text(sdf_path, ptok::A_APPROXIMATION).as_deref() {
-            Some("convexHull") => {
-                Collider::convex_hull(verts.clone()).unwrap_or_else(|| Collider::trimesh(verts, tris))
-            }
+            Some("convexHull") => Collider::convex_hull(verts.clone())
+                .unwrap_or_else(|| Collider::trimesh(verts, tris)),
             Some("convexDecomposition") => Collider::convex_decomposition(verts, tris),
             // `boundingCube`/`boundingSphere`/`meshSimplification` aren't mapped
             // to a distinct parry shape yet — fall back to the exact trimesh
@@ -690,7 +700,11 @@ fn build_collider_from_usd(reader: &StageView<'_>, sdf_path: &SdfPath) -> Option
 /// `set_scale` with the authored count (overriding Avian's `10` only for scaled
 /// round shapes). Blocked on Avian: while it hardcodes `10`, any runtime scale
 /// edit re-clobbers our value, so a clean realtime story needs Avian's knob first.
-fn apply_collider_scale(mut collider: Collider, reader: &StageView<'_>, sdf_path: &SdfPath) -> Collider {
+fn apply_collider_scale(
+    mut collider: Collider,
+    reader: &StageView<'_>,
+    sdf_path: &SdfPath,
+) -> Collider {
     let scale = read_vec3_attribute(reader, sdf_path, "xformOp:scale")
         .map(|v| (v.x, v.y, v.z))
         .unwrap_or((1.0, 1.0, 1.0));
@@ -752,18 +766,28 @@ fn build_terrain_mesh_colliders(
 ) {
     for (entity, mesh3d) in &q {
         // Still loading — try again next frame.
-        let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
+        let Some(mesh) = meshes.get(&mesh3d.0) else {
+            continue;
+        };
 
         let collider = heightfield_from_mesh(mesh).or_else(|| {
-            warn!("[usd-avian] terrain mesh isn't a regular DEM grid; \
-                   building a (heavier) trimesh collider instead");
+            warn!(
+                "[usd-avian] terrain mesh isn't a regular DEM grid; \
+                   building a (heavier) trimesh collider instead"
+            );
             Collider::trimesh_from_mesh(mesh)
         });
 
         match collider {
             Some(c) => {
-                info!("[usd-avian] terrain collider built ({} verts)", mesh.count_vertices());
-                commands.entity(entity).try_insert(c).remove::<PendingTerrainCollider>();
+                info!(
+                    "[usd-avian] terrain collider built ({} verts)",
+                    mesh.count_vertices()
+                );
+                commands
+                    .entity(entity)
+                    .try_insert(c)
+                    .remove::<PendingTerrainCollider>();
             }
             None => {
                 warn!("[usd-avian] terrain mesh has no usable geometry — no collider built");
@@ -796,8 +820,7 @@ fn build_terrain_mesh_colliders(
 /// collider therefore coincides with the visual mesh (same source, same
 /// entity transform).
 fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
-    let Some(VertexAttributeValues::Float32x3(pos)) =
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
     else {
         return None;
     };
@@ -811,15 +834,14 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
     // Probe the expected layout (row = constant Z, column = constant X). If it
     // doesn't hold, bail to trimesh rather than build a scrambled collider.
     let eps = 1.0_f32;
-    let row_const_z = (pos[0][2] - pos[1][2]).abs() < eps
-        && (pos[0][2] - pos[side - 1][2]).abs() < eps;
+    let row_const_z =
+        (pos[0][2] - pos[1][2]).abs() < eps && (pos[0][2] - pos[side - 1][2]).abs() < eps;
     let col_const_x = (pos[0][0] - pos[side][0]).abs() < eps;
     if !row_const_z || !col_const_x {
         return None;
     }
 
-    let (mut min_x, mut max_x, mut min_z, mut max_z) =
-        (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    let (mut min_x, mut max_x, mut min_z, mut max_z) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
     for v in pos {
         min_x = min_x.min(v[0]);
         max_x = max_x.max(v[0]);
@@ -839,7 +861,10 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
         }
     }
 
-    Some(Collider::heightfield(heights, DVec3::new(scale_x, 1.0, scale_z)))
+    Some(Collider::heightfield(
+        heights,
+        DVec3::new(scale_x, 1.0, scale_z),
+    ))
 }
 
 /// Deferred system that maps USD physics attributes to Avian3D components.
@@ -877,15 +902,22 @@ fn process_usd_avian_prims(
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
-    let Ok(prim_path) = query.get(entity) else { return; };
-    let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
+    let Ok(prim_path) = query.get(entity) else {
+        return;
+    };
+    let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+        return;
+    };
 
     // Ph0′ CUTOVER: read the LIVE canonical stage — the source of truth — built
     // on demand from the asset's recipe so it is available regardless of system
     // ordering. The body comes off the composed `Stage` directly.
     let id = prim_path.stage_handle.id();
     if canonical.get(id).is_none() {
-        if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+        if let Some(recipe) = stages
+            .get(&prim_path.stage_handle)
+            .and_then(|a| a.recipe.clone())
+        {
             canonical.get_or_build(id, &recipe);
         }
     }
@@ -893,7 +925,10 @@ fn process_usd_avian_prims(
         // no live stage (asset carries no recipe / build failed) — skip
         return;
     };
-    bevy::log::debug!("[canonical] avian extract off LIVE stage: {}", prim_path.path);
+    bevy::log::debug!(
+        "[canonical] avian extract off LIVE stage: {}",
+        prim_path.path
+    );
 
     // Collision groups are a STAGE-wide statement read one prim at a time, so the
     // table is resolved once per stage and cached; recomputing it per prim would
@@ -976,7 +1011,11 @@ fn apply_physics_scene_gravity(
         }
         info!("[usd-avian] {prim} sets gravity to {magnitude:.4} m/s² along {direction:?}");
         world.insert_resource(lunco_environment::Gravity::flat(magnitude, direction));
-        world.insert_resource(PhysicsSceneGravity { prim, magnitude, direction });
+        world.insert_resource(PhysicsSceneGravity {
+            prim,
+            magnitude,
+            direction,
+        });
     });
 }
 
@@ -1001,7 +1040,10 @@ fn extract_avian_prim(
     }
 
     // Skip wheel prims — the sim plugin handles those.
-    if reader.real_f32(sdf_path, "physxVehicleWheel:radius").is_some() {
+    if reader
+        .real_f32(sdf_path, "physxVehicleWheel:radius")
+        .is_some()
+    {
         commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
     }
@@ -1046,12 +1088,17 @@ fn extract_avian_prim(
         .text(sdf_path, "lunco:triggerZone")
         .filter(|z| !z.trim().is_empty())
     {
-        commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
+        commands
+            .entity(entity)
+            .try_insert((RigidBody::Static, lunco_core::Mobility::Static));
         add_collider_from_usd(commands, entity, reader, sdf_path);
         commands.entity(entity).try_insert((
             Sensor,
             lunco_core::TriggerZone(zone),
-            CollisionLayers::new(LayerMask(lunco_core::TRIGGER_COLLISION_LAYER), LayerMask::ALL),
+            CollisionLayers::new(
+                LayerMask(lunco_core::TRIGGER_COLLISION_LAYER),
+                LayerMask::ALL,
+            ),
             UsdAvianProcessed,
         ));
         return;
@@ -1074,7 +1121,9 @@ fn extract_avian_prim(
         // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
         let compound_shapes = collect_child_colliders_from_usd(reader, sdf_path);
         if !compound_shapes.is_empty() {
-            commands.entity(entity).try_insert(Collider::compound(compound_shapes));
+            commands
+                .entity(entity)
+                .try_insert(Collider::compound(compound_shapes));
         } else {
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
@@ -1082,11 +1131,14 @@ fn extract_avian_prim(
 
         // The schema's own `physics:rigidBodyEnabled` (default true) says whether
         // this body is simulated; a disabled body is unmoving collision geometry.
-        let simulated =
-            reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED).unwrap_or(true);
+        let simulated = reader
+            .scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED)
+            .unwrap_or(true);
         // A `Dynamic`-declared body spawns `Kinematic` + `ShouldBeDynamic` and
         // settles to `Dynamic` once joints resolve (no 1-frame separation launch).
-        let kinematic = reader.scalar::<bool>(sdf_path, ptok::A_KINEMATIC_ENABLED).unwrap_or(false);
+        let kinematic = reader
+            .scalar::<bool>(sdf_path, ptok::A_KINEMATIC_ENABLED)
+            .unwrap_or(false);
         let (body, mobility) = if !simulated {
             (RigidBody::Static, lunco_core::Mobility::Static)
         } else if kinematic {
@@ -1095,7 +1147,9 @@ fn extract_avian_prim(
             commands.entity(entity).try_insert(ShouldBeDynamic);
             (RigidBody::Kinematic, lunco_core::Mobility::Dynamic)
         };
-        commands.entity(entity).try_insert((body, mobility, lunco_core::SelectableRoot));
+        commands
+            .entity(entity)
+            .try_insert((body, mobility, lunco_core::SelectableRoot));
 
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else if has_collision_api {
@@ -1109,7 +1163,9 @@ fn extract_avian_prim(
         // level down (`/Scene/Ground` under a plain `Xform`) is every bit as
         // standalone as one at `/Ground`, and must collide the same way.
         if !has_rigid_body_ancestor(reader, sdf_path) {
-            commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
+            commands
+                .entity(entity)
+                .try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
             apply_collision_groups(commands, entity, groups, sdf_path);
         }
@@ -1228,7 +1284,10 @@ fn derive_joint_anchor(reader: &StageView<'_>, body0: &str, body1: &str) -> Opti
     let w0 = world_transform(reader, &p0);
     let w1 = world_transform(reader, &p1);
     let rel = w0.rotation.inverse() * (w1.translation - w0.translation);
-    Some((DVec3::new(rel.x as f64, rel.y as f64, rel.z as f64), DVec3::ZERO))
+    Some((
+        DVec3::new(rel.x as f64, rel.y as f64, rel.z as f64),
+        DVec3::ZERO,
+    ))
 }
 
 /// Read the STANDARD UsdPhysics joint at `path` off the LIVE composed stage via
@@ -1283,7 +1342,10 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     /// the same prim's `xformOp:orient` is converted — the basis and the body it
     /// hangs off must land in one frame or the joint is built against a pose the
     /// renderer never shows.
-    fn local_rot_of(attr: openusd::usd::Attribute, conv: &lunco_usd_bevy::ConventionTransform) -> DQuat {
+    fn local_rot_of(
+        attr: openusd::usd::Attribute,
+        conv: &lunco_usd_bevy::ConventionTransform,
+    ) -> DQuat {
         attr.get::<openusd::gf::Quatf>()
             .ok()
             .flatten()
@@ -1309,10 +1371,32 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         let conv = lunco_usd_bevy::stage_convention(reader);
         let to_dvec =
             move |a: [f32; 3]| conv.point_d(DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64));
-        let b0 = j.body0_rel().targets().ok()?.into_iter().next()?.to_string();
-        let b1 = j.body1_rel().targets().ok()?.into_iter().next()?.to_string();
-        let lp0_auth = j.local_pos0_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec);
-        let lp1_auth = j.local_pos1_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec);
+        let b0 = j
+            .body0_rel()
+            .targets()
+            .ok()?
+            .into_iter()
+            .next()?
+            .to_string();
+        let b1 = j
+            .body1_rel()
+            .targets()
+            .ok()?
+            .into_iter()
+            .next()?
+            .to_string();
+        let lp0_auth = j
+            .local_pos0_attr()
+            .get::<[f32; 3]>()
+            .ok()
+            .flatten()
+            .map(to_dvec);
+        let lp1_auth = j
+            .local_pos1_attr()
+            .get::<[f32; 3]>()
+            .ok()
+            .flatten()
+            .map(to_dvec);
         let (lp0, lp1) = if lp0_auth.is_none() || lp1_auth.is_none() {
             let derived = derive_joint_anchor(reader, &b0, &b1);
             (
@@ -1332,12 +1416,39 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         })
     }
     let read_drive = |ns: &str, body1: &str| -> Option<JointDrive> {
-        let d = physics::DriveAPI::get(stage, path.clone(), ns).ok().flatten()?;
-        let tp = d.target_position_attr().get::<f32>().ok().flatten().map(|v| v as f64);
-        let tv = d.target_velocity_attr().get::<f32>().ok().flatten().map(|v| v as f64);
-        let mf = d.max_force_attr().get::<f32>().ok().flatten().map(|v| v as f64);
-        let k = d.stiffness_attr().get::<f32>().ok().flatten().map(|v| v as f64);
-        let c = d.damping_attr().get::<f32>().ok().flatten().map(|v| v as f64);
+        let d = physics::DriveAPI::get(stage, path.clone(), ns)
+            .ok()
+            .flatten()?;
+        let tp = d
+            .target_position_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64);
+        let tv = d
+            .target_velocity_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64);
+        let mf = d
+            .max_force_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64);
+        let k = d
+            .stiffness_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64);
+        let c = d
+            .damping_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64);
         let ty = d.type_attr().get::<DriveType>().ok().flatten();
         // The driven body's authored mass, for the force-spring → SpringDamper
         // conversion. Read from USD (not avian's computed `Mass`, which does not
@@ -1399,39 +1510,105 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         drive,
     };
 
-    let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone()).ok().flatten() {
+    let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone())
+        .ok()
+        .flatten()
+    {
         let b = base(&j, &view)?;
         let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
-        let lo = j.lower_limit_attr().get::<f32>().ok().flatten()
-            .map(|d| (d as f64).to_radians()).unwrap_or(f64::NEG_INFINITY);
-        let hi = j.upper_limit_attr().get::<f32>().ok().flatten()
-            .map(|d| (d as f64).to_radians()).unwrap_or(f64::INFINITY);
+        let lo = j
+            .lower_limit_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|d| (d as f64).to_radians())
+            .unwrap_or(f64::NEG_INFINITY);
+        let hi = j
+            .upper_limit_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|d| (d as f64).to_radians())
+            .unwrap_or(f64::INFINITY);
         let drive = read_drive("angular", &b.body1);
         pending_from(b, axis, lo, hi, "PhysicsRevoluteJoint", None, drive)
-    } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone()).ok().flatten() {
+    } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone())
+        .ok()
+        .flatten()
+    {
         let b = base(&j, &view)?;
         let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
-        let lo = j.lower_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
-        let hi = j.upper_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
+        let lo = j
+            .lower_limit_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64)
+            .unwrap_or(f64::NEG_INFINITY);
+        let hi = j
+            .upper_limit_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64)
+            .unwrap_or(f64::INFINITY);
         let drive = read_drive("linear", &b.body1);
         pending_from(b, axis, lo, hi, "PhysicsPrismaticJoint", None, drive)
-    } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone()).ok().flatten() {
+    } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone())
+        .ok()
+        .flatten()
+    {
         let b = base(&j, &view)?;
         let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
         // `physics:coneAngle{0,1}Limit` is in DEGREES, like every other angular
         // quantity UsdPhysics authors (and like the revolute limits above);
         // avian's `AngleLimit` is in radians.
-        let swing = j.cone_angle0_limit_attr().get::<f32>().ok().flatten()
+        let swing = j
+            .cone_angle0_limit_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
             .zip(j.cone_angle1_limit_attr().get::<f32>().ok().flatten())
             .map(|(a, b)| ((a as f64).to_radians(), (b as f64).to_radians()));
-        pending_from(b, axis, f64::NEG_INFINITY, f64::INFINITY, "PhysicsSphericalJoint", swing, None)
+        pending_from(
+            b,
+            axis,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            "PhysicsSphericalJoint",
+            swing,
+            None,
+        )
     } else if let Some(j) = physics::FixedJoint::get(stage, path.clone()).ok().flatten() {
         let b = base(&j, &view)?;
-        pending_from(b, DVec3::Y, f64::NEG_INFINITY, f64::INFINITY, "PhysicsFixedJoint", None, None)
-    } else if let Some(j) = physics::DistanceJoint::get(stage, path.clone()).ok().flatten() {
+        pending_from(
+            b,
+            DVec3::Y,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            "PhysicsFixedJoint",
+            None,
+            None,
+        )
+    } else if let Some(j) = physics::DistanceJoint::get(stage, path.clone())
+        .ok()
+        .flatten()
+    {
         let b = base(&j, &view)?;
-        let lo = j.min_distance_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
-        let hi = j.max_distance_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
+        let lo = j
+            .min_distance_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64)
+            .unwrap_or(f64::NEG_INFINITY);
+        let hi = j
+            .max_distance_attr()
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .map(|v| v as f64)
+            .unwrap_or(f64::INFINITY);
         pending_from(b, DVec3::Y, lo, hi, "PhysicsDistanceJoint", None, None)
     } else if let Some(j) = physics::Joint::get(stage, path.clone()).ok().flatten() {
         // Generic/D6 → reduce via per-DOF UsdPhysicsLimitAPI (typed).
@@ -1441,7 +1618,11 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         // in the STAGE's frame, and an angular limit is authored in degrees.
         // `to_radians` leaves an infinite (unauthored) bound infinite.
         let axis = conv.dir_d(cardinal);
-        let (lo, hi) = if is_rot { (lo.to_radians(), hi.to_radians()) } else { (lo, hi) };
+        let (lo, hi) = if is_rot {
+            (lo.to_radians(), hi.to_radians())
+        } else {
+            (lo, hi)
+        };
         pending_from(b, axis, lo, hi, reduced, None, None)
     } else {
         return None;
@@ -1450,7 +1631,14 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // Wheel-targeted joints are owned by `lunco-usd-sim` (built alongside the
     // wheel body); skip them here to avoid double-up/race.
     if let Ok(b1_path) = SdfPath::new(&spec.body1_path) {
-        if stage.prim(b1_path).attribute("physxVehicleWheel:radius").get::<f32>().ok().flatten().is_some() {
+        if stage
+            .prim(b1_path)
+            .attribute("physxVehicleWheel:radius")
+            .get::<f32>()
+            .ok()
+            .flatten()
+            .is_some()
+        {
             return None;
         }
     }
@@ -1467,13 +1655,20 @@ fn reduce_generic_joint_typed(
 ) -> Option<(&'static str, DVec3, f64, f64, bool)> {
     use openusd::schemas::physics;
     const DOFS: [(&str, DVec3, bool); 6] = [
-        ("transX", DVec3::X, false), ("transY", DVec3::Y, false), ("transZ", DVec3::Z, false),
-        ("rotX", DVec3::X, true), ("rotY", DVec3::Y, true), ("rotZ", DVec3::Z, true),
+        ("transX", DVec3::X, false),
+        ("transY", DVec3::Y, false),
+        ("transZ", DVec3::Z, false),
+        ("rotX", DVec3::X, true),
+        ("rotY", DVec3::Y, true),
+        ("rotZ", DVec3::Z, true),
     ];
     let mut free_trans: Vec<(DVec3, f64, f64)> = Vec::new();
     let mut free_rot: Vec<(DVec3, f64, f64)> = Vec::new();
     for (inst, axis, is_rot) in DOFS {
-        let (low, high) = match physics::LimitAPI::get(stage, path.clone(), inst).ok().flatten() {
+        let (low, high) = match physics::LimitAPI::get(stage, path.clone(), inst)
+            .ok()
+            .flatten()
+        {
             Some(l) => (
                 l.low_attr().get::<f32>().ok().flatten().map(|v| v as f64),
                 l.high_attr().get::<f32>().ok().flatten().map(|v| v as f64),
@@ -1483,8 +1678,16 @@ fn reduce_generic_joint_typed(
         match (low, high) {
             (Some(l), Some(h)) if l > h => {} // locked
             (l, h) => {
-                let entry = (axis, l.unwrap_or(f64::NEG_INFINITY), h.unwrap_or(f64::INFINITY));
-                if is_rot { free_rot.push(entry) } else { free_trans.push(entry) }
+                let entry = (
+                    axis,
+                    l.unwrap_or(f64::NEG_INFINITY),
+                    h.unwrap_or(f64::INFINITY),
+                );
+                if is_rot {
+                    free_rot.push(entry)
+                } else {
+                    free_trans.push(entry)
+                }
             }
         }
     }
@@ -1494,10 +1697,34 @@ fn reduce_generic_joint_typed(
     // decides whether the limits are degrees (`limit:rot*`) or metres
     // (`limit:trans*`).
     match (free_trans.len(), free_rot.len()) {
-        (0, 0) => Some(("PhysicsFixedJoint", DVec3::Y, f64::NEG_INFINITY, f64::INFINITY, false)),
-        (0, 1) => Some(("PhysicsRevoluteJoint", free_rot[0].0, free_rot[0].1, free_rot[0].2, true)),
-        (1, 0) => Some(("PhysicsPrismaticJoint", free_trans[0].0, free_trans[0].1, free_trans[0].2, false)),
-        (0, 3) => Some(("PhysicsSphericalJoint", free_rot[0].0, f64::NEG_INFINITY, f64::INFINITY, true)),
+        (0, 0) => Some((
+            "PhysicsFixedJoint",
+            DVec3::Y,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            false,
+        )),
+        (0, 1) => Some((
+            "PhysicsRevoluteJoint",
+            free_rot[0].0,
+            free_rot[0].1,
+            free_rot[0].2,
+            true,
+        )),
+        (1, 0) => Some((
+            "PhysicsPrismaticJoint",
+            free_trans[0].0,
+            free_trans[0].1,
+            free_trans[0].2,
+            false,
+        )),
+        (0, 3) => Some((
+            "PhysicsSphericalJoint",
+            free_rot[0].0,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            true,
+        )),
         _ => None,
     }
 }
@@ -1518,14 +1745,21 @@ fn on_add_usd_prim(
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
-    let Ok(prim_path) = query.get(entity) else { return; };
-    let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
+    let Ok(prim_path) = query.get(entity) else {
+        return;
+    };
+    let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+        return;
+    };
 
     // Ph0′: the STANDARD typed UsdPhysics read off the live canonical stage
     // (built on demand). The typed schema needs the composed `Stage`.
     let id = prim_path.stage_handle.id();
     if canonical.get(id).is_none() {
-        if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+        if let Some(recipe) = stages
+            .get(&prim_path.stage_handle)
+            .and_then(|a| a.recipe.clone())
+        {
             canonical.get_or_build(id, &recipe);
         }
     }
@@ -1534,8 +1768,14 @@ fn on_add_usd_prim(
         return;
     };
     // A wheel prim on the LIVE stage → owned by the sim plugin, skip.
-    if cs.stage().prim(sdf_path.clone()).attribute("physxVehicleWheel:radius")
-        .get::<f32>().ok().flatten().is_some()
+    if cs
+        .stage()
+        .prim(sdf_path.clone())
+        .attribute("physxVehicleWheel:radius")
+        .get::<f32>()
+        .ok()
+        .flatten()
+        .is_some()
     {
         return;
     }
@@ -1619,14 +1859,16 @@ fn build_usd_physics_joints(
         }
         let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
         // Find body0 and body1 entities by matching USD paths and instance roots
-        let body0_ent = q_bodies.iter()
+        let body0_ent = q_bodies
+            .iter()
             .find(|(e, path)| {
                 path.path == pending.body0_path
                     && path.stage_handle == joint_prim_path.stage_handle
                     && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
             })
             .map(|(e, _)| e);
-        let body1_ent = q_bodies.iter()
+        let body1_ent = q_bodies
+            .iter()
             .find(|(e, path)| {
                 path.path == pending.body1_path
                     && path.stage_handle == joint_prim_path.stage_handle
@@ -1687,7 +1929,10 @@ fn build_usd_physics_joints(
             continue;
         }
 
-        info!("Built USD joint {} -> {} <-> {}", pending.joint_type, pending.body0_path, pending.body1_path);
+        info!(
+            "Built USD joint {} -> {} <-> {}",
+            pending.joint_type, pending.body0_path, pending.body1_path
+        );
 
         // Seat the joint at its authored anchors before the solver sees it.
         //
@@ -1742,7 +1987,11 @@ fn build_usd_physics_joints(
             // orientation: rotating body1 swings its anchor through `local_pos1`,
             // so a delta computed from the old rotation would leave a residual
             // exactly as large as that swing.
-            let angle = if locks_rotation { r1.angle_between(r1_target) } else { 0.0 };
+            let angle = if locks_rotation {
+                r1.angle_between(r1_target)
+            } else {
+                0.0
+            };
             let r1_seated = if locks_rotation { r1_target } else { r1 };
 
             let anchor0_world = p0 + r0 * pending.local_pos0;
@@ -1847,7 +2096,9 @@ fn build_usd_physics_joints(
                         motor_model: d.motor_model(),
                     };
                 }
-                commands.entity(joint_entity).try_insert(joint_bundle(joint));
+                commands
+                    .entity(joint_entity)
+                    .try_insert(joint_bundle(joint));
             }
             "PhysicsRevoluteJoint" => {
                 let mut joint = RevoluteJoint::new(b0, b1)
@@ -1866,7 +2117,9 @@ fn build_usd_physics_joints(
                         motor_model: d.motor_model(),
                     };
                 }
-                commands.entity(joint_entity).try_insert(joint_bundle(joint));
+                commands
+                    .entity(joint_entity)
+                    .try_insert(joint_bundle(joint));
             }
             "PhysicsFixedJoint" => {
                 commands.entity(joint_entity).try_insert(joint_bundle(
@@ -1897,14 +2150,24 @@ fn build_usd_physics_joints(
                 if pending.limit_lower.is_finite() && pending.limit_upper.is_finite() {
                     joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
                 }
-                commands.entity(joint_entity).try_insert(joint_bundle(joint));
+                commands
+                    .entity(joint_entity)
+                    .try_insert(joint_bundle(joint));
             }
             "PhysicsDistanceJoint" => {
                 // Tether/strut: keeps the two anchors within [min, max] distance.
                 // Cables, fixed-length links. Unauthored → a rigid rod at the
                 // current separation's min (0) which is degenerate, so warn.
-                let min = if pending.limit_lower.is_finite() { pending.limit_lower.max(0.0) } else { 0.0 };
-                let max = if pending.limit_upper.is_finite() { pending.limit_upper.max(min) } else { min };
+                let min = if pending.limit_lower.is_finite() {
+                    pending.limit_lower.max(0.0)
+                } else {
+                    0.0
+                };
+                let max = if pending.limit_upper.is_finite() {
+                    pending.limit_upper.max(min)
+                } else {
+                    min
+                };
                 if !pending.limit_upper.is_finite() {
                     warn!(
                         "DistanceJoint {} has no physics:maxDistance — defaulting to rigid {min} m",
@@ -2236,8 +2499,7 @@ pub fn read_physics_material(reader: &StageView<'_>, prim: &SdfPath) -> Option<P
     let dynamic_friction = reader.real_f32(&mat, ptok::A_DYNAMIC_FRICTION);
     let static_friction = reader.real_f32(&mat, ptok::A_STATIC_FRICTION);
     let restitution = reader.real_f32(&mat, ptok::A_RESTITUTION);
-    let friction_combine =
-        combine_mode(reader.text(&mat, PHYSX_FRICTION_COMBINE_MODE).as_deref());
+    let friction_combine = combine_mode(reader.text(&mat, PHYSX_FRICTION_COMBINE_MODE).as_deref());
     let restitution_combine =
         combine_mode(reader.text(&mat, PHYSX_RESTITUTION_COMBINE_MODE).as_deref());
 
@@ -2345,7 +2607,13 @@ mod extract_parity_tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            extract_avian_prim(reader, e, path, &CollisionGroupTable::default(), &mut commands);
+            extract_avian_prim(
+                reader,
+                e,
+                path,
+                &CollisionGroupTable::default(),
+                &mut commands,
+            );
         }
         queue.apply(&mut world);
         (
@@ -2372,8 +2640,15 @@ mod extract_parity_tests {
         // The LIVE path actually produced a full dynamic body: Kinematic
         // (settling to Dynamic via ShouldBeDynamic) + compound collider + mass.
         assert_eq!(live.0, Some(RigidBody::Kinematic), "live: rigid body");
-        assert!(live.1.is_some(), "live: compound collider built off the stage");
-        assert_eq!(live.2, Some(500.0), "live: authored mass read off the stage");
+        assert!(
+            live.1.is_some(),
+            "live: compound collider built off the stage"
+        );
+        assert_eq!(
+            live.2,
+            Some(500.0),
+            "live: authored mass read off the stage"
+        );
         assert!(live.3, "live: ShouldBeDynamic (settles to Dynamic)");
     }
 }
@@ -2427,8 +2702,16 @@ def PhysicsRevoluteJoint "Hinge" (
         assert_eq!(j.body1_path, "/Wheel");
         assert_eq!(j.axis, DVec3::Y);
         // Standard `physics:lowerLimit`/`upperLimit` are DEGREES → radians.
-        assert!((j.limit_lower - (-45f64).to_radians()).abs() < 1e-9, "lower {}", j.limit_lower);
-        assert!((j.limit_upper - 45f64.to_radians()).abs() < 1e-9, "upper {}", j.limit_upper);
+        assert!(
+            (j.limit_lower - (-45f64).to_radians()).abs() < 1e-9,
+            "lower {}",
+            j.limit_lower
+        );
+        assert!(
+            (j.limit_upper - 45f64.to_radians()).abs() < 1e-9,
+            "upper {}",
+            j.limit_upper
+        );
         assert_eq!(j.local_pos0, DVec3::new(1.0, 0.0, 0.0));
         assert_eq!(j.local_pos1, DVec3::ZERO);
         // UsdPhysicsDriveAPI:angular → JointDrive.
@@ -2522,8 +2805,16 @@ def PhysicsPrismaticJoint "Spring" (
         // revolute's degrees. A conversion here would silently scale the leg's
         // travel by 57.
         // f32 on the wire, f64 in the joint — compare at f32 precision.
-        assert!((j.limit_lower - -0.8).abs() < 1e-6, "lower {}", j.limit_lower);
-        assert!((j.limit_upper - 0.0).abs() < 1e-6, "upper {}", j.limit_upper);
+        assert!(
+            (j.limit_lower - -0.8).abs() < 1e-6,
+            "lower {}",
+            j.limit_lower
+        );
+        assert!(
+            (j.limit_upper - 0.0).abs() < 1e-6,
+            "upper {}",
+            j.limit_upper
+        );
     }
 
     #[test]
@@ -2633,7 +2924,11 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         let stage = write_and_compose("derive.usda", &DERIVE_FIXTURE.replace("AUTHORED", ""));
         let j = read_joint_spec_typed(&stage, &SdfPath::new("/Rover/Hinge").unwrap())
             .expect("revolute joint reads");
-        assert!(close(j.local_pos0, DVec3::new(0.9, -0.65, 1.225)), "lp0 derived from wheel translate: {:?}", j.local_pos0);
+        assert!(
+            close(j.local_pos0, DVec3::new(0.9, -0.65, 1.225)),
+            "lp0 derived from wheel translate: {:?}",
+            j.local_pos0
+        );
         assert_eq!(j.local_pos1, DVec3::ZERO, "lp1 = body1 origin");
     }
 
@@ -2643,11 +2938,18 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         // UNAUTHORED anchors only, so hand-tuned joints never change.
         let stage = write_and_compose(
             "authored.usda",
-            &DERIVE_FIXTURE.replace("AUTHORED", "        point3f physics:localPos0 = (1, 2, 3)\n"),
+            &DERIVE_FIXTURE.replace(
+                "AUTHORED",
+                "        point3f physics:localPos0 = (1, 2, 3)\n",
+            ),
         );
         let j = read_joint_spec_typed(&stage, &SdfPath::new("/Rover/Hinge").unwrap())
             .expect("revolute joint reads");
-        assert_eq!(j.local_pos0, DVec3::new(1.0, 2.0, 3.0), "authored lp0 wins over derivation");
+        assert_eq!(
+            j.local_pos0,
+            DVec3::new(1.0, 2.0, 3.0),
+            "authored lp0 wins over derivation"
+        );
     }
 
     #[test]
@@ -2666,13 +2968,16 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             .join("../../assets/vessels/rovers/rocker_bogie.usda");
         let stage = compose_file_to_stage(&f).expect("compose rocker_bogie");
         for (name, lp0) in [
-            ("HingeL", [-0.9, -0.2, 0.0]),       // chassis ↔ rocker (ancestor)
+            ("HingeL", [-0.9, -0.2, 0.0]), // chassis ↔ rocker (ancestor)
             ("HingeR", [0.9, -0.2, 0.0]),
-            ("BogieHingeL", [0.0, -0.2, 0.6]),   // rocker ↔ bogie (SIBLING)
+            ("BogieHingeL", [0.0, -0.2, 0.6]), // rocker ↔ bogie (SIBLING)
             ("BogieHingeR", [0.0, -0.2, 0.6]),
         ] {
-            let j = read_joint_spec_typed(&stage, &SdfPath::new(&format!("/RockerBogie/{name}")).unwrap())
-                .unwrap_or_else(|| panic!("{name} reads + derives"));
+            let j = read_joint_spec_typed(
+                &stage,
+                &SdfPath::new(&format!("/RockerBogie/{name}")).unwrap(),
+            )
+            .unwrap_or_else(|| panic!("{name} reads + derives"));
             assert!(
                 close(j.local_pos0, DVec3::new(lp0[0], lp0[1], lp0[2])),
                 "{name}: derived {:?} != old authored {lp0:?}",
@@ -2727,9 +3032,14 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 
         for (w, lp0) in mounts {
             let name = format!("{w}_Hinge");
-            let j = read_joint_spec_typed(&stage, &SdfPath::new(&format!("/Rover/{name}")).unwrap())
-                .unwrap_or_else(|| panic!("{name} reads"));
-            assert!(close(j.local_pos0, lp0), "{name}: anchor derived from the wheel translate: {:?}", j.local_pos0);
+            let j =
+                read_joint_spec_typed(&stage, &SdfPath::new(&format!("/Rover/{name}")).unwrap())
+                    .unwrap_or_else(|| panic!("{name} reads"));
+            assert!(
+                close(j.local_pos0, lp0),
+                "{name}: anchor derived from the wheel translate: {:?}",
+                j.local_pos0
+            );
             assert_eq!(j.local_pos1, DVec3::ZERO, "{name}: lp1 = origin");
         }
     }
@@ -2800,10 +3110,19 @@ def Xform "Mission"
         let sdf = SdfPath::new(path).unwrap();
         {
             let mut commands = world.commands();
-            extract_avian_prim(view, entity, &sdf, &CollisionGroupTable::default(), &mut commands);
+            extract_avian_prim(
+                view,
+                entity,
+                &sdf,
+                &CollisionGroupTable::default(),
+                &mut commands,
+            );
         }
         world.flush();
-        (world.get::<Collider>(entity).is_some(), world.get::<RigidBody>(entity).copied())
+        (
+            world.get::<Collider>(entity).is_some(),
+            world.get::<RigidBody>(entity).copied(),
+        )
     }
 
     /// A leg with a footpad: the pad is a CHILD of the leg, its own body, and
@@ -2935,7 +3254,10 @@ def Xform "Rig"
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let (has_collider, body) = extract(&cs.view(), "/Mission/Ground");
-        assert!(has_collider, "a ground plane under an Xform must get a collider");
+        assert!(
+            has_collider,
+            "a ground plane under an Xform must get a collider"
+        );
         assert_eq!(body, Some(RigidBody::Static), "and it must be static");
     }
 
@@ -2946,7 +3268,10 @@ def Xform "Rig"
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let (has_collider, body) = extract(&cs.view(), "/Mission/CompoundLander/Hull");
-        assert!(!has_collider, "a collider child must not carry its own collider");
+        assert!(
+            !has_collider,
+            "a collider child must not carry its own collider"
+        );
         assert_eq!(body, None, "nor its own rigid body");
     }
 
@@ -2961,7 +3286,10 @@ def Xform "Rig"
         assert!(collect_child_colliders_from_usd(&view, &lander).is_empty());
         assert!(build_collider_from_usd(&view, &lander).is_some());
         let (has_collider, _) = extract(&view, "/Mission/BareLander");
-        assert!(has_collider, "a bare rigid-body root must collide via its own shape");
+        assert!(
+            has_collider,
+            "a bare rigid-body root must collide via its own shape"
+        );
     }
 
     /// A body whose own prim carries no geometry (a plain `Xform` with
@@ -2972,9 +3300,15 @@ def Xform "Rig"
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
-        assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/XformBody/Shell").unwrap()));
+        assert!(has_rigid_body_ancestor(
+            &view,
+            &SdfPath::new("/Mission/XformBody/Shell").unwrap()
+        ));
         let (has_collider, body) = extract(&view, "/Mission/XformBody/Shell");
-        assert!(!has_collider, "a body's collider child must stay a compound piece");
+        assert!(
+            !has_collider,
+            "a body's collider child must stay a compound piece"
+        );
         assert_eq!(body, None);
     }
 
@@ -2983,8 +3317,17 @@ def Xform "Rig"
         let recipe = StageRecipe::from_source("t.usda", SCENE);
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let view = cs.view();
-        assert!(!has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/Ground").unwrap()));
-        assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/CompoundLander/Hull").unwrap()));
-        assert!(!has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/CompoundLander").unwrap()));
+        assert!(!has_rigid_body_ancestor(
+            &view,
+            &SdfPath::new("/Mission/Ground").unwrap()
+        ));
+        assert!(has_rigid_body_ancestor(
+            &view,
+            &SdfPath::new("/Mission/CompoundLander/Hull").unwrap()
+        ));
+        assert!(!has_rigid_body_ancestor(
+            &view,
+            &SdfPath::new("/Mission/CompoundLander").unwrap()
+        ));
     }
 }

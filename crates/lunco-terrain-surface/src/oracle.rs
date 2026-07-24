@@ -55,11 +55,7 @@ pub struct TerrainBodyCurvature {
 /// of the raster base. The feather returns the surface to THAT, not to zero;
 /// see [`lunco_terrain_core::BodyCurvature`] for why a DEM stated in absolute
 /// body-datum metres is otherwise ramped kilometres uphill at its own edge.
-pub fn curvature_contribution(
-    radius_m: f64,
-    half_extent: f32,
-    datum_m: f64,
-) -> HeightContribution {
+pub fn curvature_contribution(radius_m: f64, half_extent: f32, datum_m: f64) -> HeightContribution {
     let m = lunco_terrain_core::BodyCurvature::new(radius_m, half_extent as f64, datum_m);
     let mut key = lunco_precompute::Fnv1a::new();
     key.write_u64(0xB0D1_C42E); // domain tag: body curvature
@@ -68,7 +64,10 @@ pub fn curvature_contribution(
     key.write_u64(m.datum_m.to_bits());
     key.write_u64(m.edge_lift_m.to_bits());
     key.write_u64(m.feather_from.to_bits());
-    HeightContribution { modifier: Arc::new(m), content_key: key.finish() }
+    HeightContribution {
+        modifier: Arc::new(m),
+        content_key: key.finish(),
+    }
 }
 
 /// The composed surface: raster `base` + ordered analytic `modifiers`. Cheap to
@@ -106,7 +105,12 @@ impl SurfaceOracle {
     /// An oracle that is just the raster base — no analytic layers.
     pub fn bare(base: Arc<HeightGrid>) -> Self {
         let base_key = grid_key(&base);
-        Self { base, modifiers: Vec::new(), content_key: 0, base_key }
+        Self {
+            base,
+            modifiers: Vec::new(),
+            content_key: 0,
+            base_key,
+        }
     }
 
     /// Compose `base` with the layers' analytic contributions, in order. Folds the
@@ -135,11 +139,20 @@ impl SurfaceOracle {
         for c in &contributions {
             key.write_u64(c.content_key);
         }
-        let content_key = if contributions.is_empty() { 0 } else { key.finish() };
+        let content_key = if contributions.is_empty() {
+            0
+        } else {
+            key.finish()
+        };
         for c in contributions {
             modifiers.push(c.modifier);
         }
-        Self { base, modifiers, content_key, base_key }
+        Self {
+            base,
+            modifiers,
+            content_key,
+            base_key,
+        }
     }
 
     /// The raster base grid (extents, spacing, raw ground reads).
@@ -190,7 +203,10 @@ impl SurfaceOracle {
         let modifiers = self
             .modifiers
             .iter()
-            .map(|m| m.with_min_wavelength(min_wavelength).unwrap_or_else(|| m.clone()))
+            .map(|m| {
+                m.with_min_wavelength(min_wavelength)
+                    .unwrap_or_else(|| m.clone())
+            })
             .collect();
         SurfaceOracle {
             base: self.base.clone(),
@@ -255,7 +271,8 @@ impl HeightSource for SurfaceOracle {
         // number the maths produced, so silently replacing it would hide the
         // modifier that produced it. `1e7` m is ~6× the Moon's radius — no
         // legitimate surface height reaches it.
-        if h.is_finite() && h.abs() > 1.0e7
+        if h.is_finite()
+            && h.abs() > 1.0e7
             && !ABSURD_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed)
         {
             bevy::log::error!(
@@ -285,8 +302,7 @@ static NON_FINITE_REPORTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// As [`NON_FINITE_REPORTED`], for the absurd-magnitude report.
-static ABSURD_REPORTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static ABSURD_REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// First intersection of a ray with the composed surface, in TERRAIN-LOCAL
 /// space (heights along +Y over local `(x, z)`); `None` when the ray never
@@ -369,7 +385,10 @@ mod tests {
             softness: 0.0,
             bowl_power: 4.0,
         }]);
-        HeightContribution { modifier: Arc::new(craters), content_key: 0xC0FFEE }
+        HeightContribution {
+            modifier: Arc::new(craters),
+            content_key: 0xC0FFEE,
+        }
     }
 
     #[test]
@@ -383,9 +402,16 @@ mod tests {
     #[test]
     fn modifiers_fold_over_base() {
         let o = SurfaceOracle::new(flat(9, 50.0), vec![crater_contribution()]);
-        assert!(HeightSource::height_at(&o, 0.0, 0.0) < -1.0, "crater floor drops");
+        assert!(
+            HeightSource::height_at(&o, 0.0, 0.0) < -1.0,
+            "crater floor drops"
+        );
         assert!(HeightSource::height_at(&o, 10.0, 0.0) > 0.0, "rim rises");
-        assert_eq!(HeightSource::height_at(&o, 40.0, 40.0), 0.0, "far field = base");
+        assert_eq!(
+            HeightSource::height_at(&o, 40.0, 40.0),
+            0.0,
+            "far field = base"
+        );
         assert!(o.has_modifiers());
         assert_ne!(o.content_key(), 0);
     }

@@ -645,7 +645,10 @@ impl UsdDocument {
         // memo of `(generation, composed)` — a stale or absent entry is always
         // safe (it just recomputes), so there is no invariant to protect.
         {
-            let cache = self.composed_cache.lock().unwrap_or_else(|e| e.into_inner());
+            let cache = self
+                .composed_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some((cached_gen, data)) = &*cache {
                 if *cached_gen == gen {
                     return data.clone();
@@ -857,7 +860,10 @@ impl UsdDocument {
         match t {
             TargetLayer::Base => self.source(),
             TargetLayer::Runtime => author::data_to_usda(&self.runtime).unwrap_or_else(|e| {
-                warn!("[usd] failed to serialize runtime layer {}: {e}", self.id.raw());
+                warn!(
+                    "[usd] failed to serialize runtime layer {}: {e}",
+                    self.id.raw()
+                );
                 EMPTY_USDA.to_string()
             }),
         }
@@ -986,7 +992,11 @@ fn rotate_xyz_to(conv: &ConventionTransform, deg: [f64; 3]) -> [f64; 3] {
         (deg[2] as f32).to_radians(),
     );
     let (x, y, z) = conv.stage_rotation(q).to_euler(EulerRot::XYZ);
-    [x.to_degrees() as f64, y.to_degrees() as f64, z.to_degrees() as f64]
+    [
+        x.to_degrees() as f64,
+        y.to_degrees() as f64,
+        z.to_degrees() as f64,
+    ]
 }
 
 /// The inverse of [`rotate_xyz_to`]: a stage-frame `rotateXYZ` triple back to
@@ -999,7 +1009,11 @@ fn rotate_xyz_from(conv: &ConventionTransform, deg: [f64; 3]) -> [f64; 3] {
         (deg[2] as f32).to_radians(),
     );
     let (x, y, z) = conv.rotation(q).to_euler(EulerRot::XYZ);
-    [x.to_degrees() as f64, y.to_degrees() as f64, z.to_degrees() as f64]
+    [
+        x.to_degrees() as f64,
+        y.to_degrees() as f64,
+        z.to_degrees() as f64,
+    ]
 }
 
 fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
@@ -1094,9 +1108,8 @@ impl Document for UsdDocument {
         let logged_op = op.clone();
         let result = match op {
             UsdOp::ReplaceSource { text, .. } => {
-                let new_data = usda_to_data(&text).map_err(|e| {
-                    DocumentError::ValidationFailed(format!("ReplaceSource: {e}"))
-                })?;
+                let new_data = usda_to_data(&text)
+                    .map_err(|e| DocumentError::ValidationFailed(format!("ReplaceSource: {e}")))?;
                 let inverse = self.coarse_inverse(target, &id);
                 // Replacing the base layer repairs an un-parseable document.
                 if target == TargetLayer::Base {
@@ -1176,7 +1189,8 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let old_translate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:translate");
+                let old_translate =
+                    layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:translate");
                 // The op order is checked against the COMPOSED opinion: a weaker
                 // layer may already list ops this edit must not discard. When
                 // the op is missing, materialise that order plus the new op into
@@ -1197,7 +1211,8 @@ impl Document for UsdDocument {
                 // so this changes nothing except for imported Omniverse/Isaac
                 // content, which is exactly where silent frame corruption would be
                 // hardest to spot.
-                let conv = ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
+                let conv =
+                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
                 let authored = conv.stage_point_d(DVec3::from_array(value)).to_array();
                 stage
                     .create_attribute(format!("{path}.xformOp:translate"), "double3")
@@ -1256,7 +1271,8 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let old_rotate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
+                let old_rotate =
+                    layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
                 let composed_order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
                 let append_op = !composed_order.iter().any(|t| t == "xformOp:rotateXYZ");
 
@@ -1269,8 +1285,13 @@ impl Document for UsdDocument {
                 // conversion is the identity — the canonical stages we author
                 // ourselves keep their authored digits exactly, and only genuinely
                 // non-canonical stages pay the precision of the remap they need.
-                let conv = ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
-                let authored = if conv.is_identity() { value } else { rotate_xyz_to(&conv, value) };
+                let conv =
+                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
+                let authored = if conv.is_identity() {
+                    value
+                } else {
+                    rotate_xyz_to(&conv, value)
+                };
                 stage
                     .create_attribute(format!("{path}.xformOp:rotateXYZ"), "double3")
                     .map_err(author_err)?
@@ -1293,7 +1314,11 @@ impl Document for UsdDocument {
                         .map(|old| UsdOp::SetRotate {
                             edit_target: id.clone(),
                             path: path.clone(),
-                            value: if conv.is_identity() { old } else { rotate_xyz_from(&conv, old) },
+                            value: if conv.is_identity() {
+                                old
+                            } else {
+                                rotate_xyz_from(&conv, old)
+                            },
                         })
                         .unwrap_or_else(|| self.coarse_inverse(target, &id))
                 } else {
@@ -1356,7 +1381,8 @@ impl Document for UsdDocument {
                 // literal is ever re-formatted to convert it — a string round-trip
                 // here would risk changing values it was only meant to move.
                 let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let conv = ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
+                let conv =
+                    ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
                 let val = conv.stage_value(&type_name, val);
 
                 // SCALAR LENGTHS, which no USD type can announce. `radius` is a bare
@@ -1370,7 +1396,9 @@ impl Document for UsdDocument {
                 // "is a length" flag would still author those wrong by 10x.
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let val = match linear {
-                    crate::schema::LinearUnit::Length { stage_units_per_unit } if !conv.is_identity() => {
+                    crate::schema::LinearUnit::Length {
+                        stage_units_per_unit,
+                    } if !conv.is_identity() => {
                         scale_scalar_value(val, |m| conv.stage_length(m) / stage_units_per_unit)
                     }
                     _ => val,
@@ -1402,9 +1430,9 @@ impl Document for UsdDocument {
                     prior
                         .map(|old| conv.canonical_value(&type_name, old))
                         .map(|old| match linear {
-                            crate::schema::LinearUnit::Length { stage_units_per_unit }
-                                if !conv.is_identity() =>
-                            {
+                            crate::schema::LinearUnit::Length {
+                                stage_units_per_unit,
+                            } if !conv.is_identity() => {
                                 scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
                             }
                             _ => old,
@@ -1587,9 +1615,7 @@ impl Document for UsdDocument {
             }
 
             UsdOp::MovePrim {
-                from_path,
-                to_path,
-                ..
+                from_path, to_path, ..
             } => {
                 // Only move what the target layer itself authored.
                 self.require_prim_in(target, &from_path)?;
@@ -1681,9 +1707,9 @@ impl Document for UsdDocument {
                     .prim(path.as_str())
                     .set_metadata(
                         openusd::sdf::FieldKey::Payload.as_str(),
-                        openusd::sdf::Value::PayloadListOp(
-                            openusd::sdf::PayloadListOp::explicit(payloads),
-                        ),
+                        openusd::sdf::Value::PayloadListOp(openusd::sdf::PayloadListOp::explicit(
+                            payloads,
+                        )),
                     )
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
@@ -1707,7 +1733,6 @@ impl Document for UsdDocument {
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
-
         };
         if result.is_ok() {
             self.record_op(logged_op);
@@ -1795,7 +1820,9 @@ mod tests {
             .expect("translate authored");
 
         assert!(
-            authored[0].abs() < 1e-6 && authored[1].abs() < 1e-6 && (authored[2] - 100.0).abs() < 1e-3,
+            authored[0].abs() < 1e-6
+                && authored[1].abs() < 1e-6
+                && (authored[2] - 100.0).abs() < 1e-3,
             "canonical [0,1,0] m on a cm/Z-up stage must author as [0,0,100]; got {authored:?}"
         );
     }
@@ -1825,7 +1852,10 @@ mod tests {
             .data()
             .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/World").unwrap(), "xformOp:translate")
             .expect("translate authored");
-        assert_eq!(authored, value, "a canonical stage must not perturb the authored value");
+        assert_eq!(
+            authored, value,
+            "a canonical stage must not perturb the authored value"
+        );
     }
 
     /// UNDO MUST LAND WHERE IT STARTED on a non-canonical stage.
@@ -1859,7 +1889,9 @@ mod tests {
             .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/World").unwrap(), "xformOp:translate")
             .expect("translate authored");
         assert!(
-            restored[0].abs() < 1e-6 && restored[1].abs() < 1e-6 && (restored[2] - 250.0).abs() < 1e-3,
+            restored[0].abs() < 1e-6
+                && restored[1].abs() < 1e-6
+                && (restored[2] - 250.0).abs() < 1e-3,
             "undo must restore the stage's original (0,0,250); got {restored:?}"
         );
     }
@@ -1949,7 +1981,10 @@ mod tests {
             .data()
             .prim_attribute_value::<f64>(&SdfPath::new("/Ball").unwrap(), "radius")
             .expect("radius authored");
-        assert!((r - 200.0).abs() < 1e-6, "2 m on a cm stage must author as 200; got {r}");
+        assert!(
+            (r - 200.0).abs() < 1e-6,
+            "2 m on a cm stage must author as 200; got {r}"
+        );
     }
 
     /// The camera's TENTHS-of-a-unit quirk survives the conversion.
@@ -2014,7 +2049,10 @@ mod tests {
             .data()
             .prim_attribute_value::<f32>(&SdfPath::new("/Cam").unwrap(), "fStop")
             .expect("fStop authored");
-        assert!((v - 2.8).abs() < 1e-6, "a ratio must pass through untouched; got {v}");
+        assert!(
+            (v - 2.8).abs() < 1e-6,
+            "a ratio must pass through untouched; got {v}"
+        );
     }
 
     #[test]
@@ -2045,7 +2083,10 @@ mod tests {
         }
 
         // The part and the joint are both authored…
-        assert!(prim_exists(&doc, "/Rig/Chassis/Wheel"), "part referenced in");
+        assert!(
+            prim_exists(&doc, "/Rig/Chassis/Wheel"),
+            "part referenced in"
+        );
         assert_eq!(
             prim_type(&doc, "/Rig/Chassis/Wheel_Joint").as_deref(),
             Some("PhysicsRevoluteJoint"),
@@ -2054,8 +2095,14 @@ mod tests {
         // …and the joint relates the two bodies, with the anchor derived from the
         // placement (localPos0) — the whole point of the lowering.
         let src = doc.source();
-        assert!(src.contains("physics:body0") && src.contains("/Rig/Chassis"), "body0 → host");
-        assert!(src.contains("physics:body1") && src.contains("/Rig/Chassis/Wheel"), "body1 → part");
+        assert!(
+            src.contains("physics:body0") && src.contains("/Rig/Chassis"),
+            "body0 → host"
+        );
+        assert!(
+            src.contains("physics:body1") && src.contains("/Rig/Chassis/Wheel"),
+            "body1 → part"
+        );
         assert!(src.contains("physics:localPos0"), "anchor authored");
         assert!(src.contains("physics:axis"), "revolute axis authored");
     }
@@ -2146,7 +2193,10 @@ mod tests {
         }))
         .unwrap();
         assert!(host.document().source().contains("on_tick"), "authored");
-        assert!(reparses_cleanly(host.document()), "authored string reparses cleanly");
+        assert!(
+            reparses_cleanly(host.document()),
+            "authored string reparses cleanly"
+        );
         host.undo().unwrap();
         assert!(
             !host.document().source().contains("on_tick"),
@@ -2285,7 +2335,10 @@ mod tests {
         assert!(matches!(tail[0], UsdOp::SetTranslate { value, .. } if value == [1.0, 2.0, 3.0]));
 
         // A `since` far below current with entries dropped can't be trusted → None.
-        assert!(doc.ops_since(0).is_some(), "no overflow for a short history");
+        assert!(
+            doc.ops_since(0).is_some(),
+            "no overflow for a short history"
+        );
     }
 
     /// A rejected op neither bumps the generation nor records into the op log, so
@@ -2302,7 +2355,11 @@ mod tests {
             reference: None,
         });
         assert_eq!(doc.generation(), 0);
-        assert_eq!(doc.ops_since(0).unwrap().len(), 0, "rejected op is not in the op log");
+        assert_eq!(
+            doc.ops_since(0).unwrap().len(),
+            0,
+            "rejected op is not in the op log"
+        );
     }
 
     /// Author-once's load-bearing invariant: **every generation bump records
@@ -2334,7 +2391,9 @@ mod tests {
         // marker must keep the op log one-per-generation.
         doc.restore_runtime(usda_to_data(TINY_USDA).unwrap());
 
-        let ops = doc.ops_since(0).expect("op ring holds an entry for every generation");
+        let ops = doc
+            .ops_since(0)
+            .expect("op ring holds an entry for every generation");
         assert_eq!(
             ops.len() as u64,
             doc.generation(),
@@ -2361,7 +2420,10 @@ mod tests {
                 value: "5".into(),
             })
             .unwrap();
-        assert_eq!(doc.data().prim_attribute_value::<f64>(&ball, "radius"), Some(5.0));
+        assert_eq!(
+            doc.data().prim_attribute_value::<f64>(&ball, "radius"),
+            Some(5.0)
+        );
         assert!(
             matches!(&inverse, UsdOp::SetAttribute { name, .. } if name == "radius"),
             "overwrite of an existing attribute must invert to a typed SetAttribute, got {inverse:?}"
@@ -2369,7 +2431,10 @@ mod tests {
 
         // Replaying the inverse restores the prior value incrementally.
         doc.apply(inverse).unwrap();
-        assert_eq!(doc.data().prim_attribute_value::<f64>(&ball, "radius"), Some(1.0));
+        assert_eq!(
+            doc.data().prim_attribute_value::<f64>(&ball, "radius"),
+            Some(1.0)
+        );
     }
 
     /// Authoring a **brand-new** attribute has no prior value to restore, so it
@@ -2428,7 +2493,10 @@ mod tests {
             reference: None,
         }))
         .unwrap();
-        assert_eq!(prim_type(host.document(), "/Rover").as_deref(), Some("Xform"));
+        assert_eq!(
+            prim_type(host.document(), "/Rover").as_deref(),
+            Some("Xform")
+        );
         // Typed inverse: AddPrim → RemovePrim removes exactly the new prim.
         host.undo().unwrap();
         assert!(!prim_exists(host.document(), "/Rover"));
@@ -2482,8 +2550,10 @@ mod tests {
         assert_eq!(prim_type(doc, "/Rover").as_deref(), Some("Xform"));
         assert_eq!(prim_type(doc, "/Rover/WheelFL").as_deref(), Some("Cube"));
         assert_eq!(
-            doc.data()
-                .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/Rover/WheelFL").unwrap(), "xformOp:translate"),
+            doc.data().prim_attribute_value::<[f64; 3]>(
+                &SdfPath::new("/Rover/WheelFL").unwrap(),
+                "xformOp:translate"
+            ),
             Some([1.0, 0.0, 1.0])
         );
 
@@ -2512,13 +2582,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            doc.data()
-                .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/A").unwrap(), "xformOp:translate"),
+            doc.data().prim_attribute_value::<[f64; 3]>(
+                &SdfPath::new("/A").unwrap(),
+                "xformOp:translate"
+            ),
             Some([1.0, 2.0, 3.0])
         );
         assert_eq!(
-            doc.data()
-                .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/A/B").unwrap(), "xformOp:translate"),
+            doc.data().prim_attribute_value::<[f64; 3]>(
+                &SdfPath::new("/A/B").unwrap(),
+                "xformOp:translate"
+            ),
             Some([9.0, 9.0, 9.0]),
             "nested child translate must be untouched (CQ-503)"
         );
@@ -2552,16 +2626,21 @@ mod tests {
         let rig = SdfPath::new("/Rig").unwrap();
         assert_eq!(
             xform_op_order_tokens(&doc.composed_arc(), &rig),
-            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            vec![
+                "xformOp:translate".to_string(),
+                "xformOp:rotateXYZ".to_string()
+            ],
             "both ops listed, in author order"
         );
         // Both value attributes were authored too.
         assert_eq!(
-            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:translate"),
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:translate"),
             Some([1.0, 2.0, 3.0])
         );
         assert_eq!(
-            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
             Some([0.0, 90.0, 0.0])
         );
 
@@ -2575,11 +2654,15 @@ mod tests {
         .unwrap();
         assert_eq!(
             xform_op_order_tokens(&doc.composed_arc(), &rig),
-            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            vec![
+                "xformOp:translate".to_string(),
+                "xformOp:rotateXYZ".to_string()
+            ],
             "re-set of an existing op must not duplicate its xformOpOrder entry"
         );
         assert_eq!(
-            doc.data().prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
             Some([0.0, 45.0, 0.0])
         );
     }
@@ -2608,7 +2691,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             xform_op_order_tokens(&doc.composed_arc(), &SdfPath::new("/Rig").unwrap()),
-            vec!["xformOp:rotateXYZ".to_string(), "xformOp:translate".to_string()],
+            vec![
+                "xformOp:rotateXYZ".to_string(),
+                "xformOp:translate".to_string()
+            ],
             "rotate-first authoring lists rotate first"
         );
     }
@@ -2645,11 +2731,13 @@ mod tests {
         );
         // The pre-existing op values are untouched.
         assert_eq!(
-            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:rotateXYZ"),
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&part, "xformOp:rotateXYZ"),
             Some([0.0, 45.0, 0.0])
         );
         assert_eq!(
-            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:scale"),
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&part, "xformOp:scale"),
             Some([2.0, 2.0, 2.0])
         );
     }
@@ -2677,7 +2765,10 @@ mod tests {
         let part = SdfPath::new("/Part").unwrap();
         assert_eq!(
             xform_op_order_tokens(&doc.composed_arc(), &part),
-            vec!["xformOp:translate".to_string(), "xformOp:rotateXYZ".to_string()],
+            vec![
+                "xformOp:translate".to_string(),
+                "xformOp:rotateXYZ".to_string()
+            ],
             "composed order keeps base's translate and appends the runtime rotate"
         );
         // The base layer's own opinion is untouched (Save serializes base only).
@@ -2687,7 +2778,8 @@ mod tests {
             "runtime edit must not rewrite the base layer's xformOpOrder"
         );
         assert_eq!(
-            doc.data().prim_attribute_value::<[f64; 3]>(&part, "xformOp:translate"),
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&part, "xformOp:translate"),
             Some([1.0, 2.0, 3.0])
         );
     }
@@ -2729,9 +2821,10 @@ mod tests {
             value: "(0.2, 0.4, 0.8)".into(),
         })
         .unwrap();
-        let color = doc
-            .data()
-            .prim_attribute_value::<[f32; 3]>(&SdfPath::new("/Ball").unwrap(), "primvars:displayColor");
+        let color = doc.data().prim_attribute_value::<[f32; 3]>(
+            &SdfPath::new("/Ball").unwrap(),
+            "primvars:displayColor",
+        );
         assert_eq!(color, Some([0.2, 0.4, 0.8]));
     }
 
@@ -2766,17 +2859,20 @@ mod tests {
         let mover = SdfPath::new("/Mover").unwrap();
         // Time-aware read interpolates the authored curve.
         assert_eq!(
-            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            doc.data()
+                .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
             Some([5.0, 0.0, 0.0]),
             "midpoint must linearly interpolate the two keyframes"
         );
         assert_eq!(
-            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 10.0),
+            doc.data()
+                .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 10.0),
             Some([10.0, 0.0, 0.0])
         );
         // A sample-only attribute has no `default` opinion.
         assert_eq!(
-            doc.data().prim_attribute_value::<[f64; 3]>(&mover, "xformOp:translate"),
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&mover, "xformOp:translate"),
             None,
             "time samples must not leak into the default opinion"
         );
@@ -2786,7 +2882,8 @@ mod tests {
             doc.apply(inv).unwrap();
         }
         assert_eq!(
-            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            doc.data()
+                .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
             None,
             "keyframes undone by the typed RemoveTimeSample inverses"
         );
@@ -2799,7 +2896,8 @@ mod tests {
             "#usda 1.0\ndef Xform \"A\"\n{\n}\ndef Xform \"B\"\n{\n}\n",
             DocumentOrigin::writable_file("/tmp/move.usda"),
         );
-        let exists = |doc: &UsdDocument, p: &str| doc.data().spec(&SdfPath::new(p).unwrap()).is_some();
+        let exists =
+            |doc: &UsdDocument, p: &str| doc.data().spec(&SdfPath::new(p).unwrap()).is_some();
 
         // Reparent /A under /B → /B/A.
         let inverse = doc
@@ -2817,7 +2915,10 @@ mod tests {
             UsdOp::MovePrim { from_path, to_path, .. } if from_path == "/B/A" && to_path == "/A"
         ));
         doc.apply(inverse).unwrap();
-        assert!(exists(&doc, "/A") && !exists(&doc, "/B/A"), "inverse restores the original tree");
+        assert!(
+            exists(&doc, "/A") && !exists(&doc, "/B/A"),
+            "inverse restores the original tree"
+        );
     }
 
     #[test]
@@ -2861,7 +2962,11 @@ mod tests {
         .unwrap();
         let attr = SdfPath::new("/Load.inputs:voltage").unwrap();
         let conns = |doc: &UsdDocument| -> Vec<String> {
-            match doc.data().spec(&attr).and_then(|s| s.get("connectionPaths")) {
+            match doc
+                .data()
+                .spec(&attr)
+                .and_then(|s| s.get("connectionPaths"))
+            {
                 Some(sdf::Value::PathListOp(op)) => op
                     .explicit_items
                     .iter()
@@ -2925,7 +3030,8 @@ mod tests {
         .unwrap();
         let mover = SdfPath::new("/Mover").unwrap();
         assert_eq!(
-            doc.data().prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 0.0),
+            doc.data()
+                .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 0.0),
             None,
             "the only sample was removed, so nothing resolves"
         );
@@ -3009,7 +3115,10 @@ mod tests {
         .unwrap();
         // The saved source (base layer) must NOT contain the runtime prim.
         let saved = doc.source();
-        assert!(!saved.contains("SpawnedRock"), "runtime state leaked into save:\n{saved}");
+        assert!(
+            !saved.contains("SpawnedRock"),
+            "runtime state leaked into save:\n{saved}"
+        );
         assert!(saved.contains("World"));
     }
 
@@ -3034,7 +3143,10 @@ mod tests {
         // so it removes from runtime and never touches base.
         host.undo().unwrap();
         assert!(!runtime_prim_exists(host.document(), "/World/Obstacle"));
-        assert!(prim_exists(host.document(), "/World"), "base layer intact across runtime undo");
+        assert!(
+            prim_exists(host.document(), "/World"),
+            "base layer intact across runtime undo"
+        );
     }
 
     #[test]
@@ -3056,7 +3168,9 @@ mod tests {
         // The composed view (what the viewport renders) sees the runtime prim.
         let composed = doc.composed();
         assert_eq!(
-            composed.prim_type_name(&SdfPath::new("/World/Obstacle").unwrap()).as_deref(),
+            composed
+                .prim_type_name(&SdfPath::new("/World/Obstacle").unwrap())
+                .as_deref(),
             Some("Sphere")
         );
         assert!(doc.composed_source().contains("Obstacle"));
@@ -3084,7 +3198,10 @@ mod tests {
 
         // The reference opinion lives in the RUNTIME layer, not the base.
         assert!(runtime_prim_exists(host.document(), "/World/rover_1"));
-        assert!(!prim_exists(host.document(), "/World/rover_1"), "spawn must not touch base");
+        assert!(
+            !prim_exists(host.document(), "/World/rover_1"),
+            "spawn must not touch base"
+        );
         // It rides into the composed view (what the viewport renders /
         // re-instantiates) as a resolvable reference opinion...
         let composed = host.document().composed_source();
@@ -3103,7 +3220,10 @@ mod tests {
         // leaving the base untouched.
         host.undo().unwrap();
         assert!(!runtime_prim_exists(host.document(), "/World/rover_1"));
-        assert!(prim_exists(host.document(), "/World"), "base intact across spawn undo");
+        assert!(
+            prim_exists(host.document(), "/World"),
+            "base intact across spawn undo"
+        );
     }
 
     /// Repro for the doc-backed live-edit path (E1b): a runtime-layer
@@ -3128,7 +3248,8 @@ mod tests {
         .unwrap();
         let composed = doc.composed();
         assert_eq!(
-            composed.prim_attribute_value::<f32>(&SdfPath::new("/Root/Mid/Leaf").unwrap(), "density"),
+            composed
+                .prim_attribute_value::<f32>(&SdfPath::new("/Root/Mid/Leaf").unwrap(), "density"),
             Some(4.0),
             "runtime override must win in the composed sdf::Data"
         );
@@ -3159,7 +3280,9 @@ mod tests {
         .unwrap();
         let composed = doc.composed();
         assert_eq!(
-            composed.prim_type_name(&SdfPath::new("/Root/Mid/Probe").unwrap()).as_deref(),
+            composed
+                .prim_type_name(&SdfPath::new("/Root/Mid/Probe").unwrap())
+                .as_deref(),
             Some("Cube"),
             "runtime child under a nested parent must appear in the composed view"
         );
@@ -3236,7 +3359,8 @@ mod tests {
             "lunco:cameraMode is uniform per luncoSchema: {src}"
         );
         assert!(
-            src.contains("float lunco:env:exposureEv100") && !src.contains("uniform float lunco:env"),
+            src.contains("float lunco:env:exposureEv100")
+                && !src.contains("uniform float lunco:env"),
             "lunco:env:exposureEv100 is varying per luncoSchema: {src}"
         );
         assert!(
@@ -3249,7 +3373,10 @@ mod tests {
             !src.contains("custom token info:id"),
             "info:id is a schema property, not custom: {src}"
         );
-        assert!(reparses_cleanly(host.document()), "authored variability must reparse");
+        assert!(
+            reparses_cleanly(host.document()),
+            "authored variability must reparse"
+        );
     }
 
     #[test]
@@ -3271,7 +3398,10 @@ mod tests {
             "apiSchemas authored: {}",
             host.document().source()
         );
-        assert!(reparses_cleanly(host.document()), "authored apiSchemas must reparse cleanly");
+        assert!(
+            reparses_cleanly(host.document()),
+            "authored apiSchemas must reparse cleanly"
+        );
         host.undo().unwrap();
         assert!(
             !host.document().source().contains("PhysicsRigidBodyAPI"),
@@ -3325,12 +3455,18 @@ mod tests {
         })
         .unwrap();
         let s = doc.source();
-        assert!(s.contains("drivetrain") && s.contains("physical"), "new selection: {s}");
+        assert!(
+            s.contains("drivetrain") && s.contains("physical"),
+            "new selection: {s}"
+        );
         assert!(
             s.contains("color") && s.contains("red"),
             "sibling variant selection preserved (read-modify-write): {s}"
         );
-        assert!(reparses_cleanly(&doc), "authored variant selection must reparse cleanly: {s}");
+        assert!(
+            reparses_cleanly(&doc),
+            "authored variant selection must reparse cleanly: {s}"
+        );
     }
 
     #[test]

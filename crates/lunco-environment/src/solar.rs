@@ -144,9 +144,7 @@ pub fn compute_local_solar(
 /// fresh outputs are read the same tick. Writes every tick because a model's
 /// own output sync may rewrite its outputs map (same reasoning as the gravity
 /// bridge).
-pub fn inject_local_solar_into_cosim(
-    mut q: Query<(&LocalSolar, &mut lunco_cosim::SimComponent)>,
-) {
+pub fn inject_local_solar_into_cosim(mut q: Query<(&LocalSolar, &mut lunco_cosim::SimComponent)>) {
     for (solar, mut comp) in &mut q {
         comp.outputs
             .insert(SOLAR_AZIMUTH_CONNECTOR.to_string(), solar.azimuth);
@@ -170,9 +168,9 @@ mod tests {
     #[test]
     fn azimuth_is_clockwise_from_north() {
         let cases = [
-            ("north", Vec3::new(0.0, 0.0, -1.0), 0.0),          // −Z is NORTH
-            ("east", Vec3::new(1.0, 0.0, 0.0), FRAC_PI_2),      // +X is EAST
-            ("south", Vec3::new(0.0, 0.0, 1.0), PI),            // +Z is SOUTH
+            ("north", Vec3::new(0.0, 0.0, -1.0), 0.0), // −Z is NORTH
+            ("east", Vec3::new(1.0, 0.0, 0.0), FRAC_PI_2), // +X is EAST
+            ("south", Vec3::new(0.0, 0.0, 1.0), PI),   // +Z is SOUTH
             ("west", Vec3::new(-1.0, 0.0, 0.0), -FRAC_PI_2),
         ];
         for (name, dir, expect) in cases {

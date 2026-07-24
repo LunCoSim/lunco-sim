@@ -47,14 +47,23 @@ mod tests {
         let edited = "#usda 1.0\ndef Xform \"World\" {}\ndef Xform \"POI\" {}\n";
         let (second, out) = reg.open_file(path.clone(), edited.to_string());
 
-        assert_eq!(second, first, "same file ⇒ same document, never a second id");
+        assert_eq!(
+            second, first,
+            "same file ⇒ same document, never a second id"
+        );
         assert_eq!(out, OpenOutcome::Refreshed);
         assert!(
-            reg.host(first).unwrap().document().composed_source().contains("POI"),
+            reg.host(first)
+                .unwrap()
+                .document()
+                .composed_source()
+                .contains("POI"),
             "re-open must project the NEW disk text, not replay the resident base"
         );
         // Came from disk ⇒ clean, so nothing prompts the user to save it back.
-        assert!(!lunco_doc::FileBacked::is_dirty(reg.host(first).unwrap().document()));
+        assert!(!lunco_doc::FileBacked::is_dirty(
+            reg.host(first).unwrap().document()
+        ));
     }
 
     /// Unsaved work outranks disk. Undo cannot recover a clobbered base, so the
@@ -77,13 +86,19 @@ mod tests {
                 text: "#usda 1.0\ndef Xform \"Mine\" {}\n".to_string(),
             })
             .unwrap();
-        assert!(lunco_doc::FileBacked::is_dirty(reg.host(doc).unwrap().document()));
+        assert!(lunco_doc::FileBacked::is_dirty(
+            reg.host(doc).unwrap().document()
+        ));
 
         let (same, out) = reg.open_file(path, TINY_USDA.to_string());
         assert_eq!(same, doc);
         assert_eq!(out, OpenOutcome::KeptDirty);
         assert!(
-            reg.host(doc).unwrap().document().composed_source().contains("Mine"),
+            reg.host(doc)
+                .unwrap()
+                .document()
+                .composed_source()
+                .contains("Mine"),
             "the user's unsaved edit must survive a re-open"
         );
     }
@@ -117,7 +132,10 @@ mod tests {
 
         // The app saves (re-baseline): its own write is not an external change.
         reg.note_saved(doc);
-        assert!(reg.stale_docs().is_empty(), "save re-baselines the watermark");
+        assert!(
+            reg.stale_docs().is_empty(),
+            "save re-baselines the watermark"
+        );
     }
 
     /// A broken file on disk must not half-apply over a working document.
@@ -130,7 +148,12 @@ mod tests {
         let (same, out) = reg.open_file(path, "this is not usda at all {{{".to_string());
         assert_eq!(same, doc);
         assert_eq!(out, OpenOutcome::KeptUnparsable);
-        assert!(reg.host(doc).unwrap().document().composed_source().contains("World"));
+        assert!(reg
+            .host(doc)
+            .unwrap()
+            .document()
+            .composed_source()
+            .contains("World"));
     }
 
     /// Identity is the FILE, not the string. `allocate` mints a second document
@@ -147,17 +170,26 @@ mod tests {
         assert_eq!(reg.ids().count(), 1);
 
         assert_eq!(reg.doc_for_file(&path), Some(a));
-        assert_eq!(reg.doc_for_file(std::path::Path::new("/twins/other.usda")), None);
+        assert_eq!(
+            reg.doc_for_file(std::path::Path::new("/twins/other.usda")),
+            None
+        );
 
         // Untitled docs have no path and must never collide with it.
-        reg.allocate(TINY_USDA.to_string(), lunco_doc::PathlessOrigin::untitled("Untitled.usda"));
+        reg.allocate(
+            TINY_USDA.to_string(),
+            lunco_doc::PathlessOrigin::untitled("Untitled.usda"),
+        );
         assert_eq!(reg.doc_for_file(&path), Some(a));
     }
 
     #[test]
     fn allocate_emits_opened_and_changed() {
         let mut reg = reg();
-        let id = reg.allocate(TINY_USDA.to_string(), lunco_doc::PathlessOrigin::untitled("U.usda"));
+        let id = reg.allocate(
+            TINY_USDA.to_string(),
+            lunco_doc::PathlessOrigin::untitled("U.usda"),
+        );
         let pending = reg.drain_pending();
         assert_eq!(pending.opened, vec![id]);
         assert_eq!(pending.changed, vec![id]);
@@ -167,7 +199,10 @@ mod tests {
     #[test]
     fn apply_marks_changed() {
         let mut reg = reg();
-        let id = reg.allocate(TINY_USDA.to_string(), lunco_doc::PathlessOrigin::untitled("U.usda"));
+        let id = reg.allocate(
+            TINY_USDA.to_string(),
+            lunco_doc::PathlessOrigin::untitled("U.usda"),
+        );
         let _ = reg.drain_pending();
         reg.apply(
             id,

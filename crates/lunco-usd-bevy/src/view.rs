@@ -24,7 +24,10 @@ pub struct StageView<'a> {
 
 impl<'a> StageView<'a> {
     pub fn new(stage: &'a Stage) -> Self {
-        Self { stage, binary_sites: None }
+        Self {
+            stage,
+            binary_sites: None,
+        }
     }
 
     /// Construct with the stage's precomputed binary-arc sites (from
@@ -33,7 +36,10 @@ impl<'a> StageView<'a> {
         stage: &'a Stage,
         sites: &'a crate::compose::BinarySites,
     ) -> Self {
-        Self { stage, binary_sites: Some(sites) }
+        Self {
+            stage,
+            binary_sites: Some(sites),
+        }
     }
 
     /// The underlying stage (escape hatch for reads not yet wrapped).
@@ -79,7 +85,14 @@ impl<'a> StageView<'a> {
     /// whose value type is genuinely either (`lunco:resolvedAsset`, authored by
     /// the composer as a path but read as plain text).
     pub fn value_str(&self, prim: &SdfPath, name: &str) -> Option<String> {
-        match self.stage.prim(prim.clone()).attribute(name).get::<Value>().ok().flatten()? {
+        match self
+            .stage
+            .prim(prim.clone())
+            .attribute(name)
+            .get::<Value>()
+            .ok()
+            .flatten()?
+        {
             Value::String(s) => Some(s),
             Value::Token(t) => Some(t.to_string()),
             Value::AssetPath(a) => Some(a.as_str().to_string()),
@@ -131,8 +144,8 @@ mod compose_tests {
     /// cross-file inherit landing `lunco:port = throttle` on the vessel).
     #[test]
     fn stageview_reads_composed_inherit_opinion() {
-        let stage = compose_file_to_stage(&asset("vessels/rovers/skid_rover.usda"))
-            .expect("compose stage");
+        let stage =
+            compose_file_to_stage(&asset("vessels/rovers/skid_rover.usda")).expect("compose stage");
         let view = StageView::new(&stage);
         let fwd = SdfPath::new("/SkidRover/Controls/forward").unwrap();
         assert_eq!(

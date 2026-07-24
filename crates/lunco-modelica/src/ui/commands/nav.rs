@@ -1,8 +1,8 @@
 //! UI navigation and view control: Focus, ViewMode, Zoom, Fit, and Pan.
 
 use bevy::prelude::*;
+use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
-use lunco_core::{Command, on_command};
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -50,10 +50,7 @@ pub struct PanCanvas {
 // ─── Observers ───────────────────────────────────────────────────────────────
 
 #[on_command(FocusDocumentByName)]
-pub fn on_focus_document_by_name(
-    trigger: On<FocusDocumentByName>,
-    mut commands: Commands,
-) {
+pub fn on_focus_document_by_name(trigger: On<FocusDocumentByName>, mut commands: Commands) {
     let pattern = trigger.event().pattern.clone();
     if pattern.is_empty() {
         return;
@@ -68,10 +65,7 @@ pub fn on_focus_document_by_name(
                 .map(|d| d.id)
         };
         let Some(doc) = hit else {
-            bevy::log::info!(
-                "[FocusDocumentByName] no tab matches '{}'",
-                pattern
-            );
+            bevy::log::info!("[FocusDocumentByName] no tab matches '{}'", pattern);
             return;
         };
         let tab_id = world
@@ -96,7 +90,8 @@ pub fn on_set_view_mode(trigger: On<SetViewMode>, mut commands: Commands) {
         }) else {
             return;
         };
-        use crate::model_tabs::ModelTabs; use crate::model_tabs_types::ModelViewMode;
+        use crate::model_tabs::ModelTabs;
+        use crate::model_tabs_types::ModelViewMode;
         let new_mode = match mode_str.to_lowercase().as_str() {
             "text" | "source" => ModelViewMode::Text,
             "diagram" | "canvas" => ModelViewMode::Canvas,
@@ -152,7 +147,11 @@ pub fn on_set_zoom(trigger: On<SetZoom>, mut commands: Commands) {
 pub fn on_focus_component(trigger: On<FocusComponent>, mut commands: Commands) {
     let raw = trigger.event().doc;
     let name = trigger.event().name.clone();
-    let padding = if trigger.event().padding > 0.0 { trigger.event().padding } else { 0.5 };
+    let padding = if trigger.event().padding > 0.0 {
+        trigger.event().padding
+    } else {
+        0.5
+    };
     commands.queue(move |world: &mut World| {
         let doc = if raw.is_unassigned() {
             super::resolve_active_doc(world)
@@ -218,6 +217,9 @@ pub fn on_pan_canvas(trigger: On<PanCanvas>, mut commands: Commands) {
         };
         let docstate = state.get_mut(doc);
         let z = docstate.canvas.viewport.zoom;
-        docstate.canvas.viewport.set_target(lunco_canvas::Pos::new(ev.x, ev.y), z);
+        docstate
+            .canvas
+            .viewport
+            .set_target(lunco_canvas::Pos::new(ev.x, ev.y), z);
     });
 }

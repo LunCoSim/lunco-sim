@@ -4,7 +4,7 @@
 //! Each rule's *helper-level* contract pins here; observer wiring is
 //! exercised in single-file harness tests where Bevy is required.
 
-use lunco_modelica::ui::wasm_autosave::{IsGestureActive, should_autosave};
+use lunco_modelica::ui::wasm_autosave::{should_autosave, IsGestureActive};
 
 // ─────────────────────────────────────────────────────────────────────
 // R3 — mode-switch flush. Helper-level: the *condition* under which
@@ -54,20 +54,29 @@ fn r1_should_autosave_writes_for_clean_untitled() {
 fn r1_should_autosave_skips_file_backed() {
     // File-backed docs have a real save path; localStorage write
     // would shadow it.
-    assert!(!should_autosave(false, false), "file-backed doc never autosaves");
+    assert!(
+        !should_autosave(false, false),
+        "file-backed doc never autosaves"
+    );
 }
 
 #[test]
 fn r1_should_autosave_skips_during_gesture() {
     // Mid-drag / mid-edit: a snapshot now would capture transient
     // state ("one component in two places") and persist it.
-    assert!(!should_autosave(true, true), "active gesture blocks autosave");
+    assert!(
+        !should_autosave(true, true),
+        "active gesture blocks autosave"
+    );
 }
 
 #[test]
 fn r1_active_gesture_or_file_backed_blocks() {
     // Both filters required; either one blocking is enough.
-    assert!(!should_autosave(true, false), "gesture AND file-backed = no");
+    assert!(
+        !should_autosave(true, false),
+        "gesture AND file-backed = no"
+    );
 }
 
 #[test]

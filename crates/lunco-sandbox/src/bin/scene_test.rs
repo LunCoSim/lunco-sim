@@ -191,7 +191,11 @@ struct Xorshift64Star(u64);
 impl Xorshift64Star {
     fn new(seed: u64) -> Self {
         // State must never be zero, or the generator is stuck at zero forever.
-        Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
+        Self(if seed == 0 {
+            0x9E37_79B9_7F4A_7C15
+        } else {
+            seed
+        })
     }
 
     /// Next value in `[0, 1)`, taking the high 53 bits (an f64's mantissa).
@@ -316,7 +320,16 @@ fn parse_args() -> Result<Cli, String> {
     }
 
     let scene = scene.ok_or_else(|| format!("--scene is required\n\n{}", usage()))?;
-    Ok(Cli { scene, max_ticks, tick_hz, verdict_channel, threads, jitter, seed, select_prim })
+    Ok(Cli {
+        scene,
+        max_ticks,
+        tick_hz,
+        verdict_channel,
+        threads,
+        jitter,
+        seed,
+        select_prim,
+    })
 }
 
 fn usage() -> String {
@@ -517,22 +530,30 @@ fn main() -> std::process::ExitCode {
 
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_usd_bevy::UsdPrimPath;
                 use lunco_sandbox_edit::selection::{compute_selection_aabb, Selected};
+                use lunco_usd_bevy::UsdPrimPath;
 
                 let target_ent = {
                     let mut q = app.world_mut().query::<(Entity, &UsdPrimPath)>();
-                    q.iter(app.world()).find_map(|(e, p)| if p.path == *target_prim { Some(e) } else { None })
+                    q.iter(app.world()).find_map(|(e, p)| {
+                        if p.path == *target_prim {
+                            Some(e)
+                        } else {
+                            None
+                        }
+                    })
                 };
 
                 if let Some(e) = target_ent {
                     app.world_mut().entity_mut(e).insert(Selected);
-                    let mut state_aabb = app.world_mut().query_filtered::<(&GlobalTransform, &bevy::camera::primitives::Aabb), (
-                        With<Mesh3d>,
-                        Without<lunco_celestial::TrajectoryMeshMarker>,
-                        Without<lunco_core::programs::ProgramDriverId>,
-                        Without<lunco_core::NoSelectionBounds>,
-                    )>();
+                    let mut state_aabb =
+                        app.world_mut()
+                            .query_filtered::<(&GlobalTransform, &bevy::camera::primitives::Aabb), (
+                                With<Mesh3d>,
+                                Without<lunco_celestial::TrajectoryMeshMarker>,
+                                Without<lunco_core::programs::ProgramDriverId>,
+                                Without<lunco_core::NoSelectionBounds>,
+                            )>();
                     let mut state_children = app.world_mut().query::<&Children>();
                     let mut state_skip = app.world_mut().query_filtered::<(), Or<(
                         With<big_space::prelude::Grid>,

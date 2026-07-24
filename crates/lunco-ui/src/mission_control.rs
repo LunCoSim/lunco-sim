@@ -4,23 +4,31 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use lunco_core::{Avatar, Spacecraft};
+use lunco_avatar::{FocusTarget, PossessVessel, ReleaseVessel};
+use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
 use lunco_core::ControlBinding;
+use lunco_core::{Avatar, Spacecraft};
 use lunco_time::{TimeTransport, TransportMode, WorldTime};
-use lunco_celestial::{CelestialBody, TeleportToSurface, LeaveSurface};
-use lunco_avatar::{PossessVessel, ReleaseVessel, FocusTarget};
 
 /// Mission Control panel — everything in one place.
 pub struct MissionControl;
 
 impl Panel for MissionControl {
-    fn id(&self) -> PanelId { PanelId("mission_control") }
-    fn title(&self) -> String { "Mission Control".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn id(&self) -> PanelId {
+        PanelId("mission_control")
+    }
+    fn title(&self) -> String {
+        "Mission Control".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn transparent_background(&self) -> bool { true }
+    fn transparent_background(&self) -> bool {
+        true
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // ── Snapshot all derived/resource state up front so every `ctx`
@@ -51,7 +59,12 @@ impl Panel for MissionControl {
                 })
                 .unwrap_or_default();
             spacecraft = view
-                .map(|v| v.spacecraft.iter().map(|r| (r.entity, r.name.clone())).collect())
+                .map(|v| {
+                    v.spacecraft
+                        .iter()
+                        .map(|r| (r.entity, r.name.clone()))
+                        .collect()
+                })
                 .unwrap_or_default();
             on_surface = view.map(|v| v.on_surface).unwrap_or(false);
             gravity_body = view.and_then(|v| v.gravity_body);
@@ -86,7 +99,13 @@ impl Panel for MissionControl {
                                 (Some(o), Some(l)) if o == l
                             );
                             let taken_by_other = owner.is_some() && !mine;
-                            (r.entity, r.name.clone(), mine, taken_by_other, owner.map(|s| s.0))
+                            (
+                                r.entity,
+                                r.name.clone(),
+                                mine,
+                                taken_by_other,
+                                owner.map(|s| s.0),
+                            )
                         })
                         .collect()
                 })
@@ -108,7 +127,12 @@ impl Panel for MissionControl {
         let mut set_policy: Option<lunco_core::PossessionPolicy> = None;
 
         let frame = egui::Frame::new()
-            .fill(theme.as_ref().map(|t| t.colors.mantle).unwrap_or(egui::Color32::TRANSPARENT))
+            .fill(
+                theme
+                    .as_ref()
+                    .map(|t| t.colors.mantle)
+                    .unwrap_or(egui::Color32::TRANSPARENT),
+            )
             .inner_margin(8.0)
             .corner_radius(4);
 
@@ -121,7 +145,10 @@ impl Panel for MissionControl {
             }
             if let Some((_, paused, speed)) = clock_state {
                 ui.horizontal(|ui| {
-                    if ui.button(if paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
+                    if ui
+                        .button(if paused { "▶ Play" } else { "⏸ Pause" })
+                        .clicked()
+                    {
                         toggle_pause = true;
                     }
                 });
@@ -305,17 +332,27 @@ impl Panel for MissionControl {
         if let Some(av) = avatar_ent {
             if let Some(target) = focus {
                 ctx.defer(move |world| {
-                    world.trigger(FocusTarget { avatar: Some(av), target });
+                    world.trigger(FocusTarget {
+                        avatar: Some(av),
+                        target,
+                    });
                 });
             }
             if let Some(body_entity) = teleport_body_bits {
                 ctx.defer(move |world| {
-                    world.trigger(TeleportToSurface { target: av, body_entity });
+                    world.trigger(TeleportToSurface {
+                        target: av,
+                        body_entity,
+                    });
                 });
             }
             if let Some(target) = possess {
                 ctx.defer(move |world| {
-                    world.trigger(PossessVessel { avatar: Some(av), target, bind_camera: true });
+                    world.trigger(PossessVessel {
+                        avatar: Some(av),
+                        target,
+                        bind_camera: true,
+                    });
                 });
             }
             if release {
@@ -334,7 +371,11 @@ impl Panel for MissionControl {
             let cur = clock_state.map(|(_, p, _)| p).unwrap_or(false);
             ctx.defer(move |world| {
                 if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                    t.mode = if cur { TransportMode::Playing } else { TransportMode::Paused };
+                    t.mode = if cur {
+                        TransportMode::Playing
+                    } else {
+                        TransportMode::Paused
+                    };
                 }
             });
         }
@@ -407,7 +448,10 @@ pub fn populate_mission_control_view(
     // included. Filtering on it is also what keeps the roster stable: it is written
     // once at projection, so `Changed<ControlBinding>` fires on insert and then stops.
     // Per-tick command state lives on `CommandInputs`, which is written every tick.
-    rovers: Query<(Entity, &Name, Option<&lunco_core::GlobalEntityId>), (With<ControlBinding>, Without<Avatar>)>,
+    rovers: Query<
+        (Entity, &Name, Option<&lunco_core::GlobalEntityId>),
+        (With<ControlBinding>, Without<Avatar>),
+    >,
     surface: Query<(), With<lunco_avatar::SurfaceCamera>>,
     gravity: Option<Res<lunco_celestial::LocalGravityField>>,
     changed: Query<

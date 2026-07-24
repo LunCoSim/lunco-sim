@@ -773,9 +773,6 @@ output = "textures/earthlike.png"
             root: root.clone(),
         };
         assert_eq!(scope.dest_root(), crate::twin_cache_dir(&root));
-        assert_eq!(
-            scope.read_roots(),
-            vec![crate::twin_cache_dir(&root), root]
-        );
+        assert_eq!(scope.read_roots(), vec![crate::twin_cache_dir(&root), root]);
     }
 }

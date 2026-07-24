@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 
 /// Mirrors the last-requested maximize state. Bevy's `Window` exposes
 /// `set_maximized(bool)` but no symmetric reader, so we keep the bit
@@ -34,10 +34,7 @@ pub struct MaximizeWindow {
 pub struct CloseWindow {}
 
 #[on_command(MinimizeWindow)]
-fn on_minimize(
-    _trigger: On<MinimizeWindow>,
-    mut q: Query<&mut Window, With<PrimaryWindow>>,
-) {
+fn on_minimize(_trigger: On<MinimizeWindow>, mut q: Query<&mut Window, With<PrimaryWindow>>) {
     if let Ok(mut w) = q.single_mut() {
         w.set_minimized(true);
     }
@@ -53,7 +50,9 @@ fn on_maximize(
 ) {
     let target = trigger.event().maximized.unwrap_or(!state.0);
     state.0 = target;
-    let Ok(mut window) = q.single_mut() else { return };
+    let Ok(mut window) = q.single_mut() else {
+        return;
+    };
     window.set_maximized(target);
     // Some Linux compositors (sway/i3, several tilers) ignore the
     // `set_maximized` request. When asking to maximize, fall back to
@@ -61,7 +60,10 @@ fn on_maximize(
     // hardcoding WM behaviour. Only do this on the maximize path; on
     // restore we leave winit to size things back.
     if target {
-        let monitor = primary_monitor.single().ok().or_else(|| any_monitor.iter().next());
+        let monitor = primary_monitor
+            .single()
+            .ok()
+            .or_else(|| any_monitor.iter().next());
         if let Some(monitor) = monitor {
             let scale = monitor.scale_factor as f32;
             window.resolution.set(

@@ -106,7 +106,9 @@ pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let resolved = normalize(&base.join(asset_path)).to_string_lossy().into_owned();
+    let resolved = normalize(&base.join(asset_path))
+        .to_string_lossy()
+        .into_owned();
     match scheme {
         Some(s) => uri(s, &resolved),
         None => resolved,
@@ -211,7 +213,10 @@ mod tests {
     #[test]
     fn relative_keeps_the_anchors_scheme() {
         assert_eq!(
-            canonicalize("../../components/wheel.usda", "lunco://vessels/rovers/skid.usda"),
+            canonicalize(
+                "../../components/wheel.usda",
+                "lunco://vessels/rovers/skid.usda"
+            ),
             "lunco://components/wheel.usda"
         );
         assert_eq!(
@@ -222,7 +227,10 @@ mod tests {
 
     #[test]
     fn unmatched_parent_dir_is_preserved() {
-        assert_eq!(normalize(Path::new("../../a/b")), PathBuf::from("../../a/b"));
+        assert_eq!(
+            normalize(Path::new("../../a/b")),
+            PathBuf::from("../../a/b")
+        );
         assert_eq!(normalize(Path::new("a/./b/../c")), PathBuf::from("a/c"));
     }
 
@@ -248,7 +256,10 @@ mod tests {
         for r in ["lunco://a.usda", "twin://e/a.usda", "/a.usda"] {
             assert!(is_anchored(r), "{r} should be anchored");
             // An anchored reference means the same thing however it is asked.
-            assert_eq!(canonicalize(r, "lunco://other/x.usda"), canonicalize_root(r));
+            assert_eq!(
+                canonicalize(r, "lunco://other/x.usda"),
+                canonicalize_root(r)
+            );
         }
         assert!(!is_anchored("a.usda"));
     }

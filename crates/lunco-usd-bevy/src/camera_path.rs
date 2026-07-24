@@ -252,7 +252,17 @@ pub fn release_camera_path_gate(domain: &mut TimeDomain, parent_t: f64) {
 /// `serde` as well as `Reflect`: `#[Command]` types cross the HTTP/MCP wire, so
 /// every field type has to be (de)serializable — the variant names are the wire
 /// form (`"Play"` / `"Pause"` / `"Rewind"`).
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, lunco_core::serde::Serialize, lunco_core::serde::Deserialize)]
+#[derive(
+    Reflect,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    lunco_core::serde::Serialize,
+    lunco_core::serde::Deserialize,
+)]
 #[serde(crate = "lunco_core::serde")]
 pub enum CameraPathAction {
     /// Roll the shot: release the engine hold (idempotent) **and** clear any user
@@ -357,8 +367,12 @@ pub fn camera_path_transport(
     // the recorder-owned release fixed. `Rewind` moves the PLAYHEAD instead, which
     // is the deterministic way back to frame 0.
     if cmd.action == CameraPathAction::Play {
-        let Some(gate_entity) = gate_entity else { return };
-        let Ok(parent) = q_gate.get(gate_entity).map(|g| g.parent) else { return };
+        let Some(gate_entity) = gate_entity else {
+            return;
+        };
+        let Ok(parent) = q_gate.get(gate_entity).map(|g| g.parent) else {
+            return;
+        };
         let Some(parent_t) = resolved.get(parent) else {
             warn!("[camera-path] CameraPathTransport: '{want}' gate parent clock not resolved yet");
             return;
@@ -470,8 +484,16 @@ pub fn resolve_camera_paths(
         if keys.is_empty() {
             // No track: the whole-path rel, else tangent. One key, so `aim_at`
             // needs no empty case.
-            let source = reader.rel_target(&path, "lunco:path:lookAt").map(|t| t.to_string());
-            keys.push((AimKey { t: 0.0, mode: AimMode::Tangent }, source));
+            let source = reader
+                .rel_target(&path, "lunco:path:lookAt")
+                .map(|t| t.to_string());
+            keys.push((
+                AimKey {
+                    t: 0.0,
+                    mode: AimMode::Tangent,
+                },
+                source,
+            ));
         }
         let mut aim: Vec<AimKey> = Vec::with_capacity(keys.len());
         let mut aim_sources: Vec<AimTargetSource> = Vec::new();
@@ -540,7 +562,11 @@ pub fn resolve_camera_paths(
         // running while the sim is paused, "sim" freezes with it (the default —
         // authored motion is part of the scene, doc 19 §11b).
         let on_wall = reader.text(&path, "lunco:path:clock").as_deref() == Some("real");
-        let parent = if on_wall { clocks.interaction } else { clocks.sim };
+        let parent = if on_wall {
+            clocks.interaction
+        } else {
+            clocks.sim
+        };
 
         // The shot hangs off its real clock through a GATE domain, frozen at birth
         // (`scale = 0`). A driven clock advances by its PARENT's delta, so a frozen
@@ -678,7 +704,8 @@ pub fn bind_aim_targets(
                     warn_once!(
                         "[camera-path] {}: aim target {} ({stale:?}) no longer has a \
                          Transform-carrying entity — holding stale bind",
-                        prim.path, source.path
+                        prim.path,
+                        source.path
                     );
                 }
                 continue;
@@ -762,7 +789,8 @@ pub fn drive_camera_paths(
                     Some((target, _)) => {
                         info_once!(
                             "[camera-path] target aim live: eye {:?} -> target {:?}",
-                            world, target
+                            world,
+                            target
                         );
                         Some((target - world).as_vec3())
                     }
@@ -810,7 +838,11 @@ pub fn drive_camera_paths(
 }
 
 /// Walk up a `ChildOf` chain to the enclosing `Grid`.
-fn find_grid(from: Entity, q_parents: &Query<&ChildOf>, q_is_grid: &Query<(), With<Grid>>) -> Option<Entity> {
+fn find_grid(
+    from: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_is_grid: &Query<(), With<Grid>>,
+) -> Option<Entity> {
     let mut node = q_parents.get(from).ok()?.parent();
     for _ in 0..16 {
         if q_is_grid.contains(node) {
@@ -895,7 +927,11 @@ pub fn eval_curve(points: &[Vec3], basis: CurveBasis, periodic: bool, u: f32) ->
 }
 
 fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
-    let segs = if periodic { points.len() } else { points.len() - 1 };
+    let segs = if periodic {
+        points.len()
+    } else {
+        points.len() - 1
+    };
     let (i, f) = segment(segs, u);
     let a = points[i % points.len()];
     let b = points[(i + 1) % points.len()];
@@ -986,7 +1022,10 @@ mod tests {
         for (i, want) in p.iter().enumerate() {
             let u = i as f32 / p.len() as f32; // periodic: 4 segments
             let got = eval_curve(&p, CurveBasis::CatmullRom, true, u);
-            assert!((got - *want).length() < 1e-5, "u={u} got {got:?} want {want:?}");
+            assert!(
+                (got - *want).length() < 1e-5,
+                "u={u} got {got:?} want {want:?}"
+            );
         }
     }
 
@@ -995,7 +1034,10 @@ mod tests {
         let p = ring();
         let start = eval_curve(&p, CurveBasis::CatmullRom, true, 0.0);
         let end = eval_curve(&p, CurveBasis::CatmullRom, true, 1.0);
-        assert!((start - end).length() < 1e-5, "loop must close: {start:?} vs {end:?}");
+        assert!(
+            (start - end).length() < 1e-5,
+            "loop must close: {start:?} vs {end:?}"
+        );
     }
 
     #[test]
@@ -1010,7 +1052,10 @@ mod tests {
         let r_lin = (lin.x * lin.x + lin.z * lin.z).sqrt();
         let r_cr = (cr.x * cr.x + cr.z * cr.z).sqrt();
         assert!(r_lin < 0.72, "chord midpoint should cut inside: {r_lin}");
-        assert!(r_cr > r_lin, "catmullRom must bulge past the chord: {r_cr} vs {r_lin}");
+        assert!(
+            r_cr > r_lin,
+            "catmullRom must bulge past the chord: {r_cr} vs {r_lin}"
+        );
         assert!(r_cr < 1.05, "…without overshooting the circle: {r_cr}");
     }
 
@@ -1033,13 +1078,24 @@ mod tests {
 
     #[test]
     fn path_u_clamps_and_survives_a_degenerate_span() {
-        assert_eq!(path_u(-5.0, 0.0, 10.0), 0.0, "before the span clamps to the start");
-        assert_eq!(path_u(50.0, 0.0, 10.0), 1.0, "after the span clamps to the end");
+        assert_eq!(
+            path_u(-5.0, 0.0, 10.0),
+            0.0,
+            "before the span clamps to the start"
+        );
+        assert_eq!(
+            path_u(50.0, 0.0, 10.0),
+            1.0,
+            "after the span clamps to the end"
+        );
         assert!((path_u(5.0, 0.0, 10.0) - 0.5).abs() < 1e-6);
         // A zero-length `Playback` span must not divide by zero and produce NaN — a
         // NaN `u` propagates into the camera's Transform and the view goes black,
         // which is a spectacularly unhelpful symptom for "duration = 0".
-        assert!(path_u(1.0, 4.0, 4.0).is_finite(), "degenerate span must stay finite");
+        assert!(
+            path_u(1.0, 4.0, 4.0).is_finite(),
+            "degenerate span must stay finite"
+        );
     }
 
     #[test]
@@ -1070,10 +1126,16 @@ mod tests {
         let start = eval_curve(&p, CurveBasis::Bezier, true, 0.0);
         let end = eval_curve(&p, CurveBasis::Bezier, true, 1.0);
         assert!((start - p[0]).length() < 1e-5, "periodic start is CV 0");
-        assert!((end - start).length() < 1e-5, "periodic end wraps back onto the start");
+        assert!(
+            (end - start).length() < 1e-5,
+            "periodic end wraps back onto the start"
+        );
         // The same CVs read nonperiodically span only one segment (4 + 3(segs−1)
         // ⇒ segs = 1) and stop on CV 3 — the wrap is what adds the return leg.
         let open_end = eval_curve(&p, CurveBasis::Bezier, false, 1.0);
-        assert!((open_end - p[3]).length() < 1e-5, "nonperiodic stops at its last endpoint");
+        assert!(
+            (open_end - p[3]).length() < 1e-5,
+            "nonperiodic stops at its last endpoint"
+        );
     }
 }

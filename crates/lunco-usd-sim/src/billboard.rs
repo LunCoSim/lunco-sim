@@ -60,7 +60,11 @@ pub struct UsdBillboard {
 
 impl Default for UsdBillboard {
     fn default() -> Self {
-        Self { template: "{label}".into(), offset_y: 3.0, fade_end: 1200.0 }
+        Self {
+            template: "{label}".into(),
+            offset_y: 3.0,
+            fade_end: 1200.0,
+        }
     }
 }
 
@@ -136,7 +140,11 @@ fn index_of(name: &str) -> String {
         .into_iter()
         .rev()
         .collect();
-    if digits.is_empty() { name.to_string() } else { digits }
+    if digits.is_empty() {
+        name.to_string()
+    } else {
+        digits
+    }
 }
 
 #[cfg(test)]
@@ -170,7 +178,11 @@ mod tests {
     /// An un-anchored scene must not invent coordinates.
     #[test]
     fn missing_site_anchor_renders_a_dash_not_a_zero() {
-        let f = BillboardFacts { name: "W3", label: None, geo: None };
+        let f = BillboardFacts {
+            name: "W3",
+            label: None,
+            geo: None,
+        };
         assert_eq!(render_billboard("{lat} {lon} {height}", &f), "— — —");
     }
 
@@ -185,7 +197,10 @@ mod tests {
     #[test]
     fn label_falls_back_to_the_prim_name() {
         assert_eq!(render_billboard("{label}", &facts()), "W3");
-        let named = BillboardFacts { label: Some("Point of Interest"), ..facts() };
+        let named = BillboardFacts {
+            label: Some("Point of Interest"),
+            ..facts()
+        };
         assert_eq!(render_billboard("{label}", &named), "Point of Interest");
     }
 

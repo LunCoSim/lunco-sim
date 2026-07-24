@@ -524,7 +524,12 @@ mod tests {
             .collect();
 
         let loops = assemble_loops(
-            &[1], &[2], &[16], &knots, &[], &points,
+            &[1],
+            &[2],
+            &[16],
+            &knots,
+            &[],
+            &points,
             [0.0, 4.0], // uRange, as authored on the patch
             [0.0, 1.0], // vRange
             24,
@@ -538,7 +543,8 @@ mod tests {
             ("right sill", 3.088512 / 4.0, 0.004),
         ] {
             assert!(
-                l.iter().any(|p| (p[0] - u).abs() < 1e-6 && (p[1] - v).abs() < 1e-6),
+                l.iter()
+                    .any(|p| (p[0] - u).abs() < 1e-6 && (p[1] - v).abs() < 1e-6),
                 "{name} corner missing from the assembled loop — it will render chamfered"
             );
         }
@@ -555,7 +561,15 @@ mod tests {
             .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
             .collect();
         let loops = assemble_loops(
-            &[1], &[2], &[16], &knots, &[], &points, [0.0, 4.0], [0.0, 1.0], 24,
+            &[1],
+            &[2],
+            &[16],
+            &knots,
+            &[],
+            &points,
+            [0.0, 4.0],
+            [0.0, 1.0],
+            24,
         );
         let domain = triangulate_trimmed(&loops, 54).expect("door patch must triangulate");
 
@@ -721,7 +735,10 @@ mod tests {
             ];
             point_in_loop(c, &loops.loops[1])
         });
-        assert!(inner_survives, "island inside the nested loop was discarded");
+        assert!(
+            inner_survives,
+            "island inside the nested loop was discarded"
+        );
     }
 
     #[test]

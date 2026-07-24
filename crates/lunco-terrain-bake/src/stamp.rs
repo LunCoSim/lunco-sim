@@ -46,12 +46,16 @@ pub fn crater_placements(craters: &CraterLayer, seed: u64, half_extent: f32) -> 
     const DIAMETERS_APART: f32 = 2.0;
 
     let side = (2.0 * half_extent) as f64;
-    let count = ((craters.density as f64 * side * side) / M2_PER_HECTARE).round().max(0.0) as usize;
+    let count = ((craters.density as f64 * side * side) / M2_PER_HECTARE)
+        .round()
+        .max(0.0) as usize;
     if count == 0 {
         return Vec::new();
     }
     let pitch = (side / count.max(1) as f64).sqrt() as f32 * PITCH_FRACTION;
-    let min_spacing = (craters.size.mode * DIAMETERS_APART).max(pitch).max(MIN_SPACING_FLOOR_M);
+    let min_spacing = (craters.size.mode * DIAMETERS_APART)
+        .max(pitch)
+        .max(MIN_SPACING_FLOOR_M);
     sample_layer(
         seed,
         salt::CRATERS,

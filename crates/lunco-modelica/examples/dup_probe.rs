@@ -20,7 +20,11 @@ end Untitled1;
         Ok(ast) => {
             println!("OK. Classes: {:?}", ast.classes.keys().collect::<Vec<_>>());
             if let Some(c) = ast.classes.get("Untitled1") {
-                println!("  Untitled1 components ({}): {:?}", c.components.len(), c.components.keys().collect::<Vec<_>>());
+                println!(
+                    "  Untitled1 components ({}): {:?}",
+                    c.components.len(),
+                    c.components.keys().collect::<Vec<_>>()
+                );
             }
         }
         Err(e) => println!("ERR: {}", e),
@@ -31,7 +35,11 @@ end Untitled1;
     let ast = syntax.best_effort();
     println!("Classes: {:?}", ast.classes.keys().collect::<Vec<_>>());
     if let Some(c) = ast.classes.get("Untitled1") {
-        println!("  Untitled1 components ({}): {:?}", c.components.len(), c.components.keys().collect::<Vec<_>>());
+        println!(
+            "  Untitled1 components ({}): {:?}",
+            c.components.len(),
+            c.components.keys().collect::<Vec<_>>()
+        );
     }
     println!("Parse errors: {}", syntax.parse_errors().len());
     println!();
@@ -40,12 +48,49 @@ end Untitled1;
         r"(?m)^\s*(?:(?:flow|stream|input|output|parameter|constant|discrete|inner|outer|replaceable|final)\s+)*((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\b"
     ).unwrap();
     const KEYWORDS: &[&str] = &[
-        "model", "block", "connector", "package", "function", "record", "class", "type",
-        "extends", "import", "equation", "algorithm", "initial", "protected", "public",
-        "annotation", "connect", "if", "for", "when", "end", "within", "and", "or", "not",
-        "true", "false", "else", "elseif", "elsewhen", "while", "loop", "break", "return",
-        "then", "external", "encapsulated", "partial", "expandable", "operator", "pure",
-        "impure", "redeclare",
+        "model",
+        "block",
+        "connector",
+        "package",
+        "function",
+        "record",
+        "class",
+        "type",
+        "extends",
+        "import",
+        "equation",
+        "algorithm",
+        "initial",
+        "protected",
+        "public",
+        "annotation",
+        "connect",
+        "if",
+        "for",
+        "when",
+        "end",
+        "within",
+        "and",
+        "or",
+        "not",
+        "true",
+        "false",
+        "else",
+        "elseif",
+        "elsewhen",
+        "while",
+        "loop",
+        "break",
+        "return",
+        "then",
+        "external",
+        "encapsulated",
+        "partial",
+        "expandable",
+        "operator",
+        "pure",
+        "impure",
+        "redeclare",
     ];
     for cap in re.captures_iter(src) {
         let ty = &cap[1];

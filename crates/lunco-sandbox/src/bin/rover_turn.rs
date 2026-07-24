@@ -28,11 +28,11 @@
 
 use std::time::Duration;
 
-use bevy::prelude::*;
-use bevy::app::ScheduleRunnerPlugin;
-use bevy::time::TimeUpdateStrategy;
-use bevy::math::{DVec3, DQuat};
 use avian3d::prelude::*;
+use bevy::app::ScheduleRunnerPlugin;
+use bevy::math::{DQuat, DVec3};
+use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
 
 // ── Authored rover parameters (mirror assets/.../*rover*.usda + scene) ──
 const CHASSIS_MASS: f64 = 1000.0;
@@ -299,10 +299,10 @@ fn setup(mut commands: Commands, cfg: Res<Config>) {
     // the sign only matters for which pair steers; we steer the two front
     // (z = +WHEEL_Z here) wheels. side = +1 left (x>0), −1 right (x<0).
     let corners = [
-        (DVec3::new(WHEEL_X, CHASSIS_Y + WHEEL_DY, WHEEL_Z), true),   // FL front-left
-        (DVec3::new(-WHEEL_X, CHASSIS_Y + WHEEL_DY, WHEEL_Z), true),  // FR front-right
+        (DVec3::new(WHEEL_X, CHASSIS_Y + WHEEL_DY, WHEEL_Z), true), // FL front-left
+        (DVec3::new(-WHEEL_X, CHASSIS_Y + WHEEL_DY, WHEEL_Z), true), // FR front-right
         (DVec3::new(WHEEL_X, CHASSIS_Y + WHEEL_DY, -WHEEL_Z), false), // RL
-        (DVec3::new(-WHEEL_X, CHASSIS_Y + WHEEL_DY, -WHEEL_Z), false),// RR
+        (DVec3::new(-WHEEL_X, CHASSIS_Y + WHEEL_DY, -WHEEL_Z), false), // RR
     ];
 
     // Avian's cylinder is Y-native; rotate Y→X so the axle lies along X.

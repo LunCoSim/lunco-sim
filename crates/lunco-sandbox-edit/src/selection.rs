@@ -4,16 +4,16 @@
 //! Selects the entity closest to the camera under the cursor and immediately
 //! attaches a transform gizmo for manipulation.
 
-use bevy::prelude::*;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;
+use bevy::prelude::*;
 use transform_gizmo_bevy::GizmoTarget;
 
 use bevy::camera::primitives::Aabb;
-use bevy::math::Isometry3d;
 use bevy::math::primitives::Cuboid;
+use bevy::math::Isometry3d;
 
-use crate::{SpawnState, SelectedEntities};
+use crate::{SelectedEntities, SpawnState};
 use lunco_core::{on_command, register_commands, Command};
 
 /// Component marking an entity as currently selected.
@@ -69,17 +69,25 @@ pub(crate) fn apply_selection(
     if !extend && !toggle {
         for e in old_selected {
             if e != target {
-                commands.entity(e).remove::<Selected>().remove::<crate::gizmo::GizmoSelected>();
+                commands
+                    .entity(e)
+                    .remove::<Selected>()
+                    .remove::<crate::gizmo::GizmoSelected>();
             }
         }
         selected.entities.clear();
     }
 
     if toggle && selected.entities.contains(&target) {
-        commands.entity(target).remove::<Selected>().remove::<crate::gizmo::GizmoSelected>();
+        commands
+            .entity(target)
+            .remove::<Selected>()
+            .remove::<crate::gizmo::GizmoSelected>();
         selected.entities.retain(|e| *e != target);
     } else {
-        commands.entity(target).try_insert((Selected, crate::gizmo::GizmoSelected));
+        commands
+            .entity(target)
+            .try_insert((Selected, crate::gizmo::GizmoSelected));
         if !selected.entities.contains(&target) {
             selected.entities.push(target);
         }
@@ -94,7 +102,10 @@ pub(crate) fn clear_selection(
     old_selected: impl IntoIterator<Item = Entity>,
 ) {
     for e in old_selected {
-        commands.entity(e).remove::<Selected>().remove::<crate::gizmo::GizmoSelected>();
+        commands
+            .entity(e)
+            .remove::<Selected>()
+            .remove::<crate::gizmo::GizmoSelected>();
     }
     selected.entities.clear();
 }
@@ -131,8 +142,18 @@ pub fn on_select_entity(
         return;
     };
 
-    apply_selection(&mut commands, &mut selected, q_old.iter(), target, cmd.extend, cmd.toggle);
-    info!("SELECT_ENTITY: selected api_id={} ({target:?})", cmd.entity_id);
+    apply_selection(
+        &mut commands,
+        &mut selected,
+        q_old.iter(),
+        target,
+        cmd.extend,
+        cmd.toggle,
+    );
+    info!(
+        "SELECT_ENTITY: selected api_id={} ({target:?})",
+        cmd.entity_id
+    );
 }
 
 /// Finds the most appropriate entity to select from a hit entity.
@@ -315,15 +336,21 @@ pub fn on_scene_click_select(
     // carries a prim path.
     let alt_held = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     if alt_held && prev_selected == Some(entity) && hit_entity != entity {
-        inspector_target.part = Some(
-            find_prim_part(hit_entity, entity, &q_prims, &q_parents).unwrap_or(hit_entity),
-        );
+        inspector_target.part =
+            Some(find_prim_part(hit_entity, entity, &q_prims, &q_parents).unwrap_or(hit_entity));
         return;
     }
 
     // Shift+click toggles this entity in the multi-selection (extend + toggle),
     // through the same `apply_selection` the API command and Explorer use.
-    apply_selection(&mut commands, &mut selected, q_selected_old.iter(), entity, true, true);
+    apply_selection(
+        &mut commands,
+        &mut selected,
+        q_selected_old.iter(),
+        entity,
+        true,
+        true,
+    );
     inspector_target.part = None;
 }
 
@@ -465,13 +492,17 @@ pub fn draw_selection_bounds(
         b as f32 / 255.0,
         a as f32 / 255.0,
     );
-    
+
     for selected_ent in q_selected.iter() {
-        if let Some((min, max)) = compute_selection_aabb(selected_ent, &q_aabb, &q_children, &q_skip_tree, &mut queue) {
+        if let Some((min, max)) =
+            compute_selection_aabb(selected_ent, &q_aabb, &q_children, &q_skip_tree, &mut queue)
+        {
             let center = (min + max) * 0.5;
             let size = max - min;
             gizmos.primitive_3d(
-                &Cuboid { half_size: size * 0.5 },
+                &Cuboid {
+                    half_size: size * 0.5,
+                },
                 Isometry3d::from_translation(center),
                 color,
             );
@@ -493,24 +524,39 @@ mod tests {
     #[test]
     fn test_draw_selection_bounds_excludes_link_beams() {
         let mut app = App::new();
-        
-        let rover = app.world_mut().spawn((Selected, Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
-        let chassis = app.world_mut().spawn((
-            Mesh3d(Handle::default()),
-            Aabb { center: Vec3A::ZERO, half_extents: Vec3A::new(1.0, 0.5, 1.5) },
-            Transform::IDENTITY,
-            GlobalTransform::IDENTITY,
-            ChildOf(rover),
-        )).id();
 
-        let beam = app.world_mut().spawn((
-            Mesh3d(Handle::default()),
-            Aabb { center: Vec3A::ZERO, half_extents: Vec3A::new(10.0, 10.0, 50000.0) },
-            Transform::IDENTITY,
-            GlobalTransform::IDENTITY,
-            lunco_core::NoSelectionBounds,
-            ChildOf(rover),
-        )).id();
+        let rover = app
+            .world_mut()
+            .spawn((Selected, Transform::IDENTITY, GlobalTransform::IDENTITY))
+            .id();
+        let chassis = app
+            .world_mut()
+            .spawn((
+                Mesh3d(Handle::default()),
+                Aabb {
+                    center: Vec3A::ZERO,
+                    half_extents: Vec3A::new(1.0, 0.5, 1.5),
+                },
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                ChildOf(rover),
+            ))
+            .id();
+
+        let beam = app
+            .world_mut()
+            .spawn((
+                Mesh3d(Handle::default()),
+                Aabb {
+                    center: Vec3A::ZERO,
+                    half_extents: Vec3A::new(10.0, 10.0, 50000.0),
+                },
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                lunco_core::NoSelectionBounds,
+                ChildOf(rover),
+            ))
+            .id();
 
         app.world_mut().entity_mut(rover).add_child(chassis);
         app.world_mut().entity_mut(rover).add_child(beam);
@@ -530,34 +576,51 @@ mod tests {
     #[test]
     fn test_compute_selection_aabb_returns_tight_vehicle_bounds() {
         let mut app = App::new();
-        
-        let rover = app.world_mut().spawn((Selected, Transform::IDENTITY, GlobalTransform::IDENTITY)).id();
-        let chassis = app.world_mut().spawn((
-            Mesh3d(Handle::default()),
-            Aabb { center: Vec3A::ZERO, half_extents: Vec3A::new(1.0, 0.5, 1.5) },
-            Transform::IDENTITY,
-            GlobalTransform::IDENTITY,
-            ChildOf(rover),
-        )).id();
 
-        let beam = app.world_mut().spawn((
-            Mesh3d(Handle::default()),
-            Aabb { center: Vec3A::ZERO, half_extents: Vec3A::new(10.0, 10.0, 50000.0) },
-            Transform::IDENTITY,
-            GlobalTransform::IDENTITY,
-            lunco_core::NoSelectionBounds,
-            ChildOf(rover),
-        )).id();
+        let rover = app
+            .world_mut()
+            .spawn((Selected, Transform::IDENTITY, GlobalTransform::IDENTITY))
+            .id();
+        let chassis = app
+            .world_mut()
+            .spawn((
+                Mesh3d(Handle::default()),
+                Aabb {
+                    center: Vec3A::ZERO,
+                    half_extents: Vec3A::new(1.0, 0.5, 1.5),
+                },
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                ChildOf(rover),
+            ))
+            .id();
+
+        let beam = app
+            .world_mut()
+            .spawn((
+                Mesh3d(Handle::default()),
+                Aabb {
+                    center: Vec3A::ZERO,
+                    half_extents: Vec3A::new(10.0, 10.0, 50000.0),
+                },
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                lunco_core::NoSelectionBounds,
+                ChildOf(rover),
+            ))
+            .id();
 
         app.world_mut().entity_mut(rover).add_child(chassis);
         app.world_mut().entity_mut(rover).add_child(beam);
 
-        let mut state_aabb = app.world_mut().query_filtered::<(&GlobalTransform, &Aabb), (
-            With<Mesh3d>,
-            Without<lunco_celestial::TrajectoryMeshMarker>,
-            Without<lunco_core::programs::ProgramDriverId>,
-            Without<lunco_core::NoSelectionBounds>,
-        )>();
+        let mut state_aabb = app
+            .world_mut()
+            .query_filtered::<(&GlobalTransform, &Aabb), (
+                With<Mesh3d>,
+                Without<lunco_celestial::TrajectoryMeshMarker>,
+                Without<lunco_core::programs::ProgramDriverId>,
+                Without<lunco_core::NoSelectionBounds>,
+            )>();
         let mut state_children = app.world_mut().query::<&Children>();
         let mut state_skip = app.world_mut().query_filtered::<(), Or<(
             With<big_space::prelude::Grid>,
@@ -574,12 +637,16 @@ mod tests {
             &state_children.query(app.world()),
             &state_skip.query(app.world()),
             &mut queue,
-        ).expect("Selection AABB should exist for rover chassis");
+        )
+        .expect("Selection AABB should exist for rover chassis");
 
         let size = max - min;
         assert!((size.x - 2.0).abs() < 1e-4);
         assert!((size.y - 1.0).abs() < 1e-4);
         assert!((size.z - 3.0).abs() < 1e-4);
-        assert!(size.max_element() < 5.0, "Selection AABB must be tight (< 5m), got {size}");
+        assert!(
+            size.max_element() < 5.0,
+            "Selection AABB must be tight (< 5m), got {size}"
+        );
     }
 }

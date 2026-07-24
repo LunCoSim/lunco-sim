@@ -55,8 +55,15 @@ pub struct GridSpatialQuery<'w, 's> {
     /// (entity-independent) render→physics shift. Static bodies only: a dynamic
     /// body's render translation is an eased pose while `interpolate_all()` is
     /// on, so it would contribute its interpolation offset to the shift.
-    frame_ref:
-        Query<'w, 's, (&'static Position, &'static GlobalTransform, &'static RigidBody)>,
+    frame_ref: Query<
+        'w,
+        's,
+        (
+            &'static Position,
+            &'static GlobalTransform,
+            &'static RigidBody,
+        ),
+    >,
 }
 
 impl<'w, 's> GridSpatialQuery<'w, 's> {
@@ -102,8 +109,13 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
-        self.spatial
-            .cast_ray(render_origin + self.frame_shift(), direction, max_distance, solid, filter)
+        self.spatial.cast_ray(
+            render_origin + self.frame_shift(),
+            direction,
+            max_distance,
+            solid,
+            filter,
+        )
     }
 
     /// The wrapped [`SpatialQuery`], for origins ALREADY in the grid-absolute

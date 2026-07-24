@@ -14,11 +14,13 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 // `bevy_mesh`, not `bevy::render` — `PrimitiveTopology` is re-exported from
 // `wgpu-types` and needs no render pipeline. See docs/architecture/render-decoupling.md.
-use bevy_mesh::PrimitiveTopology;
-use lunco_render::PbrLook;
 use bevy_mesh::Indices;
+use bevy_mesh::PrimitiveTopology;
 use big_space::prelude::CellCoord;
-use lunco_core::{ArticulatedVehicle, GridAnchor, WorldGrid, Command, on_command, register_commands};
+use lunco_core::{
+    on_command, register_commands, ArticulatedVehicle, Command, GridAnchor, WorldGrid,
+};
+use lunco_render::PbrLook;
 
 // Rock scatter is native-only (see `regenerate_obstacle_field`); its helpers are
 // unused on wasm.
@@ -27,7 +29,7 @@ use crate::assets::{bucket_index, bucket_sizes};
 use crate::field::{build_height_grid, HeightGrid};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::rock::faceted_rock_mesh;
-use crate::sampler::{sample_layer, salt};
+use crate::sampler::{salt, sample_layer};
 use crate::spec::{ObstacleFieldSpec, Pattern};
 
 /// Number of shared rock meshes per size bucket (geometric size buckets).
@@ -135,7 +137,12 @@ impl Plugin for ObstacleFieldPlugin {
                 Update,
                 // Chained so a rebuild → re-seat bodies → freeze all happen
                 // the same frame, before next frame's physics step.
-                (regenerate_obstacle_field, reseat_bodies, manage_physics_hold).chain(),
+                (
+                    regenerate_obstacle_field,
+                    reseat_bodies,
+                    manage_physics_hold,
+                )
+                    .chain(),
             );
         // NOTE: removing the legacy USD-authored `Ground` prim once a field exists
         // is owned by `lunco-sandbox-edit` (`remove_legacy_ground_prim`), which has
@@ -375,7 +382,12 @@ fn regenerate_obstacle_field(
         collider,
     ));
     if let Some(meshes) = meshes.as_mut() {
-        let crate::field::MeshData { positions, normals, uvs, indices } = grid.to_mesh_data();
+        let crate::field::MeshData {
+            positions,
+            normals,
+            uvs,
+            indices,
+        } = grid.to_mesh_data();
         // Slab: keep the CPU copy (`default()`) — the horizon bake reads it back.
         let mesh = meshes.add(grid_mesh(
             positions,
@@ -467,21 +479,25 @@ fn regenerate_obstacle_field(
             if let Some(rock_meshes) = &visuals {
                 let bi = bucket_index(p.size, &buckets);
                 // Pick a faceted variant deterministically from position.
-                let variant =
-                    (p.pos.x.to_bits() ^ p.pos.y.to_bits().rotate_left(16)) as usize % ROCK_VARIANTS;
+                let variant = (p.pos.x.to_bits() ^ p.pos.y.to_bits().rotate_left(16)) as usize
+                    % ROCK_VARIANTS;
                 let scale = p.size / buckets[bi];
-                let rock_child = commands.spawn((
-                    Mesh3d(rock_meshes[bi * ROCK_VARIANTS + variant].clone()),
-                    // `PbrLook` carries texture handles, so it is Clone, not Copy.
-                    // Cloning the LOOK does not clone a material: every clone keys to
-                    // the same cached one.
-                    rock_look.clone(),
-                    Transform::from_scale(Vec3::splat(scale)),
-                    ChildOf(rock),
-                )).id();
+                let rock_child = commands
+                    .spawn((
+                        Mesh3d(rock_meshes[bi * ROCK_VARIANTS + variant].clone()),
+                        // `PbrLook` carries texture handles, so it is Clone, not Copy.
+                        // Cloning the LOOK does not clone a material: every clone keys to
+                        // the same cached one.
+                        rock_look.clone(),
+                        Transform::from_scale(Vec3::splat(scale)),
+                        ChildOf(rock),
+                    ))
+                    .id();
                 // Distance LOD cull — native only (see `rock_visibility_range`).
                 #[cfg(not(target_arch = "wasm32"))]
-                commands.entity(rock_child).try_insert(rock_visibility_range());
+                commands
+                    .entity(rock_child)
+                    .try_insert(rock_visibility_range());
                 #[cfg(target_arch = "wasm32")]
                 let _ = rock_child;
             }
@@ -555,7 +571,9 @@ fn reseat_bodies(
             return None;
         }
         let new_g = current.height_at(x as f64, z as f64);
-        let old_g = previous.map(|g| g.height_at(x as f64, z as f64)).unwrap_or(0.0);
+        let old_g = previous
+            .map(|g| g.height_at(x as f64, z as f64))
+            .unwrap_or(0.0);
         let d = new_g - old_g;
         if d.abs() < 1.0e-3 || d.abs() > MAX_RESEAT_SHIFT {
             None
@@ -615,7 +633,10 @@ pub fn stress_spec(seed: u64) -> ObstacleFieldSpec {
     ObstacleFieldSpec {
         seed,
         region_half_extent: 150.0,
-        pattern: Pattern::Clustered { clusters: 8, spread: 25.0 },
+        pattern: Pattern::Clustered {
+            clusters: 8,
+            spread: 25.0,
+        },
         ..default()
     }
 }
@@ -638,7 +659,10 @@ mod tests {
     /// stay silent under the default.
     #[test]
     fn default_mode_is_dem_delegated_and_fires_no_initial_regen() {
-        assert_eq!(ObstacleFieldMode::default(), ObstacleFieldMode::DemDelegated);
+        assert_eq!(
+            ObstacleFieldMode::default(),
+            ObstacleFieldMode::DemDelegated
+        );
         assert!(!ObstacleFieldMode::default().is_standalone());
 
         let mut app = App::new();
@@ -712,7 +736,10 @@ mod tests {
 
         // Root and wheel BOTH rise by the root's +2 (rigid unit), not their own.
         assert!((world.get::<Position>(root).unwrap().0.y - 7.0).abs() < 1e-6);
-        assert!((world.get::<Position>(wheel).unwrap().0.y - 7.0).abs() < 1e-6, "wheel must use root delta");
+        assert!(
+            (world.get::<Position>(wheel).unwrap().0.y - 7.0).abs() < 1e-6,
+            "wheel must use root delta"
+        );
         // Transform shifted too (visual stays in sync while frozen).
         assert!((world.get::<Transform>(wheel).unwrap().translation.y - 7.0).abs() < 1e-4);
         // Moved bodies have velocity zeroed.
@@ -720,8 +747,14 @@ mod tests {
         assert_eq!(world.get::<AngularVelocity>(wheel).unwrap().0, DVec3::ZERO);
 
         // Standalone ball at x=25 did NOT move (own delta 0) and kept its velocity.
-        assert!((world.get::<Position>(ball).unwrap().0.y - 5.0).abs() < 1e-6, "free body should not move");
-        assert_eq!(world.get::<LinearVelocity>(ball).unwrap().0, DVec3::splat(9.0));
+        assert!(
+            (world.get::<Position>(ball).unwrap().0.y - 5.0).abs() < 1e-6,
+            "free body should not move"
+        );
+        assert_eq!(
+            world.get::<LinearVelocity>(ball).unwrap().0,
+            DVec3::splat(9.0)
+        );
 
         // reseat_pending consumed.
         assert!(!world.resource::<ObstacleFieldHeights>().reseat_pending);

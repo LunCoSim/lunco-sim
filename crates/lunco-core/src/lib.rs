@@ -5,43 +5,43 @@
 //! and the core plugin registration.
 
 pub mod architecture;
-pub mod mocks;
-pub mod ports;
-pub mod programs;
-pub mod telemetry;
-pub mod coords;
-pub mod log;
-/// Architectural marker components for the big_space integration.
-pub mod markers;
 /// Atomic re-parenting helpers for SOI/Grid migration.
 pub mod attach;
-/// Debug-build invariant checks for the big_space hierarchy.
-pub mod invariants;
-/// The persistent big_space world shell (single root + `WorldGrid` + one
-/// `FloatingOrigin`) that every scene mounts into.
-pub mod world;
-/// Unified diagram data model — pure Rust, no Bevy dependency.
-pub mod diagram;
-/// Shared 53-bit time-sorted id generator backing `GlobalEntityId`
-/// and `commands::OpId`.
-pub mod ids;
-/// M1 — deterministic identity from `Provenance`. The only place network
-/// ids are *derived*; the assignment system below is the only place they
-/// are *minted*.
-pub mod identity;
 /// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `SyncChannel`.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
+pub mod coords;
+/// Unified diagram data model — pure Rust, no Bevy dependency.
+pub mod diagram;
+/// M1 — deterministic identity from `Provenance`. The only place network
+/// ids are *derived*; the assignment system below is the only place they
+/// are *minted*.
+pub mod identity;
+/// Shared 53-bit time-sorted id generator backing `GlobalEntityId`
+/// and `commands::OpId`.
+pub mod ids;
+/// Debug-build invariant checks for the big_space hierarchy.
+pub mod invariants;
+pub mod log;
+/// Architectural marker components for the big_space integration.
+pub mod markers;
+pub mod mocks;
+pub mod ports;
+pub mod programs;
+/// M4 — pure predict-own reconciliation decision (input-replay, D2). The
+/// dependency-free geometry the spawn-domain `reconcile_owned_prediction` system
+/// applies; unit-tested without the avian/render build.
+pub mod reconcile;
 /// Always-on networking **authority** substrate (no wire dependency):
 /// `NetworkRole`, `LocalSession`, `SyncApplyGuard`, `SessionRegistry` + the
 /// single `authorize` gate. The seam the optional `lunco-networking` layer
 /// drives; trivially inert in single-player.
 pub mod session;
-/// M4 — pure predict-own reconciliation decision (input-replay, D2). The
-/// dependency-free geometry the spawn-domain `reconcile_owned_prediction` system
-/// applies; unit-tested without the avian/render build.
-pub mod reconcile;
+pub mod telemetry;
+/// The persistent big_space world shell (single root + `WorldGrid` + one
+/// `FloatingOrigin`) that every scene mounts into.
+pub mod world;
 
 pub mod subsystems;
 
@@ -55,47 +55,43 @@ pub mod pacing;
 
 pub use architecture::*;
 pub use derived::RebuildOnChange;
-pub use pacing::KeepAwake;
-pub use mobility::Mobility;
 pub use markers::NoSelectionBounds;
+pub use mobility::Mobility;
 pub use mocks::*;
+pub use pacing::KeepAwake;
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
 // crate-root `use bevy::prelude::*` below shadows the glob above for external
 // path resolution (`lunco_core::Severity` would hit bevy's private import).
 // An explicit item outranks both globs.
-pub use telemetry::Severity;
-pub use log::*;
 pub use commands::{
     Ack, ActiveCommandId, ClientCommandPolicy, CommandOutcome, CommandResults, EditIntent,
     MarkClientLocalExt, Mutation, OpId, Reject, SessionId, SpawnEntity, SyncChannel,
 };
+pub use identity::Provenance;
+pub use invariants::BigSpaceInvariantsPlugin;
+pub use log::*;
 pub use markers::{
-    ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
-    CinematicCameraLock, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
+    ActuatorDrivenJoint, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource,
+    FallbackSceneLight, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene,
+    ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
     CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
 };
-pub use invariants::BigSpaceInvariantsPlugin;
+pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
+pub use session::{
+    authorize, AppliedInputSeq, AppliedSlot, ArticulatedLink, ArticulatedVehicle, BodyDivergence,
+    BufferedClientInputs, ContactPredictable, DivergenceStats, IncomingSnapshots, InputFrame,
+    LocalDriveInput, LocalSession, NetConnectRequest, NetDisconnectRequest, NetExcluded,
+    NetReplicate, NetSpawn, NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally,
+    PendingConnect, PendingConnectRequest, PendingCorrection, PendingReplicatedSpawns,
+    PossessionPolicy, PredictedDynamic, PredictionKind, ReplicatedChassisMotion, ReplicatedSpawn,
+    SessionProfiles, SessionRegistry, SkipContentStamp, SnapshotSample, SyncApplyGuard,
+    VesselInputLog, MAX_SEQ_JUMP,
+};
+pub use telemetry::Severity;
 pub use world::{
     ensure_world_root, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot, WorldShellPlugin,
     WorldShellSet,
-};
-pub use identity::Provenance;
-pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
-pub use session::{
-    authorize, AppliedInputSeq, AppliedSlot, MAX_SEQ_JUMP, ArticulatedLink, ArticulatedVehicle, ContactPredictable,
-    BodyDivergence, DivergenceStats, PredictionKind,
-    IncomingSnapshots, InputFrame,
-    LocalSession,
-    NetConnectRequest, NetDisconnectRequest,
-    NetExcluded, NetReplicate, NetSpawn, PendingConnect, PendingConnectRequest,
-    BufferedClientInputs, LocalDriveInput,
-    NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingCorrection,
-    PendingReplicatedSpawns,
-    PossessionPolicy,
-    PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SessionProfiles, SkipContentStamp,
-    SnapshotSample,
-    VesselInputLog, SyncApplyGuard,
 };
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
@@ -114,7 +110,7 @@ pub use session::{
 //   → generates pub fn register_all_commands(app) that wires every
 //     listed observer up. Entries may be bare idents or module paths.
 
-pub use lunco_command_macro::{Command, on_command, register_commands};
+pub use lunco_command_macro::{on_command, register_commands, Command};
 
 /// Re-exported `serde` so the `#[Command]` proc-macro can reference it
 /// via an absolute path (`::lunco_core::serde::*`). Crates using
@@ -122,8 +118,8 @@ pub use lunco_command_macro::{Command, on_command, register_commands};
 /// transitively through `lunco-core`.
 pub use serde;
 
-use bevy::prelude::*;
 use bevy::ecs::schedule::ScheduleLabel;
+use bevy::prelude::*;
 
 /// The central plugin for the LunCo simulation core.
 ///
@@ -145,7 +141,18 @@ pub struct LunCoCorePlugin;
 /// [`from_raw`](Self::from_raw) reconstructs an id from a value already known
 /// (the API boundary resolving a wire `u64`, deserialization) — it does not
 /// *mint*.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Component,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Reflect,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[reflect(Component)]
 pub struct GlobalEntityId(u64);
 
@@ -497,7 +504,9 @@ impl CancelIntent<'_, '_> {
         if self.egui_focus.wants_keyboard {
             return false;
         }
-        self.avatars.iter().any(|i| i.just_pressed(&UserIntent::Cancel))
+        self.avatars
+            .iter()
+            .any(|i| i.just_pressed(&UserIntent::Cancel))
     }
 }
 
@@ -552,8 +561,18 @@ pub const SECS_PER_TICK: f64 = 1.0 / FIXED_HZ;
 /// `FixedUpdate` step (see [`advance_sim_tick`]). Warp-independent: warp scales
 /// `dt`, not the tick count, so peers can compare ticks directly. Not yet
 /// consumed anywhere — it's the substrate the networking layer (Ph3/Ph4) drives.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq, Reflect,
-         serde::Serialize, serde::Deserialize)]
+#[derive(
+    Resource,
+    Default,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Reflect,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[reflect(Resource)]
 pub struct SimTick(pub u64);
 
@@ -644,29 +663,29 @@ impl Plugin for LunCoCorePlugin {
         app.add_plugins(LunCoLogPlugin);
         app.add_plugins(BigSpaceInvariantsPlugin);
         app.register_type::<GridAnchor>()
-           .register_type::<CinematicCameraLock>()
-           .register_type::<NeedsGroundSettle>()
-           .register_type::<SoiMigrant>()
-           .register_type::<ActuatorDrivenJoint>()
-           // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
-           // (log-level type), which shadows ours in glob-import scopes.
-           .register_type::<crate::telemetry::Severity>()
-           .register_type::<TelemetryValue>()
-           .register_type::<TelemetryEvent>()
-           .register_type::<Parameter>()
-           .register_type::<SampledParameter>()
-           .register_type::<UserIntent>()
-           .register_type::<IntentAnalogState>()
-           .register_type::<Port>()
-           .register_type::<PhysicalProperties>()
-           .register_type::<CelestialBody>()
-           .register_type::<Spacecraft>()
-           .register_type::<ActiveAction>()
-           .register_type::<ActionStatus>()
-           .register_type::<GlobalEntityId>()
-           .register_type::<Provenance>()
-           .register_type::<CameraFollow>()
-           .register_type::<SimTick>();
+            .register_type::<CinematicCameraLock>()
+            .register_type::<NeedsGroundSettle>()
+            .register_type::<SoiMigrant>()
+            .register_type::<ActuatorDrivenJoint>()
+            // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
+            // (log-level type), which shadows ours in glob-import scopes.
+            .register_type::<crate::telemetry::Severity>()
+            .register_type::<TelemetryValue>()
+            .register_type::<TelemetryEvent>()
+            .register_type::<Parameter>()
+            .register_type::<SampledParameter>()
+            .register_type::<UserIntent>()
+            .register_type::<IntentAnalogState>()
+            .register_type::<Port>()
+            .register_type::<PhysicalProperties>()
+            .register_type::<CelestialBody>()
+            .register_type::<Spacecraft>()
+            .register_type::<ActiveAction>()
+            .register_type::<ActionStatus>()
+            .register_type::<GlobalEntityId>()
+            .register_type::<Provenance>()
+            .register_type::<CameraFollow>()
+            .register_type::<SimTick>();
 
         // NOTE: the drive kernels, `DriveMix` and the `ControlKernelRegistry` all
         // live in lunco-mobility — they are vehicle-domain types, and core stays
@@ -681,7 +700,7 @@ impl Plugin for LunCoCorePlugin {
         // `SetSubsystemEnabled` command.
         subsystems::build_subsystems(app);
         app.add_systems(FixedUpdate, advance_sim_tick)
-           .add_systems(PostUpdate, assign_global_entity_ids);
+            .add_systems(PostUpdate, assign_global_entity_ids);
         // Host: keep the per-gid input-ack watermarks keyed to their CURRENT owner.
         // A re-possessed vessel must not keep acking the previous owner's `seq`
         // stream — see `AppliedInputSeq`. Change-detected on the registry, so it
@@ -829,7 +848,9 @@ fn assign_global_entity_ids(
             Some(Provenance::Local) => { /* never networked, no id */ }
             Some(p @ (Provenance::Content { .. } | Provenance::Derived { .. })) => {
                 if let Some(id) = identity::derive_id(p) {
-                    commands.entity(entity).try_insert(GlobalEntityId::from_raw(id));
+                    commands
+                        .entity(entity)
+                        .try_insert(GlobalEntityId::from_raw(id));
                 }
             }
             Some(Provenance::Authoritative) => {
@@ -904,7 +925,9 @@ mod ph1_identity_tests {
         assert!(w.get_resource::<session::SyncApplyGuard>().is_some());
         assert!(w.get_resource::<session::NetStatus>().is_some());
         assert!(w.get_resource::<session::SessionRegistry>().is_some());
-        assert!(w.get_resource::<session::PendingReplicatedSpawns>().is_some());
+        assert!(w
+            .get_resource::<session::PendingReplicatedSpawns>()
+            .is_some());
         assert!(w.get_resource::<session::IncomingSnapshots>().is_some());
         // The two resources that caused the original panic — nailed down
         // explicitly so a regression names them.
@@ -913,7 +936,9 @@ mod ph1_identity_tests {
     }
 
     fn id_of(app: &mut App, e: Entity) -> Option<u64> {
-        app.world().get::<GlobalEntityId>(e).map(GlobalEntityId::get)
+        app.world()
+            .get::<GlobalEntityId>(e)
+            .map(GlobalEntityId::get)
     }
 
     #[test]

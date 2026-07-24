@@ -76,9 +76,8 @@ pub fn bake_tile_mesh(
     let inv_uv = 1.0 / (2.0 * dem_half_extent);
     let (ox, oz) = (origin_xz[0], origin_xz[1]);
 
-    let world = |ix: usize, iz: usize| -> (f64, f64) {
-        (x0 + ix as f64 * step, z0 + iz as f64 * step)
-    };
+    let world =
+        |ix: usize, iz: usize| -> (f64, f64) { (x0 + ix as f64 * step, z0 + iz as f64 * step) };
     let height = |wx: f64, wz: f64| -> f32 { (src.height_at(wx, wz) - origin_y) as f32 };
 
     // Normals are sampled ANALYTICALLY from the composed source, NOT from each
@@ -162,7 +161,10 @@ pub fn bake_tile_mesh(
             morph_normals.push(parent_n[k]);
 
             normals.push(normal_at(wx, wz));
-            uvs.push([((wx + dem_half_extent) * inv_uv) as f32, ((wz + dem_half_extent) * inv_uv) as f32]);
+            uvs.push([
+                ((wx + dem_half_extent) * inv_uv) as f32,
+                ((wz + dem_half_extent) * inv_uv) as f32,
+            ]);
         }
     }
 
@@ -185,7 +187,14 @@ pub fn bake_tile_mesh(
         &mut indices,
     );
 
-    TileMesh { positions, morph_targets, morph_normals, normals, uvs, indices }
+    TileMesh {
+        positions,
+        morph_targets,
+        morph_normals,
+        normals,
+        uvs,
+        indices,
+    }
 }
 
 /// Append a downward skirt wall around the tile perimeter. For each of the four
@@ -244,7 +253,11 @@ mod tests {
     use lunco_obstacle_field::field::HeightGrid;
 
     fn flat_dem() -> HeightGrid {
-        HeightGrid { res: 8, half_extent: 100.0, heights: vec![0.0; 64] }
+        HeightGrid {
+            res: 8,
+            half_extent: 100.0,
+            heights: vec![0.0; 64],
+        }
     }
 
     /// A DEM whose height equals its world X (a pure ramp in X).
@@ -258,14 +271,29 @@ mod tests {
                 heights[z * res + x] = (-half + x as f32 * s) as f64; // = world x
             }
         }
-        HeightGrid { res, half_extent: half, heights }
+        HeightGrid {
+            res,
+            half_extent: half,
+            heights,
+        }
     }
 
     #[test]
     fn flat_dem_bakes_flat_no_morph() {
         let res = 5;
         let dem = flat_dem();
-        let m = bake_tile_mesh(&dem, &dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0], 0.0);
+        let m = bake_tile_mesh(
+            &dem,
+            &dem,
+            Square {
+                center: [0.0, 0.0],
+                half: 50.0,
+            },
+            res,
+            100.0,
+            [0.0, 0.0],
+            0.0,
+        );
         // Interior grid first, then appended skirt verts.
         assert!(m.positions.len() >= res * res);
         assert!(m.indices.len() >= 4 * 4 * 6);
@@ -301,9 +329,16 @@ mod tests {
                 heights[z * res_dem + x] = 6.0 * (wx * 0.09).sin() * (wz * 0.09).cos();
             }
         }
-        let dem = HeightGrid { res: res_dem, half_extent: half, heights };
+        let dem = HeightGrid {
+            res: res_dem,
+            half_extent: half,
+            heights,
+        };
 
-        let region = Square { center: [0.0, 0.0], half: 50.0 };
+        let region = Square {
+            center: [0.0, 0.0],
+            half: 50.0,
+        };
         let res = 17;
         let m = bake_tile_mesh(&dem, &dem, region, res, half as f64, [0.0, 0.0], 0.0);
 
@@ -431,10 +466,9 @@ mod tests {
                 let sz = z0 + (iz & !1) as f64 * step;
                 let want = dem.normal_at(sx, sz, 0.5);
                 let got = m.morph_normals[iz * res + ix];
-                let cosang = (want[0] as f32 * got[0]
-                    + want[1] as f32 * got[1]
-                    + want[2] as f32 * got[2])
-                    .clamp(-1.0, 1.0);
+                let cosang =
+                    (want[0] as f32 * got[0] + want[1] as f32 * got[1] + want[2] as f32 * got[2])
+                        .clamp(-1.0, 1.0);
                 worst_contract = worst_contract.max(cosang.acos().to_degrees());
             }
         }
@@ -487,11 +521,18 @@ mod tests {
                 heights[z * res_dem + x] = 6.0 * (wx * 0.09).sin() * (wz * 0.09).cos();
             }
         }
-        let dem = HeightGrid { res: res_dem, half_extent: half, heights };
+        let dem = HeightGrid {
+            res: res_dem,
+            half_extent: half,
+            heights,
+        };
         let m = bake_tile_mesh(
             &dem,
             &dem,
-            Square { center: [0.0, 0.0], half: 50.0 },
+            Square {
+                center: [0.0, 0.0],
+                half: 50.0,
+            },
             17,
             half as f64,
             [0.0, 0.0],
@@ -532,7 +573,10 @@ mod tests {
     #[test]
     fn even_vertices_do_not_move_odd_collapse_to_even() {
         let dem = ramp_dem();
-        let region = Square { center: [0.0, 0.0], half: 50.0 };
+        let region = Square {
+            center: [0.0, 0.0],
+            half: 50.0,
+        };
         let res = 5;
         let m = bake_tile_mesh(&dem, &dem, region, res, 100.0, [0.0, 0.0], 0.0);
         let step = region.side() / (res as f64 - 1.0);
@@ -542,13 +586,19 @@ mod tests {
                 let i = iz * res + ix;
                 if ix % 2 == 0 {
                     // Even vertex: morph target X == own X (no lateral move).
-                    assert!((m.morph_targets[i][0] - m.positions[i][0]).abs() < 1e-3, "even vtx moved");
+                    assert!(
+                        (m.morph_targets[i][0] - m.positions[i][0]).abs() < 1e-3,
+                        "even vtx moved"
+                    );
                 } else {
                     // Odd vertex: collapses to the lower even neighbour's X.
                     let snapped_x = (x0 + (ix & !1) as f64 * step) as f32;
                     assert!((m.morph_targets[i][0] - snapped_x).abs() < 1e-3);
                     // On an X-ramp, morphed height = snapped world X.
-                    assert!((m.morph_targets[i][1] - snapped_x).abs() < 1e-2, "morph height wrong");
+                    assert!(
+                        (m.morph_targets[i][1] - snapped_x).abs() < 1e-2,
+                        "morph height wrong"
+                    );
                 }
             }
         }
@@ -558,10 +608,26 @@ mod tests {
     fn positions_carry_dem_height() {
         let dem = ramp_dem();
         let res = 5;
-        let m = bake_tile_mesh(&dem, &dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0], 0.0);
+        let m = bake_tile_mesh(
+            &dem,
+            &dem,
+            Square {
+                center: [0.0, 0.0],
+                half: 50.0,
+            },
+            res,
+            100.0,
+            [0.0, 0.0],
+            0.0,
+        );
         // height == world x on this ramp (interior verts only; skirts hang below).
         for p in &m.positions[..res * res] {
-            assert!((p[1] - p[0]).abs() < 1e-2, "pos.y {} != world x {}", p[1], p[0]);
+            assert!(
+                (p[1] - p[0]).abs() < 1e-2,
+                "pos.y {} != world x {}",
+                p[1],
+                p[0]
+            );
         }
     }
 }

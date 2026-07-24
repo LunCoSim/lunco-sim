@@ -10,9 +10,15 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 pub struct TelemetryPanel;
 
 impl Panel for TelemetryPanel {
-    fn id(&self) -> PanelId { PanelId("telemetry") }
-    fn title(&self) -> String { "Telemetry".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn id(&self) -> PanelId {
+        PanelId("telemetry")
+    }
+    fn title(&self) -> String {
+        "Telemetry".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }

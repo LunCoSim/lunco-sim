@@ -117,7 +117,10 @@ impl<'w> PanelCtx<'w> {
     /// Wrap the live `World` for one panel's render. Internal to the
     /// workbench dispatch.
     pub(crate) fn new(world: &'w mut World) -> Self {
-        Self { world, deferred: Vec::new() }
+        Self {
+            world,
+            deferred: Vec::new(),
+        }
     }
 
     /// Consume the context and return its queued mutations, releasing the
@@ -358,13 +361,7 @@ pub trait InstancePanel: Send + Sync + 'static {
     /// Domains that want richer per-tab actions (Pin, Open in new
     /// view, Close Others, …) override this to draw their own menu
     /// items.
-    fn tab_context_menu(
-        &mut self,
-        _ui: &mut egui::Ui,
-        _ctx: &mut PanelCtx,
-        _instance: u64,
-    ) {
-    }
+    fn tab_context_menu(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx, _instance: u64) {}
 }
 
 /// Identity of a tab in the dock.

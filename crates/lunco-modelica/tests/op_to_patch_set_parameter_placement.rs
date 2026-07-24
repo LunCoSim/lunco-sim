@@ -51,8 +51,12 @@ fn set_parameter_through_apply_writes_modification_to_ast() {
     .expect("apply SetParameter");
 
     // Source still parses.
-    let sd = parse_to_ast(h.document().source(), "test.mo")
-        .unwrap_or_else(|e| panic!("post-apply parse: {e:?}\n=== src ===\n{}\n", h.document().source()));
+    let sd = parse_to_ast(h.document().source(), "test.mo").unwrap_or_else(|e| {
+        panic!(
+            "post-apply parse: {e:?}\n=== src ===\n{}\n",
+            h.document().source()
+        )
+    });
     let comp = sd
         .classes
         .get("M")
@@ -79,8 +83,12 @@ fn set_parameter_start_through_apply_routes_to_dedicated_field() {
     })
     .expect("apply SetParameter");
 
-    let sd = parse_to_ast(h.document().source(), "test.mo")
-        .unwrap_or_else(|e| panic!("post-apply parse: {e:?}\n=== src ===\n{}\n", h.document().source()));
+    let sd = parse_to_ast(h.document().source(), "test.mo").unwrap_or_else(|e| {
+        panic!(
+            "post-apply parse: {e:?}\n=== src ===\n{}\n",
+            h.document().source()
+        )
+    });
     let comp = sd.classes.get("M").unwrap().components.get("k").unwrap();
     assert!(
         comp.start_is_modification,
@@ -103,8 +111,12 @@ fn set_placement_through_apply_writes_annotation_to_ast() {
     })
     .expect("apply SetPlacement");
 
-    let sd = parse_to_ast(h.document().source(), "test.mo")
-        .unwrap_or_else(|e| panic!("post-apply parse: {e:?}\n=== src ===\n{}\n", h.document().source()));
+    let sd = parse_to_ast(h.document().source(), "test.mo").unwrap_or_else(|e| {
+        panic!(
+            "post-apply parse: {e:?}\n=== src ===\n{}\n",
+            h.document().source()
+        )
+    });
     let comp = sd.classes.get("M").unwrap().components.get("x").unwrap();
     let has_placement = comp.annotation.iter().any(|expr| {
         matches!(
@@ -132,8 +144,12 @@ fn set_placement_replaces_existing_placement_through_apply() {
     })
     .expect("apply SetPlacement");
 
-    let sd = parse_to_ast(h.document().source(), "test.mo")
-        .unwrap_or_else(|e| panic!("post-apply parse: {e:?}\n=== src ===\n{}\n", h.document().source()));
+    let sd = parse_to_ast(h.document().source(), "test.mo").unwrap_or_else(|e| {
+        panic!(
+            "post-apply parse: {e:?}\n=== src ===\n{}\n",
+            h.document().source()
+        )
+    });
     let comp = sd.classes.get("M").unwrap().components.get("x").unwrap();
     let placements: Vec<_> = comp
         .annotation

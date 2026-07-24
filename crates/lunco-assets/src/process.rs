@@ -12,13 +12,13 @@
 //! output = "textures/earth.png"
 //! ```
 
-use std::path::Path;
+use crate::cache_dir;
 use image::GenericImageView;
 #[cfg(not(target_arch = "wasm32"))]
 use resvg::tiny_skia;
+use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
-use usvg::{Tree, Options};
-use crate::cache_dir;
+use usvg::{Options, Tree};
 
 /// Processing configuration from `Assets.toml`.
 ///
@@ -276,7 +276,10 @@ fn process_asset_to(
     let stamp_path = bake_stamp_path(&output_path);
     let key = bake_key(source_path, process)?;
     if std::fs::read_to_string(&stamp_path).is_ok_and(|s| s.trim() == key) {
-        println!("  ✓ up-to-date (bake key match) → {}", output_path.display());
+        println!(
+            "  ✓ up-to-date (bake key match) → {}",
+            output_path.display()
+        );
         return Ok(());
     }
 
@@ -372,7 +375,11 @@ fn bake_key(source: &Path, cfg: &ProcessConfig) -> Result<String, std::io::Error
         .map_err(|e| io_err(format!("serializing ProcessConfig for bake key: {e}")))?;
     hasher.update(cfg_json.as_bytes());
     hasher.update(PIPELINE_VERSION.to_le_bytes());
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// glb cleanup pipeline. Runs `gltf-transform` twice in series:
@@ -406,10 +413,7 @@ fn process_gltf(source: &Path, output: &Path) -> std::io::Result<()> {
     // rather than rewriting `source` so a failed second stage doesn't
     // leave the source corrupted, and so re-running `process` is
     // idempotent (the source is the immutable Assets.toml-pinned blob).
-    let tmp = crate::temp_dir().join(format!(
-        "gltf_decoded_{}.glb",
-        std::process::id()
-    ));
+    let tmp = crate::temp_dir().join(format!("gltf_decoded_{}.glb", std::process::id()));
 
     let s1 = Command::new(&npx)
         .args(["--yes", "@gltf-transform/cli", "copy"])
@@ -448,15 +452,15 @@ fn process_svg(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), std
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
     let size = tree.size();
-    let mut pixmap = tiny_skia::Pixmap::new(tw, th)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid resolution"))?;
+    let mut pixmap = tiny_skia::Pixmap::new(tw, th).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid resolution")
+    })?;
 
-    let transform = tiny_skia::Transform::from_scale(
-        tw as f32 / size.width(),
-        th as f32 / size.height(),
-    );
+    let transform =
+        tiny_skia::Transform::from_scale(tw as f32 / size.width(), th as f32 / size.height());
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    pixmap.save_png(output)
+    pixmap
+        .save_png(output)
         .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
@@ -478,7 +482,8 @@ fn process_image(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), s
     // plenty for albedo, and it quarters the file.
     let processed = image::DynamicImage::ImageRgb8(processed.to_rgb8());
 
-    processed.save(output)
+    processed
+        .save(output)
         .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
@@ -530,8 +535,7 @@ fn process_dem(
     let tif_path = tex_dir.join("heightmap.tif");
     {
         use tiff::encoder::{colortype, TiffEncoder};
-        let mut enc =
-            TiffEncoder::new(std::fs::File::create(&tif_path)?).map_err(tiff_io_err)?;
+        let mut enc = TiffEncoder::new(std::fs::File::create(&tif_path)?).map_err(tiff_io_err)?;
 
         // The GEO half — without it QGIS opens the raster in pixel units and every
         // slope computed from it is wrong by the ground-sample factor, silently.
@@ -575,8 +579,7 @@ fn process_dem(
         let mut img = enc
             .new_image::<colortype::Gray32Float>(out_n as u32, out_n as u32)
             .map_err(tiff_io_err)?;
-        lunco_geotiff::write_geo_tags(img.encoder(), &geo, "Moon 2000")
-            .map_err(tiff_io_err)?;
+        lunco_geotiff::write_geo_tags(img.encoder(), &geo, "Moon 2000").map_err(tiff_io_err)?;
         img.write_data(&out).map_err(tiff_io_err)?;
     }
 
@@ -642,7 +645,10 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
     // Before the pixels: `read_image` advances the decoder, and this states which
     // samples are not measurements.
     let declared_nodata = lunco_geotiff::read_gdal_nodata(&mut dec);
-    let heights_f64: Vec<f64> = match dec.read_image().map_err(|e| io_err(format!("reading DTM pixels: {e}")))? {
+    let heights_f64: Vec<f64> = match dec
+        .read_image()
+        .map_err(|e| io_err(format!("reading DTM pixels: {e}")))?
+    {
         D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
         D::F64(v) => v,
         D::U8(v) => v.into_iter().map(|x| x as f64).collect(),
@@ -650,7 +656,11 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
         D::I16(v) => v.into_iter().map(|x| x as f64).collect(),
         D::U32(v) => v.into_iter().map(|x| x as f64).collect(),
         D::I32(v) => v.into_iter().map(|x| x as f64).collect(),
-        _ => return Err(io_err("unsupported DTM sample format (need numeric Gray)".into())),
+        _ => {
+            return Err(io_err(
+                "unsupported DTM sample format (need numeric Gray)".into(),
+            ))
+        }
     };
     // Sentinels → `NaN` at decode, so the resampler's `is_finite()` test below
     // actually means what it says. Shared with the terrain baker's reader: both
@@ -734,13 +744,20 @@ fn resolve_roi(
     // WESTERNMOST LON) to the raster edges. This is self-consistent for any
     // equirectangular mosaic and sidesteps the unreliable `CENTER_LONGITUDE`
     // some LROC labels carry.
-    let manifest_extent = match (cfg.src_min_lat, cfg.src_max_lat, cfg.src_min_lon, cfg.src_max_lon)
-    {
+    let manifest_extent = match (
+        cfg.src_min_lat,
+        cfg.src_max_lat,
+        cfg.src_min_lon,
+        cfg.src_max_lon,
+    ) {
         (Some(a), Some(b), Some(c), Some(d)) => Some((a, b, c, d)),
         _ => None,
     };
     let (min_lat, max_lat, min_lon, max_lon) = manifest_extent
-        .or_else(|| src.extent.map(|e| (e.min_lat, e.max_lat, e.west_lon, e.east_lon)))
+        .or_else(|| {
+            src.extent
+                .map(|e| (e.min_lat, e.max_lat, e.west_lon, e.east_lon))
+        })
         .ok_or_else(|| {
             io_err(format!(
                 "{kind} pipeline requires the source extent: set all four \
@@ -792,18 +809,18 @@ fn resolve_roi(
         .target_resolution
         .map(|[w, _]| w.max(1) as usize)
         .unwrap_or(win);
-    Ok((RoiCrop { x0, y0, win, out_n }, scale, center_lat, center_lon))
+    Ok((
+        RoiCrop { x0, y0, win, out_n },
+        scale,
+        center_lat,
+        center_lon,
+    ))
 }
 
 /// Resample the crop's source window to `out_n × out_n` (bilinear;
 /// nodata/NaN treated as 0 — same policy the DEM pipeline always had).
 #[cfg(not(target_arch = "wasm32"))]
-fn resample_roi_bilinear(
-    samples: &[f64],
-    src_w: usize,
-    src_h: usize,
-    roi: &RoiCrop,
-) -> Vec<f64> {
+fn resample_roi_bilinear(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiCrop) -> Vec<f64> {
     let (x0, y0, win, out_n) = (roi.x0, roi.y0, roi.win, roi.out_n);
     let mut out = vec![0.0f64; out_n * out_n];
     for oy in 0..out_n {
@@ -820,7 +837,11 @@ fn resample_roi_bilinear(
             // Bilinear over the four neighbours; nodata/NaN treated as 0.
             let s = |col: usize, row: usize| -> f64 {
                 let v = samples.get(row * src_w + col).copied().unwrap_or(0.0);
-                if v.is_finite() { v } else { 0.0 }
+                if v.is_finite() {
+                    v
+                } else {
+                    0.0
+                }
             };
             let v00 = s(sx0, sy0);
             let v10 = s(sx1, sy0);
@@ -914,14 +935,22 @@ fn process_map(
 
     // 1–99 percentile stretch over the CROP (not the whole mosaic — the crop
     // is the scene, and mosaic-wide outliers would flatten its contrast).
-    let mut sorted: Vec<f64> = gray.iter().copied().filter(|v| v.is_finite() && *v != 0.0).collect();
+    let mut sorted: Vec<f64> = gray
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite() && *v != 0.0)
+        .collect();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let (lo, hi) = if sorted.is_empty() {
         (0.0, 1.0)
     } else {
         let lo = sorted[(sorted.len() - 1) * 1 / 100];
         let hi = sorted[(sorted.len() - 1) * 99 / 100];
-        if (hi - lo).abs() < f64::EPSILON { (lo, lo + 1.0) } else { (lo, hi) }
+        if (hi - lo).abs() < f64::EPSILON {
+            (lo, lo + 1.0)
+        } else {
+            (lo, hi)
+        }
     };
     let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
     for (i, px) in png.pixels_mut().enumerate() {
@@ -966,7 +995,11 @@ fn process_normalmap(
             let len = (dhdx * dhdx + 1.0 + dhdz * dhdz).sqrt();
             let n = [-dhdx / len, 1.0 / len, -dhdz / len];
             let enc = |c: f64| ((c * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
-            png.put_pixel(x as u32, z as u32, image::Rgb([enc(n[0]), enc(n[1]), enc(n[2])]));
+            png.put_pixel(
+                x as u32,
+                z as u32,
+                image::Rgb([enc(n[0]), enc(n[1]), enc(n[2])]),
+            );
         }
     }
     png.save(output_path)
@@ -996,7 +1029,8 @@ mod tests {
         let mut buf = Cursor::new(Vec::new());
         {
             let mut enc = TiffEncoder::new(&mut buf).unwrap();
-            enc.write_image::<colortype::Gray32Float>(w, h, data).unwrap();
+            enc.write_image::<colortype::Gray32Float>(w, h, data)
+                .unwrap();
         }
         buf.into_inner()
     }
@@ -1015,10 +1049,7 @@ mod tests {
             .collect();
         let tif = encode_tiff_f32(sw, sh, &src);
 
-        let tmp = std::env::temp_dir().join(format!(
-            "lunco-assets-dem-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("lunco-assets-dem-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let src_path = tmp.join("source.tif");
@@ -1060,15 +1091,16 @@ mod tests {
                 // Values are a resampled slice of the gradient — all finite,
                 // and within the source's min..max range (0..880).
                 assert!(v.iter().all(|x| x.is_finite()));
-                assert!(v.iter().all(|x| (*x as f64) >= -1.0 && (*x as f64) <= 900.0));
+                assert!(v
+                    .iter()
+                    .all(|x| (*x as f64) >= -1.0 && (*x as f64) <= 900.0));
             }
             other => panic!("expected F32 heightmap, got {other:?}"),
         }
 
         // The manifest's frame declaration lands in the raster's own tags.
         // (No metadata.yaml sidecar any more — the geo tags ARE the metadata.)
-        let mut tag_dec =
-            tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
+        let mut tag_dec = tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
         let geo = lunco_geotiff::read_geo_tags(&mut tag_dec).unwrap();
         assert_eq!(geo.frame, Some(lunco_geotiff::LunarFrame::MoonMe));
 
@@ -1080,10 +1112,7 @@ mod tests {
     /// non-GeoTIFF path.
     #[test]
     fn dem_process_ingests_pds_img_via_label_extent() {
-        let tmp = std::env::temp_dir().join(format!(
-            "lunco-assets-dem-img-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("lunco-assets-dem-img-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -1162,10 +1191,7 @@ mod tests {
             .collect();
         let tif = encode_tiff_f32(sw, sh, &src);
 
-        let tmp = std::env::temp_dir().join(format!(
-            "lunco-assets-nrm-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("lunco-assets-nrm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let src_path = tmp.join("source.tif");
@@ -1197,7 +1223,11 @@ mod tests {
         // Y strongly positive.
         assert!(c[0] < 120, "R tilts negative-x on a +x ramp, got {}", c[0]);
         assert!(c[1] > 150, "G (up) stays dominant, got {}", c[1]);
-        assert!((c[2] as i32 - 128).abs() <= 6, "B stays neutral, got {}", c[2]);
+        assert!(
+            (c[2] as i32 - 128).abs() <= 6,
+            "B stays neutral, got {}",
+            c[2]
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1205,17 +1235,18 @@ mod tests {
     /// `kind = "map"` crops an RGB source to the ROI and keeps colour.
     #[test]
     fn map_process_crops_rgb_source() {
-        let tmp = std::env::temp_dir().join(format!(
-            "lunco-assets-map-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("lunco-assets-map-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
         // 16×16 RGB PNG: left half red, right half green.
         let mut img = image::RgbImage::new(16, 16);
         for (x, _y, p) in img.enumerate_pixels_mut() {
-            *p = if x < 8 { image::Rgb([200, 10, 10]) } else { image::Rgb([10, 200, 10]) };
+            *p = if x < 8 {
+                image::Rgb([200, 10, 10])
+            } else {
+                image::Rgb([10, 200, 10])
+            };
         }
         let src_path = tmp.join("source.png");
         img.save(&src_path).unwrap();

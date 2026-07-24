@@ -89,7 +89,16 @@ fn add_short_class_at_top_level() {
 #[test]
 fn add_short_class_nested() {
     let patched = doc_patched("package P\nend P;\n", |sd, e| {
-        ast_mut::add_short_class(sd, e, "P", "Pin", ClassKindSpec::Connector, "Real", &[], &[])
+        ast_mut::add_short_class(
+            sd,
+            e,
+            "P",
+            "Pin",
+            ClassKindSpec::Connector,
+            "Real",
+            &[],
+            &[],
+        )
     });
     let sd2 = parse_to_ast(&patched, "t.mo")
         .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== patched ===\n{patched}"));
@@ -234,10 +243,16 @@ fn set_experiment_through_apply_replaces_existing() {
             )
         })
         .count();
-    assert_eq!(count, 1, "expected 1 experiment entry, got {count}; src:\n{}", h.document().source());
+    assert_eq!(
+        count,
+        1,
+        "expected 1 experiment entry, got {count}; src:\n{}",
+        h.document().source()
+    );
     // New value present somewhere in the source.
     assert!(
-        h.document().source().contains("StopTime = 5") || h.document().source().contains("StopTime=5"),
+        h.document().source().contains("StopTime = 5")
+            || h.document().source().contains("StopTime=5"),
         "new StopTime not in source:\n{}",
         h.document().source()
     );

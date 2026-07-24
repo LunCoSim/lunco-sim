@@ -164,7 +164,13 @@ pub fn bind_avatar_camera_on_add(
 pub fn reconcile_scene_viewport(
     mut vp: ResMut<SceneViewport>,
     mut q_cams: Query<
-        (Entity, &mut Camera, &RenderTarget, Option<&ChildOf>, Has<bevy::camera::Projection>),
+        (
+            Entity,
+            &mut Camera,
+            &RenderTarget,
+            Option<&ChildOf>,
+            Has<bevy::camera::Projection>,
+        ),
         With<SceneCamera>,
     >,
     q_avatar_cam: Query<Entity, (With<SceneCamera>, With<LocalAvatar>)>,
@@ -186,11 +192,20 @@ pub fn reconcile_scene_viewport(
     // sole active window view always cascade-covered and forces any transient
     // projectionless camera off.
     let activatable = |q: &Query<
-        (Entity, &mut Camera, &RenderTarget, Option<&ChildOf>, Has<bevy::camera::Projection>),
+        (
+            Entity,
+            &mut Camera,
+            &RenderTarget,
+            Option<&ChildOf>,
+            Has<bevy::camera::Projection>,
+        ),
         With<SceneCamera>,
     >,
                        e: Entity|
-     -> bool { q.get(e).map_or(false, |(_, _, t, _, has_proj)| is_window(t) && has_proj) };
+     -> bool {
+        q.get(e)
+            .map_or(false, |(_, _, t, _, has_proj)| is_window(t) && has_proj)
+    };
 
     // ── Resolve the bound camera (revalidate + default) ──────────────────
     // Keep the binding if it still points at a window camera; else fall back
@@ -322,7 +337,11 @@ mod tests {
 
         app.update();
 
-        assert_eq!(active_set(&mut app), vec![b], "only the bound camera renders");
+        assert_eq!(
+            active_set(&mut app),
+            vec![b],
+            "only the bound camera renders"
+        );
     }
 
     /// When the viewport is not visible (workbench Design perspective), no
@@ -342,7 +361,10 @@ mod tests {
 
         app.update();
 
-        assert!(active_set(&mut app).is_empty(), "nothing renders while hidden");
+        assert!(
+            active_set(&mut app).is_empty(),
+            "nothing renders while hidden"
+        );
         assert_eq!(
             app.world().resource::<SceneViewport>().active_camera,
             Some(b),

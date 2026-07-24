@@ -166,7 +166,11 @@ impl Overzoom {
             let f = 1.0 / wavelength;
             sum += amp
                 * fade
-                * vnoise(x * f, z * f, self.seed ^ (o.wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+                * vnoise(
+                    x * f,
+                    z * f,
+                    self.seed ^ (o.wrapping_mul(0x9E37_79B9_7F4A_7C15)),
+                );
             amp *= 0.5;
             wavelength *= 0.5;
         }
@@ -260,7 +264,10 @@ impl HeightModifier for Overzoom {
     }
 
     fn with_min_wavelength(&self, min_wavelength: f64) -> Option<Arc<dyn HeightModifier>> {
-        Some(Arc::new(Overzoom { min_wavelength, ..self.clone() }))
+        Some(Arc::new(Overzoom {
+            min_wavelength,
+            ..self.clone()
+        }))
     }
 }
 
@@ -269,7 +276,10 @@ mod tests {
     use super::*;
 
     fn oz() -> Overzoom {
-        Overzoom { min_wavelength: 0.0, ..Default::default() }
+        Overzoom {
+            min_wavelength: 0.0,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -373,7 +383,10 @@ mod tests {
     fn gated_field_is_continuous_at_the_craterlet_reach() {
         // The reach-tail subtraction must hold under a coarse gate too: walk
         // radially across band cells and require no step anywhere.
-        let s = Overzoom { min_wavelength: 5.2, ..Default::default() };
+        let s = Overzoom {
+            min_wavelength: 5.2,
+            ..Default::default()
+        };
         let eps = 1e-4;
         for k in 0..400 {
             let x = k as f64 * 0.25;
@@ -386,10 +399,16 @@ mod tests {
     fn nyquist_gate_kills_fine_detail() {
         // Sampling at 20 m wavelength: every craterlet (≤ 6 m) and every relief
         // octave (≤ 14 m) is below ~the gate → the field collapses to ~0.
-        let coarse = Overzoom { min_wavelength: 20.0, ..Default::default() };
+        let coarse = Overzoom {
+            min_wavelength: 20.0,
+            ..Default::default()
+        };
         for k in 0..100 {
             let (x, z) = (k as f64 * 7.3, k as f64 * -4.1);
-            assert!(coarse.delta_at(x, z).abs() < 1e-9, "gated field should vanish");
+            assert!(
+                coarse.delta_at(x, z).abs() < 1e-9,
+                "gated field should vanish"
+            );
         }
         // …while the ungated field is alive at the same points.
         let fine = oz();
@@ -413,12 +432,17 @@ mod tests {
     #[test]
     fn with_min_wavelength_variant_differs_from_full() {
         let s = oz();
-        let v = s.with_min_wavelength(5.0).expect("overzoom produces variants");
+        let v = s
+            .with_min_wavelength(5.0)
+            .expect("overzoom produces variants");
         // The gated variant is a genuinely different (reduced-detail) field.
         let differs = (0..200).any(|k| {
             let (x, z) = (k as f64 * 2.9, k as f64 * -1.7);
             (s.apply(x, z, 0.0) - v.apply(x, z, 0.0)).abs() > 1e-6
         });
-        assert!(differs, "5 m gate should attenuate sub-5 m detail somewhere");
+        assert!(
+            differs,
+            "5 m gate should attenuate sub-5 m detail somewhere"
+        );
     }
 }

@@ -198,7 +198,10 @@ mod tests {
 
     #[test]
     fn extension_is_case_insensitive() {
-        assert_eq!(classify("MODEL.MO"), FileKind::Document(DocumentKind::Modelica));
+        assert_eq!(
+            classify("MODEL.MO"),
+            FileKind::Document(DocumentKind::Modelica)
+        );
         assert_eq!(classify("TEX.PNG"), FileKind::FileReference);
     }
 

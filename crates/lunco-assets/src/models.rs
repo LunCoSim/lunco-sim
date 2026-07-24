@@ -85,12 +85,18 @@ mod tests {
     #[test]
     fn model_files_nonempty_and_sorted() {
         let files = model_files();
-        assert!(!files.is_empty(), "expected at least one .mo under assets/models/");
+        assert!(
+            !files.is_empty(),
+            "expected at least one .mo under assets/models/"
+        );
         let mut sorted = files.clone();
         sorted.sort_by(|a, b| a.0.cmp(b.0));
         assert_eq!(files, sorted, "model_files not sorted by filename");
         for (name, src) in &files {
-            assert!(!name.is_empty() && !src.is_empty(), "empty model entry {name}");
+            assert!(
+                !name.is_empty() && !src.is_empty(),
+                "empty model entry {name}"
+            );
         }
     }
 

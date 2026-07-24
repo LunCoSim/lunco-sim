@@ -33,7 +33,7 @@
 //! tick a body exists. The `FixedPostUpdate` probe reproduces the bug; the
 //! `PhysicsSchedule` probe is where `build_usd_physics_joints` now runs.
 
-use avian3d::physics_transform::{Position, PhysicsTransformSystems};
+use avian3d::physics_transform::{PhysicsTransformSystems, Position};
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -108,7 +108,9 @@ fn make_app() -> App {
             .before(avian3d::schedule::PhysicsStepSystems::First),
     );
 
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(15625)));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
+        15625,
+    )));
     app.finish();
     app.cleanup();
     app
@@ -118,7 +120,11 @@ fn make_app() -> App {
 fn spawn_scene(app: &mut App) {
     let root = app
         .world_mut()
-        .spawn((BigSpace::default(), Grid::new(EDGE, 100.0), GlobalTransform::default()))
+        .spawn((
+            BigSpace::default(),
+            Grid::new(EDGE, 100.0),
+            GlobalTransform::default(),
+        ))
         .id();
     let grid = app
         .world_mut()

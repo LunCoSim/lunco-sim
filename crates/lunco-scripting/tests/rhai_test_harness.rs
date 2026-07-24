@@ -59,8 +59,8 @@ fn test_sources() -> Vec<(String, String)> {
             if path.is_dir() {
                 walk(&path, out);
             } else if path.extension().is_some_and(|e| e == "rhai") {
-                let src = std::fs::read_to_string(&path)
-                    .unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+                let src =
+                    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
                 out.push((path.file_name().unwrap().to_string_lossy().into(), src));
             }
         }
@@ -171,7 +171,8 @@ fn t_report_surfaces_a_failure() {
     let verdict = printed.last().expect("t_report printed nothing");
 
     assert_eq!(
-        verdict, "TESTS_FAIL 1/2",
+        verdict,
+        "TESTS_FAIL 1/2",
         "t_report must report 1 failure of 2 checks, got:\n{}",
         printed.join("\n")
     );

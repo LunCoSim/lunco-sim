@@ -158,10 +158,14 @@ impl Settings {
                 let bad = path.with_extension("json.bad");
                 warn!(
                     "[Settings] {} is not valid JSON ({e}); preserving as {} and starting fresh",
-                    path.display(), bad.display()
+                    path.display(),
+                    bad.display()
                 );
                 if let Err(e) = lunco_storage::write_file_sync(&bad, text.as_bytes()) {
-                    warn!("[Settings] could not preserve corrupt settings to {}: {e}", bad.display());
+                    warn!(
+                        "[Settings] could not preserve corrupt settings to {}: {e}",
+                        bad.display()
+                    );
                 }
                 Self::default()
             }
@@ -352,10 +356,7 @@ pub fn isolate_config_dir_for_tests(tag: &str) {
 ///
 /// NOTE: this fires in tests too, writing to whatever `user_config_dir()` resolves to —
 /// the developer's real config unless a test called [`isolate_config_dir_for_tests`].
-fn persist_section<S: SettingsSection>(
-    section: Res<S>,
-    mut settings: ResMut<Settings>,
-) {
+fn persist_section<S: SettingsSection>(section: Res<S>, mut settings: ResMut<Settings>) {
     if !section.is_changed() {
         return;
     }
@@ -430,7 +431,6 @@ impl SettingsSection for DownloadSettings {
     const KEY: &'static str = "download";
 }
 
-
 #[cfg(test)]
 mod disk_guard_tests {
     use super::*;
@@ -457,7 +457,10 @@ mod disk_guard_tests {
         // Only meaningful when the env override is absent — which is the state a plain
         // `cargo test` runs in.
         if std::env::var_os("LUNCOSIM_CONFIG").is_none() {
-            assert!(!disk_backed(), "a test binary must never read or write the real settings");
+            assert!(
+                !disk_backed(),
+                "a test binary must never read or write the real settings"
+            );
         }
     }
 
@@ -469,10 +472,14 @@ mod disk_guard_tests {
             return; // persistence is explicitly enabled; nothing to assert here
         }
         let mut s = Settings::default();
-        s.raw.insert("telemetry".into(), serde_json::json!({ "enabled": false }));
+        s.raw
+            .insert("telemetry".into(), serde_json::json!({ "enabled": false }));
         s.dirty = true;
         s.write_if_dirty();
-        assert!(!s.dirty, "the dirty bit must clear so we don't retry the suppressed write");
+        assert!(
+            !s.dirty,
+            "the dirty bit must clear so we don't retry the suppressed write"
+        );
     }
 
     /// An explicitly-named config dir re-enables persistence — that is how a test that

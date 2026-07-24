@@ -22,9 +22,7 @@ pub fn zone_of(event_name: &str) -> Option<&str> {
 
 /// True if `event_name` is an ENTER pulse for `zone` (`"enter:<zone>"`).
 pub fn entered_zone(event_name: &str, zone: &str) -> bool {
-    event_name
-        .strip_prefix("enter:")
-        .is_some_and(|z| z == zone)
+    event_name.strip_prefix("enter:").is_some_and(|z| z == zone)
 }
 
 /// True if `event_name` is an EXIT pulse for `zone` (`"exit:<zone>"`).

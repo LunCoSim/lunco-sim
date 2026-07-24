@@ -76,10 +76,14 @@ pub fn on_run_lint(
     let mut linted = 0usize;
     for id in ids {
         if canonical.get(id).is_none() {
-            let Some(recipe) = stages.get(id).and_then(|a| a.recipe.clone()) else { continue };
+            let Some(recipe) = stages.get(id).and_then(|a| a.recipe.clone()) else {
+                continue;
+            };
             canonical.get_or_build(id, &recipe);
         }
-        let Some(cs) = canonical.get(id) else { continue };
+        let Some(cs) = canonical.get(id) else {
+            continue;
+        };
         let found = lunco_usd_avian::lint_stage(&cs.view());
         report.extend_logged(found);
         linted += 1;

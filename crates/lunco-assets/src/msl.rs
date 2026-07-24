@@ -245,9 +245,7 @@ fn collect_mo_files(dir: &std::path::Path, files: &mut std::collections::HashSet
                 }
             }
             collect_mo_files(&path, files);
-        } else if file_type.is_file()
-            && path.extension().and_then(|e| e.to_str()) == Some("mo")
-        {
+        } else if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("mo") {
             files.insert(path);
         }
     }
@@ -292,7 +290,10 @@ impl MslLoadState {
     /// become ready), so callers that want "still arriving" semantics get
     /// `false` for a failed load.
     pub fn is_pending(&self) -> bool {
-        matches!(self, MslLoadState::NotStarted | MslLoadState::Loading { .. })
+        matches!(
+            self,
+            MslLoadState::NotStarted | MslLoadState::Loading { .. }
+        )
     }
 }
 

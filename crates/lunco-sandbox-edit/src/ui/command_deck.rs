@@ -24,7 +24,6 @@ use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, GlobalEntityId};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-
 use crate::SelectedEntities;
 
 /// Change-driven view-model for the Command Deck. Reads selection, possession
@@ -71,15 +70,24 @@ pub fn populate_command_deck_view(
     view.selected_label = sel
         .and_then(|e| q_name.get(e).ok())
         .map(|n| n.as_str().to_string())
-        .or_else(|| sel.and_then(|e| q_gid.get(e).ok()).map(|g| format!("vessel #{}", g.get())))
+        .or_else(|| {
+            sel.and_then(|e| q_gid.get(e).ok())
+                .map(|g| format!("vessel #{}", g.get()))
+        })
         .unwrap_or_default();
     // Possession: the avatar's ControllerLink points at the vessel it drives.
     view.driving = match (sel, avatars.iter().next()) {
-        (Some(v), Some(av)) => q_link.get(av).ok().map(|l| l.vessel_entity == v).unwrap_or(false),
+        (Some(v), Some(av)) => q_link
+            .get(av)
+            .ok()
+            .map(|l| l.vessel_entity == v)
+            .unwrap_or(false),
         _ => false,
     };
     // Autopilot + spec.
-    view.autopilot_engaged = sel.map(|v| q_autopilot.iter().any(|a| a.vessel == v)).unwrap_or(false);
+    view.autopilot_engaged = sel
+        .map(|v| q_autopilot.iter().any(|a| a.vessel == v))
+        .unwrap_or(false);
     view.is_patrol = false;
     view.patrol.clear();
     view.patrol_actions.clear();
@@ -92,7 +100,10 @@ pub fn populate_command_deck_view(
                     // Project to positions for the list; the count of arrival
                     // actions per waypoint is surfaced via `patrol_actions`.
                     view.patrol = waypoints.iter().map(|w| w.pos).collect();
-                    view.patrol_actions = waypoints.iter().map(|w| w.on_arrival.len() as u32).collect();
+                    view.patrol_actions = waypoints
+                        .iter()
+                        .map(|w| w.on_arrival.len() as u32)
+                        .collect();
                 }
                 other => {
                     // Variant NAME only. Most `BehaviorSpec` variants are struct
@@ -115,9 +126,15 @@ pub fn populate_command_deck_view(
 pub struct CommandDeck;
 
 impl Panel for CommandDeck {
-    fn id(&self) -> PanelId { PanelId("command_deck") }
-    fn title(&self) -> String { "Command Deck".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn id(&self) -> PanelId {
+        PanelId("command_deck")
+    }
+    fn title(&self) -> String {
+        "Command Deck".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Tools
     }
@@ -184,7 +201,11 @@ impl Panel for CommandDeck {
                 if ui.button("🏁 Take control").clicked() {
                     let v = vessel;
                     ctx.defer(move |world| {
-                        world.trigger(lunco_avatar::PossessVessel { avatar: None, target: v, bind_camera: true });
+                        world.trigger(lunco_avatar::PossessVessel {
+                            avatar: None,
+                            target: v,
+                            bind_camera: true,
+                        });
                     });
                 }
             }

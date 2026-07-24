@@ -271,7 +271,13 @@ mod tests {
     #[test]
     fn a_port_write_drives_a_light() {
         let mut app = app();
-        let e = app.world_mut().spawn(PointLight { intensity: 0.0, ..default() }).id();
+        let e = app
+            .world_mut()
+            .spawn(PointLight {
+                intensity: 0.0,
+                ..default()
+            })
+            .id();
         let reg = app.world().resource::<PortRegistry>().clone();
 
         assert!(reg.write_port(app.world_mut(), e, "light_intensity", 680_000.0));
@@ -280,13 +286,22 @@ mod tests {
         let light = app.world().get::<PointLight>(e).unwrap();
         assert_eq!(light.intensity, 680_000.0);
         assert_eq!(light.radius, 0.66);
-        assert_eq!(reg.read_input_port(app.world(), e, "light_intensity"), Some(680_000.0));
+        assert_eq!(
+            reg.read_input_port(app.world(), e, "light_intensity"),
+            Some(680_000.0)
+        );
     }
 
     #[test]
     fn a_port_write_drives_a_spot_light() {
         let mut app = app();
-        let e = app.world_mut().spawn(SpotLight { intensity: 0.0, ..default() }).id();
+        let e = app
+            .world_mut()
+            .spawn(SpotLight {
+                intensity: 0.0,
+                ..default()
+            })
+            .id();
         let reg = app.world().resource::<PortRegistry>().clone();
 
         assert!(reg.write_port(app.world_mut(), e, "light_intensity", 500_000.0));
@@ -295,7 +310,10 @@ mod tests {
         let light = app.world().get::<SpotLight>(e).unwrap();
         assert_eq!(light.intensity, 500_000.0);
         assert_eq!(light.radius, 0.5);
-        assert_eq!(reg.read_input_port(app.world(), e, "light_intensity"), Some(500_000.0));
+        assert_eq!(
+            reg.read_input_port(app.world(), e, "light_intensity"),
+            Some(500_000.0)
+        );
     }
 
     /// A scene property must never resolve as a connection SOURCE — that is what
@@ -303,9 +321,15 @@ mod tests {
     #[test]
     fn a_scene_property_is_never_an_output() {
         let mut app = app();
-        let e = app.world_mut().spawn((PointLight::default(), Transform::default())).id();
+        let e = app
+            .world_mut()
+            .spawn((PointLight::default(), Transform::default()))
+            .id();
         let reg = app.world().resource::<PortRegistry>().clone();
-        assert_eq!(reg.read_output_port(app.world(), e, "light_intensity"), None);
+        assert_eq!(
+            reg.read_output_port(app.world(), e, "light_intensity"),
+            None
+        );
         assert_eq!(reg.read_output_port(app.world(), e, "translation_y"), None);
     }
 
@@ -328,7 +352,10 @@ mod tests {
     #[test]
     fn an_unowned_name_is_refused() {
         let mut app = app();
-        let e = app.world_mut().spawn((PointLight::default(), Transform::default())).id();
+        let e = app
+            .world_mut()
+            .spawn((PointLight::default(), Transform::default()))
+            .id();
         let reg = app.world().resource::<PortRegistry>().clone();
         assert!(!reg.write_port(app.world_mut(), e, "intensity", 1.0));
         assert!(!reg.write_port(app.world_mut(), e, "throttle", 1.0));
@@ -347,10 +374,20 @@ mod tests {
         app.world_mut().clear_trackers();
 
         assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.5));
-        assert!(!app.world().entity(e).get_ref::<Transform>().unwrap().is_changed());
+        assert!(!app
+            .world()
+            .entity(e)
+            .get_ref::<Transform>()
+            .unwrap()
+            .is_changed());
 
         assert!(reg.write_port(app.world_mut(), e, "scale_y", 3.0));
-        assert!(app.world().entity(e).get_ref::<Transform>().unwrap().is_changed());
+        assert!(app
+            .world()
+            .entity(e)
+            .get_ref::<Transform>()
+            .unwrap()
+            .is_changed());
     }
 
     /// `list` reports exactly what the entity has, so `ListPorts` and `write_input`
@@ -360,8 +397,11 @@ mod tests {
         let mut app = app();
         let e = app.world_mut().spawn(Transform::default()).id();
         let reg = app.world().resource::<PortRegistry>().clone();
-        let names: Vec<String> =
-            reg.entity_ports(app.world(), e).into_iter().map(|p| p.name).collect();
+        let names: Vec<String> = reg
+            .entity_ports(app.world(), e)
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
         assert!(names.contains(&"scale_y".to_string()));
         assert!(!names.contains(&"light_intensity".to_string()));
     }

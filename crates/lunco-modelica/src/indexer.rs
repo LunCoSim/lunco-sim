@@ -50,7 +50,9 @@ impl Options {
                 "--warm" => opts.warm = true,
                 "--warm-only" => {
                     let list = iter.next().unwrap_or_else(|| {
-                        eprintln!("error: --warm-only requires a comma-separated list of qualified names");
+                        eprintln!(
+                            "error: --warm-only requires a comma-separated list of qualified names"
+                        );
                         std::process::exit(2);
                     });
                     opts.warm_only = Some(
@@ -88,7 +90,11 @@ fn format_default_expr(expr: &rumoca_compile::parsing::ast::Expression) -> Strin
     use rumoca_compile::parsing::ast::{Expression, TerminalType};
     use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
-        Expression::Terminal { terminal_type, token, .. } => {
+        Expression::Terminal {
+            terminal_type,
+            token,
+            ..
+        } => {
             let raw = token.text.as_ref();
             match terminal_type {
                 TerminalType::String => raw.trim_matches('"').to_string(),
@@ -129,10 +135,7 @@ fn format_default_expr(expr: &rumoca_compile::parsing::ast::Expression) -> Strin
         // what OMEdit shows for `qd_max=%qd_max` on KinematicPTP).
         // Multi-dimensional arrays nest the same formatting.
         Expression::Array { elements, .. } => {
-            let parts: Vec<String> = elements
-                .iter()
-                .map(format_default_expr)
-                .collect();
+            let parts: Vec<String> = elements.iter().map(format_default_expr).collect();
             if parts.iter().any(|s| s.is_empty()) {
                 String::new()
             } else {
@@ -340,8 +343,7 @@ fn collect_documentation(
     class_def: &rumoca_compile::parsing::ast::ClassDef,
     out: &mut HashMap<String, String>,
 ) {
-    let (info, _revisions) =
-        crate::doc_extract::extract_documentation(&class_def.annotation);
+    let (info, _revisions) = crate::doc_extract::extract_documentation(&class_def.annotation);
     if let Some(info) = info {
         out.insert(short_name.to_string(), clean_info_text(&info));
     }
@@ -547,20 +549,12 @@ impl MSLIndexer {
                                 let mb = self.bytes_scanned as f64 / (1024.0 * 1024.0);
                                 println!(
                                     "[scan] {} files, {:.1} MB, {:.1}s elapsed (current: {})",
-                                    self.files_scanned,
-                                    mb,
-                                    elapsed,
-                                    package_prefix,
+                                    self.files_scanned, mb, elapsed, package_prefix,
                                 );
                                 self.last_progress_print = Some(Instant::now());
                             }
                         }
-                        let file_name = path
-                            .file_name()
-                            .unwrap()
-                            .to_str()
-                            .unwrap()
-                            .to_string();
+                        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
                         self.ingest_file(&path, &source, &file_name, package_prefix);
                     }
                 }
@@ -572,13 +566,7 @@ impl MSLIndexer {
     /// branch of `scan_dir` so we can also ingest top-level companion
     /// files (e.g. `Complex.mo`) that live next to `Modelica/` rather
     /// than inside it.
-    fn ingest_file(
-        &mut self,
-        path: &Path,
-        source: &str,
-        file_name: &str,
-        package_prefix: &str,
-    ) {
+    fn ingest_file(&mut self, path: &Path, source: &str, file_name: &str, package_prefix: &str) {
         // `package.mo` declares `package <FolderName> …
         // end <FolderName>` per MLS — the class inside IS the package,
         // so we must collapse rather than prefix. Track the file role so
@@ -592,10 +580,9 @@ impl MSLIndexer {
         // first drill-in are both instant. `parse_files_parallel` with
         // one path is the public entry point that exercises the cache;
         // rayon overhead is negligible for length-1.
-        let ast_opt =
-            rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()])
-                .ok()
-                .and_then(|mut pairs| pairs.pop().map(|(_, ast)| ast));
+        let ast_opt = rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()])
+            .ok()
+            .and_then(|mut pairs| pairs.pop().map(|(_, ast)| ast));
         if let Some(ast) = ast_opt {
             for (k, v) in extract_documentation_infos(source) {
                 self.doc_infos.entry(k).or_insert(v);
@@ -672,22 +659,39 @@ impl MSLIndexer {
             .find(|cand| self.classes.contains_key(cand))
     }
 
-    fn resolve_inheritance(&self, class_name: &str, ports: &mut Vec<crate::visual_diagram::PortDef>, params: &mut Vec<crate::visual_diagram::ParamDef>, visited: &mut HashSet<String>) {
-        if visited.contains(class_name) { return; }
+    fn resolve_inheritance(
+        &self,
+        class_name: &str,
+        ports: &mut Vec<crate::visual_diagram::PortDef>,
+        params: &mut Vec<crate::visual_diagram::ParamDef>,
+        visited: &mut HashSet<String>,
+    ) {
+        if visited.contains(class_name) {
+            return;
+        }
         visited.insert(class_name.to_string());
 
         if let Some(class) = self.classes.get(class_name) {
             // 1. Resolve base classes first (extends)
             for ext in &class.extends {
-                let base_short_name = ext.base_name.name.iter().map(|s| s.text.to_string()).collect::<Vec<String>>().join(".");
-                
+                let base_short_name = ext
+                    .base_name
+                    .name
+                    .iter()
+                    .map(|s| s.text.to_string())
+                    .collect::<Vec<String>>()
+                    .join(".");
+
                 // Scope-chain resolution; fall back to an absolute /
                 // `Modelica.`-prefixed guess below.
                 let mut resolved_base = self.resolve_in_scope(class_name, &base_short_name);
                 if resolved_base.is_none() {
                     if self.classes.contains_key(&base_short_name) {
                         resolved_base = Some(base_short_name);
-                    } else if self.classes.contains_key(&format!("Modelica.{}", base_short_name)) {
+                    } else if self
+                        .classes
+                        .contains_key(&format!("Modelica.{}", base_short_name))
+                    {
                         resolved_base = Some(format!("Modelica.{}", base_short_name));
                     }
                 }
@@ -743,15 +747,15 @@ impl MSLIndexer {
 
                 let type_str = comp.type_name.to_string();
                 let lower = type_str.to_lowercase();
-                
-                let is_port = lower.contains("pin") || 
-                              lower.contains("flange") || 
-                              lower.contains("port") || 
-                              lower.contains("input") || 
-                              lower.contains("output");
-                
-                let has_causality = matches!(comp.causality, Causality::Input(_)) || 
-                                    matches!(comp.causality, Causality::Output(_));
+
+                let is_port = lower.contains("pin")
+                    || lower.contains("flange")
+                    || lower.contains("port")
+                    || lower.contains("input")
+                    || lower.contains("output");
+
+                let has_causality = matches!(comp.causality, Causality::Input(_))
+                    || matches!(comp.causality, Causality::Output(_));
 
                 if is_port || has_causality {
                     // Skip conditional connectors (e.g. `BooleanInput
@@ -824,15 +828,12 @@ impl MSLIndexer {
                         // other Modelica libraries. Going through
                         // rumoca means any library rumoca can parse
                         // also gets correctly-positioned ports.
-                        let placement = crate::annotations::extract_placement(
-                            &comp.annotation,
-                        );
+                        let placement = crate::annotations::extract_placement(&comp.annotation);
                         // Shared extent→centre/size math (see
                         // `Transformation::centre_size`); position and size
                         // fall back independently when no placement is given.
-                        let centre_size = placement
-                            .as_ref()
-                            .map(|p| p.transformation.centre_size());
+                        let centre_size =
+                            placement.as_ref().map(|p| p.transformation.centre_size());
                         let (x, y) = centre_size
                             .map(|(cx, cy, _, _)| (cx as f32, cy as f32))
                             .unwrap_or_else(|| {
@@ -885,7 +886,6 @@ impl MSLIndexer {
             }
         }
     }
-
 
     fn index_all(&mut self) -> Vec<crate::index::ClassEntry> {
         use std::sync::Arc;
@@ -955,21 +955,17 @@ impl MSLIndexer {
                 // `%name` Text label and the larger filled triangle
                 // graphic that MSL signal connectors use only in the
                 // diagram view, not as port markers).
-                let diagram_graphics = crate::annotations::extract_diagram(
-                    &class.annotation,
-                );
+                let diagram_graphics = crate::annotations::extract_diagram(&class.annotation);
 
                 // Pull the first authored Text graphic's string for the
                 // palette text fallback (used when a class has no
                 // structural icon primitives but still labels itself).
                 // Walks the typed Icon via `extract_icon` — same path
                 // the workbench uses, no regex over Debug output.
-                let icon_text = crate::annotations::extract_icon(&class.annotation)
-                    .and_then(|icon| {
+                let icon_text =
+                    crate::annotations::extract_icon(&class.annotation).and_then(|icon| {
                         icon.graphics.iter().find_map(|g| match g {
-                            crate::annotations::GraphicItem::Text(t) => {
-                                Some(t.text_string.clone())
-                            }
+                            crate::annotations::GraphicItem::Text(t) => Some(t.text_string.clone()),
                             _ => None,
                         })
                     });
@@ -1061,10 +1057,10 @@ pub(crate) fn native_msl_roots() -> (Vec<(std::path::PathBuf, String)>, Vec<std:
     }
     // Discovered third-party libs — the same set the runtime resolves
     // natively and `build_msl_assets --discover-extras` ships to web.
-    for (cache_subdir, package_dir) in
-        crate::package_tree::scanner::discover_third_party_libs()
-    {
-        let lib_path = lunco_assets::cache_dir().join(&cache_subdir).join(&package_dir);
+    for (cache_subdir, package_dir) in crate::package_tree::scanner::discover_third_party_libs() {
+        let lib_path = lunco_assets::cache_dir()
+            .join(&cache_subdir)
+            .join(&package_dir);
         if lib_path.exists() {
             dirs.push((lib_path, package_dir));
         }
@@ -1215,7 +1211,10 @@ pub fn run_with_cancel(
     }
 
     let t_total = Instant::now();
-    println!("[indexer] scanning MSL at {:?} (verbose={})", msl_path, opts.verbose);
+    println!(
+        "[indexer] scanning MSL at {:?} (verbose={})",
+        msl_path, opts.verbose
+    );
 
     let mut indexer = MSLIndexer::new();
     indexer.verbose = opts.verbose;
@@ -1467,7 +1466,10 @@ fn warm_compile_pass(opts: &Options) {
         for dir in dirs.split(':').filter(|s| !s.is_empty()) {
             let path = std::path::PathBuf::from(dir);
             if !path.exists() {
-                eprintln!("[warm] LUNCOSIM_WARM_DIRS entry does not exist: {}", path.display());
+                eprintln!(
+                    "[warm] LUNCOSIM_WARM_DIRS entry does not exist: {}",
+                    path.display()
+                );
                 continue;
             }
             if path.is_file() {
@@ -1517,7 +1519,13 @@ fn warm_compile_pass(opts: &Options) {
         total_compile_secs += secs;
         match result {
             Ok(_) => {
-                println!("[warm] [{}/{}] ✓ {} compiled in {:.1}s", i + 1, units.len(), label, secs);
+                println!(
+                    "[warm] [{}/{}] ✓ {} compiled in {:.1}s",
+                    i + 1,
+                    units.len(),
+                    label,
+                    secs
+                );
                 succeeded += 1;
             }
             Err(e) => {
@@ -1551,10 +1559,7 @@ fn warm_compile_pass(opts: &Options) {
 ///
 /// `qualified` follows MLS scoping: a top-level `model Foo` produces
 /// `Foo`; a `package Foo { model Bar }` produces `Foo.Bar`.
-fn push_file_units(
-    path: &std::path::Path,
-    units: &mut Vec<(String, WarmKind)>,
-) {
+fn push_file_units(path: &std::path::Path, units: &mut Vec<(String, WarmKind)>) {
     let Ok(source) = std::fs::read_to_string(path) else {
         eprintln!("[warm] read failed: {}", path.display());
         return;

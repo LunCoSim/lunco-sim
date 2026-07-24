@@ -4,9 +4,9 @@
 //! For panels with many query fields, prefer defining a custom
 //! `#[derive(SystemParam)]` struct + `WidgetSystem` impl directly.
 
+use crate::{widget, WidgetId, WidgetSystem};
 use bevy::prelude::*;
 use bevy_egui::egui;
-use crate::{WidgetId, widget, WidgetSystem};
 
 /// Tracks which entity is currently selected in the UI.
 #[derive(Resource, Default)]
@@ -60,11 +60,7 @@ impl<'w, 's> UiContext<'w, 's> {
 
     /// Render a nested widget using the WidgetSystem pattern.
     /// This provides composability — panels can contain other widgets.
-    pub fn render<W: WidgetSystem + 'static>(
-        &mut self,
-        ui: &mut egui::Ui,
-        id: WidgetId,
-    ) {
+    pub fn render<W: WidgetSystem + 'static>(&mut self, ui: &mut egui::Ui, id: WidgetId) {
         widget::<W>(self.world, ui, id);
     }
 }

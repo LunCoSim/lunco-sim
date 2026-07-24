@@ -119,7 +119,9 @@ fn drive_link_beams(
         if id.0 != DRIVER_ID {
             continue;
         }
-        let Some(node) = node_of(tmpl, &q_parents, &q_state) else { continue };
+        let Some(node) = node_of(tmpl, &q_parents, &q_state) else {
+            continue;
+        };
         let get = |k: &str, d: f64| params.and_then(|p| p.0.get(k).copied()).unwrap_or(d);
         let nb = nodes.entry(node).or_default();
         if get("state", 0.0) >= 0.5 {
@@ -137,7 +139,9 @@ fn drive_link_beams(
     // Pass 2: reconcile one beam per wanted peer against what is already spawned.
     for (node, nb) in &nodes {
         let node = *node;
-        let Ok(state) = q_state.get(node) else { continue };
+        let Ok(state) = q_state.get(node) else {
+            continue;
+        };
         let Some(up) = nb.up.as_ref() else { continue };
         let show_down = nb.show_down && nb.down.is_some();
 
@@ -180,7 +184,9 @@ fn drive_link_beams(
             .collect();
 
         for (peer_gid, is_up) in wanted {
-            let Some(&pe) = ent_of.get(&peer_gid) else { continue };
+            let Some(&pe) = ent_of.get(&peer_gid) else {
+                continue;
+            };
             let Some((ppos, _)) = world_pose(pe, &q_parents, &q_grids, &q_spatial) else {
                 continue;
             };
@@ -190,7 +196,11 @@ fn drive_link_beams(
                 continue;
             }
             let dir_local = (nrot_inv * (world_dir / dist)).as_vec3();
-            let len = if dist <= nb.near_m { dist as f32 } else { nb.stub };
+            let len = if dist <= nb.near_m {
+                dist as f32
+            } else {
+                nb.stub
+            };
             let tf = beam_transform(dir_local, len, nb.width);
             let (mesh, mat) = if is_up { up } else { nb.down.as_ref().unwrap() };
 
@@ -202,7 +212,10 @@ fn drive_link_beams(
                         commands.entity(beam).try_insert((
                             mesh.clone(),
                             mat.clone(),
-                            LinkBeamInstance { peer: peer_gid, up: is_up },
+                            LinkBeamInstance {
+                                peer: peer_gid,
+                                up: is_up,
+                            },
                         ));
                     }
                 }
@@ -224,7 +237,10 @@ fn drive_link_beams(
                         // the marker explicitly on each instance.
                         bevy::light::NotShadowCaster,
                         big_space::grid::propagation::LowPrecisionRoot,
-                        LinkBeamInstance { peer: peer_gid, up: is_up },
+                        LinkBeamInstance {
+                            peer: peer_gid,
+                            up: is_up,
+                        },
                         lunco_core::NoSelectionBounds,
                         ChildOf(node),
                     ));

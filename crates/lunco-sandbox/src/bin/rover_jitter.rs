@@ -27,11 +27,11 @@
 
 use std::time::Duration;
 
-use bevy::prelude::*;
-use bevy::app::ScheduleRunnerPlugin;
-use bevy::time::TimeUpdateStrategy;
-use bevy::math::DVec3;
 use avian3d::prelude::*;
+use bevy::app::ScheduleRunnerPlugin;
+use bevy::math::DVec3;
+use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
 
 // ── Authored rover parameters (mirror assets/.../*rover*.usda) ──
 const CHASSIS_MASS: f64 = 1000.0;
@@ -190,27 +190,25 @@ fn main() {
     let dt = Duration::from_secs_f64(1.0 / 60.0);
 
     let mut app = App::new();
-    app.add_plugins(
-        MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::ZERO)),
-    )
-    .add_plugins(bevy::transform::TransformPlugin)
-    // Avian's `collider-from-mesh` cache reads `AssetEvent<Mesh>`, so the
-    // Mesh asset must exist even though this headless probe builds all
-    // colliders by hand.
-    .add_plugins(bevy::asset::AssetPlugin::default())
-    .init_asset::<Mesh>()
-    .add_plugins(PhysicsPlugins::default())
-    .insert_resource(Gravity(DVec3::new(0.0, -cfg.gravity, 0.0)))
-    .insert_resource(SubstepCount(cfg.substeps))
-    .insert_resource(Time::<Fixed>::from_hz(60.0))
-    // Deterministic stepping: each app.update() advances virtual time by
-    // exactly one fixed tick, so FixedUpdate fires once per update.
-    .insert_resource(TimeUpdateStrategy::ManualDuration(dt))
-    .insert_resource(cfg.clone())
-    .insert_resource(Stats::default())
-    .add_systems(Startup, setup)
-    .add_systems(FixedUpdate, apply_drive)
-    .add_systems(FixedLast, sample_chassis);
+    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::ZERO)))
+        .add_plugins(bevy::transform::TransformPlugin)
+        // Avian's `collider-from-mesh` cache reads `AssetEvent<Mesh>`, so the
+        // Mesh asset must exist even though this headless probe builds all
+        // colliders by hand.
+        .add_plugins(bevy::asset::AssetPlugin::default())
+        .init_asset::<Mesh>()
+        .add_plugins(PhysicsPlugins::default())
+        .insert_resource(Gravity(DVec3::new(0.0, -cfg.gravity, 0.0)))
+        .insert_resource(SubstepCount(cfg.substeps))
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
+        // Deterministic stepping: each app.update() advances virtual time by
+        // exactly one fixed tick, so FixedUpdate fires once per update.
+        .insert_resource(TimeUpdateStrategy::ManualDuration(dt))
+        .insert_resource(cfg.clone())
+        .insert_resource(Stats::default())
+        .add_systems(Startup, setup)
+        .add_systems(FixedUpdate, apply_drive)
+        .add_systems(FixedLast, sample_chassis);
 
     app.finish();
     app.cleanup();
@@ -266,14 +264,19 @@ fn setup(mut commands: Commands, cfg: Res<Config>) {
     let ground_collider = if use_hf {
         use avian3d::parry::shape::{HeightFieldFlags, SharedShape};
         use avian3d::parry::utils::Array2;
-        let res = std::env::var("HFRES").ok().and_then(|s| s.parse().ok()).unwrap_or(65usize);
+        let res = std::env::var("HFRES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(65usize);
         let side = 200.0_f64;
         // HFRELIEF=1 → non-flat heights (gentle slope + bumps), like real terrain,
         // to test whether SLOPED heightfield contact holds the cylinder wheels.
         let relief = std::env::var("HFRELIEF").as_deref() == Ok("1");
         let data: Vec<f64> = (0..res * res)
             .map(|i| {
-                if !relief { return 0.0; }
+                if !relief {
+                    return 0.0;
+                }
                 let (r, c) = ((i / res) as f64, (i % res) as f64);
                 let (u, v) = (r / (res as f64 - 1.0), c / (res as f64 - 1.0));
                 // Height in heightfield-LOCAL units (scaled by scale.y=1). Amplitude
@@ -296,8 +299,13 @@ fn setup(mut commands: Commands, cfg: Res<Config>) {
     // BASEY offsets the WHOLE rig (ground + rover) to a large altitude, e.g. the
     // moonbase's ~1946 m, to test whether avian physics degrades at grid-absolute
     // coordinates (the bridge runs physics in grid-absolute, not origin-relative).
-    let base: f64 = std::env::var("BASEY").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    if base != 0.0 { eprintln!("[rover_jitter] BASEY={base} (rig offset to large altitude)"); }
+    let base: f64 = std::env::var("BASEY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    if base != 0.0 {
+        eprintln!("[rover_jitter] BASEY={base} (rig offset to large altitude)");
+    }
     // Heightfield surface sits at the entity origin (heights=0); cuboid top is at
     // origin+0.5. Place accordingly so the top face is y=0 in both cases.
     let ground_y = (if use_hf { 0.0 } else { -0.5 }) + base;
@@ -405,11 +413,9 @@ fn setup(mut commands: Commands, cfg: Res<Config>) {
                 // REDUCED mass, not the sprung corner mass, or the spring comes
                 // out ~25× too soft and the chassis sinks to the travel limit.
                 let reduced = (CHASSIS_MASS * HUB_MASS) / (CHASSIS_MASS + HUB_MASS);
-                let frequency = cfg.spring_scale
-                    * (SPRING_K / reduced).sqrt()
-                    / (2.0 * std::f64::consts::PI);
-                let damping_ratio =
-                    cfg.damp_scale * SPRING_C / (2.0 * (SPRING_K * reduced).sqrt());
+                let frequency =
+                    cfg.spring_scale * (SPRING_K / reduced).sqrt() / (2.0 * std::f64::consts::PI);
+                let damping_ratio = cfg.damp_scale * SPRING_C / (2.0 * (SPRING_K * reduced).sqrt());
 
                 commands.spawn((
                     PrismaticJoint::new(chassis, hub)

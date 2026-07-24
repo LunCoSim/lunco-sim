@@ -99,14 +99,12 @@ impl ModelicaThemeExt for Theme {
     }
 
     fn wire_color(&self, connector_type: &str) -> Color32 {
-        let leaf = connector_type
-            .rsplit('.')
-            .next()
-            .unwrap_or(connector_type);
+        let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
         let s = &self.schematic;
         match leaf {
-            "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug"
-            | "NegativePlug" => s.wire_electrical,
+            "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug" | "NegativePlug" => {
+                s.wire_electrical
+            }
             "Flange_a" | "Flange_b" | "Flange" | "Support" => s.wire_mechanical,
             "HeatPort_a" | "HeatPort_b" | "HeatPort" => s.wire_thermal,
             "FluidPort" | "FluidPort_a" | "FluidPort_b" => s.wire_fluid,

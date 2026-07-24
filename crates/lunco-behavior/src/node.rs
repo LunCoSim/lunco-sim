@@ -77,7 +77,10 @@ pub struct Sequence<Ctx: ?Sized> {
 impl<Ctx: ?Sized> Sequence<Ctx> {
     /// Build a sequence over the given ordered children.
     pub fn new(children: Vec<BoxNode<Ctx>>) -> Self {
-        Self { children, current: 0 }
+        Self {
+            children,
+            current: 0,
+        }
     }
 }
 
@@ -115,7 +118,10 @@ pub struct Selector<Ctx: ?Sized> {
 impl<Ctx: ?Sized> Selector<Ctx> {
     /// Build a selector (fallback) over the given ordered children.
     pub fn new(children: Vec<BoxNode<Ctx>>) -> Self {
-        Self { children, current: 0 }
+        Self {
+            children,
+            current: 0,
+        }
     }
 }
 
@@ -166,7 +172,11 @@ impl<Ctx: ?Sized> Parallel<Ctx> {
     /// Build a parallel node with the given completion policy.
     pub fn new(policy: ParallelPolicy, children: Vec<BoxNode<Ctx>>) -> Self {
         let latched = vec![Status::Running; children.len()];
-        Self { children, latched, policy }
+        Self {
+            children,
+            latched,
+            policy,
+        }
     }
 }
 
@@ -230,12 +240,20 @@ pub struct Repeat<Ctx: ?Sized> {
 impl<Ctx: ?Sized> Repeat<Ctx> {
     /// Repeat `child` until it has succeeded `count` times, then succeed.
     pub fn times(count: usize, child: BoxNode<Ctx>) -> Self {
-        Self { child, target: Some(count), done: 0 }
+        Self {
+            child,
+            target: Some(count),
+            done: 0,
+        }
     }
 
     /// Repeat `child` forever (only a child failure ends it).
     pub fn forever(child: BoxNode<Ctx>) -> Self {
-        Self { child, target: None, done: 0 }
+        Self {
+            child,
+            target: None,
+            done: 0,
+        }
     }
 }
 
@@ -285,12 +303,20 @@ pub struct Retry<Ctx: ?Sized> {
 impl<Ctx: ?Sized> Retry<Ctx> {
     /// Retry `child` until it succeeds, giving up (`Failure`) after `count` failures.
     pub fn times(count: usize, child: BoxNode<Ctx>) -> Self {
-        Self { child, budget: Some(count), failed: 0 }
+        Self {
+            child,
+            budget: Some(count),
+            failed: 0,
+        }
     }
 
     /// Retry `child` forever until it succeeds (a failure never ends it).
     pub fn forever(child: BoxNode<Ctx>) -> Self {
-        Self { child, budget: None, failed: 0 }
+        Self {
+            child,
+            budget: None,
+            failed: 0,
+        }
     }
 }
 
@@ -367,12 +393,18 @@ pub struct Force<Ctx: ?Sized> {
 impl<Ctx: ?Sized> Force<Ctx> {
     /// Wrap `child` so any terminal result becomes `Success`.
     pub fn succeed(child: BoxNode<Ctx>) -> Self {
-        Self { child, forced: Status::Success }
+        Self {
+            child,
+            forced: Status::Success,
+        }
     }
 
     /// Wrap `child` so any terminal result becomes `Failure`.
     pub fn fail(child: BoxNode<Ctx>) -> Self {
-        Self { child, forced: Status::Failure }
+        Self {
+            child,
+            forced: Status::Failure,
+        }
     }
 }
 
@@ -500,7 +532,11 @@ mod tests {
     }
     impl Countdown {
         fn new(delay: u32, end: Status) -> BoxNode<()> {
-            Box::new(Self { delay, left: delay, end })
+            Box::new(Self {
+                delay,
+                left: delay,
+                end,
+            })
         }
     }
     impl Node<()> for Countdown {
@@ -607,7 +643,11 @@ mod tests {
         let mut n = 0;
         let mut a = Action::new(|_: &mut ()| {
             n += 1;
-            if n >= 2 { Status::Success } else { Status::Running }
+            if n >= 2 {
+                Status::Success
+            } else {
+                Status::Running
+            }
         });
         let mut ctx = ();
         assert_eq!(a.tick(&mut ctx), Status::Running);
@@ -617,21 +657,39 @@ mod tests {
     #[test]
     fn invert_swaps_terminals_passes_running() {
         let mut ctx = ();
-        assert_eq!(Invert::new(Countdown::new(0, Status::Success)).tick(&mut ctx), Status::Failure);
-        assert_eq!(Invert::new(Countdown::new(0, Status::Failure)).tick(&mut ctx), Status::Success);
+        assert_eq!(
+            Invert::new(Countdown::new(0, Status::Success)).tick(&mut ctx),
+            Status::Failure
+        );
+        assert_eq!(
+            Invert::new(Countdown::new(0, Status::Failure)).tick(&mut ctx),
+            Status::Success
+        );
         // Running passes straight through.
-        assert_eq!(Invert::new(Countdown::new(1, Status::Success)).tick(&mut ctx), Status::Running);
+        assert_eq!(
+            Invert::new(Countdown::new(1, Status::Success)).tick(&mut ctx),
+            Status::Running
+        );
     }
 
     #[test]
     fn force_maps_any_terminal_to_fixed() {
         let mut ctx = ();
         // A failing child never fails its parent under Force::succeed.
-        assert_eq!(Force::succeed(Countdown::new(0, Status::Failure)).tick(&mut ctx), Status::Success);
+        assert_eq!(
+            Force::succeed(Countdown::new(0, Status::Failure)).tick(&mut ctx),
+            Status::Success
+        );
         // A succeeding child still fails under Force::fail.
-        assert_eq!(Force::fail(Countdown::new(0, Status::Success)).tick(&mut ctx), Status::Failure);
+        assert_eq!(
+            Force::fail(Countdown::new(0, Status::Success)).tick(&mut ctx),
+            Status::Failure
+        );
         // Running is not a terminal, so it passes through.
-        assert_eq!(Force::succeed(Countdown::new(2, Status::Failure)).tick(&mut ctx), Status::Running);
+        assert_eq!(
+            Force::succeed(Countdown::new(2, Status::Failure)).tick(&mut ctx),
+            Status::Running
+        );
     }
 
     #[test]
@@ -647,7 +705,11 @@ mod tests {
         let mut n = 0;
         let flaky = Box::new(Action::new(move |_: &mut ()| {
             n += 1;
-            if n >= 2 { Status::Success } else { Status::Failure }
+            if n >= 2 {
+                Status::Success
+            } else {
+                Status::Failure
+            }
         })) as BoxNode<()>;
         let mut r2 = Retry::times(3, flaky);
         assert_eq!(r2.tick(&mut ctx), Status::Running); // fail #1 → retry
@@ -661,15 +723,19 @@ mod tests {
         let mut g = 0;
         let guard = Box::new(Action::new(move |_: &mut ()| {
             g += 1;
-            if g <= 2 { Status::Success } else { Status::Failure }
+            if g <= 2 {
+                Status::Success
+            } else {
+                Status::Failure
+            }
         })) as BoxNode<()>;
         let action = Countdown::new(999, Status::Success); // effectively "always Running"
         let mut seq = ReactiveSequence::new(vec![guard, action]);
         let mut ctx = ();
         assert_eq!(seq.tick(&mut ctx), Status::Running); // guard ok, action running
         assert_eq!(seq.tick(&mut ctx), Status::Running); // guard ok, action running
-        // A plain Sequence would have latched the running action and NEVER re-check
-        // the guard; the reactive one re-evaluates it and bails.
+                                                         // A plain Sequence would have latched the running action and NEVER re-check
+                                                         // the guard; the reactive one re-evaluates it and bails.
         assert_eq!(seq.tick(&mut ctx), Status::Failure); // guard now false → Failure
     }
 
@@ -680,14 +746,18 @@ mod tests {
         let mut h = 0;
         let high = Box::new(Action::new(move |_: &mut ()| {
             h += 1;
-            if h <= 2 { Status::Failure } else { Status::Success }
+            if h <= 2 {
+                Status::Failure
+            } else {
+                Status::Success
+            }
         })) as BoxNode<()>;
         let low = Countdown::new(999, Status::Success); // always Running
         let mut sel = ReactiveSelector::new(vec![high, low]);
         let mut ctx = ();
         assert_eq!(sel.tick(&mut ctx), Status::Running); // high fails → low runs
         assert_eq!(sel.tick(&mut ctx), Status::Running); // high fails → low runs
-        // Reactive: the high-priority child is re-checked and preempts the low one.
+                                                         // Reactive: the high-priority child is re-checked and preempts the low one.
         assert_eq!(sel.tick(&mut ctx), Status::Success); // high now succeeds
     }
 }

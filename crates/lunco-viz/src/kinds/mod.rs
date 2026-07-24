@@ -4,5 +4,5 @@
 //! impl. New kinds live in their own module and register via
 //! [`AppVizExt::register_visualization`](crate::registry::AppVizExt).
 
-pub mod line_plot;
 pub mod canvas_plot_node;
+pub mod line_plot;

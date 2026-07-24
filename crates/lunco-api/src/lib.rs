@@ -138,7 +138,6 @@ impl LunCoApiPlugin {
             config,
         }
     }
-
 }
 
 /// Create with default configuration.
@@ -211,8 +210,10 @@ impl Plugin for LunCoApiPlugin {
         // `set_wasm_bridge` (the `window.lunco_api` export).
         #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
         {
+            use crate::{
+                http_bridge_request_router, http_response_observer, ApiHttpResponsePending,
+            };
             use transports::HttpBridge;
-            use crate::{http_bridge_request_router, http_response_observer, ApiHttpResponsePending};
 
             // BOUNDED: an unbounded channel turns a slow drain into unbounded
             // memory growth, and this queue is fed by external HTTP traffic. The
@@ -229,7 +230,10 @@ impl Plugin for LunCoApiPlugin {
             // requestAnimationFrame loop and a headless server ticks via
             // ScheduleRunnerPlugin, so neither needs (or has) the waker.
             #[cfg(all(feature = "transport-http", feature = "winit"))]
-            if let Some(proxy) = app.world().get_resource::<bevy::winit::EventLoopProxyWrapper>() {
+            if let Some(proxy) = app
+                .world()
+                .get_resource::<bevy::winit::EventLoopProxyWrapper>()
+            {
                 let proxy = (**proxy).clone();
                 bridge = bridge.with_waker(std::sync::Arc::new(move || {
                     // Ignored by design: a send error means the winit event loop
@@ -301,9 +305,7 @@ pub fn rhai_request(code: &str) -> Result<schema::ApiRequest, String> {
 /// Receives bridge requests (HTTP or wasm) and injects them as ApiRequestEvent.
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 #[derive(Resource)]
-pub struct ApiHttpBridgeReceiver(
-    tokio::sync::mpsc::Receiver<transports::BridgeMessage>,
-);
+pub struct ApiHttpBridgeReceiver(tokio::sync::mpsc::Receiver<transports::BridgeMessage>);
 
 /// Pending response senders (correlation_id → oneshot).
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]

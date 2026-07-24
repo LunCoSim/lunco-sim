@@ -41,9 +41,9 @@
 //! absolute position and subtract the body's absolute position to get
 //! the body-relative offset.
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
-use big_space::prelude::{Grid, CellCoord};
+use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 
 // Gravity configuration *types* now live in `lunco-environment` (environmental
 // state, sibling to lighting). This crate owns only the `PointMassGravity`
@@ -63,7 +63,9 @@ pub struct PointMassGravity {
 impl GravityModel for PointMassGravity {
     fn acceleration(&self, relative_pos: DVec3) -> DVec3 {
         let r2 = relative_pos.length_squared();
-        if r2 < 1.0 { return DVec3::ZERO; }
+        if r2 < 1.0 {
+            return DVec3::ZERO;
+        }
         let r = r2.sqrt();
         -relative_pos * (self.gm / (r * r2))
     }
@@ -105,7 +107,13 @@ pub struct LocalGravityField {
 ///
 /// Runs in `PreUpdate` so camera systems see fresh data.
 pub fn update_local_gravity_field(
-    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&GravityBody>)>,
+    q_avatar: Query<(
+        Entity,
+        &Transform,
+        &CellCoord,
+        &ChildOf,
+        Option<&GravityBody>,
+    )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -121,7 +129,9 @@ pub fn update_local_gravity_field(
     if orbital_pin.active {
         return;
     }
-    let Some((avatar_ent, tf, cell, _, gravity_body)) = q_avatar.iter().next() else { return };
+    let Some((avatar_ent, tf, cell, _, gravity_body)) = q_avatar.iter().next() else {
+        return;
+    };
 
     // Avatar absolute position in root frame.
     let cam_abs = crate::coords::world_position_seeded(
@@ -133,7 +143,12 @@ pub fn update_local_gravity_field(
         let body_abs = if let Ok((b_cell, b_tf)) = q_spatial.get(gb.body_entity) {
             let cell = b_cell.copied().unwrap_or_default();
             crate::coords::world_position_seeded(
-                gb.body_entity, &cell, b_tf, &q_parents, &q_grids, &q_spatial,
+                gb.body_entity,
+                &cell,
+                b_tf,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
             )
         } else {
             DVec3::ZERO
@@ -171,7 +186,11 @@ pub fn update_local_gravity_field(
     field.surface_g = surface_g;
 
     let dist = body_local.length();
-    field.local_up = if dist > 1e-6 { body_local / dist } else { DVec3::Y };
+    field.local_up = if dist > 1e-6 {
+        body_local / dist
+    } else {
+        DVec3::Y
+    };
     field.up = field.local_up;
 
     // For flat gravity, use the configured g.

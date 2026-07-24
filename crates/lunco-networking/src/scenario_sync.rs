@@ -41,7 +41,9 @@ use std::path::PathBuf;
 use lunco_core::{NetworkRole, SessionId, SyncChannel};
 use lunco_storage::StorageHandle;
 
-use crate::scenario::{cid_from_bytes, AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg};
+use crate::scenario::{
+    cid_from_bytes, AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg,
+};
 use crate::sync::{SyncEnvelope, SyncOutbox};
 
 // ── In-session chunk transfer: the FALLBACK bytes path ───────────────────────
@@ -112,7 +114,10 @@ impl AssetDownloads {
     /// empty manifest (nothing to consume).
     pub fn all_cached(&self, manifest: &ScenarioManifestMsg) -> bool {
         !manifest.assets.is_empty()
-            && manifest.assets.iter().all(|a| self.completed.contains(&a.cid))
+            && manifest
+                .assets
+                .iter()
+                .all(|a| self.completed.contains(&a.cid))
     }
 
     /// Has this CID already been requested (or found cached) this session?
@@ -337,7 +342,11 @@ pub struct PendingAssetOffers(pub Vec<(SessionId, crate::scenario::AssetOfferMsg
 /// import surface (file-open / drag-drop / palette add) when a NEW asset enters the
 /// twin. Today it's the mechanism, not yet the trigger. Also cap `bytes` and chunk
 /// large offers (see [`AssetOfferMsg`](crate::scenario::AssetOfferMsg)).
-pub fn offer_asset_to_host(outbox: &mut crate::sync::SyncOutbox, path: impl Into<String>, bytes: Vec<u8>) {
+pub fn offer_asset_to_host(
+    outbox: &mut crate::sync::SyncOutbox,
+    path: impl Into<String>,
+    bytes: Vec<u8>,
+) {
     if bytes.is_empty() {
         return;
     }
@@ -450,7 +459,10 @@ pub fn request_missing_assets(
         missing.push(asset.cid.clone());
     }
     if !missing.is_empty() {
-        info!("[net] requesting {} missing scenario asset(s)", missing.len());
+        info!(
+            "[net] requesting {} missing scenario asset(s)",
+            missing.len()
+        );
         outbox.0.push((
             SyncChannel::BulkData,
             SyncEnvelope::AssetRequest(AssetRequestMsg { missing }),
@@ -498,9 +510,13 @@ pub fn reassemble_asset_chunks(
                 }
                 continue;
             }
-            downloads
-                .inflight
-                .insert(ch.cid.clone(), Inflight { total: ch.total, ..Default::default() });
+            downloads.inflight.insert(
+                ch.cid.clone(),
+                Inflight {
+                    total: ch.total,
+                    ..Default::default()
+                },
+            );
         }
         // Append into the per-CID buffer + feed the running hash (scoped borrow so
         // we can touch `downloads.requested` afterwards without overlapping it).
@@ -562,7 +578,9 @@ pub fn reassemble_asset_chunks(
         }
         // The CID is complete only once EVERY one of its paths is written, so the
         // outcome drain must see one report per write (see `AssetPersist.pending`).
-        downloads.pending_writes.insert(ch.cid.clone(), targets.len());
+        downloads
+            .pending_writes
+            .insert(ch.cid.clone(), targets.len());
         for handle in targets {
             submit_persist(persist.tx.clone(), ch.cid.clone(), handle, done.buf.clone());
         }
@@ -684,8 +702,11 @@ pub fn drive_cache_probe(
             state.kicked = Some(m.revision);
             let scenario_id = m.scenario_id;
             let revision = m.revision;
-            let assets: Vec<(Vec<u8>, String)> =
-                m.assets.iter().map(|a| (a.cid.clone(), a.path.clone())).collect();
+            let assets: Vec<(Vec<u8>, String)> = m
+                .assets
+                .iter()
+                .map(|a| (a.cid.clone(), a.path.clone()))
+                .collect();
             let tx = probe.tx.clone();
             let fut = async move {
                 let outcome = run_cache_probe(scenario_id, revision, assets).await;
@@ -736,7 +757,9 @@ pub fn write_scenario_index(
     // Keep the in-memory registry current so the menu updates live as a download
     // completes; the async block below persists both the per-scenario index and
     // the top-level index.json so a later boot can rebuild the registry.
-    registry.entries.retain(|e| e.scenario_id != summary.scenario_id);
+    registry
+        .entries
+        .retain(|e| e.scenario_id != summary.scenario_id);
     registry.entries.push(summary.clone());
     let index = ScenarioIndex {
         name: m.name.clone(),
@@ -746,7 +769,11 @@ pub fn write_scenario_index(
         assets: m
             .assets
             .iter()
-            .map(|a| ScenarioIndexAsset { path: a.path.clone(), cid: a.cid.clone(), size: a.size })
+            .map(|a| ScenarioIndexAsset {
+                path: a.path.clone(),
+                cid: a.cid.clone(),
+                size: a.size,
+            })
             .collect(),
     };
     let Ok(bytes) = serde_json::to_vec(&index) else {
@@ -756,7 +783,10 @@ pub fn write_scenario_index(
     let top_index = StorageHandle::File(scenarios_index_path());
     let fut = async move {
         if !do_write(per_scenario, bytes).await {
-            warn!("[net] scenario index write failed for {:?}", summary.scenario_id);
+            warn!(
+                "[net] scenario index write failed for {:?}",
+                summary.scenario_id
+            );
         }
         // Merge into the top-level index.json (read → replace this id → write).
         let mut entries: Vec<CachedTwinSummary> = match storage_read(&top_index).await {
@@ -794,8 +824,9 @@ pub fn refresh_cached_twins_registry(
         let tx = index.tx.clone();
         let fut = async move {
             let entries = match storage_read(&StorageHandle::File(scenarios_index_path())).await {
-                Some(bytes) => serde_json::from_slice::<Vec<CachedTwinSummary>>(&bytes)
-                    .unwrap_or_default(),
+                Some(bytes) => {
+                    serde_json::from_slice::<Vec<CachedTwinSummary>>(&bytes).unwrap_or_default()
+                }
                 None => Vec::new(),
             };
             let _ = tx.send(entries);
@@ -909,7 +940,12 @@ pub(crate) fn asset_storage_handle(scenario_id: &[u8; 16], rel: &str) -> Option<
 /// system: native → `AsyncComputeTaskPool` (real thread); web → `spawn_local`
 /// (async OPFS on the main thread, non-blocking). The awaited body is the only
 /// native/web divergence — see [`do_write`].
-pub(crate) fn submit_persist(tx: Sender<PersistOutcome>, cid: Vec<u8>, handle: StorageHandle, bytes: Vec<u8>) {
+pub(crate) fn submit_persist(
+    tx: Sender<PersistOutcome>,
+    cid: Vec<u8>,
+    handle: StorageHandle,
+    bytes: Vec<u8>,
+) {
     let fut = async move {
         let ok = do_write(handle, bytes).await;
         let _ = tx.send(PersistOutcome { cid, ok });
@@ -931,7 +967,10 @@ pub(crate) fn submit_persist(tx: Sender<PersistOutcome>, cid: Vec<u8>, handle: S
 #[cfg(not(target_arch = "wasm32"))]
 async fn do_write(handle: StorageHandle, bytes: Vec<u8>) -> bool {
     use lunco_storage::Storage;
-    match lunco_storage::FileStorage::new().write(&handle, &bytes).await {
+    match lunco_storage::FileStorage::new()
+        .write(&handle, &bytes)
+        .await
+    {
         Ok(()) => true,
         Err(e) => {
             warn!("[net] asset cache write failed: {e}");
@@ -942,7 +981,10 @@ async fn do_write(handle: StorageHandle, bytes: Vec<u8>) -> bool {
 
 #[cfg(target_arch = "wasm32")]
 async fn do_write(handle: StorageHandle, bytes: Vec<u8>) -> bool {
-    match lunco_storage::OpfsStorage::new().write(&handle, &bytes).await {
+    match lunco_storage::OpfsStorage::new()
+        .write(&handle, &bytes)
+        .await
+    {
         Ok(()) => true,
         Err(e) => {
             warn!("[net] asset cache write failed: {e}");
@@ -980,8 +1022,14 @@ pub fn serve_asset_requests(
         if jobs.is_empty() {
             continue;
         }
-        info!("[net] serving {} scenario asset(s) to session {:?}", jobs.len(), session);
-        tasks.0.push((session, pool.spawn(async move { read_and_chunk(jobs) })));
+        info!(
+            "[net] serving {} scenario asset(s) to session {:?}",
+            jobs.len(),
+            session
+        );
+        tasks
+            .0
+            .push((session, pool.spawn(async move { read_and_chunk(jobs) })));
     }
 }
 
@@ -1002,7 +1050,12 @@ fn read_and_chunk(jobs: Vec<(Vec<u8>, PathBuf)>) -> Vec<AssetChunkMsg> {
         let total = bytes.len() as u64;
         if total == 0 {
             // Empty file: one empty chunk so the client can complete it.
-            out.push(AssetChunkMsg { cid: cid.clone(), offset: 0, total: 0, data: Vec::new() });
+            out.push(AssetChunkMsg {
+                cid: cid.clone(),
+                offset: 0,
+                total: 0,
+                data: Vec::new(),
+            });
             continue;
         }
         let mut offset = 0u64;
@@ -1131,7 +1184,9 @@ fn promote_scenario_to_folder(
     _workspace: &mut lunco_workspace::WorkspaceResource,
     _commands: &mut Commands,
 ) {
-    warn!("[promote] promotion needs a native filesystem folder; web (File System Access) is a TODO");
+    warn!(
+        "[promote] promotion needs a native filesystem folder; web (File System Access) is a TODO"
+    );
 }
 
 lunco_core::register_commands!(on_promote_scenario);
@@ -1163,7 +1218,11 @@ mod tests {
             .filter_map(|(path, _)| asset_storage_handle(&id, path))
             .collect();
 
-        assert_eq!(targets.len(), 2, "both paths sharing the CID must be written");
+        assert_eq!(
+            targets.len(),
+            2,
+            "both paths sharing the CID must be written"
+        );
         let expect = |rel: &str| StorageHandle::File(scenario_asset_path(&id, rel).unwrap());
         assert!(targets.contains(&expect("rover.glb")));
         assert!(targets.contains(&expect("structures/rover.glb")));

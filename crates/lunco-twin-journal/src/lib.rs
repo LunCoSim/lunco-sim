@@ -222,7 +222,10 @@ impl LamportClock {
         let mut cur = self.value.load(Ordering::Acquire);
         loop {
             let next = cur.max(remote);
-            match self.value.compare_exchange(cur, next, Ordering::AcqRel, Ordering::Acquire) {
+            match self
+                .value
+                .compare_exchange(cur, next, Ordering::AcqRel, Ordering::Acquire)
+            {
                 Ok(_) => return next,
                 Err(actual) => cur = actual,
             }
@@ -281,10 +284,7 @@ pub enum EntryKind {
     },
     /// Initial state of a document — a full source snapshot. Used at
     /// import/load time; ops then build on top.
-    Snapshot {
-        domain: DomainKind,
-        source: String,
-    },
+    Snapshot { domain: DomainKind, source: String },
     /// Lifecycle event (no state mutation; informational).
     Lifecycle(LifecycleKind),
 }
@@ -352,7 +352,9 @@ impl JournalEntry {
                 label: format!("source snapshot ({} bytes)", source.len()),
                 category: EntryCategory::Snapshot,
             },
-            EntryKind::TextEdit { range, replacement, .. } => {
+            EntryKind::TextEdit {
+                range, replacement, ..
+            } => {
                 let removed = range.end.saturating_sub(range.start);
                 let len = replacement.len();
                 let label = if removed == 0 {
@@ -362,7 +364,11 @@ impl JournalEntry {
                 } else {
                     format!("@{}..{} ↺ {len}b", range.start, range.end)
                 };
-                EntrySummary { tag: "EDIT".into(), label, category: EntryCategory::Text }
+                EntrySummary {
+                    tag: "EDIT".into(),
+                    label,
+                    category: EntryCategory::Text,
+                }
             }
             EntryKind::Op { op, .. } => summarize_op_value(op),
         }
@@ -419,12 +425,20 @@ fn summarize_op_value(op: &serde_json::Value) -> EntrySummary {
     // class lives under `class` for most ops, `parent` for class-authoring.
     let class = {
         let c = field("class");
-        if c.is_empty() { field("parent") } else { c }
+        if c.is_empty() {
+            field("parent")
+        } else {
+            c
+        }
     };
     // name is top-level for some ops, nested in `decl` for add-component/-variable.
     let name = {
         let n = field("name");
-        if n.is_empty() { nested("decl", "name") } else { n }
+        if n.is_empty() {
+            nested("decl", "name")
+        } else {
+            n
+        }
     };
 
     let category = if variant.starts_with("AddConnection") {
@@ -480,7 +494,11 @@ fn summarize_op_value(op: &serde_json::Value) -> EntrySummary {
     }
     .to_string();
 
-    EntrySummary { tag, label, category }
+    EntrySummary {
+        tag,
+        label,
+        category,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -840,7 +858,11 @@ impl Journal {
             entries,
             entry_order,
             streams: dto.streams.into_iter().map(|s| (s.id.clone(), s)).collect(),
-            branches: dto.branches.into_iter().map(|b| (b.name.clone(), b)).collect(),
+            branches: dto
+                .branches
+                .into_iter()
+                .map(|b| (b.name.clone(), b))
+                .collect(),
             change_sets: dto.change_sets.into_iter().map(|c| (c.id, c)).collect(),
             markers: dto.markers.into_iter().map(|m| (m.id, m)).collect(),
             next_change_set: dto.next_change_set,
@@ -1004,7 +1026,11 @@ impl Journal {
             .branches
             .get("main")
             .map(|b| b.head.clone())
-            .or_else(|| self.streams.get(&StreamId::main()).and_then(|s| s.head.clone()));
+            .or_else(|| {
+                self.streams
+                    .get(&StreamId::main())
+                    .and_then(|s| s.head.clone())
+            });
         let extends_main = match &main_head {
             Some(h) => parents.contains(h),
             None => parents.is_empty(),
@@ -1029,7 +1055,10 @@ impl Journal {
     }
 
     fn advance_main(&mut self, head: EntryId) {
-        let stream = self.streams.get_mut(&StreamId::main()).expect("main stream exists");
+        let stream = self
+            .streams
+            .get_mut(&StreamId::main())
+            .expect("main stream exists");
         stream.head = Some(head.clone());
         self.branches
             .entry("main".to_string())
@@ -1048,7 +1077,9 @@ impl Journal {
     }
 
     pub fn entries(&self) -> impl Iterator<Item = &JournalEntry> {
-        self.entry_order.iter().filter_map(|id| self.entries.get(id))
+        self.entry_order
+            .iter()
+            .filter_map(|id| self.entries.get(id))
     }
 
     pub fn entries_for_doc(&self, doc: DocumentId) -> impl Iterator<Item = &JournalEntry> {
@@ -1326,8 +1357,11 @@ impl Journal {
     /// to [`merged_order_ids`](Self::merged_order_ids).
     pub fn merged_order_ids_with(&self, policy: &dyn MergePolicy) -> Vec<EntryId> {
         let (mut indeg, children) = self.dag_edges();
-        let mut ready: Vec<EntryId> =
-            indeg.iter().filter(|(_, &d)| d == 0).map(|(id, _)| id.clone()).collect();
+        let mut ready: Vec<EntryId> = indeg
+            .iter()
+            .filter(|(_, &d)| d == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
 
         let mut out: Vec<EntryId> = Vec::with_capacity(self.entries.len());
         let mut seen: HashSet<EntryId> = HashSet::with_capacity(self.entries.len());
@@ -1389,7 +1423,11 @@ impl Journal {
     /// parent's lamport is always < its child's) would leave entries unemitted;
     /// append them deterministically by `(lamport, author, id)` so the order is
     /// always total (every entry appears exactly once).
-    fn append_cycle_leftovers(&self, mut out: Vec<EntryId>, seen: &HashSet<EntryId>) -> Vec<EntryId> {
+    fn append_cycle_leftovers(
+        &self,
+        mut out: Vec<EntryId>,
+        seen: &HashSet<EntryId>,
+    ) -> Vec<EntryId> {
         if out.len() < self.entries.len() {
             let key = |id: &EntryId| (id.lamport, id.author.clone(), id.clone());
             let mut leftover: Vec<EntryId> = self
@@ -1487,7 +1525,9 @@ pub struct ScriptedMergePolicy {
 impl ScriptedMergePolicy {
     /// Bind to the hook registered under `hook_id`.
     pub fn new(hook_id: impl Into<String>) -> Self {
-        Self { hook_id: hook_id.into() }
+        Self {
+            hook_id: hook_id.into(),
+        }
     }
 }
 
@@ -1650,12 +1690,10 @@ impl UndoManager {
     /// Drop all entries referencing `doc` (used when a doc is closed without
     /// saving so undo doesn't resurrect deleted documents).
     pub fn drop_doc(&mut self, doc: DocumentId, journal: &Journal) {
-        self.undo_stack.retain(|id| {
-            journal.get(id).map(|e| e.doc != doc).unwrap_or(true)
-        });
-        self.redo_stack.retain(|id| {
-            journal.get(id).map(|e| e.doc != doc).unwrap_or(true)
-        });
+        self.undo_stack
+            .retain(|id| journal.get(id).map(|e| e.doc != doc).unwrap_or(true));
+        self.redo_stack
+            .retain(|id| journal.get(id).map(|e| e.doc != doc).unwrap_or(true));
     }
 }
 
@@ -1720,7 +1758,11 @@ mod tests {
             "decl": {"name": "R1", "type_name": "Resistor"}}});
         let s = summarize_op_value(&m);
         assert_eq!(s.category, EntryCategory::Add);
-        assert!(s.label.contains("Circuit") && s.label.contains("R1"), "label={}", s.label);
+        assert!(
+            s.label.contains("Circuit") && s.label.contains("R1"),
+            "label={}",
+            s.label
+        );
 
         // Modelica AddConnection: PortRef endpoints nested under `eq`.
         let c = json!({"AddConnection": {"class": "Circuit", "eq": {
@@ -1728,14 +1770,22 @@ mod tests {
             "to": {"component": "C1", "port": "n"}}}});
         let s = summarize_op_value(&c);
         assert_eq!(s.category, EntryCategory::Wire);
-        assert!(s.label.contains("R1.p") && s.label.contains("C1.n"), "label={}", s.label);
+        assert!(
+            s.label.contains("R1.p") && s.label.contains("C1.n"),
+            "label={}",
+            s.label
+        );
 
         // USD AddPrim: path-keyed, cross-domain — same generic summarizer.
         let u = json!({"AddPrim": {"parent_path": "/World", "name": "Rover",
             "type_name": "Xform"}});
         let s = summarize_op_value(&u);
         assert_eq!(s.category, EntryCategory::Add);
-        assert!(s.label.contains("/World") && s.label.contains("Rover"), "label={}", s.label);
+        assert!(
+            s.label.contains("/World") && s.label.contains("Rover"),
+            "label={}",
+            s.label
+        );
 
         // ReplaceSource → Text category.
         assert_eq!(
@@ -1762,9 +1812,18 @@ mod tests {
     fn journal_persists_and_reloads() {
         let mut j = new_journal();
         let doc = DocumentId::new(3);
-        let op = FakeOp { class: "Circuit".into(), name: "R1".into(), value: 1.0 };
-        let inv = FakeOp { class: "Circuit".into(), name: "R1".into(), value: 0.0 };
-        j.record_op(AuthorTag::local_user(), doc, &op, &inv, None).unwrap();
+        let op = FakeOp {
+            class: "Circuit".into(),
+            name: "R1".into(),
+            value: 1.0,
+        };
+        let inv = FakeOp {
+            class: "Circuit".into(),
+            name: "R1".into(),
+            value: 0.0,
+        };
+        j.record_op(AuthorTag::local_user(), doc, &op, &inv, None)
+            .unwrap();
         j.record_lifecycle(AuthorTag::local_user(), doc, LifecycleKind::Saved);
         let before: Vec<_> = j.entries().map(|e| e.id.clone()).collect();
         let clock_before = j.clock.current();
@@ -1773,7 +1832,10 @@ mod tests {
         let mut loaded = Journal::from_bytes(&bytes).expect("deserialize");
 
         assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded.entries().map(|e| e.id.clone()).collect::<Vec<_>>(), before);
+        assert_eq!(
+            loaded.entries().map(|e| e.id.clone()).collect::<Vec<_>>(),
+            before
+        );
         assert_eq!(loaded.twin(), j.twin());
         assert_eq!(loaded.entries_for_doc(doc).count(), 2);
         // The reloaded clock keeps climbing — a fresh append gets a strictly
@@ -1841,10 +1903,22 @@ mod tests {
             value: 2.0,
         };
         let cs = j.open_change_set("Rename Foo→Bar".into(), AuthorTag::local_user());
-        j.record_op(AuthorTag::local_user(), DocumentId::new(1), &op, &op, Some(cs))
-            .unwrap();
-        j.record_op(AuthorTag::local_user(), DocumentId::new(2), &op, &op, Some(cs))
-            .unwrap();
+        j.record_op(
+            AuthorTag::local_user(),
+            DocumentId::new(1),
+            &op,
+            &op,
+            Some(cs),
+        )
+        .unwrap();
+        j.record_op(
+            AuthorTag::local_user(),
+            DocumentId::new(2),
+            &op,
+            &op,
+            Some(cs),
+        )
+        .unwrap();
         let cs_ref = j.change_set(cs).unwrap();
         assert_eq!(cs_ref.entries.len(), 2);
         assert_eq!(cs_ref.label, "Rename Foo→Bar");
@@ -1856,7 +1930,11 @@ mod tests {
     #[test]
     fn ambient_change_set_captures_recorders_that_pass_none() {
         let mut j = new_journal();
-        let op = FakeOp { class: "Foo".into(), name: "k".into(), value: 2.0 };
+        let op = FakeOp {
+            class: "Foo".into(),
+            name: "k".into(),
+            value: 2.0,
+        };
         let doc = DocumentId::new(1);
 
         // Outside a change set: ungrouped.
@@ -1868,7 +1946,8 @@ mod tests {
         // Inside: the SAME `None`-passing call joins the set.
         let cs = j.begin_change_set("AttachComponent", AuthorTag::local_user());
         for _ in 0..3 {
-            j.record_op(AuthorTag::local_user(), doc, &op, &op, None).unwrap();
+            j.record_op(AuthorTag::local_user(), doc, &op, &op, None)
+                .unwrap();
         }
         j.end_change_set();
         assert_eq!(j.change_set_entries(cs).len(), 3);
@@ -1886,15 +1965,23 @@ mod tests {
     fn undo_group_takes_the_whole_change_set() {
         let mut j = new_journal();
         let mut um = UndoManager::new(AuthorTag::local_user());
-        let op = FakeOp { class: "Foo".into(), name: "k".into(), value: 2.0 };
+        let op = FakeOp {
+            class: "Foo".into(),
+            name: "k".into(),
+            value: 2.0,
+        };
         let doc = DocumentId::new(1);
 
-        let solo = j.record_op(AuthorTag::local_user(), doc, &op, &op, None).unwrap();
+        let solo = j
+            .record_op(AuthorTag::local_user(), doc, &op, &op, None)
+            .unwrap();
         um.record_local(solo.clone());
 
         j.begin_change_set("AttachComponent", AuthorTag::local_user());
         for _ in 0..3 {
-            let id = j.record_op(AuthorTag::local_user(), doc, &op, &op, None).unwrap();
+            let id = j
+                .record_op(AuthorTag::local_user(), doc, &op, &op, None)
+                .unwrap();
             um.record_local(id);
         }
         j.end_change_set();
@@ -2110,9 +2197,15 @@ mod tests {
     /// Build a bare entry with an explicit id + parents (for DAG-shape tests).
     fn mk_entry(author: &str, lamport: u64, parents: Vec<EntryId>) -> JournalEntry {
         JournalEntry {
-            id: EntryId { author: AuthorId::new(author), lamport },
+            id: EntryId {
+                author: AuthorId::new(author),
+                lamport,
+            },
             parents,
-            author: AuthorTag { user: author.into(), tool: "t".into() },
+            author: AuthorTag {
+                user: author.into(),
+                tool: "t".into(),
+            },
             at_ms: 0,
             twin: TwinId::new("test-twin"),
             doc: DocumentId::new(1),
@@ -2127,8 +2220,14 @@ mod tests {
     /// (lamport, author).
     #[test]
     fn merged_order_is_deterministic_regardless_of_arrival() {
-        let r0 = EntryId { author: AuthorId::new("alice"), lamport: 1 };
-        let b1 = EntryId { author: AuthorId::new("bob"), lamport: 2 };
+        let r0 = EntryId {
+            author: AuthorId::new("alice"),
+            lamport: 1,
+        };
+        let b1 = EntryId {
+            author: AuthorId::new("bob"),
+            lamport: 2,
+        };
         // r0 <- alice@2 ; r0 <- bob@2 <- bob@3 (two concurrent branches off r0).
         let entries = vec![
             mk_entry("alice", 1, vec![]),
@@ -2171,7 +2270,10 @@ mod tests {
     /// default behaviour.
     #[test]
     fn default_policy_matches_builtin_order() {
-        let r0 = EntryId { author: AuthorId::new("alice"), lamport: 1 };
+        let r0 = EntryId {
+            author: AuthorId::new("alice"),
+            lamport: 1,
+        };
         let entries = vec![
             mk_entry("alice", 1, vec![]),
             mk_entry("alice", 2, vec![r0.clone()]),
@@ -2181,7 +2283,10 @@ mod tests {
         for e in &entries {
             j.append_remote(e.clone());
         }
-        assert_eq!(j.merged_order_ids(), j.merged_order_ids_with(&DefaultMergePolicy));
+        assert_eq!(
+            j.merged_order_ids(),
+            j.merged_order_ids_with(&DefaultMergePolicy)
+        );
     }
 
     /// A custom [`MergePolicy`] changes the tie-break among CONCURRENT entries
@@ -2196,7 +2301,10 @@ mod tests {
                 b.id.author.cmp(&a.id.author)
             }
         }
-        let r0 = EntryId { author: AuthorId::new("alice"), lamport: 1 };
+        let r0 = EntryId {
+            author: AuthorId::new("alice"),
+            lamport: 1,
+        };
         let entries = vec![
             mk_entry("alice", 1, vec![]),
             mk_entry("alice", 2, vec![r0.clone()]),
@@ -2208,7 +2316,10 @@ mod tests {
         }
         let order = j.merged_order_ids_with(&AuthorDescending);
         let pos = |a: &str, l: u64| {
-            order.iter().position(|id| id.author == AuthorId::new(a) && id.lamport == l).unwrap()
+            order
+                .iter()
+                .position(|id| id.author == AuthorId::new(a) && id.lamport == l)
+                .unwrap()
         };
         // Causality still holds: alice@1 (the root) precedes both children.
         assert!(pos("alice", 1) < pos("alice", 2));
@@ -2232,7 +2343,11 @@ mod tests {
         struct AuthorDescHook;
         impl ScriptHook for AuthorDescHook {
             fn invoke(&self, args: &[HookValue]) -> HookResult {
-                let author = |v: &HookValue| v.get("author").and_then(|s| s.as_str().map(str::to_owned)).unwrap_or_default();
+                let author = |v: &HookValue| {
+                    v.get("author")
+                        .and_then(|s| s.as_str().map(str::to_owned))
+                        .unwrap_or_default()
+                };
                 let a = author(&args[0]);
                 let b = author(&args[1]);
                 // memcmp convention: negative ⇒ a before b. Author DESC ⇒ reverse.
@@ -2252,7 +2367,10 @@ mod tests {
             hook: Arc::new(AuthorDescHook),
         });
 
-        let r0 = EntryId { author: AuthorId::new("alice"), lamport: 1 };
+        let r0 = EntryId {
+            author: AuthorId::new("alice"),
+            lamport: 1,
+        };
         let entries = vec![
             mk_entry("alice", 1, vec![]),
             mk_entry("alice", 2, vec![r0.clone()]),
@@ -2264,13 +2382,23 @@ mod tests {
         }
         let order = j.merged_order_ids_with(&ScriptedMergePolicy::new(hook_id));
         let pos = |a: &str, l: u64| {
-            order.iter().position(|id| id.author == AuthorId::new(a) && id.lamport == l).unwrap()
+            order
+                .iter()
+                .position(|id| id.author == AuthorId::new(a) && id.lamport == l)
+                .unwrap()
         };
-        assert!(pos("bob", 2) < pos("alice", 2), "scripted author-desc must flip the tie-break");
+        assert!(
+            pos("bob", 2) < pos("alice", 2),
+            "scripted author-desc must flip the tie-break"
+        );
 
         // Unregistered hook id → ScriptedMergePolicy falls back to the default.
         let fallback = j.merged_order_ids_with(&ScriptedMergePolicy::new("test.merge.absent"));
-        assert_eq!(fallback, j.merged_order_ids(), "absent hook falls back to default order");
+        assert_eq!(
+            fallback,
+            j.merged_order_ids(),
+            "absent hook falls back to default order"
+        );
 
         lunco_hooks::unregister(hook_id);
     }
@@ -2281,12 +2409,19 @@ mod tests {
     #[test]
     fn append_remote_merges_divergent_branch() {
         let mut j = new_journal();
-        let op = FakeOp { class: "F".into(), name: "k".into(), value: 1.0 };
+        let op = FakeOp {
+            class: "F".into(),
+            name: "k".into(),
+            value: 1.0,
+        };
         // Local genesis edit → main head = (local, 1).
         j.record_op(AuthorTag::local_user(), DocumentId::new(1), &op, &op, None)
             .unwrap();
         // Divergent remote root (empty parents; does not extend local head).
-        let b = EntryId { author: AuthorId::new("peer"), lamport: 5 };
+        let b = EntryId {
+            author: AuthorId::new("peer"),
+            lamport: 5,
+        };
         j.append_remote(mk_entry("peer", 5, vec![]));
         // Both are roots; higher (lamport,author) with no children sorts last → tip = b.
         assert_eq!(j.merged_head(), Some(b.clone()));

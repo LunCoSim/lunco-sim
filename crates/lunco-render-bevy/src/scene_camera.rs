@@ -79,11 +79,7 @@ fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera) {
     }
 }
 
-fn bind_scene_camera(
-    add: On<Add, SceneCamera>,
-    cams: Query<&SceneCamera>,
-    mut commands: Commands,
-) {
+fn bind_scene_camera(add: On<Add, SceneCamera>, cams: Query<&SceneCamera>, mut commands: Commands) {
     let e = add.entity;
     let Ok(cam) = cams.get(e) else { return };
     apply(&mut commands, e, cam);
@@ -116,10 +112,16 @@ mod tests {
     #[test]
     fn scene_camera_gains_a_pipeline() {
         let mut a = app();
-        let e = a.world_mut().spawn((Camera::default(), SceneCamera::agx())).id();
+        let e = a
+            .world_mut()
+            .spawn((Camera::default(), SceneCamera::agx()))
+            .id();
         a.update();
         assert!(a.world().entity(e).contains::<Camera3d>());
-        assert_eq!(a.world().entity(e).get::<Tonemapping>(), Some(&Tonemapping::AgX));
+        assert_eq!(
+            a.world().entity(e).get::<Tonemapping>(),
+            Some(&Tonemapping::AgX)
+        );
     }
 
     /// **R4, half one.** MSAA was never configured anywhere, so WebGL2 ran Bevy's
@@ -127,9 +129,16 @@ mod tests {
     #[test]
     fn msaa_is_actually_configured() {
         let mut a = app();
-        let e = a.world_mut().spawn((Camera::default(), SceneCamera::default())).id();
+        let e = a
+            .world_mut()
+            .spawn((Camera::default(), SceneCamera::default()))
+            .id();
         a.update();
-        let expected = if cfg!(target_arch = "wasm32") { Msaa::Off } else { Msaa::Sample2 };
+        let expected = if cfg!(target_arch = "wasm32") {
+            Msaa::Off
+        } else {
+            Msaa::Sample2
+        };
         assert_eq!(a.world().entity(e).get::<Msaa>(), Some(&expected));
     }
 
@@ -143,11 +152,18 @@ mod tests {
             .world_mut()
             .spawn((
                 Camera::default(),
-                SceneCamera { bloom: Some(BloomLook::default()), hdr: false, ..Default::default() },
+                SceneCamera {
+                    bloom: Some(BloomLook::default()),
+                    hdr: false,
+                    ..Default::default()
+                },
             ))
             .id();
         a.update();
-        assert!(!a.world().entity(e).contains::<Bloom>(), "bloom on an LDR camera must not attach");
+        assert!(
+            !a.world().entity(e).contains::<Bloom>(),
+            "bloom on an LDR camera must not attach"
+        );
     }
 
     /// ...and `with_bloom` makes the correct thing the easy thing.
@@ -156,7 +172,10 @@ mod tests {
         let mut a = app();
         let e = a
             .world_mut()
-            .spawn((Camera::default(), SceneCamera::default().with_bloom(BloomLook::default())))
+            .spawn((
+                Camera::default(),
+                SceneCamera::default().with_bloom(BloomLook::default()),
+            ))
             .id();
         a.update();
         assert!(a.world().entity(e).contains::<Bloom>());

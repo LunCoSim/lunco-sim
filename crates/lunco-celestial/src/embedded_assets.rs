@@ -29,7 +29,8 @@ use bevy::prelude::*;
 // ============================================================================
 
 #[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
-const ARTEMIS_2_EPHEMERIS_CSV: &str = include_str!("../../../../.cache/ephemeris/target_-1024_2026-04-02_0159_2026-04-11_0001.csv");
+const ARTEMIS_2_EPHEMERIS_CSV: &str =
+    include_str!("../../../../.cache/ephemeris/target_-1024_2026-04-02_0159_2026-04-11_0001.csv");
 
 // ============================================================================
 // Embedded Assets Plugin

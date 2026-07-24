@@ -36,7 +36,8 @@ fn test_solar_panel_usda_selects_its_shader() {
     );
     // `asset`, not `string` — naming the shader IS selecting it.
     assert!(
-        content.contains("uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@"),
+        content
+            .contains("uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@"),
         "the bound Material's Shader must name shaders/solar_panel.wgsl"
     );
 }

@@ -19,7 +19,7 @@
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 
@@ -177,4 +177,3 @@ impl Plugin for PerfHudPlugin {
         register_all_commands(app);
     }
 }
-

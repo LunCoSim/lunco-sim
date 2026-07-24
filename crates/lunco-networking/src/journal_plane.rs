@@ -88,9 +88,15 @@ fn persisted_install_id() -> String {
     // fresh id every page reload — same identity-durability gap. Revisit before
     // multiplayer hardening (INDEPENDENT-REVIEW-2026-07-19_agy.md NET-1).
     if let Err(e) = std::fs::write(&path, &fresh) {
-        warn!("[journal-plane] could not persist install id to {}: {e}", path.display());
+        warn!(
+            "[journal-plane] could not persist install id to {}: {e}",
+            path.display()
+        );
     } else {
-        info!("[journal-plane] minted install id {fresh} at {}", path.display());
+        info!(
+            "[journal-plane] minted install id {fresh} at {}",
+            path.display()
+        );
     }
     fresh
 }
@@ -388,16 +394,27 @@ mod tests {
 
         let none = HashSet::new();
         let vals = |ops: &[(EntryId, serde_json::Value)]| {
-            ops.iter().map(|(_, v)| v["v"].as_i64().unwrap()).collect::<Vec<_>>()
+            ops.iter()
+                .map(|(_, v)| v["v"].as_i64().unwrap())
+                .collect::<Vec<_>>()
         };
         // Client 2 authored nothing → it replays ALL three edits (host's 1,2 +
         // client 1's 3), in convergent order.
-        assert_eq!(vals(&scene_ops_after(&c2, None, &AuthorId::new("peer-2"), &none)), vec![1, 2, 3]);
+        assert_eq!(
+            vals(&scene_ops_after(&c2, None, &AuthorId::new("peer-2"), &none)),
+            vec![1, 2, 3]
+        );
         // Client 1 authored edit 3 → it is EXCLUDED (already applied locally);
         // only the host's two remote edits replay.
-        assert_eq!(vals(&scene_ops_after(&c1, None, &AuthorId::new("peer-1"), &none)), vec![1, 2]);
+        assert_eq!(
+            vals(&scene_ops_after(&c1, None, &AuthorId::new("peer-1"), &none)),
+            vec![1, 2]
+        );
         // The host sees client 1's edit (author != host), not its own two.
-        assert_eq!(vals(&scene_ops_after(&host, None, &AuthorId::new("host"), &none)), vec![3]);
+        assert_eq!(
+            vals(&scene_ops_after(&host, None, &AuthorId::new("host"), &none)),
+            vec![3]
+        );
     }
 
     /// A host that opens a twin whose journal was authored by SOMEONE ELSE must
@@ -438,7 +455,9 @@ mod tests {
         let me = AuthorId::new("local-host");
         let none = HashSet::new();
         let vals = |ops: &[(EntryId, serde_json::Value)]| {
-            ops.iter().map(|(_, v)| v["v"].as_i64().unwrap()).collect::<Vec<_>>()
+            ops.iter()
+                .map(|(_, v)| v["v"].as_i64().unwrap())
+                .collect::<Vec<_>>()
         };
 
         // The OLD behaviour — base `None` — re-applies the whole saved history.
@@ -449,7 +468,9 @@ mod tests {
         );
 
         // The FIX: base = the head captured at load (what the manifest advertises).
-        let head = saved.with_read(|j| j.merged_head()).expect("history is non-empty");
+        let head = saved
+            .with_read(|j| j.merged_head())
+            .expect("history is non-empty");
         assert!(
             scene_ops_after(&saved, Some(&head), &me, &none).is_empty(),
             "nothing to replay: the loaded files already reflect the whole journal"
@@ -478,11 +499,21 @@ mod tests {
 
         let me = AuthorId::new("peer-1");
         let journal = JournalResource::new(TwinId::new("t"), me.clone());
-        let host = |lam: u64| EntryId { author: AuthorId::new("host"), lamport: lam };
+        let host = |lam: u64| EntryId {
+            author: AuthorId::new("host"),
+            lamport: lam,
+        };
         let mk = |lam: u64, kind: EntryKind| JournalEntry {
             id: host(lam),
-            parents: if lam <= 1 { vec![] } else { vec![host(lam - 1)] },
-            author: AuthorTag { user: "host".into(), tool: "t".into() },
+            parents: if lam <= 1 {
+                vec![]
+            } else {
+                vec![host(lam - 1)]
+            },
+            author: AuthorTag {
+                user: "host".into(),
+                tool: "t".into(),
+            },
             at_ms: 0,
             twin: TwinId::new("t"),
             doc: DocumentId::new(1),
@@ -501,18 +532,29 @@ mod tests {
             j.append_remote(mk(4, usd(4)));
         });
         let none = HashSet::new();
-        let lam = |v: &[(EntryId, serde_json::Value)]| v.iter().map(|(id, _)| id.lamport).collect::<Vec<_>>();
+        let lam = |v: &[(EntryId, serde_json::Value)]| {
+            v.iter().map(|(id, _)| id.lamport).collect::<Vec<_>>()
+        };
 
         // base = e1 (downloaded snapshot) → apply the newer USD ops (2, 4); the
         // lifecycle entry (3) and the baked base (1) are excluded.
-        assert_eq!(lam(&scene_ops_after(&journal, Some(&host(1)), &me, &none)), vec![2, 4]);
+        assert_eq!(
+            lam(&scene_ops_after(&journal, Some(&host(1)), &me, &none)),
+            vec![2, 4]
+        );
         // base = None → every remote USD op is new.
-        assert_eq!(lam(&scene_ops_after(&journal, None, &me, &none)), vec![1, 2, 4]);
+        assert_eq!(
+            lam(&scene_ops_after(&journal, None, &me, &none)),
+            vec![1, 2, 4]
+        );
         // base present but not yet received → defer (don't double-apply history).
         assert!(scene_ops_after(&journal, Some(&host(99)), &me, &none).is_empty());
         // Already-applied ids are skipped.
         let done: HashSet<_> = [host(2)].into_iter().collect();
-        assert_eq!(lam(&scene_ops_after(&journal, Some(&host(1)), &me, &done)), vec![4]);
+        assert_eq!(
+            lam(&scene_ops_after(&journal, Some(&host(1)), &me, &done)),
+            vec![4]
+        );
     }
 
     /// A scripted merge policy activated on the journal changes the convergent
@@ -529,9 +571,15 @@ mod tests {
         // Two CONCURRENT root USD ops from different authors at the same lamport —
         // neither is a causal ancestor, so only the tie-break orders them.
         let mk = |author: &str, v: i32| JournalEntry {
-            id: EntryId { author: AuthorId::new(author), lamport: 1 },
+            id: EntryId {
+                author: AuthorId::new(author),
+                lamport: 1,
+            },
             parents: vec![],
-            author: AuthorTag { user: author.into(), tool: "t".into() },
+            author: AuthorTag {
+                user: author.into(),
+                tool: "t".into(),
+            },
             at_ms: 0,
             twin: TwinId::new("t"),
             doc: DocumentId::new(1),
@@ -548,11 +596,16 @@ mod tests {
         });
         let none = HashSet::new();
         let vals = |ops: &[(EntryId, serde_json::Value)]| {
-            ops.iter().map(|(_, v)| v["v"].as_i64().unwrap()).collect::<Vec<_>>()
+            ops.iter()
+                .map(|(_, v)| v["v"].as_i64().unwrap())
+                .collect::<Vec<_>>()
         };
 
         // Default: author ascending → aaa (1) before bbb (5).
-        assert_eq!(vals(&scene_ops_after(&journal, None, &viewer, &none)), vec![1, 5]);
+        assert_eq!(
+            vals(&scene_ops_after(&journal, None, &viewer, &none)),
+            vec![1, 5]
+        );
 
         // Activate a rhai policy that orders authors DESCENDING (a<b ⇒ a AFTER b).
         activate_scripted_merge_policy(
@@ -563,11 +616,17 @@ mod tests {
         )
         .unwrap();
         // Now bbb (5) sorts before aaa (1).
-        assert_eq!(vals(&scene_ops_after(&journal, None, &viewer, &none)), vec![5, 1]);
+        assert_eq!(
+            vals(&scene_ops_after(&journal, None, &viewer, &none)),
+            vec![5, 1]
+        );
 
         // Reverting restores the built-in order.
         use_default_merge_policy(&journal);
-        assert_eq!(vals(&scene_ops_after(&journal, None, &viewer, &none)), vec![1, 5]);
+        assert_eq!(
+            vals(&scene_ops_after(&journal, None, &viewer, &none)),
+            vec![1, 5]
+        );
 
         lunco_hooks::unregister("test.net.author_desc");
     }
@@ -585,9 +644,15 @@ mod tests {
         let viewer = AuthorId::new("viewer");
         let journal = JournalResource::new(TwinId::new("t"), viewer.clone());
         let mk = |author: &str, domain: DomainKind, v: i32| JournalEntry {
-            id: EntryId { author: AuthorId::new(author), lamport: 1 },
+            id: EntryId {
+                author: AuthorId::new(author),
+                lamport: 1,
+            },
             parents: vec![],
-            author: AuthorTag { user: author.into(), tool: "t".into() },
+            author: AuthorTag {
+                user: author.into(),
+                tool: "t".into(),
+            },
             at_ms: 0,
             twin: TwinId::new("t"),
             doc: DocumentId::new(1),
@@ -605,10 +670,18 @@ mod tests {
         });
         let none = HashSet::new();
         let vals = |ops: &[(EntryId, serde_json::Value)]| {
-            ops.iter().map(|(_, v)| v["v"].as_i64().unwrap()).collect::<Vec<_>>()
+            ops.iter()
+                .map(|(_, v)| v["v"].as_i64().unwrap())
+                .collect::<Vec<_>>()
         };
         let modelica = |j: &JournalResource| {
-            vals(&domain_ops_after(j, None, &viewer, &none, DomainKind::Modelica))
+            vals(&domain_ops_after(
+                j,
+                None,
+                &viewer,
+                &none,
+                DomainKind::Modelica,
+            ))
         };
 
         // Default: author ascending, USD op filtered out → [1, 5].

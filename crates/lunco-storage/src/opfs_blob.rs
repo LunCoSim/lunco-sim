@@ -29,14 +29,20 @@ fn handle(namespace: &str, key_hex: &str) -> StorageHandle {
 /// Read the blob stored under `precompute/<namespace>/<key-hex>`.
 /// `None` on any miss/error — the caller treats it as a cache miss.
 pub async fn read(namespace: &str, key_hex: &str) -> Option<Vec<u8>> {
-    OpfsStorage::new().read(&handle(namespace, key_hex)).await.ok()
+    OpfsStorage::new()
+        .read(&handle(namespace, key_hex))
+        .await
+        .ok()
 }
 
 /// Best-effort write of `bytes` under `precompute/<namespace>/<key-hex>`.
 /// A failed write only costs a rebake next load, so it logs and continues —
 /// never surfaces an error to the caller.
 pub async fn write(namespace: &str, key_hex: &str, bytes: &[u8]) {
-    if let Err(e) = OpfsStorage::new().write(&handle(namespace, key_hex), bytes).await {
+    if let Err(e) = OpfsStorage::new()
+        .write(&handle(namespace, key_hex), bytes)
+        .await
+    {
         web_sys::console::warn_1(
             &format!("[opfs-blob] write {namespace}/{key_hex} failed: {e}").into(),
         );

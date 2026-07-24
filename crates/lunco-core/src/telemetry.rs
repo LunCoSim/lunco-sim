@@ -1,15 +1,15 @@
 //! # Telemetry & Monitoring Standards
 //!
-//! This module defines the common data structures for the simulation's 
-//! monitoring fabric. It adheres to **XTCE/YAMCS** standards to ensure 
+//! This module defines the common data structures for the simulation's
+//! monitoring fabric. It adheres to **XTCE/YAMCS** standards to ensure
 //! compatibility with real-world mission control toolchains.
 //!
 //! ## Domain Standards
-//! 1. **Parameters**: Continuous data points (e.g., Temperature, Voltage) 
-//!    sampled at a specific frequency. These are typically broadcast as 
+//! 1. **Parameters**: Continuous data points (e.g., Temperature, Voltage)
+//!    sampled at a specific frequency. These are typically broadcast as
 //!    `SampledParameter` packets.
-//! 2. **Events**: Discrete notifications of system state changes (e.g., 
-//!    "Battery Low", "Command Ack"). These are typically broadcast as 
+//! 2. **Events**: Discrete notifications of system state changes (e.g.,
+//!    "Battery Low", "Command Ack"). These are typically broadcast as
 //!    `TelemetryEvent` packets.
 //! 3. **Timekeeping**: All telemetry is timestamped using the `WorldTime`
 //!    epoch (Julian Date, TDB; from the `lunco-time` spine) to allow for precise
@@ -33,8 +33,8 @@ pub enum Severity {
 
 /// A polymorphic container for telemetry values.
 ///
-/// **Why**: Ensures that the telemetry transport layer is agnostic of the 
-/// internal Rust type (f32, i32, bool), allowing external subscribers to 
+/// **Why**: Ensures that the telemetry transport layer is agnostic of the
+/// internal Rust type (f32, i32, bool), allowing external subscribers to
 /// deserialize data into a unified variant type.
 #[derive(Debug, Clone, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
 #[reflect(Debug, PartialEq, Default)]
@@ -262,4 +262,3 @@ impl ScriptEventAppExt for App {
         )
     }
 }
-

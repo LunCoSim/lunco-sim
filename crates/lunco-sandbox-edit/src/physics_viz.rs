@@ -34,7 +34,7 @@
 use avian3d::dynamics::integrator::VelocityIntegrationData;
 use avian3d::prelude::{ComputedMass, LinearVelocity, RigidBody};
 use bevy::prelude::*;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 
 /// Per-entity opt-in for physics-state visualization arrows.
 ///
@@ -220,7 +220,6 @@ pub fn draw_physics_arrows(
         Option<&ComputedMass>,
     )>,
 ) {
-
     for (flags, gtf, vel, integration, mass) in q.iter() {
         // Render arrows from a point ABOVE the body's COM so they're
         // visibly outside the mesh. Without this offset, arrows
@@ -257,9 +256,7 @@ pub fn draw_physics_arrows(
                 // accumulated from forces this tick.
                 let a = integ.linear_increment;
                 let mass_scalar = m.value() as f32;
-                let dir = Vec3::new(a.x as f32, a.y as f32, a.z as f32)
-                    * mass_scalar
-                    * FORCE_SCALE;
+                let dir = Vec3::new(a.x as f32, a.y as f32, a.z as f32) * mass_scalar * FORCE_SCALE;
                 if dir.length_squared() > 1e-6 {
                     gizmos.arrow(origin, origin + dir, FORCE_COLOR);
                 }

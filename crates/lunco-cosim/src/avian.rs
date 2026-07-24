@@ -17,11 +17,10 @@
 //! That one system is the only per-tick avian system left.
 
 use avian3d::prelude::{
-    AngularInertia, AngularVelocity, CenterOfMass, Collider, ComputedAngularInertia,
-    ColliderMassProperties, ComputedCenterOfMass, ComputedMass, ContactGraph, Forces,
-    LinearVelocity, Mass,
-    NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position, RigidBody, Rotation,
-    SubstepCount, WriteRigidBodyForces,
+    AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties,
+    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, ContactGraph, Forces,
+    LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
+    RigidBody, Rotation, SubstepCount, WriteRigidBodyForces,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -290,7 +289,8 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             name: "yaw",
             dir: PortDirection::Out,
             read: Some(|w, e| {
-                w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).0)
+                w.get::<Rotation>(e)
+                    .map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).0)
             }),
             write: None,
         },
@@ -298,7 +298,8 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             name: "pitch",
             dir: PortDirection::Out,
             read: Some(|w, e| {
-                w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).1)
+                w.get::<Rotation>(e)
+                    .map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).1)
             }),
             write: None,
         },
@@ -306,7 +307,8 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             name: "roll",
             dir: PortDirection::Out,
             read: Some(|w, e| {
-                w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).2)
+                w.get::<Rotation>(e)
+                    .map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).2)
             }),
             write: None,
         },
@@ -481,7 +483,8 @@ fn write_mass(w: &mut World, e: Entity, v: f64) -> bool {
 }
 
 fn inertia_diagonal(w: &World, e: Entity) -> Option<DVec3> {
-    w.get::<ComputedAngularInertia>(e).map(|i| i.value().diagonal())
+    w.get::<ComputedAngularInertia>(e)
+        .map(|i| i.value().diagonal())
 }
 
 fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
@@ -502,8 +505,13 @@ fn write_inertia_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
         1 => principal.y = v as f32,
         _ => principal.z = v as f32,
     }
-    w.entity_mut(e)
-        .insert((AngularInertia { principal, local_frame }, NoAutoAngularInertia));
+    w.entity_mut(e).insert((
+        AngularInertia {
+            principal,
+            local_frame,
+        },
+        NoAutoAngularInertia,
+    ));
     true
 }
 
@@ -524,7 +532,8 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
         1 => c.y = v as f32,
         _ => c.z = v as f32,
     }
-    w.entity_mut(e).insert((CenterOfMass(c), NoAutoCenterOfMass));
+    w.entity_mut(e)
+        .insert((CenterOfMass(c), NoAutoCenterOfMass));
     true
 }
 

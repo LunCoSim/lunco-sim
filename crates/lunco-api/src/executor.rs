@@ -8,15 +8,15 @@
 //! - `On<SetPorts>` for internal triggers
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
-use bevy::prelude::*;
-use bevy::reflect::TypeRegistry;
 use crate::{
-    registry::ApiEntityRegistry,
-    queries::{ApiQueryRegistry, ApiVisibility},
-    schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
     discovery::discover_commands,
+    queries::{ApiQueryRegistry, ApiVisibility},
+    registry::ApiEntityRegistry,
+    schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
     subscription::TelemetrySubscriptions,
 };
+use bevy::prelude::*;
+use bevy::reflect::TypeRegistry;
 
 /// Events that transport adapters send to request API operations.
 #[derive(Event, Debug)]
@@ -48,7 +48,9 @@ pub struct ApiCommandEvent {
 
 /// System counter for generating unique IDs.
 #[derive(Resource, Default)]
-pub struct ApiIdCounter { next: u64 }
+pub struct ApiIdCounter {
+    next: u64,
+}
 impl ApiIdCounter {
     /// Mint the next correlation id.
     ///
@@ -75,7 +77,11 @@ pub fn api_request_observer(
     type_registry: Res<AppTypeRegistry>,
     cmd_results: Res<lunco_core::CommandResults>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
-    q_meta: Query<(Option<&Name>, Has<lunco_core::ControlBinding>, Option<&lunco_core::CelestialBody>)>,
+    q_meta: Query<(
+        Option<&Name>,
+        Has<lunco_core::ControlBinding>,
+        Option<&lunco_core::CelestialBody>,
+    )>,
     // Which commands answer later, on the correlation id. Populated by whichever crate owns
     // them (`register_deferred_command`), never by name here.
     deferred_commands: Option<Res<DeferredCommands>>,
@@ -85,13 +91,29 @@ pub fn api_request_observer(
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &mut subscriptions, &q_meta, deferred_commands.as_deref(), correlation_id)
+        execute_request(
+            &req.request,
+            &mut commands,
+            &mut id_counter,
+            &registry,
+            &query_registry,
+            &visibility,
+            &type_reg,
+            &cmd_results,
+            &mut subscriptions,
+            &q_meta,
+            deferred_commands.as_deref(),
+            correlation_id,
+        )
     };
 
     // None means the response is deferred — a deferred command or query provider will
     // answer on this correlation id later. See `DeferredCommands`.
     if let Some(response) = maybe_response {
-        commands.trigger(ApiResponseEvent { response, correlation_id });
+        commands.trigger(ApiResponseEvent {
+            response,
+            correlation_id,
+        });
     }
 }
 
@@ -180,7 +202,10 @@ pub fn api_command_dispatcher(
 
     // 1. Find type registration by short name (e.g. "SetPorts")
     let Some(registration) = type_reg.get_with_short_type_path(&event.command) else {
-        warn!("[lunco-api] Command '{}' not found in type registry", event.command);
+        warn!(
+            "[lunco-api] Command '{}' not found in type registry",
+            event.command
+        );
         return;
     };
 
@@ -196,11 +221,17 @@ pub fn api_command_dispatcher(
     if resolved_params.is_null() {
         resolved_params = serde_json::Value::Object(serde_json::Map::new());
     }
-    resolve_command_ids(&mut resolved_params, registration.type_id(), &type_reg, &registry);
+    resolve_command_ids(
+        &mut resolved_params,
+        registration.type_id(),
+        &type_reg,
+        &registry,
+    );
 
     // 3. Deserialize JSON into reflected struct
-    let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
-    
+    let reflect_deserializer =
+        bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
+
     use serde::de::DeserializeSeed;
     match reflect_deserializer.deserialize(resolved_params.clone()) {
         Ok(_reflected) => {
@@ -266,7 +297,7 @@ pub fn api_command_dispatcher(
                     world.resource_mut::<lunco_core::ActiveCommandId>().set(None);
                 }
             });
-        },
+        }
         Err(e) => {
             // Terminal, and RECORDED — see the `!constructible` branch above.
             // An external caller sees this synchronously as a 422 from
@@ -377,11 +408,15 @@ fn convert_node(
     // Need the field type's schema to recurse. Unregistered (primitive like
     // f64/String, or simply not in the registry) → cannot contain an Entity
     // we can locate; leave it untouched.
-    let Some(info) = reg.get_type_info(type_id) else { return };
+    let Some(info) = reg.get_type_info(type_id) else {
+        return;
+    };
 
     match info {
         TypeInfo::Struct(s) => {
-            let Some(map) = value.as_object_mut() else { return };
+            let Some(map) = value.as_object_mut() else {
+                return;
+            };
             for i in 0..s.field_len() {
                 let Some(f) = s.field_at(i) else { continue };
                 if let Some(child) = map.get_mut(f.name()) {
@@ -441,8 +476,12 @@ fn convert_node(
         TypeInfo::Enum(e) => {
             // unit variant → bare string (no payload); data variant →
             // single-key object `{"Variant": payload}`.
-            let serde_json::Value::Object(map) = value else { return };
-            let Some((vname, payload)) = map.iter_mut().next() else { return };
+            let serde_json::Value::Object(map) = value else {
+                return;
+            };
+            let Some((vname, payload)) = map.iter_mut().next() else {
+                return;
+            };
             let Some(var) = e.variant(vname) else { return };
             match var {
                 VariantInfo::Struct(sv) => {
@@ -531,7 +570,11 @@ fn execute_request(
     type_registry: &TypeRegistry,
     cmd_results: &lunco_core::CommandResults,
     subscriptions: &mut TelemetrySubscriptions,
-    q_meta: &Query<(Option<&Name>, Has<lunco_core::ControlBinding>, Option<&lunco_core::CelestialBody>)>,
+    q_meta: &Query<(
+        Option<&Name>,
+        Has<lunco_core::ControlBinding>,
+        Option<&lunco_core::CelestialBody>,
+    )>,
     deferred_commands: Option<&DeferredCommands>,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
@@ -602,10 +645,15 @@ fn execute_request(
 
             // Validate command exists and has ReflectEvent
             let registration = type_registry.get_with_short_type_path(command);
-            let has_reflect_event = registration.map(|r| r.data::<bevy::ecs::reflect::ReflectEvent>().is_some()).unwrap_or(false);
+            let has_reflect_event = registration
+                .map(|r| r.data::<bevy::ecs::reflect::ReflectEvent>().is_some())
+                .unwrap_or(false);
 
             if !has_reflect_event {
-                return Some(ApiResponse::error(ApiErrorCode::CommandNotFound, format!("Command '{}' not found or not API-accessible", command)));
+                return Some(ApiResponse::error(
+                    ApiErrorCode::CommandNotFound,
+                    format!("Command '{}' not found or not API-accessible", command),
+                ));
             }
 
             // Validate the PARAMS synchronously, here, while the registry is in
@@ -620,7 +668,9 @@ fn execute_request(
             // be triggered in-process too), so this is a gate, not the only
             // check.
             if let Some(registration) = registration {
-                if let Err(msg) = validate_command_params(command, params, registration, type_registry, registry) {
+                if let Err(msg) =
+                    validate_command_params(command, params, registration, type_registry, registry)
+                {
                     return Some(ApiResponse::error(ApiErrorCode::DeserializationError, msg));
                 }
             }
@@ -636,15 +686,23 @@ fn execute_request(
             Some(ApiResponse::command_accepted(command_id))
         }
         ApiRequest::ListEntities => {
-            let entities: Vec<serde_json::Value> = registry.entities()
+            let entities: Vec<serde_json::Value> = registry
+                .entities()
                 .into_iter()
                 .map(|(api_id, entity)| {
-                    let (name, accepts_commands, body) = q_meta.get(entity).unwrap_or((None, false, None));
+                    let (name, accepts_commands, body) =
+                        q_meta.get(entity).unwrap_or((None, false, None));
                     // NOTE: the reported `type` string is deliberately unchanged. A lander
                     // accepts commands and has always been reported as `"rover"` here;
                     // correcting that is a UI/API change to make deliberately, not a side
                     // effect of this refactor.
-                    let kind = if accepts_commands { "rover" } else if body.is_some() { "planet" } else { "unknown" };
+                    let kind = if accepts_commands {
+                        "rover"
+                    } else if body.is_some() {
+                        "planet"
+                    } else {
+                        "unknown"
+                    };
                     serde_json::json!({
                         "api_id": api_id,
                         "name": name.map(|n| n.as_str()).unwrap_or(""),
@@ -652,18 +710,24 @@ fn execute_request(
                     })
                 })
                 .collect();
-            Some(ApiResponse::ok(serde_json::json!({ "entities": entities, "count": entities.len() })))
+            Some(ApiResponse::ok(
+                serde_json::json!({ "entities": entities, "count": entities.len() }),
+            ))
         }
         ApiRequest::DiscoverSchema => {
             let cmds = discover_commands(type_registry, Some(visibility));
-            Some(ApiResponse::ok(serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default()))
+            Some(ApiResponse::ok(
+                serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default(),
+            ))
         }
         ApiRequest::SubscribeTelemetry { filter } => {
             // Register the subscription so the telemetry observers actually
             // stream matching events (incl. script `emit()`s) back to this
             // client. Previously a no-op that lied "Subscription created".
             let id = subscriptions.subscribe(filter.clone());
-            Some(ApiResponse::ok(serde_json::json!({ "subscription_id": id })))
+            Some(ApiResponse::ok(
+                serde_json::json!({ "subscription_id": id }),
+            ))
         }
         ApiRequest::UnsubscribeTelemetry { id } => {
             // `unsubscribe` has existed since the beginning with NOTHING able to call
@@ -763,7 +827,10 @@ pub struct DeferredRequests {
 
 impl Default for DeferredRequests {
     fn default() -> Self {
-        Self { outstanding: std::collections::HashMap::new(), timeout_secs: 15.0 }
+        Self {
+            outstanding: std::collections::HashMap::new(),
+            timeout_secs: 15.0,
+        }
     }
 }
 
@@ -851,7 +918,10 @@ impl DeferredCommandAppExt for App {
             .next()
             .unwrap_or_default()
             .to_string();
-        self.world_mut().resource_mut::<DeferredCommands>().0.insert(short);
+        self.world_mut()
+            .resource_mut::<DeferredCommands>()
+            .0
+            .insert(short);
         self
     }
 }
@@ -892,7 +962,7 @@ impl Plugin for ApiExecutorPlugin {
 mod tests {
     use super::*;
     use lunco_core::{
-        on_command, ActiveCommandId, Ack, Command, CommandOutcome, CommandResults, OpId,
+        on_command, Ack, ActiveCommandId, Command, CommandOutcome, CommandResults, OpId,
     };
 
     /// THE WATCHDOG. A deferred command that never answers must produce an ERROR, not
@@ -918,11 +988,17 @@ mod tests {
         let sink = Arc::clone(&seen);
         app.add_observer(move |t: On<ApiResponseEvent>| {
             let e = t.event();
-            sink.lock().unwrap().push((e.correlation_id, matches!(e.response, ApiResponse::Error { .. })));
+            sink.lock().unwrap().push((
+                e.correlation_id,
+                matches!(e.response, ApiResponse::Error { .. }),
+            ));
         });
 
         // A command deferred at t=0 that nobody ever answers.
-        app.world_mut().resource_mut::<DeferredRequests>().outstanding.insert(7, 15.0);
+        app.world_mut()
+            .resource_mut::<DeferredRequests>()
+            .outstanding
+            .insert(7, 15.0);
         assert_eq!(app.world().resource::<DeferredRequests>().outstanding(), 1);
 
         for _ in 0..5 {
@@ -930,8 +1006,14 @@ mod tests {
         }
 
         let seen = seen.lock().unwrap();
-        let (_, is_error) = *seen.iter().find(|(id, _)| *id == 7).expect("the caller must get AN answer");
-        assert!(is_error, "an unanswered deferred command must surface as an error, not a hang");
+        let (_, is_error) = *seen
+            .iter()
+            .find(|(id, _)| *id == 7)
+            .expect("the caller must get AN answer");
+        assert!(
+            is_error,
+            "an unanswered deferred command must surface as an error, not a hang"
+        );
         assert_eq!(
             app.world().resource::<DeferredRequests>().outstanding(),
             0,
@@ -961,7 +1043,10 @@ mod tests {
             }
         });
 
-        app.world_mut().resource_mut::<DeferredRequests>().outstanding.insert(9, 15.0);
+        app.world_mut()
+            .resource_mut::<DeferredRequests>()
+            .outstanding
+            .insert(9, 15.0);
 
         // The handler answers, promptly.
         app.world_mut().trigger(ApiResponseEvent {
@@ -976,7 +1061,11 @@ mod tests {
         for _ in 0..5 {
             app.update();
         }
-        assert_eq!(*count.lock().unwrap(), 1, "exactly one response per request");
+        assert_eq!(
+            *count.lock().unwrap(),
+            1,
+            "exactly one response per request"
+        );
     }
 
     #[test]
@@ -1015,7 +1104,9 @@ mod tests {
         __register_on_test_echo(&mut app);
 
         // Success path, id scoped → recorded as Succeeded.
-        app.world_mut().resource_mut::<ActiveCommandId>().set(Some(7));
+        app.world_mut()
+            .resource_mut::<ActiveCommandId>()
+            .set(Some(7));
         app.world_mut().trigger(TestEcho { fail: false });
         app.world_mut().resource_mut::<ActiveCommandId>().set(None);
         assert!(matches!(
@@ -1024,7 +1115,9 @@ mod tests {
         ));
 
         // Failure path → recorded as Failed (ran-and-errored, not Rejected).
-        app.world_mut().resource_mut::<ActiveCommandId>().set(Some(8));
+        app.world_mut()
+            .resource_mut::<ActiveCommandId>()
+            .set(Some(8));
         app.world_mut().trigger(TestEcho { fail: true });
         app.world_mut().resource_mut::<ActiveCommandId>().set(None);
         assert!(matches!(
@@ -1244,7 +1337,7 @@ mod id_codec_tests {
         let mut v = json!({ "avatar": e.to_bits(), "target": e.to_bits() });
         globalize_command_ids(&mut v, TypeId::of::<TPossess>(), &reg, &ent);
         assert_eq!(v["target"], json!(gid.get())); // local bits → gid
-        // sync_local field never carries real local bits onto the wire.
+                                                   // sync_local field never carries real local bits onto the wire.
         assert_eq!(v["avatar"], json!(Entity::PLACEHOLDER.to_bits()));
     }
 
@@ -1257,7 +1350,10 @@ mod id_codec_tests {
         let (reg, ent, e, _gid) = setup();
         let mut v = json!({ "avatar": { "Some": e.to_bits() }, "target": e.to_bits() });
         globalize_command_ids(&mut v, TypeId::of::<TPossessOpt>(), &reg, &ent);
-        assert_eq!(v["avatar"], json!({ "Some": Entity::PLACEHOLDER.to_bits() }));
+        assert_eq!(
+            v["avatar"],
+            json!({ "Some": Entity::PLACEHOLDER.to_bits() })
+        );
     }
 
     #[test]

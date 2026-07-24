@@ -16,8 +16,8 @@
 //! propagation and corrupting `GlobalTransform` on all entities, which was
 //! the root cause of camera roll in surface mode.
 
-use bevy::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
+use bevy::prelude::*;
 
 use lunco_ui::LuncoUiPlugin;
 use lunco_workbench::WorkbenchAppExt;
@@ -53,16 +53,22 @@ fn main() {
 
     app.insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
         .insert_resource(ClearColor(Color::BLACK))
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(primary_window),
-            ..default()
-        }).set(bevy::render::RenderPlugin {
-            // DX12 on Windows avoids the Vulkan window-resize panics (depth/color
-            // size mismatch + SurfaceAcquireSemaphores); other platforms (incl.
-            // wasm/WebGL2) keep wgpu defaults. See lunco_workbench::render_robustness.
-            render_creation: lunco_workbench::preferred_wgpu_settings().into(),
-            ..default()
-        }).build().disable::<TransformPlugin>())
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(primary_window),
+                    ..default()
+                })
+                .set(bevy::render::RenderPlugin {
+                    // DX12 on Windows avoids the Vulkan window-resize panics (depth/color
+                    // size mismatch + SurfaceAcquireSemaphores); other platforms (incl.
+                    // wasm/WebGL2) keep wgpu defaults. See lunco_workbench::render_robustness.
+                    render_creation: lunco_workbench::preferred_wgpu_settings().into(),
+                    ..default()
+                })
+                .build()
+                .disable::<TransformPlugin>(),
+        )
         .add_plugins({
             // big_space only registers `BigSpaceValidationPlugin` under
             // `debug_assertions`; disabling it in a release build (incl. the wasm
@@ -151,7 +157,9 @@ fn toggle_slow_motion(
     keyboard: Res<ButtonInput<KeyCode>>,
     transport: Option<ResMut<lunco_time::TimeTransport>>,
 ) {
-    let Some(mut transport) = transport else { return };
+    let Some(mut transport) = transport else {
+        return;
+    };
     if keyboard.just_pressed(KeyCode::KeyT) {
         transport.rate = if transport.rate < 1.0 { 1.0 } else { 0.01 };
     }
@@ -168,10 +176,18 @@ fn auto_focus_earth_once(
     mut commands: Commands,
     mut did_focus: Local<bool>,
 ) {
-    if *did_focus { return; }
+    if *did_focus {
+        return;
+    }
 
-    let Some((camera_entity, cam_tf)) = q_cameras.iter().next() else { return };
-    let Some((earth_entity, earth_body)) = q_bodies.iter().find(|(_, body)| body.ephemeris_id == 399) else { return };
+    let Some((camera_entity, cam_tf)) = q_cameras.iter().next() else {
+        return;
+    };
+    let Some((earth_entity, earth_body)) =
+        q_bodies.iter().find(|(_, body)| body.ephemeris_id == 399)
+    else {
+        return;
+    };
     // Arm the run-once latch only once both entities exist and we're
     // committed to inserting the camera (CQ-506): setting it on frame 1
     // before the spawn check meant auto-focus never ran.
@@ -180,7 +196,8 @@ fn auto_focus_earth_once(
     // Preserve current camera orientation.
     let (yaw, pitch, _) = cam_tf.rotation.to_euler(bevy::prelude::EulerRot::YXZ);
 
-    commands.entity(camera_entity)
+    commands
+        .entity(camera_entity)
         .remove::<lunco_avatar::FreeFlightCamera>()
         .remove::<lunco_avatar::SpringArmCamera>()
         .remove::<lunco_avatar::OrbitCamera>()

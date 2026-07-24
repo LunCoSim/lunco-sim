@@ -44,7 +44,9 @@ pub enum AttachJoint {
 }
 
 /// A principal axis in the host body's local frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize,
+)]
 pub enum Axis {
     #[default]
     X,
@@ -170,7 +172,11 @@ impl AttachSpec {
     }
 
     fn joint_path(&self) -> String {
-        format!("{}/{}_Joint", self.host_path.trim_end_matches('/'), self.name)
+        format!(
+            "{}/{}_Joint",
+            self.host_path.trim_end_matches('/'),
+            self.name
+        )
     }
 
     fn joint_type_name(&self) -> &'static str {
@@ -444,23 +450,34 @@ mod tests {
             }
             _ => None,
         });
-        assert_eq!(body0.as_deref(), Some(&["/RockerBogie/RockerL".to_string()][..]));
-        assert_eq!(body1.as_deref(), Some(&["/RockerBogie/RockerL/Wheel_FL".to_string()][..]));
+        assert_eq!(
+            body0.as_deref(),
+            Some(&["/RockerBogie/RockerL".to_string()][..])
+        );
+        assert_eq!(
+            body1.as_deref(),
+            Some(&["/RockerBogie/RockerL/Wheel_FL".to_string()][..])
+        );
     }
 
     #[test]
     fn revolute_authors_axis_fixed_does_not() {
         let rev = attach_component_ops(&wheel_spec(AttachJoint::Revolute { axis: Axis::X }));
-        assert!(rev.iter().any(|op| matches!(op,
+        assert!(
+            rev.iter().any(|op| matches!(op,
             // Token value is a QUOTED literal — `"X"`, not bare `X` (see the apply test).
-            UsdOp::SetAttribute { name, value, .. } if name == "physics:axis" && value == "\"X\"")));
+            UsdOp::SetAttribute { name, value, .. } if name == "physics:axis" && value == "\"X\""))
+        );
 
         let fixed = attach_component_ops(&wheel_spec(AttachJoint::Fixed));
         assert!(!fixed.iter().any(|op| matches!(op,
             UsdOp::SetAttribute { name, .. } if name == "physics:axis")));
         // Fixed still relates both bodies and derives both anchors.
         assert_eq!(
-            fixed.iter().filter(|op| matches!(op, UsdOp::SetRelationship { .. })).count(),
+            fixed
+                .iter()
+                .filter(|op| matches!(op, UsdOp::SetRelationship { .. }))
+                .count(),
             2
         );
     }
@@ -469,8 +486,14 @@ mod tests {
     fn joint_type_matches_the_requested_kind() {
         let cases = [
             (AttachJoint::Fixed, "PhysicsFixedJoint"),
-            (AttachJoint::Revolute { axis: Axis::Y }, "PhysicsRevoluteJoint"),
-            (AttachJoint::Prismatic { axis: Axis::Z }, "PhysicsPrismaticJoint"),
+            (
+                AttachJoint::Revolute { axis: Axis::Y },
+                "PhysicsRevoluteJoint",
+            ),
+            (
+                AttachJoint::Prismatic { axis: Axis::Z },
+                "PhysicsPrismaticJoint",
+            ),
         ];
         for (joint, ty) in cases {
             let ops = attach_component_ops(&wheel_spec(joint));
@@ -486,13 +509,32 @@ mod tests {
         // touch a prim that isn't authored yet.
         let ops = attach_component_ops(&wheel_spec(AttachJoint::Fixed));
         let pos = |pred: fn(&UsdOp) -> bool| ops.iter().position(pred).unwrap();
-        let add_child = pos(|op| matches!(op, UsdOp::AddPrim { reference: Some(_), .. }));
+        let add_child = pos(|op| {
+            matches!(
+                op,
+                UsdOp::AddPrim {
+                    reference: Some(_),
+                    ..
+                }
+            )
+        });
         let place = pos(|op| matches!(op, UsdOp::SetTranslate { .. }));
-        let add_joint = pos(|op| matches!(op, UsdOp::AddPrim { type_name: Some(_), .. }));
+        let add_joint = pos(|op| {
+            matches!(
+                op,
+                UsdOp::AddPrim {
+                    type_name: Some(_),
+                    ..
+                }
+            )
+        });
         let relate = pos(|op| matches!(op, UsdOp::SetRelationship { .. }));
         assert!(add_child < place, "child exists before it is placed");
         assert!(add_joint < relate, "joint exists before it relates bodies");
-        assert!(add_child < relate, "part exists before the joint targets it");
+        assert!(
+            add_child < relate,
+            "part exists before the joint targets it"
+        );
     }
 
     #[test]
@@ -509,8 +551,8 @@ mod tests {
             [0.0, 90.0, 0.0],
         );
         assert!(
-            !ops.iter().any(|op| matches!(op,
-                UsdOp::AddPrim { .. } | UsdOp::SetRelationship { .. })),
+            !ops.iter()
+                .any(|op| matches!(op, UsdOp::AddPrim { .. } | UsdOp::SetRelationship { .. })),
             "retrofit touches no topology"
         );
         // Translate authored on the part…
@@ -562,7 +604,10 @@ mod tests {
         // goes to (1,2,3), no rotation.
         let socket = Transform::from_xyz(1.0, 2.0, 3.0);
         let (t, r) = resolve_mount_placement(socket, Transform::IDENTITY);
-        assert!(close(t, [1.0, 2.0, 3.0]), "translation carried through: {t:?}");
+        assert!(
+            close(t, [1.0, 2.0, 3.0]),
+            "translation carried through: {t:?}"
+        );
         assert!(close(r, [0.0, 0.0, 0.0]), "no rotation: {r:?}");
     }
 
@@ -572,7 +617,10 @@ mod tests {
         // origin. To land the plug on the socket, the part origin must go to -Z.
         let plug = Transform::from_xyz(0.0, 0.0, 1.0);
         let (t, _r) = resolve_mount_placement(Transform::IDENTITY, plug);
-        assert!(close(t, [0.0, 0.0, -1.0]), "plug offset is cancelled: {t:?}");
+        assert!(
+            close(t, [0.0, 0.0, -1.0]),
+            "plug offset is cancelled: {t:?}"
+        );
     }
 
     #[test]
@@ -582,7 +630,10 @@ mod tests {
         let socket = Transform::from_rotation(Quat::from_rotation_z(45f32.to_radians()));
         let (t, r) = resolve_mount_placement(socket, Transform::IDENTITY);
         assert!(close(t, [0.0, 0.0, 0.0]), "no translation: {t:?}");
-        assert!(close(r, [0.0, 0.0, 45.0]), "rotation carried through: {r:?}");
+        assert!(
+            close(r, [0.0, 0.0, 45.0]),
+            "rotation carried through: {r:?}"
+        );
     }
 
     #[test]
@@ -599,7 +650,9 @@ mod tests {
             Transform::IDENTITY,
         );
         assert!(
-            attach_component_ops(&rotated).iter().any(|op| matches!(op, UsdOp::SetRotate { .. })),
+            attach_component_ops(&rotated)
+                .iter()
+                .any(|op| matches!(op, UsdOp::SetRotate { .. })),
             "a rotated mount authors SetRotate"
         );
 
@@ -612,7 +665,9 @@ mod tests {
             AttachJoint::Fixed,
         );
         assert!(
-            !attach_component_ops(&plain).iter().any(|op| matches!(op, UsdOp::SetRotate { .. })),
+            !attach_component_ops(&plain)
+                .iter()
+                .any(|op| matches!(op, UsdOp::SetRotate { .. })),
             "an axis-aligned placement stays translate-only"
         );
     }

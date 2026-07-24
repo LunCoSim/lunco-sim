@@ -68,7 +68,10 @@ fn main() {
 
     let out = dir.join("manifest.json");
     if let Err(e) = std::fs::write(&out, json) {
-        eprintln!("build_asset_manifest: could not write {}: {e}", out.display());
+        eprintln!(
+            "build_asset_manifest: could not write {}: {e}",
+            out.display()
+        );
         std::process::exit(1);
     }
 

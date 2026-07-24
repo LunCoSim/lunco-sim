@@ -68,7 +68,10 @@ impl ScriptBackend for RhaiBackend {
             .eval::<rhai::Dynamic>(code)
             .map_err(|e| e.to_string())?;
 
-        let mut captured = out.lock().map_err(|_| "print buffer poisoned".to_string())?.clone();
+        let mut captured = out
+            .lock()
+            .map_err(|_| "print buffer poisoned".to_string())?
+            .clone();
         if !result.is_unit() {
             captured.push_str(&result.to_string());
         }

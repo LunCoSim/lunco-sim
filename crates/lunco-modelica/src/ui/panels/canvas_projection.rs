@@ -13,9 +13,9 @@
 //! - [`crate::ui::panels::canvas_projection::import_model_to_diagram`] / [`import_model_to_diagram_from_ast`] — the
 //!   AST → VisualDiagram converters
 
+use bevy::log::warn;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy::log::warn;
 use std::collections::HashMap;
 
 use crate::visual_diagram::{msl_class_library, VisualDiagram};
@@ -64,7 +64,6 @@ impl Default for DiagramAutoLayoutSettings {
         }
     }
 }
-
 
 /// Scan component declarations across a `.mo` source.
 ///
@@ -135,10 +134,7 @@ pub(crate) struct ConnectRoute {
 
 pub(crate) fn scan_connect_annotations(
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
-) -> std::collections::HashMap<
-    ((String, String), (String, String)),
-    ConnectRoute,
-> {
+) -> std::collections::HashMap<((String, String), (String, String)), ConnectRoute> {
     let mut out = std::collections::HashMap::new();
     for class in ast.classes.values() {
         collect_connect_waypoints_recursive(class, &mut out);
@@ -148,14 +144,13 @@ pub(crate) fn scan_connect_annotations(
 
 fn collect_connect_waypoints_recursive(
     class: &rumoca_compile::parsing::ast::ClassDef,
-    out: &mut std::collections::HashMap<
-        ((String, String), (String, String)),
-        ConnectRoute,
-    >,
+    out: &mut std::collections::HashMap<((String, String), (String, String)), ConnectRoute>,
 ) {
     use rumoca_compile::parsing::ast::Equation;
     for eq in &class.equations {
-        let Equation::Connect { .. } = eq else { continue };
+        let Equation::Connect { .. } = eq else {
+            continue;
+        };
         // Connect annotation no longer carried on Equation::Connect in rumoca main.
         // Waypoint extraction from annotation is unavailable until upstream restores it.
     }
@@ -173,7 +168,11 @@ fn canonical_edge_key(
     // Sort the pair so the two orderings hash to the same key.
     let a = (a_inst.to_string(), a_port.to_string());
     let b = (b_inst.to_string(), b_port.to_string());
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 /// Build a `VisualDiagram` from [`ScannedComponent`] entries
@@ -188,10 +187,8 @@ fn build_visual_diagram_from_scan(
 ) -> VisualDiagram {
     let mut diagram = VisualDiagram::default();
     let msl_lib = msl_class_library();
-    let msl_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> = msl_lib
-        .iter()
-        .map(|c| (c.name.as_str(), c))
-        .collect();
+    let msl_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
+        msl_lib.iter().map(|c| (c.name.as_str(), c)).collect();
 
     for (idx, comp) in scanned.iter().enumerate() {
         // Only render components whose type resolves against the MSL
@@ -218,10 +215,7 @@ fn build_visual_diagram_from_scan(
                 let cols = layout.cols.max(1);
                 let row = idx / cols;
                 let col = idx % cols;
-                egui::Pos2::new(
-                    col as f32 * layout.spacing_x,
-                    row as f32 * layout.spacing_y,
-                )
+                egui::Pos2::new(col as f32 * layout.spacing_x, row as f32 * layout.spacing_y)
             }
         };
 
@@ -273,15 +267,10 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// `Modelica/Blocks/Continuous.mo`. The tree browser already shows the
 /// package as a folder; drill-in into a class lands here with
 /// `target_class = Some(...)` and proceeds normally.
-fn ast_looks_like_package(
-    ast: &rumoca_compile::parsing::ast::StoredDefinition,
-) -> bool {
+fn ast_looks_like_package(ast: &rumoca_compile::parsing::ast::StoredDefinition) -> bool {
     use rumoca_compile::parsing::ClassType;
     for class in ast.classes.values() {
-        if matches!(
-            class.class_type,
-            ClassType::Package
-        ) {
+        if matches!(class.class_type, ClassType::Package) {
             return true;
         }
         // Even if not declared a package, a class with many nested
@@ -427,9 +416,8 @@ pub fn import_model_to_diagram_from_ast(
     // reference doesn't resolve via scope or path, we surface it as
     // unresolved (skipped) rather than guess.
     let msl_lib = msl_class_library();
-    let msl_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> = msl_lib.iter()
-        .map(|c| (c.name.as_str(), c))
-        .collect();
+    let msl_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
+        msl_lib.iter().map(|c| (c.name.as_str(), c)).collect();
 
     // Build the active class's import map so we can resolve
     // short-name type references the way OpenModelica's frontend
@@ -465,10 +453,8 @@ pub fn import_model_to_diagram_from_ast(
                     Import::Selective { path, names, .. } => {
                         let base = path.to_string();
                         for name in names {
-                            imports_by_short.insert(
-                                name.text.to_string(),
-                                format!("{}.{}", base, name.text),
-                            );
+                            imports_by_short
+                                .insert(name.text.to_string(), format!("{}.{}", base, name.text));
                         }
                     }
                     Import::Unqualified { .. } => {
@@ -515,8 +501,9 @@ pub fn import_model_to_diagram_from_ast(
     //  - **No target** (the whole document is the scene): full
     //    sweep, since user authoring can reference any sibling class
     //    by short name.
-    let is_msl_drill_in =
-        target_class.map(|t| t.starts_with("Modelica.")).unwrap_or(false);
+    let is_msl_drill_in = target_class
+        .map(|t| t.starts_with("Modelica."))
+        .unwrap_or(false);
     if is_msl_drill_in {
         // No-op: MSL classes are self-sufficient on qualified paths.
     } else if let Some(target) = target_class {
@@ -610,9 +597,7 @@ pub fn import_model_to_diagram_from_ast(
             .join(".");
         if !pkg.is_empty() {
             if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
-                if let Ok(pkg_ast) =
-                    rumoca_phase_parse::parse_to_ast(bundled, "within-pkg.mo")
-                {
+                if let Ok(pkg_ast) = rumoca_phase_parse::parse_to_ast(bundled, "within-pkg.mo") {
                     for (_top_name, top_class) in pkg_ast.classes.iter() {
                         for (nested_name, nested_class) in top_class.classes.iter() {
                             register_local_class(
@@ -645,12 +630,9 @@ pub fn import_model_to_diagram_from_ast(
             ast.classes
                 .iter()
                 .find_map(|_| {
-                    crate::diagram::find_class_by_qualified_name(&ast, target)
-                        .map(|class| {
-                            crate::diagram::collect_inherited_components(
-                                class, Some(target), &ast, 0,
-                            )
-                        })
+                    crate::diagram::find_class_by_qualified_name(&ast, target).map(|class| {
+                        crate::diagram::collect_inherited_components(class, Some(target), &ast, 0)
+                    })
                 })
                 .unwrap_or_default()
         } else {
@@ -658,8 +640,7 @@ pub fn import_model_to_diagram_from_ast(
         };
 
     let comp_by_short: HashMap<&str, &rumoca_compile::parsing::ast::Component> = {
-        let mut map: HashMap<&str, &rumoca_compile::parsing::ast::Component> =
-            HashMap::new();
+        let mut map: HashMap<&str, &rumoca_compile::parsing::ast::Component> = HashMap::new();
         if let Some(target) = target_class {
             // Scope to the named class. Use the qualified-name walker
             // so dotted MSL targets (e.g.
@@ -710,7 +691,11 @@ pub fn import_model_to_diagram_from_ast(
         }
 
         // Extract short name from qualified_name (e.g., "RC_Circuit.R1" → "R1")
-        let short_name = node.qualified_name.split('.').last().unwrap_or(&node.qualified_name);
+        let short_name = node
+            .qualified_name
+            .split('.')
+            .last()
+            .unwrap_or(&node.qualified_name);
 
         // Scope-aware type lookup:
         //   1. `type_name` looks like a fully-qualified path → match directly.
@@ -722,7 +707,9 @@ pub fn import_model_to_diagram_from_ast(
         let type_name = node.meta.get("type_name").map(|s| s.as_str()).unwrap_or("");
         let resolved_path: Option<String> = if type_name.contains('.') {
             Some(type_name.to_string())
-        } else { imports_by_short.get(type_name).map(|full| full.clone()) };
+        } else {
+            imports_by_short.get(type_name).map(|full| full.clone())
+        };
         let mut component_def: Option<crate::index::ClassEntry> = resolved_path
             .as_deref()
             .and_then(|p| msl_lookup_by_path.get(p).map(|d| (*d).clone()))
@@ -756,11 +743,8 @@ pub fn import_model_to_diagram_from_ast(
                 }
             }
             if let Some(within) = ast.within.as_ref() {
-                let mut parts: Vec<String> = within
-                    .name
-                    .iter()
-                    .map(|t| t.text.to_string())
-                    .collect();
+                let mut parts: Vec<String> =
+                    within.name.iter().map(|t| t.text.to_string()).collect();
                 while !parts.is_empty() {
                     candidates.push(format!("{}.{}", parts.join("."), type_name));
                     parts.pop();
@@ -898,9 +882,7 @@ pub fn import_model_to_diagram_from_ast(
             // origin/rotation correctly. Falls through to the grid
             // fallback below when no Placement is authored.
             if let Some(comp) = comp_by_short.get(short_name) {
-                if let Some(placement) =
-                    crate::annotations::extract_placement(&comp.annotation)
-                {
+                if let Some(placement) = crate::annotations::extract_placement(&comp.annotation) {
                     let extent = placement.transformation.extent;
                     let cx = ((extent.p1.x + extent.p2.x) * 0.5) as f32;
                     let cy = ((extent.p1.y + extent.p2.y) * 0.5) as f32;
@@ -950,8 +932,8 @@ pub fn import_model_to_diagram_from_ast(
             });
 
             // `pos` is an egui screen point; the diagram stores positions as bevy
-        // `Vec2` (egui-free core type). Same `{x, y}: f32`.
-        let node_id = diagram.add_node(def.clone(), bevy::math::Vec2::new(pos.x, pos.y));
+            // `Vec2` (egui-free core type). Same `{x, y}: f32`.
+            let node_id = diagram.add_node(def.clone(), bevy::math::Vec2::new(pos.x, pos.y));
 
             if let Some(diagram_node) = diagram.get_node_mut(node_id) {
                 diagram_node.instance_name = short_name.to_string();
@@ -992,17 +974,29 @@ pub fn import_model_to_diagram_from_ast(
         let tgt_short = tgt_node.qualified_name.split('.').last().unwrap_or("");
 
         // Find matching diagram nodes
-        let src_diagram_id = diagram.nodes.iter()
+        let src_diagram_id = diagram
+            .nodes
+            .iter()
             .find(|n| n.instance_name == src_short)
             .map(|n| n.id);
-        let tgt_diagram_id = diagram.nodes.iter()
+        let tgt_diagram_id = diagram
+            .nodes
+            .iter()
             .find(|n| n.instance_name == tgt_short)
             .map(|n| n.id);
 
         if let (Some(src_id), Some(tgt_id)) = (src_diagram_id, tgt_diagram_id) {
             // Port names from graph node ports
-            let mut src_port = src_node.ports.get(edge.source_port).map(|p| p.name.clone()).unwrap_or_default();
-            let mut tgt_port = tgt_node.ports.get(edge.target_port).map(|p| p.name.clone()).unwrap_or_default();
+            let mut src_port = src_node
+                .ports
+                .get(edge.source_port)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            let mut tgt_port = tgt_node
+                .ports
+                .get(edge.target_port)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
             // Top-level connector instances appear in the rumoca
             // graph with a single port whose name equals the
             // connector instance itself (rumoca treats the connector
@@ -1011,8 +1005,12 @@ pub fn import_model_to_diagram_from_ast(
             // port name in that case so the orthogonal router falls
             // back to the node-body anchor and the wire actually
             // renders.
-            if src_port == src_short { src_port = String::new(); }
-            if tgt_port == tgt_short { tgt_port = String::new(); }
+            if src_port == src_short {
+                src_port = String::new();
+            }
+            if tgt_port == tgt_short {
+                tgt_port = String::new();
+            }
             diagram.add_edge(src_id, src_port.clone(), tgt_id, tgt_port.clone());
             // Attach authored waypoints if the source had them.
             let key = canonical_edge_key(src_short, &src_port, tgt_short, &tgt_port);
@@ -1055,18 +1053,35 @@ pub fn import_model_to_diagram_from_ast(
     )> = Vec::new();
     for (key, route) in &waypoint_map {
         let ((a_inst, a_port), (b_inst, b_port)) = key;
-        let a_match = if a_inst.is_empty() { a_port.as_str() } else { a_inst.as_str() };
-        let b_match = if b_inst.is_empty() { b_port.as_str() } else { b_inst.as_str() };
-        let a_id = diagram.nodes.iter().find(|n| n.instance_name == a_match).map(|n| n.id);
-        let b_id = diagram.nodes.iter().find(|n| n.instance_name == b_match).map(|n| n.id);
-        let (Some(a_id), Some(b_id)) = (a_id, b_id) else { continue };
+        let a_match = if a_inst.is_empty() {
+            a_port.as_str()
+        } else {
+            a_inst.as_str()
+        };
+        let b_match = if b_inst.is_empty() {
+            b_port.as_str()
+        } else {
+            b_inst.as_str()
+        };
+        let a_id = diagram
+            .nodes
+            .iter()
+            .find(|n| n.instance_name == a_match)
+            .map(|n| n.id);
+        let b_id = diagram
+            .nodes
+            .iter()
+            .find(|n| n.instance_name == b_match)
+            .map(|n| n.id);
+        let (Some(a_id), Some(b_id)) = (a_id, b_id) else {
+            continue;
+        };
         // Find an existing edge connecting these two nodes (any
         // port-shape). If found and missing waypoints, attach them.
         let mut found = false;
         for edge in diagram.edges.iter_mut() {
-            let same =
-                (edge.source_node == a_id && edge.target_node == b_id)
-                    || (edge.source_node == b_id && edge.target_node == a_id);
+            let same = (edge.source_node == a_id && edge.target_node == b_id)
+                || (edge.source_node == b_id && edge.target_node == a_id);
             if same {
                 if edge.waypoints.is_empty() {
                     edge.waypoints = route.points.clone();
@@ -1078,9 +1093,19 @@ pub fn import_model_to_diagram_from_ast(
                 break;
             }
         }
-        if found { continue; }
-        let a_port_str = if a_inst.is_empty() { String::new() } else { a_port.clone() };
-        let b_port_str = if b_inst.is_empty() { String::new() } else { b_port.clone() };
+        if found {
+            continue;
+        }
+        let a_port_str = if a_inst.is_empty() {
+            String::new()
+        } else {
+            a_port.clone()
+        };
+        let b_port_str = if b_inst.is_empty() {
+            String::new()
+        } else {
+            b_port.clone()
+        };
         to_add.push((
             a_id,
             a_port_str,
@@ -1092,9 +1117,7 @@ pub fn import_model_to_diagram_from_ast(
             route.thickness,
         ));
     }
-    for (a_id, a_port, b_id, b_port, waypoints, smooth_bezier, color, thickness) in
-        to_add
-    {
+    for (a_id, a_port, b_id, b_port, waypoints, smooth_bezier, color, thickness) in to_add {
         diagram.add_edge(a_id, a_port, b_id, b_port);
         if let Some(last) = diagram.edges.last_mut() {
             last.waypoints = waypoints;
@@ -1246,10 +1269,7 @@ fn extract_local_class_ports(
     let mut out = Vec::new();
     for (sub_name, sub) in &class_def.components {
         let sub_type = sub.type_name.to_string();
-        let causality_is_port = matches!(
-            sub.causality,
-            Causality::Input(_) | Causality::Output(_)
-        );
+        let causality_is_port = matches!(sub.causality, Causality::Input(_) | Causality::Output(_));
         let type_is_connector = !sub_type.is_empty()
             && crate::diagram::is_connector_type_pub(
                 &sub_type,
@@ -1295,8 +1315,7 @@ fn extract_local_class_ports(
             .as_ref()
             .map(|c| {
                 let color = connector_icon_color(c);
-                let (kind, flow_vars) =
-                    classify_connector(c, class_qualified_path, ast, msl_mode);
+                let (kind, flow_vars) = classify_connector(c, class_qualified_path, ast, msl_mode);
                 (color, kind, flow_vars)
             })
             .unwrap_or_default();
@@ -1334,10 +1353,13 @@ fn classify_connector(
     owner_qualified_path: &str,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
     msl_mode: crate::class_cache::MslLookupMode,
-) -> (crate::visual_diagram::PortKind, Vec<crate::visual_diagram::FlowVarMeta>) {
+) -> (
+    crate::visual_diagram::PortKind,
+    Vec<crate::visual_diagram::FlowVarMeta>,
+) {
     use crate::visual_diagram::{FlowVarMeta, PortKind};
-    use rumoca_compile::parsing::Causality;
     use rumoca_compile::parsing::ast::Connection;
+    use rumoca_compile::parsing::Causality;
 
     // Short-form type alias (`connector X = input Real`) — causality
     // is on the class itself, no components to walk.
@@ -1358,7 +1380,10 @@ fn classify_connector(
                     .get("unit")
                     .and_then(crate::ast_extract::string_literal_value)
                     .unwrap_or_default();
-                Some(FlowVarMeta { name: name.clone(), unit })
+                Some(FlowVarMeta {
+                    name: name.clone(),
+                    unit,
+                })
             } else {
                 None
             }
@@ -1414,9 +1439,7 @@ fn classify_connector(
 /// so it can be called alongside `classify_connector` from the
 /// single resolve-class site.
 
-fn connector_icon_color(
-    class: &rumoca_compile::parsing::ast::ClassDef,
-) -> Option<[u8; 3]> {
+fn connector_icon_color(class: &rumoca_compile::parsing::ast::ClassDef) -> Option<[u8; 3]> {
     use crate::annotations::{extract_icon, GraphicItem};
     let icon = extract_icon(&class.annotation)?;
     for g in &icon.graphics {
@@ -1425,8 +1448,7 @@ fn connector_icon_color(
             GraphicItem::Polygon(p) => (p.shape.line_color, p.shape.fill_color),
             GraphicItem::Ellipse(e) => (e.shape.line_color, e.shape.fill_color),
             GraphicItem::Line(l) => (l.color, None),
-            GraphicItem::Text(_)
-            | GraphicItem::Bitmap(_) => (None, None),
+            GraphicItem::Text(_) | GraphicItem::Bitmap(_) => (None, None),
         };
         if let Some(c) = line.or(fill) {
             return Some([c.r, c.g, c.b]);
@@ -1434,7 +1456,6 @@ fn connector_icon_color(
     }
     None
 }
-
 
 /// Format an instance-modifier expression to a short display string
 /// for `%paramName` text substitution. Mirrors the
@@ -1460,8 +1481,8 @@ fn eval_condition(
     params_map: &std::collections::HashMap<&str, &rumoca_compile::parsing::ast::Component>,
 ) -> bool {
     use rumoca_compile::parsing::ast::Expression;
-    use rumoca_compile::parsing::OpBinary;
     use rumoca_compile::parsing::ir_core::OpUnary;
+    use rumoca_compile::parsing::OpBinary;
     match expr {
         Expression::Terminal { token, .. } => {
             // Accept any terminal whose text reads "true"/"false"; the
@@ -1475,7 +1496,11 @@ fn eval_condition(
             }
         }
         Expression::ComponentReference(cref) => {
-            let leaf = cref.parts.last().map(|p| p.ident.text.as_ref()).unwrap_or("");
+            let leaf = cref
+                .parts
+                .last()
+                .map(|p| p.ident.text.as_ref())
+                .unwrap_or("");
             params_map
                 .get(leaf)
                 .and_then(|comp| comp.binding.as_ref())
@@ -1498,10 +1523,14 @@ fn eval_condition(
 
 fn format_modifier_expr(expr: &rumoca_compile::parsing::ast::Expression) -> String {
     use rumoca_compile::parsing::ast::{Expression, TerminalType};
-    use rumoca_compile::parsing::OpBinary;
     use rumoca_compile::parsing::ir_core::OpUnary;
+    use rumoca_compile::parsing::OpBinary;
     match expr {
-        Expression::Terminal { terminal_type, token, .. } => {
+        Expression::Terminal {
+            terminal_type,
+            token,
+            ..
+        } => {
             let raw = token.text.as_ref();
             match terminal_type {
                 TerminalType::String => raw.trim_matches('"').to_string(),
@@ -1516,17 +1545,29 @@ fn format_modifier_expr(expr: &rumoca_compile::parsing::ast::Expression) -> Stri
         Expression::Unary { op, rhs, .. } => match (op, rhs.as_ref()) {
             (OpUnary::Minus, inner) => {
                 let inner = format_modifier_expr(inner);
-                if inner.is_empty() { String::new() } else { format!("-{}", inner) }
+                if inner.is_empty() {
+                    String::new()
+                } else {
+                    format!("-{}", inner)
+                }
             }
             (OpUnary::Plus, inner) => {
                 let inner = format_modifier_expr(inner);
-                if inner.is_empty() { String::new() } else { format!("+{}", inner) }
+                if inner.is_empty() {
+                    String::new()
+                } else {
+                    format!("+{}", inner)
+                }
             }
             _ => String::new(),
         },
         Expression::Parenthesized { inner, .. } => {
             let inner = format_modifier_expr(inner);
-            if inner.is_empty() { String::new() } else { format!("({})", inner) }
+            if inner.is_empty() {
+                String::new()
+            } else {
+                format!("({})", inner)
+            }
         }
         // Render simple arithmetic so MSL params like `k=1/(k*Ni)`
         // (gainTrack in LimPID) substitute as the expression text
@@ -1585,9 +1626,8 @@ mod composite_slim_slice_tests {
         let (s, e) = crate::ast_extract::class_full_text_span(class, full);
         let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
 
-        let ast = std::sync::Arc::new(
-            rumoca_phase_parse::parse_to_ast(&slim, "rs_slim.mo").unwrap(),
-        );
+        let ast =
+            std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(&slim, "rs_slim.mo").unwrap());
         let layout = DiagramAutoLayoutSettings::default();
         let diagram = import_model_to_diagram_from_ast(
             ast,
@@ -1608,14 +1648,10 @@ mod composite_slim_slice_tests {
         ));
         let layout = DiagramAutoLayoutSettings::default();
         let project = |src: &str, target: Option<&str>| -> usize {
-            let ast = std::sync::Arc::new(
-                rumoca_phase_parse::parse_to_ast(src, "x.mo").unwrap(),
-            );
-            import_model_to_diagram_from_ast(
-                ast, src, DEFAULT_MAX_DIAGRAM_NODES, target, &layout,
-            )
-            .map(|d| d.nodes.len())
-            .unwrap_or(0)
+            let ast = std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(src, "x.mo").unwrap());
+            import_model_to_diagram_from_ast(ast, src, DEFAULT_MAX_DIAGRAM_NODES, target, &layout)
+                .map(|d| d.nodes.len())
+                .unwrap_or(0)
         };
         // slim slice with no target
         let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
@@ -1631,8 +1667,13 @@ mod composite_slim_slice_tests {
         // card (full_none == 0). It must now auto-resolve the primary
         // class and render its diagram.
         assert!(slim_none >= 4, "slim slice no-target: {slim_none}");
-        assert!(full_none >= 4, "full package no-target (the card bug): {full_none}");
-        assert!(full_target >= 4, "full package explicit target: {full_target}");
+        assert!(
+            full_none >= 4,
+            "full package no-target (the card bug): {full_none}"
+        );
+        assert!(
+            full_target >= 4,
+            "full package explicit target: {full_target}"
+        );
     }
 }
-

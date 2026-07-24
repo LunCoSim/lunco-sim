@@ -282,9 +282,7 @@ fn main() {
 /// stable identifiers (not real filesystem paths). Each entry is stripped
 /// against its own root, so files from different library roots keep their
 /// distinct top-level package namespace.
-fn pre_parse(
-    entries: &[(PathBuf, PathBuf)],
-) -> Vec<(String, rumoca_ir_ast::StoredDefinition)> {
+fn pre_parse(entries: &[(PathBuf, PathBuf)]) -> Vec<(String, rumoca_ir_ast::StoredDefinition)> {
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -446,7 +444,9 @@ fn discover_extra_roots() -> Vec<PathBuf> {
         if name == "msl" || name.starts_with('.') {
             continue;
         }
-        let Ok(inner) = fs::read_dir(&p) else { continue };
+        let Ok(inner) = fs::read_dir(&p) else {
+            continue;
+        };
         let has_pkg = inner.flatten().any(|sub| {
             let sp = sub.path();
             sp.is_dir() && sp.join("package.mo").is_file()

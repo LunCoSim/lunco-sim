@@ -25,16 +25,15 @@ pub(crate) fn build(app: &mut App) {
 fn text_bundle(label: &WorldLabel) -> (Text2d, TextFont, TextColor) {
     (
         Text2d::new(label.text.clone()),
-        TextFont { font_size: bevy::text::FontSize::Px(label.size_px), ..default() },
+        TextFont {
+            font_size: bevy::text::FontSize::Px(label.size_px),
+            ..default()
+        },
         TextColor(Color::from(label.color)),
     )
 }
 
-fn bind_world_label(
-    add: On<Add, WorldLabel>,
-    labels: Query<&WorldLabel>,
-    mut commands: Commands,
-) {
+fn bind_world_label(add: On<Add, WorldLabel>, labels: Query<&WorldLabel>, mut commands: Commands) {
     let e = add.entity;
     let Ok(label) = labels.get(e) else { return };
     commands.entity(e).try_insert(text_bundle(label));
@@ -60,10 +59,17 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         build(&mut app);
 
-        let e = app.world_mut().spawn(WorldLabel::new("Artemis III", 100.0)).id();
+        let e = app
+            .world_mut()
+            .spawn(WorldLabel::new("Artemis III", 100.0))
+            .id();
         app.update();
 
-        let text = app.world().entity(e).get::<Text2d>().expect("label must render as Text2d");
+        let text = app
+            .world()
+            .entity(e)
+            .get::<Text2d>()
+            .expect("label must render as Text2d");
         assert_eq!(text.0, "Artemis III");
     }
 }

@@ -1,12 +1,12 @@
+use crate::{
+    schema::{ApiRequest, ApiResponse},
+    transports::envelope::{ApiRequestUnified, ApiResponseEnvelope},
+    transports::HttpBridge,
+};
 use axum::{
     extract::{Json, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::IntoResponse,
-};
-use crate::{
-    transports::HttpBridge,
-    transports::envelope::{ApiRequestUnified, ApiResponseEnvelope},
-    schema::{ApiRequest, ApiResponse},
 };
 
 pub async fn handle_api_commands(
@@ -38,13 +38,13 @@ pub async fn handle_schema(State(bridge): State<HttpBridge>) -> impl IntoRespons
     execute_api_request(bridge, ApiRequest::DiscoverSchema).await
 }
 
-pub async fn execute_api_request(
-    bridge: HttpBridge,
-    api_req: ApiRequest,
-) -> impl IntoResponse {
+pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> impl IntoResponse {
     let response = match bridge.execute(api_req).await {
         Ok(resp) => resp,
-        Err(_) => ApiResponse::Error { code: 500, message: "Failed to process request".to_string() },
+        Err(_) => ApiResponse::Error {
+            code: 500,
+            message: "Failed to process request".to_string(),
+        },
     };
 
     // Screenshot responses return raw PNG bytes directly.
@@ -53,7 +53,8 @@ pub async fn execute_api_request(
             StatusCode::OK,
             [(header::CONTENT_TYPE, "image/png")],
             png_bytes,
-        ).into_response();
+        )
+            .into_response();
     }
 
     let envelope = ApiResponseEnvelope::from(response);

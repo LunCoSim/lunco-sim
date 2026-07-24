@@ -67,13 +67,21 @@ pub struct CompiledTask {
 
 impl CompiledTask {
     pub fn new(id: i64, tree: BoxNode<dyn TaskCtx>) -> Self {
-        Self { id, tree, done: false }
+        Self {
+            id,
+            tree,
+            done: false,
+        }
     }
 
     /// Placeholder for a spec that failed to compile: latched `done` so the
     /// compile error reports once, not every tick.
     pub fn poisoned(id: i64) -> Self {
-        Self { id, tree: Box::new(Sequence::new(Vec::new())), done: true }
+        Self {
+            id,
+            tree: Box::new(Sequence::new(Vec::new())),
+            done: true,
+        }
     }
 }
 
@@ -128,7 +136,11 @@ impl Node<dyn TaskCtx> for Leaf {
         }
         if let Some(secs) = self.secs {
             let t0 = *self.t0.get_or_insert_with(|| ctx.now());
-            return if ctx.now() - t0 >= secs { Status::Success } else { Status::Running };
+            return if ctx.now() - t0 >= secs {
+                Status::Success
+            } else {
+                Status::Running
+            };
         }
         if let Some(name) = &self.event {
             let want = match &self.src {
@@ -143,7 +155,11 @@ impl Node<dyn TaskCtx> for Leaf {
                 .events()
                 .iter()
                 .any(|(n, s)| n == name && want.is_none_or(|w| *s == w));
-            return if hit { Status::Success } else { Status::Running };
+            return if hit {
+                Status::Success
+            } else {
+                Status::Running
+            };
         }
         Status::Success // bare / `once` — complete on the first tick
     }
@@ -174,15 +190,19 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
         .read_lock::<Map>()
         .ok_or_else(|| format!("task node must be a map, got `{}`", v.type_name()))?;
 
-    let kind = m.get("k").and_then(|k| k.clone().into_immutable_string().ok());
+    let kind = m
+        .get("k")
+        .and_then(|k| k.clone().into_immutable_string().ok());
     let Some(kind) = kind else {
         // Leaf — mirror the retired `__tick_leaf` field vocabulary.
         let secs = match m.get("secs") {
             None => None,
             Some(v) if v.is_unit() => None,
-            Some(v) => Some(v.as_float().or_else(|_| v.as_int().map(|i| i as f64)).map_err(
-                |t| format!("task leaf `secs` must be a number, got `{t}`"),
-            )?),
+            Some(v) => Some(
+                v.as_float()
+                    .or_else(|_| v.as_int().map(|i| i as f64))
+                    .map_err(|t| format!("task leaf `secs` must be a number, got `{t}`"))?,
+            ),
         };
         let event = match m.get("event") {
             None => None,
@@ -223,7 +243,10 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
         arr.iter().map(compile_node).collect()
     };
     let body = || -> Result<BoxNode<dyn TaskCtx>, String> {
-        compile_node(m.get("body").ok_or_else(|| format!("task `{kind}` node missing `body`"))?)
+        compile_node(
+            m.get("body")
+                .ok_or_else(|| format!("task `{kind}` node missing `body`"))?,
+        )
     };
     let count = || -> Result<usize, String> {
         m.get("n")
@@ -235,8 +258,14 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
     Ok(match kind.as_str() {
         "seq" => Box::new(Sequence::new(children("items")?)),
         "sel" => Box::new(Selector::new(children("items")?)),
-        "all" => Box::new(Parallel::new(ParallelPolicy::RequireAll, children("items")?)),
-        "race" => Box::new(Parallel::new(ParallelPolicy::RequireOne, children("items")?)),
+        "all" => Box::new(Parallel::new(
+            ParallelPolicy::RequireAll,
+            children("items")?,
+        )),
+        "race" => Box::new(Parallel::new(
+            ParallelPolicy::RequireOne,
+            children("items")?,
+        )),
         "repeat" => Box::new(Repeat::times(count()?, body()?)),
         "forever" => Box::new(Repeat::forever(body()?)),
         "retry" => Box::new(Retry::times(count()?, body()?)),
@@ -302,7 +331,10 @@ mod tests {
             ),
         ]);
         let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx { now: 0.0, events: vec![] };
+        let mut ctx = FakeCtx {
+            now: 0.0,
+            events: vec![],
+        };
         assert_eq!(node.tick(&mut ctx), Status::Running); // stamps t0 of leg 1
         ctx.now = 1.5;
         assert_eq!(node.tick(&mut ctx), Status::Running); // leg 1 done, leg 2 stamps 1.5
@@ -317,10 +349,21 @@ mod tests {
         // wait_for_from("GO", "path") — src resolves to 42 in FakeCtx.
         let tree = map(&[("event", "GO".into()), ("src", "launcher".into())]);
         let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx { now: 0.0, events: vec![("GO".into(), 7)] };
-        assert_eq!(node.tick(&mut ctx), Status::Running, "wrong source must not match");
+        let mut ctx = FakeCtx {
+            now: 0.0,
+            events: vec![("GO".into(), 7)],
+        };
+        assert_eq!(
+            node.tick(&mut ctx),
+            Status::Running,
+            "wrong source must not match"
+        );
         ctx.events = vec![("HALT".into(), 42)];
-        assert_eq!(node.tick(&mut ctx), Status::Running, "wrong name must not match");
+        assert_eq!(
+            node.tick(&mut ctx),
+            Status::Running,
+            "wrong name must not match"
+        );
         ctx.events = vec![("GO".into(), 42)];
         assert_eq!(node.tick(&mut ctx), Status::Success);
     }
@@ -334,14 +377,25 @@ mod tests {
             ("body", map(&[("secs", Dynamic::from_float(1.0))])),
         ]);
         let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx { now: 0.0, events: vec![] };
+        let mut ctx = FakeCtx {
+            now: 0.0,
+            events: vec![],
+        };
         assert_eq!(node.tick(&mut ctx), Status::Running);
         ctx.now = 1.0;
         assert_eq!(node.tick(&mut ctx), Status::Running); // iter 1 done, iter 2 restamps
         ctx.now = 1.5;
-        assert_eq!(node.tick(&mut ctx), Status::Running, "second dwell must restart");
+        assert_eq!(
+            node.tick(&mut ctx),
+            Status::Running,
+            "second dwell must restart"
+        );
         ctx.now = 2.4;
-        assert_eq!(node.tick(&mut ctx), Status::Running, "restamped at 1.5 → done at 2.5");
+        assert_eq!(
+            node.tick(&mut ctx),
+            Status::Running,
+            "restamped at 1.5 → done at 2.5"
+        );
         ctx.now = 2.6;
         assert_eq!(node.tick(&mut ctx), Status::Success);
     }
@@ -359,7 +413,10 @@ mod tests {
             ),
         ]);
         let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx { now: 0.0, events: vec![] };
+        let mut ctx = FakeCtx {
+            now: 0.0,
+            events: vec![],
+        };
         assert_eq!(node.tick(&mut ctx), Status::Running);
         ctx.events = vec![("GO".into(), 0)];
         assert_eq!(node.tick(&mut ctx), Status::Success);

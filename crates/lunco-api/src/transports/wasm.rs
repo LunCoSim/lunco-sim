@@ -14,9 +14,9 @@
 //! two later). Screenshot responses come back as a base64 PNG string under
 //! `data.png_base64` rather than the HTTP `image/png` body.
 
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
-use base64::{engine::general_purpose::STANDARD, Engine};
 
 use crate::schema::{ApiRequest, ApiResponse};
 use crate::transports::envelope::{ApiRequestUnified, ApiResponseEnvelope};
@@ -88,8 +88,8 @@ pub async fn lunco_rhai(code: String) -> Result<String, JsValue> {
         .with(|b| b.borrow().clone())
         .ok_or_else(|| JsValue::from_str("lunco_rhai: app not ready (bridge unset)"))?;
 
-    let req = crate::rhai_request(&code)
-        .map_err(|e| JsValue::from_str(&format!("lunco_rhai: {e}")))?;
+    let req =
+        crate::rhai_request(&code).map_err(|e| JsValue::from_str(&format!("lunco_rhai: {e}")))?;
 
     let resp = bridge
         .execute(req)

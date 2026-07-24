@@ -63,7 +63,10 @@ pub(crate) struct BoundBodyImagery(Vec<i32>);
 /// whole reason the untextured path works — the texture then reproduces its own
 /// pixels. Both binding paths (authored map, dataset default) go through here so
 /// they cannot disagree.
-fn bind_albedo(look: &lunco_materials::ShaderLook, image: Handle<Image>) -> lunco_materials::ShaderLook {
+fn bind_albedo(
+    look: &lunco_materials::ShaderLook,
+    image: Handle<Image>,
+) -> lunco_materials::ShaderLook {
     look.clone()
         .with("surface_color", ParamValue::Vec3([1.0, 1.0, 1.0]))
         .with_texture(TextureLayer::Albedo, image)

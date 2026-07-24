@@ -67,14 +67,24 @@ pub struct TimeDomain {
 
 impl Default for TimeDomain {
     fn default() -> Self {
-        Self { parent: None, offset: 0.0, scale: 1.0, regime: DomainRegime::Kinematic }
+        Self {
+            parent: None,
+            offset: 0.0,
+            scale: 1.0,
+            regime: DomainRegime::Kinematic,
+        }
     }
 }
 
 impl TimeDomain {
     /// A derived domain: `local_t = offset + scale·parent_t`.
     pub fn derived(parent: Option<Entity>, offset: f64, scale: f64) -> Self {
-        Self { parent, offset, scale, regime: DomainRegime::Kinematic }
+        Self {
+            parent,
+            offset,
+            scale,
+            regime: DomainRegime::Kinematic,
+        }
     }
 }
 
@@ -100,14 +110,28 @@ pub struct Playback {
 
 impl Default for Playback {
     fn default() -> Self {
-        Self { head: 0.0, mode: TransportMode::Playing, rate: 1.0, start: 0.0, end: 0.0, looping: false }
+        Self {
+            head: 0.0,
+            mode: TransportMode::Playing,
+            rate: 1.0,
+            start: 0.0,
+            end: 0.0,
+            looping: false,
+        }
     }
 }
 
 impl Playback {
     /// A replay playhead over `[start, end]` at `rate`, starting at `start`.
     pub fn replay(start: f64, end: f64, rate: f64, looping: bool) -> Self {
-        Self { head: start, mode: TransportMode::Playing, rate, start, end, looping }
+        Self {
+            head: start,
+            mode: TransportMode::Playing,
+            rate,
+            start,
+            end,
+            looping,
+        }
     }
 
     /// Whether the range `[start, end]` is bounded (clamp/loop applies).
@@ -459,7 +483,12 @@ pub fn advance_and_resolve_domains(
     real: Res<Time<bevy::time::Real>>,
     clocks: Option<Res<Clocks>>,
     mut last: ResMut<LastClockT>,
-    mut q: Query<(Entity, &TimeDomain, Option<&mut Playback>, Option<&ClockRoot>)>,
+    mut q: Query<(
+        Entity,
+        &TimeDomain,
+        Option<&mut Playback>,
+        Option<&ClockRoot>,
+    )>,
     mut resolved: ResMut<ResolvedDomains>,
 ) {
     let roots = RootTimes {
@@ -498,7 +527,8 @@ pub fn advance_and_resolve_domains(
     }
 
     last.per_clock.clear();
-    last.per_clock.extend(samples.iter().map(|(&e, s)| (e, s.t)));
+    last.per_clock
+        .extend(samples.iter().map(|(&e, s)| (e, s.t)));
     last.roots = roots;
     resolved.0 = samples;
 }
@@ -542,7 +572,12 @@ fn spawn_well_known_clocks(mut commands: Commands) {
             ClockRoot::Epoch,
         ))
         .id();
-    commands.insert_resource(Clocks { real, sim, interaction, celestial });
+    commands.insert_resource(Clocks {
+        real,
+        sim,
+        interaction,
+        celestial,
+    });
 }
 
 /// Spawn a **derived** domain entity (`local_t = offset + scale·parent_t`).
@@ -553,14 +588,21 @@ pub fn spawn_derived_domain(
     scale: f64,
 ) -> Entity {
     commands
-        .spawn((TimeDomain::derived(parent, offset, scale), Name::new("DerivedTimeDomain")))
+        .spawn((
+            TimeDomain::derived(parent, offset, scale),
+            Name::new("DerivedTimeDomain"),
+        ))
         .id()
 }
 
 /// Spawn a **driven** domain entity (own playhead). `parent` feeds the affine
 /// chain for any *derived* children; the driven head itself advances on the world
 /// delta (v1).
-pub fn spawn_driven_domain(commands: &mut Commands, parent: Option<Entity>, playback: Playback) -> Entity {
+pub fn spawn_driven_domain(
+    commands: &mut Commands,
+    parent: Option<Entity>,
+    playback: Playback,
+) -> Entity {
     commands
         .spawn((
             TimeDomain::derived(parent, 0.0, 1.0),
@@ -641,8 +683,12 @@ fn on_control_animation(
     let cmd = trigger.event();
     // An explicit target drives that per-object domain; otherwise the shared
     // preview. Same verb either way.
-    let Some(domain) = cmd.target.or_else(|| preview.map(|p| p.domain)) else { return };
-    let Ok(mut pb) = q.get_mut(domain) else { return };
+    let Some(domain) = cmd.target.or_else(|| preview.map(|p| p.domain)) else {
+        return;
+    };
+    let Ok(mut pb) = q.get_mut(domain) else {
+        return;
+    };
     apply_control_animation(&mut pb, cmd);
 }
 
@@ -650,7 +696,11 @@ fn on_control_animation(
 /// out so the verb is unit-tested headless without an observer / world.
 pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
     if let Some(playing) = cmd.playing {
-        pb.mode = if playing { TransportMode::Playing } else { TransportMode::Paused };
+        pb.mode = if playing {
+            TransportMode::Playing
+        } else {
+            TransportMode::Paused
+        };
     }
     if let Some(secs) = cmd.seek_secs {
         pb.head = secs;
@@ -721,7 +771,9 @@ fn on_set_mission_epoch(
 }
 
 /// Which well-known clock a [`SetClock`] targets.
-#[derive(serde::Serialize, serde::Deserialize, Reflect, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Reflect, Debug, Clone, Copy, PartialEq, Eq, Default,
+)]
 pub enum ClockId {
     /// The epoch clock (the sky).
     #[default]
@@ -787,7 +839,9 @@ fn on_set_clock(
         ClockId::Interaction => clocks.interaction,
         ClockId::Sim => clocks.sim,
     };
-    let Ok(mut domain) = q.get_mut(target) else { return };
+    let Ok(mut domain) = q.get_mut(target) else {
+        return;
+    };
 
     if let Some(parent) = cmd.parent {
         // A root ignores its parent (it IS a source), so giving a clock a parent
@@ -933,7 +987,10 @@ pub(crate) fn build_domain_tree(app: &mut App) {
                 .in_set(crate::TimeSpineSet)
                 .after(crate::advance_world_clock),
         )
-        .add_systems(Startup, (spawn_well_known_clocks, spawn_animation_preview).chain());
+        .add_systems(
+            Startup,
+            (spawn_well_known_clocks, spawn_animation_preview).chain(),
+        );
     register_all_commands(app);
 }
 
@@ -962,7 +1019,9 @@ pub fn write_epoch_from_celestial_clock(
     mut world: ResMut<WorldTime>,
 ) {
     let Some(clocks) = clocks else { return };
-    let Some(celestial_t) = resolved.get(clocks.celestial) else { return };
+    let Some(celestial_t) = resolved.get(clocks.celestial) else {
+        return;
+    };
     world.epoch_jd = mission.mission_epoch0_jd + celestial_t / crate::SECS_PER_DAY;
 }
 
@@ -982,18 +1041,31 @@ mod tests {
             parent,
             offset,
             scale,
-            playback: head.map(|h| Playback { head: h, ..default() }),
+            playback: head.map(|h| Playback {
+                head: h,
+                ..default()
+            }),
             root: None,
         }
     }
 
     fn root(kind: ClockRoot) -> DomainSnapshot {
-        DomainSnapshot { parent: None, offset: 0.0, scale: 1.0, playback: None, root: Some(kind) }
+        DomainSnapshot {
+            parent: None,
+            offset: 0.0,
+            scale: 1.0,
+            playback: None,
+            root: Some(kind),
+        }
     }
 
     /// Resolve `domain`'s `t` with no prior frame (so every `dt` starts from `t`).
     fn t_of(m: &HashMap<Entity, DomainSnapshot>, domain: Entity, sim: f64) -> f64 {
-        let roots = RootTimes { sim_secs: sim, wall_secs: 0.0, epoch_secs: 0.0 };
+        let roots = RootTimes {
+            sim_secs: sim,
+            wall_secs: 0.0,
+            epoch_secs: 0.0,
+        };
         resolve_clocks(m, &HashMap::new(), roots, roots, None)
             .get(&domain)
             .map(|s| s.t)
@@ -1003,26 +1075,46 @@ mod tests {
     #[test]
     fn control_animation_pauses_seeks_and_rates_independently() {
         let mut pb = Playback::default(); // playing, head 0, rate 1
-        // Pause only.
-        apply_control_animation(&mut pb, &ControlAnimation { playing: Some(false), ..default() });
+                                          // Pause only.
+        apply_control_animation(
+            &mut pb,
+            &ControlAnimation {
+                playing: Some(false),
+                ..default()
+            },
+        );
         assert!(matches!(pb.mode, TransportMode::Paused));
         assert_eq!(pb.head, 0.0);
         assert_eq!(pb.rate, 1.0);
         // Seek only — leaves the paused mode untouched.
-        apply_control_animation(&mut pb, &ControlAnimation { seek_secs: Some(3.5), ..default() });
+        apply_control_animation(
+            &mut pb,
+            &ControlAnimation {
+                seek_secs: Some(3.5),
+                ..default()
+            },
+        );
         assert!(matches!(pb.mode, TransportMode::Paused));
         assert!((pb.head - 3.5).abs() < EPS);
         // Play + rate in one verb.
         apply_control_animation(
             &mut pb,
-            &ControlAnimation { playing: Some(true), rate: Some(2.0), ..default() },
+            &ControlAnimation {
+                playing: Some(true),
+                rate: Some(2.0),
+                ..default()
+            },
         );
         assert!(matches!(pb.mode, TransportMode::Playing));
         assert!((pb.rate - 2.0).abs() < EPS);
         assert!((pb.head - 3.5).abs() < EPS); // seek preserved
 
         // A paused preview head does NOT advance with the world delta (scrub holds).
-        let held = Playback { mode: TransportMode::Paused, head: 3.5, ..default() };
+        let held = Playback {
+            mode: TransportMode::Paused,
+            head: 3.5,
+            ..default()
+        };
         assert!((step_playhead(&held, 10.0) - 3.5).abs() < EPS);
     }
 
@@ -1032,7 +1124,12 @@ mod tests {
         // advances by its PARENT's delta, so `mode = Playing` is not enough. On a
         // paused sim the parent delta is 0 and the camera sits still with the
         // transport insisting it is playing — which reads as "play is broken".
-        let pb = Playback { mode: TransportMode::Playing, head: 4.0, rate: 1.0, ..default() };
+        let pb = Playback {
+            mode: TransportMode::Playing,
+            head: 4.0,
+            rate: 1.0,
+            ..default()
+        };
         // Sim-rooted + sim paused ⇒ parent delta 0 ⇒ frozen (the standing shape).
         assert!((step_playhead(&pb, 0.0) - 4.0).abs() < EPS);
         // Wall-rooted ⇒ the parent keeps advancing ⇒ the move runs regardless.
@@ -1043,25 +1140,57 @@ mod tests {
     fn control_animation_toggles_looping_and_restarts() {
         // `looping` is reachable as a verb: the field was honoured by
         // `step_playhead` long before anything could set it.
-        let mut pb = Playback { start: 0.0, end: 10.0, ..default() };
+        let mut pb = Playback {
+            start: 0.0,
+            end: 10.0,
+            ..default()
+        };
         assert!(!pb.looping);
-        apply_control_animation(&mut pb, &ControlAnimation { looping: Some(true), ..default() });
+        apply_control_animation(
+            &mut pb,
+            &ControlAnimation {
+                looping: Some(true),
+                ..default()
+            },
+        );
         assert!(pb.looping);
         // ...and it reaches the stepper: past `end` wraps instead of clamping.
-        let wrapped = Playback { head: 9.0, ..pb.clone() };
+        let wrapped = Playback {
+            head: 9.0,
+            ..pb.clone()
+        };
         assert!((step_playhead(&wrapped, 2.0) - 1.0).abs() < EPS);
-        apply_control_animation(&mut pb, &ControlAnimation { looping: Some(false), ..default() });
-        let clamped = Playback { head: 9.0, ..pb.clone() };
+        apply_control_animation(
+            &mut pb,
+            &ControlAnimation {
+                looping: Some(false),
+                ..default()
+            },
+        );
+        let clamped = Playback {
+            head: 9.0,
+            ..pb.clone()
+        };
         assert!((step_playhead(&clamped, 2.0) - 10.0).abs() < EPS);
 
         // Restart = seek-to-start + play in ONE verb (the HUD's ⏮ button).
         // Range starts late on purpose: seeking a literal 0.0 here would land
         // outside [start, end] and snap forward on the next step.
-        let mut late = Playback { start: 5.0, end: 20.0, mode: TransportMode::Paused, head: 17.0, ..default() };
+        let mut late = Playback {
+            start: 5.0,
+            end: 20.0,
+            mode: TransportMode::Paused,
+            head: 17.0,
+            ..default()
+        };
         let restart_to = late.start;
         apply_control_animation(
             &mut late,
-            &ControlAnimation { playing: Some(true), seek_secs: Some(restart_to), ..default() },
+            &ControlAnimation {
+                playing: Some(true),
+                seek_secs: Some(restart_to),
+                ..default()
+            },
         );
         assert!(matches!(late.mode, TransportMode::Playing));
         assert!((late.head - 5.0).abs() < EPS);
@@ -1126,17 +1255,28 @@ mod tests {
         m.insert(child, snap(Some(sim), 0.0, 1.0, None));
         m.insert(grandchild, snap(Some(child), 0.0, 60.0, None)); // 60× the parent
 
-        let roots_running = RootTimes { sim_secs: 10.0, wall_secs: 99.0, epoch_secs: 0.0 };
+        let roots_running = RootTimes {
+            sim_secs: 10.0,
+            wall_secs: 99.0,
+            epoch_secs: 0.0,
+        };
         let a = resolve_clocks(&m, &HashMap::new(), roots_running, roots_running, Some(sim));
         assert!((a[&grandchild].t - 600.0).abs() < EPS);
 
         // Sim paused: sim_secs stops at 10 while WALL time keeps running (99 → 123).
         // Everything under `sim` must hold — including the 60× child.
         let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
-        let roots_paused = RootTimes { sim_secs: 10.0, wall_secs: 123.0, epoch_secs: 0.0 };
+        let roots_paused = RootTimes {
+            sim_secs: 10.0,
+            wall_secs: 123.0,
+            epoch_secs: 0.0,
+        };
         let b = resolve_clocks(&m, &last, roots_paused, roots_running, Some(sim));
         assert!((b[&grandchild].t - 600.0).abs() < EPS);
-        assert!(b[&grandchild].dt.abs() < EPS, "a frozen subtree must report dt = 0");
+        assert!(
+            b[&grandchild].dt.abs() < EPS,
+            "a frozen subtree must report dt = 0"
+        );
         assert!(b[&child].dt.abs() < EPS);
     }
 
@@ -1153,12 +1293,20 @@ mod tests {
         m.insert(real, root(ClockRoot::Wall));
         m.insert(interaction, snap(Some(real), 0.0, 1.0, None));
 
-        let r1 = RootTimes { sim_secs: 10.0, wall_secs: 100.0, epoch_secs: 0.0 };
+        let r1 = RootTimes {
+            sim_secs: 10.0,
+            wall_secs: 100.0,
+            epoch_secs: 0.0,
+        };
         let a = resolve_clocks(&m, &HashMap::new(), r1, r1, Some(sim));
         let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
 
         // Sim frozen (10 → 10), wall advances (100 → 100.25).
-        let r2 = RootTimes { sim_secs: 10.0, wall_secs: 100.25, epoch_secs: 0.0 };
+        let r2 = RootTimes {
+            sim_secs: 10.0,
+            wall_secs: 100.25,
+            epoch_secs: 0.0,
+        };
         let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
         assert!((b[&sim].dt).abs() < EPS, "the sim clock is paused");
         assert!(
@@ -1187,12 +1335,20 @@ mod tests {
         );
 
         // Frame 1 establishes the baseline (no prior frame ⇒ parent delta 0).
-        let r1 = RootTimes { sim_secs: 5.0, wall_secs: 0.0, epoch_secs: 0.0 };
+        let r1 = RootTimes {
+            sim_secs: 5.0,
+            wall_secs: 0.0,
+            epoch_secs: 0.0,
+        };
         let a = resolve_clocks(&m, &HashMap::new(), r1, r1, Some(sim));
         let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
 
         // Sim advances 5 → 8 (delta 3); the 2× head advances 6.
-        let r2 = RootTimes { sim_secs: 8.0, wall_secs: 0.0, epoch_secs: 0.0 };
+        let r2 = RootTimes {
+            sim_secs: 8.0,
+            wall_secs: 0.0,
+            epoch_secs: 0.0,
+        };
         let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
         assert!((b[&d].t - 6.0).abs() < EPS);
 
@@ -1219,10 +1375,18 @@ mod tests {
         m.insert(celestial, root(ClockRoot::Epoch));
 
         // Warp: the tick is FROZEN (sim_secs constant) but the epoch advances.
-        let r1 = RootTimes { sim_secs: 42.0, wall_secs: 0.0, epoch_secs: 1000.0 };
+        let r1 = RootTimes {
+            sim_secs: 42.0,
+            wall_secs: 0.0,
+            epoch_secs: 1000.0,
+        };
         let a = resolve_clocks(&m, &HashMap::new(), r1, r1, Some(sim));
         let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
-        let r2 = RootTimes { sim_secs: 42.0, wall_secs: 0.0, epoch_secs: 3000.0 };
+        let r2 = RootTimes {
+            sim_secs: 42.0,
+            wall_secs: 0.0,
+            epoch_secs: 3000.0,
+        };
         let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
 
         assert!(b[&sim].dt.abs() < EPS, "tick frozen in warp");
@@ -1274,10 +1438,16 @@ mod tests {
             .add_systems(Update, advance_and_resolve_domains);
 
         app.world_mut().resource_mut::<WorldTime>().sim_secs = 10.0;
-        let derived = app.world_mut().spawn(TimeDomain::derived(None, 0.0, 2.0)).id();
+        let derived = app
+            .world_mut()
+            .spawn(TimeDomain::derived(None, 0.0, 2.0))
+            .id();
         let driven = app
             .world_mut()
-            .spawn((TimeDomain::default(), Playback::replay(0.0, 0.0, 1.0, false)))
+            .spawn((
+                TimeDomain::default(),
+                Playback::replay(0.0, 0.0, 1.0, false),
+            ))
             .id();
 
         app.update();
@@ -1318,7 +1488,10 @@ mod tests {
         let w = app.world();
         assert_eq!(w.get::<ClockRoot>(clocks.real), Some(&ClockRoot::Wall));
         assert_eq!(w.get::<ClockRoot>(clocks.sim), Some(&ClockRoot::Tick));
-        assert_eq!(w.get::<ClockRoot>(clocks.celestial), Some(&ClockRoot::Epoch));
+        assert_eq!(
+            w.get::<ClockRoot>(clocks.celestial),
+            Some(&ClockRoot::Epoch)
+        );
         // The interaction clock hangs off the wall root — that is what keeps the
         // avatar moving while the sim is paused.
         assert_eq!(

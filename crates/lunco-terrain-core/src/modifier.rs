@@ -57,7 +57,10 @@ pub struct LayeredHeightSource {
 impl LayeredHeightSource {
     /// A stack over `base` with no modifiers (samples `base` directly).
     pub fn new(base: Arc<dyn HeightSource>) -> Self {
-        Self { base, modifiers: Vec::new() }
+        Self {
+            base,
+            modifiers: Vec::new(),
+        }
     }
 
     /// Builder: append a modifier and return self.
@@ -108,7 +111,11 @@ pub struct BrushModifier {
 
 impl BrushModifier {
     pub fn new(center: [f64; 2], radius: f64, amplitude: f64) -> Self {
-        Self { center, radius, amplitude }
+        Self {
+            center,
+            radius,
+            amplitude,
+        }
     }
 
     /// The brush's additive delta (metres) at `(x, z)` — smooth bump, zero outside.
@@ -148,7 +155,11 @@ pub struct FlattenModifier {
 
 impl FlattenModifier {
     pub fn new(center: [f64; 2], radius: f64, target_y: f64) -> Self {
-        Self { center, radius, target_y }
+        Self {
+            center,
+            radius,
+            target_y,
+        }
     }
 
     /// Blend weight toward `target_y` at `(x, z)`: 1 at centre, 0 at the edge.
@@ -236,7 +247,13 @@ impl BodyCurvature {
         // blend local relief, and every metre it spends is a metre of measured
         // DEM overwritten with apron. It was 0.6 back when the feather ran to
         // zero and had a kilometre of datum to swallow.
-        Self { radius_m, half_extent_m, datum_m, edge_lift_m: 1.0, feather_from: 0.85 }
+        Self {
+            radius_m,
+            half_extent_m,
+            datum_m,
+            edge_lift_m: 1.0,
+            feather_from: 0.85,
+        }
     }
 }
 
@@ -296,7 +313,10 @@ mod tests {
     fn brush_raises_and_digs_locally() {
         let raise = BrushModifier::new([0.0, 0.0], 10.0, 5.0);
         let dig = BrushModifier::new([0.0, 0.0], 10.0, -5.0);
-        assert!((raise.delta_at(0.0, 0.0) - 5.0).abs() < 1e-12, "peak at centre");
+        assert!(
+            (raise.delta_at(0.0, 0.0) - 5.0).abs() < 1e-12,
+            "peak at centre"
+        );
         assert_eq!(raise.delta_at(20.0, 0.0), 0.0, "zero outside radius");
         let up = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(raise));
         let down = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(dig));
@@ -316,14 +336,27 @@ mod tests {
         }
         let flat = FlattenModifier::new([0.0, 0.0], 20.0, 3.0);
         let s = LayeredHeightSource::new(Arc::new(Ramp)).with(Arc::new(flat));
-        assert!((s.height_at(0.0, 0.0) - 3.0).abs() < 1e-9, "centre pulled to target");
-        assert!((s.height_at(200.0, 0.0) - 100.0).abs() < 1e-9, "far field = raw ramp");
+        assert!(
+            (s.height_at(0.0, 0.0) - 3.0).abs() < 1e-9,
+            "centre pulled to target"
+        );
+        assert!(
+            (s.height_at(200.0, 0.0) - 100.0).abs() < 1e-9,
+            "far field = raw ramp"
+        );
     }
 
     #[test]
     fn fold_order_matters() {
         // Crater (adds −depth) then flatten (pull to 0) ≠ flatten then crater.
-        let crater = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 4.0, rim_height: 0.0, softness: 0.0, bowl_power: 4.0 }]);
+        let crater = Craters::new(vec![Crater {
+            center: [0.0, 0.0],
+            radius: 10.0,
+            depth: 4.0,
+            rim_height: 0.0,
+            softness: 0.0,
+            bowl_power: 4.0,
+        }]);
         let flat = FlattenModifier::new([0.0, 0.0], 30.0, 0.0);
         let crater_then_flat = LayeredHeightSource::new(Arc::new(Flat(0.0)))
             .with(Arc::new(crater.clone()))
@@ -332,19 +365,40 @@ mod tests {
             .with(Arc::new(flat))
             .with(Arc::new(crater));
         // Flatten-last wipes the crater at the centre (pulled to 0); crater-last keeps it.
-        assert!((crater_then_flat.height_at(0.0, 0.0)).abs() < 1e-9, "flatten last → level");
-        assert!(flat_then_crater.height_at(0.0, 0.0) < -3.0, "crater last → still a bowl");
+        assert!(
+            (crater_then_flat.height_at(0.0, 0.0)).abs() < 1e-9,
+            "flatten last → level"
+        );
+        assert!(
+            flat_then_crater.height_at(0.0, 0.0) < -3.0,
+            "crater last → still a bowl"
+        );
     }
 
     #[test]
     fn craters_modifier_matches_crater_field() {
         // The extracted `Craters` modifier over a base equals the `CraterField` wrapper.
         let list = vec![
-            Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.4, softness: 0.0, bowl_power: 4.0 },
-            Crater { center: [15.0, -8.0], radius: 6.0, depth: 1.5, rim_height: 0.3, softness: 0.0, bowl_power: 4.0 },
+            Crater {
+                center: [0.0, 0.0],
+                radius: 10.0,
+                depth: 2.0,
+                rim_height: 0.4,
+                softness: 0.0,
+                bowl_power: 4.0,
+            },
+            Crater {
+                center: [15.0, -8.0],
+                radius: 6.0,
+                depth: 1.5,
+                rim_height: 0.3,
+                softness: 0.0,
+                bowl_power: 4.0,
+            },
         ];
         let field = CraterField::new(Flat(5.0), list.clone());
-        let stack = LayeredHeightSource::new(Arc::new(Flat(5.0))).with(Arc::new(Craters::new(list)));
+        let stack =
+            LayeredHeightSource::new(Arc::new(Flat(5.0))).with(Arc::new(Craters::new(list)));
         for gx in -30..30 {
             for gz in -30..30 {
                 let (x, z) = (gx as f64 * 1.3, gz as f64 * 1.3);
@@ -356,10 +410,26 @@ mod tests {
     #[test]
     fn several_crater_layers_accumulate() {
         // Two crater modifiers (two layers) stack — deltas add.
-        let a = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.0, softness: 0.0, bowl_power: 4.0 }]);
-        let b = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.0, softness: 0.0, bowl_power: 4.0 }]);
+        let a = Craters::new(vec![Crater {
+            center: [0.0, 0.0],
+            radius: 10.0,
+            depth: 2.0,
+            rim_height: 0.0,
+            softness: 0.0,
+            bowl_power: 4.0,
+        }]);
+        let b = Craters::new(vec![Crater {
+            center: [0.0, 0.0],
+            radius: 10.0,
+            depth: 2.0,
+            rim_height: 0.0,
+            softness: 0.0,
+            bowl_power: 4.0,
+        }]);
         let one = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(a.clone()));
-        let two = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(a)).with(Arc::new(b));
+        let two = LayeredHeightSource::new(Arc::new(Flat(0.0)))
+            .with(Arc::new(a))
+            .with(Arc::new(b));
         assert!((two.height_at(0.0, 0.0) - 2.0 * one.height_at(0.0, 0.0)).abs() < 1e-9);
     }
 
@@ -372,7 +442,10 @@ mod tests {
         // Interior (inside the feather start): relief kept, sagitta subtracted.
         let d = 4000.0;
         let sag = (r * r - d * d).sqrt() - r;
-        assert!(sag < -4.0, "sagitta at 4 km must be metres-scale, got {sag}");
+        assert!(
+            sag < -4.0,
+            "sagitta at 4 km must be metres-scale, got {sag}"
+        );
         assert!((c.apply(d, 0.0, 50.0) - (50.0 + sag)).abs() < 1e-6);
         // Feathered edge: lands at sphere + edge_lift regardless of relief —
         // this is the invariant that meets the globe tiles.

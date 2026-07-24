@@ -1,9 +1,9 @@
 //! Terrain tile mesh generation and sampling.
 
-use bevy::prelude::*;
-use bevy::math::DVec3;
-use bevy_mesh::{Indices, PrimitiveTopology};
 use crate::quad_sphere::cube_to_sphere;
+use bevy::math::DVec3;
+use bevy::prelude::*;
+use bevy_mesh::{Indices, PrimitiveTopology};
 
 /// Generate a mesh for a single QuadSphere tile.
 pub fn create_quadsphere_tile_mesh(
@@ -65,11 +65,19 @@ pub fn create_quadsphere_tile_mesh(
 
             // CCW for sides, CW for Top/Bottom
             if face == 2 || face == 3 {
-                indices.push(i0); indices.push(i2); indices.push(i1);
-                indices.push(i1); indices.push(i2); indices.push(i3);
+                indices.push(i0);
+                indices.push(i2);
+                indices.push(i1);
+                indices.push(i1);
+                indices.push(i2);
+                indices.push(i3);
             } else {
-                indices.push(i0); indices.push(i1); indices.push(i2);
-                indices.push(i1); indices.push(i3); indices.push(i2);
+                indices.push(i0);
+                indices.push(i1);
+                indices.push(i2);
+                indices.push(i1);
+                indices.push(i3);
+                indices.push(i2);
             }
         }
     }

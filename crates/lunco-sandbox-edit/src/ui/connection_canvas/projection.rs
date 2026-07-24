@@ -26,9 +26,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use lunco_canvas::{
-    empty_node_data, Edge, Node, Pos, Port, PortId, PortRef, Rect, Scene,
-};
+use lunco_canvas::{empty_node_data, Edge, Node, Port, PortId, PortRef, Pos, Rect, Scene};
 use lunco_usd_bevy::{SdfPath, StageView, UsdRead};
 
 /// Node kind id registered in the canvas `VisualRegistry`.
@@ -446,8 +444,9 @@ mod tests {
             .map(|(_, n)| n)
             .expect("Amp node");
         assert!(
-            amp.ports.iter().any(|p| p.id.as_str() == "signal"
-                && p.kind.as_str() == "input"),
+            amp.ports
+                .iter()
+                .any(|p| p.id.as_str() == "signal" && p.kind.as_str() == "input"),
             "sink must expose the wired input port"
         );
     }
@@ -480,10 +479,7 @@ mod tests {
     /// are the only nodes.
     #[test]
     fn joint_becomes_edge_between_bodies() {
-        let nodes = vec![
-            prim("/A", &[], &[], true),
-            prim("/B", &[], &[], true),
-        ];
+        let nodes = vec![prim("/A", &[], &[], true), prim("/B", &[], &[], true)];
         let wires = vec![Wire {
             kind: WireKind::Joint,
             source_path: "/A".to_string(),

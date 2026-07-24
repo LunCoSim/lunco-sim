@@ -5,8 +5,8 @@
 //!
 //! Usage: cargo run -p lunco-usd --example variant_probe -- <scene.usda> [set]
 
-use lunco_usd::document::{LayerId, UsdDocument, UsdOp};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
+use lunco_usd::document::{LayerId, UsdDocument, UsdOp};
 use lunco_usd_bevy::{CanonicalStage, UsdRead};
 use openusd::sdf::Path as SdfPath;
 
@@ -112,7 +112,9 @@ fn discover_variants(src: &str, set: &str) -> Vec<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let scene = args.get(1).expect("usage: variant_probe <scene.usda> [variantSet]");
+    let scene = args
+        .get(1)
+        .expect("usage: variant_probe <scene.usda> [variantSet]");
     let set = args.get(2).map(String::as_str).unwrap_or("terrain");
     let src = std::fs::read_to_string(scene).expect("read scene");
 
@@ -136,7 +138,10 @@ fn main() {
         .join(".variant_probe");
     let _ = std::fs::remove_dir_all(&probe_dir);
     std::fs::create_dir_all(&probe_dir).expect("probe dir");
-    for entry in std::fs::read_dir(scene_dir).expect("read scene dir").flatten() {
+    for entry in std::fs::read_dir(scene_dir)
+        .expect("read scene dir")
+        .flatten()
+    {
         let p = entry.path();
         if p.extension().is_some_and(|e| e == "usda" || e == "usd") {
             let dest = probe_dir.join(p.file_name().unwrap());

@@ -52,12 +52,11 @@ use tiff::tags::Tag;
 // projection-parameter keys below are not in its constant set, so they are spelled
 // out here against the spec.
 use geotiff_core::geokeys::{
-    GEOG_ANGULAR_UNITS as KEY_GEOG_ANGULAR_UNITS, GEOGRAPHIC_TYPE as KEY_GEOG_TYPE,
+    GEOGRAPHIC_TYPE as KEY_GEOG_TYPE, GEOG_ANGULAR_UNITS as KEY_GEOG_ANGULAR_UNITS,
     GEOG_CITATION as KEY_GEOG_CITATION, GT_CITATION as KEY_GT_CITATION,
-    GT_MODEL_TYPE as KEY_GT_MODEL_TYPE,
-    GT_RASTER_TYPE as KEY_GT_RASTER_TYPE, PROJECTED_CS_TYPE as KEY_PROJECTED_CS_TYPE,
-    PROJECTION as KEY_PROJECTION, PROJ_COORD_TRANS as KEY_PROJ_COORD_TRANS,
-    PROJ_LINEAR_UNITS as KEY_PROJ_LINEAR_UNITS,
+    GT_MODEL_TYPE as KEY_GT_MODEL_TYPE, GT_RASTER_TYPE as KEY_GT_RASTER_TYPE,
+    PROJECTED_CS_TYPE as KEY_PROJECTED_CS_TYPE, PROJECTION as KEY_PROJECTION,
+    PROJ_COORD_TRANS as KEY_PROJ_COORD_TRANS, PROJ_LINEAR_UNITS as KEY_PROJ_LINEAR_UNITS,
 };
 const KEY_GEOG_SEMI_MAJOR: u16 = 2057;
 const KEY_GEOG_SEMI_MINOR: u16 = 2058;
@@ -256,7 +255,10 @@ where
         KEY_PROJ_COORD_TRANS,
         GeoKeyValue::Short(COORD_TRANS_EQUIRECTANGULAR),
     );
-    keys.set(KEY_PROJ_LINEAR_UNITS, GeoKeyValue::Short(LINEAR_UNITS_METRE));
+    keys.set(
+        KEY_PROJ_LINEAR_UNITS,
+        GeoKeyValue::Short(LINEAR_UNITS_METRE),
+    );
     keys.set(
         KEY_PROJ_STD_PARALLEL1,
         GeoKeyValue::Double(vec![tf.center_lat_deg]),
@@ -467,7 +469,10 @@ mod tests {
     #[test]
     fn float_max_sentinel_is_nodata_even_when_undeclared() {
         let esri: f64 = -3.4028226550889045e38;
-        assert!(esri.is_finite(), "the whole problem: the sentinel is finite");
+        assert!(
+            esri.is_finite(),
+            "the whole problem: the sentinel is finite"
+        );
         assert!(nodata_to_nan(esri, None).is_nan());
         assert!(nodata_to_nan(f64::from(f32::MAX), None).is_nan());
     }
@@ -553,8 +558,14 @@ mod tests {
             (got.pixel_size_m - want.pixel_size_m).abs() < 1e-9,
             "pixel size: {got:?}"
         );
-        assert!((got.origin_x_m - want.origin_x_m).abs() < 1e-9, "origin x: {got:?}");
-        assert!((got.origin_y_m - want.origin_y_m).abs() < 1e-9, "origin y: {got:?}");
+        assert!(
+            (got.origin_x_m - want.origin_x_m).abs() < 1e-9,
+            "origin x: {got:?}"
+        );
+        assert!(
+            (got.origin_y_m - want.origin_y_m).abs() < 1e-9,
+            "origin y: {got:?}"
+        );
         assert!(
             (got.body_radius_m - want.body_radius_m).abs() < 1e-6,
             "body radius: {got:?}"

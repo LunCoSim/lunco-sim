@@ -6,8 +6,8 @@
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_cosim::*;
 use lunco_core::ports::PortRegistry;
+use lunco_cosim::*;
 
 /// A standalone port registry carrying the engine's builtin backends, so a test
 /// can list/read/write ports without standing up a full `CoSimPlugin`. Mirrors
@@ -71,15 +71,27 @@ fn test_avian_body_ports_listed() {
         ))
         .id();
 
-    let names: Vec<String> = ports().entity_ports(app.world(), e)
+    let names: Vec<String> = ports()
+        .entity_ports(app.world(), e)
         .into_iter()
         .map(|p| p.name)
         .collect();
     for expected in [
-        "position_x", "position_y", "position_z", "height", "velocity_x",
-        "velocity_y", "velocity_z", "force_x", "force_y", "force_z",
+        "position_x",
+        "position_y",
+        "position_z",
+        "height",
+        "velocity_x",
+        "velocity_y",
+        "velocity_z",
+        "force_x",
+        "force_y",
+        "force_z",
     ] {
-        assert!(names.contains(&expected.to_string()), "missing port {expected}");
+        assert!(
+            names.contains(&expected.to_string()),
+            "missing port {expected}"
+        );
     }
 }
 
@@ -124,17 +136,23 @@ fn test_propagate_sim_component_to_sim_component() {
     let mut app = build_test_app();
 
     // Create two SimComponent entities
-    let source = app.world_mut().spawn(SimComponent {
-        model_name: "Source".into(),
-        outputs: [("netForce".into(), 49.0)].into_iter().collect(),
-        ..default()
-    }).id();
+    let source = app
+        .world_mut()
+        .spawn(SimComponent {
+            model_name: "Source".into(),
+            outputs: [("netForce".into(), 49.0)].into_iter().collect(),
+            ..default()
+        })
+        .id();
 
-    let target = app.world_mut().spawn(SimComponent {
-        model_name: "Target".into(),
-        inputs: [("force_in".into(), 0.0)].into_iter().collect(),
-        ..default()
-    }).id();
+    let target = app
+        .world_mut()
+        .spawn(SimComponent {
+            model_name: "Target".into(),
+            inputs: [("force_in".into(), 0.0)].into_iter().collect(),
+            ..default()
+        })
+        .id();
 
     // Create wire: Source.netForce → Target.force_in
     app.world_mut().spawn(SimConnection {
@@ -147,10 +165,9 @@ fn test_propagate_sim_component_to_sim_component() {
     });
 
     // Run wire propagation
-    app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_connections,
-    )
-    .unwrap();
+    app.world_mut()
+        .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
+        .unwrap();
 
     // Verify value propagated
     let comp = app.world().get::<SimComponent>(target).unwrap();
@@ -161,17 +178,23 @@ fn test_propagate_sim_component_to_sim_component() {
 fn test_propagate_with_scale() {
     let mut app = build_test_app();
 
-    let source = app.world_mut().spawn(SimComponent {
-        model_name: "Source".into(),
-        outputs: [("current".into(), 10.0)].into_iter().collect(),
-        ..default()
-    }).id();
+    let source = app
+        .world_mut()
+        .spawn(SimComponent {
+            model_name: "Source".into(),
+            outputs: [("current".into(), 10.0)].into_iter().collect(),
+            ..default()
+        })
+        .id();
 
-    let target = app.world_mut().spawn(SimComponent {
-        model_name: "Target".into(),
-        inputs: [("current_in".into(), 0.0)].into_iter().collect(),
-        ..default()
-    }).id();
+    let target = app
+        .world_mut()
+        .spawn(SimComponent {
+            model_name: "Target".into(),
+            inputs: [("current_in".into(), 0.0)].into_iter().collect(),
+            ..default()
+        })
+        .id();
 
     app.world_mut().spawn(SimConnection {
         start_element: source,
@@ -182,10 +205,9 @@ fn test_propagate_with_scale() {
         offset: 0.0,
     });
 
-    app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_connections,
-    )
-    .unwrap();
+    app.world_mut()
+        .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
+        .unwrap();
 
     let comp = app.world().get::<SimComponent>(target).unwrap();
     assert_eq!(comp.inputs["current_in"], 5.0); // 10.0 * 0.5
@@ -199,16 +221,21 @@ fn test_propagate_avian_to_sim_component() {
 
     // Spawn a rigid body (auto-exposes the `height` output from Position) with a
     // SimComponent that has a `height` input.
-    let entity = app.world_mut().spawn((
-        RigidBody::Dynamic,
-        Position(DVec3::new(0.0, 1200.0, 0.0)),
-        LinearVelocity(DVec3::new(0.0, 3.2, 0.0)),
-        SimComponent {
-            model_name: "Balloon".into(),
-            inputs: [("height".into(), 0.0), ("velocity".into(), 0.0)].into_iter().collect(),
-            ..default()
-        },
-    )).id();
+    let entity = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Position(DVec3::new(0.0, 1200.0, 0.0)),
+            LinearVelocity(DVec3::new(0.0, 3.2, 0.0)),
+            SimComponent {
+                model_name: "Balloon".into(),
+                inputs: [("height".into(), 0.0), ("velocity".into(), 0.0)]
+                    .into_iter()
+                    .collect(),
+                ..default()
+            },
+        ))
+        .id();
 
     // Wire: avian height output → SimComponent height input (same entity).
     app.world_mut().spawn(SimConnection {
@@ -222,7 +249,8 @@ fn test_propagate_avian_to_sim_component() {
 
     // Propagate — the source `height` is read live from Position (no snapshot
     // system needed); avian state is stable until a physics step runs.
-    app.world_mut().run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
+    app.world_mut()
+        .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
         .unwrap();
 
     let comp = app.world().get::<SimComponent>(entity).unwrap();
@@ -242,7 +270,9 @@ fn test_rigid_body_exposes_ports_by_presence() {
 
     let plain = app.world_mut().spawn_empty().id();
     assert!(
-        ports().read_output_port(app.world(), plain, "height").is_none(),
+        ports()
+            .read_output_port(app.world(), plain, "height")
+            .is_none(),
         "a non-body entity exposes no avian ports"
     );
 
@@ -266,14 +296,16 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
     let mut app = build_test_app();
 
     // Entity with SimComponent output
-    let source = app.world_mut().spawn(SimComponent {
-        model_name: "Modelica".into(),
-        outputs: [
-            ("netForce".into(), 30.0),
-            ("buoyancy".into(), 20.0),
-        ].into_iter().collect(),
-        ..default()
-    }).id();
+    let source = app
+        .world_mut()
+        .spawn(SimComponent {
+            model_name: "Modelica".into(),
+            outputs: [("netForce".into(), 30.0), ("buoyancy".into(), 20.0)]
+                .into_iter()
+                .collect(),
+            ..default()
+        })
+        .id();
 
     let target = app.world_mut().spawn(RigidBody::Dynamic).id();
 
@@ -297,9 +329,9 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
 
     // Propagate — both wires sum into the force_y input, which lands in
     // `PendingForces.f.y` (readable through the resolver's input side).
-    app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_connections,
-    ).unwrap();
+    app.world_mut()
+        .run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
+        .unwrap();
 
     assert_eq!(
         ports().read_input_port(app.world(), target, "force_y"),
@@ -309,9 +341,9 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
 
     // apply_pending_forces drains the accumulator into avian and zeroes it, so
     // accumulation starts fresh next tick.
-    app.world_mut().run_system_cached(
-        lunco_cosim::avian::apply_pending_forces,
-    ).unwrap();
+    app.world_mut()
+        .run_system_cached(lunco_cosim::avian::apply_pending_forces)
+        .unwrap();
 
     assert_eq!(
         ports().read_input_port(app.world(), target, "force_y"),
@@ -331,25 +363,28 @@ fn test_suggestions_for_balloon_model() {
         "Balloon",
         vec!["height".into(), "velocity".into(), "g".into()].into_iter(),
         vec!["netForce".into(), "volume".into(), "buoyancy".into()].into_iter(),
-        true,  // has_forces
-        true,  // has_collider
+        true, // has_forces
+        true, // has_collider
     );
 
     // Should suggest force connections for netForce, buoyancy
-    let force_suggestions: Vec<_> = suggestions.iter()
+    let force_suggestions: Vec<_> = suggestions
+        .iter()
         .filter(|s| s.end_connector == "force_y")
         .collect();
     assert!(force_suggestions.len() >= 2);
 
     // Should suggest collider for volume
-    let collider_suggestions: Vec<_> = suggestions.iter()
+    let collider_suggestions: Vec<_> = suggestions
+        .iter()
         .filter(|s| s.end_connector == "collider")
         .collect();
     assert_eq!(collider_suggestions.len(), 1);
 
     // Should suggest gravity for g — sourced from the local-gravity output
     // (populated by lunco-environment), not a hardcoded constant.
-    let gravity_suggestions: Vec<_> = suggestions.iter()
+    let gravity_suggestions: Vec<_> = suggestions
+        .iter()
         .filter(|s| s.start_connector == lunco_cosim::GRAVITY_SOURCE_CONNECTOR)
         .collect();
     assert_eq!(gravity_suggestions.len(), 1);
@@ -383,18 +418,22 @@ fn test_collider_sync_from_volume() {
     let mut app = build_test_app();
 
     let radius = 1.0;
-    let entity = app.world_mut().spawn((
-        RigidBody::Dynamic,
-        Collider::sphere(radius),
-        SimComponent {
-            model_name: "Balloon".into(),
-            outputs: [("volume".into(), 100.0)].into_iter().collect(),
-            ..default()
-        },
-    )).id();
+    let entity = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(radius),
+            SimComponent {
+                model_name: "Balloon".into(),
+                outputs: [("volume".into(), 100.0)].into_iter().collect(),
+                ..default()
+            },
+        ))
+        .id();
 
     // Run collider sync
-    app.world_mut().run_system_cached(lunco_cosim::systems::collider::sync_collider)
+    app.world_mut()
+        .run_system_cached(lunco_cosim::systems::collider::sync_collider)
         .unwrap();
 
     // Volume 100.0 → radius = cbrt(3*100/(4π)) ≈ 2.879
@@ -405,6 +444,8 @@ fn test_collider_sync_from_volume() {
 
     // Verify the volume → radius calculation is correct
     let expected_radius = ((3.0 * 100.0) / (4.0 * std::f64::consts::PI)).cbrt();
-    assert!(expected_radius > 2.0 && expected_radius < 3.0,
-        "Expected radius ~2.879, got {expected_radius}");
+    assert!(
+        expected_radius > 2.0 && expected_radius < 3.0,
+        "Expected radius ~2.879, got {expected_radius}"
+    );
 }

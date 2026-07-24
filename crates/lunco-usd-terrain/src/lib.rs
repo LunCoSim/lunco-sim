@@ -146,9 +146,11 @@ impl lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_> {
         // `TryFrom<Value>` is strict per variant, so probe both authored widths:
         // `int64` (the Inspector authors seeds full-range) and hand-authored `int`.
         let name = self.attr(name);
-        self.reader
-            .scalar::<i64>(&self.sdf, &name)
-            .or_else(|| self.reader.scalar::<i32>(&self.sdf, &name).map(|v| v as i64))
+        self.reader.scalar::<i64>(&self.sdf, &name).or_else(|| {
+            self.reader
+                .scalar::<i32>(&self.sdf, &name)
+                .map(|v| v as i64)
+        })
     }
     fn get_string(&self, name: &str) -> Option<String> {
         // Textual USD types only — `lunco:layer:mode` is a `token`. A file reference
@@ -188,7 +190,10 @@ fn parse_terrain_layer_stack(
     let mut stack = lunco_terrain_surface::TerrainLayerStack::default();
     // Runtime edit prims (`lunco:layer = "edit"`) — one prim per edit — aggregate into
     // the single `EditsLayer` (the runtime projection tier), folded on top at the end.
-    let mut edits: Vec<(lunco_terrain_surface::LayerId, lunco_terrain_surface::EditKind)> = Vec::new();
+    let mut edits: Vec<(
+        lunco_terrain_surface::LayerId,
+        lunco_terrain_surface::EditKind,
+    )> = Vec::new();
     // Whether the scene authors its OWN overzoom prim (even a zeroed/disabled one
     // counts — that's an explicit opt-out of the default sub-DEM detail).
     let mut authored_overzoom = false;
@@ -204,14 +209,23 @@ fn parse_terrain_layer_stack(
     for child in children {
         // An edit prim (`LunCoTerrainEditAPI`)? Aggregate into the single edits layer,
         // keyed by its prim path (its stable identity).
-        let edit_attrs = UsdLayerAttrs { reader, sdf: child.clone(), ns: NS_EDIT };
-        if let Some(edit) =
-            lunco_terrain_surface::parse_edit(lunco_terrain_surface::LayerId::new(child.as_str()), &edit_attrs)
-        {
+        let edit_attrs = UsdLayerAttrs {
+            reader,
+            sdf: child.clone(),
+            ns: NS_EDIT,
+        };
+        if let Some(edit) = lunco_terrain_surface::parse_edit(
+            lunco_terrain_surface::LayerId::new(child.as_str()),
+            &edit_attrs,
+        ) {
             edits.push(edit);
             continue;
         }
-        let attrs = UsdLayerAttrs { reader, sdf: child.clone(), ns: NS_LAYER };
+        let attrs = UsdLayerAttrs {
+            reader,
+            sdf: child.clone(),
+            ns: NS_LAYER,
+        };
         // Otherwise a normal composable layer prim (`lunco:layer = …`).
         let Some(layer_type) = reader.text(&child, "lunco:layer") else {
             continue;
@@ -237,7 +251,10 @@ fn parse_terrain_layer_stack(
     // and reads as flat plastic one step from the camera. Authoring an `overzoom`
     // prim — including a zeroed one — takes over from the default.
     if !authored_overzoom {
-        stack.push_layer("overzoom/default", lunco_terrain_surface::default_overzoom_layer());
+        stack.push_layer(
+            "overzoom/default",
+            lunco_terrain_surface::default_overzoom_layer(),
+        );
     }
     if !edits.is_empty() {
         stack.push_layer(
@@ -297,8 +314,7 @@ fn sync_obstacle_spec_from_usd(
                 spec.rocks.density = density;
                 let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
                 let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
-                spec.rocks.size =
-                    SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6);
+                spec.rocks.size = SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6);
                 spec.rocks.dynamic_fraction = a.get_f32("dynamicFrac").unwrap_or(0.0);
             }
             _ => {}
@@ -345,12 +361,17 @@ fn refresh_layered_terrain_layers(
         if !modified.contains(&prim_path.stage_handle.id()) {
             continue;
         }
-        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
+        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
+            continue;
+        };
         // Read the LIVE canonical stage (reflects the in-place edit that raised
         // this Modified event).
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
-            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+            if let Some(recipe) = stages
+                .get(&prim_path.stage_handle)
+                .and_then(|a| a.recipe.clone())
+            {
                 canonical.get_or_build(id, &recipe);
             }
         }
@@ -405,13 +426,22 @@ fn seed_edit_seq_past_children(
     terrain_path: &str,
     seq: &mut TerrainEditPrimSeq,
 ) {
-    let Some(host) = registry.host(doc) else { return };
-    let Ok(sdf) = openusd::sdf::Path::new(terrain_path) else { return };
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
+    let Ok(sdf) = openusd::sdf::Path::new(terrain_path) else {
+        return;
+    };
     let composed = host.document().composed_arc();
     for child in composed.prim_children(&sdf) {
-        let Some(name) = child.as_str().rsplit('/').next() else { continue };
+        let Some(name) = child.as_str().rsplit('/').next() else {
+            continue;
+        };
         for prefix in ["edit_", "rock_"] {
-            if let Some(n) = name.strip_prefix(prefix).and_then(|s| s.parse::<u64>().ok()) {
+            if let Some(n) = name
+                .strip_prefix(prefix)
+                .and_then(|s| s.parse::<u64>().ok())
+            {
                 seq.0 = seq.0.max(n + 1);
             }
         }
@@ -428,7 +458,10 @@ fn seed_edit_seq_past_children(
 /// so exactly one path fires per terrain.
 fn author_terrain_edit(
     kind: lunco_terrain_surface::EditKind,
-    terrains: &Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    terrains: &Query<
+        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        With<lunco_terrain_surface::DemTerrainSurface>,
+    >,
     registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
     seq: &mut TerrainEditPrimSeq,
     journal: Option<&lunco_doc_bevy::JournalResource>,
@@ -467,7 +500,9 @@ fn author_terrain_edit(
             });
         }
 
-        let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>| {
+        let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<
+            lunco_usd::document::UsdDocument,
+        >| {
             for op in ops {
                 if let Err(e) = registry.apply(doc, op) {
                     warn!("[terrain-edit] {edit_prim} op rejected — edit may be partial: {e:?}");
@@ -483,7 +518,10 @@ fn author_terrain_edit(
 
 fn on_brush_terrain_authored(
     trigger: On<lunco_terrain_surface::BrushTerrain>,
-    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    terrains: Query<
+        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        With<lunco_terrain_surface::DemTerrainSurface>,
+    >,
     registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -508,7 +546,10 @@ fn on_brush_terrain_authored(
 
 fn on_flatten_terrain_authored(
     trigger: On<lunco_terrain_surface::FlattenTerrain>,
-    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    terrains: Query<
+        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        With<lunco_terrain_surface::DemTerrainSurface>,
+    >,
     registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -533,7 +574,10 @@ fn on_flatten_terrain_authored(
 
 fn on_place_crater_authored(
     trigger: On<lunco_terrain_surface::PlaceCrater>,
-    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    terrains: Query<
+        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        With<lunco_terrain_surface::DemTerrainSurface>,
+    >,
     registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -561,7 +605,10 @@ fn on_place_crater_authored(
 /// the `rock` parser — a single addressable boulder, removable by its prim path.
 fn on_place_rock_authored(
     trigger: On<lunco_terrain_surface::PlaceRock>,
-    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    terrains: Query<
+        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        With<lunco_terrain_surface::DemTerrainSurface>,
+    >,
     registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -589,7 +636,11 @@ fn on_place_rock_authored(
             ("lunco:layer", "token", "\"rock\"".to_string()),
             (&ns_attr(NS_LAYER, "x"), "float", format!("{}", ev.x)),
             (&ns_attr(NS_LAYER, "z"), "float", format!("{}", ev.z)),
-            (&ns_attr(NS_LAYER, "size"), "float", format!("{}", ev.size_or_default())),
+            (
+                &ns_attr(NS_LAYER, "size"),
+                "float",
+                format!("{}", ev.size_or_default()),
+            ),
             (
                 &ns_attr(NS_LAYER, "seed"),
                 "int64",
@@ -608,7 +659,9 @@ fn on_place_rock_authored(
 
         // ONE change set: a rock is one undo step, not six. (It used to apply each op
         // on its own, so undo peeled a rock apart attribute by attribute.)
-        let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>| {
+        let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<
+            lunco_usd::document::UsdDocument,
+        >| {
             for op in ops {
                 if let Err(e) = registry.apply(doc, op) {
                     warn!("[terrain-edit] {rock_prim} op rejected — rock may be partial: {e:?}");
@@ -635,7 +688,10 @@ fn on_remove_terrain_edit_authored(
     for td in &terrains {
         let _ = registry.apply(
             lunco_doc::DocumentId::new(td.doc),
-            lunco_usd::UsdOp::RemovePrim { edit_target: lunco_usd::LayerId::runtime(), path: path.clone() },
+            lunco_usd::UsdOp::RemovePrim {
+                edit_target: lunco_usd::LayerId::runtime(),
+                path: path.clone(),
+            },
         );
     }
 }
@@ -643,7 +699,10 @@ fn on_remove_terrain_edit_authored(
 fn cache_terrain_document(
     terrains: Query<
         (Entity, &lunco_usd::UsdPrimPath),
-        (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainDocument>),
+        (
+            With<lunco_terrain_surface::DemTerrainSurface>,
+            Without<TerrainDocument>,
+        ),
     >,
     twin_scenes: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
     asset_server: Res<AssetServer>,
@@ -654,15 +713,20 @@ fn cache_terrain_document(
         // `twin://<name>/<rel>` asset path. Both twin default scenes (`--scene` /
         // workspace Twin) and live-imported (`OpenFile`) scenes are doc-backed twin
         // scenes now, so this one path covers both.
-        let doc = asset_server.get_path(terrain_path.stage_handle.id()).and_then(|asset_path| {
-            let rel_path = asset_path.path().to_string_lossy();
-            let (name, rel) = lunco_assets::split_twin_rel(&rel_path)?;
-            twin_scenes.doc_for(name, rel)
-        });
+        let doc = asset_server
+            .get_path(terrain_path.stage_handle.id())
+            .and_then(|asset_path| {
+                let rel_path = asset_path.path().to_string_lossy();
+                let (name, rel) = lunco_assets::split_twin_rel(&rel_path)?;
+                twin_scenes.doc_for(name, rel)
+            });
         let Some(doc) = doc else {
             continue; // not mounted yet (retry next frame), or document-free.
         };
-        info!("[terrain-doc] terrain {entity} → doc {} (DocBackedTerrain attached)", doc.0);
+        info!(
+            "[terrain-doc] terrain {entity} → doc {} (DocBackedTerrain attached)",
+            doc.0
+        );
         // `LiveRebuildExempt`: an authored crater/rock/edit is an attribute-only doc
         // change; without this the twin projection would despawn + re-instantiate the
         // terrain (a full DEM re-read) per edit. The exempt marker suppresses that
@@ -721,7 +785,9 @@ fn refresh_docbacked_terrain_from_doc(
     let Some(registry) = registry else { return };
     for (entity, prim_path, td, tracker, has_base_grid) in &mut terrains {
         let doc = lunco_doc::DocumentId::new(td.doc);
-        let Some(host) = registry.host(doc) else { continue };
+        let Some(host) = registry.host(doc) else {
+            continue;
+        };
         let cur_gen = host.document().generation();
         match tracker {
             Some(mut g) => {
@@ -749,15 +815,21 @@ fn refresh_docbacked_terrain_from_doc(
                 if has_runtime_override && !has_base_grid {
                     continue; // retry next frame, once the base grid is built
                 }
-                commands.entity(entity).try_insert(TerrainDocGeneration(cur_gen));
+                commands
+                    .entity(entity)
+                    .try_insert(TerrainDocGeneration(cur_gen));
                 if !has_runtime_override {
                     continue; // nothing persisted to re-apply
                 }
                 // fall through: re-parse composed + insert stack → one startup re-bake
             }
         }
-        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
-        let Some(cs) = stages.get(prim_path.stage_handle.id()) else { continue };
+        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
+            continue;
+        };
+        let Some(cs) = stages.get(prim_path.stage_handle.id()) else {
+            continue;
+        };
         let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &parser);
         // Despawn-safe: a scene reload can despawn this terrain between queue
         // time and apply_deferred — no-op instead of panicking.
@@ -798,7 +870,10 @@ fn author_layer_attr(
 /// (`Without<DocBackedTerrain>`), so exactly one path fires.
 fn on_obstacle_spec_authored(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
-    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    terrains: Query<
+        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        With<lunco_terrain_surface::DemTerrainSurface>,
+    >,
     registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
 ) {
     let Some(mut registry) = registry else { return };
@@ -809,16 +884,28 @@ fn on_obstacle_spec_authored(
     // unchecked-but-nonzero layer re-parses as still-on and stays visible. Author the
     // EFFECTIVE density (0 when disabled); the live in-memory spec keeps the real value,
     // so re-checking restores it within the session.
-    let crater_density = if spec.craters.enabled { spec.craters.density } else { 0.0 };
-    let rock_density = if spec.rocks.enabled { spec.rocks.density } else { 0.0 };
+    let crater_density = if spec.craters.enabled {
+        spec.craters.density
+    } else {
+        0.0
+    };
+    let rock_density = if spec.rocks.enabled {
+        spec.rocks.density
+    } else {
+        0.0
+    };
     for (prim_path, td) in &terrains {
-        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
+        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
+            continue;
+        };
         let doc = lunco_doc::DocumentId::new(td.doc);
         // Enumerate the terrain's child layer prims from the composed (base ⊕ runtime)
         // document — the stage asset no longer carries a flattened reader. `composed()`
         // is owned, so the registry borrow ends here and `author_layer_attr` below can
         // take it mutably.
-        let Some(composed) = registry.host(doc).map(|h| h.document().composed()) else { continue };
+        let Some(composed) = registry.host(doc).map(|h| h.document().composed()) else {
+            continue;
+        };
         let layers: Vec<(String, String)> = composed
             .prim_children(&sdf)
             .into_iter()
@@ -832,25 +919,116 @@ fn on_obstacle_spec_authored(
             match layer_type.as_str() {
                 "craters" => {
                     info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, spec.seed, td.doc);
-                    author_layer_attr(&mut registry, doc, &path, "density", "float", crater_density.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.craters.size.mode.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "sizeMin", "float", spec.craters.size.min.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "sizeMax", "float", spec.craters.size.max.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "depthRatio", "float", spec.craters.depth_ratio.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "rimRatio", "float", spec.craters.rim_height_ratio.to_string());
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "density",
+                        "float",
+                        crater_density.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "sizeMode",
+                        "float",
+                        spec.craters.size.mode.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "sizeMin",
+                        "float",
+                        spec.craters.size.min.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "sizeMax",
+                        "float",
+                        spec.craters.size.max.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "depthRatio",
+                        "float",
+                        spec.craters.depth_ratio.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "rimRatio",
+                        "float",
+                        spec.craters.rim_height_ratio.to_string(),
+                    );
                     // The u64 seed bit-casts through int64; `parse_crater_layer` casts back
                     // (`s as u64`), so the full Reseed range round-trips. Without this attr
                     // every doc-driven re-parse falls back to the parser default and the
                     // crater layout silently flips between the resource seed and 0xC0FFEE.
-                    author_layer_attr(&mut registry, doc, &path, "seed", "int64", (spec.seed as i64).to_string());
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "seed",
+                        "int64",
+                        (spec.seed as i64).to_string(),
+                    );
                 }
                 "rocks" => {
-                    author_layer_attr(&mut registry, doc, &path, "density", "float", rock_density.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.rocks.size.mode.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "sizeMin", "float", spec.rocks.size.min.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "sizeMax", "float", spec.rocks.size.max.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "dynamicFrac", "float", spec.rocks.dynamic_fraction.to_string());
-                    author_layer_attr(&mut registry, doc, &path, "seed", "int64", (spec.seed as i64).to_string());
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "density",
+                        "float",
+                        rock_density.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "sizeMode",
+                        "float",
+                        spec.rocks.size.mode.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "sizeMin",
+                        "float",
+                        spec.rocks.size.min.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "sizeMax",
+                        "float",
+                        spec.rocks.size.max.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "dynamicFrac",
+                        "float",
+                        spec.rocks.dynamic_fraction.to_string(),
+                    );
+                    author_layer_attr(
+                        &mut registry,
+                        doc,
+                        &path,
+                        "seed",
+                        "int64",
+                        (spec.seed as i64).to_string(),
+                    );
                 }
                 _ => {}
             }
@@ -887,7 +1065,10 @@ fn bridge_usd_dem_terrain(
         // — the source of truth. Wait until it is available before reading attrs.
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
-            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+            if let Some(recipe) = stages
+                .get(&prim_path.stage_handle)
+                .and_then(|a| a.recipe.clone())
+            {
                 canonical.get_or_build(id, &recipe);
             }
         }
@@ -900,9 +1081,9 @@ fn bridge_usd_dem_terrain(
             continue;
         };
         commands.entity(entity).try_insert(DemBridged); // examined — don't re-scan
-        // Newest pass wins: retire any prior terrain realized for this same
-        // authored prim (same path + same stage asset). Its LOD tiles, ring
-        // tiles, and scatter are reaped by their respective orphan reapers.
+                                                        // Newest pass wins: retire any prior terrain realized for this same
+                                                        // authored prim (same path + same stage asset). Its LOD tiles, ring
+                                                        // tiles, and scatter are reaped by their respective orphan reapers.
         for (prior, prior_path) in &q_prior_terrains {
             if prior != entity
                 && prior_path.path == prim_path.path
@@ -942,8 +1123,14 @@ fn bridge_usd_dem_terrain(
             .or_else(|| scene_dir.clone());
         let cs = canonical.get(id).expect("checked above");
         bridge_dem_prim_read(
-            &cs.view(), entity, prim_path, &sdf, scene_root.as_deref(),
-            &registry, obstacle_spec.bypass_change_detection(), &mut commands,
+            &cs.view(),
+            entity,
+            prim_path,
+            &sdf,
+            scene_root.as_deref(),
+            &registry,
+            obstacle_spec.bypass_change_detection(),
+            &mut commands,
         );
     }
 }
@@ -999,14 +1186,16 @@ fn bridge_dem_prim_read(
         ns: NS_LAYER,
     });
     let attr_f32 = |name: &str| -> Option<f32> { dem_attrs.as_ref()?.get_f32(name) };
-    let attr_i32 = |name: &str| -> Option<i32> {
-        dem_attrs.as_ref()?.get_i64(name).map(|v| v as i32)
-    };
+    let attr_i32 =
+        |name: &str| -> Option<i32> { dem_attrs.as_ref()?.get_i64(name).map(|v| v as i32) };
     let attr_bool = |name: &str| -> Option<bool> { dem_attrs.as_ref()?.get_bool(name) };
 
     let rel = dem_attrs.as_ref().and_then(|a| a.get_asset("demSource"));
     let Some(rel) = rel else {
-        warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
+        warn!(
+            "[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource",
+            prim_path.path
+        );
         return;
     };
     // Resolve the DEM source to a byte-readable URI.
@@ -1084,9 +1273,17 @@ fn bridge_dem_prim_read(
     // `lunco:terrain:lodFrozen` — a scripted shot pins its LOD once loaded rather
     // than re-selecting under a moving camera. On the SURFACE prim, per the
     // namespace split above (`lunco:terrain:*` here, `lunco:layer:*` on layers).
-    if reader.scalar::<bool>(sdf, "lunco:terrain:lodFrozen").unwrap_or(false) {
-        commands.entity(entity).try_insert(lunco_terrain_surface::LodFrozen);
-        info!("[usd-dem] {} — LOD selection frozen after first load", prim_path.path);
+    if reader
+        .scalar::<bool>(sdf, "lunco:terrain:lodFrozen")
+        .unwrap_or(false)
+    {
+        commands
+            .entity(entity)
+            .try_insert(lunco_terrain_surface::LodFrozen);
+        info!(
+            "[usd-dem] {} — LOD selection frozen after first load",
+            prim_path.path
+        );
     }
     // Georeference (#5): the `lunco:anchor:*` lat/lon/height anchor + the stage
     // `metersPerUnit`. The terrain math is metres, so a non-1 `metersPerUnit`
@@ -1125,7 +1322,10 @@ fn bridge_dem_prim_read(
         commands.entity(entity).try_insert(georef);
         info!(
             "[usd-dem] georef: lat {:.4} lon {:.4} height {:.1} m (mpu {})",
-            georef.center_lat_deg, georef.center_lon_deg, georef.anchor_height_m, georef.meters_per_unit
+            georef.center_lat_deg,
+            georef.center_lon_deg,
+            georef.anchor_height_m,
+            georef.meters_per_unit
         );
     }
     info!(
@@ -1209,7 +1409,9 @@ mod dem_bridge_tests {
         let scene = dem_scene("    bool lunco:terrain:lodFrozen = true\n", "");
         let (world, e) = bridge(&scene);
         assert!(
-            world.get::<lunco_terrain_surface::DemTerrainRequest>(e).is_some(),
+            world
+                .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+                .is_some(),
             "dem terrain still projects a DemTerrainRequest"
         );
         assert!(
@@ -1223,7 +1425,9 @@ mod dem_bridge_tests {
         let scene = dem_scene("", "");
         let (world, e) = bridge(&scene);
         assert!(
-            world.get::<lunco_terrain_surface::DemTerrainRequest>(e).is_some(),
+            world
+                .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+                .is_some(),
             "the bridge ran (request attached)"
         );
         assert!(
@@ -1255,7 +1459,10 @@ mod dem_bridge_tests {
         let req = world
             .get::<lunco_terrain_surface::DemTerrainRequest>(e)
             .expect("request attached");
-        assert_eq!(req.half_window, 256.0, "windowM = side length ⇒ half_window = windowM/2");
+        assert_eq!(
+            req.half_window, 256.0,
+            "windowM = side length ⇒ half_window = windowM/2"
+        );
         assert_eq!(req.target_res, 128);
         assert!(
             req.uri.ends_with("site/heightmap.tif") && req.uri.starts_with("/twin/moonbase"),
@@ -1276,7 +1483,10 @@ mod dem_bridge_tests {
             .get::<lunco_terrain_surface::DemTerrainRequest>(e)
             .expect("request attached");
         assert!(!req.lod_viz);
-        assert!(!req.collider_ring, "unauthored colliderRing follows lodViz=false");
+        assert!(
+            !req.collider_ring,
+            "unauthored colliderRing follows lodViz=false"
+        );
     }
 
     #[test]
@@ -1290,7 +1500,10 @@ mod dem_bridge_tests {
         let req = world
             .get::<lunco_terrain_surface::DemTerrainRequest>(e)
             .expect("request attached");
-        assert!(req.collider_ring, "authored colliderRing=true overrides the lodViz-follow default");
+        assert!(
+            req.collider_ring,
+            "authored colliderRing=true overrides the lodViz-follow default"
+        );
     }
 
     #[test]
@@ -1331,7 +1544,9 @@ mod dem_bridge_tests {
     fn no_anchor_attrs_no_georef() {
         let (world, e) = bridge(&dem_scene("", ""));
         assert!(
-            world.get::<lunco_terrain_surface::TerrainGeoref>(e).is_none(),
+            world
+                .get::<lunco_terrain_surface::TerrainGeoref>(e)
+                .is_none(),
             "no authored anchor ⇒ no TerrainGeoref (the default is absence, not zeros)"
         );
     }
@@ -1342,7 +1557,9 @@ mod dem_bridge_tests {
         let scene = "#usda 1.0\n(\n    defaultPrim = \"Terrain\"\n)\n\
                      def Xform \"Terrain\"\n{\n    bool lunco:terrain:lodFrozen = true\n}\n";
         let (world, e) = bridge(scene);
-        assert!(world.get::<lunco_terrain_surface::DemTerrainRequest>(e).is_none());
+        assert!(world
+            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+            .is_none());
         assert!(
             world.get::<lunco_terrain_surface::LodFrozen>(e).is_none(),
             "lodFrozen on a non-terrain prim must not freeze anything"
@@ -1359,6 +1576,8 @@ mod dem_bridge_tests {
                      \x20   def Xform \"ground\"\n    {\n\
                      \x20       token lunco:layer = \"dem\"\n    }\n}\n";
         let (world, e) = bridge(scene);
-        assert!(world.get::<lunco_terrain_surface::DemTerrainRequest>(e).is_none());
+        assert!(world
+            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+            .is_none());
     }
 }

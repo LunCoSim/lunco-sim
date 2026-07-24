@@ -46,8 +46,6 @@ struct CraterFieldLayer {
     seed: u64,
 }
 
-
-
 impl TerrainLayer for CraterFieldLayer {
     fn id(&self) -> &'static str {
         "craters"
@@ -77,8 +75,11 @@ impl TerrainLayer for CraterFieldLayer {
 
         // Poison recovery: the cache holds pure content-keyed data, so a panic in
         // some other bake must not turn every later terrain build into a panic too.
-        if let Some(hit) =
-            CRATER_CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&content_key).cloned()
+        if let Some(hit) = CRATER_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&content_key)
+            .cloned()
         {
             return Some(hit);
         }
@@ -171,8 +172,9 @@ impl TerrainLayer for CraterFieldLayer {
         // Re-home ~15% of the small population near a large parent: range
         // 2–5 parent radii, azimuth in a narrow lobe per parent (→ chains),
         // size a few % of the parent, born degraded (shallow, soft).
-        let parents: Vec<usize> =
-            (0..craters.len()).filter(|&i| craters[i].radius >= 12.0).collect();
+        let parents: Vec<usize> = (0..craters.len())
+            .filter(|&i| craters[i].radius >= 12.0)
+            .collect();
         if !parents.is_empty() {
             let hash_sec1 = PrehashedFnv1a::new(self.seed, 0x5EC0_0001);
             let hash_sec2 = PrehashedFnv1a::new(self.seed, 0x5EC0_0002);
@@ -186,16 +188,14 @@ impl TerrainLayer for CraterFieldLayer {
                 if craters[i].radius >= 12.0 || hash_sec1.hash(i) >= 0.15 {
                     continue;
                 }
-                let pj = parents[(hash_sec2.hash(i) * parents.len() as f64)
-                    as usize
-                    % parents.len()];
+                let pj =
+                    parents[(hash_sec2.hash(i) * parents.len() as f64) as usize % parents.len()];
                 let parent = craters[pj];
                 let lobe = hash_sec3.hash(pj) * std::f64::consts::TAU;
                 let az = lobe + (hash_sec4.hash(i) - 0.5) * 0.9;
                 let range = parent.radius * (2.0 + 3.0 * hash_sec5.hash(i));
-                let radius = (parent.radius
-                    * (0.04 + 0.08 * hash_sec6.hash(i)))
-                .max(self.craters.size.min.max(0.5) as f64);
+                let radius = (parent.radius * (0.04 + 0.08 * hash_sec6.hash(i)))
+                    .max(self.craters.size.min.max(0.5) as f64);
                 let u = 0.45 + 0.5 * hash_sec7.hash(i);
                 let mut c = morph(radius, u, 0.8);
                 c.center = [
@@ -225,7 +225,10 @@ impl TerrainLayer for CraterFieldLayer {
     }
 
     fn stamp_spec(&self) -> Option<lunco_terrain_bake::StampSpec> {
-        Some(lunco_terrain_bake::StampSpec::Craters { layer: self.craters, seed: self.seed })
+        Some(lunco_terrain_bake::StampSpec::Craters {
+            layer: self.craters,
+            seed: self.seed,
+        })
     }
 }
 
@@ -273,7 +276,12 @@ pub fn crater_layer(craters: CraterLayer, seed: u64) -> Arc<dyn TerrainLayer> {
 
 /// Construct a crater layer directly (the quick `SpawnDemTerrain` command path /
 /// programmatic use; the USD path uses [`parse_crater_layer`]).
-pub fn make_crater_layer(density: f32, size_mode: f32, depth_ratio: f32, seed: u64) -> Arc<dyn TerrainLayer> {
+pub fn make_crater_layer(
+    density: f32,
+    size_mode: f32,
+    depth_ratio: f32,
+    seed: u64,
+) -> Arc<dyn TerrainLayer> {
     Arc::new(CraterFieldLayer {
         craters: CraterLayer {
             enabled: true,

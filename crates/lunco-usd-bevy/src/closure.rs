@@ -179,7 +179,10 @@ mod tests {
 
         let closure = reference_closure(&[scene.clone()]);
         assert!(closure.contains(&normalize(&scene)));
-        assert!(closure.contains(&normalize(&rover)), "out-of-tree reference");
+        assert!(
+            closure.contains(&normalize(&rover)),
+            "out-of-tree reference"
+        );
         assert!(closure.contains(&normalize(&wheel)), "transitive reference");
     }
 
@@ -188,12 +191,14 @@ mod tests {
     /// and be dropped by `LayersOnly` (it is not a layer to parse).
     #[test]
     fn arc_filter_decides_whether_binaries_survive() {
-        let data = usda::parse(
-            "#usda 1.0\ndef Xform \"M\" (prepend references = @rover.glb@) {}\n",
-        )
-        .unwrap();
+        let data =
+            usda::parse("#usda 1.0\ndef Xform \"M\" (prepend references = @rover.glb@) {}\n")
+                .unwrap();
 
-        assert_eq!(discover_arcs(&data, ArcFilter::All), vec!["rover.glb".to_string()]);
+        assert_eq!(
+            discover_arcs(&data, ArcFilter::All),
+            vec!["rover.glb".to_string()]
+        );
         assert!(discover_arcs(&data, ArcFilter::LayersOnly).is_empty());
     }
 }

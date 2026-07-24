@@ -147,7 +147,9 @@ pub(crate) fn apply_translates_live(
             .collect()
     };
     for (path, v) in translates {
-        let Some(entity) = find_live_entity(world, id, &path) else { continue };
+        let Some(entity) = find_live_entity(world, id, &path) else {
+            continue;
+        };
         seat_authored_translate(world, entity, v);
     }
 }
@@ -223,7 +225,10 @@ mod translate_seat_tests {
         let cell = world.get::<CellCoord>(prim).copied().unwrap();
         let tf = world.get::<Transform>(prim).copied().unwrap();
         let landed = cell.y as f32 * EDGE + tf.translation.y;
-        assert!((landed - 4047.0).abs() < 1e-2, "reassembled {landed} != 4047");
+        assert!(
+            (landed - 4047.0).abs() < 1e-2,
+            "reassembled {landed} != 4047"
+        );
         assert!(
             tf.translation.y.abs() < EDGE,
             "local {} must be a remainder, not the absolute",
@@ -246,11 +251,7 @@ mod translate_seat_tests {
             ))
             .id();
         // What the gizmo would author for this prim: cell × edge + local.
-        let authored = Vec3::new(
-            1.0 * EDGE + 10.0,
-            2.0 * EDGE - 53.0,
-            -1.0 * EDGE + 4.0,
-        );
+        let authored = Vec3::new(1.0 * EDGE + 10.0, 2.0 * EDGE - 53.0, -1.0 * EDGE + 4.0);
 
         seat_authored_translate(&mut world, prim, authored);
 
@@ -292,11 +293,7 @@ mod translate_seat_tests {
 /// Without this, [`UsdOp::SetRotate`](crate::document::UsdOp::SetRotate) authored,
 /// journaled and saved, but nothing moved until the scene was reloaded — it is
 /// how a `DomeLight`'s environment is spun, and how the sun is aimed.
-pub(crate) fn apply_rotates_live(
-    world: &mut World,
-    id: AssetId<UsdStageAsset>,
-    paths: &[String],
-) {
+pub(crate) fn apply_rotates_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[String]) {
     use lunco_usd_bevy::CanonicalStages;
     if paths.is_empty() {
         return;
@@ -330,11 +327,7 @@ pub(crate) fn apply_rotates_live(
 /// Re-read every changed `DomeLight` prim and push its authored state back onto
 /// the live entity (`lunco_usd_bevy::dome`). The HDRI, its tint/intensity and
 /// the skybox toggle are plain attributes, so only this sees them move.
-pub(crate) fn refresh_domes_live(
-    world: &mut World,
-    id: AssetId<UsdStageAsset>,
-    paths: &[String],
-) {
+pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[String]) {
     use lunco_usd_bevy::{dome, CanonicalStages};
     if paths.is_empty() {
         return;
@@ -444,19 +437,16 @@ pub(crate) fn refresh_edited_prims_live(
                         let val = view
                             .scalar::<String>(&sp, "info:sourceCode")
                             .filter(|s| s.trim_start().starts_with('<'));
-                        let path_val = lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
-                            .filter(|s| s.ends_with(".xml"));
+                        let path_val =
+                            lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
+                                .filter(|s| s.ends_with(".xml"));
                         // The tree is authored on the `LunCoProgram` child, but the
                         // VESSEL owns it — `process_usd_sim_prims` inserts `BehaviorXml`
                         // on the parent entity, so a live edit must resolve to the same
                         // one or it would stamp the tree onto the program prim instead.
                         if val.is_some() || path_val.is_some() {
                             if let Some(owner) = sp.parent() {
-                                behavior_updates.push((
-                                    owner.as_str().to_string(),
-                                    val,
-                                    path_val,
-                                ));
+                                behavior_updates.push((owner.as_str().to_string(), val, path_val));
                             }
                         }
                     }
@@ -503,7 +493,9 @@ pub(crate) fn refresh_edited_prims_live(
         let Some(cs) = stages.get(id) else { return };
         let view = cs.view();
         for prim in prims {
-            let Ok(sp) = SdfPath::new(&prim) else { continue };
+            let Ok(sp) = SdfPath::new(&prim) else {
+                continue;
+            };
             match view.type_name(&sp).as_deref() {
                 // Already re-projected, better, by `refresh_domes_live`.
                 Some("DomeLight") => {}
@@ -608,7 +600,9 @@ mod tests {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<UsdStageAsset>>()
-            .add(UsdStageAsset { recipe: Some(recipe.clone()) });
+            .add(UsdStageAsset {
+                recipe: Some(recipe.clone()),
+            });
         let id = handle.id();
 
         // Build the live stage on demand, then drain its initial change set so
@@ -624,7 +618,10 @@ mod tests {
         // The live `/World` scene-root entity the reconcile spawns children under.
         app.world_mut().spawn((
             Name::new("/World"),
-            UsdPrimPath { stage_handle: handle.clone(), path: "/World".into() },
+            UsdPrimPath {
+                stage_handle: handle.clone(),
+                path: "/World".into(),
+            },
             Transform::default(),
         ));
 
@@ -643,7 +640,8 @@ mod tests {
         project_stage_changes(app.world_mut());
         let live = |world: &mut World| {
             let mut q = world.query::<&UsdPrimPath>();
-            q.iter(world).any(|p| p.stage_handle.id() == id && p.path == "/World/rover")
+            q.iter(world)
+                .any(|p| p.stage_handle.id() == id && p.path == "/World/rover")
         };
         assert!(
             live(app.world_mut()),
@@ -692,7 +690,9 @@ mod tests {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<UsdStageAsset>>()
-            .add(UsdStageAsset { recipe: Some(recipe.clone()) });
+            .add(UsdStageAsset {
+                recipe: Some(recipe.clone()),
+            });
         let id = handle.id();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
@@ -703,9 +703,15 @@ mod tests {
         {
             let stages = app.world().non_send::<CanonicalStages>();
             let stage = stages.get(id).unwrap().stage();
-            stage.define_prim("/World/Ball").unwrap().set_type_name("Sphere").unwrap();
+            stage
+                .define_prim("/World/Ball")
+                .unwrap()
+                .set_type_name("Sphere")
+                .unwrap();
         }
-        app.world_mut().non_send_mut::<CanonicalStages>().drain_all_changes();
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .drain_all_changes();
 
         // Author an attribute value — an "info only" change, no restructuring.
         {
@@ -716,11 +722,19 @@ mod tests {
                 .unwrap();
         }
 
-        let batches = app.world_mut().non_send_mut::<CanonicalStages>().drain_all_changes();
+        let batches = app
+            .world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .drain_all_changes();
         let paths: Vec<String> = batches
             .into_iter()
             .flat_map(|(_, cs)| cs)
-            .flat_map(|c| c.info_only.iter().map(|p| p.to_string()).collect::<Vec<_>>())
+            .flat_map(|c| {
+                c.info_only
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+            })
             .collect();
 
         assert!(

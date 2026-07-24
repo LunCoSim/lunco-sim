@@ -74,9 +74,10 @@ impl TransferFn {
     /// legend swatch and the terrain pixel agree by construction.
     pub fn sample(&self, v: f32) -> Rgba {
         match self {
-            TransferFn::SlopeHazard { safe_rad, cliff_rad } => {
-                hazard_color(crate::derive::hazard_from_slope(v, *safe_rad, *cliff_rad))
-            }
+            TransferFn::SlopeHazard {
+                safe_rad,
+                cliff_rad,
+            } => hazard_color(crate::derive::hazard_from_slope(v, *safe_rad, *cliff_rad)),
         }
     }
 }
@@ -93,11 +94,14 @@ mod tests {
     fn slope_hazard_greens_flat_reds_cliff() {
         let safe = 15f32.to_radians();
         let cliff = 30f32.to_radians();
-        let t = TransferFn::SlopeHazard { safe_rad: safe, cliff_rad: cliff };
+        let t = TransferFn::SlopeHazard {
+            safe_rad: safe,
+            cliff_rad: cliff,
+        };
         assert!(close(t.sample(0.0), HAZARD_SAFE)); // flat → green
         assert!(close(t.sample(cliff), HAZARD_CLIFF)); // at cliff → red
         assert!(close(t.sample(45f32.to_radians()), HAZARD_CLIFF)); // beyond → red
-        // Mid-band is neither pure green nor pure red.
+                                                                    // Mid-band is neither pure green nor pure red.
         let mid = t.sample(22.5f32.to_radians());
         assert!(!close(mid, HAZARD_SAFE) && !close(mid, HAZARD_CLIFF));
     }
@@ -107,8 +111,14 @@ mod tests {
         // A 25° slope: safe under a 40° cliff, hazardous under a 26° cliff — the
         // live-tuning property (same data, new uniform → new colour).
         let s = 25f32.to_radians();
-        let loose = TransferFn::SlopeHazard { safe_rad: 15f32.to_radians(), cliff_rad: 40f32.to_radians() };
-        let tight = TransferFn::SlopeHazard { safe_rad: 15f32.to_radians(), cliff_rad: 26f32.to_radians() };
+        let loose = TransferFn::SlopeHazard {
+            safe_rad: 15f32.to_radians(),
+            cliff_rad: 40f32.to_radians(),
+        };
+        let tight = TransferFn::SlopeHazard {
+            safe_rad: 15f32.to_radians(),
+            cliff_rad: 26f32.to_radians(),
+        };
         // redder = higher R, lower G
         assert!(tight.sample(s)[0] > loose.sample(s)[0]);
         assert!(tight.sample(s)[1] < loose.sample(s)[1]);

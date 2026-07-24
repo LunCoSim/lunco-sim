@@ -1,7 +1,7 @@
 //! Diagram-specific commands: MoveComponent and AddCanvasPlot.
 
 use bevy::prelude::*;
-use lunco_core::{Command, on_command};
+use lunco_core::{on_command, Command};
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -96,9 +96,7 @@ pub fn on_add_canvas_plot(trigger: On<AddCanvasPlot>, mut commands: Commands) {
         let w = if ev.width > 0.0 { ev.width } else { 120.0 };
         let h = if ev.height > 0.0 { ev.height } else { 90.0 };
         if ev.signal.is_empty() {
-            bevy::log::warn!(
-                "[AddCanvasPlot] empty signal — skipping (bind one first)"
-            );
+            bevy::log::warn!("[AddCanvasPlot] empty signal — skipping (bind one first)");
             return;
         }
         let class = crate::sim_default::drilled_class_for_doc(world, doc)

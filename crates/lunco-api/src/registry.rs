@@ -1,8 +1,8 @@
 //! Entity identity registry — maps stable ULID-based GlobalEntityId to Bevy Entity.
 
-use std::collections::HashMap;
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
+use std::collections::HashMap;
 
 /// Bidirectional mapping between API entity IDs and Bevy entities.
 #[derive(Resource, Default)]
@@ -47,7 +47,10 @@ impl ApiEntityRegistry {
     }
 
     pub fn entities(&self) -> Vec<(GlobalEntityId, Entity)> {
-        self.api_to_bevy.iter().map(|(&id, &entity)| (id, entity)).collect()
+        self.api_to_bevy
+            .iter()
+            .map(|(&id, &entity)| (id, entity))
+            .collect()
     }
 }
 

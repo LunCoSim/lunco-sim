@@ -50,13 +50,14 @@ fn insert_class(
     let parsed = parse_stub_cached(rendered).ok_or_else(|| AstMutError::ValueParseFailed {
         value: rendered.to_string(),
     })?;
-    let new_class = parsed
-        .classes
-        .get(name)
-        .cloned()
-        .ok_or_else(|| AstMutError::ValueParseFailed {
-            value: rendered.to_string(),
-        })?;
+    let new_class =
+        parsed
+            .classes
+            .get(name)
+            .cloned()
+            .ok_or_else(|| AstMutError::ValueParseFailed {
+                value: rendered.to_string(),
+            })?;
 
     if parent.is_empty() {
         if sd.classes.contains_key(name) {

@@ -9,16 +9,16 @@
 //! pattern — see the README for templates.
 
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
-use bevy::prelude::*;
 use bevy::math::DVec3;
+use bevy::prelude::*;
 // All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
 // `Exposure` is `bevy_camera`. Neither depends on `bevy_render`. The one knob in
 // `SetEnvironmentLight` that IS render-bound — `bloom_intensity` — is applied by a
 // second observer in `lunco-render-bevy` (`env_light.rs`), so this crate names no
 // post-processing type. See docs/architecture/render-decoupling.md.
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
 use bevy::camera::Exposure;
-use lunco_core::{Command, on_command, register_commands};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
+use lunco_core::{on_command, register_commands, Command};
 
 /// USD prim type for the scene-level **environment settings** prim (a singleton
 /// under the default prim, e.g. `/World/Environment`). It carries the render
@@ -152,7 +152,12 @@ pub fn compute_local_gravity(
     mut commands: Commands,
     gravity: Res<Gravity>,
     q_bodies: Query<&GravityProvider>,
-    q_entities: Query<(Entity, Ref<Transform>, Option<&GravityBody>, Option<&LocalGravity>)>,
+    q_entities: Query<(
+        Entity,
+        Ref<Transform>,
+        Option<&GravityBody>,
+        Option<&LocalGravity>,
+    )>,
 ) {
     // Recompute an entity's gravity only when something it depends on changed:
     // the global `Gravity` definition (Flat vector / Flat↔Surface switch) or
@@ -168,8 +173,12 @@ pub fn compute_local_gravity(
         let g = match gravity.as_ref() {
             Gravity::Flat { g, direction } => *direction * *g,
             Gravity::Surface => {
-                let Some(body_link) = gravity_body else { continue };
-                let Ok(provider) = q_bodies.get(body_link.body_entity) else { continue };
+                let Some(body_link) = gravity_body else {
+                    continue;
+                };
+                let Ok(provider) = q_bodies.get(body_link.body_entity) else {
+                    continue;
+                };
                 provider.model.acceleration(tf.translation.as_dvec3())
             }
         };
@@ -251,8 +260,10 @@ pub fn inject_local_gravity_into_cosim(
     mut q: Query<(&LocalGravity, &mut lunco_cosim::SimComponent)>,
 ) {
     for (gravity, mut comp) in &mut q {
-        comp.outputs
-            .insert(lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_string(), gravity.magnitude());
+        comp.outputs.insert(
+            lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_string(),
+            gravity.magnitude(),
+        );
     }
 }
 
@@ -363,7 +374,11 @@ fn on_set_environment_light(
     // The sun(s): every directional light EXCEPT the earthshine fill, so an
     // illuminance/color/direction tweak never clobbers the fill light.
     mut q_sun: Query<
-        (&mut Transform, &mut DirectionalLight, Option<&mut CascadeShadowConfig>),
+        (
+            &mut Transform,
+            &mut DirectionalLight,
+            Option<&mut CascadeShadowConfig>,
+        ),
         (With<DirectionalLight>, Without<Earthshine>),
     >,
     mut q_earthshine: Query<&mut DirectionalLight, With<Earthshine>>,
@@ -402,8 +417,16 @@ fn on_set_environment_light(
                 // range knobs (cascade count / overlap / near are kept).
                 // The empty-bounds fallbacks are local consts mirroring the
                 // canonical lunar-sun cascade defaults (see their declaration).
-                let cur_first = cfg.bounds.first().copied().unwrap_or(FALLBACK_FIRST_CASCADE_FAR_BOUND);
-                let cur_max = cfg.bounds.last().copied().unwrap_or(FALLBACK_MAX_SHADOW_DISTANCE);
+                let cur_first = cfg
+                    .bounds
+                    .first()
+                    .copied()
+                    .unwrap_or(FALLBACK_FIRST_CASCADE_FAR_BOUND);
+                let cur_max = cfg
+                    .bounds
+                    .last()
+                    .copied()
+                    .unwrap_or(FALLBACK_MAX_SHADOW_DISTANCE);
                 // The first bound has to stay a metre inside the max, so the max is
                 // floored at 2 m first: clamping the other way round (bound, then
                 // max) lets a sub-2 m max pull the first bound to zero or negative,

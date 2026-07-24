@@ -65,7 +65,9 @@ pub(crate) fn is_binary_asset(asset_path: &str) -> bool {
         .unwrap_or(asset_path);
     if let Some(dot) = stem.rfind('.') {
         let ext = &stem[dot + 1..];
-        BINARY_ASSET_EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(ext))
+        BINARY_ASSET_EXTENSIONS
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(ext))
     } else {
         false
     }
@@ -114,7 +116,9 @@ pub(crate) struct LuncoUsdResolver {
 impl LuncoUsdResolver {
     /// Build a resolver owning a fresh shared map seeded with `bytes`.
     pub(crate) fn new(bytes: HashMap<String, Vec<u8>>) -> Self {
-        Self { bytes: Rc::new(RefCell::new(bytes)) }
+        Self {
+            bytes: Rc::new(RefCell::new(bytes)),
+        }
     }
 
     /// A clone of the shared byte-map handle, so the caller (the
@@ -159,7 +163,11 @@ impl ar::Resolver for LuncoUsdResolver {
 
     /// Override the one fs-touching default (`fs::metadata`) so composition is
     /// 100% filesystem-free.
-    fn get_modification_timestamp(&self, _asset_path: &str, _resolved_path: &ResolvedPath) -> Option<SystemTime> {
+    fn get_modification_timestamp(
+        &self,
+        _asset_path: &str,
+        _resolved_path: &ResolvedPath,
+    ) -> Option<SystemTime> {
         None
     }
 }

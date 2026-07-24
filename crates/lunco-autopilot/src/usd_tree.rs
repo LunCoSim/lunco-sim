@@ -272,9 +272,7 @@ pub fn remove_waypoint_leaf(xml: &str, prim_path: &str) -> Result<String, String
     let mut root = crate::btcpp_xml::xml_to_value(xml)?;
     let legs = legs_mut(&mut root)?;
 
-    legs.retain(|child| {
-        child.get("target").and_then(|t| t.as_str()) != Some(prim_path)
-    });
+    legs.retain(|child| child.get("target").and_then(|t| t.as_str()) != Some(prim_path));
 
     crate::btcpp_xml::value_to_xml(&root)
 }
@@ -288,7 +286,11 @@ pub fn format_coord_target(p: DVec3) -> String {
 
 /// Move a waypoint: repoint the first `drive_to` leg matching `old_target` at
 /// `new_target`, keeping its position in the sequence (and its dwell).
-pub fn set_waypoint_target(xml: &str, old_target: &str, new_target: &str) -> Result<String, String> {
+pub fn set_waypoint_target(
+    xml: &str,
+    old_target: &str,
+    new_target: &str,
+) -> Result<String, String> {
     let mut root = crate::btcpp_xml::xml_to_value(xml)?;
     let legs = legs_mut(&mut root)?;
     let leg = legs
@@ -303,14 +305,21 @@ pub fn set_waypoint_target(xml: &str, old_target: &str, new_target: &str) -> Res
 
 /// Insert a new `drive_to` leg at `new_target` directly AFTER the leg matching
 /// `after_target` — so a waypoint can be added mid-route, not just appended.
-pub fn insert_waypoint_after(xml: &str, after_target: &str, new_target: &str) -> Result<String, String> {
+pub fn insert_waypoint_after(
+    xml: &str,
+    after_target: &str,
+    new_target: &str,
+) -> Result<String, String> {
     let mut root = crate::btcpp_xml::xml_to_value(xml)?;
     let legs = legs_mut(&mut root)?;
     let at = legs
         .iter()
         .position(|l| l.get("target").and_then(|t| t.as_str()) == Some(after_target))
         .ok_or_else(|| format!("target '{after_target}' not found"))?;
-    legs.insert(at + 1, serde_json::json!({ "kind": "drive_to", "target": new_target }));
+    legs.insert(
+        at + 1,
+        serde_json::json!({ "kind": "drive_to", "target": new_target }),
+    );
     crate::btcpp_xml::value_to_xml(&root)
 }
 
@@ -324,7 +333,9 @@ pub fn set_waypoint_dwell(xml: &str, target: &str, dwell: f64) -> Result<String,
         .iter_mut()
         .find(|l| l.get("target").and_then(|t| t.as_str()) == Some(target))
         .ok_or_else(|| format!("target '{target}' not found"))?;
-    let map = leg.as_object_mut().ok_or_else(|| "leg is not an object".to_string())?;
+    let map = leg
+        .as_object_mut()
+        .ok_or_else(|| "leg is not an object".to_string())?;
     if dwell > 0.0 {
         map.insert("dwell".into(), serde_json::json!(dwell));
     } else {
@@ -358,7 +369,8 @@ pub fn route_is_smooth(xml: &str) -> bool {
         .ok()
         .and_then(|root| {
             let legs = legs_ref(&root)?;
-            legs.iter().find_map(|l| l.get("smooth").and_then(|s| s.as_bool()))
+            legs.iter()
+                .find_map(|l| l.get("smooth").and_then(|s| s.as_bool()))
         })
         .unwrap_or(false)
 }
@@ -369,7 +381,9 @@ pub fn set_route_smooth(xml: &str, smooth: bool) -> Result<String, String> {
     let mut root = crate::btcpp_xml::xml_to_value(xml)?;
     let legs = legs_mut(&mut root)?;
     for leg in legs.iter_mut() {
-        let Some(map) = leg.as_object_mut() else { continue };
+        let Some(map) = leg.as_object_mut() else {
+            continue;
+        };
         if map.get("kind").and_then(|k| k.as_str()) != Some("drive_to") {
             continue;
         }
@@ -410,7 +424,9 @@ fn strip_reached_legs(v: &mut Value, reached: &std::collections::HashSet<String>
                 strip_reached_legs(child, reached);
             }
         }
-        Value::Array(items) => items.iter_mut().for_each(|i| strip_reached_legs(i, reached)),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|i| strip_reached_legs(i, reached)),
         _ => {}
     }
 }
@@ -459,7 +475,9 @@ pub fn catmull_rom_path(points: &[DVec3], closed: bool, spacing: f64) -> Vec<DVe
     let mut out = Vec::new();
     for s in 0..seg_count as i64 {
         let (p0, p1, p2, p3) = (at(s - 1), at(s), at(s + 1), at(s + 2));
-        let steps = (((p2 - p1).length().max(spacing)) / spacing).ceil().max(1.0) as usize;
+        let steps = (((p2 - p1).length().max(spacing)) / spacing)
+            .ceil()
+            .max(1.0) as usize;
         for k in 0..steps {
             out.push(catmull_rom(p0, p1, p2, p3, k as f64 / steps as f64));
         }
@@ -476,7 +494,11 @@ fn parse_coord_target(s: &str) -> Option<DVec3> {
     if p.len() != 3 {
         return None;
     }
-    match (p[0].trim().parse(), p[1].trim().parse(), p[2].trim().parse()) {
+    match (
+        p[0].trim().parse(),
+        p[1].trim().parse(),
+        p[2].trim().parse(),
+    ) {
         (Ok(x), Ok(y), Ok(z)) => Some(DVec3::new(x, y, z)),
         _ => None,
     }
@@ -507,7 +529,9 @@ fn expand_editor_route_in_place(v: &mut Value) {
     } else {
         return;
     };
-    let Some(children) = seq.get("children").and_then(|c| c.as_array()) else { return };
+    let Some(children) = seq.get("children").and_then(|c| c.as_array()) else {
+        return;
+    };
 
     // Only rewrite a route that is entirely coordinate `drive_to` legs — otherwise
     // leave the tree alone rather than restructure something hand-authored.
@@ -517,14 +541,22 @@ fn expand_editor_route_in_place(v: &mut Value) {
         if ch.get("kind").and_then(|k| k.as_str()) != Some("drive_to") {
             return;
         }
-        let Some(pos) = ch.get("target").and_then(|t| t.as_str()).and_then(parse_coord_target)
+        let Some(pos) = ch
+            .get("target")
+            .and_then(|t| t.as_str())
+            .and_then(parse_coord_target)
         else {
             return;
         };
         // Route-level flag, carried per-leg (see `route_is_smooth`). Consumed here —
         // it is not a `BehaviorSpec` field.
         smooth |= ch.get("smooth").and_then(|s| s.as_bool()).unwrap_or(false);
-        ctrl.push((pos, ch.get("dwell").and_then(|d| d.as_f64()).filter(|d| *d > 0.0)));
+        ctrl.push((
+            pos,
+            ch.get("dwell")
+                .and_then(|d| d.as_f64())
+                .filter(|d| *d > 0.0),
+        ));
     }
     if ctrl.is_empty() {
         return;
@@ -550,16 +582,24 @@ fn expand_editor_route_in_place(v: &mut Value) {
         let n = ctrl.len();
         let at = |i: i64| -> (DVec3, Option<f64>) {
             let n = n as i64;
-            if closed { ctrl[((i % n + n) % n) as usize] } else { ctrl[i.clamp(0, n - 1) as usize] }
+            if closed {
+                ctrl[((i % n + n) % n) as usize]
+            } else {
+                ctrl[i.clamp(0, n - 1) as usize]
+            }
         };
         let seg_count = if closed { n } else { n - 1 };
         for s in 0..seg_count as i64 {
             let ((p0, _), (p1, d1), (p2, _), (p3, _)) = (at(s - 1), at(s), at(s + 1), at(s + 2));
-            let steps = (((p2 - p1).length().max(SMOOTH_SPACING)) / SMOOTH_SPACING).ceil().max(1.0)
-                as usize;
+            let steps = (((p2 - p1).length().max(SMOOTH_SPACING)) / SMOOTH_SPACING)
+                .ceil()
+                .max(1.0) as usize;
             for k in 0..steps {
                 let t = k as f64 / steps as f64;
-                out.push(drive(fmt(catmull_rom(p0, p1, p2, p3, t)), Some(SMOOTH_RADIUS)));
+                out.push(drive(
+                    fmt(catmull_rom(p0, p1, p2, p3, t)),
+                    Some(SMOOTH_RADIUS),
+                ));
                 if k == 0 {
                     if let Some(d) = d1 {
                         out.push(wait(d)); // dwell AT the control point
@@ -647,10 +687,9 @@ fn bake_targets(
                 bake_targets(child, bindings, pose, missing);
             }
         }
-        Value::Array(items) =>
-            items
-                .iter_mut()
-                .for_each(|i| bake_targets(i, bindings, pose, missing)),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|i| bake_targets(i, bindings, pose, missing)),
         _ => {}
     }
 }
@@ -689,7 +728,8 @@ pub fn compile_behavior_xml(
     // Root-frame position of any prim, straight off the cell chain — no grid
     // offset to subtract and no floating origin to chase, because the bake no
     // longer targets the render frame.
-    let pose = |e: Entity| lunco_core::coords::world_position(e, &q_parents, &q_grids_only, &q_spatial);
+    let pose =
+        |e: Entity| lunco_core::coords::world_position(e, &q_parents, &q_grids_only, &q_spatial);
 
     for (vessel, xml, bindings) in q_vessels.iter() {
         let empty = TargetBindings::default();
@@ -749,15 +789,21 @@ pub fn compile_behavior_xml(
         let spec_changed = q_spec.get(vessel).map(|cur| cur.0 != spec).unwrap_or(true);
         if spec_changed {
             // The spec on the vessel is DERIVED — a projection of the XML + the prims.
-            commands.entity(vessel).try_insert(AutopilotBehaviorSpec(spec.clone()));
+            commands
+                .entity(vessel)
+                .try_insert(AutopilotBehaviorSpec(spec.clone()));
         }
         // Live hot-swap: if an autopilot is already driving, re-point it at the edited
         // route without a disengage/re-engage cycle. Also covers an autopilot engaged
         // with no tree of its own (empty `spec_json`), which would otherwise never
         // pick up the vessel's authored route.
-        if let Some((actor, _, has_tree)) = q_autopilots.iter().find(|(_, ap, _)| ap.vessel == vessel) {
+        if let Some((actor, _, has_tree)) =
+            q_autopilots.iter().find(|(_, ap, _)| ap.vessel == vessel)
+        {
             if spec_changed || !has_tree {
-                commands.entity(actor).try_insert(AutopilotBehavior::new(&spec));
+                commands
+                    .entity(actor)
+                    .try_insert(AutopilotBehavior::new(&spec));
             }
         }
     }
@@ -784,7 +830,8 @@ mod bake_frame_tests {
     fn a_literal_waypoint_bakes_verbatim() {
         let mut v = drive_to("1200.5;-53;-800");
         let mut missing = Vec::new();
-        let pose = |_: Entity| -> Option<DVec3> { panic!("a literal target must not resolve a prim") };
+        let pose =
+            |_: Entity| -> Option<DVec3> { panic!("a literal target must not resolve a prim") };
 
         bake_targets(&mut v, &TargetBindings::default(), &pose, &mut missing);
 
@@ -804,9 +851,8 @@ mod bake_frame_tests {
         let mut v = drive_to("/Scene/Pin");
         let mut missing = Vec::new();
         // Two cells up on a 2 km grid, 53 m down within the cell.
-        let pose = |e: Entity| -> Option<DVec3> {
-            (e == pin).then_some(DVec3::new(10.0, 3947.0, 4.0))
-        };
+        let pose =
+            |e: Entity| -> Option<DVec3> { (e == pin).then_some(DVec3::new(10.0, 3947.0, 4.0)) };
 
         bake_targets(&mut v, &bindings, &pose, &mut missing);
 
@@ -841,8 +887,14 @@ mod bake_frame_tests {
 
         bake_targets(&mut v, &TargetBindings::default(), &pose, &mut missing);
 
-        assert_eq!(v["children"][0]["target"], serde_json::json!([100.0, 0.0, 200.0]));
-        assert_eq!(v["children"][1]["target"], serde_json::json!([300.0, 0.0, 400.0]));
+        assert_eq!(
+            v["children"][0]["target"],
+            serde_json::json!([100.0, 0.0, 200.0])
+        );
+        assert_eq!(
+            v["children"][1]["target"],
+            serde_json::json!([300.0, 0.0, 400.0])
+        );
     }
 }
 
@@ -893,7 +945,11 @@ mod editor_tests {
         let xml = route(&["1;0;1", "2;0;2"]);
         let out = set_waypoint_dwell(&xml, "2;0;2", 3.5).unwrap();
         assert_eq!(waypoint_dwell(&out, "2;0;2"), Some(3.5));
-        assert_eq!(waypoint_dwell(&out, "1;0;1"), None, "dwell must not leak to siblings");
+        assert_eq!(
+            waypoint_dwell(&out, "1;0;1"),
+            None,
+            "dwell must not leak to siblings"
+        );
         let cleared = set_waypoint_dwell(&out, "2;0;2", 0.0).unwrap();
         assert_eq!(waypoint_dwell(&cleared, "2;0;2"), None);
     }
@@ -903,7 +959,10 @@ mod editor_tests {
         let xml = route(&["1;0;1", "2;0;2"]);
         assert!(!route_is_smooth(&xml));
         let on = set_route_smooth(&xml, true).unwrap();
-        assert!(route_is_smooth(&on), "smooth must survive the XML round-trip");
+        assert!(
+            route_is_smooth(&on),
+            "smooth must survive the XML round-trip"
+        );
         let off = set_route_smooth(&on, false).unwrap();
         assert!(!route_is_smooth(&off));
     }
@@ -933,13 +992,22 @@ mod editor_tests {
         let mut v = crate::btcpp_xml::xml_to_value(&xml).unwrap();
         expand_editor_route_in_place(&mut v);
         let legs = v["child"]["children"].as_array().unwrap().clone();
-        assert!(legs.len() > 10, "expected a densified curve, got {} legs", legs.len());
-        let targets: Vec<String> =
-            legs.iter().filter_map(|l| l["target"].as_str().map(String::from)).collect();
+        assert!(
+            legs.len() > 10,
+            "expected a densified curve, got {} legs",
+            legs.len()
+        );
+        let targets: Vec<String> = legs
+            .iter()
+            .filter_map(|l| l["target"].as_str().map(String::from))
+            .collect();
         for ctrl in ["0;0;0", "20;0;0", "20;0;20"] {
             let p = parse_coord_target(ctrl).unwrap();
             assert!(
-                targets.iter().filter_map(|t| parse_coord_target(t)).any(|q| (q - p).length() < 1e-6),
+                targets
+                    .iter()
+                    .filter_map(|t| parse_coord_target(t))
+                    .any(|q| (q - p).length() < 1e-6),
                 "curve must pass through control point {ctrl}"
             );
         }
@@ -952,16 +1020,26 @@ mod editor_tests {
     fn a_straight_route_is_left_as_authored() {
         let mut v = crate::btcpp_xml::xml_to_value(&route(&["1;0;1", "2;0;2"])).unwrap();
         expand_editor_route_in_place(&mut v);
-        assert_eq!(targets_of(&crate::btcpp_xml::value_to_xml(&v).unwrap()), vec!["1;0;1", "2;0;2"]);
+        assert_eq!(
+            targets_of(&crate::btcpp_xml::value_to_xml(&v).unwrap()),
+            vec!["1;0;1", "2;0;2"]
+        );
     }
 
     #[test]
     fn catmull_rom_passes_through_every_control_point() {
-        let pts = vec![DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 0.0, 10.0)];
+        let pts = vec![
+            DVec3::ZERO,
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(10.0, 0.0, 10.0),
+        ];
         let path = catmull_rom_path(&pts, false, 2.0);
         assert!(path.len() > pts.len());
         for p in &pts {
-            assert!(path.iter().any(|q| (*q - *p).length() < 1e-6), "missing control point {p:?}");
+            assert!(
+                path.iter().any(|q| (*q - *p).length() < 1e-6),
+                "missing control point {p:?}"
+            );
         }
     }
 }

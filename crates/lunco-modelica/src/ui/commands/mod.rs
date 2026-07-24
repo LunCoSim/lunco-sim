@@ -5,16 +5,16 @@ use lunco_core::register_commands;
 use lunco_doc::DocumentId;
 
 pub mod compile;
+pub mod diagram;
 pub mod doc;
+pub mod inspect;
+pub mod intent;
 pub mod lifecycle;
 pub mod nav;
-pub mod diagram;
-pub mod sim;
 pub mod plot;
-pub mod intent;
+pub mod sim;
 pub mod status;
 pub mod util;
-pub mod inspect;
 
 // Re-export Command structs for easy access
 pub use compile::{
@@ -22,22 +22,22 @@ pub use compile::{
     FastRunActiveModel, FastRunInput, FastRunSetupEntry, FastRunSetupState, PauseActiveModel,
     PickerPurpose, ResetActiveModel, RestartActiveModel, ResumeActiveModel, RunActiveModel,
 };
-pub use doc::{Undo, Redo, FormatDocument, SaveActiveDocument, SaveActiveDocumentAs};
-pub use lifecycle::{
-    CreateNewScratchModel, DuplicateModelFromReadOnly, DuplicateActiveDoc, OpenClass,
-    OpenInNewView, Open, ClassAction, CloseDialogState, PendingCloseAfterSave,
-    PendingTabCloseScopes, TabCloseScope, GetFile,
-};
-pub use nav::{
-    AutoArrangeDiagram, FocusDocumentByName, SetViewMode, SetZoom, FitCanvas,
-    FocusComponent, PanCanvas,
-};
-pub use diagram::{MoveComponent, AddCanvasPlot};
-pub use sim::{SetModelInput, SetModelInputError, apply_set_model_input};
-pub use plot::{NewPlotPanel, AddSignalToPlot};
-pub use util::{Ping, Exit};
+pub use diagram::{AddCanvasPlot, MoveComponent};
+pub use doc::{FormatDocument, Redo, SaveActiveDocument, SaveActiveDocumentAs, Undo};
 pub use inspect::InspectActiveDoc;
 pub use lifecycle::drain_open_file_results;
+pub use lifecycle::{
+    ClassAction, CloseDialogState, CreateNewScratchModel, DuplicateActiveDoc,
+    DuplicateModelFromReadOnly, GetFile, Open, OpenClass, OpenInNewView, PendingCloseAfterSave,
+    PendingTabCloseScopes, TabCloseScope,
+};
+pub use nav::{
+    AutoArrangeDiagram, FitCanvas, FocusComponent, FocusDocumentByName, PanCanvas, SetViewMode,
+    SetZoom,
+};
+pub use plot::{AddSignalToPlot, NewPlotPanel};
+pub use sim::{apply_set_model_input, SetModelInput, SetModelInputError};
+pub use util::{Exit, Ping};
 
 pub struct ModelicaCommandsPlugin;
 
@@ -55,7 +55,10 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(intent::resolve_new_document_intent)
             .add_systems(
                 Startup,
-                (register_modelica_uri_handler, lifecycle::prewarm_msl_library),
+                (
+                    register_modelica_uri_handler,
+                    lifecycle::prewarm_msl_library,
+                ),
             )
             .add_systems(
                 Update,
@@ -153,9 +156,7 @@ pub(super) fn approx_screen_rect() -> lunco_canvas::Rect {
     )
 }
 
-fn register_modelica_uri_handler(
-    mut registry: ResMut<lunco_workbench::UriRegistry>,
-) {
+fn register_modelica_uri_handler(mut registry: ResMut<lunco_workbench::UriRegistry>) {
     registry.register(std::sync::Arc::new(
         crate::ui::uri_handler::ModelicaUriHandler,
     ));

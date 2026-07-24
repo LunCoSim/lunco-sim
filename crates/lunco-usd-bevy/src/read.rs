@@ -213,9 +213,7 @@ pub trait UsdRead {
     fn points2(&self, prim: &SdfPath, name: &str) -> Vec<[f32; 2]> {
         match self.attr_value(prim, name) {
             Some(Value::Vec2fVec(v)) => v.into_iter().map(|p| [p.x, p.y]).collect(),
-            Some(Value::Vec2dVec(v)) => {
-                v.into_iter().map(|p| [p.x as f32, p.y as f32]).collect()
-            }
+            Some(Value::Vec2dVec(v)) => v.into_iter().map(|p| [p.x as f32, p.y as f32]).collect(),
             _ => Vec::new(),
         }
     }
@@ -322,7 +320,8 @@ pub trait UsdRead {
     where
         T: TryFrom<Value>,
     {
-        self.attr_value_at(prim, name, time).and_then(|v| v.get::<T>())
+        self.attr_value_at(prim, name, time)
+            .and_then(|v| v.get::<T>())
     }
 
     /// The glTF/binary asset URI resolved for `prim` (`lunco:resolvedAsset`) —
@@ -469,7 +468,9 @@ impl UsdRead for StageView<'_> {
         let mut paths = Vec::new();
         let _ = self
             .stage()
-            .traverse(openusd::usd::PrimPredicate::DEFAULT, |p| paths.push(p.clone()));
+            .traverse(openusd::usd::PrimPredicate::DEFAULT, |p| {
+                paths.push(p.clone())
+            });
         paths
     }
 
@@ -565,8 +566,14 @@ impl UsdRead for StageView<'_> {
         // Composed pseudo-root metadata (session layer wins over root), the same
         // resolution `timeCodesPerSecond` gets. Precision-tolerant: `metersPerUnit`
         // is spec'd `double` but exporters do author `float`.
-        let v = self.stage().stage_metadata("metersPerUnit").ok().flatten()?;
-        v.clone().get::<f64>().or_else(|| v.get::<f32>().map(f64::from))
+        let v = self
+            .stage()
+            .stage_metadata("metersPerUnit")
+            .ok()
+            .flatten()?;
+        v.clone()
+            .get::<f64>()
+            .or_else(|| v.get::<f32>().map(f64::from))
     }
 
     fn stage_up_axis(&self) -> Option<String> {
@@ -575,7 +582,6 @@ impl UsdRead for StageView<'_> {
         v.as_str().map(str::to_string).filter(|s| !s.is_empty())
     }
 }
-
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod real_reader_tests {
@@ -628,11 +634,18 @@ mod real_reader_tests {
             "asset() reads the authored @…@ path off the composed stage"
         );
         // A strict typed `String` read misses it — the value is `Value::AssetPath`.
-        assert_eq!(view.scalar::<String>(&world, "a_val"), None, "a String read misses an asset");
+        assert_eq!(
+            view.scalar::<String>(&world, "a_val"),
+            None,
+            "a String read misses an asset"
+        );
         // `text` coerces via `as_str` (same as `upAxis`), so it ALSO yields the path —
         // which is why the pre-migration `string demSource` read worked; the asset
         // migration is about the type contract, not about making the read possible.
-        assert_eq!(view.text(&world, "a_val").as_deref(), Some("terrain/connecting_ridge"));
+        assert_eq!(
+            view.text(&world, "a_val").as_deref(),
+            Some("terrain/connecting_ridge")
+        );
     }
 
     #[test]
@@ -659,10 +672,21 @@ mod real_reader_tests {
         );
 
         let want = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
-        assert_eq!(view.points2(&world, "st_f"), want, "points2 reads float UVs");
-        assert_eq!(view.points2(&world, "st_d"), want, "points2 reads double UVs");
+        assert_eq!(
+            view.points2(&world, "st_f"),
+            want,
+            "points2 reads float UVs"
+        );
+        assert_eq!(
+            view.points2(&world, "st_d"),
+            want,
+            "points2 reads double UVs"
+        );
         // Tolerance is not fabrication: an absent attribute is still empty.
-        assert!(view.points2(&world, "missing").is_empty(), "absent attr stays empty");
+        assert!(
+            view.points2(&world, "missing").is_empty(),
+            "absent attr stays empty"
+        );
     }
 
     #[test]
@@ -689,12 +713,24 @@ mod real_reader_tests {
         assert_eq!(view.real(&world, "d_val"), Some(3.5), "real reads double");
 
         // `real_f32` (→ f32) likewise reads either precision.
-        assert_eq!(view.real_f32(&world, "d_val"), Some(3.5), "real_f32 reads double");
-        assert_eq!(view.real_f32(&world, "f_val"), Some(2.5), "real_f32 reads float");
+        assert_eq!(
+            view.real_f32(&world, "d_val"),
+            Some(3.5),
+            "real_f32 reads double"
+        );
+        assert_eq!(
+            view.real_f32(&world, "f_val"),
+            Some(2.5),
+            "real_f32 reads float"
+        );
 
         // The time-sampled variants fall back to the `default` opinion when a
         // channel has no `timeSamples`, and are precision-tolerant there too.
-        assert_eq!(view.real_at(&world, "f_val", 0.0), Some(2.5), "real_at reads float default");
+        assert_eq!(
+            view.real_at(&world, "f_val", 0.0),
+            Some(2.5),
+            "real_at reads float default"
+        );
         assert_eq!(
             view.real_f32_at(&world, "d_val", 0.0),
             Some(3.5),

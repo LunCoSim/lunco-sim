@@ -79,8 +79,7 @@ impl LoadingIndicator {
         );
 
         // Spinner left-aligned inside the card.
-        let dots_centre =
-            egui::pos2(card_rect.min.x + 28.0, card_rect.center().y);
+        let dots_centre = egui::pos2(card_rect.min.x + 28.0, card_rect.center().y);
         paint_three_dot(ui, dots_centre, theme.tokens.accent);
 
         // Header verb picked from the bus event's `source` so the

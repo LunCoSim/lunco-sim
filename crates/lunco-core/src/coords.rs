@@ -6,10 +6,10 @@
 //! `grid.grid_position_double(...)` — works only inside one Grid and
 //! breaks across Grid boundaries; these helpers cover both cases.
 
-use bevy::prelude::*;
-use bevy::math::{DQuat, DVec3};
-use big_space::prelude::*;
 use bevy::ecs::query::QueryFilter;
+use bevy::math::{DQuat, DVec3};
+use bevy::prelude::*;
+use big_space::prelude::*;
 
 use crate::markers::GridAnchor;
 
@@ -26,8 +26,12 @@ pub fn ancestor_grid_anchor(
 ) -> Option<Entity> {
     let mut current = entity;
     for _ in 0..32 {
-        if q_anchors.contains(current) { return Some(current); }
-        let Ok(child_of) = q_parents.get(current) else { return None };
+        if q_anchors.contains(current) {
+            return Some(current);
+        }
+        let Ok(child_of) = q_parents.get(current) else {
+            return None;
+        };
         current = child_of.parent();
     }
     None
@@ -75,7 +79,10 @@ pub fn world_pose(
     let mut cur_tf = first_tf;
     for _ in 0..32 {
         let edge = match q_parents.get(current) {
-            Ok(co) => q_grids.get(co.parent()).ok().map(|g| g.cell_edge_length() as f64),
+            Ok(co) => q_grids
+                .get(co.parent())
+                .ok()
+                .map(|g| g.cell_edge_length() as f64),
             Err(_) => None,
         };
         let cell_off = match edge {
@@ -159,8 +166,11 @@ pub fn grid_absolute_seeded(
     else {
         return tf.translation.as_dvec3();
     };
-    DVec3::new(cell.x as f64 * edge, cell.y as f64 * edge, cell.z as f64 * edge)
-        + tf.translation.as_dvec3()
+    DVec3::new(
+        cell.x as f64 * edge,
+        cell.y as f64 * edge,
+        cell.z as f64 * edge,
+    ) + tf.translation.as_dvec3()
 }
 
 /// Split a grid-absolute position back into the `(CellCoord, Transform)` pair
@@ -228,7 +238,15 @@ pub fn world_position_seeded<F: QueryFilter>(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> bevy::math::DVec3 {
-    world_pose_seeded(entity, initial_cell, initial_tf, q_parents, q_grids, q_spatial).0
+    world_pose_seeded(
+        entity,
+        initial_cell,
+        initial_tf,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )
+    .0
 }
 
 /// Absolute world pose (position + rotation), seeded — the disjoint-query
@@ -246,7 +264,10 @@ pub fn world_pose_seeded<F: QueryFilter>(
     // `q_spatial` (disjoint-query / `Without<…>` cases).
     let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
     let edge0 = match q_parents.get(entity) {
-        Ok(co) => q_grids.get(co.parent()).ok().map(|g| g.cell_edge_length() as f64),
+        Ok(co) => q_grids
+            .get(co.parent())
+            .ok()
+            .map(|g| g.cell_edge_length() as f64),
         Err(_) => None,
     };
     let cell_off0 = match edge0 {
@@ -257,7 +278,10 @@ pub fn world_pose_seeded<F: QueryFilter>(
         ),
         None => DVec3::ZERO,
     };
-    chain.push((cell_off0 + initial_tf.translation.as_dvec3(), initial_tf.rotation));
+    chain.push((
+        cell_off0 + initial_tf.translation.as_dvec3(),
+        initial_tf.rotation,
+    ));
 
     let mut current = entity;
     for _ in 0..32 {
@@ -270,7 +294,10 @@ pub fn world_pose_seeded<F: QueryFilter>(
             Err(_) => break,
         };
         let edge = match q_parents.get(parent) {
-            Ok(co) => q_grids.get(co.parent()).ok().map(|g| g.cell_edge_length() as f64),
+            Ok(co) => q_grids
+                .get(co.parent())
+                .ok()
+                .map(|g| g.cell_edge_length() as f64),
             Err(_) => None,
         };
         let cell_off = match edge {
@@ -322,11 +349,11 @@ mod tests {
         let g = grid();
         let cases = [
             DVec3::ZERO,
-            DVec3::new(1500.0, -300.0, 800.0), // within cell 0
-            DVec3::new(2500.0, 0.0, 0.0),      // cell 1, offset 500
-            DVec3::new(-7000.3, 4100.0, 0.0),  // negative cells
+            DVec3::new(1500.0, -300.0, 800.0),   // within cell 0
+            DVec3::new(2500.0, 0.0, 0.0),        // cell 1, offset 500
+            DVec3::new(-7000.3, 4100.0, 0.0),    // negative cells
             DVec3::new(2500.0, -4100.0, 9999.9), // off-axis, multi-cell
-            DVec3::new(1.737e6, 0.0, 0.0),     // lunar-radius scale (the precision case)
+            DVec3::new(1.737e6, 0.0, 0.0),       // lunar-radius scale (the precision case)
         ];
         for p in cases {
             let (cell, off) = world_to_grid_local(p, DVec3::ZERO, &g);
@@ -353,17 +380,31 @@ mod tests {
     fn grid_absolute_round_trips_through_the_cell_split() {
         let mut world = World::new();
         let grid_e = world
-            .spawn((grid(), CellCoord::ZERO, Transform::default(), GlobalTransform::default()))
+            .spawn((
+                grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
             .id();
         // A prim two cells up and one over, as a moonbase prim is after spawn.
         let cell = CellCoord::new(1, 2, 0);
         let local = Vec3::new(-53.0, 120.5, 7.25);
         let prim = world
-            .spawn((cell, Transform::from_translation(local), GlobalTransform::default(), ChildOf(grid_e)))
+            .spawn((
+                cell,
+                Transform::from_translation(local),
+                GlobalTransform::default(),
+                ChildOf(grid_e),
+            ))
             .id();
         // Not grid-direct: a nested child under a referenced scene.
         let nested = world
-            .spawn((Transform::from_translation(Vec3::new(1.0, 2.0, 3.0)), GlobalTransform::default(), ChildOf(prim)))
+            .spawn((
+                Transform::from_translation(Vec3::new(1.0, 2.0, 3.0)),
+                GlobalTransform::default(),
+                ChildOf(prim),
+            ))
             .id();
 
         let mut state: SystemState<(
@@ -371,15 +412,12 @@ mod tests {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_spatial) =
-            state.get(&world).expect("read-only queries always validate");
+        let (q_parents, q_grids, q_spatial) = state
+            .get(&world)
+            .expect("read-only queries always validate");
 
         let abs = grid_absolute(prim, &q_parents, &q_grids, &q_spatial).expect("prim is spatial");
-        let expected = DVec3::new(
-            1.0 * EDGE as f64 - 53.0,
-            2.0 * EDGE as f64 + 120.5,
-            7.25,
-        );
+        let expected = DVec3::new(1.0 * EDGE as f64 - 53.0, 2.0 * EDGE as f64 + 120.5, 7.25);
         assert!(
             (abs - expected).length() < 1e-6,
             "grid_absolute {abs:?} != cell×edge + local {expected:?}"
@@ -392,16 +430,24 @@ mod tests {
         // Re-splitting the absolute reproduces a pose at the same place (the cell
         // may re-bin; only the reassembly has to match).
         let (back_cell, back_local) = grid_local_from_absolute(prim, abs, &q_parents, &q_grids);
-        let back = grid()
-            .grid_position_double(&back_cell.expect("grid-direct prim gets a cell"), &Transform::from_translation(back_local));
-        assert!((back - abs).length() < 1e-3, "round-trip {abs:?} -> {back:?}");
+        let back = grid().grid_position_double(
+            &back_cell.expect("grid-direct prim gets a cell"),
+            &Transform::from_translation(back_local),
+        );
+        assert!(
+            (back - abs).length() < 1e-3,
+            "round-trip {abs:?} -> {back:?}"
+        );
 
         // A prim with no parent Grid has no cell: its translate IS its local.
         let nested_abs =
             grid_absolute(nested, &q_parents, &q_grids, &q_spatial).expect("nested is spatial");
         assert_eq!(nested_abs, DVec3::new(1.0, 2.0, 3.0));
         let (no_cell, same) = grid_local_from_absolute(nested, nested_abs, &q_parents, &q_grids);
-        assert!(no_cell.is_none(), "a non-grid-direct entity must not be given a cell");
+        assert!(
+            no_cell.is_none(),
+            "a non-grid-direct entity must not be given a cell"
+        );
         assert_eq!(same, Vec3::new(1.0, 2.0, 3.0));
     }
 
@@ -413,8 +459,7 @@ mod tests {
         let grid_world = DVec3::new(10_000.0, 0.0, -5_000.0);
         let p = DVec3::new(12_500.0, 300.0, -5_000.0);
         let (cell, off) = world_to_grid_local(p, grid_world, &g);
-        let back =
-            g.grid_position_double(&cell, &Transform::from_translation(off)) + grid_world;
+        let back = g.grid_position_double(&cell, &Transform::from_translation(off)) + grid_world;
         assert!((back - p).length() < 1e-3, "p {p:?} -> {back:?}");
     }
 
@@ -425,7 +470,12 @@ mod tests {
     fn world_position_matches_decompose() {
         let mut world = World::new();
         let grid_e = world
-            .spawn((grid(), CellCoord::ZERO, Transform::default(), GlobalTransform::default()))
+            .spawn((
+                grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
             .id();
         let child_off = Vec3::new(500.0, -123.0, 42.0);
         let child = world
@@ -442,17 +492,27 @@ mod tests {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_spatial) = state.get(&world).expect("read-only queries always validate");
+        let (q_parents, q_grids, q_spatial) = state
+            .get(&world)
+            .expect("read-only queries always validate");
 
         let abs = world_position(child, &q_parents, &q_grids, &q_spatial).unwrap();
         let g = grid();
-        let expected =
-            g.grid_position_double(&CellCoord::new(1, 0, 0), &Transform::from_translation(child_off));
-        assert!((abs - expected).length() < 1e-6, "abs {abs:?} expected {expected:?}");
+        let expected = g.grid_position_double(
+            &CellCoord::new(1, 0, 0),
+            &Transform::from_translation(child_off),
+        );
+        assert!(
+            (abs - expected).length() < 1e-6,
+            "abs {abs:?} expected {expected:?}"
+        );
 
         let (cell, off) = world_to_grid_local(abs, DVec3::ZERO, &g);
         assert_eq!((cell.x, cell.y, cell.z), (1, 0, 0), "cell {cell:?}");
-        assert!((off - child_off).length() < 1e-3, "off {off:?} vs {child_off:?}");
+        assert!(
+            (off - child_off).length() < 1e-3,
+            "off {off:?} vs {child_off:?}"
+        );
     }
 
     /// `world_position` must apply a parent GRID's rotation. The Moon grid
@@ -492,7 +552,9 @@ mod tests {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_spatial) = state.get(&world).expect("read-only queries always validate");
+        let (q_parents, q_grids, q_spatial) = state
+            .get(&world)
+            .expect("read-only queries always validate");
 
         let pos = world_position(child, &q_parents, &q_grids, &q_spatial).unwrap();
         let expected = DVec3::new(0.0, 0.0, -100.0);

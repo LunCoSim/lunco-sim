@@ -242,9 +242,9 @@ impl Overlay for NavBarOverlay {
             .clicked()
         {
             if let Some(bounds) = ctx.scene.bounds() {
-                let (c, z) = ctx
-                    .viewport
-                    .fit_values(bounds, ctx.canvas_screen_rect, self.fit_padding);
+                let (c, z) =
+                    ctx.viewport
+                        .fit_values(bounds, ctx.canvas_screen_rect, self.fit_padding);
                 ctx.viewport.set_target(c, z);
             }
         }

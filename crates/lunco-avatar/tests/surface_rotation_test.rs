@@ -30,7 +30,11 @@ fn test_surface_incremental_yaw_no_roll() {
         rot = (pitch_q * yaw_q * rot).normalize();
     }
 
-    assert!(has_no_roll(rot), "After 50 yaw increments, right axis should be horizontal. right.y={}", get_right(rot).y);
+    assert!(
+        has_no_roll(rot),
+        "After 50 yaw increments, right axis should be horizontal. right.y={}",
+        get_right(rot).y
+    );
 }
 
 #[test]
@@ -44,7 +48,11 @@ fn test_surface_incremental_pitch_no_roll() {
         rot = (pitch_q * rot).normalize();
     }
 
-    assert!(has_no_roll(rot), "After pitch, right axis should stay horizontal. right.y={}", get_right(rot).y);
+    assert!(
+        has_no_roll(rot),
+        "After pitch, right axis should stay horizontal. right.y={}",
+        get_right(rot).y
+    );
 }
 
 #[test]
@@ -81,7 +89,11 @@ fn test_surface_mouse_axes_intuitive() {
     rot = (yaw_q * rot).normalize();
 
     let fwd = rot.mul_vec3(Vec3::NEG_Z);
-    assert!(fwd.x > 0.0, "Negative yaw should turn camera right. fwd.x={}", fwd.x);
+    assert!(
+        fwd.x > 0.0,
+        "Negative yaw should turn camera right. fwd.x={}",
+        fwd.x
+    );
 
     let pitch_delta = 0.1f32;
     let right = get_right(rot);
@@ -89,5 +101,9 @@ fn test_surface_mouse_axes_intuitive() {
     rot = (pitch_q * rot).normalize();
 
     let fwd2 = rot.mul_vec3(Vec3::NEG_Z);
-    assert!(fwd2.y > 0.0, "Positive pitch should look down. fwd.y={}", fwd2.y);
+    assert!(
+        fwd2.y > 0.0,
+        "Positive pitch should look down. fwd.y={}",
+        fwd2.y
+    );
 }

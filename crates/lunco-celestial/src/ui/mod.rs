@@ -4,20 +4,26 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
 
+use crate::commands::TeleportToSurface;
 use lunco_core::{Avatar, CelestialBody};
 use lunco_time::{TimeTransport, TransportMode, WorldTime};
-use crate::commands::TeleportToSurface;
 
 /// Celestial time control panel.
 pub struct CelestialTimePanel;
 
 impl Panel for CelestialTimePanel {
-    fn id(&self) -> PanelId { PanelId("celestial_time") }
-    fn title(&self) -> String { "Time Control".into() }
+    fn id(&self) -> PanelId {
+        PanelId("celestial_time")
+    }
+    fn title(&self) -> String {
+        "Time Control".into()
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::Bottom }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::Bottom
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         if let Some(theme) = ctx.resource::<lunco_theme::Theme>() {
@@ -43,10 +49,17 @@ impl Panel for CelestialTimePanel {
         let (paused, speed) = transport.unwrap_or((false, 1.0));
 
         ui.horizontal(|ui| {
-            if ui.button(if paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
+            if ui
+                .button(if paused { "▶ Play" } else { "⏸ Pause" })
+                .clicked()
+            {
                 ctx.defer(move |world| {
                     if let Some(mut t) = world.get_resource_mut::<TimeTransport>() {
-                        t.mode = if paused { TransportMode::Playing } else { TransportMode::Paused };
+                        t.mode = if paused {
+                            TransportMode::Playing
+                        } else {
+                            TransportMode::Paused
+                        };
                     }
                 });
             }
@@ -70,12 +83,18 @@ impl Panel for CelestialTimePanel {
 pub struct CelestialBodiesPanel;
 
 impl Panel for CelestialBodiesPanel {
-    fn id(&self) -> PanelId { PanelId("celestial_bodies") }
-    fn title(&self) -> String { "Celestial Bodies".into() }
+    fn id(&self) -> PanelId {
+        PanelId("celestial_bodies")
+    }
+    fn title(&self) -> String {
+        "Celestial Bodies".into()
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::SideBrowser
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         if let Some(theme) = ctx.resource::<lunco_theme::Theme>() {
@@ -105,7 +124,10 @@ impl Panel for CelestialBodiesPanel {
 
         if let Some((target, body_entity)) = teleport {
             ctx.defer(move |world| {
-                world.trigger(TeleportToSurface { target, body_entity });
+                world.trigger(TeleportToSurface {
+                    target,
+                    body_entity,
+                });
             });
         }
     }
@@ -144,14 +166,18 @@ struct CelestialBodyRow {
 pub fn populate_celestial_bodies_view(
     mut view: ResMut<CelestialBodiesView>,
     bodies: Query<(Entity, &Name, &CelestialBody)>,
-    changed: Query<(), (With<CelestialBody>, Or<(Changed<CelestialBody>, Changed<Name>)>)>,
+    changed: Query<
+        (),
+        (
+            With<CelestialBody>,
+            Or<(Changed<CelestialBody>, Changed<Name>)>,
+        ),
+    >,
     mut removed: RemovedComponents<CelestialBody>,
     avatar: Query<Entity, With<Avatar>>,
 ) {
     let avatar_ent = avatar.iter().next();
-    let dirty = !changed.is_empty()
-        || removed.read().next().is_some()
-        || view.avatar != avatar_ent;
+    let dirty = !changed.is_empty() || removed.read().next().is_some() || view.avatar != avatar_ent;
     if !dirty {
         return;
     }

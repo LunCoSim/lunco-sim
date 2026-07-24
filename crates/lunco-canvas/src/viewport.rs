@@ -319,7 +319,12 @@ mod tests {
         ] {
             let sp = v.world_to_screen(p, screen());
             let back = v.screen_to_world(sp, screen());
-            assert!((back.x - p.x).abs() < 1e-3, "x drift: {:?} -> {:?}", p, back);
+            assert!(
+                (back.x - p.x).abs() < 1e-3,
+                "x drift: {:?} -> {:?}",
+                p,
+                back
+            );
             assert!((back.y - p.y).abs() < 1e-3, "y drift");
         }
     }
@@ -384,7 +389,12 @@ mod tests {
             let dx = v.target_center.x - v.center.x;
             let dy = v.target_center.y - v.center.y;
             let dist = (dx * dx + dy * dy).sqrt();
-            assert!(dist <= last_dist + 1e-3, "overshoot: {} -> {}", last_dist, dist);
+            assert!(
+                dist <= last_dist + 1e-3,
+                "overshoot: {} -> {}",
+                last_dist,
+                dist
+            );
             last_dist = dist;
         }
         assert!(last_dist < 1.0, "did not converge: {}", last_dist);

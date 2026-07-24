@@ -87,10 +87,7 @@ impl ScriptSources {
         };
         // Only the final segment can carry the extension; a dot earlier in the
         // path (a versioned directory, say) must not suppress it.
-        let has_ext = id
-            .rsplit('/')
-            .next()
-            .is_some_and(|seg| seg.contains('.'));
+        let has_ext = id.rsplit('/').next().is_some_and(|seg| seg.contains('.'));
         if has_ext {
             id
         } else {
@@ -170,7 +167,10 @@ mod tests {
         let s = ScriptSources::default();
         assert!(s.get("twin://ep1/lib.rhai").is_none());
         s.insert("twin://ep1/lib.rhai", "fn f() { 1 }");
-        assert_eq!(s.get("twin://ep1/lib.rhai").as_deref(), Some("fn f() { 1 }"));
+        assert_eq!(
+            s.get("twin://ep1/lib.rhai").as_deref(),
+            Some("fn f() { 1 }")
+        );
         assert_eq!(s.ids(), vec!["twin://ep1/lib.rhai".to_string()]);
     }
 }

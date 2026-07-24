@@ -21,13 +21,6 @@ use crate::backend::ScriptBackends;
 // it once for either feature — importing under each cfg collides when both are on.
 #[cfg(any(feature = "rhai", feature = "python"))]
 use crate::doc::ScriptLanguage;
-#[cfg(any(feature = "rhai", feature = "python"))]
-use bevy::prelude::*;
-use lunco_core::register_commands;
-#[cfg(any(feature = "rhai", feature = "python"))]
-use lunco_core::{on_command, Ack, Command, OpId};
-#[cfg(feature = "rhai")]
-use lunco_core::ActiveCommandId;
 #[cfg(feature = "rhai")]
 use crate::world_bridge::PendingWorldScripts;
 #[cfg(feature = "rhai")]
@@ -35,6 +28,13 @@ use crate::{
     doc::{ScriptDocument, ScriptedModel},
     ScriptRegistry,
 };
+#[cfg(any(feature = "rhai", feature = "python"))]
+use bevy::prelude::*;
+use lunco_core::register_commands;
+#[cfg(feature = "rhai")]
+use lunco_core::ActiveCommandId;
+#[cfg(any(feature = "rhai", feature = "python"))]
+use lunco_core::{on_command, Ack, Command, OpId};
 #[cfg(feature = "rhai")]
 use lunco_doc::DocumentId;
 // Pause/stop scenario commands are language-agnostic (`any(rhai, python)`) and
@@ -256,7 +256,11 @@ pub(crate) fn attach_rhai_scenario(
 #[cfg(feature = "rhai")]
 pub fn attach_embedded_scenarios(
     q: Query<
-        (Entity, &lunco_core::EmbeddedScenarioSource, Option<&ScenarioAssetId>),
+        (
+            Entity,
+            &lunco_core::EmbeddedScenarioSource,
+            Option<&ScenarioAssetId>,
+        ),
         Without<ScriptedModel>,
     >,
     mut registry: ResMut<ScriptRegistry>,
@@ -344,12 +348,20 @@ pub fn resolve_embedded_scenario_paths(
             // read through the resolver's `canonicalize`, which anchors it to the
             // scene's source (like `lunco:resolvedAsset`). Inline `lunco:script` /
             // `LunCoPolicy` sources are unaffected (they ride the doc).
-            info!("[scripting] loading scenario script `{}` as `{uri}`", path.0);
+            info!(
+                "[scripting] loading scenario script `{}` as `{uri}`",
+                path.0
+            );
             asset_server.load(uri)
         });
         if asset_server.load_state(&*handle).is_failed() {
-            warn!("[scripting] failed to load scenario `{}` via AssetServer", path.0);
-            commands.entity(entity).remove::<lunco_core::EmbeddedScenarioPath>();
+            warn!(
+                "[scripting] failed to load scenario `{}` via AssetServer",
+                path.0
+            );
+            commands
+                .entity(entity)
+                .remove::<lunco_core::EmbeddedScenarioPath>();
             pending.remove(&entity);
             continue;
         }
@@ -540,8 +552,8 @@ fn push_rhai_string(s: &str, out: &mut String) {
 /// (validate-before-store). Errors are caller-prefixed.
 #[cfg(feature = "rhai")]
 fn parse_timeline_steps(timeline: &str) -> Result<(serde_json::Value, usize), String> {
-    let parsed: serde_json::Value = serde_json::from_str(timeline)
-        .map_err(|e| format!("`timeline` is not valid JSON: {e}"))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(timeline).map_err(|e| format!("`timeline` is not valid JSON: {e}"))?;
     let steps = match &parsed {
         serde_json::Value::Array(_) => parsed.clone(),
         serde_json::Value::Object(o) => o
@@ -816,8 +828,10 @@ pub(crate) fn register_command_policies(app: &mut App) {
 
     // Executes a script body (full `cmd()` reach under host authority) or
     // persists an authoring artifact to the twin dir → `Operator` floor.
-    const EXEC: CommandPolicy =
-        CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false };
+    const EXEC: CommandPolicy = CommandPolicy {
+        min_role: AuthorityRole::Operator,
+        ownership_gated: false,
+    };
 
     #[cfg(feature = "rhai")]
     {
@@ -938,7 +952,10 @@ mod tests {
 
         // Script-executing / disk-persisting commands carry an Operator floor:
         // a body reaches the whole cmd() surface under host authority.
-        let exec = CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false };
+        let exec = CommandPolicy {
+            min_role: AuthorityRole::Operator,
+            ownership_gated: false,
+        };
         for c in [
             "RunRhai",
             "RunScenario",
@@ -951,7 +968,10 @@ mod tests {
         }
 
         // Scenario lifecycle is ownership-gated control, like SetPorts.
-        assert_eq!(reg.policy_for("SetScenarioPaused"), CommandPolicy::OWNED_CONTROL);
+        assert_eq!(
+            reg.policy_for("SetScenarioPaused"),
+            CommandPolicy::OWNED_CONTROL
+        );
         assert_eq!(reg.policy_for("StopScenario"), CommandPolicy::OWNED_CONTROL);
 
         // The structural mutation verbs share the registry under a capability key,

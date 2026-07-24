@@ -12,20 +12,18 @@
 //! which overwrites the `EphemerisResource` installed by
 //! `lunco_celestial::CelestialPlugin`.
 
-use bevy::prelude::*;
 use bevy::math::DVec3;
-use lunco_celestial::frames::{EclipticAu, IcrfAu};
-use celestial_time::TDB;
-use celestial_time::julian::JulianDate;
-use celestial_ephemeris::{Vsop2013Earth, Vsop2013Sun, planets::Vsop2013Emb, moon::ElpMpp02Moon};
+use bevy::prelude::*;
 use celestial_core::Vector3;
+use celestial_ephemeris::{moon::ElpMpp02Moon, planets::Vsop2013Emb, Vsop2013Earth, Vsop2013Sun};
+use celestial_time::julian::JulianDate;
+use celestial_time::TDB;
+use lunco_celestial::frames::{EclipticAu, IcrfAu};
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use lunco_celestial::ephemeris::{
-    CsvDataPoint, EphemerisProvider, EphemerisResource,
-};
+use lunco_celestial::ephemeris::{CsvDataPoint, EphemerisProvider, EphemerisResource};
 
 /// Concrete implementation of the hybrid [`EphemerisProvider`].
 ///
@@ -169,7 +167,9 @@ impl CelestialEphemerisProvider {
             if let Ok(target_id) = target_id_str.parse::<i32>() {
                 let mut points = Vec::new();
                 for line in csv_content.lines() {
-                    if line.trim().is_empty() || line.contains("$$") { continue; }
+                    if line.trim().is_empty() || line.contains("$$") {
+                        continue;
+                    }
                     let parts: Vec<&str> = line.split(',').collect();
                     if parts.len() >= 5 {
                         if let (Ok(jd), Ok(x), Ok(y), Ok(z)) = (
@@ -180,7 +180,11 @@ impl CelestialEphemerisProvider {
                         ) {
                             points.push(CsvDataPoint {
                                 jd,
-                                pos_au: EclipticAu::new(DVec3::new(x / AU_KM, y / AU_KM, z / AU_KM)),
+                                pos_au: EclipticAu::new(DVec3::new(
+                                    x / AU_KM,
+                                    y / AU_KM,
+                                    z / AU_KM,
+                                )),
                             });
                         }
                     }
@@ -285,7 +289,9 @@ impl EphemerisProvider for CelestialEphemerisProvider {
             10 => Some(EclipticAu::ZERO), // the Sun IS the origin of this frame
             3 => {
                 let p = self.emb_heliocentric(&tdb)?;
-                Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(p.x, p.y, p.z))))
+                Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
+                    p.x, p.y, p.z,
+                ))))
             }
             399 => {
                 let p_emb = self.emb_heliocentric(&tdb)?;
@@ -321,8 +327,12 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                 let guard = self.custom_data.read().unwrap_or_else(|e| e.into_inner());
                 if let Some(data) = guard.get(&other_id) {
                     if !data.is_empty() {
-                        if epoch_jd <= data.first().unwrap().jd { return Some(data.first().unwrap().pos_au); }
-                        if epoch_jd >= data.last().unwrap().jd { return Some(data.last().unwrap().pos_au); }
+                        if epoch_jd <= data.first().unwrap().jd {
+                            return Some(data.first().unwrap().pos_au);
+                        }
+                        if epoch_jd >= data.last().unwrap().jd {
+                            return Some(data.last().unwrap().pos_au);
+                        }
                         let idx = data.partition_point(|p| p.jd <= epoch_jd);
                         if idx > 0 && idx < data.len() {
                             let p0 = &data[idx - 1];
@@ -377,13 +387,19 @@ mod frame_tests {
     fn shackleton_sun_stays_grazing_and_gets_lit_epochs() {
         let provider = CelestialEphemerisProvider::new();
         let registry = CelestialBodyRegistry::default_system();
-        let moon = registry.bodies.iter().find(|b| b.ephemeris_id == 301).unwrap();
+        let moon = registry
+            .bodies
+            .iter()
+            .find(|b| b.ephemeris_id == 301)
+            .unwrap();
         let site = Geodetic::new(-89.45, -136.7, 1200.0);
 
         let mut best = (0.0_f64, f64::MIN);
         for step in 0..=(366 * 4) {
             let jd = 2461228.5 + step as f64 * 0.25; // 6 h steps from 2026-07-07
-            let p_moon = provider.global_position(301, jd).expect("VSOP/ELP always have the Moon");
+            let p_moon = provider
+                .global_position(301, jd)
+                .expect("VSOP/ELP always have the Moon");
             let center_m = ecliptic_to_bevy(p_moon).raw();
             let frame = solar_tangent_frame(moon, &site, center_m, jd);
             let to_sun = ecliptic_to_bevy(-p_moon).normalize().raw();
@@ -396,7 +412,10 @@ mod frame_tests {
                 best = (jd, elev_deg);
             }
         }
-        println!("best lit epoch: JD {:.2} (elevation {:.3}°)", best.0, best.1);
+        println!(
+            "best lit epoch: JD {:.2} (elevation {:.3}°)",
+            best.0, best.1
+        );
         assert!(
             best.1 > 1.0,
             "Shackleton should reach >1° sun elevation within a year; best {:.3}°",
@@ -424,7 +443,11 @@ mod frame_tests {
 
         let provider = CelestialEphemerisProvider::new();
         let registry = CelestialBodyRegistry::default_system();
-        let moon = registry.bodies.iter().find(|b| b.ephemeris_id == 301).unwrap();
+        let moon = registry
+            .bodies
+            .iter()
+            .find(|b| b.ephemeris_id == 301)
+            .unwrap();
 
         let mut worst = (0.0_f64, 0.0_f64);
         // ~14 months at 11-day steps: samples every phase of the libration cycle.
@@ -461,7 +484,10 @@ mod frame_tests {
                 worst = (jd, lon);
             }
         }
-        println!("worst sub-Earth longitude: {:.2}° at JD {:.1}", worst.1, worst.0);
+        println!(
+            "worst sub-Earth longitude: {:.2}° at JD {:.1}",
+            worst.1, worst.0
+        );
 
         // And it must genuinely LIBRATE, not be pinned at 0 by a degenerate
         // model that happens to satisfy the bound.
@@ -582,7 +608,9 @@ fn adopt_ephemeris_datasets(
         if !seen.insert(format!("loaded:{}", entry.key)) {
             continue;
         }
-        let Some(points) = read_vectors(&entry.path) else { continue };
+        let Some(points) = read_vectors(&entry.path) else {
+            continue;
+        };
         info!(
             "[ephemeris] loaded {} vectors for NAIF {} from dataset '{}'",
             points.len(),
@@ -605,4 +633,3 @@ struct EphemerisVectors {
     data: Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>,
     parents: Arc<RwLock<HashMap<i32, i32>>>,
 }
-

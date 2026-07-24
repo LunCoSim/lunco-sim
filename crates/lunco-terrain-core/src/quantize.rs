@@ -78,7 +78,10 @@ mod tests {
             let q = quantize(h, step);
             let n = (q / step).round();
             assert!((q - n * step).abs() < 1e-9, "not on lattice: {q}");
-            assert!((q - h).abs() <= 0.5 * step + 1e-12, "moved too far: {h} -> {q}");
+            assert!(
+                (q - h).abs() <= 0.5 * step + 1e-12,
+                "moved too far: {h} -> {q}"
+            );
         }
     }
 

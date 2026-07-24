@@ -207,10 +207,8 @@ impl VisualRegistry {
         F: Fn(&NodeData) -> V + Send + Sync + 'static,
         V: NodeVisual + 'static,
     {
-        self.nodes.insert(
-            kind.into(),
-            Box::new(move |data| Box::new(factory(data))),
-        );
+        self.nodes
+            .insert(kind.into(), Box::new(move |data| Box::new(factory(data))));
     }
 
     pub fn register_edge_kind<F, V>(&mut self, kind: impl Into<SmolStr>, factory: F)
@@ -218,10 +216,8 @@ impl VisualRegistry {
         F: Fn(&NodeData) -> V + Send + Sync + 'static,
         V: EdgeVisual + 'static,
     {
-        self.edges.insert(
-            kind.into(),
-            Box::new(move |data| Box::new(factory(data))),
-        );
+        self.edges
+            .insert(kind.into(), Box::new(move |data| Box::new(factory(data))));
     }
 
     pub fn build_node(&self, kind: &str, data: &NodeData) -> Option<Box<dyn NodeVisual>> {

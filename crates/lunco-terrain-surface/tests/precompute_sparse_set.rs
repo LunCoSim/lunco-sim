@@ -75,7 +75,10 @@ fn sparse_set_depth_distribution() {
     // Base only. The analytic layers (craters/overzoom) ADD error, so a DEM-only measurement
     // is a LOWER bound on the sparse set — stated rather than silently assumed.
     let oracle = SurfaceOracle::bare(std::sync::Arc::new(grid));
-    let root = Square { center: [0.0, 0.0], half };
+    let root = Square {
+        center: [0.0, 0.0],
+        half,
+    };
 
     // Max depth the runtime can select (`stream_viz::MAX_DEPTH`).
     const MAX_DEPTH: u8 = 8;
@@ -103,12 +106,21 @@ fn sparse_set_depth_distribution() {
         for c in coord.children() {
             let cx = region.center[0] + if c.x % 2 == 0 { -h } else { h };
             let cz = region.center[1] + if c.z % 2 == 0 { -h } else { h };
-            stack.push((c, Square { center: [cx, cz], half: h }));
+            stack.push((
+                c,
+                Square {
+                    center: [cx, cz],
+                    half: h,
+                },
+            ));
         }
     }
 
     println!("\nsparse set (error floor {ERROR_FLOOR_M} m, max depth {MAX_DEPTH}):");
-    println!("{:>6} {:>12} {:>10} {:>12}", "depth", "tiles", "node m", "cumulative");
+    println!(
+        "{:>6} {:>12} {:>10} {:>12}",
+        "depth", "tiles", "node m", "cumulative"
+    );
     let mut total = 0usize;
     let mut cumulative_bytes = 0usize;
     for d in 0..=MAX_DEPTH as usize {

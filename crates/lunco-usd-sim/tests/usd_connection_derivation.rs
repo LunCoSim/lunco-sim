@@ -304,7 +304,8 @@ fn the_airframe_alone_has_no_guidance() {
     let lander = SdfPath::new("/DescentLander").unwrap();
 
     assert!(
-        view.connections(&lander, "inputs:guidance_throttle").is_empty(),
+        view.connections(&lander, "inputs:guidance_throttle")
+            .is_empty(),
         "the airframe must not wire its own guidance — an unpossessed lander that \
          flies itself is a mission, not a vehicle"
     );

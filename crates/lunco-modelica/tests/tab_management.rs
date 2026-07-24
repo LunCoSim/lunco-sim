@@ -27,7 +27,11 @@ fn ensure_for_dedups_same_doc_and_drilled_scope() {
     let a = tabs.ensure_for(doc(1), None);
     let b = tabs.ensure_for(doc(1), None);
     assert_eq!(a, b, "ensure_for must dedup same (doc, None)");
-    assert_eq!(tabs.count_for_doc(doc(1)), 1, "expected 1 tab, got duplicates");
+    assert_eq!(
+        tabs.count_for_doc(doc(1)),
+        1,
+        "expected 1 tab, got duplicates"
+    );
 }
 
 #[test]
@@ -35,7 +39,10 @@ fn ensure_for_distinguishes_drilled_scopes() {
     let mut tabs = ModelTabs::default();
     let root = tabs.ensure_for(doc(1), None);
     let drilled = tabs.ensure_for(doc(1), Some("Foo.Bar".into()));
-    assert_ne!(root, drilled, "different drilled scope must yield distinct tab");
+    assert_ne!(
+        root, drilled,
+        "different drilled scope must yield distinct tab"
+    );
     assert_eq!(tabs.count_for_doc(doc(1)), 2);
 }
 
@@ -57,7 +64,10 @@ fn ensure_preview_for_new_doc_creates_unpinned() {
     let (id, evict) = tabs.ensure_preview_for(doc(1), None);
     assert!(evict.is_none(), "no prior preview to evict");
     let state = tabs.get(id).expect("tab present");
-    assert!(!state.pinned, "preview tabs must NOT be pinned on first open");
+    assert!(
+        !state.pinned,
+        "preview tabs must NOT be pinned on first open"
+    );
 }
 
 #[test]
@@ -72,7 +82,11 @@ fn ensure_preview_for_evicts_old_preview_and_allocates_new() {
     let (preview_a, evict_a) = tabs.ensure_preview_for(doc(1), None);
     assert!(evict_a.is_none(), "no prior preview");
     let (preview_b, evict_b) = tabs.ensure_preview_for(doc(2), None);
-    assert_eq!(evict_b, Some(preview_a), "old preview returned for eviction");
+    assert_eq!(
+        evict_b,
+        Some(preview_a),
+        "old preview returned for eviction"
+    );
     assert_ne!(preview_a, preview_b, "new TabId allocated, not reused");
     // The caller is expected to close `evict_b` (preview_a). Simulate
     // that here so the post-state matches "after eviction".
@@ -90,7 +104,10 @@ fn ensure_preview_for_focuses_existing_match() {
     let mut tabs = ModelTabs::default();
     let pinned_id = tabs.ensure_for(doc(1), None);
     let (focused, evict) = tabs.ensure_preview_for(doc(1), None);
-    assert_eq!(focused, pinned_id, "must focus existing pinned tab, not allocate");
+    assert_eq!(
+        focused, pinned_id,
+        "must focus existing pinned tab, not allocate"
+    );
     assert!(evict.is_none(), "no eviction when matching existing tab");
     assert_eq!(tabs.count_for_doc(doc(1)), 1, "no duplicate created");
 }
@@ -109,7 +126,11 @@ fn ensure_preview_for_does_not_steal_pinned_tab() {
     assert!(evict.is_none(), "no prior preview slot occupant");
     assert!(tabs.get(pinned).unwrap().pinned, "pinned tab unchanged");
     assert!(!tabs.get(preview).unwrap().pinned, "new preview unpinned");
-    assert_eq!(tabs.get(pinned).unwrap().doc, doc(1), "pinned still on doc(1)");
+    assert_eq!(
+        tabs.get(pinned).unwrap().doc,
+        doc(1),
+        "pinned still on doc(1)"
+    );
 }
 
 #[test]
@@ -125,7 +146,10 @@ fn pin_promotes_preview_to_pinned_and_clears_slot() {
     let (other, evict) = tabs.ensure_preview_for(doc(2), None);
     assert!(evict.is_none(), "pinned tab is no longer in preview slot");
     assert_ne!(other, id, "fresh tab for the new preview");
-    assert!(tabs.get(id).unwrap().pinned, "previously-pinned tab still alive");
+    assert!(
+        tabs.get(id).unwrap().pinned,
+        "previously-pinned tab still alive"
+    );
 }
 
 #[test]
@@ -155,7 +179,10 @@ fn open_new_always_allocates_fresh_tab() {
     let mut tabs = ModelTabs::default();
     let a = tabs.ensure_for(doc(1), None);
     let b = tabs.open_new(doc(1), None);
-    assert_ne!(a, b, "open_new must allocate even when (doc, drilled) matches");
+    assert_ne!(
+        a, b,
+        "open_new must allocate even when (doc, drilled) matches"
+    );
     assert_eq!(tabs.count_for_doc(doc(1)), 2);
 }
 
@@ -163,7 +190,10 @@ fn open_new_always_allocates_fresh_tab() {
 fn open_new_pins_by_default() {
     let mut tabs = ModelTabs::default();
     let id = tabs.open_new(doc(1), None);
-    assert!(tabs.get(id).unwrap().pinned, "split tabs are deliberate; pinned");
+    assert!(
+        tabs.get(id).unwrap().pinned,
+        "split tabs are deliberate; pinned"
+    );
 }
 
 #[test]
@@ -174,8 +204,14 @@ fn open_new_distinct_view_modes_independent() {
     let b = tabs.open_new(doc(1), None);
     tabs.get_mut(a).unwrap().view_mode = ModelViewMode::Text;
     tabs.get_mut(b).unwrap().view_mode = ModelViewMode::Canvas;
-    assert!(matches!(tabs.get(a).unwrap().view_mode, ModelViewMode::Text));
-    assert!(matches!(tabs.get(b).unwrap().view_mode, ModelViewMode::Canvas));
+    assert!(matches!(
+        tabs.get(a).unwrap().view_mode,
+        ModelViewMode::Text
+    ));
+    assert!(matches!(
+        tabs.get(b).unwrap().view_mode,
+        ModelViewMode::Canvas
+    ));
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -277,10 +313,7 @@ fn drilled_class_for_doc_returns_no_drill_for_root_tab() {
 fn drilled_class_for_doc_returns_scope_for_drilled_tab() {
     let mut tabs = ModelTabs::default();
     let _id = tabs.ensure_for(doc(1), Some("Foo.Bar".into()));
-    assert_eq!(
-        tabs.drilled_class_for_doc(doc(1)),
-        Some("Foo.Bar".into()),
-    );
+    assert_eq!(tabs.drilled_class_for_doc(doc(1)), Some("Foo.Bar".into()),);
 }
 
 #[test]
@@ -304,7 +337,10 @@ fn close_drilled_into_drops_exact_match() {
     let closed = tabs.close_drilled_into(doc(1), "Foo.Bar");
     assert_eq!(closed, vec![drilled]);
     assert!(tabs.get(drilled).is_none(), "drilled tab dropped");
-    assert!(tabs.get(root).is_some(), "root tab survives — different scope");
+    assert!(
+        tabs.get(root).is_some(),
+        "root tab survives — different scope"
+    );
 }
 
 #[test]
@@ -318,7 +354,10 @@ fn close_drilled_into_drops_descendants() {
     let sibling = tabs.ensure_for(doc(1), Some("Foo.BarSibling".into()));
     let closed = tabs.close_drilled_into(doc(1), "Foo.Bar");
     assert_eq!(closed.len(), 3, "3 tabs match (exact + 2 descendants)");
-    assert!(tabs.get(sibling).is_some(), "Foo.BarSibling NOT a descendant");
+    assert!(
+        tabs.get(sibling).is_some(),
+        "Foo.BarSibling NOT a descendant"
+    );
 }
 
 #[test]
@@ -362,5 +401,8 @@ fn closing_then_reallocating_does_not_reuse_id() {
     let a = tabs.ensure_for(doc(1), None);
     tabs.close_tab(a);
     let b = tabs.ensure_for(doc(2), None);
-    assert!(b > a, "fresh allocation is strictly newer than the closed id");
+    assert!(
+        b > a,
+        "fresh allocation is strictly newer than the closed id"
+    );
 }

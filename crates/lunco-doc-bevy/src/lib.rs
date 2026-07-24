@@ -131,7 +131,10 @@ pub struct DocumentChanged {
 impl DocumentChanged {
     /// Local-origin constructor. Default for UI-triggered paths.
     pub fn local(doc: DocumentId) -> Self {
-        Self { doc, origin: EventOrigin::Local }
+        Self {
+            doc,
+            origin: EventOrigin::Local,
+        }
     }
 }
 
@@ -152,7 +155,10 @@ pub struct DocumentOpened {
 impl DocumentOpened {
     /// Local-origin constructor.
     pub fn local(doc: DocumentId) -> Self {
-        Self { doc, origin: EventOrigin::Local }
+        Self {
+            doc,
+            origin: EventOrigin::Local,
+        }
     }
 }
 
@@ -173,7 +179,10 @@ pub struct DocumentClosed {
 impl DocumentClosed {
     /// Local-origin constructor.
     pub fn local(doc: DocumentId) -> Self {
-        Self { doc, origin: EventOrigin::Local }
+        Self {
+            doc,
+            origin: EventOrigin::Local,
+        }
     }
 }
 
@@ -193,7 +202,10 @@ pub struct DocumentSaved {
 impl DocumentSaved {
     /// Local-origin constructor.
     pub fn local(doc: DocumentId) -> Self {
-        Self { doc, origin: EventOrigin::Local }
+        Self {
+            doc,
+            origin: EventOrigin::Local,
+        }
     }
 }
 
@@ -411,15 +423,30 @@ pub struct KeyChord {
 impl KeyChord {
     /// Convenience constructor for `Ctrl+<key>`.
     pub const fn ctrl(key: KeyCode) -> Self {
-        Self { key, ctrl: true, shift: false, alt: false }
+        Self {
+            key,
+            ctrl: true,
+            shift: false,
+            alt: false,
+        }
     }
     /// Convenience constructor for `Ctrl+Shift+<key>`.
     pub const fn ctrl_shift(key: KeyCode) -> Self {
-        Self { key, ctrl: true, shift: true, alt: false }
+        Self {
+            key,
+            ctrl: true,
+            shift: true,
+            alt: false,
+        }
     }
     /// Convenience constructor for a bare (no-modifier) key.
     pub const fn plain(key: KeyCode) -> Self {
-        Self { key, ctrl: false, shift: false, alt: false }
+        Self {
+            key,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        }
     }
 }
 
@@ -538,10 +565,7 @@ impl Plugin for ViewSyncPlugin {
 }
 
 #[cfg(feature = "ui")]
-fn view_sync_fanout(
-    _trigger: On<DocumentChanged>,
-    mut egui_q: Query<&mut bevy_egui::EguiContext>,
-) {
+fn view_sync_fanout(_trigger: On<DocumentChanged>, mut egui_q: Query<&mut bevy_egui::EguiContext>) {
     for mut ctx in egui_q.iter_mut() {
         ctx.get_mut().request_repaint();
     }
@@ -848,10 +872,7 @@ impl<O: lunco_twin_journal::OpPayload> lunco_doc::OpRecorder<O> for JournalOpRec
     }
 
     fn set_next_author(&self, user: &str, tool: &str) {
-        *self
-            .next_author
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(AuthorTag {
+        *self.next_author.lock().unwrap_or_else(|e| e.into_inner()) = Some(AuthorTag {
             user: user.to_string(),
             tool: tool.to_string(),
         });
@@ -968,7 +989,8 @@ where
     fn install(&mut self, make: impl FnOnce(DocumentId) -> D) -> DocumentId {
         self.next_doc_id = self.next_doc_id.saturating_add(1);
         let id = DocumentId::new(self.next_doc_id);
-        self.hosts.insert(id, lunco_doc::DocumentHost::new(make(id)));
+        self.hosts
+            .insert(id, lunco_doc::DocumentHost::new(make(id)));
         // Fit the journal recorder at creation so the very first edit is
         // journaled. No-op until `set_journal` retro-fits.
         self.attach_recorder(id);
@@ -1234,10 +1256,12 @@ where
         id: DocumentId,
         deps: impl IntoIterator<Item = std::path::PathBuf>,
     ) {
-        let own = self
-            .hosts
-            .get(&id)
-            .and_then(|h| h.document().origin().canonical_path().map(std::path::Path::to_path_buf));
+        let own = self.hosts.get(&id).and_then(|h| {
+            h.document()
+                .origin()
+                .canonical_path()
+                .map(std::path::Path::to_path_buf)
+        });
         let stamped = own
             .into_iter()
             .chain(deps)

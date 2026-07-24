@@ -50,7 +50,11 @@ fn coarse_base_bake_time() {
     let bytes = std::fs::read(&tif).expect("heightmap.tif reads");
     let grid = height_grid_from_geotiff(&bytes).expect("geotiff decodes");
     let half = grid.half_extent as f64;
-    println!("\nDEM: {}² samples, ±{half:.0} m, {:.2} m posting", grid.res, grid.spacing());
+    println!(
+        "\nDEM: {}² samples, ±{half:.0} m, {:.2} m posting",
+        grid.res,
+        grid.spacing()
+    );
 
     // Base only — the analytic layers add per-sample cost, so this is a LOWER bound.
     let oracle = SurfaceOracle::bare(std::sync::Arc::new(grid));
@@ -61,7 +65,13 @@ fn coarse_base_bake_time() {
     let mut total_verts = 0usize;
 
     let t_all = Instant::now();
-    let mut stack = vec![(QuadCoord::ROOT, Square { center: [0.0, 0.0], half })];
+    let mut stack = vec![(
+        QuadCoord::ROOT,
+        Square {
+            center: [0.0, 0.0],
+            half,
+        },
+    )];
     while let Some((coord, region)) = stack.pop() {
         let d = coord.depth as usize;
 
@@ -91,14 +101,23 @@ fn coarse_base_bake_time() {
             for c in coord.children() {
                 let cx = region.center[0] + if c.x % 2 == 0 { -h } else { h };
                 let cz = region.center[1] + if c.z % 2 == 0 { -h } else { h };
-                stack.push((c, Square { center: [cx, cz], half: h }));
+                stack.push((
+                    c,
+                    Square {
+                        center: [cx, cz],
+                        half: h,
+                    },
+                ));
             }
         }
     }
     let wall_ms = t_all.elapsed().as_secs_f64() * 1000.0;
 
     println!("\ncoarse base bake (N={COARSE_N}, {TILE_RES}² verts/tile, single-threaded):");
-    println!("{:>6} {:>8} {:>12} {:>12}", "depth", "tiles", "total ms", "ms/tile");
+    println!(
+        "{:>6} {:>8} {:>12} {:>12}",
+        "depth", "tiles", "total ms", "ms/tile"
+    );
     let mut tiles = 0usize;
     for d in 0..=COARSE_N as usize {
         if per_depth_n[d] == 0 {
@@ -119,15 +138,17 @@ fn coarse_base_bake_time() {
     println!("  vertices baked: {total_verts}");
 
     // Delivery verdict. Native parallelises across the task pool; wasm does not.
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
     println!("\ndelivery:");
-    println!("  native, {cores} cores (ideal)   ≈ {:.0} ms", wall_ms / cores as f64);
+    println!(
+        "  native, {cores} cores (ideal)   ≈ {:.0} ms",
+        wall_ms / cores as f64
+    );
     println!("  native, 4 cores (weak)         ≈ {:.0} ms", wall_ms / 4.0);
     println!("  wasm, single-threaded MAIN     ≈ {wall_ms:.0} ms  (no worker pool)");
-    println!(
-        "  wasm at 3x native slowdown     ≈ {:.0} ms",
-        wall_ms * 3.0
-    );
+    println!("  wasm at 3x native slowdown     ≈ {:.0} ms", wall_ms * 3.0);
     println!(
         "\nverdict: bake-at-open is viable iff the wasm number is under a scene-open budget \
          (~2 s); otherwise the coarse base must ship prebaked with the twin."

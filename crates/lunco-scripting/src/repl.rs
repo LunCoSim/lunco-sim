@@ -6,13 +6,13 @@
 //! the "run a repl-like script" console into a running process. When rhai is
 //! compiled out but python is in, it falls back to the CPython path.
 
-use std::io::{self, BufRead};
-#[cfg(all(feature = "python", not(feature = "rhai")))]
-use std::ffi::CString;
-use crossbeam_channel::{Receiver, unbounded};
 use bevy::prelude::*;
+use crossbeam_channel::{unbounded, Receiver};
 #[cfg(all(feature = "python", not(feature = "rhai")))]
 use pyo3::prelude::*;
+#[cfg(all(feature = "python", not(feature = "rhai")))]
+use std::ffi::CString;
+use std::io::{self, BufRead};
 
 #[derive(Resource)]
 pub struct ReplResource {
@@ -28,7 +28,11 @@ pub struct ReplResource {
 pub fn spawn_repl_thread() -> ReplResource {
     let (tx, rx) = unbounded();
     // The default backend is rhai; only a python-only build prompts for Python.
-    let lang = if cfg!(feature = "rhai") { "rhai" } else { "python" };
+    let lang = if cfg!(feature = "rhai") {
+        "rhai"
+    } else {
+        "python"
+    };
     std::thread::spawn(move || {
         let stdin = io::stdin();
         println!(">>> LunCo REPL Ready ({lang}) — snippets run against the live sim");

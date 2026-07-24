@@ -196,7 +196,13 @@ fn sample_heights_xz(
             flat[iz * padded + ix] = limited.height_at(wx, wz) - origin_y;
         }
     }
-    prepare_collider_heights(&mut flat, padded, step, COLLIDER_MAX_SLOPE, COLLIDER_QUANT_STEP);
+    prepare_collider_heights(
+        &mut flat,
+        padded,
+        step,
+        COLLIDER_MAX_SLOPE,
+        COLLIDER_QUANT_STEP,
+    );
     // …then crop the halo and transpose into Avian's [x][z] column layout.
     let mut cols = Vec::with_capacity(res);
     for ix in 0..res {
@@ -275,7 +281,9 @@ pub fn update_collider_ring(
     mut wanted: Local<HashSet<QuadCoord>>,
     mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
 ) {
-    let Ok((grid_entity, grid)) = grids.single() else { return };
+    let Ok((grid_entity, grid)) = grids.single() else {
+        return;
+    };
     let pool = AsyncComputeTaskPool::get();
 
     // Per-frame heightfield-bake budget, shared across all terrains. On WEB the
@@ -318,7 +326,9 @@ pub fn update_collider_ring(
         // A whole-terrain change (`None`) invalidates the whole ring, as before.
         let oracle_key = oracle.surface_key();
         if tiles.oracle_key != oracle_key {
-            let dirty = dirty_region.filter(|d| d.oracle_key == oracle_key).and_then(|d| d.bounds);
+            let dirty = dirty_region
+                .filter(|d| d.oracle_key == oracle_key)
+                .and_then(|d| d.bounds);
             let t = &mut *tiles;
             // Mark — don't despawn. A stale tile keeps supporting the rover until
             // its replacement collider is baked and swapped in place (below).
@@ -363,7 +373,11 @@ pub fn update_collider_ring(
                     if nx < 0 || nz < 0 || nx >= nodes as i64 || nz >= nodes as i64 {
                         continue;
                     }
-                    wanted.insert(QuadCoord { depth: ring.depth, x: nx as u32, z: nz as u32 });
+                    wanted.insert(QuadCoord {
+                        depth: ring.depth,
+                        x: nx as u32,
+                        z: nz as u32,
+                    });
                 }
             }
         }
@@ -385,13 +399,15 @@ pub fn update_collider_ring(
         // Parry centres the heightfield at that origin.
         done.clear();
         let done = &mut *done;
-        pending.0.retain(|coord, task| match block_on(future::poll_once(&mut *task)) {
-            Some((collider, origin_y)) => {
-                done.push((*coord, collider, origin_y));
-                false
-            }
-            None => true,
-        });
+        pending.0.retain(
+            |coord, task| match block_on(future::poll_once(&mut *task)) {
+                Some((collider, origin_y)) => {
+                    done.push((*coord, collider, origin_y));
+                    false
+                }
+                None => true,
+            },
+        );
         for (coord, collider, origin_y) in done.drain(..) {
             let region = qt.region(coord);
             let center = region.center;
@@ -399,16 +415,19 @@ pub fn update_collider_ring(
             // was rebased by — the SAME (cell, local) convention the visual tiles
             // use — so the collider surface lands in the render tile's big_space
             // cell rather than ~1945 m below it.
-            let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
+            let (cell, local) =
+                grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
             if let Some(&ent) = tiles.map.get(&coord) {
                 // Replacement for a stale tile: swap the collider onto the
                 // existing entity — the ground never vanishes under the rover.
                 // Re-anchor too: an edit can shift the tile-centre datum, so the
                 // rebased geometry needs its CellCoord/Transform kept in step.
                 if tiles.stale.remove(&coord) {
-                    commands
-                        .entity(ent)
-                        .try_insert((collider, cell, Transform::from_translation(local)));
+                    commands.entity(ent).try_insert((
+                        collider,
+                        cell,
+                        Transform::from_translation(local),
+                    ));
                 }
                 continue;
             }
@@ -556,8 +575,7 @@ pub fn hold_physics_until_dem_ready(
                 if !matches!(rb, RigidBody::Dynamic) {
                     continue;
                 }
-                let Some(coord) = ring_node(half, ring.depth, pos.0.x, pos.0.z)
-                else {
+                let Some(coord) = ring_node(half, ring.depth, pos.0.x, pos.0.z) else {
                     continue; // off this terrain — its ring doesn't apply
                 };
                 // Gate on avian broad-phase LIVENESS, not `tiles.map` membership.
@@ -568,9 +586,10 @@ pub fn hold_physics_until_dem_ready(
                 // fully-Dynamic (physical) wheel free-fell through the not-yet-live
                 // collider — the tunnel. Require the tile to actually carry
                 // `ColliderAabb` so physics resumes only once it is truly collidable.
-                let live = tiles.map.get(&coord).is_some_and(|&e| {
-                    q_live.get(e).is_ok_and(|aabb| aabb.min.x.is_finite())
-                });
+                let live = tiles
+                    .map
+                    .get(&coord)
+                    .is_some_and(|&e| q_live.get(e).is_ok_and(|aabb| aabb.min.x.is_finite()));
                 if !live {
                     wait = true;
                     break 'terrains;
@@ -678,7 +697,9 @@ pub fn settle_grounded_assemblies(
     // Query the oracle in the SAME grid-absolute frame as avian `Position` (terrain
     // owner is anchored at the grid origin cell). Wait for it if not built yet —
     // the marker persists.
-    let Some(hf) = terrains.iter().next() else { return };
+    let Some(hf) = terrains.iter().next() else {
+        return;
+    };
     let half = hf.0.half_extent() as f64;
 
     // Pass 1 (read-only): snapshot every body's grid-absolute Position.
@@ -686,7 +707,11 @@ pub fn settle_grounded_assemblies(
     for (e, pos, _, _) in bodies.iter() {
         pos_of.insert(e, pos.0);
     }
-    let adj = joints.adjacency(|e| dynamics.get(e).is_ok_and(|rb| matches!(rb, RigidBody::Dynamic)));
+    let adj = joints.adjacency(|e| {
+        dynamics
+            .get(e)
+            .is_ok_and(|rb| matches!(rb, RigidBody::Dynamic))
+    });
 
     let mut done: HashSet<Entity> = HashSet::new();
     for seed in &q_needs {
@@ -710,7 +735,9 @@ pub fn settle_grounded_assemblies(
         }
         // One-shot: consume the marker on the whole assembly regardless.
         for &m in &members {
-            commands.entity(m).try_remove::<lunco_core::NeedsGroundSettle>();
+            commands
+                .entity(m)
+                .try_remove::<lunco_core::NeedsGroundSettle>();
         }
         if !over_terrain || lift <= 0.0 {
             continue;
@@ -733,7 +760,6 @@ pub fn settle_grounded_assemblies(
         );
     }
 }
-
 
 /// How long a `KeepUpright` root must rest overturned and near-motionless before
 /// auto-righting kicks in — long enough that a rover mid-tumble or being driven
@@ -784,7 +810,9 @@ pub fn rescue_overturned_vessels(
 ) {
     use bevy::math::DQuat;
     for root in &roots {
-        let Ok((rb, pos, rot, lin, ang)) = bodies.get(root) else { continue };
+        let Ok((rb, pos, rot, lin, ang)) = bodies.get(root) else {
+            continue;
+        };
         if !matches!(rb, RigidBody::Dynamic) {
             continue;
         }
@@ -812,14 +840,19 @@ pub fn rescue_overturned_vessels(
         // from the current up to world up (an exact 180° flip picks an arbitrary
         // axis — any righting is fine there).
         let q_fix = DQuat::from_rotation_arc(up.normalize(), DVec3::Y);
-        let adj = joints
-            .adjacency(|e| dynamics.get(e).is_ok_and(|rb| matches!(rb, RigidBody::Dynamic)));
+        let adj = joints.adjacency(|e| {
+            dynamics
+                .get(e)
+                .is_ok_and(|rb| matches!(rb, RigidBody::Dynamic))
+        });
         let members = joint_component(root, &adj);
         // Rotate every member's authoritative pose about the pivot, collecting
         // the post-rotation positions for the reseat pass.
         let mut post: Vec<DVec3> = Vec::with_capacity(members.len());
         for &m in &members {
-            let Ok((_, mut pos, mut rot, _, _)) = bodies.get_mut(m) else { continue };
+            let Ok((_, mut pos, mut rot, _, _)) = bodies.get_mut(m) else {
+                continue;
+            };
             pos.0 = pivot + q_fix * (pos.0 - pivot);
             rot.0 = (q_fix * rot.0).normalize();
             post.push(pos.0);
@@ -843,7 +876,9 @@ pub fn rescue_overturned_vessels(
             }
         }
         for &m in &members {
-            let Ok((_, mut pos, _, lin, ang)) = bodies.get_mut(m) else { continue };
+            let Ok((_, mut pos, _, lin, ang)) = bodies.get_mut(m) else {
+                continue;
+            };
             if lift > 0.0 {
                 pos.0.y += lift;
             }
@@ -866,10 +901,10 @@ pub fn rescue_overturned_vessels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quadtree::QuadCoord;
     use avian3d::parry::query::Ray;
     use lunco_obstacle_field::field::HeightGrid;
     use lunco_terrain_core::{Crater, Craters};
-    use crate::quadtree::QuadCoord;
 
     /// Absolute DEM-like altitude of the flat base — deliberately far from 0 so
     /// any hidden Y-recentering in the heightfield build would show up.
@@ -910,11 +945,18 @@ mod tests {
         let h = 4000.0_f64;
         let depth = COLLIDER_DEPTH;
         let qt = Quadtree::new(h, depth, 1.0, h);
-        let coord = QuadCoord { depth, x: 70, z: 45 };
+        let coord = QuadCoord {
+            depth,
+            x: 70,
+            z: 45,
+        };
         let region = qt.region(coord);
         let side = region.side();
         let step = side / (COLLIDER_RES as f64 - 1.0);
-        println!("\n[collider fidelity] tile side={side:.2} m, step={step:.3} m, detail_limit={:.3} m", 2.0 * step);
+        println!(
+            "\n[collider fidelity] tile side={side:.2} m, step={step:.3} m, detail_limit={:.3} m",
+            2.0 * step
+        );
         for radius in [2.0_f64, 3.0, 5.0, 8.0, 15.0] {
             let crater_depth = 0.4 * radius; // depth_ratio 0.4 (fresh)
             let mut grid = HeightGrid::new_flat(129, h as f32);
@@ -936,12 +978,14 @@ mod tests {
                     content_key: 1,
                 }],
             );
-            let oracle_center = HeightSource::height_at(&oracle, region.center[0], region.center[1]);
+            let oracle_center =
+                HeightSource::height_at(&oracle, region.center[0], region.center[1]);
             let oracle_bowl = BASE_H - oracle_center;
             // The datum the runtime bake uses (`update_collider_ring`): the tile-centre
             // surface height — which at this probe point IS `oracle_center`.
             let origin_y = oracle_center;
-            let heights = sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y, native_band(region));
+            let heights =
+                sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y, native_band(region));
             let collider = heightfield_collider(heights, side);
             let collider_center = surface_y(&collider, 0.0, 0.0, origin_y);
             let collider_bowl = BASE_H - collider_center;
@@ -972,7 +1016,11 @@ mod tests {
         }
         let qt = Quadtree::new(h, depth, 1.0, h);
         // An arbitrary interior tile.
-        let coord = QuadCoord { depth, x: 70, z: 45 };
+        let coord = QuadCoord {
+            depth,
+            x: 70,
+            z: 45,
+        };
         let region = qt.region(coord);
         let side = region.side();
 
@@ -999,7 +1047,8 @@ mod tests {
         // EXACTLY the runtime bake: the tile-centre datum, then sample + condition,
         // then the same collider constructor call as `update_collider_ring`.
         let origin_y = HeightSource::height_at(&oracle, region.center[0], region.center[1]);
-        let heights = sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y, native_band(region));
+        let heights =
+            sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y, native_band(region));
 
         // (c) The rebase itself: sampled heights are LOCAL offsets from `origin_y`.
         // The tile corner is flat base, so it must read ~0 — NOT ~1945. Asserted on
@@ -1049,7 +1098,8 @@ mod tests {
             for ix in (0..COLLIDER_RES).step_by(8) {
                 let lx = -region.half + ix as f64 * step;
                 let lz = -region.half + iz as f64 * step;
-                let expect = HeightSource::height_at(&gated, region.center[0] + lx, region.center[1] + lz);
+                let expect =
+                    HeightSource::height_at(&gated, region.center[0] + lx, region.center[1] + lz);
                 let got = surface_y(&collider, lx, lz, origin_y);
                 assert!(
                     got <= expect + 1e-6 + 2.0 * COLLIDER_QUANT_STEP && got >= expect - slack - 1e-6,
@@ -1076,8 +1126,16 @@ mod tests {
             *v = BASE_H;
         }
         let qt = Quadtree::new(h, depth, 1.0, h);
-        let a = QuadCoord { depth, x: 70, z: 45 };
-        let b = QuadCoord { depth, x: 71, z: 45 };
+        let a = QuadCoord {
+            depth,
+            x: 70,
+            z: 45,
+        };
+        let b = QuadCoord {
+            depth,
+            x: 71,
+            z: 45,
+        };
         let (ra, rb) = (qt.region(a), qt.region(b));
         // A fresh, OVER-LIMIT-steep crater straddling the seam (bowl wall slope
         // 4·depth/r = 3.2 > COLLIDER_MAX_SLOPE) so the min-sweep actively
@@ -1161,7 +1219,12 @@ mod tests {
             // And the frame error the bug actually made: reading the body through
             // an origin-relative transform shifts it by the origin offset.
             let as_if_origin_relative = rover - origin;
-            let wrong = ring_node(half, depth, as_if_origin_relative.x, as_if_origin_relative.z);
+            let wrong = ring_node(
+                half,
+                depth,
+                as_if_origin_relative.x,
+                as_if_origin_relative.z,
+            );
             if origin != DVec3::ZERO {
                 assert_ne!(
                     wrong,
@@ -1180,9 +1243,9 @@ mod tests {
         let half = 997.0;
         for (x, z, want) in [
             (0.0, 0.0, true),
-            (-996.9, 996.9, true),   // just inside a corner
-            (140.0, -660.0, true),   // the change4 rover start
-            (1000.0, 0.0, false),    // off the east edge
+            (-996.9, 996.9, true), // just inside a corner
+            (140.0, -660.0, true), // the change4 rover start
+            (1000.0, 0.0, false),  // off the east edge
             (0.0, -1200.0, false),
         ] {
             assert_eq!(

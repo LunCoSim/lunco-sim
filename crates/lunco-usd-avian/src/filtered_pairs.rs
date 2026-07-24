@@ -126,7 +126,10 @@ fn collider_owner(
         }) {
             return Some(e);
         }
-        candidate = p.rsplit_once('/').map(|(head, _)| head.to_string()).filter(|h| !h.is_empty());
+        candidate = p
+            .rsplit_once('/')
+            .map(|(head, _)| head.to_string())
+            .filter(|h| !h.is_empty());
     }
     None
 }
@@ -240,13 +243,19 @@ pub(crate) fn resolve_filtered_pairs(
             info!(
                 "[usd-avian] filtered pair: {} <-x-> {}",
                 prim.path,
-                q_colliders.get(other).map(|(_, p)| p.path.clone()).unwrap_or_default(),
+                q_colliders
+                    .get(other)
+                    .map(|(_, p)| p.path.clone())
+                    .unwrap_or_default(),
             );
         }
     }
 
     for (entity, added) in additions {
-        let mut set = q_filtered.get(entity).map(|f| f.0.clone()).unwrap_or_default();
+        let mut set = q_filtered
+            .get(entity)
+            .map(|f| f.0.clone())
+            .unwrap_or_default();
         set.extend(added);
         // `FILTER_PAIRS` is what raises the broad phase's `CUSTOM_FILTER` flag; the
         // hook is not consulted for a collider that lacks it.
@@ -271,11 +280,21 @@ impl CollisionHooks for UsdCollisionFilter<'_, '_> {
     fn filter_pairs(&self, collider1: Entity, collider2: Entity, _commands: &mut Commands) -> bool {
         // The hook is handed COLLIDER entities. A collider that is a child entity
         // of a body is filtered by what its BODY names, so both are checked.
-        let body1 = self.collider_of.get(collider1).map(|c| c.body).unwrap_or(collider1);
-        let body2 = self.collider_of.get(collider2).map(|c| c.body).unwrap_or(collider2);
+        let body1 = self
+            .collider_of
+            .get(collider1)
+            .map(|c| c.body)
+            .unwrap_or(collider1);
+        let body2 = self
+            .collider_of
+            .get(collider2)
+            .map(|c| c.body)
+            .unwrap_or(collider2);
 
         let names = |a: Entity, b: Entity, b_body: Entity| {
-            self.filtered.get(a).is_ok_and(|f| f.0.contains(&b) || f.0.contains(&b_body))
+            self.filtered
+                .get(a)
+                .is_ok_and(|f| f.0.contains(&b) || f.0.contains(&b_body))
         };
 
         !(names(collider1, collider2, body2)

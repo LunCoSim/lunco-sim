@@ -163,7 +163,13 @@ impl<'ast> Visit<'ast> for Collector {
                 let Some(name) = f.ident.as_ref().map(|n| n.to_string()) else {
                     continue;
                 };
-                fields.insert(name, FieldDoc { ty: type_str(f), doc: doc_of(&f.attrs) });
+                fields.insert(
+                    name,
+                    FieldDoc {
+                        ty: type_str(f),
+                        doc: doc_of(&f.attrs),
+                    },
+                );
             }
             self.out.push((
                 i.ident.to_string(),
@@ -191,7 +197,9 @@ fn type_str(f: &Field) -> String {
 
 /// Recursively collect `.rs` files, skipping `target/`.
 fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
@@ -349,7 +357,9 @@ fn main() {
             .strip_prefix(&root)
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|_| f.clone());
-        let Ok(src) = fs::read_to_string(f) else { continue };
+        let Ok(src) = fs::read_to_string(f) else {
+            continue;
+        };
         let Ok(file) = syn::parse_file(&src) else {
             parse_failures += 1;
             continue;
@@ -399,7 +409,9 @@ fn main() {
     let total = schema.len();
     let mut md = String::new();
     md.push_str("<!-- AUTO-GENERATED. Do not edit by hand.\n");
-    md.push_str("     Source of truth: the running app's `DiscoverSchema` (GET /api/commands/schema),\n");
+    md.push_str(
+        "     Source of truth: the running app's `DiscoverSchema` (GET /api/commands/schema),\n",
+    );
     md.push_str("     decorated with the `///` docs on each `#[Command]` struct.\n");
     md.push_str("     Regenerate: cargo run -p gen-command-docs -- --schema <schema.json> -->\n\n");
     md.push_str("# Command Reference\n\n");
@@ -489,10 +501,12 @@ fn main() {
                     let ty = fd
                         .map(|d| d.ty.clone())
                         .unwrap_or_else(|| short_type(&f.type_name));
-                    let desc = fd
-                        .map(|d| d.doc.replace('\n', " "))
-                        .unwrap_or_default();
-                    let desc = if desc.trim().is_empty() { " ".into() } else { desc };
+                    let desc = fd.map(|d| d.doc.replace('\n', " ")).unwrap_or_default();
+                    let desc = if desc.trim().is_empty() {
+                        " ".into()
+                    } else {
+                        desc
+                    };
                     md.push_str(&format!("| `{}` | `{}` | {} |\n", f.name, ty, desc));
                 }
                 md.push('\n');

@@ -91,7 +91,10 @@ impl Default for StageMetrics {
     /// The USD defaults, which are also our canonical frame: `upAxis = "Y"`,
     /// `metersPerUnit = 1.0`. An unauthored stage needs no conversion.
     fn default() -> Self {
-        Self { meters_per_unit: 1.0, up_axis: UpAxis::Y }
+        Self {
+            meters_per_unit: 1.0,
+            up_axis: UpAxis::Y,
+        }
     }
 }
 
@@ -128,7 +131,10 @@ impl StageMetrics {
                 1.0
             }
         };
-        let metrics = Self { meters_per_unit, up_axis };
+        let metrics = Self {
+            meters_per_unit,
+            up_axis,
+        };
         if !metrics.is_canonical() {
             warn_once!(
                 "[usd-units] non-canonical stage: upAxis = {:?}, metersPerUnit = {} — converting \
@@ -171,10 +177,17 @@ impl StageMetrics {
             .stage_metadata("metersPerUnit")
             .ok()
             .flatten()
-            .and_then(|v| v.clone().get::<f64>().or_else(|| v.get::<f32>().map(f64::from)))
+            .and_then(|v| {
+                v.clone()
+                    .get::<f64>()
+                    .or_else(|| v.get::<f32>().map(f64::from))
+            })
             .filter(|m| m.is_finite() && *m > 0.0)
             .unwrap_or(1.0);
-        Self { meters_per_unit, up_axis }
+        Self {
+            meters_per_unit,
+            up_axis,
+        }
     }
 
     /// Whether the stage is already in the canonical frame (Y-up, metres) ⇒ the
@@ -208,7 +221,10 @@ impl Default for ConventionTransform {
 
 impl ConventionTransform {
     /// A canonical stage (Y-up, metres) needs no conversion.
-    pub const IDENTITY: Self = Self { rot: Quat::IDENTITY, scale: 1.0 };
+    pub const IDENTITY: Self = Self {
+        rot: Quat::IDENTITY,
+        scale: 1.0,
+    };
 
     /// The one construction point (doc 41: `from_stage_metrics`).
     pub fn from_stage_metrics(m: &StageMetrics) -> Self {
@@ -218,7 +234,10 @@ impl ConventionTransform {
             // The stage's +Z (its up) lands on canonical +Y (our up).
             UpAxis::Z => Quat::from_rotation_x(-FRAC_PI_2),
         };
-        Self { rot, scale: m.meters_per_unit }
+        Self {
+            rot,
+            scale: m.meters_per_unit,
+        }
     }
     /// Convert a typed attribute value CANONICAL → the stage's frame, choosing the
     /// transform from the attribute's USD type ROLE.
@@ -245,7 +264,12 @@ impl ConventionTransform {
         self.map_by_role(type_name, v, false)
     }
 
-    fn map_by_role(&self, type_name: &str, v: openusd::sdf::Value, to_stage: bool) -> openusd::sdf::Value {
+    fn map_by_role(
+        &self,
+        type_name: &str,
+        v: openusd::sdf::Value,
+        to_stage: bool,
+    ) -> openusd::sdf::Value {
         use openusd::gf;
         use openusd::sdf::Value as V;
 
@@ -270,7 +294,9 @@ impl ConventionTransform {
         }
         let role = match base {
             "point3f" | "point3d" | "point3h" => Role::Point,
-            "vector3f" | "vector3d" | "vector3h" | "normal3f" | "normal3d" | "normal3h" => Role::Direction,
+            "vector3f" | "vector3d" | "vector3h" | "normal3f" | "normal3d" | "normal3h" => {
+                Role::Direction
+            }
             "quatf" | "quatd" | "quath" => Role::Orientation,
             _ => Role::None,
         };
@@ -321,17 +347,29 @@ impl ConventionTransform {
             (Role::None, v) => v,
             (_, V::Vec3f(a)) => {
                 let r = f(Vec3::new(a.x, a.y, a.z));
-                V::Vec3f(gf::Vec3f { x: r.x, y: r.y, z: r.z })
+                V::Vec3f(gf::Vec3f {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
             }
             (_, V::Vec3d(a)) => {
                 let r = fd(DVec3::new(a.x, a.y, a.z));
-                V::Vec3d(gf::Vec3d { x: r.x, y: r.y, z: r.z })
+                V::Vec3d(gf::Vec3d {
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
             }
             (_, V::Vec3fVec(xs)) => V::Vec3fVec(
                 xs.into_iter()
                     .map(|a| {
                         let r = f(Vec3::new(a.x, a.y, a.z));
-                        gf::Vec3f { x: r.x, y: r.y, z: r.z }
+                        gf::Vec3f {
+                            x: r.x,
+                            y: r.y,
+                            z: r.z,
+                        }
                     })
                     .collect(),
             ),
@@ -339,22 +377,37 @@ impl ConventionTransform {
                 xs.into_iter()
                     .map(|a| {
                         let r = fd(DVec3::new(a.x, a.y, a.z));
-                        gf::Vec3d { x: r.x, y: r.y, z: r.z }
+                        gf::Vec3d {
+                            x: r.x,
+                            y: r.y,
+                            z: r.z,
+                        }
                     })
                     .collect(),
             ),
             (Role::Orientation, V::Quatf(q)) => {
                 let r = fq(Quat::from_xyzw(q.x, q.y, q.z, q.w));
-                V::Quatf(gf::Quatf { w: r.w, x: r.x, y: r.y, z: r.z })
+                V::Quatf(gf::Quatf {
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
+                })
             }
             (Role::Orientation, V::Quatd(q)) => {
-                let r = fq(Quat::from_xyzw(q.x as f32, q.y as f32, q.z as f32, q.w as f32));
-                V::Quatd(gf::Quatd { w: r.w as f64, x: r.x as f64, y: r.y as f64, z: r.z as f64 })
+                let r = fq(Quat::from_xyzw(
+                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
+                ));
+                V::Quatd(gf::Quatd {
+                    w: r.w as f64,
+                    x: r.x as f64,
+                    y: r.y as f64,
+                    z: r.z as f64,
+                })
             }
             (_, other) => other,
         }
     }
-
 
     /// Whether this is the no-op conversion (the common case: our own assets).
     /// Hot decoders early-out on it, so a canonical stage pays nothing.
@@ -553,8 +606,14 @@ mod tests {
             meters_per_unit: 1.0,
             up_axis: UpAxis::Z,
         });
-        assert!(ct.dir(Vec3::Z).abs_diff_eq(Vec3::Y, 1e-6), "+Z (stage up) → +Y (canonical up)");
-        assert!(ct.dir(Vec3::X).abs_diff_eq(Vec3::X, 1e-6), "X is the rotation axis — fixed");
+        assert!(
+            ct.dir(Vec3::Z).abs_diff_eq(Vec3::Y, 1e-6),
+            "+Z (stage up) → +Y (canonical up)"
+        );
+        assert!(
+            ct.dir(Vec3::X).abs_diff_eq(Vec3::X, 1e-6),
+            "X is the rotation axis — fixed"
+        );
         assert!(ct.dir(Vec3::Y).abs_diff_eq(-Vec3::Z, 1e-6), "+Y → −Z");
     }
 
@@ -565,9 +624,14 @@ mod tests {
             meters_per_unit: 0.01,
             up_axis: UpAxis::Y,
         });
-        assert!(ct.point(Vec3::new(100.0, 0.0, 0.0)).abs_diff_eq(Vec3::X, 1e-6));
+        assert!(ct
+            .point(Vec3::new(100.0, 0.0, 0.0))
+            .abs_diff_eq(Vec3::X, 1e-6));
         assert_eq!(ct.length(250.0), 2.5);
-        assert!(ct.dir(Vec3::Y).abs_diff_eq(Vec3::Y, 1e-6), "a direction is never scaled");
+        assert!(
+            ct.dir(Vec3::Y).abs_diff_eq(Vec3::Y, 1e-6),
+            "a direction is never scaled"
+        );
     }
 
     /// The canonical stage is exactly the identity — every asset we ship takes
@@ -592,8 +656,7 @@ mod tests {
         // Two authored levels + a local point, all in stage units (cm, Z-up).
         let l1 = Transform::from_xyz(100.0, 0.0, 50.0)
             .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4));
-        let l2 = Transform::from_xyz(0.0, 200.0, 0.0)
-            .with_rotation(Quat::from_rotation_x(0.3));
+        let l2 = Transform::from_xyz(0.0, 200.0, 0.0).with_rotation(Quat::from_rotation_x(0.3));
         let p = Vec3::new(10.0, -20.0, 30.0);
 
         // Raw USD world point, then converted once (ground truth).
@@ -623,22 +686,37 @@ mod tests {
         let p = Vec3::new(123.0, -45.0, 6.75);
         assert!(ct.stage_point(ct.point(p)).abs_diff_eq(p, 1e-3), "point");
         assert!(ct.stage_dir(ct.dir(p)).abs_diff_eq(p, 1e-4), "dir");
-        assert!((ct.stage_length(ct.length(250.0)) - 250.0).abs() < 1e-9, "length");
+        assert!(
+            (ct.stage_length(ct.length(250.0)) - 250.0).abs() < 1e-9,
+            "length"
+        );
 
         let pd = DVec3::new(123.0, -45.0, 6.75);
-        assert!(ct.stage_point_d(ct.point_d(pd)).abs_diff_eq(pd, 1e-3), "point_d");
+        assert!(
+            ct.stage_point_d(ct.point_d(pd)).abs_diff_eq(pd, 1e-3),
+            "point_d"
+        );
         assert!(ct.stage_dir_d(ct.dir_d(pd)).abs_diff_eq(pd, 1e-4), "dir_d");
 
         let q = Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.2);
         assert!(ct.stage_orient(ct.orient(q)).abs_diff_eq(q, 1e-6), "orient");
-        assert!(ct.stage_rotation(ct.rotation(q)).abs_diff_eq(q, 1e-6), "rotation");
+        assert!(
+            ct.stage_rotation(ct.rotation(q)).abs_diff_eq(q, 1e-6),
+            "rotation"
+        );
 
         let t = Transform::from_xyz(400.0, 10.0, -25.0)
             .with_rotation(q)
             .with_scale(Vec3::new(1.0, 2.0, 3.0));
         let back = ct.stage_local_transform(ct.local_transform(t));
-        assert!(back.translation.abs_diff_eq(t.translation, 1e-3), "local translation");
-        assert!(back.rotation.abs_diff_eq(t.rotation, 1e-6), "local rotation");
+        assert!(
+            back.translation.abs_diff_eq(t.translation, 1e-3),
+            "local translation"
+        );
+        assert!(
+            back.rotation.abs_diff_eq(t.rotation, 1e-6),
+            "local rotation"
+        );
         assert!(back.scale.abs_diff_eq(t.scale, 1e-5), "local scale");
     }
 
@@ -661,6 +739,8 @@ mod tests {
             up_axis: UpAxis::Z,
         });
         assert!((ct.stage_length(2.5) - 250.0).abs() < 1e-9);
-        assert!(ct.stage_point(Vec3::Y).abs_diff_eq(Vec3::new(0.0, 0.0, 100.0), 1e-3));
+        assert!(ct
+            .stage_point(Vec3::Y)
+            .abs_diff_eq(Vec3::new(0.0, 0.0, 100.0), 1e-3));
     }
 }

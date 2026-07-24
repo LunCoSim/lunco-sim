@@ -55,9 +55,9 @@
 mod api;
 
 use bevy::prelude::*;
-use lunco_core::{register_commands, Command, on_command};
 use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::telemetry::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
 use serde::{Deserialize, Serialize};
@@ -182,7 +182,10 @@ fn on_control_telemetry(
                 .map(|(e, _, _)| e);
             match existing {
                 Some(chan) => {
-                    commands.entity(chan).remove::<ChannelClock>().try_insert(param);
+                    commands
+                        .entity(chan)
+                        .remove::<ChannelClock>()
+                        .try_insert(param);
                 }
                 None => {
                     commands.spawn((Name::new(format!("telemetry:{}", param.name)), param));
@@ -400,14 +403,19 @@ fn drop_signal_of_removed_channel(
     mut signals: ResMut<lunco_signal::SignalRegistry>,
 ) {
     let channel_entity = trigger.entity;
-    let Ok(param) = channels.get(channel_entity) else { return };
+    let Ok(param) = channels.get(channel_entity) else {
+        return;
+    };
     let measured = param.target.unwrap_or(channel_entity);
     signals.remove_signal(&lunco_signal::SignalRef::new(measured, param.name.clone()));
 }
 
 /// One sampling pass. Public so a host can drive it directly (tests, a batch runner).
 pub fn sample_parameters(world: &mut World) {
-    let settings = world.get_resource::<TelemetrySettings>().copied().unwrap_or_default();
+    let settings = world
+        .get_resource::<TelemetrySettings>()
+        .copied()
+        .unwrap_or_default();
     if !settings.enabled {
         return;
     }
@@ -422,13 +430,19 @@ pub fn sample_parameters(world: &mut World) {
     // spine-less app would see a clock that never advances — every channel would fire
     // exactly once and then never come due again. That failure is silent (telemetry
     // just stops), which is the worst kind.
-    let world_time = world.get_resource::<WorldTime>().cloned().unwrap_or_else(|| {
-        let elapsed = world
-            .get_resource::<Time<Fixed>>()
-            .map(|t| t.elapsed_secs_f64())
-            .unwrap_or(0.0);
-        WorldTime { sim_secs: elapsed, ..Default::default() }
-    });
+    let world_time = world
+        .get_resource::<WorldTime>()
+        .cloned()
+        .unwrap_or_else(|| {
+            let elapsed = world
+                .get_resource::<Time<Fixed>>()
+                .map(|t| t.elapsed_secs_f64())
+                .unwrap_or(0.0);
+            WorldTime {
+                sim_secs: elapsed,
+                ..Default::default()
+            }
+        });
     // The resolver runs once per frame in `Update`; snapshot its map so the sampling
     // loop can hold `&World` (and later `&mut World`) without borrowing the resource.
     let resolved_domains = world
@@ -469,10 +483,16 @@ pub fn sample_parameters(world: &mut World) {
         // The channel's OWN time. This is the whole clock-binding feature.
         let t = domain_time(&resolved_domains, binding.as_ref(), &world_time);
 
-        let mut clock = world.get::<ChannelClock>(entity).map(clone_clock).unwrap_or_else(|| {
-            // First sight of this channel: due immediately.
-            ChannelClock { next_due_t: t, ..Default::default() }
-        });
+        let mut clock = world
+            .get::<ChannelClock>(entity)
+            .map(clone_clock)
+            .unwrap_or_else(|| {
+                // First sight of this channel: due immediately.
+                ChannelClock {
+                    next_due_t: t,
+                    ..Default::default()
+                }
+            });
 
         if t < clock.next_due_t {
             continue;
@@ -626,21 +646,23 @@ fn read_port(
         // Already scanned every backend and came up empty — don't do it again at the
         // sample rate. A re-authored `Parameter` (Changed) clears this, since the
         // clock is keyed to the entity and reset when the channel is re-added.
-        return registry.read_port(world, entity, name).map(TelemetryValue::F64);
+        return registry
+            .read_port(world, entity, name)
+            .map(TelemetryValue::F64);
     }
 
     if let Some(r) = registry.resolve_output(world, entity, name) {
         clock.resolved = Some(r);
-        return registry.read_resolved(world, entity, r).map(TelemetryValue::F64);
+        return registry
+            .read_resolved(world, entity, r)
+            .map(TelemetryValue::F64);
     }
 
     // Not a resolvable output — it may still be a readable input, or simply absent.
     match registry.read_port(world, entity, name) {
         Some(v) => Some(TelemetryValue::F64(v)),
         None => {
-            warn_once!(
-                "telemetry: port '{name}' not found on {entity} — channel will stay silent"
-            );
+            warn_once!("telemetry: port '{name}' not found on {entity} — channel will stay silent");
             clock.resolve_failed = true;
             None
         }
@@ -683,7 +705,9 @@ fn read_reflect(world: &World, entity: Entity, path: &str) -> Option<TelemetryVa
     } else if let Some(v) = target.try_downcast_ref::<bool>() {
         Some(TelemetryValue::Bool(*v))
     } else {
-        target.try_downcast_ref::<String>().map(|v| TelemetryValue::String(v.clone()))
+        target
+            .try_downcast_ref::<String>()
+            .map(|v| TelemetryValue::String(v.clone()))
     }
 }
 
@@ -700,8 +724,14 @@ mod tests {
 
     fn app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, lunco_core::LunCoCorePlugin, LunCoTelemetryPlugin));
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(UPDATE_MS)));
+        app.add_plugins((
+            MinimalPlugins,
+            lunco_core::LunCoCorePlugin,
+            LunCoTelemetryPlugin,
+        ));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            UPDATE_MS,
+        )));
         // `lunco-settings` refuses disk I/O in a test binary (see its `disk_backed`), so
         // this app's settings are in-memory defaults and CANNOT reach the developer's real
         // `~/.lunco/settings.json`. Asserted belt-and-braces: the master-switch test below
@@ -748,20 +778,28 @@ mod tests {
         let seen = capture(&mut app);
         let e = app
             .world_mut()
-            .spawn((Port { value: 42.0 }, Parameter {
-                rate_hz: Some(lunco_core::FIXED_HZ),
-                ..reflect_channel("motor_current")
-            }))
+            .spawn((
+                Port { value: 42.0 },
+                Parameter {
+                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    ..reflect_channel("motor_current")
+                },
+            ))
             .id();
 
         step_fixed(&mut app, 1);
 
         let seen = seen.lock().unwrap();
-        let s = seen.first().expect("a tagged parameter must produce a sample");
+        let s = seen
+            .first()
+            .expect("a tagged parameter must produce a sample");
         assert_eq!(s.name, "motor_current");
         assert_eq!(s.unit, "A");
         assert_eq!(s.value, TelemetryValue::F64(42.0));
-        assert_eq!(s.source, e, "the sample must carry its owning entity — names collide");
+        assert_eq!(
+            s.source, e,
+            "the sample must carry its owning entity — names collide"
+        );
     }
 
     /// `enabled` defaults to TRUE. `ReflectDefault` builds the component from `Default`
@@ -778,7 +816,10 @@ mod tests {
         let seen = capture(&mut app);
         app.world_mut().spawn((
             Port { value: 1.0 },
-            Parameter { enabled: false, ..reflect_channel("off") },
+            Parameter {
+                enabled: false,
+                ..reflect_channel("off")
+            },
         ));
         step_fixed(&mut app, 8);
         assert!(seen.lock().unwrap().is_empty());
@@ -791,7 +832,10 @@ mod tests {
         let seen = capture(&mut app);
         app.world_mut().spawn(Port { value: 42.0 });
         step_fixed(&mut app, 4);
-        assert!(seen.lock().unwrap().is_empty(), "nothing tagged ⇒ nothing sampled");
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "nothing tagged ⇒ nothing sampled"
+        );
     }
 
     /// THE PHASE-1 PROPERTY: rate is PER CHANNEL. A 60 Hz channel and a 10 Hz channel in
@@ -804,11 +848,17 @@ mod tests {
 
         app.world_mut().spawn((
             Port { value: 1.0 },
-            Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("fast") },
+            Parameter {
+                rate_hz: Some(lunco_core::FIXED_HZ),
+                ..reflect_channel("fast")
+            },
         ));
         app.world_mut().spawn((
             Port { value: 1.0 },
-            Parameter { rate_hz: Some(6.0), ..reflect_channel("slow") },
+            Parameter {
+                rate_hz: Some(6.0),
+                ..reflect_channel("slow")
+            },
         ));
 
         // ~1 second of sim: 64 fixed steps.
@@ -818,18 +868,27 @@ mod tests {
         let fast = seen.iter().filter(|s| s.name == "fast").count();
         let slow = seen.iter().filter(|s| s.name == "slow").count();
 
-        assert!(fast > 50, "a FIXED_HZ channel should sample near every step, got {fast}");
+        assert!(
+            fast > 50,
+            "a FIXED_HZ channel should sample near every step, got {fast}"
+        );
         assert!(
             (4..=9).contains(&slow),
             "a 6 Hz channel should sample ~6× in a sim-second, got {slow}"
         );
-        assert!(fast > slow * 4, "the rates must actually differ: fast={fast} slow={slow}");
+        assert!(
+            fast > slow * 4,
+            "the rates must actually differ: fast={fast} slow={slow}"
+        );
     }
 
     /// A rate above the fixed step cannot be honoured — it must clamp, not alias.
     #[test]
     fn a_rate_above_the_fixed_step_is_clamped() {
-        let p = Parameter { rate_hz: Some(10_000.0), ..reflect_channel("greedy") };
+        let p = Parameter {
+            rate_hz: Some(10_000.0),
+            ..reflect_channel("greedy")
+        };
         let rate = effective_rate(&p, &TelemetrySettings::default());
         assert_eq!(rate, lunco_core::FIXED_HZ);
     }
@@ -840,8 +899,15 @@ mod tests {
     fn a_nonsense_rate_falls_back_to_the_default() {
         let s = TelemetrySettings::default();
         for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
-            let p = Parameter { rate_hz: Some(bad), ..reflect_channel("bad") };
-            assert_eq!(effective_rate(&p, &s), s.default_rate_hz, "rate {bad} must fall back");
+            let p = Parameter {
+                rate_hz: Some(bad),
+                ..reflect_channel("bad")
+            };
+            assert_eq!(
+                effective_rate(&p, &s),
+                s.default_rate_hz,
+                "rate {bad} must fall back"
+            );
         }
     }
 
@@ -864,10 +930,17 @@ mod tests {
 
         step_fixed(&mut app, 10);
         let after_steady = seen.lock().unwrap().len();
-        assert_eq!(after_steady, 1, "an unchanging value emits ONCE, then goes quiet");
+        assert_eq!(
+            after_steady, 1,
+            "an unchanging value emits ONCE, then goes quiet"
+        );
 
         // Move it past the deadband.
-        app.world_mut().entity_mut(e).get_mut::<Port>().unwrap().value = 9.0;
+        app.world_mut()
+            .entity_mut(e)
+            .get_mut::<Port>()
+            .unwrap()
+            .value = 9.0;
         step_fixed(&mut app, 2);
         assert!(
             seen.lock().unwrap().len() > after_steady,
@@ -896,9 +969,17 @@ mod tests {
         step_fixed(&mut app, 4);
         let baseline = seen.lock().unwrap().len();
 
-        app.world_mut().entity_mut(e).get_mut::<Port>().unwrap().value = 1.2;
+        app.world_mut()
+            .entity_mut(e)
+            .get_mut::<Port>()
+            .unwrap()
+            .value = 1.2;
         step_fixed(&mut app, 4);
-        assert_eq!(seen.lock().unwrap().len(), baseline, "a 0.2 move under a 1.0 deadband is noise");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            baseline,
+            "a 0.2 move under a 1.0 deadband is noise"
+        );
     }
 
     /// PHASE 2: samples land in the `SignalRegistry` ring buffer — the same store every
@@ -910,7 +991,10 @@ mod tests {
             .world_mut()
             .spawn((
                 Port { value: 3.0 },
-                Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("retained") },
+                Parameter {
+                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    ..reflect_channel("retained")
+                },
             ))
             .id();
 
@@ -918,8 +1002,13 @@ mod tests {
 
         let signals = app.world().resource::<lunco_signal::SignalRegistry>();
         let sig = lunco_signal::SignalRef::new(e, "retained".to_string());
-        let hist = signals.scalar_history(&sig).expect("the sample must be retained");
-        assert!(hist.len() >= 2, "several fixed steps ⇒ several retained samples");
+        let hist = signals
+            .scalar_history(&sig)
+            .expect("the sample must be retained");
+        assert!(
+            hist.len() >= 2,
+            "several fixed steps ⇒ several retained samples"
+        );
         assert_eq!(hist.iter().next().unwrap().value, 3.0);
         // Unit metadata rides along so a plot can label its axis.
         assert_eq!(signals.meta(&sig).unwrap().unit.as_deref(), Some("A"));
@@ -962,18 +1051,28 @@ mod tests {
             .world_mut()
             .spawn((
                 Port { value: 1.0 },
-                Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("doomed") },
+                Parameter {
+                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    ..reflect_channel("doomed")
+                },
             ))
             .id();
         step_fixed(&mut app, 3);
         let sig = lunco_signal::SignalRef::new(e, "doomed".to_string());
-        assert!(app.world().resource::<lunco_signal::SignalRegistry>().scalar_history(&sig).is_some());
+        assert!(app
+            .world()
+            .resource::<lunco_signal::SignalRegistry>()
+            .scalar_history(&sig)
+            .is_some());
 
         app.world_mut().entity_mut(e).despawn();
         app.update();
 
         assert!(
-            app.world().resource::<lunco_signal::SignalRegistry>().scalar_history(&sig).is_none(),
+            app.world()
+                .resource::<lunco_signal::SignalRegistry>()
+                .scalar_history(&sig)
+                .is_none(),
             "a despawned channel must not leave its ring buffer behind"
         );
     }
@@ -984,7 +1083,10 @@ mod tests {
         let mut app = app();
         app.world_mut().spawn((
             Port { value: 1.0 },
-            Parameter { rate_hz: Some(60.0), ..reflect_channel("tunable") },
+            Parameter {
+                rate_hz: Some(60.0),
+                ..reflect_channel("tunable")
+            },
         ));
         app.update();
 
@@ -1029,7 +1131,10 @@ mod tests {
         let seen = capture(&mut app);
         app.world_mut().spawn((
             Port { value: 1.0 },
-            Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("live") },
+            Parameter {
+                rate_hz: Some(lunco_core::FIXED_HZ),
+                ..reflect_channel("live")
+            },
         ));
         step_fixed(&mut app, 3);
         assert!(!seen.lock().unwrap().is_empty());
@@ -1037,7 +1142,11 @@ mod tests {
         app.world_mut().resource_mut::<TelemetrySettings>().enabled = false;
         let before = seen.lock().unwrap().len();
         step_fixed(&mut app, 8);
-        assert_eq!(seen.lock().unwrap().len(), before, "the master switch must actually stop it");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            before,
+            "the master switch must actually stop it"
+        );
     }
 
     /// A client can now AUTHOR a channel through the API — the thing whose absence forced
@@ -1065,11 +1174,17 @@ mod tests {
             .iter(app.world())
             .find(|p| p.name == "watched")
             .expect("the channel must be authored");
-        assert_eq!(p.target, Some(e), "the channel must point at what it measures");
+        assert_eq!(
+            p.target,
+            Some(e),
+            "the channel must point at what it measures"
+        );
         assert!(p.enabled, "a channel someone explicitly asked for is live");
 
         let seen = seen.lock().unwrap();
-        let s = seen.first().expect("the created channel must actually sample");
+        let s = seen
+            .first()
+            .expect("the created channel must actually sample");
         assert_eq!(s.value, TelemetryValue::F64(7.0));
         assert_eq!(s.source, e);
     }
@@ -1090,7 +1205,10 @@ mod tests {
         step_fixed(&mut app, 3);
         let chan = {
             let mut q = app.world_mut().query::<(Entity, &Parameter)>();
-            q.iter(app.world()).find(|(_, p)| p.name == "c").map(|(e, _)| e).expect("channel entity")
+            q.iter(app.world())
+                .find(|(_, p)| p.name == "c")
+                .map(|(e, _)| e)
+                .expect("channel entity")
         };
         assert!(app.world().entity(chan).contains::<ChannelClock>());
 
@@ -1105,14 +1223,23 @@ mod tests {
 
         let mut q = app.world_mut().query::<(Entity, &Parameter)>();
         let n = q.iter(app.world()).filter(|(_, p)| p.name == "c").count();
-        assert_eq!(n, 1, "a re-point must retune the channel, not spawn a second one");
+        assert_eq!(
+            n, 1,
+            "a re-point must retune the channel, not spawn a second one"
+        );
 
         // The sampler legitimately re-adds a FRESH clock — what must not survive is the OLD
         // one's state: a `ResolvedPort` pointing at the previous source's slot, and a deadband
         // reference taken from a value this channel no longer reads.
         if let Some(clock) = app.world().entity(chan).get::<ChannelClock>() {
-            assert!(clock.resolved.is_none(), "a stale resolved port slot must not survive a re-point");
-            assert!(clock.last_emitted.is_none(), "a stale deadband reference must not survive a re-point");
+            assert!(
+                clock.resolved.is_none(),
+                "a stale resolved port slot must not survive a re-point"
+            );
+            assert!(
+                clock.last_emitted.is_none(),
+                "a stale deadband reference must not survive a re-point"
+            );
         }
         assert!(matches!(
             app.world().entity(chan).get::<Parameter>().unwrap().source,
@@ -1142,8 +1269,14 @@ mod tests {
 
         let seen = seen.lock().unwrap();
         for name in ["a", "b", "c"] {
-            let s = seen.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("channel {name} must sample"));
-            assert_eq!(s.source, rover, "every channel must report the MEASURED entity");
+            let s = seen
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("channel {name} must sample"));
+            assert_eq!(
+                s.source, rover,
+                "every channel must report the MEASURED entity"
+            );
             assert_eq!(s.value, TelemetryValue::F64(5.0));
         }
 
@@ -1151,7 +1284,9 @@ mod tests {
         let signals = app.world().resource::<lunco_signal::SignalRegistry>();
         for name in ["a", "b", "c"] {
             assert!(
-                signals.scalar_history(&lunco_signal::SignalRef::new(rover, name.to_string())).is_some(),
+                signals
+                    .scalar_history(&lunco_signal::SignalRef::new(rover, name.to_string()))
+                    .is_some(),
                 "channel {name} must retain its own history"
             );
         }
@@ -1175,7 +1310,10 @@ mod tests {
 
         let doomed = {
             let mut q = app.world_mut().query::<(Entity, &Parameter)>();
-            q.iter(app.world()).find(|(_, p)| p.name == "drop").map(|(e, _)| e).expect("channel entity")
+            q.iter(app.world())
+                .find(|(_, p)| p.name == "drop")
+                .map(|(e, _)| e)
+                .expect("channel entity")
         };
         app.world_mut().entity_mut(doomed).despawn();
         app.update();
@@ -1186,7 +1324,9 @@ mod tests {
             "a sibling channel's history must survive — this is why removal is per-signal, not drop_entity"
         );
         assert!(
-            signals.scalar_history(&lunco_signal::SignalRef::new(rover, "drop".to_string())).is_none(),
+            signals
+                .scalar_history(&lunco_signal::SignalRef::new(rover, "drop".to_string()))
+                .is_none(),
             "the removed channel's history must go"
         );
     }
@@ -1206,7 +1346,10 @@ mod tests {
             let mut store = app.world_mut().resource_mut::<DiagnosticsStore>();
             store.add(Diagnostic::new(PATH));
             store.get_mut(&PATH).unwrap().add_measurement(
-                bevy::diagnostic::DiagnosticMeasurement { time: std::time::Instant::now(), value: 59.5 },
+                bevy::diagnostic::DiagnosticMeasurement {
+                    time: std::time::Instant::now(),
+                    value: 59.5,
+                },
             );
         }
         app.world_mut().spawn(Parameter {
@@ -1220,7 +1363,9 @@ mod tests {
         step_fixed(&mut app, 2);
 
         let seen = seen.lock().unwrap();
-        let s = seen.first().expect("a diagnostic-sourced channel must emit");
+        let s = seen
+            .first()
+            .expect("a diagnostic-sourced channel must emit");
         assert_eq!(s.name, "engine.fps");
         assert_eq!(s.value, TelemetryValue::F64(59.5));
     }
@@ -1260,7 +1405,10 @@ mod tests {
         let seen = capture(&mut app);
         app.world_mut().spawn((
             Port { value: 1.0 },
-            Parameter { rate_hz: Some(lunco_core::FIXED_HZ), ..reflect_channel("t") },
+            Parameter {
+                rate_hz: Some(lunco_core::FIXED_HZ),
+                ..reflect_channel("t")
+            },
         ));
 
         step_fixed(&mut app, 6);

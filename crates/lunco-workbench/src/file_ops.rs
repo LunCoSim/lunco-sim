@@ -271,19 +271,13 @@ fn on_show_open_file_picker(
 
     let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
     commands.trigger(PickHandle {
-        mode: PickMode::OpenFile(crate::picker::OpenFilter::new(
-            "Supported files",
-            &ext_refs,
-        )),
+        mode: PickMode::OpenFile(crate::picker::OpenFilter::new("Supported files", &ext_refs)),
         on_resolved: PickFollowUp::OpenFile,
     });
 }
 
 #[on_command(ShowOpenFolderPicker)]
-fn on_show_open_folder_picker(
-    _trigger: On<ShowOpenFolderPicker>,
-    mut commands: Commands,
-) {
+fn on_show_open_folder_picker(_trigger: On<ShowOpenFolderPicker>, mut commands: Commands) {
     use crate::picker::{PickHandle, PickMode};
     commands.trigger(PickHandle {
         mode: PickMode::OpenFolder,
@@ -309,12 +303,21 @@ fn on_open_file(
     // workspace `assets/` dir — with no separate "Open Scene" command. Scheme
     // paths (`lunco://`, `twin://`, `mem://`) already name their root and are
     // handled by the USD-side observer.
-    if is_scene_path(&path) {
+    if is_scene_path(&path) && !is_path_inside_open_twin(std::path::Path::new(&path), &workspace) {
         // VS Code semantics, same as OpenFolder: opening replaces the workspace
         // root rather than accumulating one per scene.
         close_all_open_folders(&mut workspace, &mut commands, "OpenFile");
         spawn_twin_from_scene(std::path::Path::new(&path), &mut pending, "OpenFile");
     }
+}
+
+/// An authored layer inside the current Twin is a partial update target, not a
+/// request to replace the workspace. Domain `OpenFile` observers still receive
+/// the command and refresh their document/derived state.
+fn is_path_inside_open_twin(path: &std::path::Path, workspace: &WorkspaceResource) -> bool {
+    workspace
+        .twins()
+        .any(|(_, twin)| path.starts_with(&twin.root))
 }
 
 /// A bare filesystem path to a USD scene — the case that must be opened through
@@ -338,7 +341,9 @@ fn on_open_folder(
 ) {
     let path = trigger.event().path.clone();
     if path.is_empty() {
-        warn!("[OpenFolder] fired with empty path — ignoring (use ShowOpenFolderPicker for dialog)");
+        warn!(
+            "[OpenFolder] fired with empty path — ignoring (use ShowOpenFolderPicker for dialog)"
+        );
         return;
     }
     let folder = std::path::Path::new(&path);
@@ -456,8 +461,7 @@ fn close_all_open_folders(
     commands: &mut Commands,
     log_tag: &str,
 ) {
-    let ids: Vec<lunco_workspace::TwinId> =
-        workspace.twins().map(|(id, _)| id).collect();
+    let ids: Vec<lunco_workspace::TwinId> = workspace.twins().map(|(id, _)| id).collect();
     for id in ids {
         workspace.close_twin(id);
         commands.trigger(TwinClosed { twin: id });
@@ -493,11 +497,7 @@ struct TwinOpenTask {
 /// Spawns the scan asynchronously and parks the handle in
 /// [`PendingTwinOpens`]. The actual `add_twin` + [`TwinAdded`] firing
 /// happens in [`drain_pending_twin_opens`] once the walker returns.
-fn spawn_twin_from_path(
-    folder: &std::path::Path,
-    pending: &mut PendingTwinOpens,
-    log_tag: &str,
-) {
+fn spawn_twin_from_path(folder: &std::path::Path, pending: &mut PendingTwinOpens, log_tag: &str) {
     spawn_twin_scan(folder, pending, log_tag, None);
 }
 
@@ -510,18 +510,17 @@ fn spawn_twin_from_path(
 ///
 /// This is why a scene anywhere on disk opens with no new command: `OpenFile`
 /// routes here and reuses the same mount as Open Folder / Open Twin.
-fn spawn_twin_from_scene(
-    scene: &std::path::Path,
-    pending: &mut PendingTwinOpens,
-    log_tag: &str,
-) {
+fn spawn_twin_from_scene(scene: &std::path::Path, pending: &mut PendingTwinOpens, log_tag: &str) {
     let abs = std::fs::canonicalize(scene).unwrap_or_else(|_| scene.to_path_buf());
     let root = lunco_twin::root_for_file(&abs);
     let rel = abs
         .strip_prefix(&root)
         .map(lunco_assets::asset_path::slashed)
         .unwrap_or_else(|_| {
-            abs.file_name().unwrap_or_default().to_string_lossy().into_owned()
+            abs.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
         });
     spawn_twin_scan(&root, pending, log_tag, Some(rel));
 }
@@ -534,10 +533,12 @@ fn spawn_twin_scan(
 ) {
     let path = folder.to_path_buf();
     let scan_path = path.clone();
-    let task = AsyncComputeTaskPool::get()
-        .spawn(async move { TwinMode::open(&scan_path) });
+    let task = AsyncComputeTaskPool::get().spawn(async move { TwinMode::open(&scan_path) });
     match &scene {
-        Some(rel) => info!("[{log_tag}] scanning {} for `{rel}` (off-thread)…", path.display()),
+        Some(rel) => info!(
+            "[{log_tag}] scanning {} for `{rel}` (off-thread)…",
+            path.display()
+        ),
         None => info!("[{log_tag}] scanning {} (off-thread)…", path.display()),
     }
     pending.tasks.push(TwinOpenTask {
@@ -574,7 +575,11 @@ pub(crate) fn drain_pending_twin_opens(
                 let twin_id = workspace.add_twin(twin);
                 commands.trigger(TwinAdded { twin: twin_id });
                 match &entry.scene {
-                    Some(rel) => info!("[{}] opened {} @ `{rel}`", entry.log_tag, entry.path.display()),
+                    Some(rel) => info!(
+                        "[{}] opened {} @ `{rel}`",
+                        entry.log_tag,
+                        entry.path.display()
+                    ),
                     None => info!("[{}] opened {}", entry.log_tag, entry.path.display()),
                 }
             }
@@ -615,7 +620,10 @@ fn on_rename_open_document(
         return;
     };
     match &entry.origin {
-        DocumentOrigin::File { path, writable: true } => {
+        DocumentOrigin::File {
+            path,
+            writable: true,
+        } => {
             // Saved file: route through RenameTwinEntry if the path
             // lies under an open Twin. Standalone-file renames (no
             // owning Twin) aren't supported yet — would need a
@@ -651,7 +659,9 @@ fn on_rename_open_document(
             // Untitled docs (Modelica → RenameModelicaClass). The
             // workbench observer doesn't touch them.
         }
-        DocumentOrigin::File { writable: false, .. }
+        DocumentOrigin::File {
+            writable: false, ..
+        }
         | DocumentOrigin::Bundled { .. } => {
             warn!("[RenameOpenDocument] doc {} is read-only", ev.doc);
         }
@@ -675,114 +685,111 @@ fn on_rename_twin_entry(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-    use lunco_doc::DocumentOrigin;
-    let ev = trigger.event();
-    let twin_root = std::path::PathBuf::from(&ev.twin_root);
-    let new_name = ev.new_name.trim();
-    if new_name.is_empty() {
-        warn!("[RenameTwinEntry] new_name is empty");
-        return;
-    }
-    if new_name.contains(std::path::MAIN_SEPARATOR)
-        || new_name.contains('/')
-        || new_name == "."
-        || new_name == ".."
-    {
-        warn!(
-            "[RenameTwinEntry] new_name `{new_name}` contains a path separator or \
+        use lunco_doc::DocumentOrigin;
+        let ev = trigger.event();
+        let twin_root = std::path::PathBuf::from(&ev.twin_root);
+        let new_name = ev.new_name.trim();
+        if new_name.is_empty() {
+            warn!("[RenameTwinEntry] new_name is empty");
+            return;
+        }
+        if new_name.contains(std::path::MAIN_SEPARATOR)
+            || new_name.contains('/')
+            || new_name == "."
+            || new_name == ".."
+        {
+            warn!(
+                "[RenameTwinEntry] new_name `{new_name}` contains a path separator or \
              special segment — rename only, no move across directories"
-        );
-        return;
-    }
-    // Resolve TwinId by matching root path.
-    let twin_id = workspace
-        .twins()
-        .find(|(_, t)| t.root == twin_root)
-        .map(|(id, _)| id);
-    let Some(twin_id) = twin_id else {
-        warn!(
-            "[RenameTwinEntry] no open Twin matches root {}",
-            twin_root.display()
-        );
-        return;
-    };
-    let old_rel = std::path::PathBuf::from(&ev.relative_path);
-    let old_abs = twin_root.join(&old_rel);
-    if !old_abs.exists() {
-        warn!(
-            "[RenameTwinEntry] source missing: {}",
-            old_abs.display()
-        );
-        return;
-    }
-    let new_abs = old_abs
-        .parent()
-        .map(|p| p.join(new_name))
-        .unwrap_or_else(|| twin_root.join(new_name));
-    if new_abs == old_abs {
-        // No-op (user submitted the existing name) — silent.
-        return;
-    }
-    if new_abs.exists() {
-        warn!(
-            "[RenameTwinEntry] target already exists: {}",
-            new_abs.display()
-        );
-        return;
-    }
-    let is_dir = old_abs.is_dir();
-    if let Err(e) = std::fs::rename(&old_abs, &new_abs) {
-        warn!(
-            "[RenameTwinEntry] fs::rename {} -> {} failed: {e}",
+            );
+            return;
+        }
+        // Resolve TwinId by matching root path.
+        let twin_id = workspace
+            .twins()
+            .find(|(_, t)| t.root == twin_root)
+            .map(|(id, _)| id);
+        let Some(twin_id) = twin_id else {
+            warn!(
+                "[RenameTwinEntry] no open Twin matches root {}",
+                twin_root.display()
+            );
+            return;
+        };
+        let old_rel = std::path::PathBuf::from(&ev.relative_path);
+        let old_abs = twin_root.join(&old_rel);
+        if !old_abs.exists() {
+            warn!("[RenameTwinEntry] source missing: {}", old_abs.display());
+            return;
+        }
+        let new_abs = old_abs
+            .parent()
+            .map(|p| p.join(new_name))
+            .unwrap_or_else(|| twin_root.join(new_name));
+        if new_abs == old_abs {
+            // No-op (user submitted the existing name) — silent.
+            return;
+        }
+        if new_abs.exists() {
+            warn!(
+                "[RenameTwinEntry] target already exists: {}",
+                new_abs.display()
+            );
+            return;
+        }
+        let is_dir = old_abs.is_dir();
+        if let Err(e) = std::fs::rename(&old_abs, &new_abs) {
+            warn!(
+                "[RenameTwinEntry] fs::rename {} -> {} failed: {e}",
+                old_abs.display(),
+                new_abs.display()
+            );
+            return;
+        }
+
+        // Re-scan the Twin so its `files()` reflects disk.
+        if let Some(twin) = workspace.twin_mut(twin_id) {
+            if let Err(e) = twin.reload() {
+                warn!(
+                    "[RenameTwinEntry] Twin::reload after rename failed: {e} \
+                 (twin index may be stale until next OpenFolder)"
+                );
+            }
+        }
+
+        // Patch open documents whose canonical path lay under the old path
+        // so live edits stay attached to disk.
+        for doc in workspace.documents_mut() {
+            if let DocumentOrigin::File { path, writable } = &doc.origin {
+                if path.starts_with(&old_abs) {
+                    let suffix = path
+                        .strip_prefix(&old_abs)
+                        .expect("starts_with implies strip_prefix succeeds");
+                    let new_path = if suffix.as_os_str().is_empty() {
+                        new_abs.clone()
+                    } else {
+                        new_abs.join(suffix)
+                    };
+                    let writable = *writable;
+                    doc.origin = DocumentOrigin::File {
+                        path: new_path,
+                        writable,
+                    };
+                }
+            }
+        }
+
+        info!(
+            "[RenameTwinEntry] {} -> {}",
             old_abs.display(),
             new_abs.display()
         );
-        return;
-    }
-
-    // Re-scan the Twin so its `files()` reflects disk.
-    if let Some(twin) = workspace.twin_mut(twin_id) {
-        if let Err(e) = twin.reload() {
-            warn!(
-                "[RenameTwinEntry] Twin::reload after rename failed: {e} \
-                 (twin index may be stale until next OpenFolder)"
-            );
-        }
-    }
-
-    // Patch open documents whose canonical path lay under the old path
-    // so live edits stay attached to disk.
-    for doc in workspace.documents_mut() {
-        if let DocumentOrigin::File { path, writable } = &doc.origin {
-            if path.starts_with(&old_abs) {
-                let suffix = path
-                    .strip_prefix(&old_abs)
-                    .expect("starts_with implies strip_prefix succeeds");
-                let new_path = if suffix.as_os_str().is_empty() {
-                    new_abs.clone()
-                } else {
-                    new_abs.join(suffix)
-                };
-                let writable = *writable;
-                doc.origin = DocumentOrigin::File {
-                    path: new_path,
-                    writable,
-                };
-            }
-        }
-    }
-
-    info!(
-        "[RenameTwinEntry] {} -> {}",
-        old_abs.display(),
-        new_abs.display()
-    );
-    commands.trigger(FileRenamed {
-        twin: twin_id,
-        old_abs,
-        new_abs,
-        is_dir,
-    });
+        commands.trigger(FileRenamed {
+            twin: twin_id,
+            old_abs,
+            new_abs,
+            is_dir,
+        });
     } // end #[cfg(not(target_arch = "wasm32"))]
 }
 

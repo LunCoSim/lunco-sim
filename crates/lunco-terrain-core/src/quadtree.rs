@@ -75,14 +75,22 @@ pub struct QuadCoord {
 }
 
 impl QuadCoord {
-    pub const ROOT: QuadCoord = QuadCoord { depth: 0, x: 0, z: 0 };
+    pub const ROOT: QuadCoord = QuadCoord {
+        depth: 0,
+        x: 0,
+        z: 0,
+    };
 
     /// The coarser node whose region contains this one (depth − 1). `None` at the root.
     ///
     /// Region containment in a quadtree IS ancestry, so walking this chain is how a
     /// consumer asks "what coarser node covers my area" — the basis of LOD fallback.
     pub fn parent(self) -> Option<QuadCoord> {
-        (self.depth > 0).then(|| QuadCoord { depth: self.depth - 1, x: self.x / 2, z: self.z / 2 })
+        (self.depth > 0).then(|| QuadCoord {
+            depth: self.depth - 1,
+            x: self.x / 2,
+            z: self.z / 2,
+        })
     }
 
     /// The four children (depth + 1).
@@ -90,10 +98,26 @@ impl QuadCoord {
         let d = self.depth + 1;
         let (x0, z0) = (self.x * 2, self.z * 2);
         [
-            QuadCoord { depth: d, x: x0, z: z0 },
-            QuadCoord { depth: d, x: x0 + 1, z: z0 },
-            QuadCoord { depth: d, x: x0, z: z0 + 1 },
-            QuadCoord { depth: d, x: x0 + 1, z: z0 + 1 },
+            QuadCoord {
+                depth: d,
+                x: x0,
+                z: z0,
+            },
+            QuadCoord {
+                depth: d,
+                x: x0 + 1,
+                z: z0,
+            },
+            QuadCoord {
+                depth: d,
+                x: x0,
+                z: z0 + 1,
+            },
+            QuadCoord {
+                depth: d,
+                x: x0 + 1,
+                z: z0 + 1,
+            },
         ]
     }
 }
@@ -127,8 +151,19 @@ pub struct Quadtree {
 
 impl Quadtree {
     /// Construct with an explicit `range_factor`.
-    pub fn new(root_half_extent: f64, max_depth: u8, range_factor: f64, root_geometric_error: f64) -> Self {
-        Quadtree { root_half_extent, max_depth, range_factor, root_geometric_error, morph_ratio: 0.7 }
+    pub fn new(
+        root_half_extent: f64,
+        max_depth: u8,
+        range_factor: f64,
+        root_geometric_error: f64,
+    ) -> Self {
+        Quadtree {
+            root_half_extent,
+            max_depth,
+            range_factor,
+            root_geometric_error,
+            morph_ratio: 0.7,
+        }
     }
 
     /// Construct deriving `range_factor` from a **canonical** screen metric, so the
@@ -152,13 +187,21 @@ impl Quadtree {
         // dodge the inf: at 1e-3 px the range factor is still ~1000× sane and the
         // tree STILL refines to max_depth. So clamp to a USABLE band — the same one
         // the caller's own knob uses (`stream_viz` clamps 0.5..32 px).
-        let target_pixel_error =
-            if target_pixel_error.is_nan() { 2.0 } else { target_pixel_error.clamp(0.25, 64.0) };
+        let target_pixel_error = if target_pixel_error.is_nan() {
+            2.0
+        } else {
+            target_pixel_error.clamp(0.25, 64.0)
+        };
         // `tan` of a 0 / non-finite fov → floor at a small positive denominator
         // (`f64::max` also returns the finite side of a NaN).
         let sse_denominator = (2.0 * (0.5 * fov_y_rad).tan()).max(1e-4);
         let range_factor = screen_height_px / (sse_denominator * target_pixel_error);
-        Quadtree::new(root_half_extent, max_depth, range_factor, root_geometric_error)
+        Quadtree::new(
+            root_half_extent,
+            max_depth,
+            range_factor,
+            root_geometric_error,
+        )
     }
 
     /// Geometric error (m) of a node at `depth` (3D-Tiles-compatible: halves per level).
@@ -182,7 +225,11 @@ impl Quadtree {
         let idx = |v: f64| {
             (((v + self.root_half_extent) / side).floor() as i64).clamp(0, nodes - 1) as u32
         };
-        QuadCoord { depth, x: idx(xz[0]), z: idx(xz[1]) }
+        QuadCoord {
+            depth,
+            x: idx(xz[0]),
+            z: idx(xz[1]),
+        }
     }
 
     /// World-space square covered by `coord`.
@@ -192,7 +239,10 @@ impl Quadtree {
         let half = 0.5 * side;
         let x = -self.root_half_extent + (coord.x as f64 + 0.5) * side;
         let z = -self.root_half_extent + (coord.z as f64 + 0.5) * side;
-        Square { center: [x, z], half }
+        Square {
+            center: [x, z],
+            half,
+        }
     }
 
     /// Distance at which a node with MEASURED surface `error` refines — the same
@@ -215,9 +265,17 @@ impl Quadtree {
     /// with the recursive walk, so a cover built either way morphs identically.
     pub fn selected(&self, coord: QuadCoord, parent_refine_range: f64) -> Selected {
         let morph_end = parent_refine_range;
-        let morph_start =
-            if morph_end.is_finite() { self.morph_ratio * morph_end } else { f64::INFINITY };
-        Selected { coord, region: self.region(coord), morph_start, morph_end }
+        let morph_start = if morph_end.is_finite() {
+            self.morph_ratio * morph_end
+        } else {
+            f64::INFINITY
+        };
+        Selected {
+            coord,
+            region: self.region(coord),
+            morph_start,
+            morph_end,
+        }
     }
 
     /// Force `sel` (a valid REPLACE-refinement cover, as read off
@@ -279,8 +337,11 @@ impl Quadtree {
                 if nx < 0 || nz < 0 || nx >= nodes || nz >= nodes {
                     continue;
                 }
-                let target =
-                    QuadCoord { depth: self.max_depth, x: nx as u32, z: nz as u32 };
+                let target = QuadCoord {
+                    depth: self.max_depth,
+                    x: nx as u32,
+                    z: nz as u32,
+                };
                 self.force_refine(sel, target, node_error, pin_morph);
             }
         }
@@ -328,7 +389,11 @@ impl Quadtree {
             let d = cur.coord.depth + 1;
             let mut next: Option<Selected> = None;
             for (ox, oz) in [(0u32, 0u32), (1, 0), (0, 1), (1, 1)] {
-                let cc = QuadCoord { depth: d, x: cur.coord.x * 2 + ox, z: cur.coord.z * 2 + oz };
+                let cc = QuadCoord {
+                    depth: d,
+                    x: cur.coord.x * 2 + ox,
+                    z: cur.coord.z * 2 + oz,
+                };
                 // The child that covers `target` is the path further down; it
                 // inherits the pinned window only when it IS the final leaf and
                 // pin_morph is set. Siblings always take the error-derived band.
@@ -368,7 +433,6 @@ impl Quadtree {
         }
         sel.push(cur);
     }
-
 }
 
 #[cfg(test)]
@@ -418,7 +482,10 @@ mod tests {
     fn morph_end_matches_parent_refine_range() {
         let q = qt();
         let err = |c: QuadCoord| q.geometric_error(c.depth);
-        assert!(q.selected(QuadCoord::ROOT, f64::INFINITY).morph_end.is_infinite());
+        assert!(q
+            .selected(QuadCoord::ROOT, f64::INFINITY)
+            .morph_end
+            .is_infinite());
         for child in QuadCoord::ROOT.children() {
             let parent_range = q.error_refine_range(err(QuadCoord::ROOT));
             let s = q.selected(child, parent_range);
@@ -440,7 +507,8 @@ mod tests {
     #[test]
     fn degenerate_screen_metric_stays_finite_and_clamped() {
         use std::f64::consts::FRAC_PI_4;
-        let mk = |fov: f64, px: f64| Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, fov, px);
+        let mk =
+            |fov: f64, px: f64| Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, fov, px);
 
         // `target_pixel_error = 0` (an Inspector knob dragged to zero) must NOT give
         // an infinite range factor — it clamps to the usable floor (0.25 px), i.e. the
@@ -467,7 +535,10 @@ mod tests {
         // NaN / inf knobs stay finite too (NaN → the 2 px default; inf → the ceiling).
         assert!(mk(FRAC_PI_4, f64::NAN).range_factor.is_finite());
         assert!(mk(FRAC_PI_4, f64::INFINITY).range_factor.is_finite());
-        assert_eq!(mk(FRAC_PI_4, f64::INFINITY).range_factor, mk(FRAC_PI_4, 64.0).range_factor);
+        assert_eq!(
+            mk(FRAC_PI_4, f64::INFINITY).range_factor,
+            mk(FRAC_PI_4, 64.0).range_factor
+        );
         assert!(mk(f64::NAN, 2.0).range_factor.is_finite());
     }
 
@@ -478,9 +549,9 @@ mod tests {
         // cover of the root (REPLACE refinement invariant).
         let q = qt();
         let flat = |_c: QuadCoord, _r: Square| 0.05; // near-flat → coarse everywhere
-        // The coarsest legal cover — one root leaf. This is the shape `evolve_cover`
-        // starts from and reads off via `selected`, so forcing detail into it is
-        // exactly what production does under a rover.
+                                                     // The coarsest legal cover — one root leaf. This is the shape `evolve_cover`
+                                                     // starts from and reads off via `selected`, so forcing detail into it is
+                                                     // exactly what production does under a rover.
         let mut sel = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
         assert!(
             sel.iter().all(|s| s.coord.depth < q.max_depth),
@@ -493,18 +564,27 @@ mod tests {
             .iter()
             .find(|s| s.region.distance_to(rover) <= 1e-6)
             .expect("cover contains the rover");
-        assert_eq!(under.coord.depth, q.max_depth, "ground under the body must be finest");
+        assert_eq!(
+            under.coord.depth, q.max_depth,
+            "ground under the body must be finest"
+        );
         // Cover stays exact + disjoint.
         let area: f64 = sel.iter().map(|s| s.region.side() * s.region.side()).sum();
         let root_area = (2.0 * q.root_half_extent).powi(2);
-        assert!((area - root_area).abs() < 1e-3, "area {area} vs {root_area}");
+        assert!(
+            (area - root_area).abs() < 1e-3,
+            "area {area} vs {root_area}"
+        );
         for gx in 0..40 {
             for gz in 0..40 {
                 let p = [
                     -8000.0 + (gx as f64 + 0.5) * (16000.0 / 40.0) + 0.137,
                     -8000.0 + (gz as f64 + 0.5) * (16000.0 / 40.0) + 0.137,
                 ];
-                let hits = sel.iter().filter(|s| s.region.distance_to(p) <= 1e-6).count();
+                let hits = sel
+                    .iter()
+                    .filter(|s| s.region.distance_to(p) <= 1e-6)
+                    .count();
                 assert_eq!(hits, 1, "point {p:?} covered {hits} times");
             }
         }
@@ -536,12 +616,19 @@ mod tests {
             .iter()
             .find(|s| s.region.distance_to(rover) <= 1e-6)
             .expect("cover contains the rover");
-        assert!(unpinned_under.morph_end.is_finite(), "unpinned leaf morphs as usual");
+        assert!(
+            unpinned_under.morph_end.is_finite(),
+            "unpinned leaf morphs as usual"
+        );
 
         // Pinned: same cover shape, but the body leaf is frozen.
         let mut pinned = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
         q.refine_selection_at_with(&mut pinned, rover, &flat, true);
-        assert_eq!(pinned.len(), unpinned.len(), "pinning changes windows, not cover shape");
+        assert_eq!(
+            pinned.len(),
+            unpinned.len(),
+            "pinning changes windows, not cover shape"
+        );
         let pinned_under = pinned
             .iter()
             .find(|s| s.region.distance_to(rover) <= 1e-6)
@@ -567,7 +654,11 @@ mod tests {
                 && (s.coord.z as i64 - ccz).abs() <= 1
         };
         let footprint: Vec<_> = pinned.iter().filter(|s| in_footprint(s)).collect();
-        assert_eq!(footprint.len(), 9, "3×3 footprint → exactly 9 max-depth leaves");
+        assert_eq!(
+            footprint.len(),
+            9,
+            "3×3 footprint → exactly 9 max-depth leaves"
+        );
         for s in &footprint {
             assert!(
                 s.morph_end.is_infinite() && s.morph_start.is_infinite(),
@@ -584,7 +675,10 @@ mod tests {
             .iter()
             .filter(|s| s.coord.depth == q.max_depth && !in_footprint(s))
             .collect();
-        assert!(!split_siblings.is_empty(), "split-off max-depth siblings exist (the seam)");
+        assert!(
+            !split_siblings.is_empty(),
+            "split-off max-depth siblings exist (the seam)"
+        );
         for s in &split_siblings {
             assert!(
                 s.morph_end.is_finite(),
@@ -603,7 +697,10 @@ mod tests {
             .iter()
             .find(|s| s.region.distance_to(rover) <= 1e-6)
             .expect("cover still contains the rover");
-        assert!(re_under.morph_end.is_infinite(), "re-pinning an existing leaf freezes it too");
+        assert!(
+            re_under.morph_end.is_infinite(),
+            "re-pinning an existing leaf freezes it too"
+        );
     }
 
     /// [`REFINE_HYSTERESIS`] is consumed by `lunco-terrain-surface`'s `evolve_cover`,
@@ -614,8 +711,14 @@ mod tests {
     #[test]
     fn hysteresis_is_a_real_dead_band() {
         let q = qt();
-        assert!(REFINE_HYSTERESIS > 1.0, "a band at or below 1.0 is no band at all");
+        assert!(
+            REFINE_HYSTERESIS > 1.0,
+            "a band at or below 1.0 is no band at all"
+        );
         let r = q.error_refine_range(q.geometric_error(1));
-        assert!(r * REFINE_HYSTERESIS > r, "coarsening must happen strictly later than refining");
+        assert!(
+            r * REFINE_HYSTERESIS > r,
+            "coarsening must happen strictly later than refining"
+        );
     }
 }

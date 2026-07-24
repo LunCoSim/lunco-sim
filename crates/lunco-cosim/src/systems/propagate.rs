@@ -350,15 +350,13 @@ pub fn propagate_connections(
                 warn!(
                     "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
                      (declare the port or fix the wire)",
-                    t.name,
-                    t.entity
+                    t.name, t.entity
                 );
             } else {
                 debug!(
                     "[cosim] connection targets '{}' on {:?}, which exposes no ports yet — \
                      value dropped (structural endpoint, or a model still loading)",
-                    t.name,
-                    t.entity
+                    t.name, t.entity
                 );
             }
         }
@@ -416,8 +414,14 @@ mod wire_order_tests {
         let b = compile(&[30, 10, 20]);
         let c = compile(&[20, 30, 10]);
         assert_eq!(a.len(), 3);
-        assert_eq!(a, b, "wire order must not depend on SimConnection spawn order");
-        assert_eq!(a, c, "wire order must not depend on SimConnection spawn order");
+        assert_eq!(
+            a, b,
+            "wire order must not depend on SimConnection spawn order"
+        );
+        assert_eq!(
+            a, c,
+            "wire order must not depend on SimConnection spawn order"
+        );
         // …and it is the network-stable order, not an accident.
         assert_eq!(
             a.iter().map(|(g, _)| *g).collect::<Vec<_>>(),

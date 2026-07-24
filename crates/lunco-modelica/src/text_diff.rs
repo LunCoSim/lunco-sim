@@ -168,10 +168,7 @@ mod tests {
                 "// header\nmodel Foo\n  Real x;\nend Foo;",
                 "// header\nmodel Foo\n  Real x = 0;\nend Foo;",
             ),
-            (
-                "model M\nend M;",
-                "// added comment\nmodel M\nend M;",
-            ),
+            ("model M\nend M;", "// added comment\nmodel M\nend M;"),
         ];
         for (old, new) in cases {
             let (range, repl) = diff_to_edit(old, new).unwrap();

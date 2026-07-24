@@ -183,7 +183,11 @@ fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
                 },
                 None => 0.0,
             };
-            out.push(PortRef { name: p.name.to_string(), direction: p.dir, value });
+            out.push(PortRef {
+                name: p.name.to_string(),
+                direction: p.dir,
+                value,
+            });
         }
     }
 }
@@ -228,11 +232,15 @@ fn avian_resolve(
 }
 
 fn avian_resolve_output(world: &World, entity: Entity, name: &str) -> Option<u64> {
-    avian_resolve(world, entity, name, |d| matches!(d, PortDirection::Out | PortDirection::InOut))
+    avian_resolve(world, entity, name, |d| {
+        matches!(d, PortDirection::Out | PortDirection::InOut)
+    })
 }
 
 fn avian_resolve_input(world: &World, entity: Entity, name: &str) -> Option<u64> {
-    avian_resolve(world, entity, name, |d| matches!(d, PortDirection::In | PortDirection::InOut))
+    avian_resolve(world, entity, name, |d| {
+        matches!(d, PortDirection::In | PortDirection::InOut)
+    })
 }
 
 /// Read the value at a resolved avian slot. The port's `read` does the single
@@ -278,8 +286,14 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             push_map(out, &c.inputs, PortDirection::In);
         }
     },
-    read_output: |w, e, n| w.get::<SimComponent>(e).and_then(|c| c.outputs.get(n).copied()),
-    read_input: |w, e, n| w.get::<SimComponent>(e).and_then(|c| c.inputs.get(n).copied()),
+    read_output: |w, e, n| {
+        w.get::<SimComponent>(e)
+            .and_then(|c| c.outputs.get(n).copied())
+    },
+    read_input: |w, e, n| {
+        w.get::<SimComponent>(e)
+            .and_then(|c| c.inputs.get(n).copied())
+    },
     write_input: |w, e, n, v| {
         if let Some(mut c) = w.get_mut::<SimComponent>(e) {
             if c.inputs.contains_key(n) {

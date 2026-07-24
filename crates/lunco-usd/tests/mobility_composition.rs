@@ -107,11 +107,26 @@ fn each_rover_composes_the_suspension_it_asked_for() {
 fn every_rover_wheel_composes_its_applied_schemas() {
     for (asset, wheel) in [
         ("vessels/rovers/skid_rover.usda", "/SkidRover/Wheel_FL"),
-        ("vessels/rovers/ackermann_rover.usda", "/AckermannRover/Wheel_FL"),
-        ("vessels/rovers/six_wheel_rover.usda", "/SixWheelRover/Wheel_L0"),
-        ("vessels/rovers/six_wheel_independent.usda", "/SixWheelIndependent/Wheel_L0"),
-        ("vessels/rovers/rocker_bogie.usda", "/RockerBogie/RockerL/Wheel_FL"),
-        ("vessels/rovers/rucheyok/rucheyok.usda", "/Rucheyok/Wheel_FL"),
+        (
+            "vessels/rovers/ackermann_rover.usda",
+            "/AckermannRover/Wheel_FL",
+        ),
+        (
+            "vessels/rovers/six_wheel_rover.usda",
+            "/SixWheelRover/Wheel_L0",
+        ),
+        (
+            "vessels/rovers/six_wheel_independent.usda",
+            "/SixWheelIndependent/Wheel_L0",
+        ),
+        (
+            "vessels/rovers/rocker_bogie.usda",
+            "/RockerBogie/RockerL/Wheel_FL",
+        ),
+        (
+            "vessels/rovers/rucheyok/rucheyok.usda",
+            "/Rucheyok/Wheel_FL",
+        ),
     ] {
         let cs = compose(asset);
         let view = cs.view();
@@ -245,7 +260,11 @@ fn every_rover_wheel_satisfies_the_unified_param_reader() {
             });
             assert!(params.radius > 0.0, "{rover}: {} radius", p.as_str());
             assert!(params.mass > 0.0, "{rover}: {} mass", p.as_str());
-            assert!(params.peak_torque > 0.0, "{rover}: {} peakTorque", p.as_str());
+            assert!(
+                params.peak_torque > 0.0,
+                "{rover}: {} peakTorque",
+                p.as_str()
+            );
             assert!(params.friction_mu > 0.0, "{rover}: {} tire μ", p.as_str());
             // Default-variant rovers are raycast: no wheel functions without
             // composed suspension compliance.
@@ -255,7 +274,10 @@ fn every_rover_wheel_satisfies_the_unified_param_reader() {
                 p.as_str()
             );
         }
-        assert!(wheels > 0, "{rover}: no PhysxVehicleWheelAPI wheels composed");
+        assert!(
+            wheels > 0,
+            "{rover}: no PhysxVehicleWheelAPI wheels composed"
+        );
     }
 }
 
@@ -275,11 +297,23 @@ fn wheel_resync_claims_are_prim_scoped() {
     assert!(claims_edit(&view, &wheel, "physics:mass"));
     assert!(!claims_edit(&view, &chassis, "physics:mass"));
     assert!(claims_edit(&view, &wheel, "lunco:wheel:driveDamping"));
-    assert!(claims_edit(&view, &wheel, "physxVehicleEngine:maxRotationSpeed"));
+    assert!(claims_edit(
+        &view,
+        &wheel,
+        "physxVehicleEngine:maxRotationSpeed"
+    ));
     assert!(claims_edit(&view, &wheel, "physxVehicleEngine:peakTorque"));
-    assert!(claims_edit(&view, &wheel, "physxVehicleSuspension:springStrength"));
+    assert!(claims_edit(
+        &view,
+        &wheel,
+        "physxVehicleSuspension:springStrength"
+    ));
     assert!(claims_edit(&view, &root, "lunco:driveKernel"));
-    assert!(claims_edit(&view, &root, "physxVehicleAckermannSteering:maxSteerAngle"));
+    assert!(claims_edit(
+        &view,
+        &root,
+        "physxVehicleAckermannSteering:maxSteerAngle"
+    ));
     assert!(!claims_edit(&view, &chassis, "primvars:displayColor"));
     assert!(!claims_edit(&view, &root, "lunco:spawnable"));
 }

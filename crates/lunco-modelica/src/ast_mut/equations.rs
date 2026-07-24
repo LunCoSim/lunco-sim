@@ -16,14 +16,17 @@ pub fn add_equation(
 ) -> Result<(), AstMutError> {
     let body = pretty::equation_decl(eq);
     let stub = format!("model {FRAGMENT_CLASS_NAME}\nequation\n{body}end {FRAGMENT_CLASS_NAME};\n");
-    let parsed = parse_stub_cached(&stub)
-        .ok_or_else(|| AstMutError::ValueParseFailed { value: body.clone() })?;
+    let parsed = parse_stub_cached(&stub).ok_or_else(|| AstMutError::ValueParseFailed {
+        value: body.clone(),
+    })?;
     let new_eq = parsed
         .classes
         .get(FRAGMENT_CLASS_NAME)
         .and_then(|c| c.equations.first())
         .cloned()
-        .ok_or_else(|| AstMutError::ValueParseFailed { value: body.clone() })?;
+        .ok_or_else(|| AstMutError::ValueParseFailed {
+            value: body.clone(),
+        })?;
     insert_equation(class, edit, &body)?;
     class.equations.push(new_eq);
     Ok(())

@@ -60,7 +60,10 @@ fn load_through_bevy(file: &str, prim_path: &str) -> App {
     let handle = add_canonical_from_file(&mut app, &Path::new("../../assets/").join(file));
     app.world_mut().spawn((
         Name::new("TestRoot"),
-        UsdPrimPath { stage_handle: handle, path: prim_path.to_string() },
+        UsdPrimPath {
+            stage_handle: handle,
+            path: prim_path.to_string(),
+        },
         Transform::default(),
         CellCoord::default(),
         Visibility::Visible,
@@ -113,7 +116,11 @@ fn wall_prop_authors_an_occluder() {
         bevy::math::DVec3::splat(0.5),
         "a Cube with no authored extent must fall back to the unit cube"
     );
-    let scale = app.world().get::<Transform>(body).expect("Body Transform").scale;
+    let scale = app
+        .world()
+        .get::<Transform>(body)
+        .expect("Body Transform")
+        .scale;
     let (_, half) = occ.box_for(scale);
     assert!(
         (half.x - 4.0).abs() < 1e-6 && (half.y - 2.0).abs() < 1e-6 && (half.z - 0.5).abs() < 1e-6,
@@ -123,7 +130,9 @@ fn wall_prop_authors_an_occluder() {
     // Occlusion and collision are SEPARATE facts (doc 49): the wall authors both,
     // and neither is derived from the other.
     assert!(
-        app.world().get::<avian3d::prelude::Collider>(body).is_some(),
+        app.world()
+            .get::<avian3d::prelude::Collider>(body)
+            .is_some(),
         "the wall still collides — occlusion did not replace its collider"
     );
 }
@@ -142,7 +151,10 @@ fn comms_mast_is_a_link_node_at_dish_height() {
         .expect("comms_mast.usda must have a link node — it is 'the base's link home'");
     assert_eq!(node.class.as_deref(), Some("base"));
 
-    let tf = app.world().get::<Transform>(antenna).expect("Antenna Transform");
+    let tf = app
+        .world()
+        .get::<Transform>(antenna)
+        .expect("Antenna Transform");
     assert!(
         tf.translation.y > 10.0,
         "the node must sit at the dish (y > 10), not at the mast's base: y = {}",
@@ -167,7 +179,11 @@ fn comms_wall_scene_authors_two_nodes_and_a_wall_between_them() {
     classes.sort();
     assert_eq!(
         classes,
-        vec!["base".to_string(), "base_clear".to_string(), "rover".to_string()],
+        vec![
+            "base".to_string(),
+            "base_clear".to_string(),
+            "rover".to_string()
+        ],
         "the scene must author the two endpoints the lesson talks about, plus the \
          CONTROL mast (`base_clear`) whose sight-line misses the wall — without it \
          'the link is down' is equally true of a kernel that connects nothing"
@@ -231,8 +247,15 @@ fn comms_wall_scene_authors_two_nodes_and_a_wall_between_them() {
     let y_at_wall = ay + t * (by - ay);
 
     // …must be inside the box the kernel builds (half-extent × the Body's scale).
-    let occ = app.world().get::<LinkOccluder>(body).expect("wall Body is an occluder");
-    let scale = app.world().get::<Transform>(body).expect("Body Transform").scale;
+    let occ = app
+        .world()
+        .get::<LinkOccluder>(body)
+        .expect("wall Body is an occluder");
+    let scale = app
+        .world()
+        .get::<Transform>(body)
+        .expect("Body Transform")
+        .scale;
     let (_, half) = occ.box_for(scale);
     let (lo, hi) = (wy as f64 - half.y, wy as f64 + half.y);
     assert!(
@@ -254,5 +277,3 @@ fn rover_antenna_is_a_link_node() {
         "the rover's Comms prim must be a link endpoint"
     );
 }
-
-

@@ -22,13 +22,16 @@ const A: SessionId = SessionId(1);
 
 fn observer_rbac() -> SessionRbac {
     let mut rbac = SessionRbac::default();
-    rbac.sessions.insert(A.0, UserSession {
-        session_id: A,
-        username: "Observer".to_string(),
-        role: AuthorityRole::Observer,
-        authenticated: true,
-        token: Some("srv-token-a".to_string()),
-    });
+    rbac.sessions.insert(
+        A.0,
+        UserSession {
+            session_id: A,
+            username: "Observer".to_string(),
+            role: AuthorityRole::Observer,
+            authenticated: true,
+            token: Some("srv-token-a".to_string()),
+        },
+    );
     rbac
 }
 
@@ -49,7 +52,10 @@ fn scripted_hook_tightens_an_open_command() {
     struct DenySecret;
     impl ScriptHook for DenySecret {
         fn invoke(&self, args: &[HookValue]) -> HookResult {
-            let cap = args[0].get("capability").and_then(HookValue::as_str).unwrap_or("");
+            let cap = args[0]
+                .get("capability")
+                .and_then(HookValue::as_str)
+                .unwrap_or("");
             Ok(HookValue::Bool(cap != "SecretCmd"))
         }
     }

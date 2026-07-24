@@ -57,10 +57,7 @@ impl ExampleProgress {
     where
         I: IntoIterator<Item = &'a str>,
     {
-        qualifieds
-            .into_iter()
-            .filter(|q| self.is_opened(q))
-            .count()
+        qualifieds.into_iter().filter(|q| self.is_opened(q)).count()
     }
 }
 
@@ -101,10 +98,7 @@ pub fn save_progress(progress: &ExampleProgress) {
             // on wasm. Same call, both targets — the web now actually persists
             // "example opened" state across reloads instead of dropping it.
             if let Err(e) = crate::source_asset::write_text_sync(&path, &s) {
-                bevy::log::warn!(
-                    "welcome_progress: couldn't write {:?}: {e}",
-                    path
-                );
+                bevy::log::warn!("welcome_progress: couldn't write {:?}: {e}", path);
             }
         }
         Err(e) => bevy::log::warn!("welcome_progress: serialize failed: {e}"),

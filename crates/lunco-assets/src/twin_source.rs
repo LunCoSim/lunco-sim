@@ -244,7 +244,9 @@ async fn read_bytes(full: &Path) -> Option<Vec<u8>> {
 pub fn twin_asset_source(roots: &TwinRoots) -> AssetSourceBuilder {
     let roots = roots.clone();
     AssetSourceBuilder::new(move || {
-        Box::new(TwinReader { roots: roots.clone() }) as Box<dyn ErasedAssetReader>
+        Box::new(TwinReader {
+            roots: roots.clone(),
+        }) as Box<dyn ErasedAssetReader>
     })
 }
 
@@ -351,18 +353,24 @@ mod tests {
 
         // The reader receives `moonbase/scenes/sandbox.usda` (scheme stripped).
         assert_eq!(
-            roots.overlay_for(Path::new("moonbase/scenes/sandbox.usda")).as_deref(),
+            roots
+                .overlay_for(Path::new("moonbase/scenes/sandbox.usda"))
+                .as_deref(),
             Some(&*bytes),
             "overlay hit for the exact reader-facing path"
         );
         assert!(
-            roots.overlay_for(Path::new("moonbase/other.usda")).is_none(),
+            roots
+                .overlay_for(Path::new("moonbase/other.usda"))
+                .is_none(),
             "no overlay for an unrelated path"
         );
 
         roots.clear_overlay("moonbase", "scenes/sandbox.usda");
         assert!(
-            roots.overlay_for(Path::new("moonbase/scenes/sandbox.usda")).is_none(),
+            roots
+                .overlay_for(Path::new("moonbase/scenes/sandbox.usda"))
+                .is_none(),
             "cleared overlay falls back to disk"
         );
     }

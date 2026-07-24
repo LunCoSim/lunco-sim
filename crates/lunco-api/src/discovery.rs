@@ -1,9 +1,9 @@
 //! Schema discovery — tells API clients what commands exist.
 
-use bevy::prelude::*;
-use bevy::reflect::{TypeInfo, TypeRegistry};
 use crate::queries::ApiVisibility;
 use crate::schema::{ApiSchema, CommandSchema, FieldSchema};
+use bevy::prelude::*;
+use bevy::reflect::{TypeInfo, TypeRegistry};
 
 /// Discover LunCo commands from the type registry.
 /// Filters to only types from `lunco_*` crates that have `ReflectEvent`.
@@ -16,26 +16,42 @@ pub fn discover_commands(
     type_registry: &TypeRegistry,
     visibility: Option<&ApiVisibility>,
 ) -> Vec<CommandSchema> {
-    type_registry.iter()
+    type_registry
+        .iter()
         .filter_map(|reg| {
             let info = reg.type_info();
-            if !matches!(info, TypeInfo::Struct(_)) { return None; }
+            if !matches!(info, TypeInfo::Struct(_)) {
+                return None;
+            }
             reg.data::<bevy::ecs::reflect::ReflectEvent>()?;
-            let struct_info = match info { TypeInfo::Struct(s) => s, _ => return None };
+            let struct_info = match info {
+                TypeInfo::Struct(s) => s,
+                _ => return None,
+            };
             let short_name = info.type_path_table().short_path().to_string();
-            if short_name.starts_with("Api") || short_name.starts_with("Telemetry") { return None; }
+            if short_name.starts_with("Api") || short_name.starts_with("Telemetry") {
+                return None;
+            }
             let full_path = info.type_path_table().path();
-            if !full_path.contains("lunco_") { return None; }
+            if !full_path.contains("lunco_") {
+                return None;
+            }
             // Visibility filter — last gate before the command becomes
             // part of the externally-advertised schema.
             if visibility.is_some_and(|v| v.is_hidden(&short_name)) {
                 return None;
             }
-            let fields: Vec<FieldSchema> = struct_info.iter().map(|f: &bevy::reflect::NamedField| FieldSchema {
-                name: f.name().to_string(),
-                type_name: f.type_path().to_string(),
-            }).collect();
-            Some(CommandSchema { name: short_name, fields })
+            let fields: Vec<FieldSchema> = struct_info
+                .iter()
+                .map(|f: &bevy::reflect::NamedField| FieldSchema {
+                    name: f.name().to_string(),
+                    type_name: f.type_path().to_string(),
+                })
+                .collect();
+            Some(CommandSchema {
+                name: short_name,
+                fields,
+            })
         })
         .collect()
 }

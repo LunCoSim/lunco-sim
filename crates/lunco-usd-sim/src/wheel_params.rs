@@ -55,9 +55,9 @@ use avian3d::prelude::{
     AngularMotor, Collider, ColliderDensity, MotorModel, Position, RevoluteJoint, Rotation,
 };
 use bevy::asset::{AssetId, Handle};
+use bevy::log::{info, warn};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, Quat, World};
-use bevy::log::{info, warn};
 use lunco_hardware::{MotorActuator, SteeringActuator};
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
@@ -535,9 +535,8 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             let powertrain = crate::powertrain::find_for_wheel(&view, &sp);
             match WheelParams::read(&view, &sp, susp.as_ref(), powertrain.as_ref()) {
                 Ok(params) => {
-                    let max_steer_angle = crate::steering_vehicle_of(&view, path).and_then(|v| {
-                        view.real(&v, "physxVehicleAckermannSteering:maxSteerAngle")
-                    });
+                    let max_steer_angle = crate::steering_vehicle_of(&view, path)
+                        .and_then(|v| view.real(&v, "physxVehicleAckermannSteering:maxSteerAngle"));
                     updates.push(WheelUpdate {
                         entity: *entity,
                         physical: *physical,
@@ -571,9 +570,10 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             if let Some(mut susp) = world.get_mut::<Suspension>(u.entity) {
                 u.params.apply_to_suspension(&mut susp);
             }
-            if let (Some(lock), Some(mut steer)) =
-                (u.max_steer_angle, world.get_mut::<SteeringActuator>(u.entity))
-            {
+            if let (Some(lock), Some(mut steer)) = (
+                u.max_steer_angle,
+                world.get_mut::<SteeringActuator>(u.entity),
+            ) {
                 steer.max_steer_angle = lock;
             }
             continue;
@@ -642,6 +642,8 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     }
     info!(
         "[wheel resync] stage {:?}: re-derived {} wheel(s), {} vehicle root(s) in place",
-        id, wheel_count, vehicles.len()
+        id,
+        wheel_count,
+        vehicles.len()
     );
 }

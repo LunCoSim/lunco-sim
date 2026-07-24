@@ -85,7 +85,9 @@ pub fn pick_save_blocking(hint: &SaveHint) -> Option<StorageHandle> {
         let start: std::path::PathBuf = if dir.is_dir() {
             dir.clone()
         } else {
-            dir.parent().map(std::path::PathBuf::from).unwrap_or_default()
+            dir.parent()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default()
         };
         if !start.as_os_str().is_empty() {
             dialog = dialog.set_directory(&start);
@@ -216,9 +218,7 @@ mod native {
     use bevy::prelude::*;
     use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
-    use super::{
-        PickCancelled, PickHandle, PickInFlight, PickMode, PickResolved, StorageHandle,
-    };
+    use super::{PickCancelled, PickHandle, PickInFlight, PickMode, PickResolved, StorageHandle};
 
     /// Component holding the in-flight `rfd` dialog future. Spawned on
     /// the same entity as [`PickInFlight`] by [`spawn_picker`]; consumed
@@ -321,8 +321,7 @@ mod web {
     use wasm_bindgen_futures::{spawn_local, JsFuture};
 
     use super::{
-        OpenFilter, PickCancelled, PickFollowUp, PickHandle, PickMode, PickResolved,
-        StorageHandle,
+        OpenFilter, PickCancelled, PickFollowUp, PickHandle, PickMode, PickResolved, StorageHandle,
     };
 
     thread_local! {
@@ -377,8 +376,7 @@ mod web {
         let blob = web_sys::Blob::new_with_str_sequence(&parts)?;
         let url = web_sys::Url::create_object_url_with_blob(&blob)?;
 
-        let anchor: web_sys::HtmlAnchorElement =
-            document.create_element("a")?.dyn_into()?;
+        let anchor: web_sys::HtmlAnchorElement = document.create_element("a")?.dyn_into()?;
         anchor.set_href(&url);
         anchor.set_download(file_name);
         anchor.style().set_property("display", "none")?;
@@ -434,10 +432,7 @@ mod web {
 
     /// Build a hidden `<input type="file">`, wire its `change` event,
     /// and click it to raise the browser's native open dialog.
-    fn open_file_dialog(
-        filter: &OpenFilter,
-        follow_up: PickFollowUp,
-    ) -> Result<(), JsValue> {
+    fn open_file_dialog(filter: &OpenFilter, follow_up: PickFollowUp) -> Result<(), JsValue> {
         let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
         let document = window
             .document()
@@ -446,8 +441,7 @@ mod web {
             .body()
             .ok_or_else(|| JsValue::from_str("no document body"))?;
 
-        let input: web_sys::HtmlInputElement =
-            document.create_element("input")?.dyn_into()?;
+        let input: web_sys::HtmlInputElement = document.create_element("input")?.dyn_into()?;
         input.set_type("file");
         if !filter.extensions.is_empty() {
             let accept = filter
@@ -498,8 +492,7 @@ mod web {
             match JsFuture::from(text_promise).await {
                 Ok(value) => {
                     let content = value.as_string().unwrap_or_default();
-                    PICKED_CONTENT
-                        .with(|m| m.borrow_mut().insert(name.clone(), content));
+                    PICKED_CONTENT.with(|m| m.borrow_mut().insert(name.clone(), content));
                     push(Outcome::Resolved {
                         follow_up,
                         handle: StorageHandle::File(name.into()),

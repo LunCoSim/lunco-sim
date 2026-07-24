@@ -164,9 +164,17 @@ impl StorageHandle {
             #[cfg(any(feature = "idb_stub", doc))]
             Self::Idb { key, .. } => key.clone(),
             #[cfg(any(feature = "opfs_stub", doc))]
-            Self::Opfs(path) => path.rsplit('/').find(|s| !s.is_empty()).unwrap_or(path).to_string(),
+            Self::Opfs(path) => path
+                .rsplit('/')
+                .find(|s| !s.is_empty())
+                .unwrap_or(path)
+                .to_string(),
             #[cfg(any(feature = "http_stub", doc))]
-            Self::Http(url) => url.rsplit('/').find(|s| !s.is_empty()).unwrap_or(url).to_string(),
+            Self::Http(url) => url
+                .rsplit('/')
+                .find(|s| !s.is_empty())
+                .unwrap_or(url)
+                .to_string(),
         }
     }
 

@@ -5,13 +5,13 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_workbench::{InstancePanel, Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::model_tabs_types::{ModelViewMode, TabId, TabRenderContext};
-use crate::ui::MODEL_VIEW_KIND;
-use crate::model_tabs::ModelTabs;
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
-use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
-use crate::ui::panels::canvas_diagram::CanvasDiagramPanel;
+use crate::model_tabs::ModelTabs;
+use crate::model_tabs_types::{ModelViewMode, TabId, TabRenderContext};
 use crate::state::ModelicaDocumentRegistry;
+use crate::ui::panels::canvas_diagram::CanvasDiagramPanel;
+use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
+use crate::ui::MODEL_VIEW_KIND;
 use lunco_doc::CompileState;
 use lunco_doc_bevy::DocumentDiagnostics;
 
@@ -30,9 +30,15 @@ impl Default for ModelViewPanel {
 }
 
 impl InstancePanel for ModelViewPanel {
-    fn kind(&self) -> PanelId { MODEL_VIEW_KIND }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
-    fn closable(&self) -> bool { true }
+    fn kind(&self) -> PanelId {
+        MODEL_VIEW_KIND
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::Center
+    }
+    fn closable(&self) -> bool {
+        true
+    }
 
     fn title(&self, world: &World, instance: u64) -> String {
         let (doc, drilled) = resolve_tab_target(world, instance);
@@ -43,10 +49,22 @@ impl InstancePanel for ModelViewPanel {
             .map(|s| s.pinned)
             .unwrap_or(true);
         let mut prefix = String::new();
-        if read_only { prefix.push_str("🔒 "); }
-        if dirty { prefix.push_str("● "); }
-        let body = if prefix.is_empty() { base } else { format!("{prefix}{base}") };
-        if pinned { body } else { format!("‹ {body} ›") }
+        if read_only {
+            prefix.push_str("🔒 ");
+        }
+        if dirty {
+            prefix.push_str("● ");
+        }
+        let body = if prefix.is_empty() {
+            base
+        } else {
+            format!("{prefix}{base}")
+        };
+        if pinned {
+            body
+        } else {
+            format!("‹ {body} ›")
+        }
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, instance: u64) {
@@ -112,7 +130,10 @@ impl InstancePanel for ModelViewPanel {
         // Stamp `TabRenderContext` for the duration of the child body
         // render so the per-tab canvas/code/icon/docs read the right
         // doc/drill target, then restore the previous context after.
-        let prev_ctx = ctx.resource::<TabRenderContext>().cloned().unwrap_or_default();
+        let prev_ctx = ctx
+            .resource::<TabRenderContext>()
+            .cloned()
+            .unwrap_or_default();
         let restore_ctx = prev_ctx.clone();
         ctx.resource_scope::<TabRenderContext, _>(|_ctx, trc| {
             trc.tab_id = Some(tab_id);
@@ -142,7 +163,10 @@ impl InstancePanel for ModelViewPanel {
             None => return,
         };
 
-        if ui.button(if pinned { "📌 Unpin" } else { "📌 Pin tab" }).clicked() {
+        if ui
+            .button(if pinned { "📌 Unpin" } else { "📌 Pin tab" })
+            .clicked()
+        {
             ctx.defer(move |world| {
                 if let Some(state) = world.resource_mut::<ModelTabs>().get_mut(tab_id) {
                     state.pinned = !pinned;
@@ -156,7 +180,10 @@ impl InstancePanel for ModelViewPanel {
         if ui.button("🪟 Open in new view").clicked() {
             ctx.defer(move |world| {
                 let new_id = world.resource_mut::<ModelTabs>().open_new(doc, drilled);
-                world.trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: new_id });
+                world.trigger(lunco_workbench::OpenTab {
+                    kind: MODEL_VIEW_KIND,
+                    instance: new_id,
+                });
             });
             ui.close();
         }
@@ -173,7 +200,10 @@ impl InstancePanel for ModelViewPanel {
             ctx.defer(move |world| {
                 world
                     .resource_mut::<lunco_workbench::PendingTabCloses>()
-                    .push(lunco_workbench::TabId::Instance { kind: MODEL_VIEW_KIND, instance });
+                    .push(lunco_workbench::TabId::Instance {
+                        kind: MODEL_VIEW_KIND,
+                        instance,
+                    });
             });
             ui.close();
         }
@@ -223,15 +253,26 @@ fn render_unified_toolbar(
         .map(|t| t.tokens.clone())
         .unwrap_or_else(|| lunco_theme::Theme::dark().tokens);
 
-    let compile_state = ctx.resource::<DocumentDiagnostics>().map(|cs| cs.state_of(doc)).unwrap_or(CompileState::Idle);
+    let compile_state = ctx
+        .resource::<DocumentDiagnostics>()
+        .map(|cs| cs.state_of(doc))
+        .unwrap_or(CompileState::Idle);
     let is_read_only = crate::state::read_only_for_ctx(ctx, doc);
-    let compilation_error = ctx.resource::<DocumentDiagnostics>().and_then(|cs| cs.error_message(doc).map(str::to_string));
-    let undo_redo = ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
+    let compilation_error = ctx
+        .resource::<DocumentDiagnostics>()
+        .and_then(|cs| cs.error_message(doc).map(str::to_string));
+    let undo_redo = ctx
+        .resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.host(doc))
+        .map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
 
     let sim_state: Option<(bool, f64)> = ctx
         .resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.entities_linked_to(doc).into_iter().next())
-        .and_then(|e| ctx.get::<crate::ModelicaModel>(e).map(|m| (m.paused, m.current_time)));
+        .and_then(|e| {
+            ctx.get::<crate::ModelicaModel>(e)
+                .map(|m| (m.paused, m.current_time))
+        });
 
     // Snapshot runner busy state up front so the status pill (rendered
     // before the action buttons) can surface "⏩ Running…" — the
@@ -453,11 +494,27 @@ fn render_unified_toolbar(
         }
     });
 
-    if dismiss_error { ctx.defer(move |world| { if let Some(mut cs) = world.get_resource_mut::<DocumentDiagnostics>() { cs.clear_error(doc); } }); }
-    if focus_diagnostics { ctx.trigger(lunco_workbench::FocusPanel { id: "modelica_diagnostics".into() }); }
-    if undo_clicked { ctx.trigger(lunco_doc_bevy::UndoDocument { doc }); }
-    if redo_clicked { ctx.trigger(lunco_doc_bevy::RedoDocument { doc }); }
-    if duplicate_clicked { ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc }); }
+    if dismiss_error {
+        ctx.defer(move |world| {
+            if let Some(mut cs) = world.get_resource_mut::<DocumentDiagnostics>() {
+                cs.clear_error(doc);
+            }
+        });
+    }
+    if focus_diagnostics {
+        ctx.trigger(lunco_workbench::FocusPanel {
+            id: "modelica_diagnostics".into(),
+        });
+    }
+    if undo_clicked {
+        ctx.trigger(lunco_doc_bevy::UndoDocument { doc });
+    }
+    if redo_clicked {
+        ctx.trigger(lunco_doc_bevy::RedoDocument { doc });
+    }
+    if duplicate_clicked {
+        ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc });
+    }
     if run_pause_clicked {
         // Run = compile-if-stale then play (RunActiveModel); Pause just
         // freezes stepping. The button is always visible now, so pre-sim
@@ -465,80 +522,139 @@ fn render_unified_toolbar(
         // stepping maps to Pause. RunActiveModel subsumes resume-without-
         // compile (it unpauses directly when already compiled & clean).
         let realtime_running = sim_state.map(|(p, _)| !p).unwrap_or(false);
-        if realtime_running { ctx.trigger(crate::ui::commands::PauseActiveModel { doc }); }
-        else { ctx.trigger(crate::ui::commands::RunActiveModel { doc, class: None }); }
+        if realtime_running {
+            ctx.trigger(crate::ui::commands::PauseActiveModel { doc });
+        } else {
+            ctx.trigger(crate::ui::commands::RunActiveModel { doc, class: None });
+        }
     }
-    if reset_clicked { ctx.trigger(crate::ui::commands::ResetActiveModel { doc }); }
+    if reset_clicked {
+        ctx.trigger(crate::ui::commands::ResetActiveModel { doc });
+    }
     if restart_clicked {
         ctx.trigger(crate::ui::commands::RestartActiveModel { doc });
     }
-    if auto_arrange_clicked { ctx.trigger(crate::ui::commands::AutoArrangeDiagram { doc }); }
+    if auto_arrange_clicked {
+        ctx.trigger(crate::ui::commands::AutoArrangeDiagram { doc });
+    }
     if fast_run_clicked {
-      // The whole setup-resolution path reads + writes several resources
-      // and calls `&mut World` helpers (`resolve_setup_bounds`); defer it
-      // as one unit so it runs with full world access after paint. It
-      // only fires on a click, so the one-frame delay is invisible.
-      ctx.defer(move |world| {
-        // Drilled-in pin → tier-ranked simulation root (shared precedence,
-        // so the Fast Run popup never disagrees with the Experiments Setup
-        // form about which class is the default runnable system).
-        let model_ref = crate::sim_default::default_simulation_class(world, doc)
-            .map(lunco_experiments::ModelRef);
-        if let Some(model_ref) = model_ref {
-            // Canvas ⏩ always opens the setup modal — one predictable
-            // behaviour regardless of whether the Experiments panel happens
-            // to be open. (The modal is the only bounds/class surface when
-            // the panel is closed; keeping it unconditional avoids a hidden
-            // mode switch on the same button.)
-            // Same resolver the Experiments-tab Setup uses, so the two
-            // surfaces always agree (draft → runner cache → AST
-            // annotation → fallback).
-            let bounds = crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
-            let overrides_count = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len())).unwrap_or(0);
-            // Inputs from the parsed AST of the resolved model class — no
-            // source scan (WP-8 / CQ-205).
-            let detected = world
-                .get_resource::<ModelicaDocumentRegistry>()
-                .and_then(|r| r.host(doc))
-                .and_then(|h| {
-                    crate::ast_extract::find_class_by_short_name(
-                        h.document().syntax().ast(),
-                        crate::ast_extract::short_name(&model_ref.0),
-                    )
-                    .map(crate::experiments_runner::detect_top_level_inputs)
-                })
-                .unwrap_or_default();
-            let prefilled = world.get_resource::<crate::experiments_runner::ExperimentDrafts>().and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone())).unwrap_or_default();
-            let inputs: Vec<crate::ui::commands::FastRunInput> = detected.into_iter().map(|d| {
-                    let value_text = prefilled.get(&lunco_experiments::ParamPath(d.name.clone())).map(|v| match v {
-                            lunco_experiments::ParamValue::Real(x) => format!("{x}"),
-                            lunco_experiments::ParamValue::Int(x) => format!("{x}"),
-                            lunco_experiments::ParamValue::Bool(b) => if *b { "true".into() } else { "false".into() },
-                            lunco_experiments::ParamValue::String(s) => s.clone(),
-                            lunco_experiments::ParamValue::Enum(s) => s.clone(),
-                            lunco_experiments::ParamValue::RealArray(_) => "(array)".into(),
-                        }).unwrap_or_default();
-                    crate::ui::commands::FastRunInput { name: d.name, type_name: d.type_name, value_text }
-                }).collect();
-            let candidates = world.get_resource::<ModelicaDocumentRegistry>().and_then(|r| r.host(doc)).map(|h| h.document().index().simulation_candidates()).unwrap_or_default();
-            if let Some(mut setup) = world.get_resource_mut::<crate::ui::commands::FastRunSetupState>() {
-                setup.0 = Some(crate::ui::commands::FastRunSetupEntry { doc, model_ref, candidates, bounds, overrides_count, inputs });
+        // The whole setup-resolution path reads + writes several resources
+        // and calls `&mut World` helpers (`resolve_setup_bounds`); defer it
+        // as one unit so it runs with full world access after paint. It
+        // only fires on a click, so the one-frame delay is invisible.
+        ctx.defer(move |world| {
+            // Drilled-in pin → tier-ranked simulation root (shared precedence,
+            // so the Fast Run popup never disagrees with the Experiments Setup
+            // form about which class is the default runnable system).
+            let model_ref = crate::sim_default::default_simulation_class(world, doc)
+                .map(lunco_experiments::ModelRef);
+            if let Some(model_ref) = model_ref {
+                // Canvas ⏩ always opens the setup modal — one predictable
+                // behaviour regardless of whether the Experiments panel happens
+                // to be open. (The modal is the only bounds/class surface when
+                // the panel is closed; keeping it unconditional avoids a hidden
+                // mode switch on the same button.)
+                // Same resolver the Experiments-tab Setup uses, so the two
+                // surfaces always agree (draft → runner cache → AST
+                // annotation → fallback).
+                let bounds =
+                    crate::ui::commands::compile::resolve_setup_bounds(world, doc, &model_ref);
+                let overrides_count = world
+                    .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                    .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
+                    .unwrap_or(0);
+                // Inputs from the parsed AST of the resolved model class — no
+                // source scan (WP-8 / CQ-205).
+                let detected = world
+                    .get_resource::<ModelicaDocumentRegistry>()
+                    .and_then(|r| r.host(doc))
+                    .and_then(|h| {
+                        crate::ast_extract::find_class_by_short_name(
+                            h.document().syntax().ast(),
+                            crate::ast_extract::short_name(&model_ref.0),
+                        )
+                        .map(crate::experiments_runner::detect_top_level_inputs)
+                    })
+                    .unwrap_or_default();
+                let prefilled = world
+                    .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                    .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
+                    .unwrap_or_default();
+                let inputs: Vec<crate::ui::commands::FastRunInput> = detected
+                    .into_iter()
+                    .map(|d| {
+                        let value_text = prefilled
+                            .get(&lunco_experiments::ParamPath(d.name.clone()))
+                            .map(|v| match v {
+                                lunco_experiments::ParamValue::Real(x) => format!("{x}"),
+                                lunco_experiments::ParamValue::Int(x) => format!("{x}"),
+                                lunco_experiments::ParamValue::Bool(b) => {
+                                    if *b {
+                                        "true".into()
+                                    } else {
+                                        "false".into()
+                                    }
+                                }
+                                lunco_experiments::ParamValue::String(s) => s.clone(),
+                                lunco_experiments::ParamValue::Enum(s) => s.clone(),
+                                lunco_experiments::ParamValue::RealArray(_) => "(array)".into(),
+                            })
+                            .unwrap_or_default();
+                        crate::ui::commands::FastRunInput {
+                            name: d.name,
+                            type_name: d.type_name,
+                            value_text,
+                        }
+                    })
+                    .collect();
+                let candidates = world
+                    .get_resource::<ModelicaDocumentRegistry>()
+                    .and_then(|r| r.host(doc))
+                    .map(|h| h.document().index().simulation_candidates())
+                    .unwrap_or_default();
+                if let Some(mut setup) =
+                    world.get_resource_mut::<crate::ui::commands::FastRunSetupState>()
+                {
+                    setup.0 = Some(crate::ui::commands::FastRunSetupEntry {
+                        doc,
+                        model_ref,
+                        candidates,
+                        bounds,
+                        overrides_count,
+                        inputs,
+                    });
+                }
+            } else {
+                world.trigger(crate::ui::commands::FastRunActiveModel {
+                    doc,
+                    class: None,
+                    t_end: None,
+                    dt: None,
+                    n_intervals: None,
+                    tolerance: None,
+                    solver: None,
+                    h0: None,
+                });
             }
-        } else {
-            world.trigger(crate::ui::commands::FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
-        }
-      });
+        });
     }
     if compile_clicked {
-        ctx.trigger(crate::ui::commands::CompileActiveModel { doc, class: String::new() });
+        ctx.trigger(crate::ui::commands::CompileActiveModel {
+            doc,
+            class: String::new(),
+        });
     }
     new_view_mode
 }
 
 fn render_docs_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    let doc_id = ctx.resource::<lunco_workspace::WorkspaceResource>().and_then(|ws| ws.active_document);
+    let doc_id = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|ws| ws.active_document);
     let Some(doc) = doc_id else {
-        ui.centered_and_justified(|ui| { ui.label(egui::RichText::new("No model open").weak()); });
+        ui.centered_and_justified(|ui| {
+            ui.label(egui::RichText::new("No model open").weak());
+        });
         return;
     };
 
@@ -560,117 +676,175 @@ fn render_docs_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .unwrap_or((None, None, None, None))
     };
 
-    egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-        ui.vertical_centered(|ui| {
-            if let Some(name) = &class_name {
-                ui.label(egui::RichText::new(name).size(22.0).strong());
-                if let Some(desc) = &class_description {
-                    ui.label(egui::RichText::new(desc).size(13.0).italics());
+    egui::ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                if let Some(name) = &class_name {
+                    ui.label(egui::RichText::new(name).size(22.0).strong());
+                    if let Some(desc) = &class_description {
+                        ui.label(egui::RichText::new(desc).size(13.0).italics());
+                    }
+                    ui.add_space(12.0);
                 }
-                ui.add_space(12.0);
-            }
-            if let Some(html) = info.as_deref().filter(|s| !s.trim().is_empty()) {
-                render_html_as_markdown(ui, ctx, 760.0, html);
-            } else {
-                ui.label(egui::RichText::new("(no documentation)").italics().weak());
-            }
-            if let Some(revs) = revisions.as_deref().filter(|s| !s.trim().is_empty()) {
-                ui.add_space(24.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("Revisions").strong().size(15.0));
-                ui.add_space(6.0);
-                render_html_as_markdown(ui, ctx, 760.0, revs);
-            }
+                if let Some(html) = info.as_deref().filter(|s| !s.trim().is_empty()) {
+                    render_html_as_markdown(ui, ctx, 760.0, html);
+                } else {
+                    ui.label(egui::RichText::new("(no documentation)").italics().weak());
+                }
+                if let Some(revs) = revisions.as_deref().filter(|s| !s.trim().is_empty()) {
+                    ui.add_space(24.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Revisions").strong().size(15.0));
+                    ui.add_space(6.0);
+                    render_html_as_markdown(ui, ctx, 760.0, revs);
+                }
+            });
         });
-    });
 }
 
 fn render_html_as_markdown(ui: &mut egui::Ui, ctx: &mut PanelCtx, target_width: f32, html: &str) {
     use std::sync::Mutex;
-    static CACHE: std::sync::OnceLock<Mutex<egui_commonmark::CommonMarkCache>> = std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<Mutex<egui_commonmark::CommonMarkCache>> =
+        std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(egui_commonmark::CommonMarkCache::default()));
-    
+
     static MD_CACHE: std::sync::OnceLock<Mutex<Option<(u64, String)>>> = std::sync::OnceLock::new();
     let md_cache = MD_CACHE.get_or_init(|| Mutex::new(None));
-    
+
     let html_hash = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         html.hash(&mut h);
         h.finish()
     };
-    
+
     let md = {
         let mut g = md_cache.lock().unwrap();
-        if let Some((k, v)) = g.as_ref() { if *k == html_hash { v.clone() } else {
-            let v = htmd::convert(html).unwrap_or_else(|_| html.to_string());
-            *g = Some((html_hash, v.clone()));
-            v
-        }} else {
+        if let Some((k, v)) = g.as_ref() {
+            if *k == html_hash {
+                v.clone()
+            } else {
+                let v = htmd::convert(html).unwrap_or_else(|_| html.to_string());
+                *g = Some((html_hash, v.clone()));
+                v
+            }
+        } else {
             let v = htmd::convert(html).unwrap_or_else(|_| html.to_string());
             *g = Some((html_hash, v.clone()));
             v
         }
     };
-    
+
     if let Ok(mut c) = cache.lock() {
-        egui_commonmark::CommonMarkViewer::new().max_image_width(Some(target_width as usize)).show(ui, &mut c, &md);
+        egui_commonmark::CommonMarkViewer::new()
+            .max_image_width(Some(target_width as usize))
+            .show(ui, &mut c, &md);
     }
 
     let intercepts: Vec<(usize, String, lunco_workbench::UriResolution)> = {
         let registry = ctx.resource::<lunco_workbench::UriRegistry>();
         ui.ctx().output_mut(|o| {
-            o.commands.iter().enumerate().filter_map(|(idx, cmd)| {
-                if let egui::OutputCommand::OpenUrl(open) = cmd {
-                    let res = registry.map(|r| r.dispatch(&open.url)).unwrap_or(lunco_workbench::UriResolution::NotHandled);
-                    if !matches!(res, lunco_workbench::UriResolution::NotHandled) { return Some((idx, open.url.clone(), res)); }
-                }
-                None
-            }).collect()
+            o.commands
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, cmd)| {
+                    if let egui::OutputCommand::OpenUrl(open) = cmd {
+                        let res = registry
+                            .map(|r| r.dispatch(&open.url))
+                            .unwrap_or(lunco_workbench::UriResolution::NotHandled);
+                        if !matches!(res, lunco_workbench::UriResolution::NotHandled) {
+                            return Some((idx, open.url.clone(), res));
+                        }
+                    }
+                    None
+                })
+                .collect()
         })
     };
-    
+
     ui.ctx().output_mut(|o| {
-        for (idx, _, _) in intercepts.iter().rev() { if *idx < o.commands.len() { o.commands.remove(*idx); } }
+        for (idx, _, _) in intercepts.iter().rev() {
+            if *idx < o.commands.len() {
+                o.commands.remove(*idx);
+            }
+        }
     });
     for (_, url, resolution) in intercepts {
-        ctx.trigger(lunco_workbench::UriClicked { uri: url, resolution });
+        ctx.trigger(lunco_workbench::UriClicked {
+            uri: url,
+            resolution,
+        });
     }
 }
 
 fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    let theme = ctx.resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
-    let active = ctx.resource::<lunco_workspace::WorkspaceResource>().and_then(|ws| ws.active_document);
+    let theme = ctx
+        .resource::<lunco_theme::Theme>()
+        .cloned()
+        .unwrap_or_else(lunco_theme::Theme::dark);
+    let active = ctx
+        .resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|ws| ws.active_document);
     let Some(doc) = active else {
-        ui.centered_and_justified(|ui| { ui.label(egui::RichText::new("No model open").weak()); });
+        ui.centered_and_justified(|ui| {
+            ui.label(egui::RichText::new("No model open").weak());
+        });
         return;
     };
 
     let (qualified, authored_icon, parameters) = {
-        let Some(registry) = ctx.resource::<ModelicaDocumentRegistry>() else { return; };
-        let Some(host) = registry.host(doc) else { return; };
+        let Some(registry) = ctx.resource::<ModelicaDocumentRegistry>() else {
+            return;
+        };
+        let Some(host) = registry.host(doc) else {
+            return;
+        };
         let document = host.document();
         let display = document.origin().display_name();
         let from_path = display.strip_prefix("msl://").map(|s| s.to_string());
-        let short = document.strict_ast().and_then(|ast| crate::ast_extract::extract_model_name_from_ast(&ast)).unwrap_or_default();
+        let short = document
+            .strict_ast()
+            .and_then(|ast| crate::ast_extract::extract_model_name_from_ast(&ast))
+            .unwrap_or_default();
         let qualified = from_path.unwrap_or_else(|| short.clone());
-        
+
         let mut qpath = qualified.clone();
         if !qpath.contains('.') {
             if let Some(ast) = document.strict_ast() {
-                let pkg = ast.within.as_ref().map(|w| w.name.iter().map(|t| t.text.as_ref()).collect::<Vec<_>>().join(".")).unwrap_or_default();
-                if !pkg.is_empty() { qpath = format!("{pkg}.{qpath}"); }
+                let pkg = ast
+                    .within
+                    .as_ref()
+                    .map(|w| {
+                        w.name
+                            .iter()
+                            .map(|t| t.text.as_ref())
+                            .collect::<Vec<_>>()
+                            .join(".")
+                    })
+                    .unwrap_or_default();
+                if !pkg.is_empty() {
+                    qpath = format!("{pkg}.{qpath}");
+                }
             }
         }
-        
+
         let (icon, params) = match ctx.resource::<crate::engine_resource::ModelicaEngineHandle>() {
             Some(handle) => {
                 let mut engine = handle.lock();
                 let icon = crate::annotations::extract_icon_via_engine(&qpath, &mut engine);
-                let params: Vec<(String, String)> = engine.inherited_members_typed(&qpath).into_iter()
-                    .filter(|m| matches!(m.variability, crate::engine::InheritedVariability::Parameter))
-                    .map(|m| (m.name, m.default_value.unwrap_or_default())).collect();
+                let params: Vec<(String, String)> = engine
+                    .inherited_members_typed(&qpath)
+                    .into_iter()
+                    .filter(|m| {
+                        matches!(
+                            m.variability,
+                            crate::engine::InheritedVariability::Parameter
+                        )
+                    })
+                    .map(|m| (m.name, m.default_value.unwrap_or_default()))
+                    .collect();
                 (icon, params)
             }
             _ => (None, Vec::new()),
@@ -684,19 +858,42 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     if let Some(icon) = authored_icon {
         let side = (rect.width().min(rect.height()) * 0.6).max(100.0);
         let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
-        let short_name = qualified.rsplit('.').next().unwrap_or(&qualified).to_string();
+        let short_name = qualified
+            .rsplit('.')
+            .next()
+            .unwrap_or(&qualified)
+            .to_string();
         let sub = crate::icon_paint::TextSubstitution {
             name: Some(short_name.as_str()),
             class_name: Some(short_name.as_str()),
             parameters: (!parameters.is_empty()).then_some(parameters.as_slice()),
         };
-        crate::icon_paint::paint_graphics_themed(painter, icon_rect, icon.coordinate_system, crate::icon_paint::IconOrientation::default(), Some(&sub), None, Some(&theme.modelica_icons), &icon.graphics);
+        crate::icon_paint::paint_graphics_themed(
+            painter,
+            icon_rect,
+            icon.coordinate_system,
+            crate::icon_paint::IconOrientation::default(),
+            Some(&sub),
+            None,
+            Some(&theme.modelica_icons),
+            &icon.graphics,
+        );
         return;
     }
 
-    crate::ui::panels::placeholder::render_centered_card(ui, rect, egui::vec2(380.0, 170.0), &theme, |ui| {
-        ui.label(egui::RichText::new("🎨").size(36.0));
-        ui.label(egui::RichText::new("No icon defined for this class").strong());
-        ui.label(egui::RichText::new("Add an Icon annotation in the Text tab.").italics().size(11.0));
-    });
+    crate::ui::panels::placeholder::render_centered_card(
+        ui,
+        rect,
+        egui::vec2(380.0, 170.0),
+        &theme,
+        |ui| {
+            ui.label(egui::RichText::new("🎨").size(36.0));
+            ui.label(egui::RichText::new("No icon defined for this class").strong());
+            ui.label(
+                egui::RichText::new("Add an Icon annotation in the Text tab.")
+                    .italics()
+                    .size(11.0),
+            );
+        },
+    );
 }

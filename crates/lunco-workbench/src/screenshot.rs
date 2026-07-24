@@ -95,7 +95,10 @@ impl Plugin for ScreenshotPlugin {
             .add_systems(Update, start_recording_when_scene_ready)
             // One-shot contracts: `--record-frames <n>` bounds the take, and
             // `--offscreen` exits the process once the take is on disk.
-            .add_systems(Update, (stop_recording_at_limit, exit_when_recording_drained))
+            .add_systems(
+                Update,
+                (stop_recording_at_limit, exit_when_recording_drained),
+            )
             // `Last`: the strategy written here is read by `TimeSystem` in `First`
             // next frame, so the decision is made after every other system has run.
             .add_systems(Last, drive_offline_clock);
@@ -154,8 +157,11 @@ fn on_capture_screenshot(
     let request = if cmd.save_to_file {
         // Empty ⇒ we pick a timestamped name. Reaching for a wall clock is not something the
         // render-free substrate should do, so that default lives here.
-        let path =
-            if cmd.path.is_empty() { timestamped_name("screenshot") } else { cmd.path.clone() };
+        let path = if cmd.path.is_empty() {
+            timestamped_name("screenshot")
+        } else {
+            cmd.path.clone()
+        };
 
         // ANSWER NOW. A deferred command owes the caller EXACTLY ONE response on its
         // correlation id — the executor no longer sends one on its behalf. In save-to-file
@@ -167,7 +173,11 @@ fn on_capture_screenshot(
             response: ApiResponse::ok(serde_json::json!({ "path": path })),
         });
 
-        PendingCapture { correlation_id: None, save_path: Some(path), region }
+        PendingCapture {
+            correlation_id: None,
+            save_path: Some(path),
+            region,
+        }
     } else {
         PendingCapture {
             correlation_id: Some(pending_request.correlation_id),
@@ -376,7 +386,9 @@ fn register_science_tools() {
         |world, vessel, _gid, _args| {
             // The command's observer resolves the vessel's `Camera3d` descendant and captures
             // from the window it renders to. A vessel with no camera no-ops with a warn.
-            world.trigger(CaptureFromCamera { target: Some(vessel) });
+            world.trigger(CaptureFromCamera {
+                target: Some(vessel),
+            });
             ToolResult::Ok
         },
     );
@@ -457,7 +469,10 @@ pub struct StopOfflineRecording {}
 /// extension.
 pub fn output_is_video(path: &std::path::Path) -> bool {
     matches!(
-        path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("mp4" | "mkv" | "mov")
     )
 }
@@ -579,7 +594,13 @@ impl VideoSink {
             .stderr(std::process::Stdio::inherit())
             .spawn()?;
         let stdin = child.stdin.take().expect("stdin was piped above");
-        Ok(Self { child, stdin, path: path.to_path_buf(), width, height })
+        Ok(Self {
+            child,
+            stdin,
+            path: path.to_path_buf(),
+            width,
+            height,
+        })
     }
 }
 
@@ -603,13 +624,12 @@ impl VideoSink {
 /// ordinary `Automatic` mode: the wait is real-time and consumes no recorded frames,
 /// so the deterministic capture still begins at step 0 with N frames == N steps.
 #[on_command(StartOfflineRecording)]
-fn on_start_offline_recording(
-    trigger: On<StartOfflineRecording>,
-    mut commands: Commands,
-) {
+fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: Commands) {
     let cmd = trigger.event();
     let dir = if cmd.output_dir.is_empty() {
-        std::env::current_dir().unwrap_or_default().join("recorded_frames")
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join("recorded_frames")
     } else {
         std::path::PathBuf::from(&cmd.output_dir)
     };
@@ -619,7 +639,9 @@ fn on_start_offline_recording(
     // A video destination (`out.mp4`) needs its PARENT to exist — creating the
     // path itself would plant a directory where ffmpeg wants a file.
     let dir_to_create = if output_is_video(&dir) {
-        dir.parent().map(std::path::Path::to_path_buf).unwrap_or_default()
+        dir.parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default()
     } else {
         dir.clone()
     };
@@ -719,7 +741,9 @@ fn activate_recording(
     // Freeze time initially by setting manual duration to 0.
     // This allows guarded simulation systems to execute but see a 0 delta.
     // `drive_offline_clock` owns the strategy from the next frame onward.
-    commands.insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
+    commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::ZERO,
+    ));
 
     // THE diagnostic line for "why does frame 0 look wrong?". It names the wait
     // duration and the last thing the gate was blocked on, so the next occurrence
@@ -730,7 +754,10 @@ fn activate_recording(
         state.output_dir.display(),
         state.fps,
         pending.requested_at.elapsed().as_secs_f32(),
-        pending.last_blocker.as_deref().unwrap_or("none — ready on the first check"),
+        pending
+            .last_blocker
+            .as_deref()
+            .unwrap_or("none — ready on the first check"),
     );
 }
 
@@ -779,7 +806,13 @@ fn on_stop_offline_recording(
     commands.remove_resource::<PendingShotStart>();
 
     if state.active {
-        teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+        teardown_recording(
+            &mut state,
+            &mut keep_awake,
+            &mut windows,
+            &mut video_sink,
+            &mut commands,
+        );
         info!("[offline-record] stopped recording");
     }
 }
@@ -985,14 +1018,18 @@ fn start_recording_when_scene_ready(
         }
         None => {
             pending.ready_streak += 1;
-            pending.ready_since.get_or_insert_with(web_time::Instant::now);
+            pending
+                .ready_since
+                .get_or_insert_with(web_time::Instant::now);
         }
     }
 
     // BOTH guards must pass — they cover different hazards (pipeline warm-up vs.
     // asynchronous spawn lulls). See [`SETTLE_FRAMES`] / [`SETTLE_PERIOD`].
     let settled = pending.ready_streak >= SETTLE_FRAMES
-        && pending.ready_since.is_some_and(|t| t.elapsed() >= SETTLE_PERIOD);
+        && pending
+            .ready_since
+            .is_some_and(|t| t.elapsed() >= SETTLE_PERIOD);
     let timed_out = pending.requested_at.elapsed() >= READY_TIMEOUT;
     if !settled && !timed_out {
         return;
@@ -1008,7 +1045,13 @@ fn start_recording_when_scene_ready(
         );
     }
 
-    activate_recording(&pending, &mut state, &mut keep_awake, &mut windows, &mut commands);
+    activate_recording(
+        &pending,
+        &mut state,
+        &mut keep_awake,
+        &mut windows,
+        &mut commands,
+    );
     commands.remove_resource::<PendingShotStart>();
 }
 
@@ -1122,7 +1165,10 @@ fn deliver_offline_frame(
         return;
     }
     let Ok(dyn_img) = event.image.clone().try_into_dynamic() else {
-        error!("[offline-record] failed to convert image for frame {}", state.frame_index);
+        error!(
+            "[offline-record] failed to convert image for frame {}",
+            state.frame_index
+        );
         state.is_waiting_for_frame = false;
         return;
     };
@@ -1154,7 +1200,13 @@ fn deliver_offline_frame(
                 }
                 Err(e) => {
                     error!("[offline-record] failed to start ffmpeg ({e}) — aborting recording");
-                    teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+                    teardown_recording(
+                        &mut state,
+                        &mut keep_awake,
+                        &mut windows,
+                        &mut video_sink,
+                        &mut commands,
+                    );
                     return;
                 }
             }
@@ -1166,7 +1218,13 @@ fn deliver_offline_frame(
                  — aborting; a raw video stream cannot change dimensions",
                 sink.width, sink.height
             );
-            teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+            teardown_recording(
+                &mut state,
+                &mut keep_awake,
+                &mut windows,
+                &mut video_sink,
+                &mut commands,
+            );
             return;
         }
         if let Err(e) = sink.stdin.write_all(rgba.as_raw()) {
@@ -1174,20 +1232,34 @@ fn deliver_offline_frame(
                 "[offline-record] ffmpeg pipe write failed at frame {} ({e}) — aborting recording",
                 state.frame_index
             );
-            teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+            teardown_recording(
+                &mut state,
+                &mut keep_awake,
+                &mut windows,
+                &mut video_sink,
+                &mut commands,
+            );
             return;
         }
         trace!("[offline-record] encoded frame {}", state.frame_index);
     } else {
         // PNG SINK: one file per frame into the destination directory.
-        let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
+        let path = state
+            .output_dir
+            .join(format!("frame_{:06}.png", state.frame_index));
         if let Err(e) = dyn_img.save(&path) {
             error!(
                 "[offline-record] failed to save frame {} ({e}) — aborting recording to \
                  avoid a sequence with holes in it",
                 state.frame_index
             );
-            teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+            teardown_recording(
+                &mut state,
+                &mut keep_awake,
+                &mut windows,
+                &mut video_sink,
+                &mut commands,
+            );
             return;
         }
         trace!("[offline-record] saved frame {}", state.frame_index);
@@ -1196,14 +1268,22 @@ fn deliver_offline_frame(
     // activation always demotes to the PNG sequence).
     #[cfg(target_arch = "wasm32")]
     {
-        let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
+        let path = state
+            .output_dir
+            .join(format!("frame_{:06}.png", state.frame_index));
         if let Err(e) = dyn_img.save(&path) {
             error!(
                 "[offline-record] failed to save frame {} ({e}) — aborting recording to \
                  avoid a sequence with holes in it",
                 state.frame_index
             );
-            teardown_recording(&mut state, &mut keep_awake, &mut windows, &mut video_sink, &mut commands);
+            teardown_recording(
+                &mut state,
+                &mut keep_awake,
+                &mut windows,
+                &mut video_sink,
+                &mut commands,
+            );
             return;
         }
         trace!("[offline-record] saved frame {}", state.frame_index);
@@ -1268,7 +1348,11 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
     fn name(&self) -> &'static str {
         "GetOfflineRecordingStatus"
     }
-    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::schema::ApiResponse {
+    fn execute(
+        &self,
+        world: &mut World,
+        _params: &serde_json::Value,
+    ) -> lunco_api::schema::ApiResponse {
         let state = world.resource::<OfflineRecordingState>();
         lunco_api::schema::ApiResponse::ok(serde_json::json!({
             "active": state.active,
@@ -1277,4 +1361,3 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
         }))
     }
 }
-

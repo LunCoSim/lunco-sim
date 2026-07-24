@@ -96,7 +96,10 @@ fn compile_balloon_model(
 
 fn setup_balloon_wires(
     mut commands: Commands,
-    q_new: Query<(Entity, &Name, &ModelicaModel), (With<BalloonModelMarker>, Without<SimComponent>)>,
+    q_new: Query<
+        (Entity, &Name, &ModelicaModel),
+        (With<BalloonModelMarker>, Without<SimComponent>),
+    >,
 ) {
     for (entity, name, model) in &q_new {
         if model.variables.is_empty() {
@@ -116,16 +119,28 @@ fn setup_balloon_wires(
         });
 
         commands.spawn(SimConnection {
-            start_element: entity, start_connector: "netForce".into(),
-            end_element: entity,   end_connector: "force_y".into(), scale: 1.0, offset: 0.0,
+            start_element: entity,
+            start_connector: "netForce".into(),
+            end_element: entity,
+            end_connector: "force_y".into(),
+            scale: 1.0,
+            offset: 0.0,
         });
         commands.spawn(SimConnection {
-            start_element: entity, start_connector: "height".into(),
-            end_element: entity,   end_connector: "height".into(), scale: 1.0, offset: 0.0,
+            start_element: entity,
+            start_connector: "height".into(),
+            end_element: entity,
+            end_connector: "height".into(),
+            scale: 1.0,
+            offset: 0.0,
         });
         commands.spawn(SimConnection {
-            start_element: entity, start_connector: "velocity_y".into(),
-            end_element: entity,   end_connector: "velocity".into(), scale: 1.0, offset: 0.0,
+            start_element: entity,
+            start_connector: "velocity_y".into(),
+            end_element: entity,
+            end_connector: "velocity".into(),
+            scale: 1.0,
+            offset: 0.0,
         });
 
         commands.entity(entity).remove::<BalloonModelMarker>();
@@ -165,7 +180,9 @@ fn balloon_flies_up_under_buoyancy() {
         bevy::mesh::MeshPlugin,
         PhysicsPlugins::default(),
     ))
-    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+        1.0 / 60.0,
+    )))
     .insert_resource(Gravity::ZERO)
     .insert_resource(Time::<Fixed>::from_hz(60.0));
 
@@ -185,14 +202,17 @@ fn balloon_flies_up_under_buoyancy() {
     app.finish();
 
     let initial_y = 5.0_f64;
-    let balloon = app.world_mut().spawn((
-        Name::new("Test Balloon"),
-        Transform::from_xyz(0.0, initial_y as f32, 0.0),
-        RigidBody::Dynamic,
-        Collider::sphere(1.0),
-        Mass(4.5),
-        BalloonModelMarker::default(),
-    )).id();
+    let balloon = app
+        .world_mut()
+        .spawn((
+            Name::new("Test Balloon"),
+            Transform::from_xyz(0.0, initial_y as f32, 0.0),
+            RigidBody::Dynamic,
+            Collider::sphere(1.0),
+            Mass(4.5),
+            BalloonModelMarker::default(),
+        ))
+        .id();
 
     // Wait for Modelica compile + setup_balloon_wires.
     let mut compiled = false;
@@ -205,10 +225,17 @@ fn balloon_flies_up_under_buoyancy() {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(compiled, "balloon never received SimComponent — Modelica compile failed?");
+    assert!(
+        compiled,
+        "balloon never received SimComponent — Modelica compile failed?"
+    );
 
     // Snapshot starting Y, then run physics for ~2 simulated seconds (120 ticks).
-    let start_y = app.world().get::<Position>(balloon).map(|p| p.0.y).unwrap_or(initial_y);
+    let start_y = app
+        .world()
+        .get::<Position>(balloon)
+        .map(|p| p.0.y)
+        .unwrap_or(initial_y);
     eprintln!("test: starting Position.y = {start_y}");
 
     let mut max_force_y = 0.0_f64;
@@ -223,12 +250,20 @@ fn balloon_flies_up_under_buoyancy() {
         // each iteration is fine).
         max_force_y = app.world().resource::<ForceYWitness>().0;
         if let Some(v) = app.world().get::<LinearVelocity>(balloon) {
-            if v.0.y.abs() > max_velocity_y.abs() { max_velocity_y = v.0.y; }
+            if v.0.y.abs() > max_velocity_y.abs() {
+                max_velocity_y = v.0.y;
+            }
         }
     }
 
-    let end_y = app.world().get::<Position>(balloon).map(|p| p.0.y).unwrap_or(start_y);
-    let netforce = app.world().get::<SimComponent>(balloon)
+    let end_y = app
+        .world()
+        .get::<Position>(balloon)
+        .map(|p| p.0.y)
+        .unwrap_or(start_y);
+    let netforce = app
+        .world()
+        .get::<SimComponent>(balloon)
         .and_then(|c| c.outputs.get("netForce").copied())
         .unwrap_or(f64::NAN);
 
@@ -272,12 +307,19 @@ fn balloon_flies_up_with_flat_gravity() {
         bevy::mesh::MeshPlugin,
         PhysicsPlugins::default(),
     ))
-    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+        1.0 / 60.0,
+    )))
     .insert_resource(Gravity::ZERO)
     .insert_resource(CelestialGravity::flat(9.81, bevy::math::DVec3::NEG_Y))
     .insert_resource(Time::<Fixed>::from_hz(60.0));
 
-    app.add_plugins((CoSimPlugin, ModelicaCorePlugin, GravityPlugin, EnvironmentPlugin));
+    app.add_plugins((
+        CoSimPlugin,
+        ModelicaCorePlugin,
+        GravityPlugin,
+        EnvironmentPlugin,
+    ));
     add_force_y_witness(&mut app);
 
     app.add_systems(
@@ -304,45 +346,72 @@ fn balloon_flies_up_with_flat_gravity() {
     ));
 
     let initial_y = 5.0_f64;
-    let balloon = app.world_mut().spawn((
-        Name::new("Test Balloon (with gravity)"),
-        Transform::from_xyz(0.0, initial_y as f32, 0.0),
-        RigidBody::Dynamic,
-        Collider::sphere(1.0),
-        Mass(4.5),
-        BalloonModelMarker::default(),
-    )).id();
+    let balloon = app
+        .world_mut()
+        .spawn((
+            Name::new("Test Balloon (with gravity)"),
+            Transform::from_xyz(0.0, initial_y as f32, 0.0),
+            RigidBody::Dynamic,
+            Collider::sphere(1.0),
+            Mass(4.5),
+            BalloonModelMarker::default(),
+        ))
+        .id();
 
     // Same compile-wait as the no-gravity test.
     let mut compiled = false;
     for _ in 0..600 {
         app.update();
-        if app.world().get::<SimComponent>(balloon).is_some() { compiled = true; break; }
+        if app.world().get::<SimComponent>(balloon).is_some() {
+            compiled = true;
+            break;
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(compiled, "balloon never compiled");
 
-    let start_y = app.world().get::<Position>(balloon).map(|p| p.0.y).unwrap_or(initial_y);
+    let start_y = app
+        .world()
+        .get::<Position>(balloon)
+        .map(|p| p.0.y)
+        .unwrap_or(initial_y);
     eprintln!("test (gravity): starting Position.y = {start_y}");
 
     let mut min_y = start_y;
-    for _ in 0..480 {  // 8 simulated seconds — give it time to fall AND recover
+    for _ in 0..480 {
+        // 8 simulated seconds — give it time to fall AND recover
         app.update();
         std::thread::sleep(Duration::from_millis(2));
         if let Some(p) = app.world().get::<Position>(balloon) {
-            if p.0.y < min_y { min_y = p.0.y; }
+            if p.0.y < min_y {
+                min_y = p.0.y;
+            }
         }
     }
 
-    let end_y = app.world().get::<Position>(balloon).map(|p| p.0.y).unwrap_or(start_y);
-    let netforce = app.world().get::<SimComponent>(balloon)
+    let end_y = app
+        .world()
+        .get::<Position>(balloon)
+        .map(|p| p.0.y)
+        .unwrap_or(start_y);
+    let netforce = app
+        .world()
+        .get::<SimComponent>(balloon)
         .and_then(|c| c.outputs.get("netForce").copied())
         .unwrap_or(f64::NAN);
-    let (force_y_in, total_force_in) = app.world().get::<SimComponent>(balloon)
-        .map(|c| (
-            c.inputs.get("force_y").copied().unwrap_or(0.0),
-            c.inputs.iter().map(|(k, v)| format!("{k}={v:.2}")).collect::<Vec<_>>().join(", ")
-        ))
+    let (force_y_in, total_force_in) = app
+        .world()
+        .get::<SimComponent>(balloon)
+        .map(|c| {
+            (
+                c.inputs.get("force_y").copied().unwrap_or(0.0),
+                c.inputs
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v:.2}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        })
         .unwrap_or((0.0, String::new()));
 
     eprintln!("test (gravity): start={start_y} min={min_y} end={end_y}");

@@ -138,7 +138,10 @@ pub fn drain_deep_link_inbox(
     };
     while let Some(url) = q.pop_front() {
         if let Some(link) = crate::connect_link::parse_native(&url) {
-            info!("[net] deep link → pending connect to {} (awaiting confirm)", link.address);
+            info!(
+                "[net] deep link → pending connect to {} (awaiting confirm)",
+                link.address
+            );
             pending.request = Some(lunco_core::session::PendingConnectRequest {
                 address: link.address,
                 digest: link.digest,

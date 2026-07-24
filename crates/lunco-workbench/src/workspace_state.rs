@@ -37,8 +37,8 @@ use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
 use serde::{Deserialize, Serialize};
 
-use lunco_workspace::WorkspaceResource;
 use crate::{PanelId, WorkbenchLayout};
+use lunco_workspace::WorkspaceResource;
 
 /// Hot-exit snapshot of one open document — VSCode-style. Carries the
 /// **live editor buffer** (`source`), not just a path, so unsaved edits
@@ -568,8 +568,7 @@ fn build_state(world: &mut World) -> WorkspaceState {
                 .active_document
                 .map(|id| id.raw())
         });
-    let active_document =
-        active_id.and_then(|aid| pairs.iter().position(|(id, _)| *id == aid));
+    let active_document = active_id.and_then(|aid| pairs.iter().position(|(id, _)| *id == aid));
     // Stamp each snapshot with its live id so the persisted dock tree's
     // tab instances can be remapped onto the restored docs next launch.
     let documents: Vec<DocumentSnapshot> = pairs
@@ -586,7 +585,9 @@ fn build_state(world: &mut World) -> WorkspaceState {
     // the viewport-only rebuild branch) is skipped rather than round-tripping
     // as a layout with missing panels.
     let docks = if RESTORE_DOCK_ARRANGEMENT {
-        world.resource::<WorkbenchLayout>().capture_perspective_docks()
+        world
+            .resource::<WorkbenchLayout>()
+            .capture_perspective_docks()
     } else {
         HashMap::new() // see RESTORE_DOCK_ARRANGEMENT
     };
@@ -692,8 +693,7 @@ fn restore_workspace_state(world: &mut World) {
             let codec = reg.codecs.iter().find(|c| c.kind() == snap.kind);
             // Resolve the live id: an already-open doc (auto-open / cosim /
             // dedup) reuses its live id; otherwise the codec recreates it.
-            let live_id = if let Some((live, _)) =
-                existing.iter().find(|(_, o)| o == &snap.origin)
+            let live_id = if let Some((live, _)) = existing.iter().find(|(_, o)| o == &snap.origin)
             {
                 Some(*live)
             } else if let Some(c) = codec {
@@ -774,12 +774,15 @@ fn persist_workspace_state(world: &mut World) {
         }
     }
     let state = build_state(world);
-    let key = format!("{:016x}", fnv1a64(
-        std::fs::canonicalize(&state.twin_root)
-            .unwrap_or_else(|_| state.twin_root.clone())
-            .to_string_lossy()
-            .as_bytes(),
-    ));
+    let key = format!(
+        "{:016x}",
+        fnv1a64(
+            std::fs::canonicalize(&state.twin_root)
+                .unwrap_or_else(|_| state.twin_root.clone())
+                .to_string_lossy()
+                .as_bytes(),
+        )
+    );
     let current = match serde_json::to_string_pretty(&state) {
         Ok(s) => s,
         Err(e) => {

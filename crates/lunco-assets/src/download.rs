@@ -22,11 +22,11 @@
 //! | Textures | `sha256` (content hash) | `"abc123..."` |
 //! | Ephemeris | date in filename | `target_-1024_2026-04-02.csv` |
 
+use crate::{cache_dir, process::ProcessConfig};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use serde::Deserialize;
-use crate::{cache_dir, process::ProcessConfig};
 
 /// A single asset entry from `Assets.toml`.
 #[derive(Debug, Clone, Deserialize)]
@@ -206,9 +206,8 @@ impl AssetManifest {
             ));
         }
         let content = std::fs::read_to_string(path)?;
-        toml::from_str(&content).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-        })
+        toml::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 
     /// Reads and parses `Assets.toml` from a **Twin folder**. Twins keep their
@@ -223,9 +222,8 @@ impl AssetManifest {
             ));
         }
         let content = std::fs::read_to_string(&path)?;
-        toml::from_str(&content).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-        })
+        toml::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 }
 
@@ -292,7 +290,12 @@ pub fn download_asset_with_control(
             if version_file.exists() {
                 let installed_ver = std::fs::read_to_string(&version_file).unwrap_or_default();
                 if installed_ver.trim() == ver.trim() {
-                    println!("  ✓ {} v{} already installed at {}", key, ver, dest.display());
+                    println!(
+                        "  ✓ {} v{} already installed at {}",
+                        key,
+                        ver,
+                        dest.display()
+                    );
                     return Ok(());
                 }
             }
@@ -313,8 +316,10 @@ pub fn download_asset_with_control(
             if !expected.is_empty() {
                 use sha2::{Digest, Sha256};
                 if let Ok(bytes) = std::fs::read(&dest) {
-                    let hash: String =
-                        Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+                    let hash: String = Sha256::digest(&bytes)
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
                     if hash == *expected {
                         println!(
                             "  ✓ {} already installed at {} (sha256 match)",
@@ -358,7 +363,8 @@ pub fn download_asset_with_control(
 
     // Download in chunks so progress can tick and cancellation is
     // responsive (within one chunk's read latency).
-    let response = ureq::get(&entry.url).call()
+    let response = ureq::get(&entry.url)
+        .call()
         .map_err(|e| DownloadError::DownloadFailed(entry.url.clone(), e.to_string()))?;
     let total: u64 = response
         .headers()
@@ -391,7 +397,10 @@ pub fn download_asset_with_control(
 
     // Compute SHA-256
     use sha2::{Digest, Sha256};
-    let hash: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let hash: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
 
     // Check against expected if provided and non-empty
     if let Some(ref expected) = entry.sha256 {
@@ -420,8 +429,8 @@ pub fn download_asset_with_control(
         std::fs::write(&tar_path, &bytes)
             .map_err(|e| DownloadError::WriteFailed(tar_path.clone(), e.to_string()))?;
 
-        let file = std::fs::File::open(&tar_path)
-            .map_err(|e| DownloadError::ReadFailed(e.to_string()))?;
+        let file =
+            std::fs::File::open(&tar_path).map_err(|e| DownloadError::ReadFailed(e.to_string()))?;
         // Dispatch to the right decompressor. Both flate2::GzDecoder
         // and bzip2::read::BzDecoder implement `Read`, so the tar
         // unpacker receives a `Box<dyn Read>` either way.
@@ -444,8 +453,7 @@ pub fn download_asset_with_control(
             if cancelled() {
                 return Err(DownloadError::Cancelled);
             }
-            let mut entry = entry
-                .map_err(|e| DownloadError::ExtractFailed(e.to_string()))?;
+            let mut entry = entry.map_err(|e| DownloadError::ExtractFailed(e.to_string()))?;
             entry
                 .unpack_in(&temp_dir)
                 .map_err(|e| DownloadError::ExtractFailed(e.to_string()))?;
@@ -468,7 +476,9 @@ pub fn download_asset_with_control(
             .collect();
 
         if entries.is_empty() {
-            return Err(DownloadError::ExtractFailed("No directories in tarball".into()));
+            return Err(DownloadError::ExtractFailed(
+                "No directories in tarball".into(),
+            ));
         }
 
         let source_dir = &entries[0].path();
@@ -486,9 +496,8 @@ pub fn download_asset_with_control(
                 )));
             }
             if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    DownloadError::WriteFailed(parent.to_path_buf(), e.to_string())
-                })?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| DownloadError::WriteFailed(parent.to_path_buf(), e.to_string()))?;
             }
             std::fs::copy(&src_file, &dest)
                 .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
@@ -536,7 +545,11 @@ pub fn load_download_parallel_limit() -> usize {
     let settings_file = crate::user_config_dir().join("settings.json");
     if let Ok(text) = std::fs::read_to_string(&settings_file) {
         if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(limit) = raw.get("download").and_then(|d| d.get("max_parallel_downloads")).and_then(|v| v.as_u64()) {
+            if let Some(limit) = raw
+                .get("download")
+                .and_then(|d| d.get("max_parallel_downloads"))
+                .and_then(|v| v.as_u64())
+            {
                 return (limit as usize).max(1);
             }
         }
@@ -546,7 +559,10 @@ pub fn load_download_parallel_limit() -> usize {
 
 /// Downloads every asset in one engine manifest group with a parallel download limit.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_all_for_group_with_limit(group: &str, max_parallel: usize) -> Result<(), DownloadError> {
+pub fn download_all_for_group_with_limit(
+    group: &str,
+    max_parallel: usize,
+) -> Result<(), DownloadError> {
     let path = crate::manifests_dir().join(format!("{group}.toml"));
     let manifest = AssetManifest::from_file(&path)
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
@@ -596,7 +612,10 @@ pub fn download_all_for_group(group: &str) -> Result<(), DownloadError> {
 
 /// Downloads all assets from a Twin folder's `Assets.toml` with a specified parallel limit.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_all_for_twin_with_limit(twin_root: &Path, max_parallel: usize) -> Result<(), DownloadError> {
+pub fn download_all_for_twin_with_limit(
+    twin_root: &Path,
+    max_parallel: usize,
+) -> Result<(), DownloadError> {
     let manifest = AssetManifest::from_crate_dir(twin_root)
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
 
@@ -739,8 +758,15 @@ pub fn list_manifest(
         };
 
         let version = entry.version.as_deref().unwrap_or("latest");
-        let has_process = if entry.process.is_some() { " [process]" } else { "" };
-        println!("  {} [{}] {} → {}{}", key, version, entry.name, status, has_process);
+        let has_process = if entry.process.is_some() {
+            " [process]"
+        } else {
+            ""
+        };
+        println!(
+            "  {} [{}] {} → {}{}",
+            key, version, entry.name, status, has_process
+        );
     }
 
     Ok(())
@@ -795,10 +821,7 @@ pub fn is_safe_rel_dest(dest: &str) -> bool {
         return false;
     }
     let bytes = dest.as_bytes();
-    if bytes.len() >= 2
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-    {
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
         return false;
     }
     true

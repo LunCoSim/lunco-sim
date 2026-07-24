@@ -107,10 +107,7 @@ impl ModelicaEngineHandle {
     ///
     /// Returns `None` when another parse is already in flight for the
     /// same doc (dedup, same as `upsert_document_async`).
-    pub fn mark_pending_for_worker(
-        &self,
-        doc_id: DocumentId,
-    ) -> Option<String> {
+    pub fn mark_pending_for_worker(&self, doc_id: DocumentId) -> Option<String> {
         let mut engine = self.lock();
         if !engine.mark_pending(doc_id) {
             return None;
@@ -419,7 +416,11 @@ pub fn drive_engine_sync(
     }
 
     // ── 3. Apply sync upserts + spawn async parses ────────────────────
-    let mut sync_only: Vec<(DocumentId, u64, std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>)> = Vec::new();
+    let mut sync_only: Vec<(
+        DocumentId,
+        u64,
+        std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>,
+    )> = Vec::new();
     let mut async_only: Vec<(DocumentId, u64, std::sync::Arc<str>)> = Vec::new();
     for (doc_id, gen, plan) in to_upsert {
         match plan {
@@ -464,9 +465,7 @@ pub fn drive_engine_sync(
     // so the order in which we *spawn* dictates the order in which
     // they run.
     if let Some(active) = active_doc {
-        async_only.sort_by_key(|(doc_id, _, _)| {
-            if *doc_id == active { 0 } else { 1 }
-        });
+        async_only.sort_by_key(|(doc_id, _, _)| if *doc_id == active { 0 } else { 1 });
     }
     // Wasm throttle: at most 4 parses in flight at a time. Rumoca
     // parses on wasm32-unknown-unknown each take ~5 s of main-thread
@@ -511,10 +510,7 @@ pub fn drive_engine_sync(
         let (was_parsed, last_edit) = match registry.host(doc_id) {
             Some(host) => {
                 let doc = host.document();
-                (
-                    doc.syntax_arc().generation > 0,
-                    doc.last_source_edit_at(),
-                )
+                (doc.syntax_arc().generation > 0, doc.last_source_edit_at())
             }
             None => (false, None),
         };
@@ -562,12 +558,12 @@ pub fn drive_engine_sync(
                 // path is the same key the MSL bundle uses.
                 let cached_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = {
                     let host = registry.host(doc_id);
-                    let origin_path = host
-                        .map(|h| h.document().origin().clone())
-                        .and_then(|o| match o {
-                            lunco_doc::DocumentOrigin::File { path, .. } => Some(path),
-                            _ => None,
-                        });
+                    let origin_path =
+                        host.map(|h| h.document().origin().clone())
+                            .and_then(|o| match o {
+                                lunco_doc::DocumentOrigin::File { path, .. } => Some(path),
+                                _ => None,
+                            });
                     origin_path.and_then(|path| {
                         let key = path.to_string_lossy().to_string();
                         crate::msl_remote::global_parsed_msl().and_then(|bundle| {
@@ -605,7 +601,12 @@ pub fn drive_engine_sync(
                     );
                     continue;
                 }
-                if crate::worker_transport::dispatch_parse_to_worker(doc_id, gen, uri, source.to_string()) {
+                if crate::worker_transport::dispatch_parse_to_worker(
+                    doc_id,
+                    gen,
+                    uri,
+                    source.to_string(),
+                ) {
                     true
                 } else {
                     handle.finish_pending_failed(doc_id, gen);
@@ -632,8 +633,16 @@ pub fn drive_engine_sync(
             gen,
             src_len,
             !was_parsed,
-            if dispatched_to_worker { "worker" } else { "main" },
-            if Some(doc_id) == active_doc { ", priority=active" } else { "" },
+            if dispatched_to_worker {
+                "worker"
+            } else {
+                "main"
+            },
+            if Some(doc_id) == active_doc {
+                ", priority=active"
+            } else {
+                ""
+            },
         );
     }
 }
@@ -704,7 +713,6 @@ pub fn drain_worker_parse_results(
     }
 }
 
-
 /// Plugin registering the engine handle, sync cursor, and sync
 /// system. Add once at app build; safe to add multiple times because
 /// every component is `init_resource` / unique-system.
@@ -724,7 +732,11 @@ impl Plugin for ModelicaEnginePlugin {
             .init_resource::<MslBootstrapState>()
             .add_systems(
                 Update,
-                (drive_engine_sync, drive_msl_bootstrap, drain_worker_parse_results),
+                (
+                    drive_engine_sync,
+                    drive_msl_bootstrap,
+                    drain_worker_parse_results,
+                ),
             );
     }
 }

@@ -1,9 +1,9 @@
 //! Tab table and lifecycle logic for Modelica model views.
 
-use std::collections::{HashMap, HashSet};
+use crate::model_tabs_types::{ModelTabState, ModelViewMode, TabId};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use crate::model_tabs_types::{ModelTabState, ModelViewMode, TabId};
+use std::collections::{HashMap, HashSet};
 
 /// Registry of open model view tabs.
 #[derive(Resource, Default)]
@@ -31,14 +31,12 @@ impl ModelTabs {
             .map(|(id, _)| *id)
     }
 
-    pub fn ensure_for(
-        &mut self,
-        doc: DocumentId,
-        drilled_class: Option<String>,
-    ) -> TabId {
-        if let Some((id, _)) = self.tabs.iter().find(|(_, s)| {
-            s.doc == doc && s.drilled_class.as_deref() == drilled_class.as_deref()
-        }) {
+    pub fn ensure_for(&mut self, doc: DocumentId, drilled_class: Option<String>) -> TabId {
+        if let Some((id, _)) = self
+            .tabs
+            .iter()
+            .find(|(_, s)| s.doc == doc && s.drilled_class.as_deref() == drilled_class.as_deref())
+        {
             return *id;
         }
         let id = self.allocate_id();
@@ -58,12 +56,7 @@ impl ModelTabs {
     /// `Some(new)`. Called by the `ClassRenamed` change observer so
     /// tabs follow class identity through a rename instead of going
     /// stale and forcing a duplicate-tab.
-    pub fn rename_drilled_class(
-        &mut self,
-        doc: DocumentId,
-        old: &str,
-        new: &str,
-    ) -> usize {
+    pub fn rename_drilled_class(&mut self, doc: DocumentId, old: &str, new: &str) -> usize {
         let mut hit = 0;
         for state in self.tabs.values_mut() {
             if state.doc == doc && state.drilled_class.as_deref() == Some(old) {
@@ -114,8 +107,7 @@ impl ModelTabs {
             // the file-tab view.
             match s.drilled_class.as_deref() {
                 None => true,
-                Some(s_class) => default_class
-                    .is_some_and(|def| s_class == def),
+                Some(s_class) => default_class.is_some_and(|def| s_class == def),
             }
         }) {
             return (*id, None);
@@ -134,11 +126,7 @@ impl ModelTabs {
         (id, evict)
     }
 
-    pub fn open_new(
-        &mut self,
-        doc: DocumentId,
-        drilled_class: Option<String>,
-    ) -> TabId {
+    pub fn open_new(&mut self, doc: DocumentId, drilled_class: Option<String>) -> TabId {
         let id = self.allocate_id();
         self.tabs.insert(
             id,
@@ -259,11 +247,7 @@ impl ModelTabs {
             .find_map(|(id, s)| (s.doc == doc).then_some(*id))
     }
 
-    pub fn find_for(
-        &self,
-        doc: DocumentId,
-        drilled_class: Option<&str>,
-    ) -> Option<TabId> {
+    pub fn find_for(&self, doc: DocumentId, drilled_class: Option<&str>) -> Option<TabId> {
         self.tabs.iter().find_map(|(id, s)| {
             (s.doc == doc && s.drilled_class.as_deref() == drilled_class).then_some(*id)
         })

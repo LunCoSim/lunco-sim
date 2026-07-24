@@ -257,9 +257,9 @@ pub fn update_range_sensors(
         let Ok(dir) = Dir3::new(dir_world.as_vec3()) else {
             continue;
         };
-        let mut filter = SpatialQueryFilter::from_mask(
-            avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS),
-        );
+        let mut filter = SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
+            !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
+        ));
         filter.excluded_entities.insert(e);
         if let Ok(parent) = q_parents.get(e) {
             filter.excluded_entities.insert(parent.0);

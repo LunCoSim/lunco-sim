@@ -73,7 +73,10 @@ pub fn produce_usd_variant_view(
 
     let stage_id = prim.stage_handle.id();
     if canonical.get(stage_id).is_none() {
-        if let Some(recipe) = stages.get(&prim.stage_handle).and_then(|a| a.recipe.clone()) {
+        if let Some(recipe) = stages
+            .get(&prim.stage_handle)
+            .and_then(|a| a.recipe.clone())
+        {
             canonical.get_or_build(stage_id, &recipe);
         }
     }
@@ -86,7 +89,11 @@ pub fn produce_usd_variant_view(
 
     let stage = cs.stage();
     // Composed selections: authoritative, and reference-arc correct.
-    let selections = match stage.prim(sdf.as_str()).variant_sets().get_all_variant_selections() {
+    let selections = match stage
+        .prim(sdf.as_str())
+        .variant_sets()
+        .get_all_variant_selections()
+    {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -112,4 +119,3 @@ pub fn produce_usd_variant_view(
     }
     view.sets.sort_by(|a, b| a.name.cmp(&b.name));
 }
-
