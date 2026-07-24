@@ -24,7 +24,7 @@
 
 def Xform "ModelicaBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -33,24 +33,20 @@ def Xform "ModelicaBalloon" (
     bool physics:rigidBodyEnabled = true
     float physics:mass = 4.5
 
-    # ── The plant ────────────────────────────────────────────────────────────
-    # Buoyancy, drag and envelope volume. `asset`, so the resolver and the reference
-    # closure can see the file this scene depends on.
-    uniform asset info:sourceAsset = @lunco://models/Balloon.mo@
+    # The body owns Avian physics ports. `force_y` is intentionally NOT a
+    # Modelica input: it is the solver force sink on this rigid body.
+    float inputs:force_y.connect = </ModelicaBalloon/Plant.outputs:netForce>
 
-    # It drives `force_y` every solver step on a body the client predicts, so it must
-    # promise it steps fast enough to be trusted with a force.
-    uniform bool lunco:program:realtimeSafe = true
-
-    # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection` by
-    # `reconcile_usd_connections`). Self-loop on this one prim, carrying both the
-    # Modelica model ports (out: netForce, volume; in: height, velocity) and the
-    # Avian physics ports (out: height, velocity_y; in: force_y). `volume` is
-    # consumed directly by the collider synchronizer; it is not a scalar input
-    # port, so no synthetic `inputs:collider` connection exists.
-    float inputs:force_y.connect = </ModelicaBalloon.outputs:netForce>
-    float inputs:height.connect = </ModelicaBalloon.outputs:height>
-    float inputs:velocity.connect = </ModelicaBalloon.outputs:velocity_y>
+    # The Modelica program is a distinct child prim. This keeps the USD/Modelica
+    # contract exact: Plant declares only its Modelica inputs, while the parent
+    # exposes only Avian facts and force sinks.
+    def Scope "Plant" (prepend apiSchemas = ["LunCoProgramAPI"])
+    {
+        uniform asset info:sourceAsset = @lunco://models/Balloon.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        float inputs:height.connect = </ModelicaBalloon.outputs:height>
+        float inputs:velocity.connect = </ModelicaBalloon.outputs:velocity_y>
+    }
 
     # ── Looks: the envelope's skin ───────────────────────────────────────────
     # Spin-revealing checker (see assets/shaders/balloon.wgsl), bound the way USD binds

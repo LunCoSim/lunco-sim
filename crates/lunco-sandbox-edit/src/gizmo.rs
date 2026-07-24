@@ -237,6 +237,7 @@ pub fn capture_gizmo_start(
     q_grids: Query<&big_space::prelude::Grid>,
     q_interpolation: Query<(Has<TranslationInterpolation>, Has<RotationInterpolation>)>,
     q_floating_origin: Query<Entity, With<FloatingOrigin>>,
+    mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
     mut commands: Commands,
 ) {
     let mut captured_any = false;
@@ -289,6 +290,12 @@ pub fn capture_gizmo_start(
     }
 
     if captured_any {
+        // A selected lander is an articulation: legs and pads are separate
+        // dynamic bodies coupled to the root. Holding the entire physics world
+        // is the only atomic capture boundary available to Avian; changing only
+        // the root to Kinematic leaves live joints to integrate against a pose
+        // the gizmo is mutating, which creates unbounded impulses.
+        physics_holds.set(lunco_physics::PhysicsHolds::CINEMATIC, true);
         // 1. FREEZE COORDINATE SYSTEM
         // Remove FloatingOrigin from the camera. This stops big_space from shifting
         // the world while we drag, breaking the positive feedback loop with the camera.
@@ -425,6 +432,7 @@ pub fn restore_gizmo_dynamic(
     q_prim: Query<&lunco_usd_bevy::UsdPrimPath>,
     usd_registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
     mut commands: Commands,
 ) {
     let mut restored_any = false;
@@ -553,6 +561,12 @@ pub fn restore_gizmo_dynamic(
                 av_ent
             );
         }
+    }
+    // Resume only after every released drag has authored its root teleport and
+    // its velocity was zeroed. This keeps a jointed lander from taking one fixed
+    // step against a half-restored articulation.
+    if restored_any && !any_still_active {
+        physics_holds.set(lunco_physics::PhysicsHolds::CINEMATIC, false);
     }
 }
 
