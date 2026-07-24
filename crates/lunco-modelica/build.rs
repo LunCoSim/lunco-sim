@@ -37,7 +37,9 @@ fn hash_file(path: &Path, hasher: &mut DefaultHasher) {
 }
 
 fn hash_dir(dir: &Path, hasher: &mut DefaultHasher) {
-    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<_> = read.flatten().map(|e| e.path()).collect();
     // Deterministic order — `read_dir` yields entries in filesystem order.
     entries.sort();
@@ -69,5 +71,8 @@ fn main() {
     println!("cargo:rerun-if-changed={src}");
     hash_dir(Path::new(&src), &mut hasher);
 
-    println!("cargo:rustc-env=LUNCO_WIRE_BUILD_ID={:016x}", hasher.finish());
+    println!(
+        "cargo:rustc-env=LUNCO_WIRE_BUILD_ID={:016x}",
+        hasher.finish()
+    );
 }

@@ -252,11 +252,21 @@ def Xform "LintSelftest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
+    # A domain network with no components cannot produce any equations.
+    def Scope "EmptyElectrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+    }
+
     def Scope "Scenario"
     {
         custom string lunco:scenario = "lint-selftest"
 
-        def LunCoProgram "LintTest"
+        def Scope "LintTest" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/lint_selftest.rhai@
         }

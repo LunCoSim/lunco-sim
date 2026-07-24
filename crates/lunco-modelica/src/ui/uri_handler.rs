@@ -118,10 +118,7 @@ fn resolve_resource(class_dotted: &str, subpath: &str) -> UriResolution {
 /// observers pick them up. Resource opens + anchor navigation are
 /// logged at `debug` for now (no domain command yet wires them; a
 /// follow-up task picks those up).
-pub fn on_modelica_uri_clicked(
-    trigger: On<UriClicked>,
-    mut commands: Commands,
-) {
+pub fn on_modelica_uri_clicked(trigger: On<UriClicked>, mut commands: Commands) {
     let ev = trigger.event();
     match &ev.resolution {
         UriResolution::OpenDocument {
@@ -138,9 +135,7 @@ pub fn on_modelica_uri_clicked(
             // Until then, open the class and drop the anchor — keeps
             // the link functional even if it doesn't scroll to the
             // specific section.
-            bevy::log::debug!(
-                "modelica URI anchor not yet wired: {identifier}#{anchor}"
-            );
+            bevy::log::debug!("modelica URI anchor not yet wired: {identifier}#{anchor}");
             commands.trigger(crate::ui::commands::OpenClass {
                 qualified: identifier.clone(),
                 action: crate::ui::commands::ClassAction::View,

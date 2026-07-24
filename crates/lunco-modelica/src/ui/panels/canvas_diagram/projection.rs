@@ -17,11 +17,9 @@ use lunco_canvas::{
 
 use crate::visual_diagram::{DiagramNodeId, VisualDiagram};
 
-use super::edge::{ConnectionEdgeData, PortDir, port_edge_dir};
+use super::edge::{port_edge_dir, ConnectionEdgeData, PortDir};
 use super::node::IconNodeData;
-use super::port::{
-    port_fallback_offset_for_size, port_kind_str, resolve_port_icons,
-};
+use super::port::{port_fallback_offset_for_size, port_kind_str, resolve_port_icons};
 use super::si_unit_suffix;
 
 /// Regex-scan `connect(a.b, c.d);` patterns in `source` and add
@@ -75,7 +73,11 @@ pub(super) fn recover_edges_from_ast(
                 e.target_port.clone(),
             );
             // Canonicalise to min/max so (A.x, B.y) == (B.y, A.x).
-            if a <= b { (a, b) } else { (b, a) }
+            if a <= b {
+                (a, b)
+            } else {
+                (b, a)
+            }
         })
         .collect();
 
@@ -87,7 +89,9 @@ pub(super) fn recover_edges_from_ast(
     ) {
         use rumoca_compile::parsing::ast::Equation;
         for eq in &class.equations {
-            let Equation::Connect { lhs, rhs, .. } = eq else { continue };
+            let Equation::Connect { lhs, rhs, .. } = eq else {
+                continue;
+            };
             // Only handle 2+ part references (`inst.port[.subport]`);
             // single-part bare-connector connects are caught by the
             // primary AST path that builds the component graph.
@@ -111,15 +115,18 @@ pub(super) fn recover_edges_from_ast(
                 ),
                 _ => continue,
             };
-            let (Some(&src_id), Some(&tgt_id)) =
-                (index.get(&src_comp), index.get(&tgt_comp))
+            let (Some(&src_id), Some(&tgt_id)) = (index.get(&src_comp), index.get(&tgt_comp))
             else {
                 continue;
             };
             let pair = {
                 let a = (src_comp.clone(), src_port.clone());
                 let b = (tgt_comp.clone(), tgt_port.clone());
-                if a <= b { (a, b) } else { (b, a) }
+                if a <= b {
+                    (a, b)
+                } else {
+                    (b, a)
+                }
             };
             if existing.contains(&pair) {
                 continue;
@@ -135,7 +142,9 @@ pub(super) fn recover_edges_from_ast(
     }
 }
 
-pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, CanvasNodeId>) {
+pub(super) fn project_scene(
+    diagram: &VisualDiagram,
+) -> (Scene, HashMap<DiagramNodeId, CanvasNodeId>) {
     let mut scene = Scene::new();
     let mut id_map: HashMap<DiagramNodeId, CanvasNodeId> = HashMap::new();
 
@@ -161,8 +170,7 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
         // ({{-100,-100},{100,100}} per MLS default) under the
         // transform. Honours rotation naturally (a 45°-rotated icon
         // gets a larger axis-aligned rect than its unrotated form).
-        let ((min_wx, min_wy), (max_wx, max_wy)) =
-            xform.local_aabb(-100.0, -100.0, 100.0, 100.0);
+        let ((min_wx, min_wy), (max_wx, max_wy)) = xform.local_aabb(-100.0, -100.0, 100.0, 100.0);
         let icon_w_local = (max_wx - min_wx).max(4.0);
         let icon_h_local = (max_wy - min_wy).max(4.0);
 
@@ -184,12 +192,8 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
                     // Fallback layout: distribute around the rect.
                     // Already in icon-local screen coords — convert
                     // to world by adding the rect's top-left.
-                    let (fx, fy) = port_fallback_offset_for_size(
-                        i,
-                        n_ports,
-                        icon_w_local,
-                        icon_h_local,
-                    );
+                    let (fx, fy) =
+                        port_fallback_offset_for_size(i, n_ports, icon_w_local, icon_h_local);
                     (min_wx + fx, min_wy + fy)
                 } else {
                     xform.apply(p.x, p.y)
@@ -219,9 +223,7 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
             kind: "modelica.icon".into(),
             data: std::sync::Arc::new(IconNodeData {
                 qualified_type: node.component_def.name.clone(),
-                icon_only: crate::ui::loaded_classes::is_icon_only_class(
-                    &node.component_def.name,
-                ),
+                icon_only: crate::ui::loaded_classes::is_icon_only_class(&node.component_def.name),
                 expandable_connector: node.component_def.is_expandable_connector(),
                 icon_graphics: node.component_def.icon.clone(),
                 diagram_graphics: if matches!(
@@ -259,7 +261,15 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
                     .component_def
                     .ports
                     .iter()
-                    .map(|p| (p.name.clone(), p.msl_path.clone(), p.size_x, p.size_y, p.rotation_deg))
+                    .map(|p| {
+                        (
+                            p.name.clone(),
+                            p.msl_path.clone(),
+                            p.size_x,
+                            p.size_y,
+                            p.rotation_deg,
+                        )
+                    })
                     .collect(),
                 port_connector_icons: resolve_port_icons(
                     &node.component_def.name,
@@ -293,10 +303,7 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
                         e.p2.x as f32,
                         e.p2.y as f32,
                     );
-                    CanvasRect::from_min_max(
-                        CanvasPos::new(vx0, vy0),
-                        CanvasPos::new(vx1, vy1),
-                    )
+                    CanvasRect::from_min_max(CanvasPos::new(vx0, vy0), CanvasPos::new(vx1, vy1))
                 }),
         });
     }
@@ -321,9 +328,9 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
         // outer `flange` PortDef. Without this, every recovered
         // edge with a sub-port lost its colour + stub direction
         // because the find() returned None.
-        let find_port = |defs: &[crate::visual_diagram::PortDef], name: &str|
-            -> Option<crate::visual_diagram::PortDef>
-        {
+        let find_port = |defs: &[crate::visual_diagram::PortDef],
+                         name: &str|
+         -> Option<crate::visual_diagram::PortDef> {
             if let Some(p) = defs.iter().find(|p| p.name == name) {
                 return Some(p.clone());
             }
@@ -345,14 +352,12 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
         // `Line(color={r,g,b})` annotation wins over the
         // connector-derived colour so the wire properties dialog's
         // colour pick lands immediately in the visual.
-        let icon_color = edge
-            .color
-            .or_else(|| {
-                src_port_def
-                    .as_ref()
-                    .and_then(|p| p.color)
-                    .or_else(|| tgt_port_def.as_ref().and_then(|p| p.color))
-            });
+        let icon_color = edge.color.or_else(|| {
+            src_port_def
+                .as_ref()
+                .and_then(|p| p.color)
+                .or_else(|| tgt_port_def.as_ref().and_then(|p| p.color))
+        });
         // Stub direction = which edge the port sits on in *screen*
         // space. Apply the owning instance's transform's linear part
         // (no translation — directions don't have a position). One
@@ -390,10 +395,16 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
         } else {
             // World endpoints: port world position via owning
             // node's transform.
-            let src_world = src_node
-                .and_then(|n| src_port_def.as_ref().map(|p| n.icon_transform.apply(p.x, p.y)));
-            let tgt_world = tgt_node
-                .and_then(|n| tgt_port_def.as_ref().map(|p| n.icon_transform.apply(p.x, p.y)));
+            let src_world = src_node.and_then(|n| {
+                src_port_def
+                    .as_ref()
+                    .map(|p| n.icon_transform.apply(p.x, p.y))
+            });
+            let tgt_world = tgt_node.and_then(|n| {
+                tgt_port_def
+                    .as_ref()
+                    .map(|p| n.icon_transform.apply(p.x, p.y))
+            });
             match (src_world, tgt_world) {
                 (Some(s), Some(t)) => {
                     let from_out = from_dir.outward();
@@ -420,14 +431,7 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
                     // 4-bend wrap around the engine when a 2-bend
                     // route over the top was available.
                     let pts = crate::ui::wire_router::route(
-                        s,
-                        from_out,
-                        t,
-                        to_out,
-                        &obstacles,
-                        4.0,
-                        80.0,
-                        2.0,
+                        s, from_out, t, to_out, &obstacles, 4.0, 80.0, 2.0,
                     );
                     // Strip endpoints — `waypoints_world` carries
                     // *interior* bends only; the renderer prepends /
@@ -470,8 +474,7 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
                 connector_type: connector_type.clone(),
                 from_dir,
                 to_dir,
-                icon_color: icon_color
-                    .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)),
+                icon_color: icon_color.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b)),
                 source_path: src_node
                     .map(|n| format!("{}.{}", n.instance_name, edge.source_port))
                     .unwrap_or_default(),
@@ -511,7 +514,13 @@ pub(super) fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramN
             .map(|n| format!("{}.{}", n.instance_name, edge.target_port))
             .unwrap_or_default();
         let src_port_ports: Vec<String> = src_node
-            .map(|n| n.component_def.ports.iter().map(|p| p.name.clone()).collect())
+            .map(|n| {
+                n.component_def
+                    .ports
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect()
+            })
             .unwrap_or_default();
         let resolved_flow_vars: Vec<String> = src_port_def
             .as_ref()
@@ -570,7 +579,9 @@ pub(super) fn projection_relevant_source_hash(source: &str) -> u64 {
                 Some('/') => {
                     chars.next();
                     while let Some(&n) = chars.peek() {
-                        if n == '\n' { break; }
+                        if n == '\n' {
+                            break;
+                        }
                         chars.next();
                     }
                     continue;
@@ -656,4 +667,3 @@ pub struct ProjectionTask {
     /// reprojection on no-op edits (whitespace, comments).
     pub source_hash: u64,
 }
-

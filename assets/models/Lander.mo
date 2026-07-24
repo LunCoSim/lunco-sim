@@ -32,6 +32,8 @@ model Lander
   parameter Real max_thrust = 60000.0 "Max engine thrust (N)";
   parameter Real v_e = 2900.0 "Effective exhaust velocity (m/s)";
   parameter Real spool_tau = 0.35 "Human-stick spool-lag time constant (s) — pilot feel";
+  parameter Real low_fuel_mass = 200.0 "Low-fuel event threshold (kg)";
+  parameter Real depleted_mass = 0.5 "Propellant-depleted event threshold (kg)";
 
   // ── Body properties (wired from the rigid body) ──
   input Real inertia_xx = 6250.0 "Body inertia about X — wired from body";
@@ -53,6 +55,10 @@ model Lander
   input Real omega_x = 0.0 "Angular rate about world X (rad/s) — wired from the body's `angvel_x`";
   input Real omega_y = 0.0 "Angular rate about world Y (rad/s) — wired from the body's `angvel_y`";
   input Real omega_z = 0.0 "Angular rate about world Z (rad/s) — wired from the body's `angvel_z`";
+  input Real leg_force_px = 0.0 "Solver reaction at the +X landing leg (N)";
+  input Real leg_force_nx = 0.0 "Solver reaction at the -X landing leg (N)";
+  input Real leg_force_pz = 0.0 "Solver reaction at the +Z landing leg (N)";
+  input Real leg_force_nz = 0.0 "Solver reaction at the -Z landing leg (N)";
 
   // ── Stability augmentation (RCS) ──
   input Real attitude_hold = 0.0 "1 = the RCS holds the vehicle upright and damps rotation, whoever is commanding. UNWIRED = 0 = bare airframe";
@@ -63,6 +69,9 @@ model Lander
   output Real force_x; output Real force_y; output Real force_z;
   output Real torque_x; output Real torque_y; output Real torque_z;
   output Real throttle "Effective throttle fraction 0..1 (telemetry / flame)";
+  output Real low_fuel "Discrete 0/1 low-fuel signal";
+  output Real depleted "Discrete 0/1 propellant-depleted signal";
+  output Real touchdown "Discrete 0/1 touchdown signal from combined leg reactions";
 
   Real m_prop(start = 2000.0);
   Real thrust;
@@ -76,6 +85,10 @@ model Lander
   Real f_world_x, f_world_y, f_world_z, t_world_x, t_world_y, t_world_z;
   Real up_x, up_y, up_z;
   Real hold_x, hold_y, hold_z;
+  Real total_leg_force;
+  LunCo.Logic.AboveThreshold touchdown_check(
+    threshold = 250.0,
+    transition_width = 100.0);
 
 equation
   // Keep the tunable gain LIVE (der-fed → not folded).
@@ -161,4 +174,9 @@ equation
   thrust = sqrt(force_x*force_x + force_y*force_y + force_z*force_z);
   der(m_prop) = -thrust / v_e;
   throttle = thrust / max_thrust;
+  low_fuel = max(0.0, min(1.0, 0.5 + 100.0 * (low_fuel_mass - m_prop)));
+  depleted = max(0.0, min(1.0, 0.5 + 100.0 * (depleted_mass - m_prop)));
+  total_leg_force = leg_force_px + leg_force_nx + leg_force_pz + leg_force_nz;
+  touchdown_check.value = total_leg_force;
+  touchdown = touchdown_check.active;
 end Lander;

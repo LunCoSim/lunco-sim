@@ -24,14 +24,13 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use std::collections::HashMap;
 
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 
 use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
-use lunco_doc_bevy::DocumentDiagnostics;
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
+use lunco_doc_bevy::DocumentDiagnostics;
 
 use super::{entity_for_doc, resolve_doc_or_active};
-
 
 // ─── Compile typed command ────────────────────────────────────────────────
 
@@ -455,7 +454,9 @@ pub(crate) fn render_fast_run_setup(
     }
     if confirmed {
         let Some(entry) = setup.0.take() else {
-            bevy::log::warn!("[FastRunSettings] confirmed without an entry — modal closed concurrently");
+            bevy::log::warn!(
+                "[FastRunSettings] confirmed without an entry — modal closed concurrently"
+            );
             return;
         };
         // Persist edited bounds + inputs into the draft so
@@ -474,8 +475,14 @@ pub(crate) fn render_fast_run_setup(
                 continue;
             }
             let v = match inp.type_name.as_str() {
-                "Real" => txt.parse::<f64>().ok().map(lunco_experiments::ParamValue::Real),
-                "Integer" | "Int" => txt.parse::<i64>().ok().map(lunco_experiments::ParamValue::Int),
+                "Real" => txt
+                    .parse::<f64>()
+                    .ok()
+                    .map(lunco_experiments::ParamValue::Real),
+                "Integer" | "Int" => txt
+                    .parse::<i64>()
+                    .ok()
+                    .map(lunco_experiments::ParamValue::Int),
                 "Boolean" | "Bool" => match txt {
                     "true" => Some(lunco_experiments::ParamValue::Bool(true)),
                     "false" => Some(lunco_experiments::ParamValue::Bool(false)),
@@ -493,7 +500,16 @@ pub(crate) fn render_fast_run_setup(
         draft.inputs = new_inputs;
         // Pass the chosen class explicitly so dispatch skips the
         // disambiguation modal — the dropdown above already resolved it.
-        commands.trigger(FastRunActiveModel { doc: entry.doc, class: Some(entry.model_ref.0.clone()), t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
+        commands.trigger(FastRunActiveModel {
+            doc: entry.doc,
+            class: Some(entry.model_ref.0.clone()),
+            t_end: None,
+            dt: None,
+            n_intervals: None,
+            tolerance: None,
+            solver: None,
+            h0: None,
+        });
     } else if cancelled {
         setup.0 = None;
     }
@@ -529,11 +545,8 @@ pub(crate) fn render_compile_class_picker(
     // its own system and uses `egui::Modal` directly for scrim /
     // Esc / focus trap. (Stateful forms aren't a fit for the
     // outcome-based `ModalQueue`.)
-    let modal_response = egui::Modal::new(egui::Id::new((
-        "compile_class_picker",
-        entry.doc.raw(),
-    )))
-    .show(ctx, |ui| {
+    let modal_response = egui::Modal::new(egui::Id::new(("compile_class_picker", entry.doc.raw())))
+        .show(ctx, |ui| {
             ui.heading(title);
             ui.separator();
             ui.label(
@@ -544,7 +557,9 @@ pub(crate) fn render_compile_class_picker(
                 .size(12.0),
             );
             ui.add_space(8.0);
-            let mut selected = entry.preselected.min(entry.candidates.len().saturating_sub(1));
+            let mut selected = entry
+                .preselected
+                .min(entry.candidates.len().saturating_sub(1));
             egui::ScrollArea::vertical()
                 .max_height(260.0)
                 .show(ui, |ui| {
@@ -559,9 +574,7 @@ pub(crate) fn render_compile_class_picker(
                     PickerPurpose::Compile => "Compile",
                     PickerPurpose::FastRun => "Fast Run",
                 };
-                let ok = ui.add(egui::Button::new(
-                    egui::RichText::new(ok_label).strong(),
-                ));
+                let ok = ui.add(egui::Button::new(egui::RichText::new(ok_label).strong()));
                 if ok.clicked() {
                     confirmed = entry.candidates.get(selected).cloned();
                 }
@@ -591,12 +604,26 @@ pub(crate) fn render_compile_class_picker(
         picker.0 = None;
         match purpose {
             PickerPurpose::Compile => {
-                commands.trigger(CompileModel { doc, class: None, force: false, resume_after_compile: false });
+                commands.trigger(CompileModel {
+                    doc,
+                    class: None,
+                    force: false,
+                    resume_after_compile: false,
+                });
             }
             PickerPurpose::FastRun => {
                 // Re-dispatch — second-time-around the drilled-class
                 // pin is set so resolution skips the picker.
-                commands.trigger(FastRunActiveModel { doc, class: None, t_end: None, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None });
+                commands.trigger(FastRunActiveModel {
+                    doc,
+                    class: None,
+                    t_end: None,
+                    dt: None,
+                    n_intervals: None,
+                    tolerance: None,
+                    solver: None,
+                    h0: None,
+                });
             }
         }
     } else if cancelled {
@@ -629,7 +656,10 @@ pub(crate) fn render_compile_class_picker(
 fn compile_overlay_source(document: &crate::document::ModelicaDocument) -> String {
     if matches!(
         document.origin(),
-        lunco_doc::DocumentOrigin::File { writable: false, .. }
+        lunco_doc::DocumentOrigin::File {
+            writable: false,
+            ..
+        }
     ) {
         String::new()
     } else {
@@ -683,66 +713,72 @@ pub fn on_compile_model(
     // compile (see `ModelicaCommand::Compile`), so any AST staleness
     // here only affects telemetry-panel labels for one debounce
     // cycle, not the compiled model itself.
-    let (source, doc_generation, ast_for_extract, candidate_classes, preferred_count, detected_first_class, params, inputs_with_defaults, runtime_inputs) =
-        match registry.host(doc) {
-            Some(h) => {
-                let doc_ref = h.document();
-                let ast = doc_ref.strict_ast();
-                // Document generation at this compile dispatch — recorded as
-                // `pending_generation` and promoted to `compiled_generation`
-                // on success, and used for the idempotency / staleness gate.
-                let doc_generation = doc_ref.generation_owned();
-                // Class candidates + first-non-package detection via
-                // the per-doc Index (sees optimistic patches; no extra
-                // AST walk per call).
-                let index = doc_ref.index();
-                let candidates = index.simulation_candidates();
-                let preferred_count = index.simulation_preferred_count();
-                let first_non_package = candidates.first().cloned();
-                // Compile-time seed values for `ModelicaModel`
-                // (parameters / input defaults / runtime input names)
-                // — read straight from the index. Replaces three
-                // `ast_extract::extract_*_from_ast` calls that walked
-                // the same data.
-                let mut params: HashMap<String, f64> = HashMap::new();
-                let mut inputs_with_defaults: HashMap<String, f64> = HashMap::new();
-                let mut runtime_inputs: Vec<String> = Vec::new();
-                for entry in &index.components {
-                    let numeric = entry
-                        .binding
-                        .as_ref()
-                        .and_then(|s| s.parse::<f64>().ok());
-                    match (entry.variability, entry.causality) {
-                        (crate::index::Variability::Parameter, _)
-                        | (crate::index::Variability::Constant, _) => {
-                            if let Some(v) = numeric {
-                                params.insert(entry.name.clone(), v);
-                            }
+    let (
+        source,
+        doc_generation,
+        ast_for_extract,
+        candidate_classes,
+        preferred_count,
+        detected_first_class,
+        params,
+        inputs_with_defaults,
+        runtime_inputs,
+    ) = match registry.host(doc) {
+        Some(h) => {
+            let doc_ref = h.document();
+            let ast = doc_ref.strict_ast();
+            // Document generation at this compile dispatch — recorded as
+            // `pending_generation` and promoted to `compiled_generation`
+            // on success, and used for the idempotency / staleness gate.
+            let doc_generation = doc_ref.generation_owned();
+            // Class candidates + first-non-package detection via
+            // the per-doc Index (sees optimistic patches; no extra
+            // AST walk per call).
+            let index = doc_ref.index();
+            let candidates = index.simulation_candidates();
+            let preferred_count = index.simulation_preferred_count();
+            let first_non_package = candidates.first().cloned();
+            // Compile-time seed values for `ModelicaModel`
+            // (parameters / input defaults / runtime input names)
+            // — read straight from the index. Replaces three
+            // `ast_extract::extract_*_from_ast` calls that walked
+            // the same data.
+            let mut params: HashMap<String, f64> = HashMap::new();
+            let mut inputs_with_defaults: HashMap<String, f64> = HashMap::new();
+            let mut runtime_inputs: Vec<String> = Vec::new();
+            for entry in &index.components {
+                let numeric = entry.binding.as_ref().and_then(|s| s.parse::<f64>().ok());
+                match (entry.variability, entry.causality) {
+                    (crate::index::Variability::Parameter, _)
+                    | (crate::index::Variability::Constant, _) => {
+                        if let Some(v) = numeric {
+                            params.insert(entry.name.clone(), v);
                         }
-                        (_, crate::index::Causality::Input) => {
-                            if let Some(v) = numeric {
-                                inputs_with_defaults.insert(entry.name.clone(), v);
-                            } else {
-                                runtime_inputs.push(entry.name.clone());
-                            }
-                        }
-                        _ => {}
                     }
+                    (_, crate::index::Causality::Input) => {
+                        if let Some(v) = numeric {
+                            inputs_with_defaults.insert(entry.name.clone(), v);
+                        } else {
+                            runtime_inputs.push(entry.name.clone());
+                        }
+                    }
+                    _ => {}
                 }
-                (
-                    compile_overlay_source(doc_ref),
-                    doc_generation,
-                    ast,
-                    candidates,
-                    preferred_count,
-                    first_non_package,
-                    params,
-                    inputs_with_defaults,
-                    runtime_inputs,
-                )
             }
-            None => return,
-        };
+            (
+                compile_overlay_source(doc_ref),
+                doc_generation,
+                ast,
+                candidates,
+                preferred_count,
+                first_non_package,
+                params,
+                inputs_with_defaults,
+                runtime_inputs,
+            )
+        }
+        None => return,
+    };
     let Some(_ast) = ast_for_extract else {
         // Parse failure on this doc (rare — rumoca is
         // error-recovering). Fall back to the source-based
@@ -888,6 +924,7 @@ pub fn on_compile_model(
             // second Modelica compiles.
             model.is_stepping = true;
             model.is_compiling = true;
+            model.last_error = None;
             // Capture the generation being compiled; promoted to
             // `compiled_generation` by the post-compile success handler.
             model.pending_generation = doc_generation;
@@ -961,6 +998,7 @@ pub fn on_compile_model(
                         map
                     },
                     variables: HashMap::new(),
+                    last_error: None,
                     document: doc,
                     is_stepping: true,
                     is_compiling: true,
@@ -1136,7 +1174,6 @@ pub fn on_compile_model(
 
 // ─── Run-control + FastRun typed commands & observers ────────────────────
 
-
 /// Run-control events — fire against `doc=0` to target the active
 /// document, or a specific `DocumentId.raw()` for automation.
 ///
@@ -1239,9 +1276,12 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
             // new model so the post-compile handler unpauses and play
             // begins immediately. (Previously this needed a second click:
             // there was no entity to pre-arm before the deferred spawn.)
-            world
-                .commands()
-                .trigger(CompileModel { doc, class, force: false, resume_after_compile: true });
+            world.commands().trigger(CompileModel {
+                doc,
+                class,
+                force: false,
+                resume_after_compile: true,
+            });
             return;
         };
         // Document generation for the staleness check.
@@ -1269,9 +1309,12 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
         if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
             model.resume_after_compile = true;
         }
-        world
-            .commands()
-            .trigger(CompileModel { doc, class, force: false, resume_after_compile: true });
+        world.commands().trigger(CompileModel {
+            doc,
+            class,
+            force: false,
+            resume_after_compile: true,
+        });
     });
 }
 
@@ -1285,7 +1328,9 @@ pub fn on_restart_active_model(trigger: On<RestartActiveModel>, mut commands: Co
         // Reset to t=0, then run. Mirrors the toolbar's Reset+Run
         // composition; the two triggers run in dispatch order.
         world.commands().trigger(ResetActiveModel { doc });
-        world.commands().trigger(RunActiveModel { doc, class: None });
+        world
+            .commands()
+            .trigger(RunActiveModel { doc, class: None });
     });
 }
 
@@ -1467,7 +1512,8 @@ fn dispatch_experiment(
             // sole/ambiguous fallback (`candidates[0]`) could pick a leaf model
             // over the annotated system.
             let candidates: Vec<String> = index.simulation_candidates();
-            let mut experiment_map: HashMap<String, crate::annotations::Experiment> = HashMap::new();
+            let mut experiment_map: HashMap<String, crate::annotations::Experiment> =
+                HashMap::new();
             for c in index.classes.values() {
                 if let Some(exp) = &c.experiment {
                     experiment_map.insert(c.name.clone(), *exp);
@@ -1502,12 +1548,9 @@ fn dispatch_experiment(
                 }
             },
             None => {
-                let has_drill =
-                    crate::sim_default::drilled_class_for_doc(world, doc).is_some();
+                let has_drill = crate::sim_default::drilled_class_for_doc(world, doc).is_some();
                 if !has_drill && candidates.len() > 1 {
-                    if let Some(mut picker) =
-                        world.get_resource_mut::<CompileClassPickerState>()
-                    {
+                    if let Some(mut picker) = world.get_resource_mut::<CompileClassPickerState>() {
                         if picker.0.as_ref().map(|p| p.doc) != Some(doc) {
                             picker.0 = Some(CompileClassPickerEntry {
                                 doc,
@@ -1649,16 +1692,32 @@ fn dispatch_experiment(
         inputs.extend(cmd_inputs);
 
         // Command bounds override (explicit API params, highest priority).
-        if let Some(t) = cmd_bounds.t_start { bounds.t_start = t; }
-        if let Some(t) = cmd_bounds.t_end { bounds.t_end = t; }
+        if let Some(t) = cmd_bounds.t_start {
+            bounds.t_start = t;
+        }
+        if let Some(t) = cmd_bounds.t_end {
+            bounds.t_end = t;
+        }
         // `dt` (Interval) and `n_intervals` (NumberOfIntervals) are the two
         // mutually-exclusive ways to set the output grid; setting one clears
         // the other so the request is unambiguous.
-        if let Some(d) = cmd_bounds.dt { bounds.dt = Some(d); bounds.n_intervals = None; }
-        if let Some(n) = cmd_bounds.n_intervals { bounds.n_intervals = Some(n); bounds.dt = None; }
-        if let Some(t) = cmd_bounds.tolerance { bounds.tolerance = Some(t); }
-        if let Some(s) = cmd_bounds.solver { bounds.solver = Some(s); }
-        if let Some(h) = cmd_bounds.h0 { bounds.h0 = Some(h); }
+        if let Some(d) = cmd_bounds.dt {
+            bounds.dt = Some(d);
+            bounds.n_intervals = None;
+        }
+        if let Some(n) = cmd_bounds.n_intervals {
+            bounds.n_intervals = Some(n);
+            bounds.dt = None;
+        }
+        if let Some(t) = cmd_bounds.tolerance {
+            bounds.tolerance = Some(t);
+        }
+        if let Some(s) = cmd_bounds.solver {
+            bounds.solver = Some(s);
+        }
+        if let Some(h) = cmd_bounds.h0 {
+            bounds.h0 = Some(h);
+        }
 
         // Insert experiment + dispatch run. Scope to the originating
         // doc so multi-tab workflows keep run histories separate
@@ -1821,18 +1880,19 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
         let doc = entry.doc;
         // Pin the drilled class so the re-dispatch resolves directly (mirrors
         // `render_compile_class_picker`'s confirm branch).
-        if let Some(mut tabs) =
-            world.get_resource_mut::<crate::model_tabs::ModelTabs>()
-        {
+        if let Some(mut tabs) = world.get_resource_mut::<crate::model_tabs::ModelTabs>() {
             for (_, state) in tabs.iter_mut_for_doc(doc) {
                 state.drilled_class = Some(chosen.clone());
             }
         }
         match entry.purpose {
             PickerPurpose::Compile => {
-                world
-                    .commands()
-                    .trigger(CompileModel { doc, class: None, force: false, resume_after_compile: false });
+                world.commands().trigger(CompileModel {
+                    doc,
+                    class: None,
+                    force: false,
+                    resume_after_compile: false,
+                });
             }
             PickerPurpose::FastRun => {
                 world.commands().trigger(FastRunActiveModel {
@@ -1899,7 +1959,15 @@ pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
         h0: ev.h0,
     };
     commands.queue(move |world: &mut World| {
-        dispatch_experiment(world, raw, explicit_class, overrides, inputs, cmd_bounds, label);
+        dispatch_experiment(
+            world,
+            raw,
+            explicit_class,
+            overrides,
+            inputs,
+            cmd_bounds,
+            label,
+        );
     });
 }
 
@@ -1927,9 +1995,7 @@ pub fn on_cancel_experiment(trigger: On<CancelExperiment>, mut commands: Command
                 n += 1;
             }
         }
-        bevy::log::info!(
-            "[CancelExperiment] signalled {n} run(s) (all={all}, id={target:?})"
-        );
+        bevy::log::info!("[CancelExperiment] signalled {n} run(s) (all={all}, id={target:?})");
     });
 }
 
@@ -1997,7 +2063,10 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
                 }
             }
         } else if let Some(t) = target.as_deref() {
-            let id = reg.iter_all().find(|e| e.id.0.to_string() == t).map(|e| e.id);
+            let id = reg
+                .iter_all()
+                .find(|e| e.id.0.to_string() == t)
+                .map(|e| e.id);
             if let Some(id) = id {
                 if reg.delete(id) {
                     removed += 1;
@@ -2095,11 +2164,12 @@ pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Comman
             model.session_id
         };
         if let Some(channels) = world.get_resource::<crate::ModelicaChannels>() {
-            let _ = channels.tx.send(crate::ModelicaCommand::Reset { entity, session_id });
+            let _ = channels
+                .tx
+                .send(crate::ModelicaCommand::Reset { entity, session_id });
         }
     });
 }
-
 
 // ─── CompileActiveModel API shim ─────────────────────────────────────────
 
@@ -2134,7 +2204,12 @@ pub fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Co
             return;
         };
         let target_class = if class.is_empty() { None } else { Some(class) };
-        world.commands().trigger(CompileModel { doc, class: target_class, force: false, resume_after_compile: false });
+        world.commands().trigger(CompileModel {
+            doc,
+            class: target_class,
+            force: false,
+            resume_after_compile: false,
+        });
     });
 }
 

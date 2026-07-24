@@ -27,18 +27,14 @@ pub(super) fn render_drill_in_error_overlay(
 ) {
     let card_w = 420.0;
     let card_h = 110.0;
-    let card_rect = egui::Rect::from_center_size(
-        canvas_rect.center(),
-        egui::vec2(card_w, card_h),
-    );
-    let painter = ui.painter().clone().with_clip_rect(ui.clip_rect().intersect(canvas_rect));
+    let card_rect = egui::Rect::from_center_size(canvas_rect.center(), egui::vec2(card_w, card_h));
+    let painter = ui
+        .painter()
+        .clone()
+        .with_clip_rect(ui.clip_rect().intersect(canvas_rect));
     let painter = &painter;
     let shadow = theme.colors.base.alpha(100);
-    painter.rect_filled(
-        card_rect.translate(egui::vec2(0.0, 3.0)),
-        8.0,
-        shadow,
-    );
+    painter.rect_filled(card_rect.translate(egui::vec2(0.0, 3.0)), 8.0, shadow);
     painter.rect_filled(card_rect, 8.0, theme.tokens.surface_raised);
     painter.rect_stroke(
         card_rect,
@@ -83,7 +79,6 @@ pub(super) fn render_drill_in_error_overlay(
     );
 }
 
-
 // ─── Empty-diagram summary ──────────────────────────────────────────
 
 /// When the canvas scene has no nodes — common for equation-only
@@ -112,8 +107,12 @@ pub(super) fn render_empty_diagram_overlay(
         .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let Some(doc) = active else { return };
-    let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() else { return };
-    let Some(host) = registry.host(doc) else { return };
+    let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() else {
+        return;
+    };
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
     let document = host.document();
     let theme = ctx
         .resource::<lunco_theme::Theme>()
@@ -129,10 +128,12 @@ pub(super) fn render_empty_diagram_overlay(
     // loading) or the active class isn't in the index.
     let counts = {
         let active_doc = active_doc_from_world_ctx(ctx);
-        let drilled = active_doc.and_then(|doc| {
-            crate::sim_default::drilled_class_for_doc_ctx(ctx, doc)
-        });
-        let registry = match ctx.resource::<ModelicaDocumentRegistry>() { Some(r) => r, None => return };
+        let drilled =
+            active_doc.and_then(|doc| crate::sim_default::drilled_class_for_doc_ctx(ctx, doc));
+        let registry = match ctx.resource::<ModelicaDocumentRegistry>() {
+            Some(r) => r,
+            None => return,
+        };
         active_doc
             .and_then(|doc| registry.host(doc))
             .and_then(|host| {
@@ -231,26 +232,23 @@ pub(super) fn render_empty_diagram_overlay(
             // a data sheet rather than a ragged centred stack.
             child.scope(|ui| {
                 ui.set_width(ui.available_width());
-                ui.with_layout(
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                        paint_symbol_band(ui, "Parameters", &param_names, counts.params, &theme);
-                        paint_symbol_band(ui, "Inputs", &input_names, counts.inputs, &theme);
-                        paint_symbol_band(ui, "Outputs", &output_names, counts.outputs, &theme);
-                        if counts.equations > 0 || counts.connects > 0 {
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{} equations · {} connect equations",
-                                    counts.equations, counts.connects,
-                                ))
-                                .small()
-                                .color(theme.text_muted()),
-                            );
-                        }
-                    },
-                );
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    paint_symbol_band(ui, "Parameters", &param_names, counts.params, &theme);
+                    paint_symbol_band(ui, "Inputs", &input_names, counts.inputs, &theme);
+                    paint_symbol_band(ui, "Outputs", &output_names, counts.outputs, &theme);
+                    if counts.equations > 0 || counts.connects > 0 {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} equations · {} connect equations",
+                                counts.equations, counts.connects,
+                            ))
+                            .small()
+                            .color(theme.text_muted()),
+                        );
+                    }
+                });
             });
 
             child.add_space(10.0);

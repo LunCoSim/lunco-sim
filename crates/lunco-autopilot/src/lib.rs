@@ -1685,7 +1685,7 @@ fn on_engage_autopilot(
         // fabricated setpoint was almost never what the user meant when they pressed
         // Engage, and it is indistinguishable from "the autopilot is broken": the
         // rover just leaves, ignoring the waypoints it doesn't have.
-        // A vessel gets a route from the BT.CPP XML on its `LunCoProgram`
+        // A vessel gets a route from the BT.CPP XML on its `LunCoProgramAPI`
         // mission child — `info:sourceCode`, or a `.xml` `info:sourceAsset` (stamped
         // as `usd_tree::BehaviorXml` by the USD projection, then compiled into
         // `AutopilotBehaviorSpec` by `usd_tree::compile_behavior_xml`), which the editor
@@ -1696,7 +1696,7 @@ fn on_engage_autopilot(
         if !has_xml && !has_spec {
             if throttle == 0.0 {
                 warn!(
-                    "[autopilot] vessel {:?} has NO ROUTE (no `LunCoProgram` mission BT.CPP tree \
+                    "[autopilot] vessel {:?} has NO ROUTE (no `LunCoProgramAPI` mission BT.CPP tree \
                      and no compiled AutopilotBehaviorSpec) — engaged and HOLDING. Give it \
                      waypoints (Alt+LMB the ground with the vessel possessed/selected) or pass \
                      `spec_json`; pass a non-zero `throttle` if you really want a blind cruise.",

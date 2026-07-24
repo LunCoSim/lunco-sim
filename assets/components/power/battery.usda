@@ -5,40 +5,36 @@
     metersPerUnit = 1
 )
 
-# A battery pack — a mass and a case the physics engine carries.
+# A physical battery pack — mass, collision, and visible case.
 #
-# Its electrical behaviour is not here and not its own: a battery is one component of a
-# circuit, and a circuit is one Modelica model. `LunCo.Electrical.Battery` is the reusable
-# model class; the vessel that mounts this pack instantiates it in its electrical system
-# (see `vessels/rovers/rucheyok/rucheyok_electrical.mo`) and sets this pack's capacity
-# there. USD assembles the part; the circuit is the maths.
-#
-# The root is an `Xform` — a component, not a cube — so the visible case is an ordinary
-# child gprim that both renders and collides.
+# Its electrical behaviour belongs to the vessel's ONE synthesized electrical
+# domain model. The domain compiler instantiates `LunCo.Electrical.Battery`
+# together with every load and source, then emits the `connect()` equations so
+# Kirchhoff balance is solved inside one DAE.
 def Xform "Battery" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
 )
 {
     uniform bool lunco:spawnable = true
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
 
-    # --- Placement (the case's size is on the gprim; scale it here) ---
+    # Model parameters consumed when an enclosing CollectionAPI:components
+    # includes this part in a runtime-projected network.
+    float inputs:voltage_nom = 24.0
+    float inputs:capacity = 83.33
+    float inputs:R_internal = 0.05
+    float inputs:soc_init = 1.0
+    custom token connectors:p
+
     double3 xformOp:translate = (0, 0, 0)
     double3 xformOp:scale = (2.0, 0.5, 3.0)
     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
 
-    # --- Physics ---
-    # NO `PhysicsRigidBodyAPI`. A pack bolted to a hull is not a second body: under
-    # UsdPhysics its case is a COLLIDER of the body it is mounted on, and its mass is
-    # that body's mass. Applying the schema here made it a free body that no joint
-    # held, so it fell out of the vehicle the way the drive motors did — see
-    # `components/mobility/motor.usda` for the full account, and the
-    # `nested-body-no-joint` rule in `lunco-usd-avian`'s physics linter, which now
-    # reports this shape at load. A pack that must be DETACHABLE gets a body and a
-    # joint together, authored by the mount (`AttachSpec`), never a body alone.
+    # A mounted pack is part of its parent's body. A detachable pack must gain
+    # a rigid body and joint together at the mount, never a free nested body.
     float physics:mass = 50.0
 
-    # --- Case: renders and collides ---
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )

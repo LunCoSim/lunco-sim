@@ -53,10 +53,7 @@ fn active_share_url(world: &mut World) -> Option<String> {
 /// *returns* the URL instead (see `api_queries::CopyShareLinkProvider`),
 /// since a headless server has no clipboard.
 #[on_command(CopyShareLink)]
-fn on_copy_share_link(
-    trigger: On<CopyShareLink>,
-    mut commands: Commands,
-) {
+fn on_copy_share_link(trigger: On<CopyShareLink>, mut commands: Commands) {
     commands.queue(|world: &mut World| {
         let Some(url) = active_share_url(world) else {
             if let Some(mut console) =
@@ -70,7 +67,10 @@ fn on_copy_share_link(
         if let Some(mut console) =
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {
-            console.info(format!("Share link copied to clipboard ({} chars)", url.len()));
+            console.info(format!(
+                "Share link copied to clipboard ({} chars)",
+                url.len()
+            ));
         }
     });
 }
@@ -109,7 +109,9 @@ fn shared_source_from_url() -> Option<String> {
 /// Untitled document by firing the existing creation command.
 #[cfg(target_arch = "wasm32")]
 fn load_shared_model_on_boot(mut commands: Commands) {
-    let Some(source) = shared_source_from_url() else { return };
+    let Some(source) = shared_source_from_url() else {
+        return;
+    };
     let name = crate::extract_model_name(&source);
     bevy::log::info!(
         "[model_share] opening shared model from URL fragment ({} bytes)",

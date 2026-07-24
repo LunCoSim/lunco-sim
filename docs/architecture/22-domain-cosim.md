@@ -297,7 +297,7 @@ registered by `UsdSimPlugin`) reads:
 | `float inputs:<port>` / `float outputs:<port>` | The program's ports. A `.connect` makes one a wire; a constant makes it a parameter. A prim is stepped iff it BOTH binds a program AND declares ports. |
 
 A program that is bolted onto a thing — a guidance law, a battery, a supervisory script
-— is a `def LunCoProgram` CHILD prim, so deleting the prim removes the behaviour. A prim
+— is a a `Scope` applying `LunCoProgramAPI` CHILD prim, so deleting the prim removes the behaviour. A prim
 that IS a program — a vessel's own flight-control system, inseparable from the airframe
 — authors the `info:*` properties on itself instead.
 
@@ -306,8 +306,7 @@ same form serves within one prim (a model's output driving the body's force inpu
 *between* prims (the target path simply names another one):
 
 ```usda
-def LunCoProgram "Amplifier"
-{
+def Scope "Amplifier" (prepend apiSchemas = ["LunCoProgramAPI"]) {
     uniform asset info:sourceAsset = @models/Amplifier.py@
     float inputs:signal.connect = </Scene/Oscillator.outputs:signal>
 }

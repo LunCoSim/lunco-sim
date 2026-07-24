@@ -25,15 +25,15 @@
 //! a follow-up; the live-signal split (the more impactful one) is in
 //! place.
 
+use crate::ui::panels::experiments::PlotPanelStates;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{InstancePanel, PanelCtx, PanelId, PanelSlot};
-use lunco_viz::{
-    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization,
-    viz::VizId, SignalRegistry, VisualizationRegistry, VizFitRequests,
-};
 use lunco_experiments::{ExperimentId, ExperimentRegistry};
-use crate::ui::panels::experiments::PlotPanelStates;
+use lunco_viz::{
+    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization, viz::VizId, SignalRegistry,
+    VisualizationRegistry, VizFitRequests,
+};
+use lunco_workbench::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::viz::{ensure_default_modelica_graph, DEFAULT_MODELICA_GRAPH};
 
@@ -44,8 +44,12 @@ pub const MODELICA_PLOT_KIND: PanelId = PanelId("modelica_plot");
 pub struct ModelicaPlotPanel;
 
 impl InstancePanel for ModelicaPlotPanel {
-    fn kind(&self) -> PanelId { MODELICA_PLOT_KIND }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::Bottom }
+    fn kind(&self) -> PanelId {
+        MODELICA_PLOT_KIND
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::Bottom
+    }
 
     fn title(&self, world: &World, instance: u64) -> String {
         let id = VizId(instance);
@@ -162,11 +166,7 @@ fn render_plot_header(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
 /// (both the LinePlot and experiments bodies drain it), and `💾 CSV`
 /// exports the plot's curves. Renders in the caller's current layout
 /// direction (the callers use right-to-left, so `➕` lands rightmost).
-pub(crate) fn plot_action_buttons(
-    ui: &mut egui::Ui,
-    ctx: &mut PanelCtx,
-    viz_id: VizId,
-) {
+pub(crate) fn plot_action_buttons(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     let mut new_plot = false;
     let mut dup = false;
     let mut fit = false;
@@ -282,7 +282,10 @@ fn collect_live_extras(
 }
 
 fn render_line_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
-    let config = match ctx.resource::<VisualizationRegistry>().and_then(|r| r.get(viz_id)) {
+    let config = match ctx
+        .resource::<VisualizationRegistry>()
+        .and_then(|r| r.get(viz_id))
+    {
         Some(c) => c.clone(),
         None => return,
     };
@@ -415,11 +418,13 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
         return; // user cancelled the save dialog
     };
 
-    if let Err(e) = futures_lite::future::block_on(<lunco_storage::FileStorage as lunco_storage::Storage>::write(
-        &storage,
-        &handle,
-        csv.as_bytes(),
-    )) {
+    if let Err(e) = futures_lite::future::block_on(
+        <lunco_storage::FileStorage as lunco_storage::Storage>::write(
+            &storage,
+            &handle,
+            csv.as_bytes(),
+        ),
+    ) {
         if let Some(mut console) =
             world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
         {

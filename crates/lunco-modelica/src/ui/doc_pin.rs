@@ -61,14 +61,18 @@ pub fn active_doc(world: &World) -> Option<DocumentId> {
 /// `pin.telemetry.or(active_doc)`. Telemetry panel uses this to
 /// decide which doc's simulator entity to bind to.
 pub fn resolved_telemetry_doc(world: &World) -> Option<DocumentId> {
-    let pin = world.get_resource::<DocPinState>().and_then(|s| s.telemetry);
+    let pin = world
+        .get_resource::<DocPinState>()
+        .and_then(|s| s.telemetry);
     pin.or_else(|| active_doc(world))
 }
 
 /// `pin.inspector.or(active_doc)`. Inspector panel uses this to
 /// decide which doc's canvas selection to inspect.
 pub fn resolved_inspector_doc(world: &World) -> Option<DocumentId> {
-    let pin = world.get_resource::<DocPinState>().and_then(|s| s.inspector);
+    let pin = world
+        .get_resource::<DocPinState>()
+        .and_then(|s| s.inspector);
     pin.or_else(|| active_doc(world))
 }
 
@@ -88,34 +92,25 @@ pub fn active_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
 }
 
 /// `PanelCtx` sibling of [`resolved_telemetry_doc`].
-pub fn resolved_telemetry_doc_ctx(
-    ctx: &lunco_workbench::PanelCtx,
-) -> Option<DocumentId> {
+pub fn resolved_telemetry_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
     let pin = ctx.resource::<DocPinState>().and_then(|s| s.telemetry);
     pin.or_else(|| active_doc_ctx(ctx))
 }
 
 /// `PanelCtx` sibling of [`resolved_inspector_doc`].
-pub fn resolved_inspector_doc_ctx(
-    ctx: &lunco_workbench::PanelCtx,
-) -> Option<DocumentId> {
+pub fn resolved_inspector_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
     let pin = ctx.resource::<DocPinState>().and_then(|s| s.inspector);
     pin.or_else(|| active_doc_ctx(ctx))
 }
 
 /// `PanelCtx` sibling of [`resolved_experiments_doc`].
-pub fn resolved_experiments_doc_ctx(
-    ctx: &lunco_workbench::PanelCtx,
-) -> Option<DocumentId> {
+pub fn resolved_experiments_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
     let pin = ctx.resource::<DocPinState>().and_then(|s| s.experiments);
     pin.or_else(|| active_doc_ctx(ctx))
 }
 
 /// `PanelCtx` sibling of [`doc_display_name`].
-pub fn doc_display_name_ctx(
-    ctx: &lunco_workbench::PanelCtx,
-    doc: DocumentId,
-) -> String {
+pub fn doc_display_name_ctx(ctx: &lunco_workbench::PanelCtx, doc: DocumentId) -> String {
     ctx.resource::<crate::state::ModelicaDocumentRegistry>()
         .and_then(|reg| reg.host(doc))
         .map(|host| host.document().origin().display_name())
@@ -150,7 +145,10 @@ pub fn render_pin_header(
         .unwrap_or(None);
     let active = active_doc_ctx(ctx);
     let target = current_pin.or(active);
-    let muted = ctx.resource_expect::<lunco_theme::Theme>().tokens.text_subdued;
+    let muted = ctx
+        .resource_expect::<lunco_theme::Theme>()
+        .tokens
+        .text_subdued;
 
     let label = match target {
         Some(doc) => doc_display_name_ctx(ctx, doc),
@@ -179,12 +177,7 @@ pub fn render_pin_header(
         let mut text = egui::RichText::new(label).small();
         if current_pin.is_some() {
             text = text.color(accent).strong();
-            ui.label(
-                egui::RichText::new("PIN")
-                    .color(accent)
-                    .strong()
-                    .small(),
-            );
+            ui.label(egui::RichText::new("PIN").color(accent).strong().small());
         } else {
             text = text.color(muted);
         }

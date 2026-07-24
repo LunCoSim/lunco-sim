@@ -90,7 +90,9 @@ def Xform "LandingLegsTest" (
     {
         custom string lunco:scenario = "landing-legs"
 
-        def LunCoProgram "Mission"
+        def Scope "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/landing_legs.rhai@
         }

@@ -108,7 +108,9 @@ fn track_model_compiles(
             kinds::PROGRAM_COMPILE,
             model.model_name.clone(),
         );
-        commands.entity(entity).try_insert(ModelCompileWait { ticket });
+        commands
+            .entity(entity)
+            .try_insert(ModelCompileWait { ticket });
     }
 
     for (entity, wait) in &ready {

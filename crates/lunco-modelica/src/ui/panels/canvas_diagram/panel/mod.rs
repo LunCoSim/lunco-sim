@@ -1,26 +1,32 @@
 //! `CanvasDiagramPanel` — top-level panel implementation.
 
-pub(crate) mod util;
-pub(crate) mod snapshots;
 pub(crate) mod interaction;
 pub(crate) mod projection_sync;
 pub(crate) mod render;
+pub(crate) mod snapshots;
+pub(crate) mod util;
 
 use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
+use super::{active_doc_from_world_ctx, CanvasDiagramState, CANVAS_DIAGRAM_PANEL_ID};
 use crate::model_tabs_types::TabRenderContext;
-use super::{CANVAS_DIAGRAM_PANEL_ID, CanvasDiagramState, active_doc_from_world_ctx};
-use projection_sync::{trigger_projection_if_needed, poll_and_swap_projection};
+use projection_sync::{poll_and_swap_projection, trigger_projection_if_needed};
 use render::render_diagram_canvas;
 
 pub struct CanvasDiagramPanel;
 
 impl Panel for CanvasDiagramPanel {
-    fn id(&self) -> PanelId { CANVAS_DIAGRAM_PANEL_ID }
-    fn title(&self) -> String { "🧩 Canvas Diagram".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
+    fn id(&self) -> PanelId {
+        CANVAS_DIAGRAM_PANEL_ID
+    }
+    fn title(&self) -> String {
+        "🧩 Canvas Diagram".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::Center
+    }
     /// Not listed: the canvas users actually work in is embedded in the
     /// per-document Model view tab. This singleton renders an empty scene when
     /// no document is active, so a menu entry for it opens a blank panel.

@@ -58,10 +58,7 @@ impl InputActivity {
 /// If any pointer movement, click, scroll, or keypress happened,
 /// stamp the activity tracker. Cheap — egui keeps the input state
 /// in `Memory`; we just read flags, no buffering.
-pub fn stamp_user_input(
-    mut activity: ResMut<InputActivity>,
-    mut contexts: EguiContexts,
-) {
+pub fn stamp_user_input(mut activity: ResMut<InputActivity>, mut contexts: EguiContexts) {
     // `EguiContexts::ctx_mut()` returns the primary context; we only
     // need one for input detection (workbench has a single window).
     let Ok(ctx) = contexts.ctx_mut() else { return };

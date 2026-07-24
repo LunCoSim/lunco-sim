@@ -82,7 +82,9 @@ def Xform "SandboxScene" (
     {
         custom string lunco:scenario = "filtered-pairs"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/filtered_pairs.rhai@
             # WHICH case this is, declared rather than sniffed: 1 = the pair is

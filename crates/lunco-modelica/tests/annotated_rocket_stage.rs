@@ -5,9 +5,7 @@
 //! fails, the fixture and the extractor have drifted apart — fix
 //! whichever side is wrong before touching the renderer.
 
-use lunco_modelica::annotations::{
-    extract_diagram, extract_icon, extract_placement, GraphicItem,
-};
+use lunco_modelica::annotations::{extract_diagram, extract_icon, extract_placement, GraphicItem};
 use rumoca_phase_parse::parse_to_ast;
 
 fn source() -> &'static str {
@@ -29,7 +27,14 @@ fn fixture_parses_and_extracts() {
     // package plus the four physical classes and the top-level
     // RocketStage assembly.
     let leaf_names: Vec<&str> = pkg.classes.keys().map(|k| k.as_str()).collect();
-    for expected in ["LunCoAnnotations", "Tank", "Valve", "Engine", "Airframe", "RocketStage"] {
+    for expected in [
+        "LunCoAnnotations",
+        "Tank",
+        "Valve",
+        "Engine",
+        "Airframe",
+        "RocketStage",
+    ] {
         assert!(
             leaf_names.contains(&expected),
             "missing class {expected} (have {leaf_names:?})"

@@ -195,7 +195,9 @@ def Xform "CommsWallTest" (
     {
         custom string lunco:scenario = "comms-wall"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/comms_wall.rhai@
         }

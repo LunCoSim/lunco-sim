@@ -1,8 +1,8 @@
 //! Simulation-specific commands: SetModelInput.
 
 use bevy::prelude::*;
+use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
-use lunco_core::{Command, on_command};
 
 // The actual mutation (`apply_set_model_input`) + its error type are UI-free and
 // live in `crate::model_commands` so the headless API server can call them.
@@ -36,4 +36,3 @@ pub fn on_set_model_input(trigger: On<SetModelInput>, mut commands: Commands) {
         }
     });
 }
-

@@ -1,8 +1,8 @@
 //! Graphics primitives for Modelica Icons and Diagrams.
 
+use super::types::{Arrow, Color, EllipseClosure, Extent, FilledShape, LinePattern, Point};
 use rumoca_compile::parsing::ast::Expression;
 use serde::{Deserialize, Serialize};
-use super::types::{Point, Extent, Color, LinePattern, FilledShape, Arrow, EllipseClosure};
 
 /// One graphics primitive from an Icon/Diagram `graphics={...}` array.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,7 +149,11 @@ impl DynExpr {
                 let bv = b.eval(resolve)?;
                 match (&av, &bv) {
                     (DynValue::Number(x), DynValue::Number(y)) => Some(DynValue::Number(x + y)),
-                    _ => Some(DynValue::Text(format!("{}{}", av.to_display(), bv.to_display()))),
+                    _ => Some(DynValue::Text(format!(
+                        "{}{}",
+                        av.to_display(),
+                        bv.to_display()
+                    ))),
                 }
             }
             DynExpr::Sub(a, b) => match (a.eval(resolve)?, b.eval(resolve)?) {
@@ -162,7 +166,11 @@ impl DynExpr {
             },
             DynExpr::Div(a, b) => match (a.eval(resolve)?, b.eval(resolve)?) {
                 (DynValue::Number(x), DynValue::Number(y)) => {
-                    if y == 0.0 { None } else { Some(DynValue::Number(x / y)) }
+                    if y == 0.0 {
+                        None
+                    } else {
+                        Some(DynValue::Number(x / y))
+                    }
                 }
                 _ => None,
             },

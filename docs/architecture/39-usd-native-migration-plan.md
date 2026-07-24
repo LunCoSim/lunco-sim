@@ -143,7 +143,7 @@ by-slot hot loop are untouched; two peers converge on identical wiring from repl
   (`schemas/registry.rs`) — needs either typed views or a light codeless-schema registry contribution.
   *Verify:* `has_api_schema` gates dispatch.
 - **P2.2 🟡 — Gate on applied schema, never a heuristic** (`cosim.rs`). Identity = "this prim binds a program
-  and declares ports" — read off `LunCoProgram`/the prim's `info:*` properties and the domain schema, not off the shape of
+  and declares ports" — read off `LunCoProgramAPI`/the prim's `info:*` properties and the domain schema, not off the shape of
   an attribute value.
 - **P2.3 🟡 — Keep the binding neutral:** a program names its source (`info:sourceAsset`, plus
   `:subIdentifier` when the file holds several definitions) and the engine follows the extension —

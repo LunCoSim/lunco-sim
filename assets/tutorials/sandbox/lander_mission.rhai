@@ -6,7 +6,7 @@
 //!   • `/LanderTest/Scenario` → `rover_surface_ops.rhai`: powered descent →
 //!     `lander_touchdown` → detach the joint → `rover_deployed` → reveal a 3-gate
 //!     course one dome at a time, announcing `waypoint_N_reached` / `course_complete`.
-//!   • `/LanderTest/SkidRover` → `rover_autopilot.rhai`: drives the course after
+//!   • `/LanderTest/SkidRover` → `lander_rover_patrol.btxml`: drives the course after
 //!     `rover_deployed`, and yields the moment a human takes the rover.
 //! Both emit their phase events on the global bus, so this tutorial just *watches*:
 //! it turns those events into a student-facing objectives checklist and coaches

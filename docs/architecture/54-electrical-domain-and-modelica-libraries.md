@@ -29,15 +29,14 @@ imply forty times that) has no equation to catch the contradiction; nobody reads
 number, so nothing objects. Moving the value into a model turns a silent lie into a
 checkable claim. That is the whole reason the split exists — not tidiness.
 
-## 2. Why a physical network is ONE model, and acausal
+## 2. USD assembles components; runtime projects one acausal model
 
-The tempting design is: each component (battery, panel, motor) is its own program with
-causal ports (`current_out → current_in`), wired together in USD. **It is wrong, and the
-symptom tells you why.** With causal signal wires, *something* has to sum the four motors'
-draw before the battery sees it — so you reach for a bus model with `n_loads`, an array of
-currents, an index per wheel. Every one of those is a workaround for the wires being
-directional. Add a fifth wheel and you must update a count *and* an array slot *and* an
-order: three places that can disagree.
+Each physical component applies `LunCoProgramAPI` and names its reusable Modelica class.
+Its causal boundary uses `inputs:`/`outputs:`; its acausal Modelica connector members use
+`connectors:`. Ordinary USD property connections author topology. There is no electrical
+USD schema and no exposed `Pin` prim. An ordinary network `Scope` applies the standard
+multiple-apply `CollectionAPI:components`; that collection is the explicit working set
+for one projected Modelica model.
 
 A circuit is not directional. It is acausal, and Modelica exists precisely to express
 that: a `Pin` with a `flow` variable, connected with `connect()`, makes the tool write
@@ -50,38 +49,46 @@ connector Pin
 end Pin;
 ```
 
-So the electrical domain is **one model per vehicle**
-(`vessels/rovers/<rover>/<rover>_electrical.mo`) that imports the `LunCo.Electrical`
-component classes and `connect()`s them to a shared node. Add a fifth wheel → one
-component and one `connect` line; the node equation grows on its own. No count, no array,
-no summation code — because those were never the problem, only symptoms of modelling a
-circuit as signals.
-
-**Why not many small programs, then?** Because the cosim boundary is *causal* by
-construction (`SimConnection`: an output drives an input, stepped sequentially). Kirchhoff
-needs the node solved *simultaneously* — you cannot sum flows across prims that step
-independently. Acausal therefore forces one model per network. That is not a limitation to
-work around; it is the correct granularity.
-
-In USD this is **one** `LunCoProgram` under a domain scope (doc 38's shape):
+At runtime `lunco-usd-sim` asks OpenUSD to compute the collection's included prims, then
+projects those connector-bearing components into one generated Modelica wrapper. The
+wrapper instantiates the qualified classes and emits `connect()` equations. It exists
+only at runtime; USD remains the authored source of assembly truth and Modelica remains
+the equation language.
 
 ```usd
-def Scope "Electrical" {
-    def LunCoProgram "System" {
-        uniform asset info:sourceAsset = @vessels/rovers/rucheyok/rucheyok_electrical.mo@
-        float inputs:battery_capacity = 312.0   # the circuit's parameters, valued here
-        float inputs:irradiance                 # boundary — cosim wires it to the sun
-        float inputs:omega_fl                   # boundary — cosim wires it to a wheel
-        float outputs:soc
-    }
+def Xform "Battery" (
+    prepend references = @lunco://components/power/battery.usda@</Battery>
+) {}
+
+def Xform "Motor_FL" (
+    prepend references = @lunco://components/mobility/motor.usda@</Motor>
+)
+{
+    float inputs:demand.connect = </Rover/Electrical.inputs:drive_left>
+    custom token connectors:p.connect = </Rover/Battery.connectors:p>
+}
+
+def Scope "Electrical" (
+    prepend apiSchemas = ["CollectionAPI:components"]
+)
+{
+    float inputs:drive_left
+    float outputs:soc.connect = </Rover/Battery.outputs:soc_out>
+
+    uniform token collection:components:expansionRule = "explicitOnly"
+    prepend rel collection:components:includes = [
+        </Rover/Battery>,
+        </Rover/Motor_FL>,
+    ]
 }
 ```
 
-Acausal *inside* the bus; causal *at the boundary*, where cosim legitimately crosses to
-physics (a motor's shaft speed comes from Avian's step) and environment (irradiance from
-the sun). Synthesising that circuit `.mo` from the USD electrical graph, instead of
-hand-authoring it, is doc 37's netlist-from-USD — the next step, deliberately not built
-here so the acausal core lands first and provably.
+Acausal inside the generated DAE; causal at the Scope boundary, where cosim crosses to
+physics, environment, controls, and telemetry. The actual part prims remain where the
+vehicle assembly needs them; the collection groups them without duplicating them below a
+network proxy hierarchy. Separate electrical islands use separate Scopes and collections.
+Their path namespaces give generated instances stable unique names even when the same
+component appears more than once.
 
 ## 3. Why library loading looks the way it does
 

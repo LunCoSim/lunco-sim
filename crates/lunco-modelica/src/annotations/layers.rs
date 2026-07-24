@@ -1,8 +1,8 @@
 //! Icon and Diagram annotation layers.
 
-use serde::{Deserialize, Serialize};
-use super::types::{Extent, Point, CoordinateSystem};
 use super::graphics::GraphicItem;
+use super::types::{CoordinateSystem, Extent, Point};
+use serde::{Deserialize, Serialize};
 
 /// Decoded `Icon(coordinateSystem=..., graphics={...})` annotation.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

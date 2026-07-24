@@ -14,11 +14,8 @@
 //   #{ event: "NAME" }                 wait until a matching event arrives
 // (`act`/`done`/`secs`/`event` avoid rhai's reserved `do`/`until`.)
 //
-// Events arrive in on_event, not on_tick, so wait-for-event needs the hook to
-// feed them in. The 3-hook shell (`me` is the host gid; state lives on `this`):
-//   fn on_start(me)      { this.cur = seq_init(); }
-//   fn on_tick(me)       { this.cur = run_steps(me, STEPS, this.cur); }
-//   fn on_event(me, evt) { this.cur = seq_note_event(this.cur, evt); }
+// Prefer behaviour-tree sequencing or `RunTimeline`. Scenario rhai reacts to
+// events; continuous progression and numerical predicates belong outside rhai.
 //
 // Progress is observable on the telemetry bus: STEP_COMPLETE(idx) per step and
 // SEQUENCE_COMPLETE(len) at the end (mirrors run_plan's OBJECTIVE/PLAN emits).
@@ -167,4 +164,3 @@ fn __note_task_event(me, evt) {
 fn __init_task(me) {
     if this.task == () && is_def_fn("task", 1) { this.task = task(me); }
 }
-

@@ -132,7 +132,10 @@ fn fs_root_for(package_path: &str) -> std::path::PathBuf {
 /// produce identical nodes.
 pub fn library_root_node(lib: &str) -> PackageNode {
     let (id, name) = if lib == "Modelica" {
-        ("msl_root".to_string(), "📚 Modelica Standard Library".to_string())
+        (
+            "msl_root".to_string(),
+            "📚 Modelica Standard Library".to_string(),
+        )
     } else {
         (format!("{lib}_root"), lib.to_string())
     };

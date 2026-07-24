@@ -141,7 +141,11 @@ impl Plugin for AssetDiscoveryPlugin {
 fn load_manifest_native(mut manifest: ResMut<AssetManifest>) {
     let dir = crate::assets_dir_abs();
     let rels = scan_library(&dir);
-    info!("ASSET_MANIFEST: {} file(s) under {}", rels.len(), dir.display());
+    info!(
+        "ASSET_MANIFEST: {} file(s) under {}",
+        rels.len(),
+        dir.display()
+    );
     manifest.set(rels);
 }
 
@@ -211,7 +215,9 @@ mod wasm_manifest {
     }
 
     pub fn drain_fetch(fetch: Res<ManifestFetch>, mut manifest: ResMut<AssetManifest>) {
-        let Ok(result) = fetch.rx.try_recv() else { return };
+        let Ok(result) = fetch.rx.try_recv() else {
+            return;
+        };
         match result {
             Ok(rels) => {
                 info!("ASSET_MANIFEST: {} file(s) from {MANIFEST_URL}", rels.len());
@@ -318,7 +324,10 @@ pub fn list_scene_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<Ass
     out.retain(|asset| match &asset.twin {
         Some(name) => globs
             .get(name)
-            .map(|g| g.iter().any(|glob| lunco_twin::glob_matches(glob, &asset.rel)))
+            .map(|g| {
+                g.iter()
+                    .any(|glob| lunco_twin::glob_matches(glob, &asset.rel))
+            })
             .unwrap_or(false),
         // The engine library's own layout, which it is entitled to assert about
         // itself — it ships the folder.
@@ -364,7 +373,9 @@ const MANIFEST_EXTS: &[&str] = &["usda", "wgsl", "rhai"];
 
 #[cfg(not(target_arch = "wasm32"))]
 fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -388,7 +399,9 @@ fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn walk(base: &Path, dir: &Path, ext: &str, f: &mut impl FnMut(String)) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -427,7 +440,7 @@ mod tests {
         assert!(is_test_asset("scenes/tests/landing_legs.usda"));
         assert!(is_test_asset("scenarios/tests/landing_legs.rhai"));
         assert!(!is_test_asset("scenes/sandbox/lander_cinematic.usda"));
-        assert!(!is_test_asset("scenarios/rover_autopilot.rhai"));
+        assert!(!is_test_asset("behaviors/solar_rover_patrol.btxml"));
         // The suffix convention it replaces — a file that merely READS as a test
         // is still shown, because nothing but its folder makes it one.
         assert!(!is_test_asset("scenes/sandbox/something_test.usda"));

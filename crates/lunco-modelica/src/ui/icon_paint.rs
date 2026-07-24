@@ -33,7 +33,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-fn with_active_palette<R>(palette: Option<&lunco_theme::ModelicaIconPalette>, f: impl FnOnce() -> R) -> R {
+fn with_active_palette<R>(
+    palette: Option<&lunco_theme::ModelicaIconPalette>,
+    f: impl FnOnce() -> R,
+) -> R {
     let prev = ACTIVE_PALETTE.with(|cell| cell.replace(palette.cloned()));
     let result = f();
     ACTIVE_PALETTE.with(|cell| {
@@ -69,10 +72,7 @@ fn remap_color(c: egui::Color32) -> egui::Color32 {
 /// (visual difference is minor at icon scale; rendering nothing is
 /// much worse). Future polish: emit `egui::Mesh` with per-vertex
 /// colour interpolation for cylinder/sphere patterns.
-fn effective_fill_color(
-    pattern: FillPattern,
-    color: Option<Color>,
-) -> egui::Color32 {
+fn effective_fill_color(pattern: FillPattern, color: Option<Color>) -> egui::Color32 {
     match pattern {
         FillPattern::None => egui::Color32::TRANSPARENT,
         _ => color_or_default(color, egui::Color32::BLACK),
@@ -287,10 +287,7 @@ impl<'a> TextSubstitution<'a> {
                     // didn't expose one) drops to empty so we don't
                     // print the literal placeholder.
                     if let Some(params) = self.parameters {
-                        if let Some((_, value)) = params
-                            .iter()
-                            .find(|(name, _)| name == other)
-                        {
+                        if let Some((_, value)) = params.iter().find(|(name, _)| name == other) {
                             out.push_str(value);
                         }
                     }
@@ -376,8 +373,12 @@ impl CoordXform {
         let mut dx = p.x as f32 - self.src_center.x;
         let mut dy = p.y as f32 - self.src_center.y;
         // 2. Mirror in the Modelica frame (before rotation, MLS Annex D).
-        if self.mirror_x { dx = -dx; }
-        if self.mirror_y { dy = -dy; }
+        if self.mirror_x {
+            dx = -dx;
+        }
+        if self.mirror_y {
+            dy = -dy;
+        }
         // 3. Rotate CCW in Modelica's +Y-up frame.
         if self.rotation_deg != 0.0 {
             let theta = self.rotation_deg.to_radians();
@@ -398,12 +399,7 @@ impl CoordXform {
     /// project to screen. `origin` is in Modelica coords, `rotation`
     /// is degrees CCW (matches MLS Annex D). Per-instance orientation
     /// (rotation + mirror) gets applied by [`crate::ui::icon_paint::to_screen`] downstream.
-    pub fn to_screen_rotated(
-        &self,
-        p: Point,
-        origin: Point,
-        rotation_deg: f64,
-    ) -> egui::Pos2 {
+    pub fn to_screen_rotated(&self, p: Point, origin: Point, rotation_deg: f64) -> egui::Pos2 {
         let theta = (rotation_deg as f32).to_radians();
         let (s, c) = theta.sin_cos();
         let lx = p.x as f32;
@@ -468,7 +464,12 @@ fn paint_rectangle(
         let fill = effective_fill_color(r.shape.fill_pattern, r.shape.fill_color);
         let radius_px = (r.radius as f32 * xf.scale).max(0.0);
         painter.rect_filled(rect, radius_px, fill);
-        let stroke = stroke_for(r.shape.line_color, r.shape.line_pattern, r.shape.line_thickness, xf.scale);
+        let stroke = stroke_for(
+            r.shape.line_color,
+            r.shape.line_pattern,
+            r.shape.line_thickness,
+            xf.scale,
+        );
         if stroke.width > 0.0 {
             painter.rect_stroke(rect, radius_px, stroke, egui::StrokeKind::Inside);
         }
@@ -532,15 +533,10 @@ fn paint_polygon(painter: &egui::Painter, xf: &CoordXform, p: &Polygon) {
 /// the EvenOdd fill rule, returning an `egui::Mesh` ready to draw.
 /// Returns `None` for degenerate inputs (fewer than 3 unique points
 /// or tessellator failure — both render as "no fill").
-fn tessellate_polygon_evenodd(
-    pts: &[egui::Pos2],
-    color: egui::Color32,
-) -> Option<egui::Mesh> {
+fn tessellate_polygon_evenodd(pts: &[egui::Pos2], color: egui::Color32) -> Option<egui::Mesh> {
     use lyon_path::Path;
     use lyon_tessellation::geometry_builder::BuffersBuilder;
-    use lyon_tessellation::{
-        FillOptions, FillRule, FillTessellator, FillVertex, VertexBuffers,
-    };
+    use lyon_tessellation::{FillOptions, FillRule, FillTessellator, FillVertex, VertexBuffers};
 
     if pts.len() < 3 {
         return None;
@@ -629,7 +625,15 @@ fn paint_line(painter: &egui::Painter, xf: &CoordXform, l: &Line) {
     let head_px = ((l.arrow_size as f32) * xf.scale).max(4.0);
     let color = color_or_default(l.color, egui::Color32::BLACK);
     if !matches!(l.arrow[0], Arrow::None) && pts.len() >= 2 {
-        paint_arrow_head(painter, pts[1], pts[0], l.arrow[0], head_px, stroke.width, color);
+        paint_arrow_head(
+            painter,
+            pts[1],
+            pts[0],
+            l.arrow[0],
+            head_px,
+            stroke.width,
+            color,
+        );
     }
     if !matches!(l.arrow[1], Arrow::None) && pts.len() >= 2 {
         let n = pts.len();
@@ -714,7 +718,9 @@ fn paint_text(
         (Some(expr), Some(resolve)) => expr.eval(resolve).map(|v| v.to_display()),
         _ => None,
     };
-    let base = dynamic_rendered.as_deref().unwrap_or(t.text_string.as_str());
+    let base = dynamic_rendered
+        .as_deref()
+        .unwrap_or(t.text_string.as_str());
     if base.is_empty() {
         return;
     }
@@ -770,11 +776,8 @@ fn paint_text(
             // Egui galley measure: cheap no-wrap layout to get the
             // rendered width at this font size. If it overruns the
             // extent, scale down by the ratio.
-            let galley = painter.layout_no_wrap(
-                rendered.clone(),
-                egui::FontId::proportional(size),
-                color,
-            );
+            let galley =
+                painter.layout_no_wrap(rendered.clone(), egui::FontId::proportional(size), color);
             let measured_w = galley.size().x;
             if measured_w > w {
                 size *= w / measured_w;
@@ -808,21 +811,15 @@ fn paint_text(
     } else {
         // Build a Galley and emit a rotated TextShape — egui's
         // higher-level `painter.text` fixes angle to 0.
-        let galley = painter.layout_no_wrap(
-            rendered,
-            egui::FontId::proportional(font_size_px),
-            color,
-        );
+        let galley =
+            painter.layout_no_wrap(rendered, egui::FontId::proportional(font_size_px), color);
         // TextShape rotates around `pos` (top-left). To centre the
         // rotated label on `rect.center()`, push `pos` back by the
         // rotated half-size vector — places the post-rotation centre
         // exactly on rect.center.
         let half = galley.size() * 0.5;
         let (sin, cos) = angle_screen.sin_cos();
-        let rotated_half = egui::vec2(
-            cos * half.x - sin * half.y,
-            sin * half.x + cos * half.y,
-        );
+        let rotated_half = egui::vec2(cos * half.x - sin * half.y, sin * half.x + cos * half.y);
         let pos = rect.center() - rotated_half;
         let mut shape = egui::epaint::TextShape::new(pos, galley, color);
         shape.angle = angle_screen;
@@ -943,11 +940,7 @@ fn paint_ellipse(painter: &egui::Painter, xf: &CoordXform, e: &Ellipse) {
         }
         EllipseClosure::Radial => {
             // Pie slice — close with two radii to the centre.
-            let centre = xf.to_screen_rotated(
-                Point { x: cx, y: cy },
-                e.origin,
-                e.rotation,
-            );
+            let centre = xf.to_screen_rotated(Point { x: cx, y: cy }, e.origin, e.rotation);
             let mut pie = Vec::with_capacity(pts.len() + 1);
             pie.extend_from_slice(&pts);
             pie.push(centre);
@@ -1003,12 +996,7 @@ fn paint_bitmap(painter: &egui::Painter, xf: &CoordXform, b: &Bitmap) {
     let label = b
         .filename
         .as_deref()
-        .map(|s| {
-            s.rsplit('/')
-                .next()
-                .unwrap_or(s)
-                .to_string()
-        })
+        .map(|s| s.rsplit('/').next().unwrap_or(s).to_string())
         .unwrap_or_else(|| "[image]".to_string());
     let font_size = (rect.height().abs() * 0.3).clamp(8.0, 14.0);
     painter.text(
@@ -1023,10 +1011,7 @@ fn paint_bitmap(painter: &egui::Painter, xf: &CoordXform, b: &Bitmap) {
 /// Texture cache for Bitmap primitives. Keyed by the raw filename
 /// string so `modelica://Pkg/icon.png` and a plain `icon.png` hit
 /// different slots (they resolve differently).
-fn texture_for_bitmap(
-    ctx: &egui::Context,
-    filename: &str,
-) -> Option<egui::TextureHandle> {
+fn texture_for_bitmap(ctx: &egui::Context, filename: &str) -> Option<egui::TextureHandle> {
     use crate::icon_memo::SourceMemo;
     use std::sync::{Mutex, OnceLock};
     // The memo stores `Option<TextureHandle>` so a failed load is remembered and not
@@ -1238,7 +1223,10 @@ mod tests {
         assert!((xf.scale - 0.5).abs() < 1e-3);
         // Source corner (-100,-100) bottom-left of source → screen (150, 100)
         // because horizontal centring puts the 100px-wide square at x=150..250.
-        let bl = xf.to_screen(Point { x: -100.0, y: -100.0 });
+        let bl = xf.to_screen(Point {
+            x: -100.0,
+            y: -100.0,
+        });
         assert!((bl.x - 150.0).abs() < 1.0);
         assert!((bl.y - 100.0).abs() < 1.0);
     }
@@ -1250,16 +1238,10 @@ mod tests {
         // a point that was to the right of the origin ends up *above* it
         // (since +Y up). After Y-flip, "above" = smaller screen y.
         let xf = coord_xform(default_cs().extent, dst());
-        let unrotated = xf.to_screen_rotated(
-            Point { x: 10.0, y: 0.0 },
-            Point { x: 0.0, y: 0.0 },
-            0.0,
-        );
-        let rotated = xf.to_screen_rotated(
-            Point { x: 10.0, y: 0.0 },
-            Point { x: 0.0, y: 0.0 },
-            90.0,
-        );
+        let unrotated =
+            xf.to_screen_rotated(Point { x: 10.0, y: 0.0 }, Point { x: 0.0, y: 0.0 }, 0.0);
+        let rotated =
+            xf.to_screen_rotated(Point { x: 10.0, y: 0.0 }, Point { x: 0.0, y: 0.0 }, 90.0);
         // Unrotated is to the right of centre, same y as centre.
         assert!(unrotated.x > 200.0);
         assert!((unrotated.y - 300.0).abs() < 1.0);
@@ -1271,13 +1253,16 @@ mod tests {
     #[test]
     fn stroke_zero_for_pattern_none_or_no_color() {
         assert_eq!(
-            stroke_for(Some(Color { r: 0, g: 0, b: 0 }), LinePattern::None, 0.5, 10.0).width,
+            stroke_for(
+                Some(Color { r: 0, g: 0, b: 0 }),
+                LinePattern::None,
+                0.5,
+                10.0
+            )
+            .width,
             0.0
         );
-        assert_eq!(
-            stroke_for(None, LinePattern::Solid, 0.5, 10.0).width,
-            0.0
-        );
+        assert_eq!(stroke_for(None, LinePattern::Solid, 0.5, 10.0).width, 0.0);
     }
 
     #[test]

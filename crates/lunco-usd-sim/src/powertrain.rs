@@ -28,7 +28,7 @@
 //! that falls out of `τ = k(V − kω)/R`. A sampled torque curve would buy nothing here
 //! and cost an interpolation rule, a units convention, and the Inspector sliders that
 //! `customData{min,max}` gives scalars for free. A motor that genuinely is not linear
-//! (stepper, field-weakening) authors a `LunCoProgram` child that computes torque
+//! (stepper, field-weakening) authors a `LunCoProgramAPI` child that computes torque
 //! instead — a program beats scalars for the same reason a wired port beats a constant.
 //!
 //! ## Optional by construction

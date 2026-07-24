@@ -32,10 +32,10 @@ use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 // `DrilledInClassNames` reads migrated to
 // `crate::sim_default::drilled_class_for_doc`.
 use crate::state::ModelicaDocumentRegistry;
-use lunco_doc::CompileState;
-use lunco_doc_bevy::DocumentDiagnostics;
 use crate::visual_diagram::msl_class_library;
+use lunco_doc::CompileState;
 use lunco_doc::DocumentId;
+use lunco_doc_bevy::DocumentDiagnostics;
 
 /// Plugin that registers the [`ApiQueryProvider`]s exposed by
 /// `lunco-modelica`. Wired into [`crate::ui::ModelicaUiPlugin`] when
@@ -81,11 +81,7 @@ impl ApiQueryProvider for ListBundledProvider {
         "ListBundled"
     }
 
-    fn execute(
-        &self,
-        _world: &mut World,
-        _params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, _world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         let items: Vec<serde_json::Value> = bundled_models()
             .into_iter()
             .map(|m| {
@@ -116,11 +112,7 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
         "ListOpenDocuments"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        _params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         let ws = world.resource::<WorkspaceResource>();
         let active = ws.active_document;
 
@@ -162,11 +154,7 @@ impl ApiQueryProvider for ListRecentFilesProvider {
         "ListRecentFiles"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        _params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
         fn entry(path: &std::path::Path) -> serde_json::Value {
             // mtime as whole seconds since the Unix epoch; `None` when the
             // path is gone or the platform/file has no modified time.
@@ -209,19 +197,12 @@ impl ApiQueryProvider for ListTwinProvider {
         "ListTwin"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         // Pagination params: both optional. `offset` defaults to 0,
         // `limit` defaults to "all" (no slicing). Caller supplies them
         // when a Twin folder is large enough to warrant paging; the
         // common case (<100 files) returns the whole list.
-        let offset = params
-            .get("offset")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit = params
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -254,10 +235,7 @@ impl ApiQueryProvider for ListTwinProvider {
             &all[offset..end]
         };
 
-        let root = twin
-            .root_handle()
-            .as_file_path()
-            .map(|p| p.to_path_buf());
+        let root = twin.root_handle().as_file_path().map(|p| p.to_path_buf());
         let items: Vec<serde_json::Value> = slice
             .iter()
             .map(|f| file_entry_to_json(f, root.as_deref()))
@@ -274,10 +252,7 @@ impl ApiQueryProvider for ListTwinProvider {
     }
 }
 
-fn file_entry_to_json(
-    f: &FileEntry,
-    root: Option<&std::path::Path>,
-) -> serde_json::Value {
+fn file_entry_to_json(f: &FileEntry, root: Option<&std::path::Path>) -> serde_json::Value {
     let abs = root.map(|r| r.join(&f.relative_path));
     serde_json::json!({
         "relative_path": f.relative_path.to_string_lossy(),
@@ -314,11 +289,7 @@ impl ApiQueryProvider for ListMslProvider {
         "ListMsl"
     }
 
-    fn execute(
-        &self,
-        _world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, _world: &mut World, params: &serde_json::Value) -> ApiResponse {
         // Pagination + filter params. All optional. `cursor` is an
         // opaque decimal string carrying the offset to start from
         // (returned by the previous page); v1 does not validate that
@@ -371,10 +342,7 @@ impl ApiQueryProvider for ListMslProvider {
                     // and take the first segment. Matches the
                     // categories the Welcome tab and palette already
                     // surface.
-                    let after_modelica = c
-                        .name
-                        .strip_prefix("Modelica.")
-                        .unwrap_or(&c.name);
+                    let after_modelica = c.name.strip_prefix("Modelica.").unwrap_or(&c.name);
                     let top = after_modelica.split('.').next().unwrap_or("");
                     top.eq_ignore_ascii_case(cat)
                 }
@@ -429,11 +397,7 @@ impl ApiQueryProvider for ListCompileCandidatesProvider {
         "ListCompileCandidates"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -488,11 +452,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
         "QueryExperimentBounds"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -544,7 +504,8 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                 let has_draft = world
                     .get_resource::<crate::experiments_runner::ExperimentDrafts>()
                     .and_then(|d| {
-                        d.get(doc_id, &mref).and_then(|dr| dr.bounds_override.clone())
+                        d.get(doc_id, &mref)
+                            .and_then(|dr| dr.bounds_override.clone())
                     })
                     .is_some();
                 let has_runner_cache = world
@@ -599,11 +560,7 @@ impl ApiQueryProvider for CompileStatusProvider {
         "CompileStatus"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -618,8 +575,7 @@ impl ApiQueryProvider for CompileStatusProvider {
         // helper falls back to first-tab-for-doc when no
         // `TabRenderContext` is in scope (which is the case here —
         // API queries run off-render).
-        let drilled_in =
-            crate::sim_default::drilled_class_for_doc(world, doc_id);
+        let drilled_in = crate::sim_default::drilled_class_for_doc(world, doc_id);
         // `picker_pending` mirrors the gate in `on_compile_model`: we
         // would be in the picker branch if no class is pinned and the
         // doc has 2+ non-package classes. Easier to recompute than to
@@ -662,7 +618,6 @@ impl ApiQueryProvider for CompileStatusProvider {
         let error_message = world
             .get_resource::<lunco_doc_bevy::DocumentDiagnostics>()
             .and_then(|cs| cs.error_message(doc_id).map(str::to_string));
-
 
         // Live run-state, read from the `ModelicaModel` for this doc's
         // entity (if one exists yet). Lets a single CompileStatus call
@@ -736,11 +691,7 @@ impl ApiQueryProvider for RunStatusProvider {
         "RunStatus"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(id) = parse_experiment_id(params, "experiment_id") else {
             return err_missing_field("experiment_id");
         };
@@ -770,11 +721,7 @@ impl ApiQueryProvider for ListRunsProvider {
         "ListRuns"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         // Optional `doc` filter — when absent, list every run in the
         // registry (across docs/twins).
         let filter_doc = parse_doc_id(params, "doc");
@@ -816,10 +763,7 @@ impl ApiQueryProvider for ListRunsProvider {
 /// Build the `latest_run` pointer attached to `CompileStatus`. Picks
 /// the most-recently-created experiment whose source doc matches.
 /// Returns `null` when no run has been dispatched for the doc.
-fn latest_run_for_doc(
-    world: &World,
-    doc_id: DocumentId,
-) -> serde_json::Value {
+fn latest_run_for_doc(world: &World, doc_id: DocumentId) -> serde_json::Value {
     // CQ-114: reuse the most-recent-experiment-for-doc selection in
     // [`latest_experiment_id_for_doc`] instead of duplicating the scan.
     let Some(id) = latest_experiment_id_for_doc(world, doc_id) else {
@@ -852,10 +796,7 @@ fn run_state_label(s: &RunStatus) -> &'static str {
 /// Project an `Experiment` into the API's stable JSON shape. The
 /// flat `state` tag plus optional fields keeps clients simple — they
 /// pattern-match on `state` and read the field they care about.
-fn run_summary(
-    exp: &lunco_experiments::Experiment,
-    doc_id: Option<u64>,
-) -> serde_json::Value {
+fn run_summary(exp: &lunco_experiments::Experiment, doc_id: Option<u64>) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     obj.insert(
         "experiment_id".into(),
@@ -878,10 +819,7 @@ fn run_summary(
         .duration_since(web_time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    obj.insert(
-        "created_at_ms".into(),
-        serde_json::Value::from(created_ms),
-    );
+    obj.insert("created_at_ms".into(), serde_json::Value::from(created_ms));
     match &exp.status {
         RunStatus::Running { t_current } => {
             obj.insert("t_current".into(), serde_json::json!(*t_current));
@@ -929,10 +867,7 @@ fn param_value_json(v: &lunco_experiments::ParamValue) -> serde_json::Value {
     }
 }
 
-fn parse_experiment_id(
-    params: &serde_json::Value,
-    field: &str,
-) -> Option<ExperimentId> {
+fn parse_experiment_id(params: &serde_json::Value, field: &str) -> Option<ExperimentId> {
     params
         .get(field)
         .and_then(|v| v.as_str())
@@ -943,10 +878,7 @@ fn parse_experiment_id(
 /// Resolve the most-recently-created experiment for `doc_id` to its id.
 /// Mirrors [`latest_run_for_doc`] but returns the id so a caller can
 /// look up the full result. `None` when the doc has no runs.
-fn latest_experiment_id_for_doc(
-    world: &World,
-    doc_id: DocumentId,
-) -> Option<ExperimentId> {
+fn latest_experiment_id_for_doc(world: &World, doc_id: DocumentId) -> Option<ExperimentId> {
     let sources = world.get_resource::<ExperimentSources>()?;
     let registry = world.get_resource::<ExperimentRegistry>()?;
     let mut best: Option<&lunco_experiments::Experiment> = None;
@@ -983,11 +915,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
         "GetExperimentResult"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         // Resolve target run: explicit id wins, else latest for `doc`.
         let id = match parse_experiment_id(params, "experiment_id") {
             Some(id) => id,
@@ -1011,14 +939,15 @@ impl ApiQueryProvider for GetExperimentResultProvider {
         };
 
         // Optional variable filter.
-        let want: Option<Vec<String>> = params
-            .get("variables")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            });
+        let want: Option<Vec<String>> =
+            params
+                .get("variables")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                });
         // Optional downsample cap.
         let max_points = params
             .get("max_points")
@@ -1077,8 +1006,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
                 for n in names {
                     match result.series.get(n) {
                         Some(v) => {
-                            series_json
-                                .insert(n.clone(), serde_json::json!(sample(v)));
+                            series_json.insert(n.clone(), serde_json::json!(sample(v)));
                         }
                         None => missing.push(n.clone()),
                     }
@@ -1086,8 +1014,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
             }
             None => {
                 for (n, v) in &result.series {
-                    series_json
-                        .insert(n.clone(), serde_json::json!(sample(v)));
+                    series_json.insert(n.clone(), serde_json::json!(sample(v)));
                 }
             }
         }
@@ -1116,11 +1043,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
         "GetDocumentSource"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -1186,11 +1109,7 @@ impl ApiQueryProvider for CopyShareLinkProvider {
         "CopyShareLink"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let doc_id = parse_doc_id(params, "doc")
             .or_else(|| world.resource::<WorkspaceResource>().active_document);
         let Some(doc_id) = doc_id else {
@@ -1229,11 +1148,7 @@ impl ApiQueryProvider for DescribeModelProvider {
         "DescribeModel"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -1251,8 +1166,7 @@ impl ApiQueryProvider for DescribeModelProvider {
         // helper falls back to first-tab-for-doc when no
         // `TabRenderContext` is in scope (which is the case here —
         // API queries run off-render).
-        let drilled_in =
-            crate::sim_default::drilled_class_for_doc(world, doc_id);
+        let drilled_in = crate::sim_default::drilled_class_for_doc(world, doc_id);
 
         let registry = world.resource::<ModelicaDocumentRegistry>();
         let Some(host) = registry.host(doc_id) else {
@@ -1287,20 +1201,13 @@ impl ApiQueryProvider for DescribeModelProvider {
         let Some(target_name) = target_class_name else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
-                format!(
-                    "doc {} has no non-package class to describe",
-                    doc_id.raw()
-                ),
+                format!("doc {} has no non-package class to describe", doc_id.raw()),
             );
         };
         // The caller may pass `Foo.Bar` — try the short tail first.
-        let short = target_name
-            .rsplit('.')
-            .next()
-            .unwrap_or(&target_name);
+        let short = target_name.rsplit('.').next().unwrap_or(&target_name);
         let Some(class) = ast_extract::find_class_by_short_name(&ast, short) else {
-            let candidates =
-                ast_extract::collect_non_package_classes_qualified(&ast);
+            let candidates = ast_extract::collect_non_package_classes_qualified(&ast);
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
                 format!(
@@ -1354,9 +1261,7 @@ impl ApiQueryProvider for DescribeModelProvider {
     }
 }
 
-fn class_member_variability_str(
-    v: &crate::engine::InheritedVariability,
-) -> &'static str {
+fn class_member_variability_str(v: &crate::engine::InheritedVariability) -> &'static str {
     use crate::engine::InheritedVariability;
     match v {
         InheritedVariability::Continuous => "continuous",
@@ -1366,9 +1271,7 @@ fn class_member_variability_str(
     }
 }
 
-fn class_member_causality_str(
-    c: &crate::engine::InheritedCausality,
-) -> &'static str {
+fn class_member_causality_str(c: &crate::engine::InheritedCausality) -> &'static str {
     use crate::engine::InheritedCausality;
     match c {
         InheritedCausality::Internal => "none",
@@ -1412,11 +1315,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
         "SnapshotVariables"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
@@ -1467,7 +1366,9 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
         // lives in (e.g. `valve` is an input on this model but might be
         // a parameter on the next one).
         let in_filter = |name: &str| -> bool {
-            name_filter.as_ref().is_none_or(|f| f.iter().any(|n| n == name))
+            name_filter
+                .as_ref()
+                .is_none_or(|f| f.iter().any(|n| n == name))
         };
         let project = |map: &std::collections::HashMap<String, f64>| -> serde_json::Value {
             let inner: serde_json::Map<String, serde_json::Value> = map
@@ -1514,11 +1415,7 @@ impl ApiQueryProvider for FindModelProvider {
         "FindModel"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         let query = params
             .get("query")
             .and_then(|v| v.as_str())
@@ -1557,8 +1454,7 @@ impl ApiQueryProvider for FindModelProvider {
         let twin_files: Vec<(String, String)> = {
             let ws = world.resource::<WorkspaceResource>();
             let twin = ws.active_twin.and_then(|id| ws.twin(id));
-            let root = twin
-                .and_then(|t| t.root_handle().as_file_path().map(|p| p.to_path_buf()));
+            let root = twin.and_then(|t| t.root_handle().as_file_path().map(|p| p.to_path_buf()));
             twin.map(|t| {
                 t.files()
                     .iter()
@@ -1620,9 +1516,7 @@ impl ApiQueryProvider for FindModelProvider {
                 .iter()
                 .map(|e| {
                     let uri = match &e.origin {
-                        DocumentOrigin::File { path, .. } => {
-                            path.to_string_lossy().into_owned()
-                        }
+                        DocumentOrigin::File { path, .. } => path.to_string_lossy().into_owned(),
                         DocumentOrigin::Bundled { filename } => format!("bundled://{filename}"),
                         DocumentOrigin::Untitled { name } => format!("mem://{name}"),
                     };
@@ -1737,23 +1631,14 @@ impl ApiQueryProvider for SetModelInputProvider {
         "SetModelInput"
     }
 
-    fn execute(
-        &self,
-        world: &mut World,
-        params: &serde_json::Value,
-    ) -> ApiResponse {
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
         // Wire-format mirror of the Reflect event:
         // `{ doc: u64, name: String, value: f64 }`. `doc == 0` means
         // "active document" — same convention the event uses. We
         // accept it as `u64` over the wire and wrap into the typed
         // `DocumentId` immediately so the rest of the call site
         // doesn't think in raw integers.
-        let doc = lunco_doc::DocumentId(
-            params
-                .get("doc")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-        );
+        let doc = lunco_doc::DocumentId(params.get("doc").and_then(|v| v.as_u64()).unwrap_or(0));
         let Some(name) = params
             .get("name")
             .and_then(|v| v.as_str())
@@ -1777,12 +1662,8 @@ impl ApiQueryProvider for SetModelInputProvider {
                 let code = match e {
                     SetModelInputError::NoActiveDocument
                     | SetModelInputError::NoLinkedEntity { .. }
-                    | SetModelInputError::EntityMissingModel { .. } => {
-                        ApiErrorCode::EntityNotFound
-                    }
-                    SetModelInputError::UnknownInput { .. } => {
-                        ApiErrorCode::DeserializationError
-                    }
+                    | SetModelInputError::EntityMissingModel { .. } => ApiErrorCode::EntityNotFound,
+                    SetModelInputError::UnknownInput { .. } => ApiErrorCode::DeserializationError,
                 };
                 ApiResponse::error(code, e.message())
             }

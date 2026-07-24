@@ -93,7 +93,10 @@ pub enum WireMessage {
     /// `provide_to_main = true` — the main thread needs exactly one decoded copy,
     /// so the other workers decode for their own compiles but skip the ~173 MB
     /// transfer the main thread would just dedupe away.
-    InstallParsedMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
+    InstallParsedMslCompressed {
+        bytes: Vec<u8>,
+        provide_to_main: bool,
+    },
     /// Untar + parse the **source** `sources-*.tar.zst` bundle off the main
     /// thread and install the resulting parsed AST bundle. This is the
     /// tag-mismatch fallback: when the shipped pre-parsed bundle was built by a
@@ -106,7 +109,10 @@ pub enum WireMessage {
     /// the primary worker bincode-encodes the parsed bundle and transfers it
     /// back for the main thread's deserialize-only ingest, then both report
     /// readiness with [`WireResult::MslReady`].
-    ParseSourceMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
+    ParseSourceMslCompressed {
+        bytes: Vec<u8>,
+        provide_to_main: bool,
+    },
     /// Diagnostic round-trip — worker echoes back as a `WireResult::Log`.
     /// Used by the test bridge (`window.__lc_test_worker_ping`) to confirm
     /// the worker is alive and responding without sending an actual
@@ -135,21 +141,19 @@ pub enum WireMessage {
         source: String,
         filename: String,
         extras: Vec<(String, String)>,
-        overrides: std::collections::BTreeMap<
-            lunco_experiments::ParamPath,
-            lunco_experiments::ParamValue,
-        >,
+        overrides:
+            std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue>,
         #[serde(default)]
-        inputs: std::collections::BTreeMap<
-            lunco_experiments::ParamPath,
-            lunco_experiments::ParamValue,
-        >,
+        inputs:
+            std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue>,
         bounds: lunco_experiments::RunBounds,
     },
     /// Best-effort cancel of an in-flight Fast Run. Worker observes
     /// the flag between solver steps. v1: cancel granularity is
     /// "between steps in the worker's run loop".
-    CancelRun { run_id: lunco_experiments::ExperimentId },
+    CancelRun {
+        run_id: lunco_experiments::ExperimentId,
+    },
 }
 
 /// Index of [`WireMessage::InstallParsedMsl`] among `WireMessage`'s variants.
@@ -454,14 +458,12 @@ static RUN_SENDERS: OnceLock<
     >,
 > = OnceLock::new();
 
-fn run_senders()
-    -> &'static std::sync::Mutex<
-        std::collections::HashMap<
-            lunco_experiments::ExperimentId,
-            crossbeam_channel::Sender<lunco_experiments::RunUpdate>,
-        >,
-    >
-{
+fn run_senders() -> &'static std::sync::Mutex<
+    std::collections::HashMap<
+        lunco_experiments::ExperimentId,
+        crossbeam_channel::Sender<lunco_experiments::RunUpdate>,
+    >,
+> {
     RUN_SENDERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -477,8 +479,15 @@ pub fn register_run_sender(
     }
 }
 
-fn forward_run_update(run_id: lunco_experiments::ExperimentId, update: lunco_experiments::RunUpdate) {
-    let tx = match run_senders().lock().ok().and_then(|m| m.get(&run_id).cloned()) {
+fn forward_run_update(
+    run_id: lunco_experiments::ExperimentId,
+    update: lunco_experiments::RunUpdate,
+) {
+    let tx = match run_senders()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&run_id).cloned())
+    {
         Some(tx) => tx,
         None => {
             bevy::log::warn!("[worker_transport] RunUpdate for unknown run_id");
@@ -536,9 +545,7 @@ pub fn register_result_sender(tx_res: Sender<ModelicaResult>) -> bool {
 /// Stash the command-side sender so the dev-test JS bridge can post
 /// commands directly without going through the UI. Same handle as
 /// `ModelicaChannels.tx`. Idempotent.
-pub fn register_command_sender(
-    tx_cmd: crossbeam_channel::Sender<ModelicaCommand>,
-) -> bool {
+pub fn register_command_sender(tx_cmd: crossbeam_channel::Sender<ModelicaCommand>) -> bool {
     COMMAND_TX.set(tx_cmd).is_ok()
 }
 
@@ -566,11 +573,10 @@ pub fn is_worker_active() -> bool {
 /// Fast Runs by `run_id`. Tolerant of partial failure: as long as worker 0
 /// starts it returns `Ok`; a later worker failing just shrinks the pool.
 pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
-    let want = lunco_settings::load_section_from_disk::<
-        crate::experiments_runner::ExperimentSettings,
-    >()
-    .resolved_max_parallel()
-    .clamp(1, MAX_WORKERS);
+    let want =
+        lunco_settings::load_section_from_disk::<crate::experiments_runner::ExperimentSettings>()
+            .resolved_max_parallel()
+            .clamp(1, MAX_WORKERS);
 
     let n = {
         let mut p = pool().lock_or_recover();
@@ -664,9 +670,19 @@ fn route_wire_result(idx: usize, data: JsValue) {
             flush_pending_commands();
             flush_pending_run_fast();
         }
-        Ok(WireResult::ParseDocumentDone { doc_id, gen, ast, errors }) => {
+        Ok(WireResult::ParseDocumentDone {
+            doc_id,
+            gen,
+            ast,
+            errors,
+        }) => {
             let tx = ensure_parse_done_channel();
-            let _ = tx.send(ParseDoneEnvelope { doc_id, gen, ast, errors });
+            let _ = tx.send(ParseDoneEnvelope {
+                doc_id,
+                gen,
+                ast,
+                errors,
+            });
         }
         Ok(WireResult::RunUpdate { run_id, update }) => {
             forward_run_update(run_id, update);
@@ -792,9 +808,7 @@ fn handle_worker_error(idx: usize) {
         p.running.get(idx).copied().flatten()
     };
     if let Some(run_id) = crashed_run {
-        bevy::log::warn!(
-            "[worker_transport] failing run {run_id:?} after worker {idx} crash"
-        );
+        bevy::log::warn!("[worker_transport] failing run {run_id:?} after worker {idx} crash");
         forward_run_update(
             run_id,
             lunco_experiments::RunUpdate::Failed {
@@ -954,10 +968,7 @@ pub fn dispatch_run_fast(
         lunco_experiments::ParamPath,
         lunco_experiments::ParamValue,
     >,
-    inputs: std::collections::BTreeMap<
-        lunco_experiments::ParamPath,
-        lunco_experiments::ParamValue,
-    >,
+    inputs: std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue>,
     bounds: lunco_experiments::RunBounds,
 ) -> bool {
     // A Fast Run is the heavy work the worker pool exists for — spawn it now if
@@ -1169,7 +1180,9 @@ fn command_needs_msl(cmd: &ModelicaCommand) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn msl_installed() -> bool { true }
+fn msl_installed() -> bool {
+    true
+}
 #[cfg(target_arch = "wasm32")]
 fn msl_installed() -> bool {
     MSL_INSTALLED.with(|c| c.get())
@@ -1229,7 +1242,12 @@ pub fn dispatch_parse_to_worker(
     };
     post_msg_to(
         idx,
-        &WireMessage::ParseDocument { doc_id, gen, uri, source },
+        &WireMessage::ParseDocument {
+            doc_id,
+            gen,
+            uri,
+            source,
+        },
         "parse",
     );
     true
@@ -1280,9 +1298,7 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
 /// ~1–2 s memcpy of the 165 MB bundle on first load). With a pool we must
 /// hand the bytes to each worker, so a fresh structured-clone copy is sent
 /// per worker — the cost the extra workers pay for parallelism.
-pub fn install_msl_in_worker(
-    parsed: &[(String, rumoca_compile::parsing::StoredDefinition)],
-) {
+pub fn install_msl_in_worker(parsed: &[(String, rumoca_compile::parsing::StoredDefinition)]) {
     // CQ-213: encode straight out of the caller's slice. The old code did
     // `WireMessage::InstallParsedMsl(parsed.to_vec())` — a deep clone of the
     // full ~165 MB parsed MSL bundle whose ONLY purpose was to own the payload
@@ -1419,7 +1435,11 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
         array.copy_from(&bytes);
         let transfer = js_sys::Array::new();
         transfer.push(&array.buffer());
-        let res = p.inner.as_ref().unwrap().post_transfer(0, &array, &transfer);
+        let res = p
+            .inner
+            .as_ref()
+            .unwrap()
+            .post_transfer(0, &array, &transfer);
         match res {
             Ok(()) => {
                 p.msl[0] = MslState::Decoding;
@@ -1475,7 +1495,11 @@ pub fn parse_msl_source_in_worker(compressed: &[u8]) -> usize {
         array.copy_from(&bytes);
         let transfer = js_sys::Array::new();
         transfer.push(&array.buffer());
-        let res = p.inner.as_ref().unwrap().post_transfer(0, &array, &transfer);
+        let res = p
+            .inner
+            .as_ref()
+            .unwrap()
+            .post_transfer(0, &array, &transfer);
         match res {
             Ok(()) => {
                 p.msl[0] = MslState::Decoding;
@@ -1506,7 +1530,9 @@ pub fn parse_msl_source_in_worker(compressed: &[u8]) -> usize {
 /// it without a rebuild.
 fn worker_preload_enabled() -> bool {
     web_sys::window()
-        .and_then(|w| js_sys::Reflect::get(&w, &wasm_bindgen::JsValue::from_str("__lc_worker_preload")).ok())
+        .and_then(|w| {
+            js_sys::Reflect::get(&w, &wasm_bindgen::JsValue::from_str("__lc_worker_preload")).ok()
+        })
         .map(|v| v.is_truthy())
         .unwrap_or(false)
 }

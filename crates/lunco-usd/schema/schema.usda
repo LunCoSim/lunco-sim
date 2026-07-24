@@ -35,14 +35,12 @@
     parameter is simply an input with a constant instead of a connection. Only the
     stable contracts the engine's projectors read by name belong in here.
 
-    A PROGRAM IS A PRIM. Behaviour is not an attribute on the thing that behaves:
-    it is a [`LunCoProgram`] child prim carrying a source and typed ports, which is
-    how `UsdShade` binds a shader (`info:implementationSource` + `info:sourceAsset`
-    + `inputs:`/`outputs:`) and how OmniGraph binds a compute node. Role is never
-    declared, because it cannot be: the same `.py` is a plant in one prim and a
-    script in the next, and one program can both solve and react. What a program
-    DOES is derived from what it declares — ports make it part of the port graph,
-    its extension picks the engine that runs it.
+    A PROGRAM IS AN APPLIED CAPABILITY. Apply `LunCoProgramAPI` directly to the
+    physical prim when the program is intrinsic. For a separable behaviour, apply it
+    to an ordinary `Scope` child, so the program composes and can be removed without
+    changing the owner. The API carries the standard UsdShade-style implementation
+    properties and typed ports. Role is inferred from the source and public interface,
+    never declared separately.
 
     EXTERNAL FILES ARE `asset`, ALWAYS. A path held in a `string` is inert: USD's
     resolver cannot see it, and nothing that walks a layer for the files a scene
@@ -116,7 +114,7 @@ class LunCoPolicy "LunCoPolicy" (
         per-op edit that syncs and converges like any other doc op, so it is the form
         for live/dynamic policy editing.
 
-        `UsdShade`'s own property name, as on `LunCoProgram`: a policy is a pluggable
+        `UsdShade`'s own property name, as on `LunCoProgramAPI`: a policy is a pluggable
         implementation behind a named seam, which is the same shape of thing a shader
         is. For a file-backed policy author `info:sourceAsset` instead; inline wins
         when both are present."""
@@ -552,20 +550,17 @@ class "LunCoTerrainEditAPI" (
     )
 }
 
-class LunCoProgram "LunCoProgram" (
-    inherits = </Typed>
-    doc = """ONE program bound to the prim that owns it — a Modelica plant, a rhai
-    controller, a Python model, a behaviour tree. It is a PRIM, not an attribute on
-    the thing it drives, for the same reason a `UsdShade` shader is a prim and an
-    OmniGraph node is a prim: it has typed ports, those ports CONNECT, and a thing
-    with ports and connections is a node in a graph — not a string on its neighbour.
-
-    Being a prim is what makes a program composable. A vessel carries as many as it
-    needs (a flight-control model AND a supervisory script AND a tree), each with its
-    own ports and its own parameters, none of them able to collide with the others'.
-    A program arrives through a `references` arc like any other component, and a scene
-    that does not reference it does not get it: an airframe with no guidance program
-    is an airframe that flies nowhere on its own.
+class "LunCoProgramAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """ONE program capability applied to a prim — a Modelica plant, a rhai
+    controller, a Python model, or a behaviour tree. Apply it directly to a physical
+    prim when the program is intrinsic. For separable behaviour, apply it to an
+    ordinary `Scope` child; the scope supplies namespace and composition identity
+    while this API supplies the program contract. No custom concrete prim type is
+    needed.
 
     ROLE IS NEVER DECLARED, because it cannot be. The same `.py` is a plant on one prim
     and a script on the next; a rhai program can integrate state as readily as it can
@@ -578,15 +573,12 @@ class LunCoProgram "LunCoProgram" (
     PARAMETERS ARE PORTS. A gain is `float inputs:kv = 1.2` — an input with a constant
     instead of a connection. Wire it later and nothing about the program changes.
 
-    A PRIM THAT *IS* A PROGRAM just authors these properties on itself; there is no
-    separate "apply" schema, because the properties are the whole mechanism.
-
-    Which form to use is not a style question, it is whether the program is separable
+    Which placement to use is not a style question, it is whether the program is separable
     from the thing. A vessel's flight-control system is its airframe: it is what the
     stick talks to, its `inputs:` ARE the vessel's control surface, and a lander
     without it is not a lander with no autopilot — it is a lander with no engine. So
     those properties go ON the vessel. A guidance law, a supervisory script, a patrol
-    tree are bolted on, and each is a `LunCoProgram` CHILD arriving on its own
+    tree are bolted on, and each is a `Scope` child applying `LunCoProgramAPI` and arriving on its own
     `references` arc: delete the prim and the behaviour is gone, which is exactly what
     you want for an autopilot and must never have for an engine."""
 )
@@ -619,8 +611,8 @@ class LunCoProgram "LunCoProgram" (
         visualization is registering a name, not editing a schema."""
     )
     uniform asset info:sourceAsset = @@ (
-        doc = """The program's file — `@models/Lander.mo@`, `@scenarios/rover_autopilot.rhai@`,
-        `@behaviors/rover_patrol.xml@`.
+        doc = """The program's file — `@models/Lander.mo@`,
+        `@behaviors/rover_patrol.btxml@`.
 
         `asset`, never `string`. Only an `asset` is visible to USD's resolver and to
         anything that walks a layer for the files a scene depends on — the reference
@@ -658,30 +650,22 @@ class LunCoProgram "LunCoProgram" (
     )
 }
 
-class LunCoPortEvent "LunCoPortEvent" (
+class LunCoEvent "LunCoEvent" (
     inherits = </Typed>
-    doc = """A threshold crossing on one port, published as a named event — the
-    discrete edge of a continuous signal (`m_prop` falling below 200 becomes
-    `lander_low_fuel`).
-
-    A child prim of the program whose port it watches, one prim per rule, because a
-    rule is a thing with parts: a port, a comparison, a threshold, a name. Packed into
-    a string those parts are invisible to the type system — nothing validates the
-    comparison, nothing checks the port exists, and no other DCC can read any of it."""
+    doc = """A connected discrete signal projected onto the engine's TelemetryEvent
+    bus. The physical condition belongs to the producing model; this prim only binds
+    that output to an engine event name. One prim per event."""
 )
 {
-    uniform token lunco:event:port = "" (
-        doc = "The watched port, by name, on the owning program."
+    float inputs:trigger = 0 (
+        doc = "A 0/1 discrete signal connected from the producing model output."
     )
-    uniform token lunco:event:op = "lt" (
-        doc = "The comparison that fires the event."
-        allowedTokens = ["lt", "le", "gt", "ge"]
+    uniform token lunco:event:name = "" (
+        doc = "The TelemetryEvent name emitted on the trigger's rising edge."
     )
-    double lunco:event:threshold = 0 (
-        doc = "The value the port is compared against."
-    )
-    uniform token lunco:event:emit = "" (
-        doc = "The event published on the crossing."
+    uniform token lunco:event:severity = "info" (
+        allowedTokens = ["debug", "info", "warning", "error", "critical"]
+        doc = "Telemetry severity."
     )
 }
 
@@ -830,7 +814,7 @@ class "LunCoMotorAPI" (
     integrator can use the extra fidelity — the friction cone at the tire clips the
     torque long before the curve's shape matters. A motor whose real curve is NOT linear
     (a stepper, a saturating traction motor at field weakening) is modelled by giving
-    this prim a `LunCoProgram` child with a `.mo` that computes torque; the program wins
+    this prim a `Scope` child applying `LunCoProgramAPI` with a `.mo` that computes torque; the program wins
     over the scalars, exactly as a wired port wins over a constant.
 
     WHAT THE SCALARS DO NOT COVER GOES IN A PROGRAM. Thermal derating, battery sag,
@@ -872,18 +856,6 @@ class "LunCoMotorAPI" (
         to the stall torque it can hold for seconds. Not a limit the physics step
         enforces — it is the threshold a thermal program compares against, and the
         number a mission planner sizes a traverse with. Always ≤ `stallTorque`."""
-    )
-    float lunco:motor:efficiency (
-        customData = {
-            double min = 0
-            double max = 1
-        }
-        doc = """Electrical-to-mechanical conversion efficiency at the rated point,
-        0..1. Sets both the power draw (P_in = τ·ω / efficiency) and the waste heat
-        (P_heat = P_in · (1 − efficiency)) — one number, because they are the same
-        number seen from two sides. A motor that models efficiency as a function of load
-        does it in a `LunCoProgram`; this is the constant that a rover with no thermal
-        model still gets a correct-order power draw from."""
     )
     float lunco:motor:rotorInertia (
         customData = {

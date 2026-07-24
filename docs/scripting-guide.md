@@ -123,7 +123,7 @@ program is a prim, not an attribute — delete the prim and the behaviour goes w
 
 ```usda
 def Xform "Rover_01" {
-    def LunCoProgram "Mission" {
+    def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @scenarios/my_rover_mission.rhai@
         # …or author the source in place:
         # uniform string info:sourceCode = '''<rhai source>'''
@@ -376,7 +376,7 @@ Available nodes include:
 
 ## I. Persistence
 
-- **Per-entity scenarios → USD (load):** a script is a `LunCoProgram` child prim, and it
+- **Per-entity scenarios → USD (load):** a script is a `LunCoProgramAPI` child prim, and it
   auto-attaches and runs when the prim is spawned:
   - `uniform asset info:sourceAsset = @scenarios/foo.rhai@` — the file, resolved
     like every other asset the scene depends on.
@@ -387,13 +387,10 @@ Available nodes include:
     read in-script by `param(me, "<key>", default)`.
 - **Tool libraries → files:** `<twin>/tools/*.rhai` (see [§E](#e-tools-shared-libraries)).
 - **Timelines → files:** `RegisterTimeline { name, timeline }` stores to `<twin>/timelines/<name>.json`; reloaded on Twin open. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`.
-- **Port-threshold events → USD:** author one `def LunCoPortEvent` child prim per rule on
-  the program whose port it watches, and a telemetry event fires automatically when the
-  port crosses the threshold. Each rule is four typed properties: `lunco:event:port`
-  (token), `lunco:event:op` (token — `lt` \| `le` \| `gt` \| `ge`), `lunco:event:threshold`
-  (double), `lunco:event:emit` (token). Example — the lander's `LowFuel` prim watches
-  `m_prop` with `lt` 200 and emits `lander_low_fuel`; its `Depleted` prim watches the same
-  port with `le` 0.5 and emits `lander_depleted`. Scripts receive these via `on_event`.
+- **Model events → USD:** express the condition in Modelica as a 0/1 output, then connect
+  it to a `def LunCoEvent` prim through `inputs:trigger.connect`. The prim supplies only
+  the bus-facing `lunco:event:name` and `lunco:event:severity`; scripts receive its rising
+  edges through `on_event`. Physical thresholds and hysteresis stay in the model.
 
 ## J. Introspection & discovery
 

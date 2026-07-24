@@ -19,15 +19,15 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 
 | Capability | Mechanism | Status |
 |---|---|---|
-| One program per prim | a `LunCoProgram` prim (or `info:*` authored in place) + `info:sourceAsset` → `SimComponent`; the engine follows the extension | ✅ |
+| One program per prim | a `LunCoProgramAPI` prim (or `info:*` authored in place) + `info:sourceAsset` → `SimComponent`; the engine follows the extension | ✅ |
 | Wiring (SSP Connection) | a native USD connection on the consumer — `inputs:x.connect = </Other.outputs:y>` → `SimConnection`; same form within a prim and across prims | ✅ |
 | Gravity from environment | env publishes `gravity_accel` output (`GRAVITY_SOURCE_CONNECTOR`); the model connects `inputs:g` to it | ✅ |
-| Many scripts in one world | each `LunCoProgram` prim → own `EmbeddedScenarioSource` → independent rhai | ✅ |
+| Many scripts in one world | each `LunCoProgramAPI` prim → own `EmbeddedScenarioSource` → independent rhai | ✅ |
 | Task state machines | rhai `seq`/`par_all`/`par_race`/`repeat` sequencer + `fn task(me)` | ✅ |
 | Connector/`connect()` Modelica | rumoca flattens `RC_Circuit.mo`, `CascadedRCFilter.mo` | ✅ (verify MSL `LimPID` specifically) |
 | Live input retune (no recompile) | port write changes `input Real` next step | ✅ (must be a model **input**, not a `parameter`) |
 | Named trigger zones (geofence events) | `lunco:triggerZone="name"` → overlap-only Sensor → `enter:/exit:<name>` events | ✅ |
-| Threshold events on a model port | one `def LunCoPortEvent` child prim per rule (`lunco:event:port`/`op`/`threshold`/`emit`) → edge-detect a model output in native code → event | ✅ (rumoca-safe: edge logic out of the model) |
+| Model events | Modelica condition output → `LunCoEvent.inputs:trigger.connect` → named telemetry event on its rising edge | ✅ (condition and hysteresis remain solver-owned) |
 | Per-instance program config | one typed attribute per key on the program prim — `custom float lunco:param:wmax = 1.05` → rhai `param(me,k,default)` | ✅ (the right answer instead of `name(me)` matching) |
 | Emitter identity on events | `TelemetryEvent.source` (sensor/script gid); `wait_for_from(name, src)`, `evt.source` | ✅ |
 | On-screen notifications | `ShowNotification` command + rhai `notify`/`notify_kind` + ui overlay | ✅ |
@@ -44,7 +44,7 @@ change** — it is the SSP one-program-prim-per-domain pattern below.
 ## Decision 1 — Multi-domain vehicle = one program prim per domain + connections (SSP)
 
 A program is a PRIM with typed ports, and ports connect — the same shape `UsdShade`
-gives a shader. Model each physical domain as its **own** `LunCoProgram` under the
+gives a shader. Model each physical domain as its **own** `LunCoProgramAPI` under the
 vehicle Xform, each naming its own `.mo`, wired through the port surface. This *is* the
 FMI/SSP system structure and needs nothing new.
 
@@ -53,7 +53,7 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)        # the rigid body (avian port
 {
     float inputs:force_local_y.connect = </Lander/GNC.outputs:thrust>   # GNC thrust → body
 
-    def LunCoProgram "GNC" {
+    def Scope "GNC" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @models/LanderGNC.mo@
         uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
         float inputs:altitude.connect      = </Lander.outputs:height>
@@ -61,11 +61,11 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)        # the rigid body (avian port
         float inputs:g.connect             = </Environment.outputs:gravity_accel>
         float inputs:engine_enable.connect = </Lander/Power.outputs:soc>
     }
-    def LunCoProgram "Power" {
+    def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @models/Battery.mo@
         float inputs:load.connect = </Lander/GNC.outputs:thrust>
     }
-    def LunCoProgram "Therm" {
+    def Scope "Therm" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @models/ThermalNode.mo@
     }
 }
@@ -127,7 +127,7 @@ def Scope "Scenario" ( kind = "component" )
 {
     custom string lunco:scenario = "rover-surface-ops"
 
-    def LunCoProgram "Mission" {                                     # orchestration
+    def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {                                     # orchestration
         uniform asset info:sourceAsset = @scenarios/rover_surface_ops.rhai@
         # …or author the state machine in place:
         # uniform string info:sourceCode = """ … """

@@ -2444,7 +2444,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SaveScenario`
 
- Save a live-edited rhai scenario's current source back onto its `LunCoProgram`
+ Save a live-edited rhai scenario's current source back onto its `LunCoProgramAPI`
  prim's `info:sourceCode` — the missing half of scenario authoring.
 
  The LOAD path reads a program prim's source into a running scenario; until

@@ -74,6 +74,7 @@ fn task(me) {
         once(|m| {
             set_camera("RoverCam");
             emit("rover_deployed");        // the rover's autopilot engages on this
+            cmd("EngageAutopilot", #{ vessel: find("/LanderTest/SkidRover") });
             notify_kind("Rover deployed - driving the survey course.", "success");
         }),
 

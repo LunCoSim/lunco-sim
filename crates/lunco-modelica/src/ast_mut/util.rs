@@ -1,10 +1,10 @@
 //! AST and text utility helpers.
 
-use std::sync::Arc;
-use rumoca_compile::parsing::ast::{ClassDef, ComponentReference, Expression, StoredDefinition};
-use rumoca_compile::parsing::Token;
 use super::errors::AstMutError;
 use crate::pretty;
+use rumoca_compile::parsing::ast::{ClassDef, ComponentReference, Expression, StoredDefinition};
+use rumoca_compile::parsing::Token;
+use std::sync::Arc;
 
 /// Resolve a dotted-qualified class path against a parsed `StoredDefinition`.
 ///
@@ -27,7 +27,9 @@ pub fn lookup_class_mut<'a>(
     let local_path: String =
         crate::diagram::strip_within_prefix(qualified, sd.within.as_ref()).to_string();
     let mut parts = local_path.split('.');
-    let head = parts.next().expect("split always yields at least one piece");
+    let head = parts
+        .next()
+        .expect("split always yields at least one piece");
     let mut current = sd
         .classes
         .get_mut(head)
@@ -60,10 +62,7 @@ pub fn expression_is_line_call(e: &Expression) -> bool {
 }
 
 /// True when the reference is a single-segment ident equal to `name`.
-pub fn ref_is_simple(
-    cref: &ComponentReference,
-    name: &str,
-) -> bool {
+pub fn ref_is_simple(cref: &ComponentReference, name: &str) -> bool {
     cref.parts.len() == 1 && &*cref.parts[0].ident.text == name
 }
 
@@ -76,9 +75,7 @@ pub fn named_arg_name(expr: &Expression) -> Option<&str> {
 }
 
 /// From a freshly-parsed annotation Vec `[Line(points={...})]`, pluck the `points=` NamedArgument.
-pub fn extract_points_named_argument(
-    annotation: &[Expression],
-) -> Option<Expression> {
+pub fn extract_points_named_argument(annotation: &[Expression]) -> Option<Expression> {
     for e in annotation {
         if let Expression::FunctionCall { comp, args, .. } = e {
             if !ref_is_simple(comp, "Line") {
@@ -95,10 +92,7 @@ pub fn extract_points_named_argument(
 }
 
 /// Match a parsed `ComponentReference` against a `pretty::PortRef`.
-pub fn matches_port_ref(
-    cref: &ComponentReference,
-    port: &pretty::PortRef,
-) -> bool {
+pub fn matches_port_ref(cref: &ComponentReference, port: &pretty::PortRef) -> bool {
     if port.port.is_empty() {
         cref.parts.len() == 1 && &*cref.parts[0].ident.text == port.component
     } else {
@@ -137,9 +131,7 @@ pub fn graphic_entry_arg<'a>(expr: &'a Expression, key: &str) -> Option<&'a Expr
         Expression::ClassModification { modifications, .. } => {
             for m in modifications {
                 if let Expression::Modification { target, value, .. } = m {
-                    if target.parts.len() == 1
-                        && &*target.parts[0].ident.text == key
-                    {
+                    if target.parts.len() == 1 && &*target.parts[0].ident.text == key {
                         return Some(value.as_ref());
                     }
                 }
@@ -210,7 +202,10 @@ pub fn read_text_spec(expr: &Expression) -> TextSpec {
         text: String::new(),
     };
     if let Some(v) = graphic_entry_arg(expr, "extent") {
-        if let Expression::Array { elements: outer, .. } = v {
+        if let Expression::Array {
+            elements: outer, ..
+        } = v
+        {
             if outer.len() == 2 {
                 if let (Some((x1, y1)), Some((x2, y2))) =
                     (point_pair(&outer[0]), point_pair(&outer[1]))

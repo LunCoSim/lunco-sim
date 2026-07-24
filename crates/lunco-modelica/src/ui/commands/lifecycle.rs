@@ -2,18 +2,19 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_core::{on_command, Command};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{CloseDocument, DocumentSaved};
 use lunco_workbench::file_ops::{NewDocument, OpenFile};
-use lunco_core::{Command, on_command};
 use std::sync::Arc;
 
 use crate::document::duplicate::{
     build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
-use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
-use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
+use crate::model_tabs::ModelTabs;
 use crate::package_tree::PackageTreeCache;
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::MODEL_VIEW_KIND;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -162,7 +163,11 @@ pub struct AppCloseFlow {
 /// `render_close_dialogs` system pops one Save / Don't save / Cancel
 /// modal per tab, just like Dymola.
 pub fn request_app_close(world: &mut World) {
-    if world.get_resource::<AppCloseFlow>().map(|f| f.armed).unwrap_or(false) {
+    if world
+        .get_resource::<AppCloseFlow>()
+        .map(|f| f.armed)
+        .unwrap_or(false)
+    {
         // Already in progress — re-clicking X just lets the existing
         // sequential prompt continue. Avoid re-queueing tabs.
         return;
@@ -174,8 +179,7 @@ pub fn request_app_close(world: &mut World) {
     // docs are automatically picked up by the close prompt with no
     // change here.
     let dirty_tabs: Vec<(DocumentId, u64)> = {
-        let Some(unsaved) = world.get_resource::<lunco_workbench::UnsavedDocs>()
-        else {
+        let Some(unsaved) = world.get_resource::<lunco_workbench::UnsavedDocs>() else {
             fire_app_exit(world);
             return;
         };
@@ -228,9 +232,7 @@ pub fn request_app_close(world: &mut World) {
     // Push tabs into the workbench's per-tab close queue. The existing
     // `drain_pending_tab_closes` system will detect dirty docs and
     // enqueue Save/Don't save/Cancel modals through `render_close_dialogs`.
-    if let Some(mut pending) =
-        world.get_resource_mut::<lunco_workbench::PendingTabCloses>()
-    {
+    if let Some(mut pending) = world.get_resource_mut::<lunco_workbench::PendingTabCloses>() {
         for (_doc, tab) in dirty_tabs {
             pending.push(lunco_workbench::TabId::Instance {
                 kind: MODEL_VIEW_KIND,
@@ -280,9 +282,7 @@ pub(crate) fn arm_shutdown_watchdog() {
 /// thread stuck inside a rumoca compile (no cancel hook there) — that's what
 /// the watchdog is for.
 pub(crate) fn cancel_inflight_runs(world: &World) {
-    if let Some(pending) =
-        world.get_resource::<crate::experiments_runner::PendingHandles>()
-    {
+    if let Some(pending) = world.get_resource::<crate::experiments_runner::PendingHandles>() {
         if !pending.0.is_empty() {
             bevy::log::info!(
                 "[AppClose] cancelling {} in-flight run(s) before exit",
@@ -455,10 +455,8 @@ pub fn on_create_new_scratch_model(
 
     let source = req_source.unwrap_or_else(|| format!("model {name}\nend {name};\n"));
     let mem_id = format!("mem://{name}");
-    let doc_id = registry.allocate_with_origin(
-        source.clone(),
-        DocumentOrigin::untitled(name.clone()),
-    );
+    let doc_id =
+        registry.allocate_with_origin(source.clone(), DocumentOrigin::untitled(name.clone()));
 
     cache.in_memory_models.retain(|e| e.id != mem_id);
     cache
@@ -518,7 +516,10 @@ pub fn on_duplicate_model_from_read_only(
             .strict_ast()
             .as_ref()
             .and_then(|ast| ast.classes.iter().next().map(|(n, _)| n.clone()))
-            .or_else(|| fqn.as_ref().and_then(|q| q.split('.').next().map(String::from)))
+            .or_else(|| {
+                fqn.as_ref()
+                    .and_then(|q| q.split('.').next().map(String::from))
+            })
             .unwrap_or_else(|| doc.origin().display_name());
         // Target qualified name = drilled class if drilled, else the
         // top-level class. `build_duplicate_source` pops its last segment
@@ -613,7 +614,9 @@ pub fn on_duplicate_active_doc(trigger: On<DuplicateActiveDoc>, mut commands: Co
             bevy::log::warn!("[DuplicateActiveDoc] no active document");
             return;
         };
-        world.commands().trigger(DuplicateModelFromReadOnly { source_doc: doc });
+        world
+            .commands()
+            .trigger(DuplicateModelFromReadOnly { source_doc: doc });
     });
 }
 
@@ -651,8 +654,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         .reserve_id();
     let mem_id = format!("mem://{name}");
     {
-        let mut cache = world
-            .resource_mut::<PackageTreeCache>();
+        let mut cache = world.resource_mut::<PackageTreeCache>();
         cache.in_memory_models.retain(|e| e.id != mem_id);
         cache
             .in_memory_models
@@ -663,8 +665,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             });
     }
     let tab_id = {
-        let mut model_tabs = world
-            .resource_mut::<ModelTabs>();
+        let mut model_tabs = world.resource_mut::<ModelTabs>();
         let tab_id = model_tabs.ensure_for(doc_id, None);
         if let Some(tab) = model_tabs.get_mut(tab_id) {
             tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
@@ -689,8 +690,10 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
     let origin_short_for_task = origin_short.clone();
     let name_for_task = name.clone();
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-        let Some(crate::ui::class_source::ResolvedClassSource { source: source_full, origin_path }) =
-            resolved
+        let Some(crate::ui::class_source::ResolvedClassSource {
+            source: source_full,
+            origin_path,
+        }) = resolved
         else {
             return crate::document::ModelicaDocument::with_origin(
                 doc_id,
@@ -772,9 +775,7 @@ pub fn on_open_in_new_view(trigger: On<OpenInNewView>, mut commands: Commands) {
         let drilled = world
             .get_resource::<ModelTabs>()
             .and_then(|t| t.drilled_class_for_doc(doc));
-        let new_id = world
-            .resource_mut::<ModelTabs>()
-            .open_new(doc, drilled);
+        let new_id = world.resource_mut::<ModelTabs>().open_new(doc, drilled);
         world.commands().trigger(lunco_workbench::OpenTab {
             kind: MODEL_VIEW_KIND,
             instance: new_id,
@@ -869,8 +870,9 @@ struct OpenFileResult {
 
 static OPEN_FILE_RESULT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<OpenFileResult>> =
     std::sync::OnceLock::new();
-static OPEN_FILE_RESULT_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<OpenFileResult>>> =
-    std::sync::OnceLock::new();
+static OPEN_FILE_RESULT_RX: std::sync::OnceLock<
+    std::sync::Mutex<std::sync::mpsc::Receiver<OpenFileResult>>,
+> = std::sync::OnceLock::new();
 
 /// Drain pending `OpenFile` reads and install them as documents.
 /// Runs each tick; cheap when the queue is empty.
@@ -913,9 +915,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
         // entity-link map is decomposed out of the shared core.
         let doc_id = match registry.find_by_path(&path) {
             Some(doc) => {
-                let dirty = registry
-                    .host(doc)
-                    .is_some_and(|h| h.document().is_dirty());
+                let dirty = registry.host(doc).is_some_and(|h| h.document().is_dirty());
                 if dirty {
                     // Unsaved edits outrank disk — reloading would destroy work
                     // undo cannot recover. The user keeps theirs; disk and memory
@@ -975,9 +975,7 @@ pub fn focus_in_memory_doc(world: &mut World, name: &str) {
         );
         return;
     };
-    let tab_id = world
-        .resource_mut::<ModelTabs>()
-        .ensure_for(doc_id, None);
+    let tab_id = world.resource_mut::<ModelTabs>().ensure_for(doc_id, None);
     world.commands().trigger(lunco_workbench::OpenTab {
         kind: MODEL_VIEW_KIND,
         instance: tab_id,
@@ -997,16 +995,16 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
         return;
     }
 
-    let looks_like_qualified_name = uri.contains('.')
-        && !uri.contains('/')
-        && !uri.contains('\\');
+    let looks_like_qualified_name = uri.contains('.') && !uri.contains('/') && !uri.contains('\\');
     if looks_like_qualified_name {
         // A bare qualified name (e.g. `Modelica.Blocks.Examples.PID_Controller`)
         // is an "open as my editable copy" request — dispatch as a duplicate
         // with an empty name so the handler derives the default `<short>Copy`.
         commands.trigger(OpenClass {
             qualified: uri,
-            action: ClassAction::Duplicate { name: String::new() },
+            action: ClassAction::Duplicate {
+                name: String::new(),
+            },
         });
         return;
     }
@@ -1106,10 +1104,7 @@ pub fn finish_close_after_save(
         for tab_id in tab_ids {
             close_model_tab(world, tab_id);
         }
-        let last_gone = world
-            .resource::<ModelTabs>()
-            .count_for_doc(doc)
-            == 0;
+        let last_gone = world.resource::<ModelTabs>().count_for_doc(doc) == 0;
         if last_gone {
             world.commands().trigger(CloseDocument { doc });
         }
@@ -1147,17 +1142,13 @@ pub fn resolve_tab_close_scopes(
     for (anchor, scope) in scopes.requests.drain(..) {
         let anchor_pos = ordered.iter().position(|&i| i == anchor);
         let targets: Vec<u64> = match scope {
-            TabCloseScope::Others => {
-                ordered.iter().copied().filter(|&i| i != anchor).collect()
-            }
+            TabCloseScope::Others => ordered.iter().copied().filter(|&i| i != anchor).collect(),
             TabCloseScope::Right => match anchor_pos {
                 Some(p) => ordered[p + 1..].to_vec(),
                 None => Vec::new(),
             },
             TabCloseScope::All => ordered.clone(),
-            TabCloseScope::Saved => {
-                ordered.iter().copied().filter(|&i| is_clean(i)).collect()
-            }
+            TabCloseScope::Saved => ordered.iter().copied().filter(|&i| is_clean(i)).collect(),
         };
         for instance in targets {
             pending.push(lunco_workbench::TabId::Instance {
@@ -1189,8 +1180,7 @@ pub fn drain_pending_tab_closes(
         {
             commands.trigger(lunco_workbench::CloseTab { kind, instance });
             commands.queue(move |world: &mut World| {
-                if let Some(mut reg) =
-                    world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
+                if let Some(mut reg) = world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
                 {
                     reg.remove(lunco_viz::viz::VizId(instance));
                 }
@@ -1212,7 +1202,11 @@ pub fn drain_pending_tab_closes(
             })
             .unwrap_or((false, false));
         if is_dirty && !is_read_only {
-            if !dialogs.pending.iter().any(|(d, t)| *d == doc && *t == instance) {
+            if !dialogs
+                .pending
+                .iter()
+                .any(|(d, t)| *d == doc && *t == instance)
+            {
                 dialogs.pending.push((doc, instance));
             }
         } else {
@@ -1331,20 +1325,16 @@ pub fn render_close_dialogs(
                 let tab = originating_tab;
                 commands.queue(move |world: &mut World| {
                     close_model_tab(world, tab);
-                    let last_gone = world
-                        .resource::<ModelTabs>()
-                        .count_for_doc(doc)
-                        == 0;
+                    let last_gone = world.resource::<ModelTabs>().count_for_doc(doc) == 0;
                     if last_gone {
                         world.commands().trigger(CloseDocument { doc });
                     }
                 });
             }
-            DialogAction::Cancel => { }
+            DialogAction::Cancel => {}
         }
     }
-    let alive: std::collections::HashSet<(DocumentId, u64)> =
-        survivors.iter().copied().collect();
+    let alive: std::collections::HashSet<(DocumentId, u64)> = survivors.iter().copied().collect();
     let stale: Vec<((DocumentId, u64), lunco_ui::modal::ModalId)> = dialogs
         .requested
         .iter()
@@ -1359,7 +1349,10 @@ pub fn render_close_dialogs(
 }
 
 #[on_command(NewDocument)]
-pub fn on_new_modelica_document(trigger: On<lunco_workbench::file_ops::NewDocument>, mut commands: Commands) {
+pub fn on_new_modelica_document(
+    trigger: On<lunco_workbench::file_ops::NewDocument>,
+    mut commands: Commands,
+) {
     if trigger.event().kind != "modelica" {
         return;
     }

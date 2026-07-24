@@ -155,7 +155,10 @@ impl Default for CoordinateSystem {
     fn default() -> Self {
         Self {
             extent: Extent {
-                p1: Point { x: -100.0, y: -100.0 },
+                p1: Point {
+                    x: -100.0,
+                    y: -100.0,
+                },
                 p2: Point { x: 100.0, y: 100.0 },
             },
         }

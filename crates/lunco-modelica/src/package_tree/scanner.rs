@@ -1,10 +1,10 @@
 //! Backend scanning logic for the Package Browser.
 
+use super::cache::TwinState;
+use super::types::{PackageNode, TwinNode};
+use crate::state::ModelLibrary;
 use bevy::prelude::*;
 use std::path::{Path, PathBuf};
-use crate::state::ModelLibrary;
-use super::types::{PackageNode, TwinNode};
-use super::cache::TwinState;
 
 /// Canonical tree-node id for an MSL / third-party class, keyed by its dotted
 /// qualified name (`Modelica.Blocks.Examples.PID_Controller`).
@@ -26,14 +26,14 @@ pub(crate) fn msl_tree_id(qualified: &str) -> String {
 pub fn scan_twin_folder(root: PathBuf) -> TwinState {
     let root_node = TwinNode {
         path: root.clone(),
-        name: root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+        name: root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         children: scan_twin_children(&root),
         is_modelica: false,
     };
-    TwinState {
-        root,
-        root_node,
-    }
+    TwinState { root, root_node }
 }
 
 fn scan_twin_children(dir: &Path) -> Vec<TwinNode> {
@@ -54,7 +54,7 @@ fn scan_twin_children(dir: &Path) -> Vec<TwinNode> {
                 .and_then(|e| e.to_str())
                 .map(|e| e.eq_ignore_ascii_case("mo"))
                 .unwrap_or(false);
-        
+
         if is_dir {
             let children = scan_twin_children(&path);
             out.push(TwinNode {
@@ -74,7 +74,9 @@ fn scan_twin_children(dir: &Path) -> Vec<TwinNode> {
         }
     }
     out.sort_by(|a, b| {
-        b.is_modelica.cmp(&a.is_modelica).then_with(|| a.name.cmp(&b.name))
+        b.is_modelica
+            .cmp(&a.is_modelica)
+            .then_with(|| a.name.cmp(&b.name))
     });
     out
 }
@@ -227,7 +229,9 @@ pub(crate) fn scan_msl_dir_native(dir: &Path, package_path: String) -> Vec<Packa
             let name = entry.file_name().to_string_lossy().to_string();
 
             if path.is_dir() {
-                if name.starts_with('.') || name == "__MACOSX" { continue; }
+                if name.starts_with('.') || name == "__MACOSX" {
+                    continue;
+                }
                 let sub_path = format!("{}.{}", package_path, name);
                 let id = msl_tree_id(&sub_path);
                 results.push(PackageNode::Category {
@@ -252,10 +256,8 @@ pub(crate) fn scan_msl_dir_native(dir: &Path, package_path: String) -> Vec<Packa
     let pkg_mo = dir.join("package.mo");
     if pkg_mo.is_file() {
         if let Ok(source) = std::fs::read_to_string(&pkg_mo) {
-            let ast = rumoca_phase_parse::parse_to_recovered_ast(
-                &source,
-                &pkg_mo.display().to_string(),
-            );
+            let ast =
+                rumoca_phase_parse::parse_to_recovered_ast(&source, &pkg_mo.display().to_string());
             if let Some((_, top_class)) = ast.classes.iter().next() {
                 let existing_names: std::collections::HashSet<String> =
                     results.iter().map(|n| n.name().to_string()).collect();
@@ -303,7 +305,13 @@ enum SortGroup {
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 enum LeafKind {
-    Model, Block, Connector, Record, Function, Type, Other,
+    Model,
+    Block,
+    Connector,
+    Record,
+    Function,
+    Type,
+    Other,
 }
 
 impl LeafKind {
@@ -341,9 +349,13 @@ fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> 
         library: ModelLibrary::MSL,
         class_kind: None,
     };
-    let Ok(source) = std::fs::read_to_string(path) else { return leaf_unknown(); };
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return leaf_unknown();
+    };
     let ast = rumoca_phase_parse::parse_to_recovered_ast(&source, &path.display().to_string());
-    let Some((_, top_class)) = ast.classes.iter().next() else { return leaf_unknown(); };
+    let Some((_, top_class)) = ast.classes.iter().next() else {
+        return leaf_unknown();
+    };
     class_def_to_node(path, qualified, display_name, top_class)
 }
 
@@ -404,7 +416,9 @@ pub fn discover_third_party_libs() -> Vec<(String, String)> {
 
 fn scan_third_party_libs() -> Vec<(String, String)> {
     let cache = lunco_assets::cache_dir();
-    let Ok(entries) = std::fs::read_dir(&cache) else { return Vec::new(); };
+    let Ok(entries) = std::fs::read_dir(&cache) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -415,7 +429,9 @@ fn scan_third_party_libs() -> Vec<(String, String)> {
         if subdir == "msl" || subdir.starts_with('.') {
             continue;
         }
-        let Ok(inner) = std::fs::read_dir(&path) else { continue; };
+        let Ok(inner) = std::fs::read_dir(&path) else {
+            continue;
+        };
         for inner_entry in inner.flatten() {
             let inner_path = inner_entry.path();
             if inner_path.is_dir() && inner_path.join("package.mo").is_file() {

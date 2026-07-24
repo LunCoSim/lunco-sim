@@ -312,22 +312,21 @@ A bare `"scripting/lib/shots"` would anchor to the importer's own root and look 
 
 ## 9. Driving a recording from a scene
 
-A recording scene is self-contained: it carries its program as a `LunCoProgram` child prim
+A recording scene is self-contained: it carries its program as a `LunCoProgramAPI` child prim
 and needs no external control loop (see
 [scripting-guide.md § Persist it in the scene](./scripting-guide.md#persist-it-in-the-scene)).
 
 ```usda
 def Xform "Vehicle" ( prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover> )
 {
-    def LunCoProgram "Recorder"
-    {
+    def Scope "Recorder" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @twin://my_episode/my_episode.rhai@
     }
 }
 ```
 
 > [!CAUTION]
-> **Autoloading means loading the scene starts the recording.** A `LunCoProgram` whose
+> **Autoloading means loading the scene starts the recording.** A `LunCoProgramAPI` whose
 > script calls `StartOfflineRecording` begins capturing — and overwriting the output
 > directory — the moment the stage loads. Opening such a scene to inspect lighting or
 > framing destroys the existing capture. To inspect without recording, load a

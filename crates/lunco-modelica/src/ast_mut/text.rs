@@ -243,7 +243,8 @@ pub fn arg_head(source: &str, arg: Range<usize>) -> &str {
 
 /// Index into `args` of the argument whose head identifier is `name`.
 pub fn find_arg(source: &str, args: &[Range<usize>], name: &str) -> Option<usize> {
-    args.iter().position(|r| arg_head(source, r.clone()) == name)
+    args.iter()
+        .position(|r| arg_head(source, r.clone()) == name)
 }
 
 /// Declaration prefixes that sit *before* the type name and so belong to the
@@ -430,10 +431,7 @@ pub fn class_end_keyword(source: &str, class: &ClassDef) -> Option<usize> {
 /// Distinguished from the `annotation(...)` on a *component declaration* by
 /// position: the class annotation is the statement immediately before
 /// `end Name;`, so search only the bytes after the last element.
-pub fn class_annotation_clause(
-    source: &str,
-    class: &ClassDef,
-) -> Option<(usize, Range<usize>)> {
+pub fn class_annotation_clause(source: &str, class: &ClassDef) -> Option<(usize, Range<usize>)> {
     let end_kw = class_end_keyword(source, class)?;
     let last = last_element_end(source, class).unwrap_or(class.location.start as usize);
     let kw = find_keyword(source, last..end_kw, "annotation")?;

@@ -119,7 +119,9 @@ def Xform "RockerBogieTest" (
     {
         custom string lunco:scenario = "rocker-bogie"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie.rhai@
 

@@ -41,10 +41,9 @@ file), [`use-asset-library`](../use-asset-library/SKILL.md) (get it discovered),
 
 ```bash
 cargo run -p lunco-sandbox --bin sandbox -- --validate \
-  assets/models/RoverBattery.mo \
+  assets/models/LunCo/Electrical/Battery.mo \
   assets/vessels/rovers/skid_rover.usda \
-  assets/shaders/rover_hull.wgsl \
-  assets/scenarios/rover_battery.rhai
+  assets/shaders/rover_hull.wgsl
 ```
 
 The flag is intercepted in `crates/lunco-sandbox/src/bin/sandbox.rs:19-33`
@@ -68,7 +67,7 @@ rendered, no window opens, no port is bound. Run it anywhere, any time.
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"ValidateAsset","params":{"path":"lunco://models/RoverBattery.mo"}}'
+  -d '{"command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
 ```
 
 Only one param: **`path`** (string). It is a **query provider**, so the data
@@ -113,8 +112,8 @@ stripping comments) and emits **errors**, not warnings:
   `algorithm` / `initial algorithm` section. An `if` in a binding or a modifier
   is fine.
 
-Fix by rewriting as `der(x) = expr` with `max()`/`min()` clamps — that is exactly
-what `assets/models/RoverBattery.mo` does for its state-of-charge cutoff.
+Fix by rewriting as `der(x) = expr` with `max()`/`min()` clamps. Battery,
+network, and brownout equations belong in Modelica, not a tick script.
 
 `info` carries `{model, params, inputs, outputs:null}`. `outputs` is always
 `null` — outputs are not knowable before a compile.

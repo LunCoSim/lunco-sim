@@ -8,8 +8,8 @@
 
 use bevy::prelude::*;
 use lunco_viz::{
-    LINE_PLOT_KIND, SignalBinding, SignalRef, ViewTarget, VisualizationConfig,
-    VisualizationRegistry, VizId,
+    SignalBinding, SignalRef, ViewTarget, VisualizationConfig, VisualizationRegistry, VizId,
+    LINE_PLOT_KIND,
 };
 
 /// Stable id of the singleton "Modelica" time-series plot. Reserved
@@ -50,7 +50,11 @@ pub fn set_signal_plotted(
         // Create if missing (matches ensure_default_modelica_graph behavior)
         registry.insert(VisualizationConfig {
             id: viz_id,
-            title: if viz_id == DEFAULT_MODELICA_GRAPH { "Modelica".into() } else { format!("Plot #{}", viz_id.0) },
+            title: if viz_id == DEFAULT_MODELICA_GRAPH {
+                "Modelica".into()
+            } else {
+                format!("Plot #{}", viz_id.0)
+            },
             kind: LINE_PLOT_KIND,
             view: ViewTarget::Panel2D,
             inputs: Vec::new(),
@@ -87,10 +91,7 @@ pub fn is_signal_plotted(
 /// Drop every binding tied to `entity` across ALL plots in the
 /// registry. Called when a model entity despawns so stale-source
 /// bindings are cleared globally.
-pub fn drop_entity_bindings(
-    registry: &mut VisualizationRegistry,
-    entity: Entity,
-) {
+pub fn drop_entity_bindings(registry: &mut VisualizationRegistry, entity: Entity) {
     for cfg in registry.values_mut() {
         cfg.inputs.retain(|b| b.source.entity != entity);
     }

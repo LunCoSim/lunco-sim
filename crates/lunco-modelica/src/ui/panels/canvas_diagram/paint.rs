@@ -15,23 +15,19 @@ use bevy_egui::egui;
 /// canvas. Used as the FALLBACK when we couldn't read the connector
 /// instance's own `icon_color` from the AST.
 pub(super) fn wire_color_for(connector_type: &str) -> egui::Color32 {
-    let leaf = connector_type
-        .rsplit('.')
-        .next()
-        .unwrap_or(connector_type);
+    let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
     use egui::Color32 as C;
     match leaf {
         // Electrical: red (positive) — MSL Pin uses {0,0,255}; OMEdit
         // renders these as solid red, but the canonical RGB is blue.
         // We follow the AST line color via icon_color when available.
-        "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug"
-        | "NegativePlug" => C::from_rgb(0, 0, 255),
+        "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug" | "NegativePlug" => {
+            C::from_rgb(0, 0, 255)
+        }
         // Translational + rotational mechanics: BLACK — `Flange`
         // connectors author lineColor=black in MSL. OMEdit renders
         // mechanical wires black on the white canvas.
-        "Flange_a" | "Flange_b" | "Flange" | "Support" => {
-            C::from_rgb(0, 0, 0)
-        }
+        "Flange_a" | "Flange_b" | "Flange" | "Support" => C::from_rgb(0, 0, 0),
         // Heat transfer: red (191,0,0) — canonical thermal color.
         "HeatPort_a" | "HeatPort_b" | "HeatPort" => C::from_rgb(191, 0, 0),
         // Fluid: blue (canonical Modelica.Fluid uses lineColor blue).
@@ -94,7 +90,11 @@ pub(super) fn paint_wire_tooltip(
     // Offset so the tooltip doesn't sit under the cursor.
     let min = egui::pos2(pointer.x + 12.0, pointer.y + 12.0);
     let rect = egui::Rect::from_min_size(min, galley.size() + pad * 2.0);
-    top.rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(20, 22, 28, 235));
+    top.rect_filled(
+        rect,
+        3.0,
+        egui::Color32::from_rgba_unmultiplied(20, 22, 28, 235),
+    );
     top.rect_stroke(
         rect,
         3.0,
@@ -123,11 +123,11 @@ pub(super) fn paint_arrowhead(
     }
     let (ux, uy) = (dx / len, dy / len);
     let (px, py) = (-uy, ux); // perpendicular
-    // Base ~9×4.5 filled triangle to match OMEdit's heavier arrow
-    // weight on signal connections. Clamp head_len to ≤40 % of the
-    // final-segment length so the tail never reaches past the
-    // previous waypoint (orthogonal routing leaves a small stub at
-    // the input port; an oversized head would eat the whole stub).
+                              // Base ~9×4.5 filled triangle to match OMEdit's heavier arrow
+                              // weight on signal connections. Clamp head_len to ≤40 % of the
+                              // final-segment length so the tail never reaches past the
+                              // previous waypoint (orthogonal routing leaves a small stub at
+                              // the input port; an oversized head would eat the whole stub).
     let head_len: f32 = (9.0 * scale).min(len * 0.4);
     let head_halfw: f32 = head_len * 0.5;
     let base = egui::pos2(tip.x - ux * head_len, tip.y - uy * head_len);

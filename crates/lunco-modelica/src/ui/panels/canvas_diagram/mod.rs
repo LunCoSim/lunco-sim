@@ -40,62 +40,48 @@ pub const CANVAS_DIAGRAM_PANEL_ID: PanelId = PanelId("modelica_canvas_diagram");
 
 // ─── Visuals ────────────────────────────────────────────────────────
 
-mod theme;
-mod paint;
-pub mod loads;
-mod port;
-mod edge;
-mod node;
-mod projection;
-mod palette;
-mod overlays;
-mod menus;
 mod decorations;
-mod pulse;
+mod edge;
+pub mod loads;
+mod menus;
+mod node;
 mod ops;
+mod overlays;
+mod paint;
+mod palette;
 mod panel;
-pub use theme::CanvasThemeSnapshot;
+mod port;
+mod projection;
+mod pulse;
+mod theme;
 pub use panel::CanvasDiagramPanel;
+pub use theme::CanvasThemeSnapshot;
 // `__register_on_auto_arrange_diagram` is the registrar `#[on_command]` generates
 // next to the handler; `register_commands!` in `ui::commands` names the observer by
 // path, so the generated helper has to travel with it through this re-export.
 pub use ops::{
-    active_class_for_doc, active_class_for_doc_ctx, apply_ops_public, on_auto_arrange_diagram,
-    __register_on_auto_arrange_diagram,
+    __register_on_auto_arrange_diagram, active_class_for_doc, active_class_for_doc_ctx,
+    apply_ops_public, on_auto_arrange_diagram,
 };
 // Op-application core moved to the egui-free `crate::doc_ops` module.
 pub use crate::doc_ops::{apply_one_op_as, drain_pending_structural_ops, PendingStructuralOps};
 // API-feedback queue data moved to the egui-free `crate::canvas_feedback`.
+pub use edge::ConnectionEdgeData;
+pub use loads::{
+    drill_into_class, drive_drill_in_loads, drive_duplicate_loads, DrillInBinding, DuplicateBinding,
+};
+pub use node::IconNodeData;
+pub use palette::{DiagramProjectionLimits, PaletteSettings};
+pub use projection::ProjectionTask;
 pub use pulse::{
-    EdgePulseHandle, PulseEntry, PulseHandle, drive_pending_api_connections,
-    drive_pending_api_focus,
+    drive_pending_api_connections, drive_pending_api_focus, EdgePulseHandle, PulseEntry,
+    PulseHandle,
 };
 use pulse::{EdgePulseLayer, PulseGlowLayer};
-pub use palette::{DiagramProjectionLimits, PaletteSettings};
-pub use loads::{DrillInBinding, DuplicateBinding, drill_into_class, drive_drill_in_loads, drive_duplicate_loads};
-pub use edge::ConnectionEdgeData;
-pub use node::IconNodeData;
-pub use projection::ProjectionTask;
 
+use edge::OrthogonalEdgeVisual;
 use node::IconNodeVisual;
 use paint::wire_color_for;
-use edge::OrthogonalEdgeVisual;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 fn build_registry() -> VisualRegistry {
     let mut reg = VisualRegistry::new();
@@ -159,10 +145,12 @@ fn build_registry() -> VisualRegistry {
         // Materialise the per-frame HashMap lookup keys here, once per
         // projection — avoids two `format!()` allocations per edge per
         // frame in `OrthogonalEdgeVisual::draw`.
-        let flow_lookup_keys = d.flow_vars.first().map(|fv| (
-            format!("{}.{}", d.source_path, fv.name),
-            format!("{}.{}", d.target_path, fv.name),
-        ));
+        let flow_lookup_keys = d.flow_vars.first().map(|fv| {
+            (
+                format!("{}.{}", d.source_path, fv.name),
+                format!("{}.{}", d.target_path, fv.name),
+            )
+        });
         OrthogonalEdgeVisual {
             color: d
                 .icon_color
@@ -230,10 +218,7 @@ pub mod coords {
     /// Canvas world (+Y down) → Modelica (+Y up).
     #[inline]
     pub fn canvas_to_modelica(c: CanvasPos) -> ModelicaPos {
-        ModelicaPos {
-            x: c.x,
-            y: -c.y,
-        }
+        ModelicaPos { x: c.x, y: -c.y }
     }
 
     /// Modelica (+Y up) → canvas world (+Y down).
@@ -247,19 +232,10 @@ pub mod coords {
     /// canvas coordinates, but Modelica placements are centre-
     /// anchored, so we shift by half the icon extent.
     #[inline]
-    pub fn canvas_min_to_modelica_center(
-        min: CanvasPos,
-        icon_w: f32,
-        icon_h: f32,
-    ) -> ModelicaPos {
-        canvas_to_modelica(CanvasPos::new(
-            min.x + icon_w * 0.5,
-            min.y + icon_h * 0.5,
-        ))
+    pub fn canvas_min_to_modelica_center(min: CanvasPos, icon_w: f32, icon_h: f32) -> ModelicaPos {
+        canvas_to_modelica(CanvasPos::new(min.x + icon_w * 0.5, min.y + icon_h * 0.5))
     }
 }
-
-
 
 // ─── Panel state + Bevy resource ───────────────────────────────────
 
@@ -394,8 +370,7 @@ impl Default for CanvasDocState {
         // ring paints ON TOP of nodes/edges/selection — matches
         // Figma's outer-glow which is visible regardless of underlying
         // chrome. See `docs/architecture/20-domain-modelica.md` § 9c.4.
-        let pulse_handle: PulseHandle =
-            std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
+        let pulse_handle: PulseHandle = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
         canvas.layers.push(Box::new(PulseGlowLayer {
             data: pulse_handle.clone(),
         }));
@@ -421,8 +396,6 @@ impl Default for CanvasDocState {
         }
     }
 }
-
-
 
 /// Per-panel state carried across frames. Stored as a Bevy resource
 /// so the panel's `render` can pull it out via `world.resource_mut`.
@@ -462,8 +435,7 @@ pub struct CanvasDiagramState {
     /// first created in [`get_mut_for_tab`](Self::get_mut_for_tab) the
     /// saved viewport is moved onto it; the initial projection then
     /// `snap_to`s it instead of fitting.
-    pending_view_restore:
-        std::collections::HashMap<lunco_doc::DocumentId, lunco_canvas::Viewport>,
+    pending_view_restore: std::collections::HashMap<lunco_doc::DocumentId, lunco_canvas::Viewport>,
 }
 
 impl CanvasDiagramState {
@@ -516,15 +488,9 @@ impl CanvasDiagramState {
     /// `doc`. **Does not allocate** on a `None`/missing-doc path —
     /// returns the fallback. Callers that *need* an entry should
     /// pass an explicit `tab_id` via `get_mut_for_tab`.
-    pub fn get_mut(
-        &mut self,
-        doc: Option<lunco_doc::DocumentId>,
-    ) -> &mut CanvasDocState {
+    pub fn get_mut(&mut self, doc: Option<lunco_doc::DocumentId>) -> &mut CanvasDocState {
         match doc.and_then(|d| self.first_tab_for(d)) {
-            Some(tab_id) => self
-                .per_tab
-                .get_mut(&tab_id)
-                .unwrap_or(&mut self.fallback),
+            Some(tab_id) => self.per_tab.get_mut(&tab_id).unwrap_or(&mut self.fallback),
             None => &mut self.fallback,
         }
     }
@@ -559,11 +525,7 @@ impl CanvasDiagramState {
     /// Applied to the doc's first tab when it's created (see
     /// [`get_mut_for_tab`](Self::get_mut_for_tab)). Called by the Modelica
     /// session codec on workspace-state restore.
-    pub fn stash_pending_view(
-        &mut self,
-        doc: lunco_doc::DocumentId,
-        view: lunco_canvas::Viewport,
-    ) {
+    pub fn stash_pending_view(&mut self, doc: lunco_doc::DocumentId, view: lunco_canvas::Viewport) {
         self.pending_view_restore.insert(doc, view);
     }
 
@@ -665,10 +627,7 @@ impl CanvasDiagramState {
     /// tab has been opened on it. Returns whichever tab matched
     /// first; for one-tab-per-doc consumers (the common case) this
     /// is the only one anyway.
-    pub fn get_for_doc(
-        &self,
-        doc: lunco_doc::DocumentId,
-    ) -> Option<&CanvasDocState> {
+    pub fn get_for_doc(&self, doc: lunco_doc::DocumentId) -> Option<&CanvasDocState> {
         self.first_tab_for(doc).and_then(|t| self.per_tab.get(&t))
     }
 
@@ -692,8 +651,7 @@ impl CanvasDiagramState {
     /// `projection_task.cancel` on every non-active tab.
     pub fn iter_mut(
         &mut self,
-    ) -> impl Iterator<Item = (CanvasKey, lunco_doc::DocumentId, &mut CanvasDocState)> + '_
-    {
+    ) -> impl Iterator<Item = (CanvasKey, lunco_doc::DocumentId, &mut CanvasDocState)> + '_ {
         let tab_doc = &self.tab_doc;
         self.per_tab.iter_mut().map(move |(tab_id, state)| {
             let doc = tab_doc
@@ -779,10 +737,6 @@ pub fn cancel_inactive_projections(
 // TODO(modelica.canvas.animation.pulse_ms): expose `PULSE_DURATION`
 // as a setting (0 = disable). Today it's hardcoded to 1.0 s.
 
-
-
-
-
 /// Snapshot of a right-click: where to anchor the popup + what it
 /// was targeted at. Close handling is done via egui's
 /// `clicked_elsewhere()` on the popup's Response — no manual timer.
@@ -809,15 +763,11 @@ pub enum ContextMenuTarget {
     Empty,
 }
 
-
 // ─── Panel ─────────────────────────────────────────────────────────
-
 
 // ─── MSL package tree (for nested add-component menu) ──────────────
 
-
 // ─── Context-menu renderers ────────────────────────────────────────
-
 
 /// Shorthand used by free helpers that don't already have the
 /// active doc threaded through.
@@ -841,9 +791,7 @@ pub fn active_doc_from_world(world: &World) -> Option<lunco_doc::DocumentId> {
 
 /// `PanelCtx` sibling of [`active_doc_from_world`] — same precedence,
 /// reading resources through the capability-narrowed panel context.
-pub fn active_doc_from_world_ctx(
-    ctx: &lunco_workbench::PanelCtx,
-) -> Option<lunco_doc::DocumentId> {
+pub fn active_doc_from_world_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<lunco_doc::DocumentId> {
     if let Some((doc, _)) = ctx
         .resource::<crate::model_tabs_types::TabRenderContext>()
         .and_then(|c| c.current())
@@ -878,8 +826,6 @@ pub(super) fn render_target_ctx(
 /// empty card the user can resize and bind later from the inspector.
 
 // ─── Drill-in loading overlay ──────────────────────────────────────
-
-
 
 /// SI unit suffix for the most common `Modelica.Units.SI.*` types used
 /// by MSL Mechanics / Electrical / Blocks. Returned string is appended
@@ -926,10 +872,7 @@ pub(super) fn si_unit_suffix(param_type: &str) -> Option<&'static str> {
     })
 }
 
-
-
 // ─── Drill-in ───────────────────────────────────────────────────────
-
 
 /// User-facing canvas snap settings, read each frame by the canvas
 /// render path and pushed onto [`lunco_canvas::Canvas::snap`]. Off by
@@ -962,16 +905,4 @@ impl Default for CanvasSnapSettings {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
 // ─── Doc-op translation ─────────────────────────────────────────────
-

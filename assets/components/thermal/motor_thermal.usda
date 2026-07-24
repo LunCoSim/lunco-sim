@@ -5,36 +5,19 @@
     metersPerUnit = 1
 )
 
-# Drive-motor THERMAL model for a rover — the `thermal = "basic"` variant
-# references this into the rover ROOT, the same shape as the `driveLaw` and
-# `power` variants: a variant CHOOSES a component, it never restates one.
-# Everything below composes onto the rover; `</Thermal.…>` paths translate to
-# the HOST rover root through the reference arc.
-#
-# What it does: `models/RoverMotorThermal.mo` integrates a first-order lumped
-# heat balance per motor side — dissipation follows the commanded drive
-# magnitude, losses follow the excess over a lunar-day ambient — and publishes
-# `temp_left`/`temp_right` (kelvin) as ports. `thermal = "none"` is the
-# ABSENCE of this component.
-#
-# PURE TELEMETRY: no rhai bridge, because nothing acts on the temperatures —
-# they are readable/watchable ports for dashboards, scripts, and lessons
-# (contrast the battery, whose `alive` output must be ENFORCED onto the drive
-# ports and so carries a bridge). USD wires + Modelica physics; no Rust.
-#
-# NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
-def Xform "Thermal" (
+# Drive-motor THERMAL model for a rover — Thermal Domain Layer
+def Scope "Thermal" (
     kind = "component"
+    doc = "Thermal Domain Layer for motor thermal dissipation."
 )
 {
     # The physics: per-side first-order heat balance, solver-clocked.
-    def LunCoProgram "MotorThermal"
+    def Scope "MotorThermal" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         uniform asset info:sourceAsset = @lunco://models/RoverMotorThermal.mo@
         uniform bool lunco:program:realtimeSafe = true
-        # `</Thermal.…>` = the host rover root after arc translation: the model
-        # reads the same per-side FSW drive ports the wheels listen to, so
-        # heating follows what is actually being commanded.
         float inputs:drive_left.connect = </Thermal.outputs:drive_left>
         float inputs:drive_right.connect = </Thermal.outputs:drive_right>
     }

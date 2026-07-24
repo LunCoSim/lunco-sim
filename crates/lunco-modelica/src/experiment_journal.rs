@@ -180,7 +180,10 @@ pub fn apply_and_record(
 /// Apply an `ExperimentOp` to the registry **without** recording — the replay
 /// entry point (op arrived via the journal, already logged). Returns `false`
 /// (logged) if the payload isn't an `ExperimentOp`.
-pub fn replay_experiment_op(registry: &mut ExperimentRegistry, op_json: &serde_json::Value) -> bool {
+pub fn replay_experiment_op(
+    registry: &mut ExperimentRegistry,
+    op_json: &serde_json::Value,
+) -> bool {
     match serde_json::from_value::<ExperimentOp>(op_json.clone()) {
         Ok(op) => {
             apply_op(registry, &op);
@@ -208,7 +211,8 @@ fn apply_op(registry: &mut ExperimentRegistry, op: &ExperimentOp) {
             color_hint,
             created_at_ms,
         } => {
-            let created_at = web_time::SystemTime::UNIX_EPOCH + Duration::from_millis(*created_at_ms);
+            let created_at =
+                web_time::SystemTime::UNIX_EPOCH + Duration::from_millis(*created_at_ms);
             registry.insert_with_id(Experiment {
                 id: *id,
                 twin_id: twin_id.clone(),
@@ -291,6 +295,9 @@ mod tests {
     #[test]
     fn bad_payload_is_rejected_softly() {
         let mut r = ExperimentRegistry::new();
-        assert!(!replay_experiment_op(&mut r, &serde_json::json!({ "nope": 1 })));
+        assert!(!replay_experiment_op(
+            &mut r,
+            &serde_json::json!({ "nope": 1 })
+        ));
     }
 }

@@ -8,8 +8,8 @@
 //! and therefore no egui/workbench dependency.
 
 use bevy::prelude::*;
-use lunco_workbench::status_bus::{StatusBus, StatusLevel};
 use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
+use lunco_workbench::status_bus::{StatusBus, StatusLevel};
 
 use lunco_assets::msl::{MslLoadPhase, MslLoadState};
 
@@ -37,7 +37,11 @@ pub fn mirror_msl_state_to_status_bus(
 
     match &*state {
         MslLoadState::NotStarted => {}
-        MslLoadState::Loading { phase, bytes_done, bytes_total } => {
+        MslLoadState::Loading {
+            phase,
+            bytes_done,
+            bytes_total,
+        } => {
             let label = msl_phase_label(*phase);
             // Phase transition → discrete history entry.
             if prior_phase_label != Some(label) {
@@ -50,7 +54,11 @@ pub fn mirror_msl_state_to_status_bus(
         MslLoadState::Ready { file_count, .. } => {
             // Only fire once per Ready transition (re-renders shouldn't spam).
             if !matches!(last.as_ref(), Some(MirrorMemo { ready: true, .. })) {
-                bus.push(MSL_SOURCE, StatusLevel::Info, format!("ready — {file_count} files"));
+                bus.push(
+                    MSL_SOURCE,
+                    StatusLevel::Info,
+                    format!("ready — {file_count} files"),
+                );
                 bus.clear_progress(MSL_SOURCE);
             }
         }
@@ -105,8 +113,14 @@ impl From<&MslLoadState> for MirrorMemo {
                 phase_label: Some(msl_phase_label(*phase)),
                 ..Self::default()
             },
-            MslLoadState::Ready { .. } => Self { ready: true, ..Self::default() },
-            MslLoadState::Failed(_) => Self { failed: true, ..Self::default() },
+            MslLoadState::Ready { .. } => Self {
+                ready: true,
+                ..Self::default()
+            },
+            MslLoadState::Failed(_) => Self {
+                failed: true,
+                ..Self::default()
+            },
         }
     }
 }
@@ -184,16 +198,24 @@ pub fn drain_sim_samples_to_viz(
 pub fn drain_notices_to_console(
     mut notices: MessageReader<crate::ModelicaNotice>,
     console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
+    bus: Option<ResMut<StatusBus>>,
 ) {
-    let Some(mut console) = console else {
-        notices.clear();
-        return;
-    };
+    let mut console = console;
+    let mut bus = bus;
     for n in notices.read() {
-        match n.level {
-            crate::NoticeLevel::Info => console.info(n.text.clone()),
-            crate::NoticeLevel::Warn => console.warn(n.text.clone()),
-            crate::NoticeLevel::Error => console.error(n.text.clone()),
+        if let Some(console) = console.as_deref_mut() {
+            match n.level {
+                crate::NoticeLevel::Info => console.info(n.text.clone()),
+                crate::NoticeLevel::Warn => console.warn(n.text.clone()),
+                crate::NoticeLevel::Error => console.error(n.text.clone()),
+            }
+        }
+        if n.level == crate::NoticeLevel::Error {
+            if let Some(bus) = bus.as_deref_mut() {
+                // A notice is emitted for a worker response, never by a
+                // polling system, so a failure produces one status entry.
+                bus.push("Modelica", StatusLevel::Error, n.text.clone());
+            }
         }
     }
 }
@@ -224,11 +246,19 @@ pub fn mirror_source_roots_to_status_bus(
             LoadState::NotLoaded => {}
             LoadState::Loading { .. } => {
                 bus.push_progress(STATUS_BUS_SOURCE, format!("Loading library `{id}`…"), 0, 0);
-                bus.push(STATUS_BUS_SOURCE, StatusLevel::Info, format!("Loading library `{id}`"));
+                bus.push(
+                    STATUS_BUS_SOURCE,
+                    StatusLevel::Info,
+                    format!("Loading library `{id}`"),
+                );
             }
             LoadState::Ready => {
                 bus.clear_progress(STATUS_BUS_SOURCE);
-                bus.push(STATUS_BUS_SOURCE, StatusLevel::Info, format!("Library `{id}` ready"));
+                bus.push(
+                    STATUS_BUS_SOURCE,
+                    StatusLevel::Info,
+                    format!("Library `{id}` ready"),
+                );
             }
             LoadState::Failed(msg) => {
                 bus.clear_progress(STATUS_BUS_SOURCE);
@@ -298,9 +328,13 @@ pub fn project_run_results_to_ui(
 ) {
     for ev in ev_completed.read() {
         let run_id = ev.experiment_id;
-        let Some(entry) = registry.get(run_id) else { continue };
+        let Some(entry) = registry.get(run_id) else {
+            continue;
+        };
         let run_name = entry.name.clone();
-        let Some(result) = entry.result.as_ref() else { continue };
+        let Some(result) = entry.result.as_ref() else {
+            continue;
+        };
         let n_samples = result.times.len();
         let n_vars = result.series.len();
         let wall = result.meta.wall_time_ms;
@@ -359,7 +393,10 @@ pub fn project_run_results_to_ui(
                 .or_insert_with(|| commands.spawn_empty().id());
             signals_mut.drop_entity(entity);
             for (path, samples) in &result.series {
-                let sig = SignalRef { entity, path: path.clone() };
+                let sig = SignalRef {
+                    entity,
+                    path: path.clone(),
+                };
                 for (t, v) in result.times.iter().zip(samples.iter()) {
                     signals_mut.push_scalar(sig.clone(), *t, *v);
                 }

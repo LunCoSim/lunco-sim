@@ -11,10 +11,10 @@
 use bevy_egui::egui;
 use lunco_canvas::{DrawCtx, EdgeVisual, Pos as CanvasPos};
 
+use super::node::paint_flow_dots;
 use super::paint::{
     brighten, dist_point_to_segment, paint_wire_tooltip, segment_dist_sq, wire_color_for,
 };
-use super::node::paint_flow_dots;
 use super::theme::modelica_icon_palette_from_ctx;
 
 /// Typed payload for `"modelica.connection"` edges. Same purpose as
@@ -88,7 +88,11 @@ pub(super) fn port_edge_dir(x: f32, y: f32) -> PortDir {
         return PortDir::None;
     }
     if ax >= ay {
-        if x >= 0.0 { PortDir::Right } else { PortDir::Left }
+        if x >= 0.0 {
+            PortDir::Right
+        } else {
+            PortDir::Left
+        }
     } else if y >= 0.0 {
         PortDir::Down
     } else {
@@ -155,13 +159,13 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             .as_ref()
             .map(|p| p.remap(self.color))
             .unwrap_or(self.color);
-        let col = if selected {
-            brighten(mapped)
-        } else {
-            mapped
-        };
+        let col = if selected { brighten(mapped) } else { mapped };
         let base_width = if selected {
-            if self.is_causal { 2.2 } else { 1.7 }
+            if self.is_causal {
+                2.2
+            } else {
+                1.7
+            }
         } else if self.is_causal {
             1.6
         } else {
@@ -234,9 +238,7 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         // wire's stubs/waypoints and tracks zoom instead of being a
         // straight, fixed-pixel-width screen-space line.
         let pulse_alpha: Option<f32> = {
-            let id = egui::Id::new(
-                super::pulse::EDGE_PULSE_DATA_ID,
-            );
+            let id = egui::Id::new(super::pulse::EDGE_PULSE_DATA_ID);
             ctx.ui.ctx().data(|d| {
                 d.get_temp::<super::pulse::EdgePulseAlphaMap>(id)
                     .and_then(|m| {
@@ -256,15 +258,11 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             let line_a = (alpha * 0.95 * 255.0).clamp(0.0, 255.0) as u8;
             let halo = egui::Stroke::new(
                 halo_w,
-                egui::Color32::from_rgba_unmultiplied(
-                    base.r(), base.g(), base.b(), halo_a,
-                ),
+                egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), halo_a),
             );
             let core = egui::Stroke::new(
                 line_w,
-                egui::Color32::from_rgba_unmultiplied(
-                    base.r(), base.g(), base.b(), line_a,
-                ),
+                egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), line_a),
             );
             for w in polyline.windows(2) {
                 painter.line_segment([w[0], w[1]], halo);
@@ -277,12 +275,9 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         let anim_time = ctx
             .ui
             .ctx()
-            .data(|d| {
-                d.get_temp::<f64>(egui::Id::new("lunco_modelica_flow_anim_time"))
-            })
+            .data(|d| d.get_temp::<f64>(egui::Id::new("lunco_modelica_flow_anim_time")))
             .unwrap_or(0.0);
-        let node_state =
-            lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
+        let node_state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
         const ACTIVITY_EPS: f64 = 1e-6;
         let physical_flow = if let (Some(fv), Some((src_key, tgt_key))) =
             (self.flow_vars.first(), self.flow_lookup_keys.as_ref())
@@ -340,9 +335,7 @@ impl EdgeVisual for OrthogonalEdgeVisual {
                 .windows(2)
                 .any(|w| dist_point_to_segment(p, w[0], w[1]) <= HOVER_PX);
             if hit {
-                let state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(
-                    ctx.ui.ctx(),
-                );
+                let state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
                 let text = edge_hover_text(self, &state);
                 paint_wire_tooltip(painter, p, &text, col);
             }
@@ -390,10 +383,7 @@ impl EdgeVisual for OrthogonalEdgeVisual {
                     continue;
                 }
                 let mid = egui::pos2((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
-                let r = egui::Rect::from_center_size(
-                    mid,
-                    egui::vec2(handle_size, handle_size),
-                );
+                let r = egui::Rect::from_center_size(mid, egui::vec2(handle_size, handle_size));
                 painter.rect_stroke(
                     r,
                     0.0,

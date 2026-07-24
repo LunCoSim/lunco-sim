@@ -60,30 +60,28 @@ def Xform "CommsSystem" (kind = "component") {          # ── the reusable un
         prepend payload = @lunco://models/hga.glb@  #     heavy mesh → deferred binary payload
         # + collider, mount frame, optional gimbal joint
     }
-    def LunCoProgram "Link" {                           # ── Layer 2: RF dynamics (Modelica)
+    def Scope "Link" (prepend apiSchemas = ["LunCoProgramAPI"]) {                           # ── Layer 2: RF dynamics (Modelica)
         uniform asset info:sourceAsset = @models/CommsLink.mo@   # Friis → data-rate → buffer
         float inputs:u_range.connect = </CommsSystem/Geom.outputs:range_km>
         float inputs:u_up.connect    = </CommsSystem/Geom.outputs:connected>
 
-        def LunCoPortEvent "Loss" {
-            uniform token lunco:event:port = "margin_db"
-            uniform token lunco:event:op = "lt"
-            double lunco:event:threshold = 0.0
-            uniform token lunco:event:emit = "comms:loss"
+        def LunCoEvent "Loss" {
+            float inputs:trigger.connect = </CommsSystem/Link.outputs:loss>
+            uniform token lunco:event:name = "comms:loss"
+            uniform token lunco:event:severity = "warning"
         }
-        def LunCoPortEvent "Acquire" {
-            uniform token lunco:event:port = "margin_db"
-            uniform token lunco:event:op = "gt"
-            double lunco:event:threshold = 3.0
-            uniform token lunco:event:emit = "comms:acquire"
+        def LunCoEvent "Acquire" {
+            float inputs:trigger.connect = </CommsSystem/Link.outputs:acquire>
+            uniform token lunco:event:name = "comms:acquire"
+            uniform token lunco:event:severity = "info"
         }
     }
-    def LunCoProgram "Power" {                          # ── Layer 3: electrical draw (Modelica)
+    def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"]) {                          # ── Layer 3: electrical draw (Modelica)
         uniform asset info:sourceAsset = @models/CommsPower.mo@  # TX state → DC watts
         float inputs:u_tx.connect = </CommsSystem/Link.outputs:txActive>
         # its `outputs:p_draw` is what the vehicle's EPS bus consumes
     }
-    def LunCoProgram "Policy" {                         # ── Layer 4: mode/relay policy (rhai)
+    def Scope "Policy" (prepend apiSchemas = ["LunCoProgramAPI"]) {                         # ── Layer 4: mode/relay policy (rhai)
         uniform asset info:sourceAsset = @scripts/comms_policy.rhai@   # handover, duty-cycle, safe-mode
     }
 }

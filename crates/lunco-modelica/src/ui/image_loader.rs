@@ -179,11 +179,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         "lunco.modelica.image_loader"
     }
 
-    fn load(
-        &self,
-        ctx: &egui::Context,
-        uri: &str,
-    ) -> egui::load::BytesLoadResult {
+    fn load(&self, ctx: &egui::Context, uri: &str) -> egui::load::BytesLoadResult {
         if !uri.starts_with("modelica://") {
             return Err(egui::load::LoadError::NotSupported);
         }
@@ -213,10 +209,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
                     // we never block the UI on the worker's lock —
                     // if contended we just report Pending for this
                     // frame and check again next time.
-                    let maybe_ready = slot_arc
-                        .try_lock()
-                        .ok()
-                        .and_then(|guard| guard.clone());
+                    let maybe_ready = slot_arc.try_lock().ok().and_then(|guard| guard.clone());
                     match maybe_ready {
                         Some(Ok(bytes)) => {
                             cache.insert(uri.to_string(), Slot::Ready(bytes.clone()));
@@ -251,8 +244,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         // Shared result slot written by the worker once the read
         // completes. Spawned on Bevy's `IoTaskPool` so this compiles
         // on wasm32 (where `std::thread::spawn` is unsupported).
-        let result: Arc<Mutex<Option<Result<Arc<[u8]>, String>>>> =
-            Arc::new(Mutex::new(None));
+        let result: Arc<Mutex<Option<Result<Arc<[u8]>, String>>>> = Arc::new(Mutex::new(None));
         cache.insert(uri.to_string(), Slot::Pending(result.clone()));
         drop(cache);
 
@@ -261,36 +253,38 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         // pending image wouldn't drive any redraw and the user
         // would have to move the mouse to see it appear.
         let ctx = ctx.clone();
-        bevy::tasks::IoTaskPool::get().spawn(async move {
-            // MSL virtual FS: on-disk tree (native) or in-memory bundle (web).
-            let read_result: Result<Arc<[u8]>, String> =
-                match lunco_assets::msl::msl_read(&path) {
-                    Some(bytes) => {
-                        log::info!(
-                            "[ModelicaImageLoader] loaded {} → {} ({} bytes)",
-                            uri_for_worker,
-                            path.display(),
-                            bytes.len(),
-                        );
-                        Ok(Arc::from(bytes))
-                    }
-                    None => {
-                        log::warn!(
-                            "[ModelicaImageLoader] not found in any MSL root: {} → {}",
-                            uri_for_worker,
-                            path.display(),
-                        );
-                        Err(format!(
-                            "modelica:// image not found in the MSL root ({})",
-                            path.display(),
-                        ))
-                    }
-                };
-            if let Ok(mut guard) = result.lock() {
-                *guard = Some(read_result);
-            }
-            ctx.request_repaint();
-        }).detach();
+        bevy::tasks::IoTaskPool::get()
+            .spawn(async move {
+                // MSL virtual FS: on-disk tree (native) or in-memory bundle (web).
+                let read_result: Result<Arc<[u8]>, String> =
+                    match lunco_assets::msl::msl_read(&path) {
+                        Some(bytes) => {
+                            log::info!(
+                                "[ModelicaImageLoader] loaded {} → {} ({} bytes)",
+                                uri_for_worker,
+                                path.display(),
+                                bytes.len(),
+                            );
+                            Ok(Arc::from(bytes))
+                        }
+                        None => {
+                            log::warn!(
+                                "[ModelicaImageLoader] not found in any MSL root: {} → {}",
+                                uri_for_worker,
+                                path.display(),
+                            );
+                            Err(format!(
+                                "modelica:// image not found in the MSL root ({})",
+                                path.display(),
+                            ))
+                        }
+                    };
+                if let Ok(mut guard) = result.lock() {
+                    *guard = Some(read_result);
+                }
+                ctx.request_repaint();
+            })
+            .detach();
 
         Ok(egui::load::BytesPoll::Pending { size: None })
     }

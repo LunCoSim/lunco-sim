@@ -7,7 +7,7 @@ over "LanderTest"
     }
     over "SkidRover"
     {
-        def LunCoProgram "Mission"
+        def LunCoProgramAPI "Mission"
         {
             custom string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">

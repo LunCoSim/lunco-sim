@@ -153,7 +153,7 @@ report comes back in the response body; no `QueryCommandResult` poll.
 ```bash
 curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
-  -d '{"command":"ValidateAsset","params":{"path":"lunco://models/RoverBattery.mo"}}'
+  -d '{"command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
 ```
 
 **Answered by sandbox binaries only** — it lives in `lunco-scene-commands`,
@@ -162,7 +162,7 @@ instance (or only lunica) up, the same checks run as a one-shot CLI that builds
 no app at all:
 
 ```bash
-cargo run -p lunco-sandbox --bin sandbox -- --validate assets/models/RoverBattery.mo
+cargo run -p lunco-sandbox --bin sandbox -- --validate assets/models/LunCo/Electrical/Battery.mo
 ```
 
 Full runbook — per-extension checks, exit codes, and the CWD path-resolution

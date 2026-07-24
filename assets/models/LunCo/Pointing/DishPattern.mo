@@ -24,5 +24,5 @@ equation
   // 4·ln2 = 2.7726 is the constant that puts gain_frac = 0.5 exactly at
   // ±beamwidth/2 — the definition of the half-power beamwidth.
   gain_frac = exp(-2.7726 * (point_error / beamwidth)^2);
-  locked = if point_error < beamwidth / 2 then 1.0 else 0.0;
+  locked = max(0.0, min(1.0, 0.5 + 1000.0 * (beamwidth / 2.0 - point_error)));
 end DishPattern;

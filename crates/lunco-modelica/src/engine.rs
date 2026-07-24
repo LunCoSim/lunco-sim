@@ -67,9 +67,7 @@ pub enum InheritedCausality {
     Internal,
 }
 
-fn map_variability_inherited(
-    v: &rumoca_compile::parsing::Variability,
-) -> InheritedVariability {
+fn map_variability_inherited(v: &rumoca_compile::parsing::Variability) -> InheritedVariability {
     use rumoca_compile::parsing::Variability as V;
     match v {
         V::Empty | V::Continuous(_) => InheritedVariability::Continuous,
@@ -79,9 +77,7 @@ fn map_variability_inherited(
     }
 }
 
-fn map_causality_inherited(
-    c: &rumoca_compile::parsing::Causality,
-) -> InheritedCausality {
+fn map_causality_inherited(c: &rumoca_compile::parsing::Causality) -> InheritedCausality {
     use rumoca_compile::parsing::Causality as C;
     match c {
         C::Empty => InheritedCausality::Internal,
@@ -190,7 +186,11 @@ impl ModelicaEngine {
         // source. ONE signal invalidates every derived memo, here and on the paint
         // side; see `crate::icon_memo`.
         crate::icon_memo::invalidate_source_memos();
-        let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
+        let prefix = ast
+            .within
+            .as_ref()
+            .map(|w| w.to_string())
+            .unwrap_or_default();
         for class_key in ast.classes.keys() {
             let qualified = if prefix.is_empty() {
                 class_key.clone()
@@ -206,20 +206,13 @@ impl ModelicaEngine {
     /// Stash the located parse diagnostics for `doc_id` produced by an
     /// off-lock async parse. Overwrites any prior set — only the latest
     /// parse's diagnostics matter.
-    pub fn set_parse_diags(
-        &mut self,
-        doc_id: DocumentId,
-        diags: Vec<lunco_doc::Diagnostic>,
-    ) {
+    pub fn set_parse_diags(&mut self, doc_id: DocumentId, diags: Vec<lunco_doc::Diagnostic>) {
         self.parse_diags.insert(doc_id, diags);
     }
 
     /// Take (and clear) the parse diagnostics stashed for `doc_id`.
     /// Returns an empty vec when none were recorded.
-    pub fn take_parse_diags(
-        &mut self,
-        doc_id: DocumentId,
-    ) -> Vec<lunco_doc::Diagnostic> {
+    pub fn take_parse_diags(&mut self, doc_id: DocumentId) -> Vec<lunco_doc::Diagnostic> {
         self.parse_diags.remove(&doc_id).unwrap_or_default()
     }
 
@@ -277,7 +270,9 @@ impl ModelicaEngine {
         ast: rumoca_compile::parsing::ast::StoredDefinition,
     ) {
         let uri = self.uri(doc_id);
-        self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
+        self.uri_for_doc
+            .entry(doc_id)
+            .or_insert_with(|| uri.clone());
         self.index_ast_classes(&uri, &ast);
         self.session.add_parsed_batch(vec![(uri, ast)]);
     }
@@ -287,7 +282,9 @@ impl ModelicaEngine {
     /// in the session for partial-data queries.
     pub fn install_lenient(&mut self, doc_id: DocumentId, source: &str) {
         let uri = self.uri(doc_id);
-        self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
+        self.uri_for_doc
+            .entry(doc_id)
+            .or_insert_with(|| uri.clone());
         self.class_uri_misses.clear();
         crate::icon_memo::invalidate_source_memos();
         let _ = self.session.add_document(&uri, source);
@@ -310,7 +307,9 @@ impl ModelicaEngine {
         ast: rumoca_compile::parsing::ast::StoredDefinition,
     ) {
         let uri = self.uri(doc_id);
-        self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
+        self.uri_for_doc
+            .entry(doc_id)
+            .or_insert_with(|| uri.clone());
         self.index_ast_classes(&uri, &ast);
         self.session.add_parsed_batch(vec![(uri, ast)]);
     }
@@ -406,7 +405,11 @@ impl ModelicaEngine {
                 // Index any classes for the fast qualified→URI lookup.
                 if let Some(ast) = self.session.parsed_file_query(uri) {
                     let uri_clone = uri.clone();
-                    let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
+                    let prefix = ast
+                        .within
+                        .as_ref()
+                        .map(|w| w.to_string())
+                        .unwrap_or_default();
                     let keys: Vec<String> = ast.classes.keys().cloned().collect();
                     for k in keys {
                         let q = if prefix.is_empty() {
@@ -414,7 +417,9 @@ impl ModelicaEngine {
                         } else {
                             format!("{}.{}", prefix, k)
                         };
-                        self.class_to_uri.entry(q).or_insert_with(|| uri_clone.clone());
+                        self.class_to_uri
+                            .entry(q)
+                            .or_insert_with(|| uri_clone.clone());
                     }
                 }
                 count += 1;
@@ -481,8 +486,7 @@ impl ModelicaEngine {
         // borrows out of the build closure.
         let mut comps_cache: HashMap<String, Vec<rumoca_compile::parsing::ast::Component>> =
             HashMap::new();
-        let unique: HashSet<String> =
-            resolved.iter().map(|(_, _, d)| d.clone()).collect();
+        let unique: HashSet<String> = resolved.iter().map(|(_, _, d)| d.clone()).collect();
         for declaring in unique {
             let comps = self
                 .session
@@ -505,16 +509,13 @@ impl ModelicaEngine {
                         // `binding`; `start` holds the type's default
                         // (0.0) unless a `start=` modifier set it. Prefer
                         // the binding, fall back to a start *modification*.
-                        c.binding
-                            .as_ref()
-                            .map(|e| format!("{e}"))
-                            .or_else(|| {
-                                if c.start_is_modification {
-                                    Some(format!("{}", c.start))
-                                } else {
-                                    None
-                                }
-                            }),
+                        c.binding.as_ref().map(|e| format!("{e}")).or_else(|| {
+                            if c.start_is_modification {
+                                Some(format!("{}", c.start))
+                            } else {
+                                None
+                            }
+                        }),
                     ),
                     None => (
                         InheritedVariability::Continuous,
@@ -571,10 +572,7 @@ impl ModelicaEngine {
     /// installed, and fall back to a linear search over the MSL bundle
     /// for classes that arrived via `replace_parsed_source_set` (which
     /// bypasses `add_document` and therefore skips `index_ast_classes`).
-    pub fn class_def(
-        &mut self,
-        qualified: &str,
-    ) -> Option<rumoca_compile::parsing::ast::ClassDef> {
+    pub fn class_def(&mut self, qualified: &str) -> Option<rumoca_compile::parsing::ast::ClassDef> {
         // Negative cache: skip the whole resolution (incl. the O(bundle)
         // MSL scan below) for a class we've already failed to bridge. The
         // empty-diagram overlay calls this every frame for the active
@@ -592,7 +590,10 @@ impl ModelicaEngine {
             // class during the pre-MSL projection (expected — resolution
             // retries once MSL installs), spamming the wasm console. The
             // `class_uri_misses` guard already dedupes per class.
-            bevy::log::debug!("[engine] class_def: class_lookup_query failed for {}", qualified);
+            bevy::log::debug!(
+                "[engine] class_def: class_lookup_query failed for {}",
+                qualified
+            );
             return None;
         }
 
@@ -651,15 +652,18 @@ impl ModelicaEngine {
             // icon resolution) retried every frame and rendered nothing.
             let mut best: Option<(usize, String)> = None;
             for (uri, ast) in bundle.iter() {
-                let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
+                let prefix = ast
+                    .within
+                    .as_ref()
+                    .map(|w| w.to_string())
+                    .unwrap_or_default();
                 for class_key in ast.classes.keys() {
                     let q = if prefix.is_empty() {
                         class_key.clone()
                     } else {
                         format!("{}.{}", prefix, class_key)
                     };
-                    let is_container =
-                        qualified == q || qualified.starts_with(&format!("{}.", q));
+                    let is_container = qualified == q || qualified.starts_with(&format!("{}.", q));
                     if is_container && best.as_ref().is_none_or(|(len, _)| q.len() > *len) {
                         best = Some((q.len(), uri.clone()));
                     }
@@ -692,7 +696,8 @@ impl ModelicaEngine {
         let Some(parsed) = self.session.parsed_file_query(&file_uri) else {
             bevy::log::warn!(
                 "[engine] class_def: parsed_file_query failed for uri {} (class {})",
-                file_uri, qualified
+                file_uri,
+                qualified
             );
             return None;
         };
@@ -707,7 +712,8 @@ impl ModelicaEngine {
         if found.is_none() {
             bevy::log::warn!(
                 "[engine] class_def: find_class_by_qualified_name failed for {} in uri {}",
-                qualified, file_uri
+                qualified,
+                file_uri
             );
         }
         found
@@ -744,8 +750,7 @@ mod tests {
     /// `document::ModelicaDocument::refresh_ast_now` for the canonical
     /// pattern.
     fn upsert_test(engine: &mut ModelicaEngine, id: DocumentId, src: &str) {
-        let ast = rumoca_phase_parse::parse_to_ast(src, "test.mo")
-            .expect("test source must parse");
+        let ast = rumoca_phase_parse::parse_to_ast(src, "test.mo").expect("test source must parse");
         engine.upsert_document_with_ast(id, ast);
     }
 

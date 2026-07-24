@@ -24,8 +24,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::ui::panels::log::{render_log_view, LogEntry, LogLevel};
 use crate::state::ModelicaDocumentRegistry;
+use crate::ui::panels::log::{render_log_view, LogEntry, LogLevel};
 
 /// Panel id.
 pub const DIAGNOSTICS_PANEL_ID: PanelId = PanelId("modelica_diagnostics");
@@ -140,7 +140,9 @@ impl Panel for DiagnosticsPanel {
                 .and_then(|ws| ws.active_document);
             ctx.defer(move |world| {
                 world
-                    .get_resource_or_insert_with(crate::ui::panels::code_editor::EditorJumpRequest::default)
+                    .get_resource_or_insert_with(
+                        crate::ui::panels::code_editor::EditorJumpRequest::default,
+                    )
                     .request(doc, loc);
             });
         }
@@ -246,9 +248,10 @@ pub fn refresh_diagnostics(
             model: model_tag.clone(),
             // Located when the lenient parser gave us a span — makes
             // the row click-to-source like lint findings.
-            loc: diag.line.zip(diag.col).map(|(line, column)| {
-                crate::ui::panels::log::SourceLoc { line, column }
-            }),
+            loc: diag
+                .line
+                .zip(diag.col)
+                .map(|(line, column)| crate::ui::panels::log::SourceLoc { line, column }),
         });
     }
 
@@ -269,9 +272,10 @@ pub fn refresh_diagnostics(
                 model: model_tag.clone(),
                 // Located when the failure's primary span sits in this
                 // doc — makes the row click-to-source like lint findings.
-                loc: diag.line.zip(diag.col).map(|(line, column)| {
-                    crate::ui::panels::log::SourceLoc { line, column }
-                }),
+                loc: diag
+                    .line
+                    .zip(diag.col)
+                    .map(|(line, column)| crate::ui::panels::log::SourceLoc { line, column }),
             });
         }
     } else if let Some(msg) = compile_states.error_message(doc_id) {
@@ -315,8 +319,9 @@ pub fn refresh_diagnostics(
             // A worker task that panics mid-update would otherwise crash
             // the whole UI on the next refresh; the cached lint state is
             // plain data, so reading through poison is safe.
-            let mut lint_state =
-                lint_worker_state().lock().unwrap_or_else(|e| e.into_inner());
+            let mut lint_state = lint_worker_state()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let current_cache_key = lint_state.cached_for;
             let current_inflight_key = lint_state.inflight_for;
             let mut hit: Option<Vec<LogEntry>> = None;
@@ -353,40 +358,39 @@ pub fn refresh_diagnostics(
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
-            let result_slot = lint_result_slot().clone();
-            bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-                let opts = rumoca_tool_lint::LintOptions::default();
-                let out: Vec<LogEntry> = rumoca_tool_lint::lint(
-                    &source_owned,
-                    &display_name,
-                    &opts,
-                )
-                .into_iter()
-                .map(|msg| {
-                    let level = match msg.level {
-                        rumoca_tool_lint::LintLevel::Error => LogLevel::Error,
-                        rumoca_tool_lint::LintLevel::Warning => LogLevel::Warn,
-                        _ => LogLevel::Info,
-                    };
-                    LogEntry {
-                        at: web_time::Instant::now(),
-                        level,
-                        // Position now lives on `loc` (rendered as a
-                        // chip + makes the row clickable), so the text
-                        // carries just rule + message.
-                        text: format!("[{}] {}", msg.rule, msg.message),
-                        model: tag_for_worker.clone(),
-                        loc: Some(crate::ui::panels::log::SourceLoc {
-                            line: msg.line,
-                            column: msg.column,
-                        }),
-                    }
-                })
-                .collect();
-                if let Ok(mut slot) = result_slot.lock() {
-                    *slot = Some((dispatch_key, out));
-                }
-            }).detach();
+                let result_slot = lint_result_slot().clone();
+                bevy::tasks::AsyncComputeTaskPool::get()
+                    .spawn(async move {
+                        let opts = rumoca_tool_lint::LintOptions::default();
+                        let out: Vec<LogEntry> =
+                            rumoca_tool_lint::lint(&source_owned, &display_name, &opts)
+                                .into_iter()
+                                .map(|msg| {
+                                    let level = match msg.level {
+                                        rumoca_tool_lint::LintLevel::Error => LogLevel::Error,
+                                        rumoca_tool_lint::LintLevel::Warning => LogLevel::Warn,
+                                        _ => LogLevel::Info,
+                                    };
+                                    LogEntry {
+                                        at: web_time::Instant::now(),
+                                        level,
+                                        // Position now lives on `loc` (rendered as a
+                                        // chip + makes the row clickable), so the text
+                                        // carries just rule + message.
+                                        text: format!("[{}] {}", msg.rule, msg.message),
+                                        model: tag_for_worker.clone(),
+                                        loc: Some(crate::ui::panels::log::SourceLoc {
+                                            line: msg.line,
+                                            column: msg.column,
+                                        }),
+                                    }
+                                })
+                                .collect();
+                        if let Ok(mut slot) = result_slot.lock() {
+                            *slot = Some((dispatch_key, out));
+                        }
+                    })
+                    .detach();
             }
         }
 
@@ -396,8 +400,9 @@ pub fn refresh_diagnostics(
         // `entries` on the same refresh rather than the next one.
         if let Ok(mut slot) = lint_result_slot().lock() {
             if let Some((key, out)) = slot.take() {
-                let mut state =
-                    lint_worker_state().lock().unwrap_or_else(|e| e.into_inner());
+                let mut state = lint_worker_state()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 state.cached_for = Some(key);
                 state.cached_entries = out.clone();
                 state.inflight_for = None;
@@ -446,14 +451,12 @@ fn lint_worker_state() -> &'static std::sync::Mutex<LintWorkerState> {
 /// buffer — the main thread drains it every refresh. `None` means
 /// no completion since the last drain.
 #[allow(clippy::type_complexity)]
-fn lint_result_slot() -> &'static std::sync::Arc<
-    std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>,
-> {
+fn lint_result_slot(
+) -> &'static std::sync::Arc<std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>>
+{
     use std::sync::OnceLock;
     static SLOT: OnceLock<
-        std::sync::Arc<
-            std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>,
-        >,
+        std::sync::Arc<std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>>,
     > = OnceLock::new();
     SLOT.get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(None)))
 }

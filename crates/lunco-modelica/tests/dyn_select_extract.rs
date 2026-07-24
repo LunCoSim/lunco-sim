@@ -1,6 +1,6 @@
 //! Verify DynamicSelect extraction on the actual Tank/Valve icons.
 
-use lunco_modelica::annotations::{DynExpr, DynValue, GraphicItem, extract_icon};
+use lunco_modelica::annotations::{extract_icon, DynExpr, DynValue, GraphicItem};
 use rumoca_compile::parsing::ast::Expression;
 
 fn src() -> &'static str {

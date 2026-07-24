@@ -10,9 +10,9 @@
 //! in [`crate::ui::document_openings::DocumentOpenings`]; the
 //! per-frame drivers below poll their own variant.
 
-use bevy::prelude::*;
-use crate::ui::document_openings::{DocumentOpenings, OpeningState};
 use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_openings::{DocumentOpenings, OpeningState};
+use bevy::prelude::*;
 
 /// Tab-to-class binding for drill-in tabs whose document hasn't
 /// been installed in the registry yet. Stored in
@@ -95,9 +95,7 @@ pub fn drive_duplicate_loads(
         let t_poll = web_time::Instant::now();
         let polled: Option<crate::document::ModelicaDocument> =
             if let Some(OpeningState::Duplicate(b)) = openings.get_mut(doc_id) {
-                futures_lite::future::block_on(futures_lite::future::poll_once(
-                    &mut b.task,
-                ))
+                futures_lite::future::block_on(futures_lite::future::poll_once(&mut b.task))
             } else {
                 None
             };
@@ -160,8 +158,7 @@ pub fn drive_duplicate_loads(
                 }
                 let new_id = tabs.ensure_for(doc_id, Some(q));
                 if let Some(tab) = tabs.get_mut(new_id) {
-                    tab.view_mode =
-                        crate::model_tabs_types::ModelViewMode::Canvas;
+                    tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
                 }
                 commands.trigger(lunco_workbench::OpenTab {
                     kind: crate::ui::MODEL_VIEW_KIND,
@@ -226,9 +223,7 @@ pub fn drive_drill_in_loads(
     for doc_id in doc_ids {
         let polled: Option<Result<crate::document::ModelicaDocument, String>> =
             if let Some(OpeningState::DrillIn(b)) = openings.get_mut(doc_id) {
-                futures_lite::future::block_on(futures_lite::future::poll_once(
-                    &mut b.task,
-                ))
+                futures_lite::future::block_on(futures_lite::future::poll_once(&mut b.task))
             } else {
                 None
             };
@@ -285,9 +280,8 @@ pub fn drive_drill_in_loads(
         registry.install_prebuilt(doc_id, doc);
         // by the upstream `drill_into_class` call before this
         // driver runs.
-        let land_in_icon_view =
-            crate::ui::loaded_classes::is_icon_only_class(&qualified)
-                || has_components == Some(false);
+        let land_in_icon_view = crate::ui::loaded_classes::is_icon_only_class(&qualified)
+            || has_components == Some(false);
         if land_in_icon_view {
             // Update the drilled-in tab's view mode. Multiple tabs
             // may now point at the same doc (sibling drill-ins);
@@ -342,8 +336,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         // own tabs — that's the whole point of keying ModelTabs by
         // TabId rather than DocumentId.
         let tab_id = {
-            let mut tabs = world
-                .resource_mut::<crate::model_tabs::ModelTabs>();
+            let mut tabs = world.resource_mut::<crate::model_tabs::ModelTabs>();
             // Drill-in is a deliberate navigation gesture (canvas
             // double-click), so the tab is pinned via ensure_for —
             // not the preview slot. Same-class re-drill focuses;
@@ -356,8 +349,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         };
         // `ensure_for(doc_id, Some(qualified))` immediately above
         // already wrote it.
-        if let Some(mut workspace) =
-            world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
+        if let Some(mut workspace) = world.get_resource_mut::<lunco_workspace::WorkspaceResource>()
         {
             workspace.active_document = Some(doc_id);
         }
@@ -409,11 +401,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
 ///
 /// If a tab for the same file path is already open (from a
 /// previous drill-in), we focus it instead of making a second.
-fn open_drill_in_tab(
-    world: &mut World,
-    qualified: &str,
-    file_path: &std::path::Path,
-) {
+fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::Path) {
     // Find or allocate the doc. Reuse an existing one only if the
     // same `(file, drilled-in class)` was opened before — keying on
     // file alone collapsed sibling MSL classes (e.g. `Integrator`
@@ -433,9 +421,7 @@ fn open_drill_in_tab(
             let same_file = registry
                 .host(state.doc)
                 .and_then(|h| match h.document().origin() {
-                    lunco_doc::DocumentOrigin::File { path, .. } => {
-                        Some(path == file_path)
-                    }
+                    lunco_doc::DocumentOrigin::File { path, .. } => Some(path == file_path),
                     _ => None,
                 })
                 .unwrap_or(false);
@@ -475,8 +461,7 @@ fn open_drill_in_tab(
             )
         });
         let busy = {
-            let mut bus =
-                world.resource_mut::<lunco_workbench::status_bus::StatusBus>();
+            let mut bus = world.resource_mut::<lunco_workbench::status_bus::StatusBus>();
             bus.begin(
                 lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
                 "drill-in",
@@ -505,10 +490,8 @@ fn open_drill_in_tab(
     // to see). Default `view_mode` is Text for newly-created
     // scratch models; drill-in is a different use case.
     let tab_id = {
-        let mut model_tabs =
-            world.resource_mut::<crate::model_tabs::ModelTabs>();
-        let tab_id =
-            model_tabs.ensure_for(doc_id, Some(qualified.to_string()));
+        let mut model_tabs = world.resource_mut::<crate::model_tabs::ModelTabs>();
+        let tab_id = model_tabs.ensure_for(doc_id, Some(qualified.to_string()));
         if let Some(tab) = model_tabs.get_mut(tab_id) {
             tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }

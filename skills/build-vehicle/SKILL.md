@@ -36,7 +36,7 @@ differential), `rucheyok/` (Z-forward, Modelica electrical).
 | Wheel hub | `mobility/wheel.usda` | dimensions, mass, drive/brake/spin dynamics — THE default set every wheel composes |
 | Tire | `mobility/tires/*.usda` | grip (`lunco:tire:frictionCoefficient`, `physxVehicleTire:longitudinalStiffness`) + look (wheel.wgsl inputs: lugs, wear, dust) — chosen via the wheel's `tire` variantSet |
 | Suspension | `mobility/suspensions/*.usda` | compliance (`lunco:suspension:restLength`, `physxVehicleSuspension:*`) + strut visuals — ALL suspensions carry them: standard/rocker have the animated Casing/Piston/Spring trio (`lunco:suspensionVisual:role`), rigid a static casing only (zero travel ⇒ no roles) |
-| Battery | `power/rover_battery.usda` | traction energy budget (`RoverBattery.mo` + enforcement bridge) — chosen via the rover's `power` variantSet. Distinct from `power/battery.usda`, the physical pack |
+| Battery | `power/battery.usda` | reusable physical/nameplate/electrical contribution; the rover electrical layer composes it with loads and synthesizes one acausal domain DAE |
 | Motor thermal | `thermal/motor_thermal.usda` | per-side motor heat balance (`RoverMotorThermal.mo`), telemetry-only — chosen via the rover's `thermal` variantSet |
 | Chassis | `mobility/chassis/box_chassis.usda` | collider + panelised hull material (`rover_hull.wgsl`) |
 | Headlight | `lights/headlight.usda` | spotlight + casing + glowing lens, self-contained |
@@ -191,7 +191,7 @@ from an exemplar — that is the intended way to extend, not a Rust change.
   by what ports the built-in kernel it displaces writes:
   * `drive_laws/modelica_skid.usda` (skid_rover, six_wheel_rover,
     rocker_bogie): `RoverDrivetrain.mo` integrates a per-side motor lag on
-    the solver clock; the rhai bridge writes `drive_left`/`drive_right`.
+    the solver clock; native USD connections publish `drive_left`/`drive_right`.
   * `drive_laws/modelica_ackermann.usda` (ackermann_rover):
     `RoverAckermannDrivetrain.mo`, ONE shared-axle lag + a `steering`
     passthrough — the built-in Ackermann kernel writes three ports, so the
@@ -213,19 +213,13 @@ from an exemplar — that is the intended way to extend, not a Rust change.
   law is a VEHICLE-level component that writes those ports by name.
 - `power` = **infinite | battery** — does driving cost anything. `infinite`
   is an EMPTY variant (absence of a battery = today's drive-forever default);
-  `battery` references `components/power/rover_battery.usda` onto the root:
-  `RoverBattery.mo` integrates state-of-charge on the solver clock with a
-  realistic consumption shape — an avionics floor (`idle_w = 30 W`) plus
-  per-side motor draw proportional to the commanded drive magnitude
-  (`motor_w = 250 W` at full command per side, `capacity_wh = 2000`). Its
-  `alive` output is a smooth 0..1 cutoff (1.0 until the last ~2% of charge);
-  the `rover_battery.rhai` bridge scales `drive_left`/`drive_right` by it —
-  a DELIBERATE last-writer clamp that never touches the ports while
-  `alive >= 0.999`, so it cannot race the drive kernel/law in the common
-  case, and brownouts rather than steps the rover dead at the end.
-  Exemplars: skid_rover, six_wheel_rover — other rovers adopt identically
-  (same variantSet + reference; works under both `driveLaw` variants since
-  the bridge reads the port value, not a specific writer).
+  `battery` references reusable battery and motor parts, authors their connector
+  topology in the rover file, and lists the actual part paths in a standard
+  `CollectionAPI:components` on the `Electrical` Scope. Runtime projects that
+  collection as one acausal electrical DAE, with drive commands entering as
+  scalar domain-boundary inputs. Brownout
+  and current limiting are equations and therefore belong in the projected
+  Modelica island. Production Rhai must never scale drive ports per tick.
 - `thermal` = **none | basic** — do the motors have temperatures. `none` is
   EMPTY; `basic` references `components/thermal/motor_thermal.usda`:
   `RoverMotorThermal.mo` per-side first-order heat balance (dissipation

@@ -292,7 +292,7 @@ That is a legitimate technique, not a bug — but write down that you did it.
 
 ## Behaviour — one binding for every language
 
-There is **no per-language schema**. `LunCoProgram` / `LunCoProgramAPI` is modelled
+There is **no per-language schema**. `LunCoProgramAPI` / `LunCoProgramAPI` is modelled
 on `UsdShade.Shader`, and **the engine comes from the source's file extension**,
 exactly as USD picks a file-format plugin.
 
@@ -306,14 +306,15 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 }
 ```
 
-`.mo` → Modelica, `.py` → Python, `.rhai` → Rhai, `.xml` → behaviour tree.
+`.mo` → Modelica, `.py` → Python, `.rhai` → Rhai, `.btxml` → behaviour tree
+(`.xml` is accepted only for upstream interoperability).
 **Nothing else about the prim changes.**
 
 - **Role is derived, never declared.** A program with `inputs:`/`outputs:` ports
   is a node in the port graph and is stepped; one without them runs for effects
   only. **Parameters are ports** — a gain is `float inputs:kv = 1.2`.
 - `LunCoProgramAPI` when the program *is* the thing (a vessel's flight control);
-  a child `LunCoProgram` **prim** for a guidance law or patrol tree, so deleting
+  a child `LunCoProgramAPI` **prim** for a guidance law or patrol tree, so deleting
   the prim deletes the behaviour. Only the prim form has `sourceAsset:subIdentifier`
   for multi-model `.mo` files.
 - **`realtimeSafe` defaults to `false`, and the wiring pass will then refuse it a
@@ -329,8 +330,9 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 
 Older attributes still exist and **inline always wins over path**: `lunco:script` /
 `lunco:scriptPath`. Prefer `lunco:program:*`. Behaviour trees follow the ordinary
-`LunCoProgram` rule — a child prim (conventionally `Mission`) whose `info:sourceCode` /
-`info:sourceAsset` ends in `.xml`, exactly as `.rhai` and `.mo` select their engines.
+`LunCoProgramAPI` rule — a child prim (conventionally `Mission`) whose `info:sourceCode` /
+`info:sourceAsset` ends in canonical `.btxml`, exactly as `.rhai` and `.mo`
+select their engines. Imported BehaviorTree.CPP/Groot/ROS `.xml` is also accepted.
 
 Vehicles are a special case with **no fallbacks**: a wheel missing any
 `LunCoWheelAPI` / `LunCoTireAPI` attribute logs an error and **refuses to spawn**.

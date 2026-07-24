@@ -13,10 +13,8 @@
 #
 # What it does: replaces the instant built-in skid mixing with a physical
 # command→torque law — `models/RoverDrivetrain.mo` integrates a first-order
-# motor lag per side on the solver clock, and the rhai bridge writes the
-# model's normalized outputs onto the rover's `drive_left`/`drive_right` ports
-# each tick. USD wires + Modelica physics + a rhai actuator; no Rust anywhere
-# (the leg_spring pattern, applied to driving).
+# motor lag per side on the solver clock. Native USD connections project the
+# outputs onto the rover ports; no tick script participates.
 #
 # NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
 def Xform "DriveLaw" (
@@ -28,9 +26,13 @@ def Xform "DriveLaw" (
     # is written) — which is exactly what a program-driven drive law needs:
     # nothing else may write the drive ports it owns.
     string lunco:driveKernel = "external"
+    float inputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
+    float inputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
 
     # The physics: per-side first-order motor lag, solver-clocked.
-    def LunCoProgram "Drivetrain"
+    def Scope "Drivetrain" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         uniform asset info:sourceAsset = @lunco://models/RoverDrivetrain.mo@
         uniform bool lunco:program:realtimeSafe = true
@@ -38,11 +40,5 @@ def Xform "DriveLaw" (
         # model reads the same FSW command ports the built-in kernels read.
         float inputs:throttle.connect = </DriveLaw.outputs:throttle>
         float inputs:steer.connect = </DriveLaw.outputs:steer>
-    }
-
-    # The actuation: model outputs → the rover's per-side drive ports.
-    def LunCoProgram "DriveBridge"
-    {
-        uniform asset info:sourceAsset = @lunco://scenarios/rover_modelica_drive.rhai@
     }
 }

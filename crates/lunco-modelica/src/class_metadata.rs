@@ -78,9 +78,7 @@ pub fn resolve_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata
             //    index by the within-relative name.
             workspace_doc_metadata(world, class)
         }
-        Library::UserFile { .. } | Library::Untitled(_) => {
-            workspace_doc_metadata(world, class)
-        }
+        Library::UserFile { .. } | Library::Untitled(_) => workspace_doc_metadata(world, class),
     }
 }
 
@@ -102,8 +100,7 @@ pub fn resolve_metadata_for_doc(
     doc_id: lunco_doc::DocumentId,
     drilled: Option<&str>,
 ) -> Option<ClassMetadata> {
-    let registry = world
-        .get_resource::<crate::state::ModelicaDocumentRegistry>()?;
+    let registry = world.get_resource::<crate::state::ModelicaDocumentRegistry>()?;
     let host = registry.host(doc_id)?;
     resolve_metadata_from_index(host.document().index(), drilled)
 }
@@ -145,9 +142,7 @@ fn resolve_metadata_from_index(
             found = index
                 .classes
                 .iter()
-                .find(|(k, _)| {
-                    k.as_str() == leaf || k.ends_with(&format!(".{leaf}"))
-                })
+                .find(|(k, _)| k.as_str() == leaf || k.ends_with(&format!(".{leaf}")))
                 .map(|(_, v)| v);
         }
         if let Some(entry) = found {
@@ -168,8 +163,7 @@ fn resolve_metadata_from_index(
 /// non-pre-baked branch and as a fallback for system libraries
 /// whose backing doc happens to be open.
 fn workspace_doc_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata> {
-    let registry = world
-        .get_resource::<crate::state::ModelicaDocumentRegistry>()?;
+    let registry = world.get_resource::<crate::state::ModelicaDocumentRegistry>()?;
     let target_doc = match &class.library {
         Library::UserFile { path } => registry.find_by_path(path),
         Library::Untitled(doc_id) => Some(*doc_id),
@@ -194,8 +188,7 @@ fn workspace_doc_metadata(world: &World, class: &ClassRef) -> Option<ClassMetada
                         .classes
                         .iter()
                         .find(|(k, _)| {
-                            k.as_str() == leaf.as_str()
-                                || k.ends_with(&format!(".{}", leaf))
+                            k.as_str() == leaf.as_str() || k.ends_with(&format!(".{}", leaf))
                         })
                         .map(|(_, v)| v)
                 });
@@ -210,9 +203,7 @@ fn workspace_doc_metadata(world: &World, class: &ClassRef) -> Option<ClassMetada
         if let Some(entry) = index
             .classes
             .iter()
-            .find(|(k, _)| {
-                k.as_str() == leaf.as_str() || k.ends_with(&format!(".{}", leaf))
-            })
+            .find(|(k, _)| k.as_str() == leaf.as_str() || k.ends_with(&format!(".{}", leaf)))
             .map(|(_, v)| v)
         {
             return Some(metadata_from(entry));

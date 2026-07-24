@@ -143,7 +143,9 @@ def Xform "SandboxScene" (
     {
         custom string lunco:scenario = "prismatic-drive"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/prismatic_drive.rhai@
         }

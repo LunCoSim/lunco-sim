@@ -49,12 +49,12 @@
 use avian3d::prelude::{ComputedCenterOfMass, LinearVelocity};
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
-use lunco_mobility::WheelRaycast;
 use lunco_core::{Avatar, GlobalEntityId};
+use lunco_mobility::WheelRaycast;
 
 /// Fallback amber threshold, for a vessel whose limits cannot be derived.
 ///
@@ -75,6 +75,37 @@ const FALLBACK_CAUTION_TILT_DEG: f32 = 20.0;
 /// Fallback red threshold. See [`FALLBACK_CAUTION_TILT_DEG`].
 const FALLBACK_DANGER_TILT_DEG: f32 = 30.0;
 
+use lunco_cosim::SimComponent;
+
+/// Information about a driven vessel's energy budget/battery.
+#[derive(Debug, Clone)]
+struct EnergyInfo {
+    /// State of charge in percent (0.0 ..= 100.0).
+    soc_pct: f32,
+    /// Total remaining energy in Wh, if capacity is known.
+    energy_wh: Option<f32>,
+    /// Pack capacity in Wh, if known.
+    capacity_wh: Option<f32>,
+}
+
+/// Information about a driven vessel's motor temperatures.
+#[derive(Debug, Clone)]
+struct ThermalInfo {
+    temp_left_k: Option<f32>,
+    temp_right_k: Option<f32>,
+}
+
+impl ThermalInfo {
+    fn max_temp_k(&self) -> f32 {
+        match (self.temp_left_k, self.temp_right_k) {
+            (Some(l), Some(r)) => l.max(r),
+            (Some(l), None) => l,
+            (None, Some(r)) => r,
+            (None, None) => 250.0,
+        }
+    }
+}
+
 /// What the HUD needs about the driven vessel, resolved once per frame.
 struct DrivenVessel {
     label: String,
@@ -90,6 +121,10 @@ struct DrivenVessel {
     speed: Option<f32>,
     /// Live comms link, or `None` for a vessel carrying no link node at all.
     link: Option<LinkInfo>,
+    /// Energy/battery status, or `None` if vehicle has no battery telemetry.
+    energy: Option<EnergyInfo>,
+    /// Thermal status, or `None` if vehicle has no thermal telemetry.
+    thermal: Option<ThermalInfo>,
     /// Amber threshold — this vessel's own slip limit when derivable, else the
     /// generic fallback. See [`FALLBACK_CAUTION_TILT_DEG`].
     caution_deg: f32,
@@ -174,7 +209,9 @@ fn resolve_link(
             return true;
         }
         for _ in 0..MAX_DEPTH {
-            let Ok(parent) = q_parents.get(e) else { return false };
+            let Ok(parent) = q_parents.get(e) else {
+                return false;
+            };
             e = parent.parent();
             if e == vessel {
                 return true;
@@ -201,7 +238,12 @@ fn resolve_link(
         .iter()
         .filter(|p| p.connected)
         .min_by(|a, b| a.range_m.total_cmp(&b.range_m))
-        .or_else(|| state.peers.iter().min_by(|a, b| a.range_m.total_cmp(&b.range_m)))?;
+        .or_else(|| {
+            state
+                .peers
+                .iter()
+                .min_by(|a, b| a.range_m.total_cmp(&b.range_m))
+        })?;
 
     // `LinkPeer` names its peer by GID (identity survives despawn/reload; an Entity
     // would not), so resolve GID → entity → `Name` for a label the driver can read.
@@ -221,7 +263,10 @@ fn resolve_link(
     // code intended `Base`. Truncate to the leaf FIRST, then decide.
     let leaf = |n: &str| n.rsplit('/').next().unwrap_or(n).to_string();
 
-    let peer_ent = q_ids.iter().find(|(_, g)| g.get() == pick.peer).map(|(e, _)| e);
+    let peer_ent = q_ids
+        .iter()
+        .find(|(_, g)| g.get() == pick.peer)
+        .map(|(e, _)| e);
     let peer_label = match peer_ent {
         Some(e) => {
             let own = q_name.get(e).ok().map(|n| leaf(n.as_str()));
@@ -251,6 +296,101 @@ fn resolve_link(
     })
 }
 
+fn is_owned_by_vessel(entity: Entity, vessel: Entity, q_parents: &Query<&ChildOf>) -> bool {
+    if entity == vessel {
+        return true;
+    }
+    let mut curr = entity;
+    for _ in 0..8 {
+        let Ok(parent) = q_parents.get(curr) else {
+            break;
+        };
+        curr = parent.parent();
+        if curr == vessel {
+            return true;
+        }
+    }
+    false
+}
+
+fn resolve_energy(
+    vessel: Entity,
+    q_sim: &Query<(Entity, &SimComponent)>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<EnergyInfo> {
+    for (ent, sim) in q_sim.iter() {
+        if !is_owned_by_vessel(ent, vessel, q_parents) {
+            continue;
+        }
+        let raw_soc = sim
+            .outputs
+            .get("soc")
+            .or_else(|| sim.outputs.get("soc_out"))
+            .or_else(|| sim.outputs.get("SOC"))
+            .or_else(|| sim.outputs.get("battery_soc"))
+            .copied();
+
+        if let Some(raw_soc) = raw_soc {
+            let soc_frac = if raw_soc <= 1.0 {
+                raw_soc.max(0.0)
+            } else {
+                (raw_soc / 100.0).clamp(0.0, 1.0)
+            };
+            let soc_pct = (soc_frac * 100.0) as f32;
+
+            let capacity_wh = capacity_wh(sim);
+
+            let energy_wh = capacity_wh.map(|cap| (soc_frac as f32) * cap);
+
+            return Some(EnergyInfo {
+                soc_pct,
+                energy_wh,
+                capacity_wh,
+            });
+        }
+    }
+    None
+}
+
+fn capacity_wh(sim: &SimComponent) -> Option<f32> {
+    sim.parameters
+        .get("capacity_wh")
+        .or_else(|| sim.inputs.get("capacity_wh"))
+        .copied()
+        .map(|value| value as f32)
+}
+
+fn resolve_thermal(
+    vessel: Entity,
+    q_sim: &Query<(Entity, &SimComponent)>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<ThermalInfo> {
+    for (ent, sim) in q_sim.iter() {
+        if !is_owned_by_vessel(ent, vessel, q_parents) {
+            continue;
+        }
+        let tl = sim
+            .outputs
+            .get("temp_left")
+            .or_else(|| sim.outputs.get("tl"))
+            .copied()
+            .map(|v| v as f32);
+        let tr = sim
+            .outputs
+            .get("temp_right")
+            .or_else(|| sim.outputs.get("tr"))
+            .copied()
+            .map(|v| v as f32);
+        if tl.is_some() || tr.is_some() {
+            return Some(ThermalInfo {
+                temp_left_k: tl,
+                temp_right_k: tr,
+            });
+        }
+    }
+    None
+}
+
 /// Resolve the vessel the local avatar is driving, or `None` in free flight.
 fn resolve_driven(
     q_avatar: &Query<&ControllerLink, With<Avatar>>,
@@ -265,6 +405,7 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
+    q_sim: &Query<(Entity, &SimComponent)>,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
     let (pos, rot) = lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
@@ -322,7 +463,9 @@ fn resolve_driven(
                 owned = true;
                 break;
             }
-            let Ok((_, link_t)) = q_spatial.get(e) else { break };
+            let Ok((_, link_t)) = q_spatial.get(e) else {
+                break;
+            };
             p = link_t.transform_point(p);
         }
         if !owned {
@@ -345,11 +488,7 @@ fn resolve_driven(
         let (c, d) = tilt_bands(min_mu, half_track, com_above_contact);
         (c, d, true)
     } else {
-        (
-            FALLBACK_CAUTION_TILT_DEG,
-            FALLBACK_DANGER_TILT_DEG,
-            false,
-        )
+        (FALLBACK_CAUTION_TILT_DEG, FALLBACK_DANGER_TILT_DEG, false)
     };
 
     Some(DrivenVessel {
@@ -363,6 +502,8 @@ fn resolve_driven(
         link: resolve_link(
             vessel, q_links, q_parents, q_name, q_ids, q_grids, q_spatial,
         ),
+        energy: resolve_energy(vessel, q_sim, q_parents),
+        thermal: resolve_thermal(vessel, q_sim, q_parents),
         caution_deg,
         danger_deg,
         limits_derived,
@@ -431,6 +572,46 @@ mod tilt_band_tests {
         // Easy tier on a very stable chassis: slip 52.4° vs a tip of ~45°.
         let (slip, tip) = tilt_bands(1.3, 1.0, 1.0);
         assert!(tip >= slip, "bands crossed: slip {slip}, tip {tip}");
+    }
+}
+
+#[cfg(test)]
+mod energy_thermal_tests {
+    use super::*;
+
+    #[test]
+    fn thermal_info_max_temp() {
+        let t = ThermalInfo {
+            temp_left_k: Some(290.0),
+            temp_right_k: Some(310.0),
+        };
+        assert_eq!(t.max_temp_k(), 310.0);
+
+        let t_empty = ThermalInfo {
+            temp_left_k: None,
+            temp_right_k: None,
+        };
+        assert_eq!(t_empty.max_temp_k(), 250.0);
+    }
+
+    #[test]
+    fn energy_capacity_uses_only_explicit_watt_hours() {
+        let sim = SimComponent {
+            parameters: [
+                ("capacity".to_string(), 83.33),
+                ("capacity_wh".to_string(), 2_000.0),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        assert_eq!(capacity_wh(&sim), Some(2_000.0));
+
+        let amp_hours_only = SimComponent {
+            parameters: [("capacity".to_string(), 83.33)].into_iter().collect(),
+            ..Default::default()
+        };
+        assert_eq!(capacity_wh(&amp_hours_only), None);
     }
 }
 
@@ -539,15 +720,30 @@ fn attitude_gauge(ui: &mut egui::Ui, v: &DrivenVessel, pal: &Palette) {
     // Bands, mirrored left and right of vertical.
     for sign in [-1.0_f32, 1.0] {
         arc(&painter, 0.0, sign * caution, pal.band_ok, 5.0);
-        arc(&painter, sign * caution, sign * danger, pal.band_caution, 5.0);
-        arc(&painter, sign * danger, sign * MAX_DEG, pal.band_danger, 5.0);
+        arc(
+            &painter,
+            sign * caution,
+            sign * danger,
+            pal.band_caution,
+            5.0,
+        );
+        arc(
+            &painter,
+            sign * danger,
+            sign * MAX_DEG,
+            pal.band_danger,
+            5.0,
+        );
     }
 
     // Needle: lean direction follows roll, magnitude is total tilt (so a purely
     // pitched-up rover still reads its tilt, it just does not lean).
     let lean = v.roll_deg.signum() * v.tilt_deg.min(MAX_DEG);
     let a = to_screen(lean);
-    let tip = egui::pos2(centre.x + (radius - 8.0) * a.cos(), centre.y + (radius - 8.0) * a.sin());
+    let tip = egui::pos2(
+        centre.x + (radius - 8.0) * a.cos(),
+        centre.y + (radius - 8.0) * a.sin(),
+    );
     // Colour against the UNCLAMPED limits — the reading must go amber at the real
     // slip angle even when that sits past the end of the dial.
     let col = pal.tilt(v.tilt_deg, v.caution_deg, v.danger_deg);
@@ -660,7 +856,12 @@ fn readout(ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32) 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).weak().size(10.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(value).color(color).monospace().size(12.0));
+            ui.label(
+                egui::RichText::new(value)
+                    .color(color)
+                    .monospace()
+                    .size(12.0),
+            );
         });
     });
 }
@@ -692,12 +893,24 @@ pub(crate) fn draw_rover_hud(
     q_ids: Query<(Entity, &GlobalEntityId)>,
     q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: Query<&ComputedCenterOfMass>,
+    q_sim: Query<(Entity, &SimComponent)>,
 ) {
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
     let Some(v) = resolve_driven(
-        &q_avatar, &q_name, &q_callsign, &q_gid, &q_vel, &q_parents, &q_grids, &q_spatial,
-        &q_links, &q_ids, &q_wheels, &q_com,
+        &q_avatar,
+        &q_name,
+        &q_callsign,
+        &q_gid,
+        &q_vel,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+        &q_links,
+        &q_ids,
+        &q_wheels,
+        &q_com,
+        &q_sim,
     ) else {
         return;
     };
@@ -725,10 +938,14 @@ pub(crate) fn draw_rover_hud(
                     // two small angles doubled the panel's height for numbers
                     // nobody reads digit-by-digit — the gauge above already
                     // shows attitude; these are the fine print under it.
-                    inline_pairs(ui, &[
-                        ("R", format!("{:+.0}°", v.roll_deg)),
-                        ("P", format!("{:+.0}°", v.pitch_deg)),
-                    ], &pal);
+                    inline_pairs(
+                        ui,
+                        &[
+                            ("R", format!("{:+.0}°", v.roll_deg)),
+                            ("P", format!("{:+.0}°", v.pitch_deg)),
+                        ],
+                        &pal,
+                    );
                 });
         });
 
@@ -750,11 +967,15 @@ pub(crate) fn draw_rover_hud(
                     ui.separator();
                     // Position and heading on ONE line — three stacked rows of
                     // one number each was most of this panel's height.
-                    inline_pairs(ui, &[
-                        ("E", format!("{:+.0}", v.pos.x)),
-                        ("N", format!("{:+.0}", -v.pos.z)),
-                        ("HDG", format!("{:.0}°", v.heading_deg)),
-                    ], &pal);
+                    inline_pairs(
+                        ui,
+                        &[
+                            ("E", format!("{:+.0}", v.pos.x)),
+                            ("N", format!("{:+.0}", -v.pos.z)),
+                            ("HDG", format!("{:.0}°", v.heading_deg)),
+                        ],
+                        &pal,
+                    );
 
                     // COMMS — only for a vessel that actually carries a link node.
                     // A rover with no radio shows nothing rather than a permanent
@@ -811,10 +1032,14 @@ pub(crate) fn draw_rover_hud(
                             //
                             // What a driver needs from a link is whether it closes,
                             // to whom, how far and how high — which is what is left.
-                            inline_pairs(ui, &[
-                                ("range", range),
-                                ("elev", format!("{:+.0}°", link.elevation_deg)),
-                            ], &pal);
+                            inline_pairs(
+                                ui,
+                                &[
+                                    ("range", range),
+                                    ("elev", format!("{:+.0}°", link.elevation_deg)),
+                                ],
+                                &pal,
+                            );
                             if !link.connected {
                                 ui.label(
                                     egui::RichText::new("no line of sight — autonomy only")
@@ -822,6 +1047,88 @@ pub(crate) fn draw_rover_hud(
                                         .size(9.0),
                                 );
                             }
+                        }
+                    }
+
+                    // POWER / ENERGY — shown for any vessel with battery/energy telemetry.
+                    if let Some(energy) = &v.energy {
+                        ui.separator();
+                        let soc_str = format!("{:.0}%", energy.soc_pct);
+                        let color = if energy.soc_pct > 30.0 {
+                            pal.ok
+                        } else if energy.soc_pct > 15.0 {
+                            pal.caution
+                        } else {
+                            pal.danger
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("POWER").weak().size(9.0));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(soc_str)
+                                            .color(color)
+                                            .strong()
+                                            .size(11.0),
+                                    );
+                                },
+                            );
+                        });
+                        if let Some(wh) = energy.energy_wh {
+                            let energy_str = if wh >= 1000.0 {
+                                format!("{:.2} kWh", wh / 1000.0)
+                            } else {
+                                format!("{:.0} Wh", wh)
+                            };
+                            let cap_str = energy
+                                .capacity_wh
+                                .map(|cap| {
+                                    if cap >= 1000.0 {
+                                        format!("{:.1} kWh", cap / 1000.0)
+                                    } else {
+                                        format!("{:.0} Wh", cap)
+                                    }
+                                })
+                                .unwrap_or_default();
+                            inline_pairs(ui, &[("energy", energy_str), ("cap", cap_str)], &pal);
+                        } else {
+                            readout(ui, "charge", format!("{:.1}%", energy.soc_pct), pal.value);
+                        }
+                    }
+
+                    // THERMAL — shown for any vessel with motor thermal telemetry.
+                    if let Some(thermal) = &v.thermal {
+                        ui.separator();
+                        let max_temp_k = thermal.max_temp_k();
+                        let temp_c = max_temp_k - 273.15;
+                        let color = if max_temp_k > 350.0 {
+                            pal.danger
+                        } else if max_temp_k > 310.0 {
+                            pal.caution
+                        } else {
+                            pal.ok
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("THERMAL").weak().size(9.0));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("{:.0}°C", temp_c))
+                                            .color(color)
+                                            .strong()
+                                            .size(11.0),
+                                    );
+                                },
+                            );
+                        });
+                        if let (Some(tl), Some(tr)) = (thermal.temp_left_k, thermal.temp_right_k) {
+                            inline_pairs(
+                                ui,
+                                &[("L", format!("{:.0} K", tl)), ("R", format!("{:.0} K", tr))],
+                                &pal,
+                            );
                         }
                     }
 

@@ -56,7 +56,8 @@ static GLOBAL_PARSED_MSL: OnceLock<Arc<Vec<(String, rumoca_compile::parsing::Sto
 static MSL_DECODE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Read the pre-parsed MSL bundle if any has been installed.
-pub fn global_parsed_msl() -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
+pub fn global_parsed_msl(
+) -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
     GLOBAL_PARSED_MSL.get()
 }
 
@@ -217,8 +218,8 @@ pub(crate) fn write_parsed_bundle(
 #[cfg(target_arch = "wasm32")]
 pub fn decompress_parsed_bundle(compressed: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
-    let mut decoder = ruzstd::StreamingDecoder::new(compressed)
-        .map_err(|e| format!("zstd decoder: {e}"))?;
+    let mut decoder =
+        ruzstd::StreamingDecoder::new(compressed).map_err(|e| format!("zstd decoder: {e}"))?;
     let mut out = Vec::new();
     decoder
         .read_to_end(&mut out)
@@ -270,7 +271,9 @@ pub fn parse_source_bundle_to_docs(
         }
     }
     if out.is_empty() {
-        return Err(format!("source bundle produced 0 parsed docs ({failed} failed)"));
+        return Err(format!(
+            "source bundle produced 0 parsed docs ({failed} failed)"
+        ));
     }
     if failed > 0 {
         bevy::log::warn!(
@@ -416,7 +419,9 @@ pub fn ingest_worker_decoded_msl(decoded: Vec<u8>) {
         acc: Vec::new(),
     });
     if seeded {
-        info!("[MSL] received decoded MSL bytes from worker — deserialize only (no main decompress)");
+        info!(
+            "[MSL] received decoded MSL bytes from worker — deserialize only (no main decompress)"
+        );
     }
 }
 
@@ -542,7 +547,9 @@ fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
                 compressed_bytes: 0,
                 uncompressed_bytes: uncompressed,
             };
-            info!("[MSL] main-thread decode complete: {count} docs — resolution/autocomplete ready");
+            info!(
+                "[MSL] main-thread decode complete: {count} docs — resolution/autocomplete ready"
+            );
         } else {
             *state = MslLoadState::Loading {
                 phase: MslLoadPhase::Parsing,
@@ -580,9 +587,7 @@ fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         if matches!(sources[0], MslAssetSource::Filesystem(_)) {
-            for (subdir, _pkg) in
-                crate::package_tree::scanner::discover_third_party_libs()
-            {
+            for (subdir, _pkg) in crate::package_tree::scanner::discover_third_party_libs() {
                 sources.push(MslAssetSource::Filesystem(
                     lunco_assets::cache_dir().join(subdir),
                 ));
@@ -620,10 +625,11 @@ pub fn ensure_msl_source_unpacked() {
 /// worker bin (`bin/lunica_worker.rs`) can install the MSL bundle it
 /// receives over postMessage.
 #[cfg(target_arch = "wasm32")]
-pub fn install_global_parsed_msl_pub(parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>) {
+pub fn install_global_parsed_msl_pub(
+    parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
+) {
     install_global_parsed_msl(parsed);
 }
-
 
 /// Marker resource. Insert **before** adding [`MslRemotePlugin`] (or
 /// [`ModelicaCorePlugin`], which adds it transitively) to suppress the
@@ -715,7 +721,10 @@ impl Plugin for MslRemotePlugin {
 
             if let Some(root) = resolved_root {
                 let count = count_mo_files(&root);
-                info!("[MSL] using on-disk root {} ({count} .mo files)", root.display());
+                info!(
+                    "[MSL] using on-disk root {} ({count} .mo files)",
+                    root.display()
+                );
                 lunco_assets::msl::install_global_msl_sources(sources_with_extras(
                     MslAssetSource::Filesystem(root),
                 ));
@@ -962,8 +971,7 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
             set_install_state(
                 &slot,
                 MslLoadState::Failed(
-                    "downloader succeeded but no Modelica/ tree was found in cache"
-                        .into(),
+                    "downloader succeeded but no Modelica/ tree was found in cache".into(),
                 ),
             );
             return;
@@ -1058,10 +1066,8 @@ fn drain_native_msl_install(
     let Ok(mut inner) = slot.0.lock() else { return };
     if let Some(new_state) = inner.pending_state.take() {
         match (&*state, &new_state) {
-            (
-                MslLoadState::Loading { phase: a, .. },
-                MslLoadState::Loading { phase: b, .. },
-            ) if a == b => {}
+            (MslLoadState::Loading { phase: a, .. }, MslLoadState::Loading { phase: b, .. })
+                if a == b => {}
             _ => log_state_transition(&new_state),
         }
         *state = new_state;
@@ -1242,9 +1248,7 @@ fn drain_msl_load_slot(
             let pending = in_memory.as_source_pairs();
             let total = pending.len();
             let now = web_time::Instant::now();
-            bevy::log::info!(
-                "[MSL] parsing {total} files (chunked, {PARSE_CHUNK_SIZE}/frame)…"
-            );
+            bevy::log::info!("[MSL] parsing {total} files (chunked, {PARSE_CHUNK_SIZE}/frame)…");
             commands.insert_resource(MslParseInProgress {
                 pending,
                 parsed: Vec::with_capacity(total),
@@ -1269,7 +1273,9 @@ fn drive_msl_parse(
     // its tail in O(1); insertion order into `parsed` doesn't matter
     // because rumoca rebuilds its own indices on insert.
     for _ in 0..PARSE_CHUNK_SIZE {
-        let Some((uri, source)) = state.pending.pop() else { break };
+        let Some((uri, source)) = state.pending.pop() else {
+            break;
+        };
         match rumoca_phase_parse::parse_to_ast(&source, &uri) {
             Ok(definition) => state.parsed.push((uri, definition)),
             Err(e) => bevy::log::warn!("[MSL] parse '{uri}': {e}"),
@@ -1402,7 +1408,8 @@ mod web {
             },
         );
 
-        let manifest_bytes = web_fetch::fetch_bytes_revalidated(CACHE_NAME, "msl/manifest.json").await?;
+        let manifest_bytes =
+            web_fetch::fetch_bytes_revalidated(CACHE_NAME, "msl/manifest.json").await?;
         let manifest: MslManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| format!("manifest.json parse: {e}"))?;
         if manifest.schema_version != 1 {
@@ -1467,9 +1474,7 @@ mod web {
                 lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG,
             );
         }
-        let parsed_bytes = if let Some(parsed_meta) =
-            manifest.parsed.as_ref().filter(|_| tag_ok)
-        {
+        let parsed_bytes = if let Some(parsed_meta) = manifest.parsed.as_ref().filter(|_| tag_ok) {
             let parsed_path = format!("msl/{}", parsed_meta.filename);
             let phase2 = bundle_fetch_phase(&parsed_path).await;
             // Per-blob again: the (larger) parsed bundle sweeps 0..its own size.

@@ -8,11 +8,8 @@
 // hook functions the engine calls. Functions here may freely call the prelude
 // (world_pos, nearest_where, vsub, …) and the host verbs.
 //
-//   fn on_start(me) { this.leg = 0; this.visited = []; }
-//   fn on_tick(me)  {
-//       let p = survey::lawnmower_target(me, 20.0, 5.0, this.leg);
-//       if nav_to(me, p, 1.0, 2.0) { this.leg += 1; }
-//   }
+// Use this library to generate authored waypoints once. Execute continuous
+// path following in a behaviour tree, Modelica controller, or native runtime.
 
 /// A waypoint on a boustrophedon ("lawnmower") survey pattern. `leg` selects the
 /// row (rows are `spacing` metres apart, each `width` long, alternating

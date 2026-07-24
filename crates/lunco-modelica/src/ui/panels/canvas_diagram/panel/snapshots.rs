@@ -1,9 +1,9 @@
 //! Data snapshots for canvas-visual consumption.
 
+use crate::state::ModelicaDocumentRegistry;
+use crate::ModelicaModel;
 use bevy_egui::egui;
 use lunco_workbench::PanelCtx;
-use crate::state::{ModelicaDocumentRegistry};
-use crate::ModelicaModel;
 
 /// Resolve the `(min, max)` attributes of an input `member` on a
 /// component of type `ty`, by building (once, cached) a `ModelicaIndex`
@@ -36,9 +36,10 @@ fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Opt
     // Match by member name AND owning class (exact or qualified suffix) so
     // a member name shared across classes (e.g. `availability`) resolves to
     // the right one.
-    let entry = idx.components.iter().find(|e| {
-        e.name == member && (e.class == ty || e.class.ends_with(&format!(".{ty}")))
-    });
+    let entry = idx
+        .components
+        .iter()
+        .find(|e| e.name == member && (e.class == ty || e.class.ends_with(&format!(".{ty}"))));
     match entry {
         Some(e) => (
             e.modifications.get("min").and_then(|s| s.parse().ok()),
@@ -48,13 +49,19 @@ fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Opt
     }
 }
 
-pub(crate) fn stash_snapshots(ui: &egui::Context, ctx: &PanelCtx, doc_id: Option<lunco_doc::DocumentId>) {
+pub(crate) fn stash_snapshots(
+    ui: &egui::Context,
+    ctx: &PanelCtx,
+    doc_id: Option<lunco_doc::DocumentId>,
+) {
     // ─── Signals ───
     if let Some(sig_reg) = ctx.resource::<lunco_viz::SignalRegistry>() {
         let mut snapshot = lunco_viz::kinds::canvas_plot_node::SignalSnapshot::default();
         for (sig_ref, hist) in sig_reg.iter_scalar() {
             let pts: Vec<[f64; 2]> = hist.samples.iter().map(|s| [s.time, s.value]).collect();
-            snapshot.samples.insert((sig_ref.entity, sig_ref.path.clone()), pts);
+            snapshot
+                .samples
+                .insert((sig_ref.entity, sig_ref.path.clone()), pts);
         }
         // Seed doc → playback entity first, then overwrite with the
         // live cosim entity (if any) so live wins for docs that have
@@ -62,9 +69,7 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, ctx: &PanelCtx, doc_id: Option
         // series in `SignalRegistry` (published by
         // `drain_pending_handles`), keeping the lookup uniform
         // — `(entity, path) → samples` — across live and historical.
-        if let Some(playback) = ctx
-            .resource::<crate::experiments_runner::PlaybackEntities>()
-        {
+        if let Some(playback) = ctx.resource::<crate::experiments_runner::PlaybackEntities>() {
             for (d, e) in &playback.0 {
                 snapshot.doc_to_entity.insert(d.raw(), *e);
             }
@@ -110,19 +115,27 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, ctx: &PanelCtx, doc_id: Option
         }
         if let Some(entity) = canvas_sim {
             if let Some(model) = ctx.get::<ModelicaModel>(entity) {
-                for (k, v) in &model.parameters { state.values.insert(k.to_string(), *v); }
-                for (k, v) in &model.inputs { state.values.insert(k.to_string(), *v); }
-                for (k, v) in &model.variables { state.values.insert(k.to_string(), *v); }
+                for (k, v) in &model.parameters {
+                    state.values.insert(k.to_string(), *v);
+                }
+                for (k, v) in &model.inputs {
+                    state.values.insert(k.to_string(), *v);
+                }
+                for (k, v) in &model.variables {
+                    state.values.insert(k.to_string(), *v);
+                }
             }
         }
         lunco_viz::kinds::canvas_plot_node::stash_node_state(ui, state);
-        
+
         let any_unpaused = canvas_sim
             .and_then(|e| ctx.get::<ModelicaModel>(e))
             .map(|m| !m.paused)
             .unwrap_or(false);
         let dt = ui.input(|i| i.stable_dt as f64);
-        let prev = ui.data(|d| d.get_temp::<f64>(egui::Id::new("lunco_modelica_flow_anim_time"))).unwrap_or(0.0);
+        let prev = ui
+            .data(|d| d.get_temp::<f64>(egui::Id::new("lunco_modelica_flow_anim_time")))
+            .unwrap_or(0.0);
         let next = if any_unpaused { prev + dt } else { prev };
         ui.data_mut(|d| {
             d.insert_temp(egui::Id::new("lunco_modelica_flow_anim_time"), next);
@@ -132,10 +145,12 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, ctx: &PanelCtx, doc_id: Option
 
     // ─── Input Controls ───
     {
-        let mut control_snapshot = lunco_viz::kinds::canvas_plot_node::InputControlSnapshot::default();
+        let mut control_snapshot =
+            lunco_viz::kinds::canvas_plot_node::InputControlSnapshot::default();
         if let Some(entity) = canvas_sim {
             if let Some(model) = ctx.get::<ModelicaModel>(entity) {
-                let host = ctx.resource::<ModelicaDocumentRegistry>()
+                let host = ctx
+                    .resource::<ModelicaDocumentRegistry>()
                     .and_then(|r| r.host(model.document));
                 let index_ref = host.map(|h| h.document().index());
                 // A standalone `within P;` duplicate's own index can't see
@@ -143,15 +158,18 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, ctx: &PanelCtx, doc_id: Option
                 // like `valve.opening` has no min/max → the slider falls back
                 // to a value-derived range that runs away. Recover the real
                 // bounds (0..100) from the bundled package P.
-                let within_pkg = host
-                    .and_then(|h| crate::document::duplicate::within_package(h.document().source()));
+                let within_pkg = host.and_then(|h| {
+                    crate::document::duplicate::within_package(h.document().source())
+                });
                 for (qualified, value) in &model.inputs {
                     let (mut mn, mut mx) = index_ref
                         .and_then(|idx| idx.find_component_by_leaf(qualified))
-                        .map(|entry| (
-                            entry.modifications.get("min").and_then(|s| s.parse().ok()),
-                            entry.modifications.get("max").and_then(|s| s.parse().ok()),
-                        ))
+                        .map(|entry| {
+                            (
+                                entry.modifications.get("min").and_then(|s| s.parse().ok()),
+                                entry.modifications.get("max").and_then(|s| s.parse().ok()),
+                            )
+                        })
                         .unwrap_or((None, None));
                     if mn.is_none() && mx.is_none() {
                         if let (Some(pkg), Some((inst, member))) =
@@ -167,7 +185,9 @@ pub(crate) fn stash_snapshots(ui: &egui::Context, ctx: &PanelCtx, doc_id: Option
                             }
                         }
                     }
-                    control_snapshot.inputs.insert(qualified.to_string(), (*value, mn, mx));
+                    control_snapshot
+                        .inputs
+                        .insert(qualified.to_string(), (*value, mn, mx));
                 }
             }
         }
@@ -182,10 +202,16 @@ fn seed_state_from_latest_experiment(
 ) {
     use lunco_experiments::ExperimentRegistry;
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
-    let active_plot = ctx.resource::<crate::ui::panels::experiments::ActivePlot>().copied().unwrap_or_default().or_default();
+    let active_plot = ctx
+        .resource::<crate::ui::panels::experiments::ActivePlot>()
+        .copied()
+        .unwrap_or_default()
+        .or_default();
     let plot_states = ctx.resource::<crate::ui::panels::experiments::PlotPanelStates>();
     let visible_in_active = plot_states.map(|s| s.visible(active_plot));
-    let Some(registry) = ctx.resource::<ExperimentRegistry>() else { return; };
+    let Some(registry) = ctx.resource::<ExperimentRegistry>() else {
+        return;
+    };
     let exps = registry.list_for_twin(&twin);
     let chosen = exps.iter().rev().find(|e| {
         e.result.is_some()
@@ -196,7 +222,9 @@ fn seed_state_from_latest_experiment(
     });
     let Some(exp) = chosen else { return };
     let Some(result) = &exp.result else { return };
-    if result.times.is_empty() { return; }
+    if result.times.is_empty() {
+        return;
+    }
     let scrub_time = plot_states.and_then(|s| s.scrub(active_plot));
     let idx = match scrub_time {
         Some(t) => {
@@ -204,7 +232,10 @@ fn seed_state_from_latest_experiment(
             let mut best_d = f64::INFINITY;
             for (i, ti) in result.times.iter().enumerate() {
                 let d = (ti - t).abs();
-                if d < best_d { best_d = d; best = i; }
+                if d < best_d {
+                    best_d = d;
+                    best = i;
+                }
             }
             best
         }
@@ -212,7 +243,9 @@ fn seed_state_from_latest_experiment(
     };
     for (name, samples) in &result.series {
         if let Some(v) = samples.get(idx) {
-            if v.is_finite() { state.values.insert(name.clone(), *v); }
+            if v.is_finite() {
+                state.values.insert(name.clone(), *v);
+            }
         }
     }
 }

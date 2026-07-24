@@ -1,17 +1,20 @@
 //! Helpers for syncing tab state with global workspace state.
 
+use crate::model_tabs::ModelTabs;
+use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::panels::code_editor::EditorBufferState;
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use crate::ui::panels::code_editor::EditorBufferState;
-use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
-use crate::model_tabs::ModelTabs;
 
 // `drilled_class_for_doc`, `default_simulation_class`, `RunTargetOverrides`,
 // and `set_run_target_for_doc` moved to the egui-free `crate::sim_default`
 // module so the headless build can resolve the default simulation class.
 
 pub fn resolve_tab_target(world: &World, instance: u64) -> (DocumentId, Option<String>) {
-    if let Some(state) = world.get_resource::<ModelTabs>().and_then(|t| t.get(instance)) {
+    if let Some(state) = world
+        .get_resource::<ModelTabs>()
+        .and_then(|t| t.get(instance))
+    {
         return (state.doc, state.drilled_class.clone());
     }
     (DocumentId::new(instance), None)
@@ -39,9 +42,7 @@ pub fn resolve_tab_title(
                 // M-badge row → `RenameModelicaClass`.
                 let raw = document.origin().display_name();
                 if raw == "package" {
-                    if let lunco_doc::DocumentOrigin::File { path, .. } =
-                        document.origin()
-                    {
+                    if let lunco_doc::DocumentOrigin::File { path, .. } = document.origin() {
                         if let Some(parent) = path
                             .parent()
                             .and_then(|p| p.file_name())
@@ -67,11 +68,7 @@ pub fn resolve_tab_title(
     (format!("Model #{}", doc.raw()), false, false)
 }
 
-pub fn sync_active_tab_to_doc(
-    world: &mut World,
-    doc: DocumentId,
-    _drilled_class: Option<&str>,
-) {
+pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class: Option<&str>) {
     let active_matches = world
         .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document)
@@ -101,21 +98,16 @@ pub fn sync_active_tab_to_doc(
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| format!("mem://{display_name}"));
             let library = match document.origin() {
-                lunco_doc::DocumentOrigin::Untitled { .. } => {
-                    crate::state::ModelLibrary::InMemory
-                }
-                lunco_doc::DocumentOrigin::Bundled { .. } => {
-                    crate::state::ModelLibrary::Bundled
-                }
+                lunco_doc::DocumentOrigin::Untitled { .. } => crate::state::ModelLibrary::InMemory,
+                lunco_doc::DocumentOrigin::Bundled { .. } => crate::state::ModelLibrary::Bundled,
                 lunco_doc::DocumentOrigin::File { writable: true, .. } => {
                     crate::state::ModelLibrary::User
                 }
-                lunco_doc::DocumentOrigin::File { writable: false, .. } => {
-                    crate::state::ModelLibrary::Bundled
-                }
+                lunco_doc::DocumentOrigin::File {
+                    writable: false, ..
+                } => crate::state::ModelLibrary::Bundled,
             };
-            let read_only =
-                matches!(library, crate::state::ModelLibrary::Bundled);
+            let read_only = matches!(library, crate::state::ModelLibrary::Bundled);
             let detected_name = document
                 .index()
                 .classes
@@ -134,8 +126,7 @@ pub fn sync_active_tab_to_doc(
     };
 
     let snapshot = snapshot.or_else(|| {
-        let openings = world
-            .get_resource::<crate::ui::document_openings::DocumentOpenings>()?;
+        let openings = world.get_resource::<crate::ui::document_openings::DocumentOpenings>()?;
         if let Some(qualified) = openings.drill_in_qualified(doc) {
             let qualified = qualified.to_string();
             let short = qualified
@@ -165,9 +156,7 @@ pub fn sync_active_tab_to_doc(
         }
         None
     });
-    let Some((path_str, display_name, source, read_only, library, detected_name)) =
-        snapshot
-    else {
+    let Some((path_str, display_name, source, read_only, library, detected_name)) = snapshot else {
         return;
     };
 

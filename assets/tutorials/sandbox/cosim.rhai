@@ -23,7 +23,7 @@ fn steps() {
 
         #{ anchor: "",
            title: "Where the model is attached",
-           body: "A program is a PRIM, like a UsdShade shader. The lander's flight-control system is inseparable from the airframe, so it authors the program properties in place: `uniform asset info:sourceAsset = @models/Lander.mo@` on the vessel prim itself. The model's `inputs:` (throttle, pitch, roll, yaw) ARE the vessel's control surface — the live command ports a session writes when it takes the stick. A program that is bolted on instead — a guidance law, a supervisory script — is a `def LunCoProgram` CHILD prim, so deleting the prim removes the behaviour." },
+           body: "A program is an applied capability. The lander's flight-control system is inseparable from the airframe, so the vessel applies `LunCoProgramAPI` and authors `info:sourceAsset = @models/Lander.mo@` in place. Its `inputs:` are the vessel's live control surface. A separable guidance law or supervisor is an ordinary `Scope` child applying the same API, so deleting that scope removes only the bolted-on behaviour." },
 
         #{ anchor: "",
            title: "The wire",
@@ -31,7 +31,7 @@ fn steps() {
 
         #{ anchor: "panel.bottom",
            title: "The model speaks in events",
-           body: "A threshold crossing on a port is published as a named event. One `def LunCoPortEvent` child prim per rule: `lunco:event:port = \"m_prop\"`, `lunco:event:op = \"lt\"`, `lunco:event:threshold = 200`, `lunco:event:emit = \"lander_low_fuel\"` — so when propellant mass drops under 200, a `lander_low_fuel` event reaches scripts and the HUD. The lander declares a second one, `Depleted`, at 0.5. Watch for them in the Console below as the descent burns fuel." },
+           body: "Modelica publishes each physical condition as a 0/1 output. A `def LunCoEvent` connects `inputs:trigger` to that output and supplies `lunco:event:name` plus severity. The lander wires `low_fuel` and `depleted` this way, so scripts and the HUD react without polling or duplicating thresholds outside the model. Watch for those events in the Console below as the descent burns fuel." },
 
         #{ anchor: "",
            title: "Verify it from code",
@@ -39,7 +39,7 @@ fn steps() {
 
         #{ anchor: "",
            title: "Your turn: a battery on a rover",
-           body: "A whole subsystem, one model. A rover's electrical system is a CIRCUIT — a panel, a pack and the hub motors on a shared bus — and a circuit is acausal: the `LunCo.Electrical` components (`Pin` with a `flow` current) `connect()` to a node and Modelica writes Kirchhoff's law, so nothing counts or sums the loads. That is one model (`vessels/rovers/rucheyok/rucheyok_electrical.mo`), hence one `def LunCoProgram \"System\"` under a `def Scope \"Electrical\"`. Its `inputs:` are the circuit's parameters (battery capacity, panel area) plus its boundary — irradiance from the sun, each wheel's shaft speed from physics — and `outputs:soc` is the charge draining as you drive. Open it in the Design workspace to see the circuit you are flying." },
+           body: "A whole subsystem, one compiled model. A rover's electrical system is an acausal circuit: each part applies `LunCoProgramAPI`, exposes its Modelica `Pin` as `connectors:*`, and ordinary USD connections assemble the bus. Runtime projection emits one Modelica wrapper for the enclosing `Electrical` Scope; Modelica `connect()` enforces Kirchhoff balance. The Scope exposes only causal boundary `inputs:` and `outputs:` such as drive demand and SoC." },
     ]
 }
 

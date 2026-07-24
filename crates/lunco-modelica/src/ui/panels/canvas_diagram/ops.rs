@@ -10,12 +10,12 @@ use bevy::prelude::*;
 
 use crate::document::ModelicaOp;
 use crate::pretty::{self, Placement};
-use crate::ui::commands::AutoArrangeDiagram;
 use crate::state::ModelicaDocumentRegistry;
+use crate::ui::commands::AutoArrangeDiagram;
 
-use super::coords::{ModelicaPos, canvas_to_modelica};
+use super::coords::{canvas_to_modelica, ModelicaPos};
 use super::projection::projection_relevant_source_hash;
-use super::{CanvasDiagramState, IconNodeData, active_doc_from_world, active_doc_from_world_ctx};
+use super::{active_doc_from_world, active_doc_from_world_ctx, CanvasDiagramState, IconNodeData};
 use crate::model_tabs_types::TabRenderContext;
 
 /// Read the active tab id from `TabRenderContext`. `None` outside a
@@ -24,15 +24,15 @@ use crate::model_tabs_types::TabRenderContext;
 /// semantics in that case.
 #[cfg(feature = "ui")]
 fn render_tab_id_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<crate::model_tabs_types::TabId> {
-    ctx
-        .resource::<TabRenderContext>()
-        .and_then(|c| c.tab_id)
+    ctx.resource::<TabRenderContext>().and_then(|c| c.tab_id)
 }
 
 /// Resolve `(document id, editing class name)` for the current tab.
 /// `PanelCtx` reader used by the canvas render path.
 #[cfg(feature = "ui")]
-pub(super) fn resolve_doc_context(ctx: &lunco_workbench::PanelCtx) -> (Option<lunco_doc::DocumentId>, Option<String>) {
+pub(super) fn resolve_doc_context(
+    ctx: &lunco_workbench::PanelCtx,
+) -> (Option<lunco_doc::DocumentId>, Option<String>) {
     // Active doc from the Workspace session; the per-doc Index
     // is read as a display-cache fallback when the registry AST hasn't
     // caught up yet. Both paths are optional — the caller tolerates
@@ -55,12 +55,10 @@ pub(super) fn resolve_doc_context(ctx: &lunco_workbench::PanelCtx) -> (Option<lu
     // (AnnotatedRocketStage, every MSL example, …) is the *package*
     // wrapper. Adding a component to a package corrupts the file —
     // packages can only contain classes, not components.
-    let drilled_in =
-        crate::sim_default::drilled_class_for_doc_ctx(ctx, doc_id);
+    let drilled_in = crate::sim_default::drilled_class_for_doc_ctx(ctx, doc_id);
     let class = drilled_in
         .or_else(|| {
-            ctx
-                .resource::<ModelicaDocumentRegistry>()
+            ctx.resource::<ModelicaDocumentRegistry>()
                 .and_then(|r| r.host(doc_id))
                 .and_then(|h| {
                     h.document()
@@ -94,7 +92,9 @@ pub(super) fn build_ops_from_events(
     for ev in events {
         match ev {
             SceneEvent::NodeMoved { id, new_min, .. } => {
-                let Some(node) = scene.node(*id) else { continue };
+                let Some(node) = scene.node(*id) else {
+                    continue;
+                };
                 // Plot tiles are vendor-annotation rows in
                 // `Diagram(graphics)`, not component placements. They
                 // round-trip through `SetPlotNodeExtent` keyed by
@@ -160,7 +160,9 @@ pub(super) fn build_ops_from_events(
                 // The `origin` we set during projection carries the
                 // Modelica instance name. Skip if missing (shouldn't
                 // happen — projection always sets it).
-                let Some(name) = node.origin.clone() else { continue };
+                let Some(name) = node.origin.clone() else {
+                    continue;
+                };
                 // Use the node's actual icon extent — `Placement::at`
                 // hardcodes 20×20, which silently shrinks (or grows)
                 // every dragged component back to the default size on
@@ -216,46 +218,44 @@ pub(super) fn build_ops_from_events(
                         })
                         .collect();
                     for (eid, is_from, is_to) in incident {
-                        let Some(edge) = scene.edge(eid) else { continue };
+                        let Some(edge) = scene.edge(eid) else {
+                            continue;
+                        };
                         let mut pts = edge.waypoints.clone();
                         if is_from && !pts.is_empty() {
-                            pts[0] = lunco_canvas::Pos::new(
-                                pts[0].x + dx,
-                                pts[0].y + dy,
-                            );
+                            pts[0] = lunco_canvas::Pos::new(pts[0].x + dx, pts[0].y + dy);
                         }
                         if is_to && !pts.is_empty() {
                             let last = pts.len() - 1;
-                            pts[last] = lunco_canvas::Pos::new(
-                                pts[last].x + dx,
-                                pts[last].y + dy,
-                            );
+                            pts[last] = lunco_canvas::Pos::new(pts[last].x + dx, pts[last].y + dy);
                         }
-                        let Some(from_node) = scene.node(edge.from.node) else { continue };
-                        let Some(to_node) = scene.node(edge.to.node) else { continue };
-                        let Some(from_instance) = from_node.origin.clone() else { continue };
-                        let Some(to_instance) = to_node.origin.clone() else { continue };
-                        let modelica_points: Vec<(f32, f32)> = pts
-                            .iter()
-                            .map(|p| (p.x, -p.y))
-                            .collect();
+                        let Some(from_node) = scene.node(edge.from.node) else {
+                            continue;
+                        };
+                        let Some(to_node) = scene.node(edge.to.node) else {
+                            continue;
+                        };
+                        let Some(from_instance) = from_node.origin.clone() else {
+                            continue;
+                        };
+                        let Some(to_instance) = to_node.origin.clone() else {
+                            continue;
+                        };
+                        let modelica_points: Vec<(f32, f32)> =
+                            pts.iter().map(|p| (p.x, -p.y)).collect();
                         ops.push(ModelicaOp::SetConnectionLine {
                             class: class.to_string(),
-                            from: pretty::PortRef::new(
-                                &from_instance,
-                                edge.from.port.as_str(),
-                            ),
-                            to: pretty::PortRef::new(
-                                &to_instance,
-                                edge.to.port.as_str(),
-                            ),
+                            from: pretty::PortRef::new(&from_instance, edge.from.port.as_str()),
+                            to: pretty::PortRef::new(&to_instance, edge.to.port.as_str()),
                             points: modelica_points,
                         });
                     }
                 }
             }
             SceneEvent::NodeResized { id, new_rect, .. } => {
-                let Some(node) = scene.node(*id) else { continue };
+                let Some(node) = scene.node(*id) else {
+                    continue;
+                };
                 if node.kind == lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND {
                     let signal = node
                         .origin
@@ -303,7 +303,9 @@ pub(super) fn build_ops_from_events(
                 // the node's centre fixed but adopting the new
                 // width/height. Lets users tighten oversized library
                 // icons on the canvas without writing source by hand.
-                let Some(name) = node.origin.clone() else { continue };
+                let Some(name) = node.origin.clone() else {
+                    continue;
+                };
                 let w = new_rect.width().max(1.0);
                 let h = new_rect.height().max(1.0);
                 let m = super::coords::canvas_min_to_modelica_center(new_rect.min, w, h);
@@ -321,10 +323,18 @@ pub(super) fn build_ops_from_events(
             SceneEvent::EdgeCreated { from, to, points } => {
                 // Resolve canvas port refs → Modelica (instance,
                 // port) pairs via node.origin + port.id.
-                let Some(from_node) = scene.node(from.node) else { continue };
-                let Some(to_node) = scene.node(to.node) else { continue };
-                let Some(from_instance) = from_node.origin.clone() else { continue };
-                let Some(to_instance) = to_node.origin.clone() else { continue };
+                let Some(from_node) = scene.node(from.node) else {
+                    continue;
+                };
+                let Some(to_node) = scene.node(to.node) else {
+                    continue;
+                };
+                let Some(from_instance) = from_node.origin.clone() else {
+                    continue;
+                };
+                let Some(to_instance) = to_node.origin.clone() else {
+                    continue;
+                };
                 // Click-to-bend during creation → annotation(Line(...))
                 // with the captured points (Y-flipped into Modelica
                 // coords). Empty list = quick drag, no annotation,
@@ -364,21 +374,28 @@ pub(super) fn build_ops_from_events(
                 }
             }
             SceneEvent::EdgeWaypointsChanged { id, points } => {
-                let Some(edge) = scene.edge(*id) else { continue };
+                let Some(edge) = scene.edge(*id) else {
+                    continue;
+                };
                 if edge.kind.as_str() != "modelica.connection" {
                     continue;
                 }
-                let Some(from_node) = scene.node(edge.from.node) else { continue };
-                let Some(to_node) = scene.node(edge.to.node) else { continue };
-                let Some(from_instance) = from_node.origin.clone() else { continue };
-                let Some(to_instance) = to_node.origin.clone() else { continue };
+                let Some(from_node) = scene.node(edge.from.node) else {
+                    continue;
+                };
+                let Some(to_node) = scene.node(edge.to.node) else {
+                    continue;
+                };
+                let Some(from_instance) = from_node.origin.clone() else {
+                    continue;
+                };
+                let Some(to_instance) = to_node.origin.clone() else {
+                    continue;
+                };
                 // Canvas Y is +down; Modelica diagram Y is +up. Flip
                 // so the round-trip back through `extract_line_points`
                 // lands at the same canvas positions.
-                let modelica_points: Vec<(f32, f32)> = points
-                    .iter()
-                    .map(|p| (p.x, -p.y))
-                    .collect();
+                let modelica_points: Vec<(f32, f32)> = points.iter().map(|p| (p.x, -p.y)).collect();
                 ops.push(ModelicaOp::SetConnectionLine {
                     class: class.to_string(),
                     from: pretty::PortRef::new(&from_instance, edge.from.port.as_str()),
@@ -419,13 +436,11 @@ pub(super) fn component_headers(
 /// `R2`, …). Walks `scene.nodes()` directly so the choice respects
 /// nodes the user has just optimistically synthesised but that
 /// haven't yet round-tripped through the AST.
-pub(super) fn pick_add_instance_name(comp: &crate::index::ClassEntry, scene: &lunco_canvas::Scene) -> String {
-    let prefix = comp
-        .name
-        .chars()
-        .next()
-        .unwrap_or('X')
-        .to_ascii_uppercase();
+pub(super) fn pick_add_instance_name(
+    comp: &crate::index::ClassEntry,
+    scene: &lunco_canvas::Scene,
+) -> String {
+    let prefix = comp.name.chars().next().unwrap_or('X').to_ascii_uppercase();
     let mut n: u32 = 1;
     loop {
         let candidate = format!("{prefix}{n}");
@@ -580,11 +595,7 @@ pub(super) fn op_remove_edge_inner(
 /// commands (`MoveComponent`, etc.) can dispatch the same SetPlacement
 /// pipeline the mouse drag uses — keeps undo/redo + source rewriting
 /// consistent across UI-driven and API-driven edits.
-pub fn apply_ops_public(
-    world: &mut World,
-    doc_id: lunco_doc::DocumentId,
-    ops: Vec<ModelicaOp>,
-) {
+pub fn apply_ops_public(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<ModelicaOp>) {
     apply_ops(
         world,
         doc_id,
@@ -761,10 +772,7 @@ pub(super) fn apply_ops(
 /// Iterates the canvas scene (not the AST) so the order matches what
 /// the user sees. Each op is separately undo-able via Ctrl+Z.
 #[lunco_core::on_command(AutoArrangeDiagram)]
-pub fn on_auto_arrange_diagram(
-    trigger: On<AutoArrangeDiagram>,
-    mut commands: Commands,
-) {
+pub fn on_auto_arrange_diagram(trigger: On<AutoArrangeDiagram>, mut commands: Commands) {
     let raw = trigger.event().doc;
     // Observers can't take `&mut World` in Bevy 0.18. Defer the real
     // work to an exclusive command — same mutations, just queued to
@@ -777,9 +785,7 @@ pub fn on_auto_arrange_diagram(
             match active_doc_from_world(world) {
                 Some(d) => d,
                 None => {
-                    bevy::log::warn!(
-                        "[CanvasDiagram] Auto-Arrange: no active doc"
-                    );
+                    bevy::log::warn!("[CanvasDiagram] Auto-Arrange: no active doc");
                     return;
                 }
             }
@@ -842,11 +848,8 @@ pub(super) fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId)
             // the same coord frame a drag would.
             let wx = col as f32 * dx + row_shift;
             let wy = row as f32 * dy;
-            let m = super::coords::canvas_min_to_modelica_center(
-                lunco_canvas::Pos::new(wx, wy),
-                w,
-                h,
-            );
+            let m =
+                super::coords::canvas_min_to_modelica_center(lunco_canvas::Pos::new(wx, wy), w, h);
             ModelicaOp::SetPlacement {
                 class: class.clone(),
                 name,

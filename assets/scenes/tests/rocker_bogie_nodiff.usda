@@ -107,7 +107,9 @@ def Xform "RockerBogieTest" (
     {
         custom string lunco:scenario = "rocker-bogie-nodiff"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie.rhai@
 

@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
-use lunco_modelica::pretty::{
-    CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl,
-};
+use lunco_modelica::pretty::{CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl};
 use rumoca_phase_parse::parse_to_ast;
 
 fn host(source: &str) -> DocumentHost<ModelicaDocument> {
@@ -75,7 +73,11 @@ fn add_class_top_level_through_apply() {
     .expect("apply AddClass");
     let sd = parse_to_ast(h.document().source(), "test.mo")
         .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== src ===\n{}", h.document().source()));
-    assert!(sd.classes.contains_key("Foo"), "Foo missing; src:\n{}", h.document().source());
+    assert!(
+        sd.classes.contains_key("Foo"),
+        "Foo missing; src:\n{}",
+        h.document().source()
+    );
     assert!(sd.classes.contains_key("Existing"), "Existing dropped");
 }
 

@@ -6,12 +6,12 @@
 //! `state::detected_name_for`) can resolve "which class does a
 //! simulation surface default to" without the egui `ui` module.
 
-use bevy::prelude::*;
-use std::collections::HashMap;
-use lunco_doc::DocumentId;
-use crate::state::ModelicaDocumentRegistry;
-use crate::model_tabs_types::TabRenderContext;
 use crate::model_tabs::ModelTabs;
+use crate::model_tabs_types::TabRenderContext;
+use crate::state::ModelicaDocumentRegistry;
+use bevy::prelude::*;
+use lunco_doc::DocumentId;
+use std::collections::HashMap;
 
 /// Read-only resource access abstracted over the three contexts that resolve
 /// run-target precedence: the headless / world side (`&World`) and the two

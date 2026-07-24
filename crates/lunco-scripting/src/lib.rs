@@ -7,51 +7,51 @@ pub mod backend;
 /// features provide.
 #[cfg(any(feature = "rhai", feature = "python"))]
 pub mod bridge_core;
-/// Language-neutral scenario lifecycle driver (`on_start`/`on_tick`/`on_event`/
-/// `on_stop`, hot-reload, pause, teardown). Backends implement `ScenarioRuntime`.
-#[cfg(any(feature = "rhai", feature = "python"))]
-pub mod scenario;
-pub mod commands;
-pub mod python;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod repl;
-pub mod doc;
-pub mod source_asset;
-/// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
+/// Authoring catalog (`ScriptingCatalog` query) — the discoverability surface
+/// for editor completion / hover / docs.
 #[cfg(feature = "rhai")]
-pub mod rhai_math;
-pub mod world_bridge;
+pub mod catalog;
+pub mod commands;
+/// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
+#[cfg(feature = "rhai")]
+pub mod diagnostics;
+pub mod doc;
 /// `import` resolution over the asset pipeline. Holds no path logic of its own —
 /// ids come from `lunco_assets::script_source::ScriptSources`.
 #[cfg(feature = "rhai")]
 pub mod module_resolver;
+pub mod python;
+/// Journaling for named registrations (tool libraries + timelines) — so a
+/// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
+#[cfg(feature = "rhai")]
+pub mod registration_journal;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod repl;
+/// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
+#[cfg(feature = "rhai")]
+pub mod rhai_math;
+/// Language-neutral scenario lifecycle driver (`on_start`/`on_tick`/`on_event`/
+/// `on_stop`, hot-reload, pause, teardown). Backends implement `ScenarioRuntime`.
+#[cfg(any(feature = "rhai", feature = "python"))]
+pub mod scenario;
+pub mod source_asset;
 /// rhai task maps compiled onto the `lunco-behavior` kernel — the native tick
 /// engine behind the prelude's `seq`/`par_*`/`repeat`/`wait_*` task vocabulary
 /// (replaces the prelude's retired `__tick*` rhai recursion).
 #[cfg(feature = "rhai")]
 pub mod task_tree;
-/// Importable rhai tool libraries (named `libname::fn` modules).
-#[cfg(feature = "rhai")]
-pub mod tool_libs;
 /// Twin persistence + discovery for declarative mission timelines
 /// (`<twin>/timelines/*.json`; `ListTimelines`/`GetTimeline`/`RunStoredTimeline`).
 #[cfg(feature = "rhai")]
 pub mod timelines;
-/// Journaling for named registrations (tool libraries + timelines) — so a
-/// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
+/// Importable rhai tool libraries (named `libname::fn` modules).
 #[cfg(feature = "rhai")]
-pub mod registration_journal;
-/// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
-#[cfg(feature = "rhai")]
-pub mod diagnostics;
-/// Authoring catalog (`ScriptingCatalog` query) — the discoverability surface
-/// for editor completion / hover / docs.
-#[cfg(feature = "rhai")]
-pub mod catalog;
+pub mod tool_libs;
+pub mod world_bridge;
 
-use std::collections::HashMap;
-use lunco_doc::{Document, DocumentId, DocumentHost};
 use doc::{ScriptDocument, ScriptedModel};
+use lunco_doc::{Document, DocumentHost, DocumentId};
+use std::collections::HashMap;
 // Brings the pyo3 method traits (`PyDictMethods::{set_item,get_item}`,
 // `PyAnyMethods::{downcast,extract}`) into scope for `run_scripted_models`.
 #[cfg(feature = "python")]
@@ -103,7 +103,6 @@ impl ScriptRegistry {
             }
         }
     }
-
 }
 
 // `replay_op` deserializes the journal payload with serde_json, which is only
@@ -192,6 +191,7 @@ fn register_builtin_policies() {
         // are entirely here, and `register_hook("lint.usd", …)` replaces them on a
         // running sim.
         ("lint_usd", "lint.usd", "lint_usd"),
+        ("lint_rhai", "lint.rhai", "lint_rhai"),
         // (Link availability is not a builtin policy. The generic link kernel
         // computes the geometry and applies a builtin range+mask+occlusion rule;
         // an authored `link.connected` hook overrides the verdict, and routing is
@@ -241,8 +241,7 @@ impl Plugin for LunCoScriptingPlugin {
         // into the canonical journal like Modelica/USD — "scripts sync by design".
         app.add_systems(
             Update,
-            wire_scripting_journal_handle
-                .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+            wire_scripting_journal_handle.run_if(resource_added::<lunco_doc_bevy::JournalResource>),
         );
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -252,7 +251,7 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.register_type::<ScriptedModel>()
-           .register_type::<doc::ScriptLanguage>();
+            .register_type::<doc::ScriptLanguage>();
 
         let python_status = python::get_python_status();
         app.insert_resource(python_status);
@@ -372,7 +371,10 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(feature = "rhai")]
         backends.insert(doc::ScriptLanguage::Rhai, Box::new(backend::RhaiBackend));
         #[cfg(feature = "python")]
-        backends.insert(doc::ScriptLanguage::Python, Box::new(backend::PythonBackend));
+        backends.insert(
+            doc::ScriptLanguage::Python,
+            Box::new(backend::PythonBackend),
+        );
         app.insert_resource(backends);
 
         commands::register_all_commands(app);
@@ -397,14 +399,22 @@ fn run_scripted_models(
     python_status: Res<python::PythonStatus>,
 ) {
     for mut model in q_models.iter_mut() {
-        if model.paused { continue; }
+        if model.paused {
+            continue;
+        }
 
-        let Some(doc_id_raw) = model.document_id else { continue };
+        let Some(doc_id_raw) = model.document_id else {
+            continue;
+        };
         let doc_id = DocumentId::new(doc_id_raw);
-        let Some(host) = registry.documents.get(&doc_id) else { continue };
+        let Some(host) = registry.documents.get(&doc_id) else {
+            continue;
+        };
         let doc = host.document();
 
-        if doc.language != doc::ScriptLanguage::Python { continue; }
+        if doc.language != doc::ScriptLanguage::Python {
+            continue;
+        }
 
         if *python_status != python::PythonStatus::Available {
             error_once!("Python is not available on this system. Cannot run Python scripts.");
@@ -444,7 +454,8 @@ fn run_scripted_models(
                 if let Ok(Some(outputs)) = locals.get_item("outputs") {
                     if let Ok(dict) = outputs.downcast::<pyo3::types::PyDict>() {
                         for (k, v) in dict.iter() {
-                            if let (Ok(key), Ok(val)) = (k.extract::<String>(), v.extract::<f64>()) {
+                            if let (Ok(key), Ok(val)) = (k.extract::<String>(), v.extract::<f64>())
+                            {
                                 model.outputs.insert(key, val);
                             }
                         }
@@ -473,7 +484,6 @@ fn run_scripted_models(
 fn scripts_run_here(role: Option<Res<lunco_core::NetworkRole>>) -> bool {
     !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
 }
-
 
 #[cfg(all(test, any(feature = "rhai", feature = "python")))]
 mod journal_tests {

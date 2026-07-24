@@ -63,12 +63,7 @@ pub const SAMPLE_CAP: f64 = 200_000.0;
 ///   * degenerate zero-length span                         → `0.01`
 ///
 /// then clamped up so `span / step_dt <= SAMPLE_CAP`.
-pub fn resolve_step_dt(
-    t_start: f64,
-    t_end: f64,
-    dt: Option<f64>,
-    n_intervals: Option<u32>,
-) -> f64 {
+pub fn resolve_step_dt(t_start: f64, t_end: f64, dt: Option<f64>, n_intervals: Option<u32>) -> f64 {
     let span = (t_end - t_start).max(0.0);
     let mut step_dt = match (n_intervals.filter(|&n| n > 0), dt) {
         // Count wins: N intervals over the span → N+1 evenly-spaced points.
@@ -194,8 +189,7 @@ pub fn resolve_requested_class(
         let suffix_hits: Vec<&String> = candidates
             .iter()
             .filter(|c| {
-                c.rsplit('.').next() == req.rsplit('.').next()
-                    && req.ends_with(&format!(".{c}"))
+                c.rsplit('.').next() == req.rsplit('.').next() && req.ends_with(&format!(".{c}"))
             })
             .collect();
         if suffix_hits.len() == 1 {
@@ -271,13 +265,25 @@ mod tests {
     use super::*;
 
     fn rb(t_end: f64) -> RunBounds {
-        RunBounds { t_start: 0.0, t_end, dt: None, n_intervals: None, tolerance: None, solver: None, h0: None, runtime: lunco_experiments::RuntimeMode::Batch }
+        RunBounds {
+            t_start: 0.0,
+            t_end,
+            dt: None,
+            n_intervals: None,
+            tolerance: None,
+            solver: None,
+            h0: None,
+            runtime: lunco_experiments::RuntimeMode::Batch,
+        }
     }
 
     #[test]
     fn default_class_prefers_drill_pin_then_first_candidate() {
         let cands = vec!["Pkg.Env".to_string(), "Pkg.System".to_string()];
-        assert_eq!(default_class(Some("Pkg.System"), &cands).as_deref(), Some("Pkg.System"));
+        assert_eq!(
+            default_class(Some("Pkg.System"), &cands).as_deref(),
+            Some("Pkg.System")
+        );
         assert_eq!(default_class(None, &cands).as_deref(), Some("Pkg.Env"));
         assert_eq!(default_class(None, &[]), None);
     }
@@ -286,10 +292,16 @@ mod tests {
     fn resolve_bounds_prefers_draft_then_annotation_then_cache() {
         // Args, highest precedence first: (draft, annotation, runner_cached).
         // Draft wins over everything.
-        assert_eq!(resolve_bounds(Some(rb(1.0)), Some(rb(2.0)), Some(rb(3.0))).t_end, 1.0);
+        assert_eq!(
+            resolve_bounds(Some(rb(1.0)), Some(rb(2.0)), Some(rb(3.0))).t_end,
+            1.0
+        );
         // Race fix: the fresh AST annotation beats the async runner cache, so a
         // run's frozen bounds don't depend on whether the worker callback landed.
-        assert_eq!(resolve_bounds(None, Some(rb(2.0)), Some(rb(3.0))).t_end, 2.0);
+        assert_eq!(
+            resolve_bounds(None, Some(rb(2.0)), Some(rb(3.0))).t_end,
+            2.0
+        );
         // The cache is only a fallback when there is no annotation.
         assert_eq!(resolve_bounds(None, None, Some(rb(3.0))).t_end, 3.0);
         assert_eq!(resolve_bounds(None, None, None).t_end, DEFAULT_STOP_TIME);
@@ -310,7 +322,10 @@ mod tests {
             "LunarRover.LunarEnvironment"
         );
         // Dot-free top-level matches exactly.
-        assert_eq!(resolve_requested_class("TopLevel", &cands).unwrap(), "TopLevel");
+        assert_eq!(
+            resolve_requested_class("TopLevel", &cands).unwrap(),
+            "TopLevel"
+        );
         // Unique leaf resolves to its qualified form.
         assert_eq!(
             resolve_requested_class("LunarEnvironment", &cands).unwrap(),
@@ -322,7 +337,10 @@ mod tests {
             "LunarRover.LunarEnvironment"
         );
         // Unknown name → Unknown.
-        assert_eq!(resolve_requested_class("Nope", &cands), Err(ClassResolveError::Unknown));
+        assert_eq!(
+            resolve_requested_class("Nope", &cands),
+            Err(ClassResolveError::Unknown)
+        );
         // Leaf shared across packages → Ambiguous with both matches.
         match resolve_requested_class("RoverThermalSystem", &cands) {
             Err(ClassResolveError::Ambiguous(m)) => {

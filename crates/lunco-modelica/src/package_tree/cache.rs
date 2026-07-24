@@ -1,9 +1,9 @@
 //! Resource state and result types for the Package Browser.
 
+use super::types::{InMemoryEntry, PackageNode, TwinNode};
+use crate::state::ModelLibrary;
 use bevy::prelude::*;
 use bevy::tasks::Task;
-use crate::state::ModelLibrary;
-use super::types::{PackageNode, InMemoryEntry, TwinNode};
 
 pub struct ScanResult {
     pub parent_id: String,
@@ -104,7 +104,13 @@ impl PackageTreeCache {
 
         // Reset library roots (e.g. Modelica) so they retry expanding with the now-available MSL.
         for root in &mut self.roots {
-            if let PackageNode::Category { id, children, is_loading, .. } = root {
+            if let PackageNode::Category {
+                id,
+                children,
+                is_loading,
+                ..
+            } = root
+            {
                 if id != "bundled_root" {
                     *children = None;
                     *is_loading = false;
@@ -129,8 +135,10 @@ impl PackageTreeCache {
             if existing.contains(&lib) {
                 continue;
             }
-            self.roots
-                .insert(insert_at + offset, super::library_tree::library_root_node(&lib));
+            self.roots.insert(
+                insert_at + offset,
+                super::library_tree::library_root_node(&lib),
+            );
             offset += 1;
         }
         self.library_roots_synced = true;

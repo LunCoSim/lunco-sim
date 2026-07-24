@@ -487,7 +487,10 @@ end Foo;
             "within clause prepended"
         );
         // The qualified run name the dispatch must use (within + copy name).
-        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+        assert_eq!(
+            within_package(&out).as_deref(),
+            Some("AnnotatedRocketStage")
+        );
     }
 
     #[test]
@@ -507,10 +510,16 @@ end Foo;
             "RocketStageCopy",
             Some("AnnotatedRocketStage.RocketStage"),
         );
-        assert!(parses_clean(&out), "nested-model duplicate must parse:\n{out}");
+        assert!(
+            parses_clean(&out),
+            "nested-model duplicate must parse:\n{out}"
+        );
         assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
         assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
-        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+        assert_eq!(
+            within_package(&out).as_deref(),
+            Some("AnnotatedRocketStage")
+        );
     }
 
     #[test]
@@ -530,7 +539,10 @@ end Foo;
         assert!(parses_clean(&out), "bundled duplicate must parse:\n{out}");
         assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
         assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
-        assert_eq!(within_package(&out).as_deref(), Some("AnnotatedRocketStage"));
+        assert_eq!(
+            within_package(&out).as_deref(),
+            Some("AnnotatedRocketStage")
+        );
     }
 
     #[test]

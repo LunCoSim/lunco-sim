@@ -47,7 +47,11 @@ pub(super) fn port_kind_str(kind: crate::visual_diagram::PortKind) -> &'static s
 /// strip. Non-negative values stay non-negative.
 fn fallback_range(value: f64) -> (f64, f64) {
     let mag = value.abs().max(1.0) * 2.0;
-    if value < 0.0 { (-mag, mag) } else { (0.0, mag) }
+    if value < 0.0 {
+        (-mag, mag)
+    } else {
+        (0.0, mag)
+    }
 }
 
 /// Stable heuristic domain for an unbounded input, cached per-input in
@@ -66,8 +70,9 @@ fn fallback_range(value: f64) -> (f64, f64) {
 /// the feedback loop is broken.
 fn stable_fallback_range(ctx: &egui::Context, name: &str, value: f64) -> (f64, f64) {
     let id = egui::Id::new(("lunco_input_fallback_domain", name));
-    let (mut mn, mut mx) =
-        ctx.data(|d| d.get_temp::<(f64, f64)>(id)).unwrap_or_else(|| fallback_range(value));
+    let (mut mn, mut mx) = ctx
+        .data(|d| d.get_temp::<(f64, f64)>(id))
+        .unwrap_or_else(|| fallback_range(value));
     // Widen only when the live value sits strictly outside the cached
     // domain (an external set, never the slider's own output, which
     // clamps to `[mn, mx]`). Monotonic: the domain can grow but never
@@ -138,13 +143,9 @@ pub(super) fn paint_input_control_widget(
         // Lay sliders OUTSIDE the icon to the right so they never
         // occlude the component artwork (previously the strip was
         // painted on top of the icon, hiding e.g. the valve body).
-        let x = icon_rect.right()
-            + strip_pad
-            + (idx as f32) * (strip_width + strip_gap);
-        let strip_rect = egui::Rect::from_min_size(
-            egui::pos2(x, strip_top_y),
-            egui::vec2(strip_width, h),
-        );
+        let x = icon_rect.right() + strip_pad + (idx as f32) * (strip_width + strip_gap);
+        let strip_rect =
+            egui::Rect::from_min_size(egui::pos2(x, strip_top_y), egui::vec2(strip_width, h));
 
         lunco_canvas::canvas::push_canvas_widget_rect(ui, strip_rect);
 
@@ -163,7 +164,10 @@ pub(super) fn paint_input_control_widget(
             painter.rect_filled(fill_rect, radius, fill_color);
             let y = strip_rect.max.y - fill_h;
             painter.line_segment(
-                [egui::pos2(strip_rect.min.x, y), egui::pos2(strip_rect.max.x, y)],
+                [
+                    egui::pos2(strip_rect.min.x, y),
+                    egui::pos2(strip_rect.max.x, y),
+                ],
                 egui::Stroke::new(1.5 * s, egui::Color32::from_rgb(220, 235, 250)),
             );
         }
@@ -201,7 +205,11 @@ pub(super) fn paint_input_control_widget(
                 .strip_prefix(&prefix)
                 .map(|rest| {
                     let trimmed = rest.trim_end_matches(".value");
-                    if trimmed.is_empty() { rest } else { trimmed }
+                    if trimmed.is_empty() {
+                        rest
+                    } else {
+                        trimmed
+                    }
                 })
                 .unwrap_or_else(|| name.rsplit('.').next().unwrap_or(name));
             response.on_hover_text(var_name.to_string());
@@ -247,10 +255,7 @@ pub(super) fn paint_port_shape(
         PortShape::OutputTriangle => {
             let (ox, oy) = dir.outward();
             if (ox, oy) == (0.0, 0.0) {
-                let rect = egui::Rect::from_center_size(
-                    center,
-                    egui::vec2(R * 1.6, R * 1.6),
-                );
+                let rect = egui::Rect::from_center_size(center, egui::vec2(R * 1.6, R * 1.6));
                 painter.rect_filled(rect, 0.0, fill);
                 painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
                 return;

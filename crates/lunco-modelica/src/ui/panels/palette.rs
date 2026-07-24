@@ -169,7 +169,11 @@ fn palette_catalog() -> &'static PaletteCatalog {
         *cat_counts_all.entry(category_of(&c.name)).or_insert(0) += 1;
     }
     let total = lib.len();
-    let _ = CACHE.set(PaletteCatalog { lib, cat_counts_all, total });
+    let _ = CACHE.set(PaletteCatalog {
+        lib,
+        cat_counts_all,
+        total,
+    });
     CACHE.get().unwrap_or_else(|| empty())
 }
 
@@ -187,7 +191,6 @@ fn category_of(msl_path: &str) -> &'static str {
     }
     "Other"
 }
-
 
 /// The panel. Zero-sized; state lives in [`PaletteState`].
 pub struct ComponentPalettePanel;
@@ -489,8 +492,7 @@ impl Panel for ComponentPalettePanel {
                                     .as_deref()
                                     .map(|p| p == comp.name.as_str())
                                     .unwrap_or(false);
-                                let action =
-                                    render_component_row(ui, comp, &theme, being_dragged);
+                                let action = render_component_row(ui, comp, &theme, being_dragged);
                                 if action.clicked {
                                     clicked = Some((*comp).clone());
                                 }
@@ -607,8 +609,8 @@ pub(crate) fn place_component(
     // so dropped components get distinct names too) and resolve
     // placement: explicit drop-site wins, else step the grid.
     let counter_val = {
-        let mut counter = world
-            .get_resource_or_insert_with::<PalettePlacementCounter>(Default::default);
+        let mut counter =
+            world.get_resource_or_insert_with::<PalettePlacementCounter>(Default::default);
         counter.0 = counter.0.saturating_add(1);
         counter.0
     };
@@ -616,7 +618,10 @@ pub(crate) fn place_component(
         Some(xy) => xy,
         None => {
             let n = counter_val;
-            (-50.0 + ((n % 3) as f32) * 30.0, 50.0 - ((n / 3) as f32) * 30.0)
+            (
+                -50.0 + ((n % 3) as f32) * 30.0,
+                50.0 - ((n / 3) as f32) * 30.0,
+            )
         }
     };
 
@@ -692,10 +697,7 @@ fn render_component_row(
 
     let resp = ui
         .horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(8.0, 8.0),
-                egui::Sense::hover(),
-            );
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
             ui.painter().circle_filled(rect.center(), 4.0, cat_color);
 
             ui.vertical(|ui| {
@@ -705,18 +707,12 @@ fn render_component_row(
                 // ends up highlighting characters instead of starting
                 // a palette → canvas drag.
                 ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(comp.short_name()).size(12.0),
-                    )
-                    .selectable(false),
+                    egui::Label::new(egui::RichText::new(comp.short_name()).size(12.0))
+                        .selectable(false),
                 );
                 ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(&comp.category)
-                            .size(9.0)
-                            .color(muted),
-                    )
-                    .selectable(false),
+                    egui::Label::new(egui::RichText::new(&comp.category).size(9.0).color(muted))
+                        .selectable(false),
                 );
             });
         })
@@ -746,24 +742,14 @@ fn render_component_row(
 /// Draw one category chip. Returns `true` if the user just clicked
 /// it. Selected chips render with a tinted background; non-selected
 /// chips are outlined. Count is suffixed in parentheses.
-fn chip(
-    ui: &mut egui::Ui,
-    name: &str,
-    color: egui::Color32,
-    count: usize,
-    selected: bool,
-) -> bool {
+fn chip(ui: &mut egui::Ui, name: &str, color: egui::Color32, count: usize, selected: bool) -> bool {
     // Tone down the fill for non-selected chips.
     let fill = if selected {
         color.linear_multiply(0.30)
     } else {
         egui::Color32::TRANSPARENT
     };
-    let stroke_color = if count == 0 {
-        color.alpha(90)
-    } else {
-        color
-    };
+    let stroke_color = if count == 0 { color.alpha(90) } else { color };
     let label = if count > 0 {
         format!("{} ({})", name, count)
     } else {
@@ -776,11 +762,11 @@ fn chip(
     // Latte. Non-selected chips inherit the category `color` itself,
     // which is already a schematic-token value.
     let resp = ui.add(
-        egui::Button::new(
-            egui::RichText::new(label)
-                .size(11.0)
-                .color(if selected { egui::Color32::WHITE } else { color }),
-        )
+        egui::Button::new(egui::RichText::new(label).size(11.0).color(if selected {
+            egui::Color32::WHITE
+        } else {
+            color
+        }))
         .fill(fill)
         .stroke(egui::Stroke::new(1.0, stroke_color)),
     );

@@ -24,8 +24,8 @@ use bevy::tasks::Task;
 use lunco_doc::DocumentId;
 use std::collections::HashMap;
 
-use crate::ui::panels::canvas_diagram::loads::{DrillInBinding, DuplicateBinding};
 use crate::package_tree::cache::FileLoadResult;
+use crate::ui::panels::canvas_diagram::loads::{DrillInBinding, DuplicateBinding};
 
 /// One in-flight document open. Each variant carries the typed
 /// `Task<...>` plus the metadata that variant's driver needs to
@@ -286,9 +286,7 @@ pub fn drive_file_load_openings(
     let doc_ids = openings.doc_ids();
     for doc_id in doc_ids {
         let ready = match openings.get_mut(doc_id) {
-            Some(OpeningState::FileLoad { task, .. }) => {
-                future::block_on(future::poll_once(task))
-            }
+            Some(OpeningState::FileLoad { task, .. }) => future::block_on(future::poll_once(task)),
             _ => None,
         };
         let Some(ready) = ready else { continue };

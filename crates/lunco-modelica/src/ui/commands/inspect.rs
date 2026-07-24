@@ -1,8 +1,8 @@
 //! Inspection commands for Modelica documents.
 
-use bevy::prelude::*;
-use lunco_core::{Command, on_command};
 use crate::state::ModelicaDocumentRegistry;
+use bevy::prelude::*;
+use lunco_core::{on_command, Command};
 
 #[Command(default)]
 pub struct InspectActiveDoc {}
@@ -39,11 +39,7 @@ pub fn on_inspect_active_doc(_trigger: On<InspectActiveDoc>, mut commands: Comma
                 "[InspectActiveDoc]   parse OK; within={:?}",
                 ast.within.as_ref().map(|w| w.to_string()),
             );
-            fn dump(
-                name: &str,
-                class: &rumoca_compile::parsing::ast::ClassDef,
-                depth: usize,
-            ) {
+            fn dump(name: &str, class: &rumoca_compile::parsing::ast::ClassDef, depth: usize) {
                 let indent = "  ".repeat(depth + 1);
                 let comps: Vec<String> = class
                     .components

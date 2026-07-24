@@ -116,8 +116,7 @@ impl VarHistory {
     /// input the way the main-thread findings do.
     /// See docs/code-quality-remediation.md (CQ-210).
     pub fn append(&self, sample: SimSample) -> VarHistory {
-        let mut next: Vec<SimSample> =
-            Vec::with_capacity(self.samples.len().saturating_add(1));
+        let mut next: Vec<SimSample> = Vec::with_capacity(self.samples.len().saturating_add(1));
         let overflow = (self.samples.len() + 1).saturating_sub(DEFAULT_HISTORY_CAPACITY);
         next.extend_from_slice(&self.samples[overflow..]);
         next.push(sample);
@@ -162,19 +161,14 @@ impl SimSnapshot {
     /// aligned with the model's current schema — important after
     /// a recompile that renamed or removed a variable).
     pub fn advance(prev: &SimSnapshot, new_time: f64, outputs: &[(String, f64)]) -> SimSnapshot {
-        let mut next_vars: IndexMap<String, VarHistory> =
-            IndexMap::with_capacity(outputs.len());
+        let mut next_vars: IndexMap<String, VarHistory> = IndexMap::with_capacity(outputs.len());
         for (name, value) in outputs {
             if !value.is_finite() {
                 // Skip NaN / ±Inf rather than poison the history —
                 // matches `SignalRegistry::push_scalar`'s rule.
                 continue;
             }
-            let base = prev
-                .vars
-                .get(name)
-                .cloned()
-                .unwrap_or_default();
+            let base = prev.vars.get(name).cloned().unwrap_or_default();
             let appended = base.append(SimSample {
                 time: new_time,
                 value: *value,
@@ -234,10 +228,7 @@ mod tests {
         let prev = SimSnapshot::advance(
             &SimSnapshot::empty_at_zero(),
             0.1,
-            &[
-                ("a".into(), 1.0),
-                ("b".into(), 2.0),
-            ],
+            &[("a".into(), 1.0), ("b".into(), 2.0)],
         );
         assert!(prev.vars.contains_key("a"));
         assert!(prev.vars.contains_key("b"));

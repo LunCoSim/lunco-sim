@@ -45,9 +45,17 @@
 //       (a SUBTREE each), `filtered` the groups it does not collide with, and the
 //       two `missing_*` lists the targets that resolve to nothing.
 //
-//   facts.prims[]   #{ path, type, parent, schemas[] }
+//   facts.prims[]   #{ path, type, parent, schemas[], attributes[],
+//                      connected_attributes[] }
 //       EVERY prim applying any schema at all — the generic projection, so a new
 //       rule about a schema nobody has thought about yet needs no Rust change.
+//
+//   facts.collections[] #{ path, parent, name, members[] }
+//       standard computed collection membership from the composed stage.
+//
+//   facts.network_scopes[] #{ path, parent, members[] }
+//       scopes applying CollectionAPI:components, including codeless-schema
+//       runtimes whose applied-schema enumeration is incomplete.
 //
 // ── WHAT A RULE RETURNS ─────────────────────────────────────────────────────
 //
@@ -99,6 +107,23 @@ fn lint_usd(facts) {
     for f in body_is_its_own_scaled_mesh(facts) { out.push(f); }
     for f in filtered_pair_is_inert(facts) { out.push(f); }
     for f in collision_group_is_inert(facts) { out.push(f); }
+    for f in empty_component_network(facts) { out.push(f); }
+    out
+}
+
+/// A declared compiler network with an empty standard component collection.
+///
+/// It cannot generate equations and would otherwise be silently skipped.
+fn empty_component_network(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        if scope.members.len() != 0 { continue; }
+        let m = "declares CollectionAPI:components but includes no components —";
+        m += " the domain compiler has no equations to compile.";
+        m += " Add the Modelica component facets to";
+        m += " collection:components:includes or remove the empty network scope.";
+        out.push(finding("empty-component-network", "error", scope.path, m));
+    }
     out
 }
 

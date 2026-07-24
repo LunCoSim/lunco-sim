@@ -58,7 +58,7 @@
 //! - **Graphs** (bottom dock) — time-series plots of simulation variables
 
 use bevy::prelude::*;
-use lunco_workbench::{Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout, PanelId};
+use lunco_workbench::{PanelId, Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout};
 // Core document/library/compile state moved out of `ui` into `crate::state`.
 use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
 use lunco_doc_bevy::DocumentDiagnostics;
@@ -74,25 +74,25 @@ pub mod document_openings;
 pub mod commands;
 /// Reactive UI observers of core domain state (status-bus mirrors, etc.).
 pub mod core_observers;
-/// UI→core bridge: workbench rename events → `RenameModelicaClass`.
-pub mod rename_chain;
 /// Bevy/UI integration for shareable model links (clipboard + boot loader).
 pub mod model_share;
+/// UI→core bridge: workbench rename events → `RenameModelicaClass`.
+pub mod rename_chain;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod icon_paint;
 pub mod image_loader;
+/// Debounced AST reparse driver — see module docs.
+pub mod input_activity;
+pub mod loaded_classes;
 pub mod panels;
-pub mod viz;
+pub mod text_node;
 pub mod theme;
 pub mod uri_handler;
-pub mod loaded_classes;
-pub mod text_node;
+pub mod viz;
 pub mod wasm_autosave;
 pub mod wasm_clipboard;
 pub mod welcome_progress;
-/// Debounced AST reparse driver — see module docs.
-pub mod input_activity;
 pub mod wire_router;
 
 /// Modelica section of the Twin Browser — class-tree contributed by
@@ -159,7 +159,9 @@ fn close_drilled_tabs_on_class_removed(
 ) {
     use lunco_doc::Document as _;
     let doc = trigger.event().doc;
-    let Some(host) = registry.host(doc) else { return };
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
     let document = host.document();
     let last_seen = watermark.0.get(&doc).copied().unwrap_or(0);
     // `changes_since` returns None when the retention ring rolled
@@ -325,7 +327,9 @@ fn sync_workspace_on_doc_saved(
     mut ws: ResMut<lunco_workspace::WorkspaceResource>,
 ) {
     let id = trigger.event().doc;
-    let Some(host) = registry.host(id) else { return };
+    let Some(host) = registry.host(id) else {
+        return;
+    };
     let doc = host.document();
     let new_origin = doc.origin().clone();
     let new_title = new_origin.display_name();
@@ -530,12 +534,18 @@ pub struct AnalyzePerspective {
 }
 
 impl Default for AnalyzePerspective {
-    fn default() -> Self { Self { seed_welcome: true } }
+    fn default() -> Self {
+        Self { seed_welcome: true }
+    }
 }
 
 impl Perspective for AnalyzePerspective {
-    fn id(&self) -> PerspectiveId { PerspectiveId("modelica_analyze") }
-    fn title(&self) -> String { "📐 Design".into() }
+    fn id(&self) -> PerspectiveId {
+        PerspectiveId("modelica_analyze")
+    }
+    fn title(&self) -> String {
+        "📐 Design".into()
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         // Side dock = Twin Browser only. The legacy
@@ -705,7 +715,9 @@ impl Plugin for ModelicaUiPlugin {
         // Tutorials load from assets/tutorials/lunica/tutorials.json (data, not code).
         #[cfg(feature = "scripting")]
         if config.include_help_overlay {
-            app.add_plugins(lunco_tutorial::TutorialPlugin { app: "lunica".into() });
+            app.add_plugins(lunco_tutorial::TutorialPlugin {
+                app: "lunica".into(),
+            });
         }
 
         // Reflect-registered query providers exposed over the
@@ -976,9 +988,7 @@ impl Plugin for ModelicaUiPlugin {
 /// all prefs discoverable in one place.
 fn register_settings_menu(world: &mut World) {
     use bevy_egui::egui;
-    let Some(mut layout) = world
-        .get_resource_mut::<lunco_workbench::WorkbenchLayout>()
-    else {
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
     layout.register_settings(|ui, world| {
@@ -991,8 +1001,7 @@ fn register_settings_menu(world: &mut World) {
         drop(buf);
         ui.separator();
         ui.label(egui::RichText::new("Component Palette").weak().small());
-        let mut palette =
-            world.resource_mut::<panels::canvas_diagram::PaletteSettings>();
+        let mut palette = world.resource_mut::<panels::canvas_diagram::PaletteSettings>();
         ui.checkbox(
             &mut palette.show_icon_only_classes,
             "Show icon-only classes",
@@ -1006,8 +1015,7 @@ fn register_settings_menu(world: &mut World) {
         drop(palette);
         ui.separator();
         ui.label(egui::RichText::new("Diagram").weak().small());
-        let mut limits =
-            world.resource_mut::<panels::canvas_diagram::DiagramProjectionLimits>();
+        let mut limits = world.resource_mut::<panels::canvas_diagram::DiagramProjectionLimits>();
         ui.horizontal(|ui| {
             ui.label("Max nodes");
             ui.add(
@@ -1050,13 +1058,13 @@ fn register_settings_menu(world: &mut World) {
         // have their authored placements auto-rounded unless they
         // opted in. When on, drags quantise *live* (visible during
         // the drag itself) to multiples of `step` Modelica units.
-        let mut snap =
-            world.resource_mut::<panels::canvas_diagram::CanvasSnapSettings>();
-        ui.checkbox(&mut snap.enabled, "Snap to grid on drag").on_hover_text(
-            "When on, dragging an icon quantises its position to a \
+        let mut snap = world.resource_mut::<panels::canvas_diagram::CanvasSnapSettings>();
+        ui.checkbox(&mut snap.enabled, "Snap to grid on drag")
+            .on_hover_text(
+                "When on, dragging an icon quantises its position to a \
              grid. Applies live during the drag and at commit. Off \
              by default.",
-        );
+            );
         ui.horizontal(|ui| {
             ui.label("Grid step");
             ui.add_enabled(
@@ -1207,10 +1215,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
         Some(lunco_assets::msl::MslLoadState::Loading { .. })
     );
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    let install_failed = matches!(
-        load_state,
-        Some(lunco_assets::msl::MslLoadState::Failed(_))
-    );
+    let install_failed = matches!(load_state, Some(lunco_assets::msl::MslLoadState::Failed(_)));
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let install_ready = matches!(
         load_state,
@@ -1222,44 +1227,44 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
         // user can always pick "do it again" without restarting.
         #[cfg(not(target_arch = "wasm32"))]
         {
-        if install_running {
-            if let Some(cancel) = world.get_resource::<crate::msl_remote::MslInstallCancel>() {
-                if ui
-                    .button("Cancel")
-                    .on_hover_text(
-                        "Stop the in-flight MSL download/index. The \
+            if install_running {
+                if let Some(cancel) = world.get_resource::<crate::msl_remote::MslInstallCancel>() {
+                    if ui
+                        .button("Cancel")
+                        .on_hover_text(
+                            "Stop the in-flight MSL download/index. The \
                          download aborts within one chunk; the indexer \
                          aborts at the next phase boundary.",
+                        )
+                        .clicked()
+                    {
+                        cancel.0.store(true, std::sync::atomic::Ordering::Relaxed);
+                        bevy::log::info!("[MSL] cancel requested by user");
+                    }
+                }
+            } else if install_failed {
+                if ui
+                    .button("Retry")
+                    .on_hover_text(
+                        "Re-run the MSL download + indexer. Clears the \
+                     previous cache so a partial install is wiped.",
                     )
                     .clicked()
                 {
-                    cancel.0.store(true, std::sync::atomic::Ordering::Relaxed);
-                    bevy::log::info!("[MSL] cancel requested by user");
+                    crate::msl_remote::reinstall_msl(world);
+                }
+            } else if install_ready {
+                if ui
+                    .button("Reinstall")
+                    .on_hover_text(
+                        "Force-redownload MSL and rebuild the bincode cache. \
+                     Wipes the current cache directory first.",
+                    )
+                    .clicked()
+                {
+                    crate::msl_remote::reinstall_msl(world);
                 }
             }
-        } else if install_failed {
-            if ui
-                .button("Retry")
-                .on_hover_text(
-                    "Re-run the MSL download + indexer. Clears the \
-                     previous cache so a partial install is wiped.",
-                )
-                .clicked()
-            {
-                crate::msl_remote::reinstall_msl(world);
-            }
-        } else if install_ready {
-            if ui
-                .button("Reinstall")
-                .on_hover_text(
-                    "Force-redownload MSL and rebuild the bincode cache. \
-                     Wipes the current cache directory first.",
-                )
-                .clicked()
-            {
-                crate::msl_remote::reinstall_msl(world);
-            }
-        }
         }
         #[cfg(not(target_arch = "wasm32"))]
         if ui
@@ -1451,9 +1456,7 @@ fn open_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
 /// flags the in-panel toolbar uses. Keeps clipboard/selection
 /// handling in one place while letting the menu drive it.
 fn register_edit_menu(world: &mut World) {
-    let Some(mut layout) = world
-        .get_resource_mut::<lunco_workbench::WorkbenchLayout>()
-    else {
+    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
     layout.register_edit_menu(|ui, world| {
@@ -1465,8 +1468,7 @@ fn register_edit_menu(world: &mut World) {
         // currently-focused egui TextEdit, which has no
         // representation on the API side — a typed command would
         // need an explicit `doc` + range/text payload.
-        let mut req = world
-            .resource_mut::<panels::code_editor::CodeEditorMenuRequest>();
+        let mut req = world.resource_mut::<panels::code_editor::CodeEditorMenuRequest>();
         if ui.button("Cut\tCtrl+X").clicked() {
             req.cut = true;
             ui.close();
@@ -1517,9 +1519,7 @@ fn install_image_loaders_once(
     // throughout MSL Documentation blocks.
     let loader = std::sync::Arc::new(image_loader::ModelicaImageLoader::new());
     ctx.add_bytes_loader(loader);
-    bevy::log::info!(
-        "[ModelicaImageLoader] installed egui_extras loaders + modelica:// loader"
-    );
+    bevy::log::info!("[ModelicaImageLoader] installed egui_extras loaders + modelica:// loader");
 
     commands.insert_resource(ImageLoadersInstalled);
 }
@@ -1549,14 +1549,23 @@ fn fan_status_bus_to_console(
     // exactly the retained tail.
     let delta = total.saturating_sub(*last_total) as usize;
     let take = delta.min(bus.history().count());
-    for ev in bus.history().rev().take(take).collect::<Vec<_>>().into_iter().rev() {
+    for ev in bus
+        .history()
+        .rev()
+        .take(take)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         let level = match ev.level {
             lunco_workbench::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
             lunco_workbench::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
             lunco_workbench::status_bus::StatusLevel::Error => panels::console::ConsoleLevel::Error,
             // Progress events shouldn't be in `history` (they live in
             // active_progress), but if one ever sneaks in, surface as Info.
-            lunco_workbench::status_bus::StatusLevel::Progress => panels::console::ConsoleLevel::Info,
+            lunco_workbench::status_bus::StatusLevel::Progress => {
+                panels::console::ConsoleLevel::Info
+            }
         };
         console.push(level, format!("[{}] {}", ev.source, ev.message));
     }

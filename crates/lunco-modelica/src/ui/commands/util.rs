@@ -1,7 +1,7 @@
 //! Miscellaneous utility commands: Ping and Exit.
 
 use bevy::prelude::*;
-use lunco_core::{Command, on_command};
+use lunco_core::{on_command, Command};
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 

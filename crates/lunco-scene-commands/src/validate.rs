@@ -36,8 +36,8 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_hooks::HookValue as H;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_hooks::HookValue as H;
 use lunco_usd_bevy::{CanonicalStage, UsdRead};
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -131,7 +131,7 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
         Ok(t) => t,
         Err(e) => {
             return ValidationReport::new(reference, "unknown")
-                .error(format!("cannot read {}: {e}", path.display()))
+                .error(format!("cannot read {}: {e}", path.display()));
         }
     };
     let report = match ext.as_str() {
@@ -214,9 +214,7 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
     let syntax = rumoca_phase_parse::parse_to_syntax(text, file_name);
     if syntax.has_errors() {
         match syntax.parse_error() {
-            Some(joined) => report
-                .errors
-                .extend(joined.lines().map(|l| l.to_string())),
+            Some(joined) => report.errors.extend(joined.lines().map(|l| l.to_string())),
             None => report
                 .errors
                 .push("parse failed (no diagnostic text from rumoca)".to_string()),
@@ -276,26 +274,47 @@ fn branch_lint(text: &str) -> Vec<String> {
         "rumoca's solver path is branch-free — rewrite as der(x) = expr using max()/min() clamps";
     let mut errors = Vec::new();
     let mut in_block_comment = false;
+    let mut in_string = false;
     let mut in_equations = false;
     for (idx, raw) in text.lines().enumerate() {
         let n = idx + 1;
-        // Strip comments (line-granular approximation of /* */).
-        let mut line = raw.to_string();
-        if in_block_comment {
-            match line.find("*/") {
-                Some(p) => {
-                    line = line[p + 2..].to_string();
+        // Strip strings and comments in source order. A quote inside a comment
+        // is inert, and comment markers inside a description string are text.
+        let mut line = String::with_capacity(raw.len());
+        let mut chars = raw.chars().peekable();
+        let mut escaped = false;
+        while let Some(ch) = chars.next() {
+            if in_block_comment {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
                     in_block_comment = false;
                 }
-                None => continue,
+                continue;
             }
-        }
-        if let Some(p) = line.find("/*") {
-            in_block_comment = !line[p..].contains("*/");
-            line.truncate(p);
-        }
-        if let Some(p) = line.find("//") {
-            line.truncate(p);
+            if in_string {
+                if ch == '"' && !escaped {
+                    in_string = false;
+                }
+                escaped = ch == '\\' && !escaped;
+                continue;
+            }
+            if ch == '/' {
+                match chars.peek() {
+                    Some('/') => break,
+                    Some('*') => {
+                        chars.next();
+                        in_block_comment = true;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            if ch == '"' {
+                in_string = true;
+                escaped = false;
+            } else {
+                line.push(ch);
+            }
         }
         let trimmed = line.trim();
 
@@ -316,13 +335,9 @@ fn branch_lint(text: &str) -> Vec<String> {
         // anywhere; `if` is also a valid *expression* in bindings, so only
         // flag it inside the sections the solver walks.
         if has_word(trimmed, "when") || has_word(trimmed, "elsewhen") {
-            errors.push(format!(
-                "line {n}: `when` equation — {HINT}"
-            ));
+            errors.push(format!("line {n}: `when` equation — {HINT}"));
         } else if in_equations && has_word(trimmed, "if") {
-            errors.push(format!(
-                "line {n}: `if` in an equation — {HINT}"
-            ));
+            errors.push(format!("line {n}: `if` in an equation — {HINT}"));
         }
     }
     errors
@@ -425,9 +440,9 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 /// once there reaches every vessel referencing it. So the shape decides, not the
 /// name: a scope is any prim with a child that authors `lunco:port`.
 fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
-    view.children(prim).iter().any(|c| {
-        c.name().is_some() && view.attr_names(c).iter().any(|a| a == "lunco:port")
-    })
+    view.children(prim)
+        .iter()
+        .any(|c| c.name().is_some() && view.attr_names(c).iter().any(|a| a == "lunco:port"))
 }
 
 /// Spellings [`lunco_core::parse_user_intent`] accepts. Used ONLY to suggest a
@@ -563,11 +578,7 @@ pub fn run_cli(paths: &[String]) -> i32 {
         }
         failed |= !report.ok;
     }
-    if failed {
-        1
-    } else {
-        0
-    }
+    if failed { 1 } else { 0 }
 }
 
 // ─── API registration ───────────────────────────────────────────────────────
@@ -619,6 +630,18 @@ mod tests {
     #[test]
     fn branch_lint_ignores_comments_and_bindings() {
         let src = "model M\n  // if this then that\n  parameter Real k = 2;\nequation\n  der(x) = max(0.0, k);\nend M;\n";
+        assert!(branch_lint(src).is_empty());
+    }
+
+    #[test]
+    fn branch_lint_ignores_multiline_model_descriptions() {
+        let src = "model M\n  \"Active when commanded;\n   otherwise idle\"\n  Real x;\nequation\n  der(x) = 0;\nend M;\n";
+        assert!(branch_lint(src).is_empty());
+    }
+
+    #[test]
+    fn branch_lint_ignores_quotes_and_keywords_in_comments() {
+        let src = "model M\n  // \"if this comment never closes\n  Real x;\nequation\n  /* when false then */ der(x) = 0;\nend M;\n";
         assert!(branch_lint(src).is_empty());
     }
 

@@ -126,7 +126,9 @@ pub(super) fn msl_package_tree() -> &'static MslPackageNode {
             // [Modelica, Electrical, Analog, Basic], attach class
             // `Resistor`.
             let mut parts: Vec<&str> = comp.name.split('.').collect();
-            let Some(_class_name) = parts.pop() else { continue };
+            let Some(_class_name) = parts.pop() else {
+                continue;
+            };
             let mut node = &mut root;
             for seg in parts {
                 node = node
@@ -189,7 +191,15 @@ pub(super) fn render_msl_package_menu(
         }
         ui.menu_button(name, |ui| {
             render_msl_package_menu(
-                ui, ctx, state, doc_id, child, click_world, editing_class, show_icons, out,
+                ui,
+                ctx,
+                state,
+                doc_id,
+                child,
+                click_world,
+                editing_class,
+                show_icons,
+                out,
             );
         });
     }
@@ -236,17 +246,19 @@ pub(super) fn render_msl_package_menu(
                     let tab = ctx
                         .resource::<crate::model_tabs_types::TabRenderContext>()
                         .and_then(|c| c.tab_id);
-                    pick_add_instance_name(
-                        comp,
-                        &state.get_for_render(tab, doc_id).canvas.scene,
-                    )
+                    pick_add_instance_name(comp, &state.get_for_render(tab, doc_id).canvas.scene)
                 };
                 // Optimistic scene synthesis (`synthesize_msl_node`) was
                 // removed. Now: emit the op, gen bumps in
                 // `apply_patch`, the next frame's projection re-derives
                 // the scene from the new AST. Same-frame visual
                 // response since the projection system runs each tick.
-                out.push(op_add_component_with_name(comp, &instance_name, click_world, class));
+                out.push(op_add_component_with_name(
+                    comp,
+                    &instance_name,
+                    click_world,
+                    class,
+                ));
             }
             ui.close();
         }

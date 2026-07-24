@@ -167,8 +167,10 @@ struct WelcomeCatalog {
 
 fn welcome_catalog() -> &'static WelcomeCatalog {
     static CACHE: std::sync::OnceLock<WelcomeCatalog> = std::sync::OnceLock::new();
-    static EMPTY: WelcomeCatalog =
-        WelcomeCatalog { examples: Vec::new(), domain_counts: Vec::new() };
+    static EMPTY: WelcomeCatalog = WelcomeCatalog {
+        examples: Vec::new(),
+        domain_counts: Vec::new(),
+    };
     if let Some(c) = CACHE.get() {
         return c;
     }
@@ -180,17 +182,18 @@ fn welcome_catalog() -> &'static WelcomeCatalog {
     }
     let examples: Vec<&'static crate::index::ClassEntry> =
         lib.iter().filter(|c| is_top_level_example(c)).collect();
-    let mut counts: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for c in &examples {
         *counts.entry(c.domain().to_string()).or_default() += 1;
     }
     let mut domain_counts: Vec<(String, usize)> = counts.into_iter().collect();
     domain_counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let _ = CACHE.set(WelcomeCatalog { examples, domain_counts });
+    let _ = CACHE.set(WelcomeCatalog {
+        examples,
+        domain_counts,
+    });
     CACHE.get().unwrap_or(&EMPTY)
 }
-
 
 fn card_subtitle(c: &crate::index::ClassEntry) -> String {
     if !c.description.is_empty() {
@@ -281,16 +284,11 @@ impl Panel for WelcomePanel {
 
             // ── Hero ───────────────────────────────────────
             ui.vertical_centered(|ui| {
-                ui.heading(
-                    egui::RichText::new("Lunica (LunCoSim Modelica Workbench)")
-                        .size(24.0),
-                );
+                ui.heading(egui::RichText::new("Lunica (LunCoSim Modelica Workbench)").size(24.0));
                 ui.label(
-                    egui::RichText::new(
-                        "Build physics models, simulate them, see the numbers.",
-                    )
-                    .size(13.0)
-                    .color(muted),
+                    egui::RichText::new("Build physics models, simulate them, see the numbers.")
+                        .size(13.0)
+                        .color(muted),
                 );
             });
 
@@ -304,9 +302,7 @@ impl Panel for WelcomePanel {
                         .add_sized(
                             [272.0, 44.0],
                             egui::Button::new(
-                                egui::RichText::new("➕  New Model")
-                                    .size(14.0)
-                                    .strong(),
+                                egui::RichText::new("➕  New Model").size(14.0).strong(),
                             ),
                         )
                         .on_hover_text("Create a new untitled model (Ctrl+N)")
@@ -322,9 +318,7 @@ impl Panel for WelcomePanel {
                     if ui
                         .add_sized(
                             [272.0, 44.0],
-                            egui::Button::new(
-                                egui::RichText::new(label).size(14.0).strong(),
-                            ),
+                            egui::Button::new(egui::RichText::new(label).size(14.0).strong()),
                         )
                         .on_hover_text(hover)
                         .clicked()
@@ -358,12 +352,9 @@ impl Panel for WelcomePanel {
                 // content without hiding the demos entirely.
                 let bundled = bundled_models();
                 egui::CollapsingHeader::new(
-                    egui::RichText::new(format!(
-                        "LunCoSim demos ({} bundled)",
-                        bundled.len()
-                    ))
-                    .size(14.0)
-                    .color(title_tint),
+                    egui::RichText::new(format!("LunCoSim demos ({} bundled)", bundled.len()))
+                        .size(14.0)
+                        .color(title_tint),
                 )
                 .id_salt("welcome_bundled_demos")
                 .default_open(false)
@@ -380,68 +371,59 @@ impl Panel for WelcomePanel {
 
                     // 2-col grid of bundled cards.
                     let col_w = ((ui.available_width() - 8.0) / 2.0).max(220.0);
-                let row_h = 52.0;
-                let mut iter = bundled.iter();
-                loop {
-                    let left = iter.next();
-                    let right = iter.next();
-                    if left.is_none() {
-                        break;
-                    }
-                    ui.horizontal(|ui| {
-                        for entry in [left, right].into_iter().flatten() {
-                            let display = entry
-                                .filename
-                                .strip_suffix(".mo")
-                                .unwrap_or(entry.filename);
-                            let resp = ui
-                                .add_sized(
-                                    [col_w, row_h],
-                                    egui::Button::new("")
-                                        .fill(card_fill)
-                                        .stroke(egui::Stroke::new(
-                                            1.0,
-                                            card_stroke,
-                                        )),
-                                )
-                                .on_hover_text(format!(
-                                    "Open {} as a read-only tab",
-                                    display
-                                ));
-                            let rect = resp.rect;
-                            let painter = ui.painter_at(rect).with_clip_rect(rect);
-                            painter.text(
-                                rect.min + egui::vec2(14.0, 8.0),
-                                egui::Align2::LEFT_TOP,
-                                format!("📄  {}", display),
-                                egui::FontId::proportional(13.5),
-                                title_tint,
-                            );
-                            // Trim tagline so both cards stay
-                            // one-line and visually aligned.
-                            let tagline = entry.tagline;
-                            let tagline = if tagline.chars().count() > 64 {
-                                let mut s: String =
-                                    tagline.chars().take(64).collect();
-                                s.push('…');
-                                s
-                            } else {
-                                tagline.to_string()
-                            };
-                            painter.text(
-                                rect.min + egui::vec2(14.0, 28.0),
-                                egui::Align2::LEFT_TOP,
-                                tagline,
-                                egui::FontId::proportional(10.5),
-                                muted,
-                            );
-                            if resp.clicked() {
-                                open_bundled = Some(entry.filename);
-                            }
+                    let row_h = 52.0;
+                    let mut iter = bundled.iter();
+                    loop {
+                        let left = iter.next();
+                        let right = iter.next();
+                        if left.is_none() {
+                            break;
                         }
-                    });
-                    ui.add_space(6.0);
-                }
+                        ui.horizontal(|ui| {
+                            for entry in [left, right].into_iter().flatten() {
+                                let display =
+                                    entry.filename.strip_suffix(".mo").unwrap_or(entry.filename);
+                                let resp = ui
+                                    .add_sized(
+                                        [col_w, row_h],
+                                        egui::Button::new("")
+                                            .fill(card_fill)
+                                            .stroke(egui::Stroke::new(1.0, card_stroke)),
+                                    )
+                                    .on_hover_text(format!("Open {} as a read-only tab", display));
+                                let rect = resp.rect;
+                                let painter = ui.painter_at(rect).with_clip_rect(rect);
+                                painter.text(
+                                    rect.min + egui::vec2(14.0, 8.0),
+                                    egui::Align2::LEFT_TOP,
+                                    format!("📄  {}", display),
+                                    egui::FontId::proportional(13.5),
+                                    title_tint,
+                                );
+                                // Trim tagline so both cards stay
+                                // one-line and visually aligned.
+                                let tagline = entry.tagline;
+                                let tagline = if tagline.chars().count() > 64 {
+                                    let mut s: String = tagline.chars().take(64).collect();
+                                    s.push('…');
+                                    s
+                                } else {
+                                    tagline.to_string()
+                                };
+                                painter.text(
+                                    rect.min + egui::vec2(14.0, 28.0),
+                                    egui::Align2::LEFT_TOP,
+                                    tagline,
+                                    egui::FontId::proportional(10.5),
+                                    muted,
+                                );
+                                if resp.clicked() {
+                                    open_bundled = Some(entry.filename);
+                                }
+                            }
+                        });
+                        ui.add_space(6.0);
+                    }
                 });
             });
 
@@ -457,8 +439,7 @@ impl Panel for WelcomePanel {
 
                 // Overall header — "X of N paths started" turns the
                 // section into a tiny dashboard.
-                let total_steps: usize =
-                    registry.paths.iter().map(|p| p.steps.len()).sum();
+                let total_steps: usize = registry.paths.iter().map(|p| p.steps.len()).sum();
                 let done_steps: usize = registry
                     .paths
                     .iter()
@@ -555,25 +536,16 @@ impl Panel for WelcomePanel {
                         rect.max - egui::vec2(16.0, 22.0),
                         egui::Align2::RIGHT_TOP,
                         if is_expanded {
-                            format!(
-                                "{} of {}  ▾",
-                                opened,
-                                path.steps.len()
-                            )
+                            format!("{} of {}  ▾", opened, path.steps.len())
                         } else {
-                            format!(
-                                "{} of {}  ▸",
-                                opened,
-                                path.steps.len()
-                            )
+                            format!("{} of {}  ▸", opened, path.steps.len())
                         },
                         egui::FontId::proportional(11.0),
                         muted,
                     );
 
                     if resp.clicked() {
-                        wstate.expanded =
-                            if is_expanded { None } else { Some(i) };
+                        wstate.expanded = if is_expanded { None } else { Some(i) };
                     }
 
                     ui.add_space(6.0);
@@ -587,9 +559,8 @@ impl Panel for WelcomePanel {
                             // Resolve index entry for path-exists
                             // validation (rare missing means label
                             // still renders but click is disabled).
-                            let exists = msl_class_library()
-                                .iter()
-                                .any(|c| c.name == step.qualified);
+                            let exists =
+                                msl_class_library().iter().any(|c| c.name == step.qualified);
 
                             let step_h = 48.0;
                             let indent = 32.0;
@@ -601,10 +572,7 @@ impl Panel for WelcomePanel {
                                     egui::Button::new("")
                                         .min_size(egui::vec2(step_w, step_h))
                                         .fill(card_fill)
-                                        .stroke(egui::Stroke::new(
-                                            1.0,
-                                            card_stroke,
-                                        )),
+                                        .stroke(egui::Stroke::new(1.0, card_stroke)),
                                 );
                                 let resp = if exists {
                                     resp.on_hover_text(format!(
@@ -693,12 +661,9 @@ impl Panel for WelcomePanel {
                 let examples = &catalog.examples;
 
                 egui::CollapsingHeader::new(
-                    egui::RichText::new(format!(
-                        "Browse all {} examples",
-                        examples.len()
-                    ))
-                    .size(14.0)
-                    .color(title_tint),
+                    egui::RichText::new(format!("Browse all {} examples", examples.len()))
+                        .size(14.0)
+                        .color(title_tint),
                 )
                 .id_salt("welcome_browse_all")
                 .default_open(false)
@@ -721,10 +686,7 @@ impl Panel for WelcomePanel {
                                 .hint_text("search…"),
                         );
                         if !wstate.browse_query.is_empty()
-                            && ui
-                                .button("✕")
-                                .on_hover_text("Clear search")
-                                .clicked()
+                            && ui.button("✕").on_hover_text("Clear search").clicked()
                         {
                             wstate.browse_query.clear();
                         }
@@ -736,29 +698,21 @@ impl Panel for WelcomePanel {
                     let domain_counts = &catalog.domain_counts;
 
                     ui.horizontal_wrapped(|ui| {
-                        let chip =
-                            |ui: &mut egui::Ui,
-                             label: String,
-                             active: bool|
-                             -> egui::Response {
-                                let (fill, fg) = if active {
-                                    (chip_fill_active, chip_text_active)
-                                } else {
-                                    (chip_fill_idle, chip_text_idle)
-                                };
-                                ui.add(
-                                    egui::Button::new(
-                                        egui::RichText::new(label)
-                                            .size(11.0)
-                                            .color(fg),
-                                    )
-                                    .fill(fill)
-                                    .stroke(egui::Stroke::new(
-                                        1.0,
-                                        chip_fill_idle,
-                                    )),
-                                )
+                        let chip = |ui: &mut egui::Ui,
+                                    label: String,
+                                    active: bool|
+                         -> egui::Response {
+                            let (fill, fg) = if active {
+                                (chip_fill_active, chip_text_active)
+                            } else {
+                                (chip_fill_idle, chip_text_idle)
                             };
+                            ui.add(
+                                egui::Button::new(egui::RichText::new(label).size(11.0).color(fg))
+                                    .fill(fill)
+                                    .stroke(egui::Stroke::new(1.0, chip_fill_idle)),
+                            )
+                        };
 
                         if chip(
                             ui,
@@ -770,19 +724,8 @@ impl Panel for WelcomePanel {
                             wstate.browse_domain.clear();
                         }
                         for (domain, count) in domain_counts {
-                            let label = format!(
-                                "{} {} ({})",
-                                domain_icon(domain),
-                                domain,
-                                count
-                            );
-                            if chip(
-                                ui,
-                                label,
-                                wstate.browse_domain == *domain,
-                            )
-                            .clicked()
-                            {
+                            let label = format!("{} {} ({})", domain_icon(domain), domain, count);
+                            if chip(ui, label, wstate.browse_domain == *domain).clicked() {
                                 wstate.browse_domain = domain.clone();
                             }
                         }
@@ -795,32 +738,20 @@ impl Panel for WelcomePanel {
                         .iter()
                         .copied()
                         .filter(|c| {
-                            (wstate.browse_domain.is_empty()
-                                || c.domain() == wstate.browse_domain)
+                            (wstate.browse_domain.is_empty() || c.domain() == wstate.browse_domain)
                                 && (query_lc.is_empty()
-                                    || c.short_name()
-                                        .to_lowercase()
-                                        .contains(&query_lc)
-                                    || c.name
-                                        .to_lowercase()
-                                        .contains(&query_lc)
+                                    || c.short_name().to_lowercase().contains(&query_lc)
+                                    || c.name.to_lowercase().contains(&query_lc)
                                     || (!c.description.is_empty()
-                                        && c.description
-                                            .to_lowercase()
-                                            .contains(&query_lc))
+                                        && c.description.to_lowercase().contains(&query_lc))
                                     || c.documentation_info()
-                                        .is_some_and(|s| {
-                                            s.to_lowercase().contains(&query_lc)
-                                        }))
+                                        .is_some_and(|s| s.to_lowercase().contains(&query_lc)))
                         })
                         .collect();
 
                     if filtered.is_empty() {
                         ui.add_space(12.0);
-                        ui.label(
-                            egui::RichText::new("No examples match.")
-                                .color(muted),
-                        );
+                        ui.label(egui::RichText::new("No examples match.").color(muted));
                     } else {
                         let col_w = 372.0;
                         let row_h = 62.0;
@@ -832,18 +763,14 @@ impl Panel for WelcomePanel {
                                 break;
                             }
                             ui.horizontal(|ui| {
-                                for entry in [left, right].into_iter().flatten()
-                                {
+                                for entry in [left, right].into_iter().flatten() {
                                     let c = *entry;
                                     let resp = ui
                                         .add_sized(
                                             [col_w, row_h],
                                             egui::Button::new("")
                                                 .fill(card_fill)
-                                                .stroke(egui::Stroke::new(
-                                                    1.0,
-                                                    card_stroke,
-                                                )),
+                                                .stroke(egui::Stroke::new(1.0, card_stroke)),
                                         )
                                         .on_hover_text(format!(
                                             "{}\n\nOpens read-only — \
@@ -852,8 +779,7 @@ impl Panel for WelcomePanel {
                                         ));
                                     let rect = resp.rect;
                                     let painter = ui.painter_at(rect).with_clip_rect(rect);
-                                    let dot = if progress.is_opened(&c.name)
-                                    {
+                                    let dot = if progress.is_opened(&c.name) {
                                         ("●", success)
                                     } else {
                                         ("○", muted)
@@ -868,18 +794,13 @@ impl Panel for WelcomePanel {
                                     painter.text(
                                         rect.min + egui::vec2(28.0, 8.0),
                                         egui::Align2::LEFT_TOP,
-                                        format!(
-                                            "{}  {}",
-                                            domain_icon(c.domain()),
-                                            c.short_name()
-                                        ),
+                                        format!("{}  {}", domain_icon(c.domain()), c.short_name()),
                                         egui::FontId::proportional(13.0),
                                         title_tint,
                                     );
                                     let sub = card_subtitle(c);
                                     let sub = if sub.chars().count() > 72 {
-                                        let mut s: String =
-                                            sub.chars().take(72).collect();
+                                        let mut s: String = sub.chars().take(72).collect();
                                         s.push('…');
                                         s
                                     } else {
@@ -893,16 +814,14 @@ impl Panel for WelcomePanel {
                                         muted,
                                     );
                                     painter.text(
-                                        rect.min
-                                            + egui::vec2(28.0, row_h - 16.0),
+                                        rect.min + egui::vec2(28.0, row_h - 16.0),
                                         egui::Align2::LEFT_TOP,
                                         c.domain(),
                                         egui::FontId::proportional(9.5),
                                         muted,
                                     );
                                     if resp.clicked() {
-                                        open_msl =
-                                            Some(c.name.clone());
+                                        open_msl = Some(c.name.clone());
                                     }
                                 }
                             });

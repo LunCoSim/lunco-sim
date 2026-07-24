@@ -109,6 +109,13 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
         "lint_selftest.usda must trip nested-body-no-joint through ValidateAsset — \
          got {lint_errors:?}"
     );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("empty-component-network")),
+        "lint_selftest.usda must prove empty domain networks are rejected — \
+         got {lint_errors:?}"
+    );
     assert!(!report.ok, "a file with lint ERRORS must not report ok");
 }
 

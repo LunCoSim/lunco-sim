@@ -14,7 +14,7 @@ one directly when doing that kind of task by hand.
 | Skill | Use it when you want to… |
 |---|---|
 | [**repo-map**](repo-map/SKILL.md) | Get your bearings — repo layout, which binary to run, where a feature lives |
-| [**use-asset-library**](use-asset-library/SKILL.md) | Add a component / shader / Modelica model / rhai actuator to `assets/` and have the engine find it — no Rust |
+| [**use-asset-library**](use-asset-library/SKILL.md) | Add a component, shader, Modelica model, or event-driven Rhai policy to `assets/` and have the engine find it |
 
 ## Author the world & its behaviour
 

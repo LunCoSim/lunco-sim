@@ -133,5 +133,8 @@ fn remove_connection_through_apply() {
         .equations
         .iter()
         .any(|eq| matches!(eq, rumoca_compile::parsing::ast::Equation::Connect { .. }));
-    assert!(!any_connect, "connect equation still present after RemoveConnection");
+    assert!(
+        !any_connect,
+        "connect equation still present after RemoveConnection"
+    );
 }

@@ -1,14 +1,14 @@
 //! Inner extractors and expression walkers for Modelica annotations.
 
-use std::collections::HashSet;
-use std::sync::Arc;
-use rumoca_compile::parsing::ast::{Expression, TerminalType, ClassDef, Import};
-use rumoca_compile::parsing::OpBinary;
-use rumoca_compile::parsing::ir_core::OpUnary;
-use super::types::*;
 use super::graphics::*;
 use super::layers::*;
 use super::placement::*;
+use super::types::*;
+use rumoca_compile::parsing::ast::{ClassDef, Expression, Import, TerminalType};
+use rumoca_compile::parsing::ir_core::OpUnary;
+use rumoca_compile::parsing::OpBinary;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Public extractors
@@ -18,8 +18,8 @@ use super::placement::*;
 pub fn extract_placement(annotations: &[Expression]) -> Option<Placement> {
     let placement_call = find_call(annotations, "Placement")?;
     let placement_args = call_args(placement_call)?;
-    let transformation = find_call(placement_args, "transformation")
-        .and_then(extract_transformation)?;
+    let transformation =
+        find_call(placement_args, "transformation").and_then(extract_transformation)?;
     Some(Placement { transformation })
 }
 
@@ -67,14 +67,19 @@ pub fn extract_lunco_plot_nodes(annotations: &[Expression]) -> Vec<LunCoPlotNode
     let Some(call) = find_call(annotations, "__LunCo") else {
         return Vec::new();
     };
-    let Some(args) = call_args(call) else { return Vec::new() };
+    let Some(args) = call_args(call) else {
+        return Vec::new();
+    };
     let Some(plot_nodes_arr) = named_arg(args, "plotNodes") else {
         return Vec::new();
     };
     let Some(elements) = array_elements(plot_nodes_arr) else {
         return Vec::new();
     };
-    elements.iter().filter_map(extract_lunco_plot_node_record).collect()
+    elements
+        .iter()
+        .filter_map(extract_lunco_plot_node_record)
+        .collect()
 }
 
 fn extract_lunco_plot_node_record(expr: &Expression) -> Option<LunCoPlotNode> {
@@ -93,7 +98,11 @@ fn extract_lunco_plot_node_record(expr: &Expression) -> Option<LunCoPlotNode> {
         .and_then(extract_string)
         .map(|s| s.trim_matches('"').to_string())
         .unwrap_or_default();
-    Some(LunCoPlotNode { extent, signal, title })
+    Some(LunCoPlotNode {
+        extent,
+        signal,
+        title,
+    })
 }
 
 /// Extract the `experiment(...)` annotation from a class's annotation
@@ -159,7 +168,9 @@ where
                 break;
             }
         }
-        let Some((resolved_name, base_class)) = hit else { continue };
+        let Some((resolved_name, base_class)) = hit else {
+            continue;
+        };
         if let Some(base_icon) = merge_inherited_icon(
             &resolved_name,
             base_class.as_ref(),
@@ -237,9 +248,8 @@ pub fn extract_icon_via_engine(
         .collect();
 
     let top = engine.class_def(qualified)?;
-    let mut resolver = |name: &str| -> Option<Arc<ClassDef>> {
-        engine.class_def(name).map(Arc::new)
-    };
+    let mut resolver =
+        |name: &str| -> Option<Arc<ClassDef>> { engine.class_def(name).map(Arc::new) };
     let mut visited = HashSet::new();
     merge_inherited_icon(qualified, &top, &mut resolver, &falsy_params, &mut visited)
 }
@@ -248,11 +258,7 @@ pub fn extract_icon_via_engine(
 // Inner helpers
 // ---------------------------------------------------------------------------
 
-fn build_extends_candidates(
-    class_name: &str,
-    base_name: &str,
-    imports: &[Import],
-) -> Vec<String> {
+fn build_extends_candidates(class_name: &str, base_name: &str, imports: &[Import]) -> Vec<String> {
     let mut out = Vec::new();
     out.push(base_name.to_string());
 
@@ -283,11 +289,7 @@ fn build_extends_candidates(
                 }
             }
             Import::Qualified { path, .. } => {
-                let last = path
-                    .name
-                    .last()
-                    .map(|t| t.text.as_ref())
-                    .unwrap_or("");
+                let last = path.name.last().map(|t| t.text.as_ref()).unwrap_or("");
                 if last == head {
                     let resolved = import_path_name(path);
                     let full = match tail {
@@ -360,32 +362,28 @@ fn collect_falsy_bool_params_recursive<F>(
         let candidates = build_extends_candidates(class_name, &base_name, &class.imports);
         for cand in candidates {
             if let Some(base) = resolver(&cand) {
-                collect_falsy_bool_params_recursive(
-                    &cand,
-                    base.as_ref(),
-                    resolver,
-                    out,
-                    visited,
-                );
+                collect_falsy_bool_params_recursive(&cand, base.as_ref(), resolver, out, visited);
                 break;
             }
         }
     }
 }
 
-fn collect_falsy_bool_params(
-    class: &ClassDef,
-    out: &mut HashSet<String>,
-) {
+fn collect_falsy_bool_params(class: &ClassDef, out: &mut HashSet<String>) {
     for (name, comp) in class.components.iter() {
         if !comp.has_explicit_binding {
             continue;
         }
-        let Some(binding) = comp.binding.as_ref() else { continue };
-        if let Expression::Terminal { terminal_type, token, .. } = binding {
-            if matches!(terminal_type, TerminalType::Bool)
-                && token.text.as_ref() == "false"
-            {
+        let Some(binding) = comp.binding.as_ref() else {
+            continue;
+        };
+        if let Expression::Terminal {
+            terminal_type,
+            token,
+            ..
+        } = binding
+        {
+            if matches!(terminal_type, TerminalType::Bool) && token.text.as_ref() == "false" {
                 out.insert(name.clone());
             }
         }
@@ -401,7 +399,11 @@ fn extract_transformation(call: &Expression) -> Option<Transformation> {
     let rotation = named_arg(args, "rotation")
         .and_then(extract_number)
         .unwrap_or(0.0);
-    Some(Transformation { extent, origin, rotation })
+    Some(Transformation {
+        extent,
+        origin,
+        rotation,
+    })
 }
 
 fn extract_coordinate_system(args: &[Expression]) -> Option<CoordinateSystem> {
@@ -451,25 +453,20 @@ fn extract_graphic_item_filtered(
     }
 }
 
-fn is_visibility_falsy(
-    args: &[Expression],
-    falsy_params: &HashSet<String>,
-) -> bool {
+fn is_visibility_falsy(args: &[Expression], falsy_params: &HashSet<String>) -> bool {
     let Some(vis) = named_arg(args, "visible") else {
         return false;
     };
     eval_visibility_falsy(vis, falsy_params)
 }
 
-fn eval_visibility_falsy(
-    expr: &Expression,
-    falsy_params: &HashSet<String>,
-) -> bool {
+fn eval_visibility_falsy(expr: &Expression, falsy_params: &HashSet<String>) -> bool {
     match expr {
-        Expression::Terminal { terminal_type, token, .. } => {
-            matches!(terminal_type, TerminalType::Bool)
-                && token.text.as_ref() == "false"
-        }
+        Expression::Terminal {
+            terminal_type,
+            token,
+            ..
+        } => matches!(terminal_type, TerminalType::Bool) && token.text.as_ref() == "false",
         Expression::ComponentReference(cref) => cref
             .parts
             .first()
@@ -479,9 +476,7 @@ fn eval_visibility_falsy(
             OpUnary::Not => false,
             _ => false,
         },
-        Expression::Parenthesized { inner, .. } => {
-            eval_visibility_falsy(inner, falsy_params)
-        }
+        Expression::Parenthesized { inner, .. } => eval_visibility_falsy(inner, falsy_params),
         _ => false,
     }
 }
@@ -535,7 +530,9 @@ fn extract_dyn_extent(expr: &Expression) -> Option<DynExtent> {
 }
 
 pub fn extract_line_points(annotation: &[Expression]) -> Vec<(f32, f32)> {
-    extract_line_full(annotation).map(|r| r.points).unwrap_or_default()
+    extract_line_full(annotation)
+        .map(|r| r.points)
+        .unwrap_or_default()
 }
 
 pub fn extract_line_route(annotation: &[Expression]) -> Option<(Vec<(f32, f32)>, bool)> {
@@ -632,7 +629,8 @@ fn extract_polygon(args: &[Expression]) -> Option<Polygon> {
 fn extract_text(args: &[Expression]) -> Option<Text> {
     let extent = named_arg(args, "extent").and_then(extract_extent)?;
     let text_string_arg = named_arg(args, "textString")?;
-    let (text_string, text_string_dynamic) = if call_name(text_string_arg) == Some("DynamicSelect") {
+    let (text_string, text_string_dynamic) = if call_name(text_string_arg) == Some("DynamicSelect")
+    {
         let cargs = call_args(text_string_arg).unwrap_or(&[]);
         let s = cargs.first().and_then(extract_string).unwrap_or_default();
         let d = cargs.get(1).and_then(expr_to_dyn);
@@ -727,9 +725,7 @@ fn call_name(expr: &Expression) -> Option<&str> {
         Expression::ClassModification { target, .. } => {
             target.parts.last().map(|t| t.ident.text.as_ref())
         }
-        Expression::FunctionCall { comp, .. } => {
-            comp.parts.last().map(|t| t.ident.text.as_ref())
-        }
+        Expression::FunctionCall { comp, .. } => comp.parts.last().map(|t| t.ident.text.as_ref()),
         _ => None,
     }
 }
@@ -745,7 +741,8 @@ fn call_args(expr: &Expression) -> Option<&[Expression]> {
 fn named_arg<'a>(args: &'a [Expression], name: &str) -> Option<&'a Expression> {
     args.iter().find_map(|e| match e {
         Expression::Modification { target, value, .. } => {
-            (target.parts.last().map(|t| t.ident.text.as_ref()) == Some(name)).then_some(value.as_ref())
+            (target.parts.last().map(|t| t.ident.text.as_ref()) == Some(name))
+                .then_some(value.as_ref())
         }
         Expression::NamedArgument {
             name: arg_name,
@@ -839,8 +836,12 @@ fn expr_to_dyn(expr: &Expression) -> Option<DynExpr> {
             token,
             ..
         } => match terminal_type {
-            TerminalType::UnsignedReal | TerminalType::UnsignedInteger => token.text.parse().ok().map(DynExpr::Const),
-            TerminalType::String => Some(DynExpr::StringLit(token.text.trim_matches('"').to_string())),
+            TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
+                token.text.parse().ok().map(DynExpr::Const)
+            }
+            TerminalType::String => {
+                Some(DynExpr::StringLit(token.text.trim_matches('"').to_string()))
+            }
             _ => None,
         },
         Expression::ComponentReference(cref) => {

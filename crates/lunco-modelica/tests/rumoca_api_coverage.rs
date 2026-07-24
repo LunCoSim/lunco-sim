@@ -27,12 +27,49 @@ fn legacy_regex_scan(source: &str) -> HashSet<(String, String)> {
         r"(?m)^\s*(?:(?:redeclare|flow|stream|input|output|parameter|constant|discrete|inner|outer|replaceable|final)\s+)*((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\b"
     ).expect("regex compiles");
     const KEYWORDS: &[&str] = &[
-        "model", "block", "connector", "package", "function", "record", "class", "type",
-        "extends", "import", "equation", "algorithm", "initial", "protected", "public",
-        "annotation", "connect", "if", "for", "when", "end", "within", "and", "or", "not",
-        "true", "false", "else", "elseif", "elsewhen", "while", "loop", "break", "return",
-        "then", "external", "encapsulated", "partial", "expandable", "operator", "pure",
-        "impure", "redeclare",
+        "model",
+        "block",
+        "connector",
+        "package",
+        "function",
+        "record",
+        "class",
+        "type",
+        "extends",
+        "import",
+        "equation",
+        "algorithm",
+        "initial",
+        "protected",
+        "public",
+        "annotation",
+        "connect",
+        "if",
+        "for",
+        "when",
+        "end",
+        "within",
+        "and",
+        "or",
+        "not",
+        "true",
+        "false",
+        "else",
+        "elseif",
+        "elsewhen",
+        "while",
+        "loop",
+        "break",
+        "return",
+        "then",
+        "external",
+        "encapsulated",
+        "partial",
+        "expandable",
+        "operator",
+        "pure",
+        "impure",
+        "redeclare",
     ];
     let mut out = HashSet::new();
     for cap in re.captures_iter(source) {
@@ -62,9 +99,7 @@ fn legacy_regex_scan(source: &str) -> HashSet<(String, String)> {
 fn compile_str_keeps_bound_input_as_runtime_slot() {
     let src = "model M\n  input Real g = 9.81;\n  Real x;\nequation\n  der(x) = g;\nend M;\n";
     let mut compiler = lunco_modelica::ModelicaCompiler::new();
-    let dae = compiler
-        .compile_str("M", src, "m.mo")
-        .expect("M compiles");
+    let dae = compiler.compile_str("M", src, "m.mo").expect("M compiles");
 
     let opts = rumoca_sim::SimOptions {
         t_start: 0.0,
@@ -109,8 +144,7 @@ fn simulation_session_clamps_advance_at_t_end() {
         t_end: 0.5,
         ..Default::default()
     };
-    let mut session =
-        rumoca_sim::SimulationSession::new(&dae.dae, opts).expect("session builds");
+    let mut session = rumoca_sim::SimulationSession::new(&dae.dae, opts).expect("session builds");
 
     // Ask for 2 s of model time against a 0.5 s horizon.
     for _ in 0..20 {

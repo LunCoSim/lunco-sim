@@ -1,7 +1,7 @@
 //! Periodic update/sync systems: StatusBar and UnsavedDocs.
 
-use bevy::prelude::*;
 use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use bevy::prelude::*;
 use lunco_doc_bevy::DocumentDiagnostics;
 
 pub fn publish_unsaved_modelica_docs(

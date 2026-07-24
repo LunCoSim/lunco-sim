@@ -61,11 +61,15 @@ use uuid::Uuid;
 pub struct DiagramNodeId(Uuid);
 
 impl DiagramNodeId {
-    pub fn new() -> Self { Self(Uuid::new_v4()) }
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
 impl Default for DiagramNodeId {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Causality classification of a connector port, derived from the
@@ -162,7 +166,9 @@ pub struct PortDef {
 }
 
 impl PortDef {
-    fn default_size() -> f32 { 20.0 }
+    fn default_size() -> f32 {
+        20.0
+    }
 }
 
 /// A parameter definition for an MSL component.
@@ -177,7 +183,6 @@ pub struct ParamDef {
     /// Unit (e.g., "Ohm", "F", "V").
     pub unit: Option<String>,
 }
-
 
 /// On-disk shape of `msl_index.json`. Wraps the legacy
 /// `Vec<crate::index::ClassEntry>` payload alongside the pre-baked
@@ -292,10 +297,18 @@ pub struct VisualDiagram {
 impl VisualDiagram {
     /// Generate a unique instance name for a component type.
     pub fn next_instance_name(&mut self, component_name: &str) -> String {
-        let counter = self.name_counters.entry(component_name.to_string()).or_insert(0);
+        let counter = self
+            .name_counters
+            .entry(component_name.to_string())
+            .or_insert(0);
         *counter += 1;
         // Use first letter as prefix: Resistor → R1, Capacitor → C1
-        let prefix = component_name.chars().next().unwrap_or('X').to_uppercase().to_string();
+        let prefix = component_name
+            .chars()
+            .next()
+            .unwrap_or('X')
+            .to_uppercase()
+            .to_string();
         format!("{}{}", prefix, counter)
     }
 
@@ -305,7 +318,12 @@ impl VisualDiagram {
     }
 
     /// Add a node with a specific ID.
-    pub fn add_node_with_id(&mut self, id: DiagramNodeId, def: crate::index::ClassEntry, position: Pos2) -> DiagramNodeId {
+    pub fn add_node_with_id(
+        &mut self,
+        id: DiagramNodeId,
+        def: crate::index::ClassEntry,
+        position: Pos2,
+    ) -> DiagramNodeId {
         let instance_name = self.next_instance_name(def.short_name());
         let mut parameter_values = HashMap::new();
         for param in &def.parameters {
@@ -319,7 +337,8 @@ impl VisualDiagram {
         let icon_transform = crate::icon_transform::IconTransform::from_placement(
             (position.x, -position.y),
             (20.0, 20.0),
-            false, false,
+            false,
+            false,
             0.0,
             (0.0, 0.0),
         );
@@ -340,7 +359,8 @@ impl VisualDiagram {
     /// Remove a node and its connected edges.
     pub fn remove_node(&mut self, id: DiagramNodeId) {
         self.nodes.retain(|n| n.id != id);
-        self.edges.retain(|e| e.source_node != id && e.target_node != id);
+        self.edges
+            .retain(|e| e.source_node != id && e.target_node != id);
     }
 
     /// Add an edge between two ports.
@@ -353,10 +373,14 @@ impl VisualDiagram {
     ) {
         // Check for duplicate
         let exists = self.edges.iter().any(|e| {
-            (e.source_node == source_node && e.source_port == source_port
-                && e.target_node == target_node && e.target_port == target_port)
-            || (e.source_node == target_node && e.source_port == target_port
-                && e.target_node == source_node && e.target_port == source_port)
+            (e.source_node == source_node
+                && e.source_port == source_port
+                && e.target_node == target_node
+                && e.target_port == target_port)
+                || (e.source_node == target_node
+                    && e.source_port == target_port
+                    && e.target_node == source_node
+                    && e.target_port == source_port)
         });
         if !exists {
             self.edges.push(DiagramEdge {
@@ -471,10 +495,9 @@ fn parse_msl_index(text: &str) -> Option<MslIndex> {
         bundled: serde_json::Value,
     }
     if let Ok(relaxed) = serde_json::from_str::<Relaxed>(text) {
-        let bundled = serde_json::from_value::<
-            Vec<crate::package_tree::types::PackageNode>,
-        >(relaxed.bundled)
-        .unwrap_or_default();
+        let bundled =
+            serde_json::from_value::<Vec<crate::package_tree::types::PackageNode>>(relaxed.bundled)
+                .unwrap_or_default();
         return Some(MslIndex {
             components: relaxed.components,
             bundled,
@@ -511,10 +534,7 @@ pub fn msl_classes_in_category(category: &str) -> Vec<crate::index::ClassEntry> 
 
 /// Lookup a component definition by its MSL path.
 pub fn msl_class_by_path(path: &str) -> Option<crate::index::ClassEntry> {
-    msl_class_library()
-        .iter()
-        .find(|c| c.name == path)
-        .cloned()
+    msl_class_library().iter().find(|c| c.name == path).cloned()
 }
 
 #[cfg(test)]

@@ -1,18 +1,18 @@
 //! Document management for Modelica files.
 
-pub mod ops;
-pub mod core;
 pub mod apply;
+pub mod core;
 pub mod duplicate;
+pub mod ops;
 
-pub use core::{ModelicaDocument, SyntaxCache, AstCache, parse_diag_from_error};
-pub use ops::{ModelicaOp, ModelicaChange, OpKind, FreshAst, CHANGE_HISTORY_CAPACITY};
+pub use core::{parse_diag_from_error, AstCache, ModelicaDocument, SyntaxCache};
+pub use ops::{FreshAst, ModelicaChange, ModelicaOp, OpKind, CHANGE_HISTORY_CAPACITY};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_doc::{DocumentHost, DocumentId, Reject};
     use crate::pretty::ComponentDecl;
+    use lunco_doc::{DocumentHost, DocumentId, Reject};
 
     fn doc() -> DocumentHost<ModelicaDocument> {
         DocumentHost::new(ModelicaDocument::new(
@@ -73,9 +73,12 @@ mod tests {
     #[test]
     fn multi_step_undo_redo_round_trip() {
         let mut host = doc();
-        host.apply(ModelicaOp::ReplaceSource { new: "a".into() }).unwrap();
-        host.apply(ModelicaOp::ReplaceSource { new: "b".into() }).unwrap();
-        host.apply(ModelicaOp::ReplaceSource { new: "c".into() }).unwrap();
+        host.apply(ModelicaOp::ReplaceSource { new: "a".into() })
+            .unwrap();
+        host.apply(ModelicaOp::ReplaceSource { new: "b".into() })
+            .unwrap();
+        host.apply(ModelicaOp::ReplaceSource { new: "c".into() })
+            .unwrap();
         assert_eq!(host.document().source(), "c");
         assert_eq!(host.generation(), 4); // gen 1 fresh + 3 mutations
 
@@ -93,7 +96,8 @@ mod tests {
     #[test]
     fn generation_monotonic_across_undo_redo() {
         let mut host = doc();
-        host.apply(ModelicaOp::ReplaceSource { new: "a".into() }).unwrap();
+        host.apply(ModelicaOp::ReplaceSource { new: "a".into() })
+            .unwrap();
         assert_eq!(host.generation(), 2); // gen 1 fresh + 1 mutation
         host.undo().unwrap();
         assert_eq!(host.generation(), 3);
@@ -104,11 +108,17 @@ mod tests {
     #[test]
     fn new_apply_clears_redo_branch() {
         let mut host = doc();
-        host.apply(ModelicaOp::ReplaceSource { new: "first".into() }).unwrap();
+        host.apply(ModelicaOp::ReplaceSource {
+            new: "first".into(),
+        })
+        .unwrap();
         host.undo().unwrap();
         assert!(host.can_redo());
 
-        host.apply(ModelicaOp::ReplaceSource { new: "second".into() }).unwrap();
+        host.apply(ModelicaOp::ReplaceSource {
+            new: "second".into(),
+        })
+        .unwrap();
         assert!(!host.can_redo());
         assert_eq!(host.document().source(), "second");
     }

@@ -24,13 +24,10 @@
 
 use bevy::log::info;
 
-pub fn class_to_file_index(
-) -> &'static std::collections::HashMap<String, std::path::PathBuf> {
+pub fn class_to_file_index() -> &'static std::collections::HashMap<String, std::path::PathBuf> {
     use std::sync::OnceLock;
-    static INDEX: OnceLock<std::collections::HashMap<String, std::path::PathBuf>> =
-        OnceLock::new();
-    static EMPTY: OnceLock<std::collections::HashMap<String, std::path::PathBuf>> =
-        OnceLock::new();
+    static INDEX: OnceLock<std::collections::HashMap<String, std::path::PathBuf>> = OnceLock::new();
+    static EMPTY: OnceLock<std::collections::HashMap<String, std::path::PathBuf>> = OnceLock::new();
 
     if let Some(idx) = INDEX.get() {
         return idx;
@@ -48,8 +45,7 @@ pub fn class_to_file_index(
     INDEX.get_or_init(build_class_to_file_index)
 }
 
-fn build_class_to_file_index(
-) -> std::collections::HashMap<String, std::path::PathBuf> {
+fn build_class_to_file_index() -> std::collections::HashMap<String, std::path::PathBuf> {
     let start = web_time::Instant::now();
     let lib = crate::visual_diagram::msl_class_library();
     let mut map = std::collections::HashMap::with_capacity(lib.len());

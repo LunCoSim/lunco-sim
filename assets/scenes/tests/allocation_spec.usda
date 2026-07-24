@@ -175,7 +175,9 @@ def Xform "AllocationSpec" (
     {
         custom string lunco:scenario = "allocation-spec"
 
-        def LunCoProgram "AllocationSpec"
+        def Scope "AllocationSpec" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/allocation_spec.rhai@
         }

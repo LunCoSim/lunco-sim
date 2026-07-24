@@ -57,7 +57,7 @@ fn on_event(me, evt) {
 ```
 
 (A real controller sequences phases here with `wait_for`/`wait_until` or reacts to
-events raised by `LunCoPortEvent` prims. Never write command ports every tick from rhai.)
+events raised by connected `LunCoEvent` prims. Never write command ports every tick from rhai.)
 
 ## Step 3 — sensors + wiring (USD)
 
@@ -81,7 +81,7 @@ float inputs:piloted.connect      = </Vessel.outputs:piloted>
 float inputs:throttle.connect     = </Vessel.outputs:throttle>
 
 # the supervisor is bolted on, so it is a child program prim:
-def LunCoProgram "Supervisor" {
+def Scope "Supervisor" (prepend apiSchemas = ["LunCoProgramAPI"]) {
     uniform asset info:sourceAsset = @scenarios/hover_super.rhai@
 }
 ```

@@ -14,11 +14,11 @@
 //! - **Expression-aware**: Extracts numeric values from AST expressions, not
 //!   just regex-captured number literals.
 
-use rumoca_phase_parse::parse_to_ast;
+use rumoca_compile::parsing::ast::AstIndexMap;
 use rumoca_compile::parsing::{
     Causality, ClassDef, ClassType, Expression, StoredDefinition, TerminalType, Variability,
 };
-use rumoca_compile::parsing::ast::AstIndexMap;
+use rumoca_phase_parse::parse_to_ast;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,6 @@ use std::collections::HashMap;
 fn parse(source: &str) -> Option<StoredDefinition> {
     parse_to_ast(source, "model.mo").ok()
 }
-
 
 // ---------------------------------------------------------------------------
 // Public extraction functions (drop-in replacements for regex versions)
@@ -167,12 +166,15 @@ pub fn unescape_modelica_string(s: &str) -> String {
 /// `canvas_projection::string_literal_of`, and an inline pattern in
 /// `model_view::parsing`) disagreed on what to strip and which
 /// escapes to decode. Use this from now on.
-pub fn string_literal_value(
-    e: &rumoca_compile::parsing::ast::Expression,
-) -> Option<String> {
+pub fn string_literal_value(e: &rumoca_compile::parsing::ast::Expression) -> Option<String> {
     use rumoca_compile::parsing::ast::Expression;
     use rumoca_compile::parsing::TerminalType;
-    let Expression::Terminal { terminal_type, token, .. } = e else {
+    let Expression::Terminal {
+        terminal_type,
+        token,
+        ..
+    } = e
+    else {
         return None;
     };
     if !matches!(terminal_type, TerminalType::String) {
@@ -206,9 +208,7 @@ pub fn parent_qualified(qualified: &str) -> &str {
 /// top-level classes, depth-first. Used by the Compile handler to
 /// decide whether to auto-pick (length 0–1) or open a picker modal
 /// (length ≥ 2, task #102). Cheap — walks the already-parsed AST.
-pub fn collect_non_package_classes_qualified(
-    ast: &StoredDefinition,
-) -> Vec<String> {
+pub fn collect_non_package_classes_qualified(ast: &StoredDefinition) -> Vec<String> {
     let mut out = Vec::new();
     collect_non_package_qualified(&ast.classes, "", &mut out);
     out
@@ -247,12 +247,8 @@ fn find_first_non_package_qualified(
     // Runnable = Model / Block / Class. Skip connectors, records,
     // types, functions — they have no equations to simulate and
     // compile would only produce `EmptySystem` / type errors.
-    let is_runnable = |t: &ClassType| {
-        matches!(
-            t,
-            ClassType::Model | ClassType::Block | ClassType::Class
-        )
-    };
+    let is_runnable =
+        |t: &ClassType| matches!(t, ClassType::Model | ClassType::Block | ClassType::Class);
     // First pass: prefer a runnable class AT THIS level.
     for (name, class) in classes {
         if is_runnable(&class.class_type) {
@@ -327,9 +323,7 @@ pub fn extract_inputs_with_defaults(source: &str) -> HashMap<String, f64> {
 }
 
 /// AST-based variant — see `extract_parameters_from_ast`.
-pub fn extract_inputs_with_defaults_from_ast(
-    ast: &StoredDefinition,
-) -> HashMap<String, f64> {
+pub fn extract_inputs_with_defaults_from_ast(ast: &StoredDefinition) -> HashMap<String, f64> {
     let mut inputs = HashMap::new();
     collect_inputs_with_defaults_from_classes(&ast.classes, &mut inputs);
     inputs
@@ -507,7 +501,11 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
 pub(crate) fn numeric_of(expr: &Expression) -> Option<f64> {
     use rumoca_compile::parsing::ir_core::OpUnary;
     match expr {
-        Expression::Terminal { terminal_type, token, .. } => match terminal_type {
+        Expression::Terminal {
+            terminal_type,
+            token,
+            ..
+        } => match terminal_type {
             TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
                 token.text.parse::<f64>().ok()
             }
@@ -714,17 +712,13 @@ pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
 /// equations (algebraic, when, if, …) are intentionally not surfaced
 /// here — the agent's structural picture is the wiring, not the
 /// constitutive equations.
-pub fn extract_connections_for_class(
-    class: &ClassDef,
-) -> Vec<(String, String)> {
+pub fn extract_connections_for_class(class: &ClassDef) -> Vec<(String, String)> {
     use rumoca_compile::parsing::ast::Equation;
     class
         .equations
         .iter()
         .filter_map(|e| match e {
-            Equation::Connect { lhs, rhs, .. } => {
-                Some((lhs.to_string(), rhs.to_string()))
-            }
+            Equation::Connect { lhs, rhs, .. } => Some((lhs.to_string(), rhs.to_string())),
             _ => None,
         })
         .collect()
@@ -755,7 +749,11 @@ fn tokens_to_description(tokens: &[rumoca_compile::parsing::Token]) -> String {
 /// `get_document_source`.
 fn expression_to_string(expr: &Expression) -> String {
     match expr {
-        Expression::Terminal { terminal_type, token, .. } => match terminal_type {
+        Expression::Terminal {
+            terminal_type,
+            token,
+            ..
+        } => match terminal_type {
             TerminalType::String => token.text.trim_matches('"').to_string(),
             _ => token.text.to_string(),
         },
@@ -836,14 +834,14 @@ fn is_output_connector_type(type_name: &str) -> bool {
 /// Pull the `unit="..."` modification for a component, if any. Returns
 /// the inner string with quotes stripped.
 fn unit_of_component(comp: &rumoca_compile::parsing::ast::Component) -> Option<String> {
-    comp.modifications
-        .get("unit")
-        .and_then(|expr| match expr {
-            Expression::Terminal { terminal_type: TerminalType::String, token, .. } => {
-                Some(token.text.trim_matches('"').to_string())
-            }
-            _ => None,
-        })
+    comp.modifications.get("unit").and_then(|expr| match expr {
+        Expression::Terminal {
+            terminal_type: TerminalType::String,
+            token,
+            ..
+        } => Some(token.text.trim_matches('"').to_string()),
+        _ => None,
+    })
 }
 
 fn typed_components_filtered<F>(class: &ClassDef, want: F) -> Vec<TypedComponent>
@@ -913,7 +911,10 @@ mod tests {
         assert!(modified.contains("  Real x;\n"));
         assert!(modified.contains("  x = g;\n"));
         // Still parses after blanking.
-        assert!(parse(&modified).is_some(), "blanked source must still parse");
+        assert!(
+            parse(&modified).is_some(),
+            "blanked source must still parse"
+        );
     }
 
     #[test]

@@ -1,0 +1,9 @@
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <Action ID="drive_to" target="/LanderTest/RoverTarget1" speed="0.7" radius="4.0"/>
+      <Action ID="drive_to" target="/LanderTest/RoverTarget2" speed="0.7" radius="4.0"/>
+      <Action ID="drive_to" target="/LanderTest/RoverTarget3" speed="0.7" radius="4.0"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

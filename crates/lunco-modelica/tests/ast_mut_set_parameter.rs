@@ -105,14 +105,9 @@ fn lookup_class_mut_empty_path_rejected() {
 
 #[test]
 fn set_parameter_inserts_new_modification_on_unmodified_component() {
-    let comp = mutate_and_reparse(
-        "model M\n  Real k;\nend M;\n",
-        "M",
-        "k",
-        |class, e| {
-            ast_mut::set_parameter(class, e,"k", "fixed", "true").expect("set_parameter");
-        },
-    );
+    let comp = mutate_and_reparse("model M\n  Real k;\nend M;\n", "M", "k", |class, e| {
+        ast_mut::set_parameter(class, e, "k", "fixed", "true").expect("set_parameter");
+    });
     assert!(
         comp.modifications.contains_key("fixed"),
         "modifications after mutation: {:?}",
@@ -129,7 +124,7 @@ fn set_parameter_replaces_existing_modification() {
         "M",
         "k",
         |class, e| {
-            ast_mut::set_parameter(class, e,"k", "min", "2.0").expect("set_parameter");
+            ast_mut::set_parameter(class, e, "k", "min", "2.0").expect("set_parameter");
         },
     );
     let rendered = format!("{:?}", comp.modifications.get("min").expect("min present"));
@@ -148,7 +143,7 @@ fn set_parameter_preserves_other_modifications() {
         "M",
         "k",
         |class, e| {
-            ast_mut::set_parameter(class, e,"k", "min", "1.0").expect("set_parameter");
+            ast_mut::set_parameter(class, e, "k", "min", "1.0").expect("set_parameter");
         },
     );
     assert!(
@@ -193,14 +188,9 @@ fn set_parameter_does_not_disturb_sibling_components() {
 
 #[test]
 fn set_parameter_start_writes_to_dedicated_field() {
-    let comp = mutate_and_reparse(
-        "model M\n  Real k;\nend M;\n",
-        "M",
-        "k",
-        |class, e| {
-            ast_mut::set_parameter(class, e,"k", "start", "1.5").expect("set_parameter");
-        },
-    );
+    let comp = mutate_and_reparse("model M\n  Real k;\nend M;\n", "M", "k", |class, e| {
+        ast_mut::set_parameter(class, e, "k", "start", "1.5").expect("set_parameter");
+    });
     // `start` field populated, flag set, no duplicate in modifications.
     assert!(
         comp.start_is_modification,
@@ -212,7 +202,10 @@ fn set_parameter_start_writes_to_dedicated_field() {
         comp.modifications.keys().collect::<Vec<_>>()
     );
     let rendered = format!("{:?}", comp.start);
-    assert!(rendered.contains("1.5"), "expected 1.5 in start, got: {rendered}");
+    assert!(
+        rendered.contains("1.5"),
+        "expected 1.5 in start, got: {rendered}"
+    );
 }
 
 #[test]
@@ -224,7 +217,7 @@ fn set_parameter_start_replaces_existing_start_value() {
         "M",
         "k",
         |class, e| {
-            ast_mut::set_parameter(class, e,"k", "start", "2.0").expect("set_parameter");
+            ast_mut::set_parameter(class, e, "k", "start", "2.0").expect("set_parameter");
         },
     );
     let rendered = format!("{:?}", comp.start);
@@ -248,7 +241,10 @@ fn set_parameter_unknown_component_returns_error() {
         "1.0",
     );
     match err {
-        AstMutError::ComponentNotFound { class: c, component } => {
+        AstMutError::ComponentNotFound {
+            class: c,
+            component,
+        } => {
             assert_eq!(c, "M");
             assert_eq!(component, "nonexistent");
         }
@@ -273,27 +269,17 @@ fn set_parameter_unparseable_value_returns_error() {
 
 #[test]
 fn set_parameter_accepts_integer_literal() {
-    let comp = mutate_and_reparse(
-        "model M\n  Integer n;\nend M;\n",
-        "M",
-        "n",
-        |class, e| {
-            ast_mut::set_parameter(class, e,"n", "min", "42").expect("set_parameter");
-        },
-    );
+    let comp = mutate_and_reparse("model M\n  Integer n;\nend M;\n", "M", "n", |class, e| {
+        ast_mut::set_parameter(class, e, "n", "min", "42").expect("set_parameter");
+    });
     assert!(comp.modifications.contains_key("min"));
 }
 
 #[test]
 fn set_parameter_accepts_boolean_literal() {
-    let comp = mutate_and_reparse(
-        "model M\n  Real k;\nend M;\n",
-        "M",
-        "k",
-        |class, e| {
-            ast_mut::set_parameter(class, e,"k", "fixed", "true").expect("set_parameter");
-        },
-    );
+    let comp = mutate_and_reparse("model M\n  Real k;\nend M;\n", "M", "k", |class, e| {
+        ast_mut::set_parameter(class, e, "k", "fixed", "true").expect("set_parameter");
+    });
     assert!(comp.modifications.contains_key("fixed"));
 }
 
@@ -302,14 +288,8 @@ fn set_parameter_accepts_array_literal() {
     // Use `nominal` rather than `start` so we exercise the
     // generic-modifications-map route; the `start` route is covered
     // separately above.
-    let comp = mutate_and_reparse(
-        "model M\n  Real x[3];\nend M;\n",
-        "M",
-        "x",
-        |class, e| {
-            ast_mut::set_parameter(class, e,"x", "nominal", "{1.0, 2.0, 3.0}")
-                .expect("set_parameter");
-        },
-    );
+    let comp = mutate_and_reparse("model M\n  Real x[3];\nend M;\n", "M", "x", |class, e| {
+        ast_mut::set_parameter(class, e, "x", "nominal", "{1.0, 2.0, 3.0}").expect("set_parameter");
+    });
     assert!(comp.modifications.contains_key("nominal"));
 }

@@ -16,11 +16,9 @@ use std::sync::Arc;
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica::ast_mut::{self, AstMutError};
 use lunco_modelica::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
-use lunco_modelica::pretty::{
-    FillPattern, GraphicSpec, LinePattern, LunCoPlotNodeSpec,
-};
-use rumoca_phase_parse::parse_to_ast;
+use lunco_modelica::pretty::{FillPattern, GraphicSpec, LinePattern, LunCoPlotNodeSpec};
 use rumoca_compile::parsing::ast::Expression;
+use rumoca_phase_parse::parse_to_ast;
 
 fn host(source: &str) -> DocumentHost<ModelicaDocument> {
     let syntax = Arc::new(SyntaxCache::from_source(source, 0));
@@ -73,16 +71,30 @@ fn count_plot_nodes(class_src: &str, class: &str) -> usize {
     let sd = parse_to_ast(class_src, "test.mo").unwrap();
     let class_def = sd.classes.get(class).expect("class present");
     for entry in &class_def.annotation {
-        let Expression::ClassModification { target, modifications, .. } = entry else { continue };
+        let Expression::ClassModification {
+            target,
+            modifications,
+            ..
+        } = entry
+        else {
+            continue;
+        };
         if !(target.parts.len() == 1 && &*target.parts[0].ident.text == "__LunCo") {
             continue;
         }
         for m in modifications {
-            let Expression::Modification { target: t, value, .. } = m else { continue };
+            let Expression::Modification {
+                target: t, value, ..
+            } = m
+            else {
+                continue;
+            };
             if !(t.parts.len() == 1 && &*t.parts[0].ident.text == "plotNodes") {
                 continue;
             }
-            let Expression::Array { elements, .. } = value.as_ref() else { continue };
+            let Expression::Array { elements, .. } = value.as_ref() else {
+                continue;
+            };
             return elements
                 .iter()
                 .filter(|e| {
@@ -234,7 +246,10 @@ fn set_diagram_text_string_updates_indexed_entry() {
     })
     .expect("apply SetDiagramTextString");
     let src = h.document().source();
-    assert!(src.contains("\"a\""), "first Text changed unexpectedly:\n{src}");
+    assert!(
+        src.contains("\"a\""),
+        "first Text changed unexpectedly:\n{src}"
+    );
     assert!(src.contains("\"B\""), "second Text not updated:\n{src}");
 }
 
@@ -313,8 +328,14 @@ fn add_plot_node_through_apply() {
     })
     .expect("apply AddPlotNode");
     let src = h.document().source().to_string();
-    assert!(src.contains("LunCoAnnotations.PlotNode"), "record missing:\n{src}");
-    assert!(src.contains("__LunCo(plotNodes"), "vendor annotation missing:\n{src}");
+    assert!(
+        src.contains("LunCoAnnotations.PlotNode"),
+        "record missing:\n{src}"
+    );
+    assert!(
+        src.contains("__LunCo(plotNodes"),
+        "vendor annotation missing:\n{src}"
+    );
     assert!(src.contains("\"x\""));
     assert_eq!(count_plot_nodes(&src, "M"), 1);
 }
@@ -335,7 +356,10 @@ fn remove_plot_node_through_apply() {
     })
     .expect("apply RemovePlotNode");
     let src = h.document().source().to_string();
-    assert!(!src.contains("LunCoAnnotations.PlotNode"), "node not removed:\n{src}");
+    assert!(
+        !src.contains("LunCoAnnotations.PlotNode"),
+        "node not removed:\n{src}"
+    );
     assert_eq!(count_plot_nodes(&src, "M"), 0);
 }
 

@@ -110,10 +110,7 @@ fn empty_model() {
 
 #[test]
 fn one_real_component() {
-    assert_idempotent(
-        "model M\n  Real x;\nend M;\n",
-        "one_real_component.mo",
-    );
+    assert_idempotent("model M\n  Real x;\nend M;\n", "one_real_component.mo");
 }
 
 #[test]

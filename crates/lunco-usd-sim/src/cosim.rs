@@ -39,8 +39,8 @@ use lunco_scripting::{
     ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot,
-    UsdPrimPath, UsdRead, UsdStageAsset,
+    CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
+    UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
@@ -260,6 +260,61 @@ fn process_usd_cosim_prim_read(
     commands: &mut Commands,
     asset_server: &AssetServer,
 ) {
+    if reader.type_name(sdf_path).as_deref() == Some("LunCoEvent") {
+        let sources = reader.connections(sdf_path, "inputs:trigger");
+        let Some(source) = sources.first() else {
+            warn!(
+                "[usd-cosim] {}: LunCoEvent has no inputs:trigger connection",
+                sdf_path
+            );
+            return;
+        };
+        let source = source.to_string();
+        let Some((source_path, output)) = source.split_once(".outputs:") else {
+            warn!(
+                "[usd-cosim] {}: event trigger source `{source}` is not an outputs:* property",
+                sdf_path
+            );
+            return;
+        };
+        let Some(name) = reader.text(sdf_path, "lunco:event:name") else {
+            warn!(
+                "[usd-cosim] {}: LunCoEvent has no lunco:event:name",
+                sdf_path
+            );
+            return;
+        };
+        commands.entity(entity).try_insert(EventBinding {
+            source_path: source_path.to_string(),
+            output: output.to_string(),
+            name,
+            severity: parse_event_severity(
+                reader
+                    .text(sdf_path, "lunco:event:severity")
+                    .as_deref()
+                    .unwrap_or("info"),
+            ),
+            armed: true,
+        });
+        return;
+    }
+
+    if !reader.has_api_schema(sdf_path, "LunCoProgramAPI") {
+        return;
+    }
+
+    // Connector-bearing Modelica components are compiled together by the
+    // network projector. Compiling the same class here would create a second,
+    // physically independent solver for one authored component.
+    if reader
+        .attr_names(sdf_path)
+        .iter()
+        .any(|name| name.starts_with("connectors:"))
+    {
+        commands.entity(entity).try_insert(UsdSimProcessed);
+        return;
+    }
+
     // Active-cosim gate: a prim is stepped iff it BOTH binds a behavior model
     // AND declares connectable ports (`inputs:`/`outputs:` attributes). The two
     // non-active cases skip silently: a model with no ports is a
@@ -326,7 +381,9 @@ fn process_usd_cosim_prim_read(
     // subsystems live on child prims, not the moving body). Harmless on
     // non-`RigidBody` cosim prims (e.g. a joint-driven solar tracker): the
     // marker is inert where prediction never runs.
-    commands.entity(entity).try_insert(lunco_core::NotPredictable);
+    commands
+        .entity(entity)
+        .try_insert(lunco_core::NotPredictable);
 
     // Source files are loaded through Bevy's `AssetServer`: on native it reads
     // from the workspace `assets/` source, on wasm it issues an HTTP fetch
@@ -356,15 +413,9 @@ fn process_usd_cosim_prim_read(
         .scalar::<bool>(sdf_path, "lunco:program:realtimeSafe")
         .unwrap_or(false)
     {
-        commands.entity(entity).try_insert(lunco_cosim::RealtimeSafe);
-    }
-
-    // Event rules are `LunCoPortEvent` CHILD prims — one prim per rule, each with a
-    // port, a comparison, a threshold and a name. Each turns a threshold crossing on
-    // a model output into a discrete TelemetryEvent (see `fire_model_port_events`).
-    let rules = read_port_event_prims(reader, sdf_path);
-    if !rules.is_empty() {
-        commands.entity(entity).try_insert(ModelEventRules(rules));
+        commands
+            .entity(entity)
+            .try_insert(lunco_cosim::RealtimeSafe);
     }
 
     info!(
@@ -391,61 +442,6 @@ fn solver_language(path: &str) -> Option<SolverLanguage> {
         Some("py") => Some(SolverLanguage::Python),
         _ => None,
     }
-}
-
-/// Read a program's [`LunCoPortEvent`] children into threshold rules.
-///
-/// One prim per rule, so each part of it — the port, the comparison, the threshold,
-/// the event name — is a typed property that validates, inspects, journals and
-/// replicates like any other. A rule packed into a string is none of those things.
-fn read_port_event_prims(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    sdf_path: &SdfPath,
-) -> Vec<PortEventRule> {
-    let mut rules = Vec::new();
-    for child in reader.children(sdf_path) {
-        if reader.type_name(&child).as_deref() != Some("LunCoPortEvent") {
-            continue;
-        }
-        let (Some(port), Some(emit)) = (
-            reader.text(&child, "lunco:event:port"),
-            reader.text(&child, "lunco:event:emit"),
-        ) else {
-            warn!(
-                "[usd-cosim] {}: a LunCoPortEvent needs both `lunco:event:port` and \
-                 `lunco:event:emit` — ignoring it",
-                child.as_str(),
-            );
-            continue;
-        };
-        let op = match reader
-            .text(&child, "lunco:event:op")
-            .unwrap_or_else(|| "lt".to_string())
-            .as_str()
-        {
-            "lt" => EdgeOp::Lt,
-            "le" => EdgeOp::Le,
-            "gt" => EdgeOp::Gt,
-            "ge" => EdgeOp::Ge,
-            other => {
-                warn!(
-                    "[usd-cosim] {}: `lunco:event:op = \"{}\"` is not one of lt/le/gt/ge — \
-                     ignoring this rule",
-                    child.as_str(),
-                    other,
-                );
-                continue;
-            }
-        };
-        rules.push(PortEventRule {
-            port,
-            op,
-            threshold: reader.real(&child, "lunco:event:threshold").unwrap_or(0.0),
-            event: emit,
-            armed: true,
-        });
-    }
-    rules
 }
 
 /// Drain `PendingModelicaSource` for entities whose `.mo` text has
@@ -653,11 +649,13 @@ pub fn wrap_modelica_into_simcomponent(
 
 /// The status a `ModelicaModel` projects onto its `SimComponent`.
 ///
-/// No solved variables yet ⇒ the interface is declared but the solver has not
-/// produced a state: `Compiling`. One place, so the bind-time insert and the
-/// per-tick sync can never disagree about when a model becomes `Running`.
+/// A durable worker error wins; otherwise no solved variables yet means the
+/// interface is declared but the solver has not produced a state: `Compiling`.
+/// One place keeps bind-time insertion and per-tick sync consistent.
 fn modelica_status(model: &ModelicaModel) -> SimStatus {
-    if model.variables.is_empty() {
+    if let Some(error) = &model.last_error {
+        SimStatus::Error(error.clone())
+    } else if model.variables.is_empty() {
         SimStatus::Compiling
     } else if model.paused {
         SimStatus::Paused
@@ -730,82 +728,84 @@ pub fn sync_script_inputs(
     }
 }
 
-// ── Modelica `when` / port-edge → event bridge ───────────────────────────────
-//
-// Modelica HAS discrete events (`when`, zero-crossings), but our rumoca codegen
-// surfaces only continuous variable VALUES as ports, and conditions on wired
-// INPUTS read defaults — so putting the event condition INSIDE the model is
-// unreliable. Instead the model stays a continuous SIGNAL emitter, and the edge
-// detection happens HERE in trusted Rust: a declarative `lunco:portEvents` rule
-// turns a threshold crossing of a model OUTPUT into a discrete `TelemetryEvent`
-// on the shared bus — the same bus rhai reads via `on_event` / `wait_for`.
+// ── Connected discrete signal → event bus ───────────────────────────────────
 
-#[derive(Clone, Copy)]
-enum EdgeOp {
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
-
-impl EdgeOp {
-    fn holds(self, v: f64, thr: f64) -> bool {
-        match self {
-            EdgeOp::Lt => v < thr,
-            EdgeOp::Le => v <= thr,
-            EdgeOp::Gt => v > thr,
-            EdgeOp::Ge => v >= thr,
-        }
-    }
-}
-
-/// One declarative port-edge rule: emit `event` when output `port` `op`-crosses
-/// `threshold`. Re-triggerable — `armed` clears on fire and re-arms when the
-/// condition is false again, so it fires once per rising edge.
-#[derive(Clone)]
-struct PortEventRule {
-    port: String,
-    op: EdgeOp,
-    threshold: f64,
-    event: String,
+/// Runtime projection of one authored `LunCoEvent`.
+#[derive(Component)]
+pub struct EventBinding {
+    source_path: String,
+    output: String,
+    name: String,
+    severity: lunco_core::Severity,
     armed: bool,
 }
 
-/// Port-edge event rules on a program, read from its [`LunCoPortEvent`] children.
-#[derive(Component, Default)]
-pub struct ModelEventRules(Vec<PortEventRule>);
+fn parse_event_severity(value: &str) -> lunco_core::Severity {
+    match value {
+        "debug" => lunco_core::Severity::Debug,
+        "warning" => lunco_core::Severity::Warning,
+        "error" => lunco_core::Severity::Error,
+        "critical" => lunco_core::Severity::Critical,
+        _ => lunco_core::Severity::Info,
+    }
+}
 
-/// Per-tick: evaluate each entity's port-edge rules against its fresh
-/// `SimComponent.outputs` and fire a `TelemetryEvent` (source = the model
-/// entity) on each rising edge. This is the "Modelica events" bridge — a
-/// continuous model signal in, a discrete event out.
-pub fn fire_model_port_events(
-    mut q: Query<(
-        &mut ModelEventRules,
+fn event_rising_edge(armed: &mut bool, value: f64) -> bool {
+    let active = value >= 0.5;
+    if active && *armed {
+        *armed = false;
+        true
+    } else {
+        if !active {
+            *armed = true;
+        }
+        false
+    }
+}
+
+/// Project rising edges of connected 0/1 model outputs onto [`TelemetryEvent`].
+pub fn fire_connected_events(
+    mut bindings: Query<(Entity, &UsdPrimPath, &mut EventBinding)>,
+    sources: Query<(
+        Entity,
+        &UsdPrimPath,
         &SimComponent,
         Option<&lunco_core::GlobalEntityId>,
     )>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
-    for (mut rules, comp, gid) in &mut q {
-        let src = gid.map(|g| g.get()).unwrap_or(0);
-        for rule in rules.0.iter_mut() {
-            let Some(&v) = comp.outputs.get(&rule.port) else {
-                continue;
-            };
-            let cond = rule.op.holds(v, rule.threshold);
-            if cond && rule.armed {
-                rule.armed = false;
-                commands.trigger(lunco_core::TelemetryEvent {
-                    name: rule.event.clone(),
-                    source: src,
-                    severity: lunco_core::Severity::Info,
-                    data: lunco_core::TelemetryValue::F64(v),
-                    timestamp: 0.0,
-                });
-            } else if !cond {
-                rule.armed = true;
-            }
+    let instance_of =
+        |entity| lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
+    let mut by_path = HashMap::new();
+    for (entity, path, component, gid) in &sources {
+        by_path.insert(
+            (instance_of(entity), path.path.as_str()),
+            (component, gid.map(|id| id.get()).unwrap_or(0)),
+        );
+    }
+    for (entity, _, mut binding) in &mut bindings {
+        let Some((value, source)) = by_path
+            .get(&(instance_of(entity), binding.source_path.as_str()))
+            .and_then(|(component, source)| {
+                component
+                    .outputs
+                    .get(&binding.output)
+                    .map(|value| (*value, *source))
+            })
+        else {
+            continue;
+        };
+        if event_rising_edge(&mut binding.armed, value) {
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: binding.name.clone(),
+                source,
+                severity: binding.severity,
+                data: lunco_core::TelemetryValue::F64(value),
+                timestamp: 0.0,
+            });
         }
     }
 }
@@ -875,10 +875,7 @@ pub fn rewire_usd_connections(
     // opted out of prediction). Absence of the promise is the dangerous case;
     // absence of the body is the safe one.
     q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
-    q_predicted_body: Query<
-        &avian3d::prelude::RigidBody,
-        Without<lunco_core::NotPredictable>,
-    >,
+    q_predicted_body: Query<&avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
     q_defaults: Query<&UsdInputDefaults>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
@@ -939,6 +936,22 @@ pub fn rewire_usd_connections(
         let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
             continue;
         };
+        // `LunCoEvent.inputs:trigger` is a standard USD connection, but its
+        // consumer is the event projector below rather than the scalar
+        // SimConnection fabric.
+        if view.type_name(&sink_sdf).as_deref() == Some("LunCoEvent") {
+            continue;
+        }
+        if view
+            .attr_names(&sink_sdf)
+            .iter()
+            .any(|name| name.starts_with("connectors:"))
+        {
+            // This is a component inside a synthesized Modelica network.
+            // Its causal and acausal edges are compiled into the wrapper; only
+            // the containing Scope participates in scalar runtime propagation.
+            continue;
+        }
 
         // Resolve this prim's wires within its OWN instance — a source path names a
         // prim of the same spawn, never a same-named prim of a different one.
@@ -1455,11 +1468,7 @@ fn on_restart_scene(
 pub struct ClearScene {}
 
 #[on_command(ClearScene)]
-fn on_clear_scene(
-    trigger: On<ClearScene>,
-    mut commands: Commands,
-    scene: SceneEntities,
-) {
+fn on_clear_scene(trigger: On<ClearScene>, mut commands: Commands, scene: SceneEntities) {
     info!("[clear-scene] clearing viewport");
     clear_scene_entities(&mut commands, &scene);
 }
@@ -1539,7 +1548,9 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     // guard is a backstop, not the handover. `try_insert` is a no-op if the anchor
     // already holds it (the origin never left home for this scene).
     if let Ok(anchor) = q_origin.single() {
-        commands.entity(anchor).try_insert(big_space::prelude::FloatingOrigin);
+        commands
+            .entity(anchor)
+            .try_insert(big_space::prelude::FloatingOrigin);
     }
 
     // Despawn any root-level derived connection wires (which are spawned as root entities)
@@ -1547,10 +1558,7 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
         commands.entity(e).try_despawn();
         despawned += 1;
     }
-    info!(
-        "[scene] cleanup: {} entities despawned",
-        despawned
-    );
+    info!("[scene] cleanup: {} entities despawned", despawned);
     // Every scene clear resets the whole clock tree to defaults (doc 19 §11b): a sky
     // left detached at 100 000×, a scrubbed animation, a paused transport — none of it
     // may survive into the next scene. This is the single choke point all three reload
@@ -1960,6 +1968,7 @@ pub(crate) fn install(app: &mut App) {
             // to load (network on wasm, async I/O on native).
             dispatch_loaded_modelica_sources,
             dispatch_loaded_python_sources,
+            crate::domain_projection::project_domain_islands,
             // Wiring is derived from native `connectionPaths`: rebuilds the
             // `SimConnection` set whenever prims spawn/despawn (structural) or a
             // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
@@ -1993,7 +2002,7 @@ pub(crate) fn install(app: &mut App) {
                 .after(ApplyForcesCosimSet::ApplyForces)
                 .before(ModelicaSet::SpawnRequests),
             // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
-            fire_model_port_events
+            fire_connected_events
                 .after(sync_modelica_outputs)
                 .after(sync_script_outputs),
         ),
@@ -2018,8 +2027,6 @@ pub(crate) fn install(app: &mut App) {
 }
 
 register_commands!(on_clear_scene, on_restart_scene,);
-
-
 
 #[cfg(test)]
 mod tests {
@@ -2078,8 +2085,7 @@ mod tests {
             .get::<SimComponent>(e)
             .expect("the interface must be published at bind, not at compile-complete");
         assert!(
-            comp.inputs.contains_key("vehicle_throttle")
-                && comp.inputs.contains_key("sun_azimuth"),
+            comp.inputs.contains_key("vehicle_throttle") && comp.inputs.contains_key("sun_azimuth"),
             "a wire into a declared input must resolve while the model still compiles; \
              got inputs {:?}",
             comp.inputs.keys().collect::<Vec<_>>()
@@ -2092,12 +2098,39 @@ mod tests {
     }
 
     #[test]
-    fn status_becomes_running_once_variables_populate() {
+    fn status_tracks_compile_run_pause_and_failure() {
         let mut model = dispatched_but_unsolved();
         assert_eq!(modelica_status(&model), SimStatus::Compiling);
         model.variables.insert("soc_out".into(), 1.0);
         assert_eq!(modelica_status(&model), SimStatus::Running);
         model.paused = true;
         assert_eq!(modelica_status(&model), SimStatus::Paused);
+        model.last_error = Some("singular system".into());
+        assert_eq!(
+            modelica_status(&model),
+            SimStatus::Error("singular system".into())
+        );
+    }
+
+    #[test]
+    fn connected_event_fires_once_per_rising_edge_and_rearms() {
+        let mut armed = true;
+        assert!(!event_rising_edge(&mut armed, 0.0));
+        assert!(event_rising_edge(&mut armed, 0.5));
+        assert!(!event_rising_edge(&mut armed, 1.0));
+        assert!(!event_rising_edge(&mut armed, 0.49));
+        assert!(event_rising_edge(&mut armed, 1.0));
+    }
+
+    #[test]
+    fn event_severity_defaults_to_info() {
+        assert_eq!(
+            parse_event_severity("not-a-severity"),
+            lunco_core::Severity::Info
+        );
+        assert_eq!(
+            parse_event_severity("critical"),
+            lunco_core::Severity::Critical
+        );
     }
 }

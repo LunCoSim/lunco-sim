@@ -1,7 +1,7 @@
 //! Placement and transformation annotations.
 
-use serde::{Deserialize, Serialize};
 use super::types::{Extent, Point};
+use serde::{Deserialize, Serialize};
 
 /// Decoded `Placement(transformation(...), [iconTransformation(...)])` annotation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

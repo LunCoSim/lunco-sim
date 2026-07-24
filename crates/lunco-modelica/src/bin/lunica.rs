@@ -35,9 +35,9 @@ use bevy::prelude::*;
 use lunco_modelica::ModelicaWorkbenchPlugin;
 
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
-use std::path::PathBuf;
-#[cfg(all(target_arch = "wasm32", feature = "ui"))]
 use lunco_modelica::{models::bundled_models, ModelicaModel};
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
+use std::path::PathBuf;
 
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
@@ -69,7 +69,11 @@ fn main() {
         let n_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        let compile_threads = if n_cpus <= 4 { 2 } else { n_cpus.saturating_sub(2) };
+        let compile_threads = if n_cpus <= 4 {
+            2
+        } else {
+            n_cpus.saturating_sub(2)
+        };
         rumoca_compile::parallelism::set_compiler_parallelism(compile_threads);
         eprintln!(
             "[lunica] rumoca compiler parallelism set to {compile_threads} threads (of {n_cpus} CPUs)"
@@ -286,7 +290,11 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
         // (backends:None, WinitPlugin off).
         DefaultPlugins
             .set(bevy::render::RenderPlugin {
-                render_creation: bevy::render::settings::WgpuSettings { backends: None, ..default() }.into(),
+                render_creation: bevy::render::settings::WgpuSettings {
+                    backends: None,
+                    ..default()
+                }
+                .into(),
                 ..default()
             })
             .set(WindowPlugin {
@@ -432,10 +440,7 @@ fn setup_web_workbench(
 
     // Open the model tab so the user lands on the model view.
     let tab_id = model_tabs.ensure_for(doc_id, None);
-    layout.open_instance(
-        lunco_modelica::ui::MODEL_VIEW_KIND,
-        tab_id,
-    );
+    layout.open_instance(lunco_modelica::ui::MODEL_VIEW_KIND, tab_id);
 
     // Select this entity so panels default to viewing it.
     workbench_state.selected_entity = Some(entity);

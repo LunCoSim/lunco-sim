@@ -69,13 +69,8 @@ pub fn drain_browser_actions(world: &mut World) {
                 // toggles the 📝 Text mode in the tab toolbar to see
                 // raw source. (A future kind-aware default would
                 // pre-select Text for non-`.mo`; tracked separately.)
-                let class = crate::class_ref::ClassRef::user_file(
-                    abs,
-                    Vec::<String>::new(),
-                );
-                crate::ui::panels::package_browser::open_class(
-                    world, class, false,
-                );
+                let class = crate::class_ref::ClassRef::user_file(abs, Vec::<String>::new());
+                crate::ui::panels::package_browser::open_class(world, class, false);
             }
             BrowserAction::OpenModelicaClass {
                 relative_path,
@@ -89,10 +84,8 @@ pub fn drain_browser_actions(world: &mut World) {
                     continue;
                 };
                 let abs = root.join(&relative_path);
-                let qualified_parts: Vec<String> = qualified_path
-                    .split('.')
-                    .map(String::from)
-                    .collect();
+                let qualified_parts: Vec<String> =
+                    qualified_path.split('.').map(String::from).collect();
                 let class = crate::class_ref::ClassRef::user_file(abs, qualified_parts);
                 crate::ui::panels::package_browser::open_class(world, class, false);
             }
@@ -115,17 +108,11 @@ pub fn drain_browser_actions(world: &mut World) {
                             .index()
                             .classes
                             .values()
-                            .find(|c| {
-                                !matches!(
-                                    c.kind,
-                                    crate::index::ClassKind::Package
-                                )
-                            })
+                            .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
                             .map(|c| c.name.clone())
                     });
                 let (tab_id, evict) = {
-                    let mut model_tabs = world
-                        .resource_mut::<crate::model_tabs::ModelTabs>();
+                    let mut model_tabs = world.resource_mut::<crate::model_tabs::ModelTabs>();
                     model_tabs.ensure_preview_for_with_default(
                         doc,
                         Some(qualified_path),
@@ -145,8 +132,8 @@ pub fn drain_browser_actions(world: &mut World) {
                         .resource_mut::<crate::model_tabs::ModelTabs>()
                         .close_tab(old_id);
                     if let Some(mut state) = world
-                        .get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>()
-                    {
+                        .get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>(
+                    ) {
                         state.drop_tab(old_id);
                     }
                 }
@@ -166,7 +153,8 @@ pub fn drain_browser_actions(world: &mut World) {
                     .active_document = Some(doc);
             }
             BrowserAction::CloseDoc { doc } => {
-                use crate::model_tabs::ModelTabs; use crate::ui::MODEL_VIEW_KIND;
+                use crate::model_tabs::ModelTabs;
+                use crate::ui::MODEL_VIEW_KIND;
                 // Close every tab bound to the doc — dock layout via
                 // CloseTab triggers, ModelTabs state via
                 // `close_all_for_doc`, canvas via `drop_tab` — then
@@ -175,16 +163,15 @@ pub fn drain_browser_actions(world: &mut World) {
                 // on wasm the resulting `DocumentClosed` also clears
                 // the localStorage autosave entry, so a restored
                 // draft stops resurrecting on reload.
-                let tab_ids =
-                    world.resource_mut::<ModelTabs>().close_all_for_doc(doc);
+                let tab_ids = world.resource_mut::<ModelTabs>().close_all_for_doc(doc);
                 for tab in tab_ids {
                     world.commands().trigger(lunco_workbench::CloseTab {
                         kind: MODEL_VIEW_KIND,
                         instance: tab,
                     });
-                    if let Some(mut state) = world.get_resource_mut::<
-                        crate::ui::panels::canvas_diagram::CanvasDiagramState,
-                    >() {
+                    if let Some(mut state) = world
+                        .get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>(
+                    ) {
                         state.drop_tab(tab);
                     }
                 }

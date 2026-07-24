@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lunco_doc::{Diagnostic, Document, DocumentError, DocumentId, DocumentOrigin};
-use rumoca_phase_parse::parse_to_syntax;
 use rumoca_compile::parsing::ast::StoredDefinition;
+use rumoca_phase_parse::parse_to_syntax;
 
-use super::ops::{ModelicaChange, ModelicaOp, FreshAst, CHANGE_HISTORY_CAPACITY};
+use super::ops::{FreshAst, ModelicaChange, ModelicaOp, CHANGE_HISTORY_CAPACITY};
 use crate::index::ModelicaIndex;
 
 // ---------------------------------------------------------------------------
@@ -131,11 +131,7 @@ impl SyntaxCache {
         }
     }
 
-    pub fn install_from_worker(
-        &mut self,
-        ast: Arc<StoredDefinition>,
-        errors: Vec<Diagnostic>,
-    ) {
+    pub fn install_from_worker(&mut self, ast: Arc<StoredDefinition>, errors: Vec<Diagnostic>) {
         self.ast = ast;
         self.errors = errors;
     }
@@ -209,11 +205,7 @@ impl ModelicaDocument {
         )
     }
 
-    pub fn with_origin(
-        id: DocumentId,
-        source: impl Into<String>,
-        origin: DocumentOrigin,
-    ) -> Self {
+    pub fn with_origin(id: DocumentId, source: impl Into<String>, origin: DocumentOrigin) -> Self {
         let source = source.into();
         let syntax = Arc::new(SyntaxCache::empty(0));
         let mut doc = Self::from_parts(id, source, origin, syntax);
@@ -232,11 +224,7 @@ impl ModelicaDocument {
         doc
     }
 
-    pub fn load_msl_class(
-        id: DocumentId,
-        path: &Path,
-        qualified: &str,
-    ) -> Result<Self, String> {
+    pub fn load_msl_class(id: DocumentId, path: &Path, qualified: &str) -> Result<Self, String> {
         // On wasm the MSL source tree is untarred lazily (boot no longer unpacks
         // it, to avoid a startup freeze). Materialise it before reading source.
         #[cfg(target_arch = "wasm32")]
@@ -346,10 +334,7 @@ impl ModelicaDocument {
         Ok(Self::with_origin(id, source, origin))
     }
 
-    pub fn load_msl_file(
-        id: DocumentId,
-        path: &Path,
-    ) -> Result<Self, String> {
+    pub fn load_msl_file(id: DocumentId, path: &Path) -> Result<Self, String> {
         // Lazily untar the MSL source tree on first drill-in (see load_msl_class).
         #[cfg(target_arch = "wasm32")]
         crate::msl_remote::ensure_msl_source_unpacked();
@@ -380,12 +365,12 @@ impl ModelicaDocument {
                 {
                     let key = path.to_string_lossy().to_string();
                     crate::msl_remote::global_parsed_msl()
-                        .and_then(|b| b.iter()
-                            .find(|(k, _)| k == &key)
-                            .map(|(_, a)| Arc::new(a.clone())))
-                        .ok_or_else(|| format!(
-                            "load_msl_file: pre-parsed AST missing for `{key}`"
-                        ))
+                        .and_then(|b| {
+                            b.iter()
+                                .find(|(k, _)| k == &key)
+                                .map(|(_, a)| Arc::new(a.clone()))
+                        })
+                        .ok_or_else(|| format!("load_msl_file: pre-parsed AST missing for `{key}`"))
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -430,11 +415,7 @@ impl ModelicaDocument {
             syntax.generation, 0,
             "from_parts expects a freshly-parsed SyntaxCache"
         );
-        let last_saved_generation = if origin.is_untitled() {
-            None
-        } else {
-            Some(0)
-        };
+        let last_saved_generation = if origin.is_untitled() { None } else { Some(0) };
         let has_errors = syntax.has_errors();
         // Baseline is already established iff this constructor was handed a real
         // parsed syntax (classes present) rather than the empty placeholder that
@@ -458,11 +439,19 @@ impl ModelicaDocument {
         }
     }
 
-    pub fn id_owned(&self) -> DocumentId { self.id }
-    pub fn generation_owned(&self) -> u64 { self.generation }
+    pub fn id_owned(&self) -> DocumentId {
+        self.id
+    }
+    pub fn generation_owned(&self) -> u64 {
+        self.generation
+    }
 
-    pub fn index(&self) -> &ModelicaIndex { &self.index }
-    pub fn source(&self) -> &str { &self.source }
+    pub fn index(&self) -> &ModelicaIndex {
+        &self.index
+    }
+    pub fn source(&self) -> &str {
+        &self.source
+    }
     /// Shared `Arc<str>` view of the current source. First call after
     /// any edit performs one `Arc::from(self.source.as_str())`
     /// allocation; subsequent calls before the next edit are free
@@ -473,21 +462,30 @@ impl ModelicaDocument {
             .get_or_init(|| Arc::from(self.source.as_str()))
             .clone()
     }
-    pub fn ast(&self) -> &SyntaxCache { &self.syntax }
-    pub fn ast_is_stale(&self) -> bool { self.syntax.generation != self.generation }
-    pub fn last_source_edit_at(&self) -> Option<web_time::Instant> { self.last_source_edit_at }
+    pub fn ast(&self) -> &SyntaxCache {
+        &self.syntax
+    }
+    pub fn ast_is_stale(&self) -> bool {
+        self.syntax.generation != self.generation
+    }
+    pub fn last_source_edit_at(&self) -> Option<web_time::Instant> {
+        self.last_source_edit_at
+    }
 
     pub fn waive_ast_debounce(&mut self) {
         if self.last_source_edit_at.is_some() {
             let backdate_ms = (crate::engine_resource::AST_DEBOUNCE_MS as u64).saturating_add(1);
-            self.last_source_edit_at = Some(
-                web_time::Instant::now() - std::time::Duration::from_millis(backdate_ms),
-            );
+            self.last_source_edit_at =
+                Some(web_time::Instant::now() - std::time::Duration::from_millis(backdate_ms));
         }
     }
 
-    pub fn syntax(&self) -> &SyntaxCache { &self.syntax }
-    pub fn syntax_arc(&self) -> &Arc<SyntaxCache> { &self.syntax }
+    pub fn syntax(&self) -> &SyntaxCache {
+        &self.syntax
+    }
+    pub fn syntax_arc(&self) -> &Arc<SyntaxCache> {
+        &self.syntax
+    }
 
     pub fn strict_ast(&self) -> Option<Arc<StoredDefinition>> {
         if !self.syntax.has_errors() {
@@ -497,7 +495,9 @@ impl ModelicaDocument {
         }
     }
 
-    pub fn syntax_is_stale(&self) -> bool { self.syntax.generation != self.generation }
+    pub fn syntax_is_stale(&self) -> bool {
+        self.syntax.generation != self.generation
+    }
 
     pub fn install_parse_results(&mut self, syntax: SyntaxCache) {
         if syntax.generation != self.generation {
@@ -526,13 +526,11 @@ impl ModelicaDocument {
         // silently mutate the index — and every downstream consumer
         // that keys by class name (open tabs, experiment records,
         // parameter drafts) goes stale.
-        let prior: std::collections::HashSet<String> =
-            self.index.classes.keys().cloned().collect();
-        let prior_signatures: std::collections::HashMap<String, (usize, usize)> =
-            prior
-                .iter()
-                .map(|name| (name.clone(), class_shape_signature(&self.index, name)))
-                .collect();
+        let prior: std::collections::HashSet<String> = self.index.classes.keys().cloned().collect();
+        let prior_signatures: std::collections::HashMap<String, (usize, usize)> = prior
+            .iter()
+            .map(|name| (name.clone(), class_shape_signature(&self.index, name)))
+            .collect();
         let has_errors = self.syntax.has_errors();
         if has_errors && !prior.is_empty() {
             // Transient parse failure mid-edit (user typing through
@@ -545,11 +543,8 @@ impl ModelicaDocument {
             // immediately wants back.
             return;
         }
-        self.index.rebuild_with_errors(
-            &self.syntax.ast,
-            &self.source,
-            has_errors,
-        );
+        self.index
+            .rebuild_with_errors(&self.syntax.ast, &self.source, has_errors);
         // First (baseline) build: adopt the initial class set silently. The
         // document's starting classes aren't `ClassAdded` mutations — consumers
         // read the index directly for initial state; the ring carries only the
@@ -561,8 +556,7 @@ impl ModelicaDocument {
             self.index_baselined = true;
             return;
         }
-        let now: std::collections::HashSet<String> =
-            self.index.classes.keys().cloned().collect();
+        let now: std::collections::HashSet<String> = self.index.classes.keys().cloned().collect();
         let added: Vec<String> = now.difference(&prior).cloned().collect();
         let removed: Vec<String> = prior.difference(&now).cloned().collect();
         if added.is_empty() && removed.is_empty() {
@@ -580,11 +574,10 @@ impl ModelicaDocument {
         // `ClassRemoved` / `ClassAdded`. Lets a "rename Foo→Bar +
         // add Baz" edit cycle preserve the Foo→Bar tab/experiment
         // bindings instead of treating Foo as deleted.
-        let new_signatures: std::collections::HashMap<String, (usize, usize)> =
-            added
-                .iter()
-                .map(|name| (name.clone(), class_shape_signature(&self.index, name)))
-                .collect();
+        let new_signatures: std::collections::HashMap<String, (usize, usize)> = added
+            .iter()
+            .map(|name| (name.clone(), class_shape_signature(&self.index, name)))
+            .collect();
         let mut unmatched_added: Vec<String> = added;
         let mut unmatched_removed: Vec<String> = Vec::new();
         for old in removed {
@@ -597,10 +590,7 @@ impl ModelicaDocument {
             match pair_idx {
                 Some(i) => {
                     let new = unmatched_added.remove(i);
-                    self.push_change(ModelicaChange::ClassRenamed {
-                        old,
-                        new,
-                    });
+                    self.push_change(ModelicaChange::ClassRenamed { old, new });
                 }
                 None => unmatched_removed.push(old),
             }
@@ -626,10 +616,7 @@ impl ModelicaDocument {
 /// connection counts is robust to the dominant rename case (header
 /// edited, body untouched) and lets false-positives degrade
 /// gracefully into separate add/remove changes.
-fn class_shape_signature(
-    index: &crate::index::ModelicaIndex,
-    qualified: &str,
-) -> (usize, usize) {
+fn class_shape_signature(index: &crate::index::ModelicaIndex, qualified: &str) -> (usize, usize) {
     let comps = index
         .components_by_class
         .get(qualified)
@@ -644,8 +631,9 @@ fn class_shape_signature(
 }
 
 impl ModelicaDocument {
-
-    pub fn source_snapshot(&self) -> String { self.source.clone() }
+    pub fn source_snapshot(&self) -> String {
+        self.source.clone()
+    }
 
     pub fn refresh_ast_now(&mut self) {
         if !self.ast_is_stale() && !self.syntax_is_stale() {
@@ -710,7 +698,8 @@ impl ModelicaDocument {
         // test may have no engine installed, which is fine.
         if !syntax.has_errors() {
             if let Some(h) = handle.as_ref() {
-                h.lock().upsert_document_with_ast(self.id, (*syntax.ast).clone());
+                h.lock()
+                    .upsert_document_with_ast(self.id, (*syntax.ast).clone());
             }
         }
 
@@ -750,12 +739,24 @@ impl ModelicaDocument {
         self.changes.push_back((self.next_change_idx, change));
     }
 
-    pub fn len(&self) -> usize { self.source.len() }
-    pub fn is_empty(&self) -> bool { self.source.is_empty() }
-    pub fn origin(&self) -> &DocumentOrigin { &self.origin }
-    pub fn canonical_path(&self) -> Option<&Path> { self.origin.canonical_path() }
-    pub fn is_read_only(&self) -> bool { !self.origin.accepts_mutations() }
-    pub fn set_origin(&mut self, origin: DocumentOrigin) { self.origin = origin; }
+    pub fn len(&self) -> usize {
+        self.source.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.source.is_empty()
+    }
+    pub fn origin(&self) -> &DocumentOrigin {
+        &self.origin
+    }
+    pub fn canonical_path(&self) -> Option<&Path> {
+        self.origin.canonical_path()
+    }
+    pub fn is_read_only(&self) -> bool {
+        !self.origin.accepts_mutations()
+    }
+    pub fn set_origin(&mut self, origin: DocumentOrigin) {
+        self.origin = origin;
+    }
 
     pub fn set_canonical_path(&mut self, path: Option<PathBuf>) {
         match path {
@@ -795,9 +796,7 @@ impl ModelicaDocument {
                 self.source.len()
             )));
         }
-        if !self.source.is_char_boundary(range.start)
-            || !self.source.is_char_boundary(range.end)
-        {
+        if !self.source.is_char_boundary(range.start) || !self.source.is_char_boundary(range.end) {
             return Err(DocumentError::ValidationFailed(format!(
                 "text range {}..{} not on char boundaries",
                 range.start, range.end
@@ -830,8 +829,16 @@ impl ModelicaDocument {
                     .patch_placement_changed(class, component, *placement);
             }
             ModelicaChange::ConnectionAdded { class, from, to } => {
-                let from_port = if from.port.is_empty() { None } else { Some(from.port.as_str()) };
-                let to_port = if to.port.is_empty() { None } else { Some(to.port.as_str()) };
+                let from_port = if from.port.is_empty() {
+                    None
+                } else {
+                    Some(from.port.as_str())
+                };
+                let to_port = if to.port.is_empty() {
+                    None
+                } else {
+                    Some(to.port.as_str())
+                };
                 self.index.patch_connection_added(
                     class,
                     &from.component,
@@ -841,8 +848,16 @@ impl ModelicaDocument {
                 );
             }
             ModelicaChange::ConnectionRemoved { class, from, to } => {
-                let from_port = if from.port.is_empty() { None } else { Some(from.port.as_str()) };
-                let to_port = if to.port.is_empty() { None } else { Some(to.port.as_str()) };
+                let from_port = if from.port.is_empty() {
+                    None
+                } else {
+                    Some(from.port.as_str())
+                };
+                let to_port = if to.port.is_empty() {
+                    None
+                } else {
+                    Some(to.port.as_str())
+                };
                 self.index.patch_connection_removed(
                     class,
                     &from.component,
@@ -857,11 +872,14 @@ impl ModelicaDocument {
                 param,
                 value,
             } => {
-                self.index.patch_parameter_changed(class, component, param, value);
+                self.index
+                    .patch_parameter_changed(class, component, param, value);
             }
             ModelicaChange::ClassAdded { qualified, kind } => {
-                self.index
-                    .patch_class_added(qualified, super::apply::class_kind_spec_to_index_kind(*kind));
+                self.index.patch_class_added(
+                    qualified,
+                    super::apply::class_kind_spec_to_index_kind(*kind),
+                );
             }
             ModelicaChange::ClassRemoved { qualified } => {
                 self.index.patch_class_removed(qualified);
@@ -907,7 +925,12 @@ impl lunco_doc::FileBacked for ModelicaDocument {
         // Route through the op, never a raw field poke: `ReplaceSource` is what
         // keeps generation and the op log coherent (undo/redo, journal replay).
         // It cannot fail today, but the trait signature is fallible.
-        let _ = Document::apply(self, ModelicaOp::ReplaceSource { new: source.to_string() });
+        let _ = Document::apply(
+            self,
+            ModelicaOp::ReplaceSource {
+                new: source.to_string(),
+            },
+        );
         // A re-open is a one-shot commit, not a keystroke burst — reparse on the
         // next tick instead of waiting out the typing debounce.
         self.waive_ast_debounce();
@@ -923,8 +946,12 @@ impl lunco_doc::FileBacked for ModelicaDocument {
 impl Document for ModelicaDocument {
     type Op = ModelicaOp;
 
-    fn id(&self) -> DocumentId { self.id }
-    fn generation(&self) -> u64 { self.generation }
+    fn id(&self) -> DocumentId {
+        self.id
+    }
+    fn generation(&self) -> u64 {
+        self.generation
+    }
 
     fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError> {
         if !self.origin.accepts_mutations() {
@@ -948,7 +975,7 @@ impl Document for ModelicaDocument {
         }
         let (range, replacement, change, fresh_ast) =
             super::apply::op_to_patch(&self.source, &self.syntax, &self.syntax.ast, op)?;
-        
+
         debug_assert!(
             match (&fresh_ast, kind) {
                 (FreshAst::Mutated(_), super::ops::OpKind::Structured) => true,

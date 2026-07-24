@@ -51,8 +51,9 @@ impl lunco_canvas::Layer for DiagramDecorationLayer {
             lunco_canvas::Pos::new(world_min_x, world_min_y),
             lunco_canvas::Pos::new(world_max_x, world_max_y),
         );
-        let screen_rect_canvas =
-            ctx.viewport.world_rect_to_screen(world_rect, ctx.screen_rect);
+        let screen_rect_canvas = ctx
+            .viewport
+            .world_rect_to_screen(world_rect, ctx.screen_rect);
         let screen_rect = bevy_egui::egui::Rect::from_min_max(
             bevy_egui::egui::pos2(screen_rect_canvas.min.x, screen_rect_canvas.min.y),
             bevy_egui::egui::pos2(screen_rect_canvas.max.x, screen_rect_canvas.max.y),
@@ -170,9 +171,7 @@ pub(super) fn emit_diagram_decorations(
         // context — defensive, doesn't happen in practice since
         // projection is always doc-scoped.
         let binding = match doc_id {
-            Some(d) => lunco_viz::kinds::canvas_plot_node::PlotBinding::Doc {
-                doc_id: d.raw(),
-            },
+            Some(d) => lunco_viz::kinds::canvas_plot_node::PlotBinding::Doc { doc_id: d.raw() },
             None => lunco_viz::kinds::canvas_plot_node::PlotBinding::Pinned { entity: 0 },
         };
         let payload = lunco_viz::kinds::canvas_plot_node::PlotNodeData {

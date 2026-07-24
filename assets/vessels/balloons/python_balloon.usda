@@ -15,7 +15,7 @@
 
 def Xform "PythonBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
 )
 {
     uniform bool lunco:spawnable = true

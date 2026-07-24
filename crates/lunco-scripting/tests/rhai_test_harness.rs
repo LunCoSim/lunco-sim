@@ -59,8 +59,8 @@ fn test_sources() -> Vec<(String, String)> {
             if path.is_dir() {
                 walk(&path, out);
             } else if path.extension().is_some_and(|e| e == "rhai") {
-                let src = std::fs::read_to_string(&path)
-                    .unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+                let src =
+                    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
                 out.push((path.file_name().unwrap().to_string_lossy().into(), src));
             }
         }
@@ -171,7 +171,8 @@ fn t_report_surfaces_a_failure() {
     let verdict = printed.last().expect("t_report printed nothing");
 
     assert_eq!(
-        verdict, "TESTS_FAIL 1/2",
+        verdict,
+        "TESTS_FAIL 1/2",
         "t_report must report 1 failure of 2 checks, got:\n{}",
         printed.join("\n")
     );
@@ -180,4 +181,45 @@ fn t_report_surfaces_a_failure() {
         "t_report must name the failing check, got:\n{}",
         printed.join("\n")
     );
+}
+
+#[test]
+fn rhai_lint_rejects_production_tick_but_allows_test_tick() {
+    let policy = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/scripting/policy/lint_rhai.rhai"),
+    )
+    .expect("rhai lint policy");
+    let engine = runtime_engine();
+
+    let production = r#"
+        let facts = #{
+            path: "assets/scenarios/bad.rhai",
+            kind: "rhai",
+            source: "fn on_tick(me) { set(me, \"x\", 1.0); }"
+        };
+        lint_rhai(facts)
+    "#;
+    let findings = engine
+        .eval::<rhai::Array>(&format!("{policy}\n{production}"))
+        .expect("production lint result");
+    assert_eq!(findings.len(), 1);
+    let finding = findings[0].clone().cast::<rhai::Map>();
+    assert_eq!(
+        finding["rule"].clone().into_string().unwrap(),
+        "production-rhai-on-tick"
+    );
+
+    let test = r#"
+        let facts = #{
+            path: "assets/scenarios/tests/step.rhai",
+            kind: "rhai",
+            source: "fn on_tick(me) { this.t += 1; }"
+        };
+        lint_rhai(facts)
+    "#;
+    let findings = engine
+        .eval::<rhai::Array>(&format!("{policy}\n{test}"))
+        .expect("test lint result");
+    assert!(findings.is_empty());
 }

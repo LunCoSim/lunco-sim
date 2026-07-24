@@ -15,7 +15,11 @@ pub(crate) static LAST_APPLY_AT: Mutex<Option<web_time::Instant>> = Mutex::new(N
 // `crate::icon_memo`).
 
 /// Mark a phase in the render loop for tracing.
-pub(crate) fn mark(label: &'static str, t: &mut web_time::Instant, log: &mut Vec<(&'static str, f64)>) {
+pub(crate) fn mark(
+    label: &'static str,
+    t: &mut web_time::Instant,
+    log: &mut Vec<(&'static str, f64)>,
+) {
     let ms = t.elapsed().as_secs_f64() * 1000.0;
     if ms > 1.0 {
         log.push((label, ms));

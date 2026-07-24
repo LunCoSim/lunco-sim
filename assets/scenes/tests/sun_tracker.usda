@@ -203,7 +203,9 @@ def Xform "SunTrackerTest" (
         # Controller — the SunTracker.mo co-sim model. Self-loop connection feeds
         # the solar bridge's `sun_azimuth` output into the model's `sun_azimuth`
         # input (same name on both sides — one signal).
-        def Xform "Controller"
+        def Xform "Controller" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
             float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
@@ -214,7 +216,9 @@ def Xform "SunTrackerTest" (
     {
         custom string lunco:scenario = "sun-tracker"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/sun_tracker.rhai@
         }

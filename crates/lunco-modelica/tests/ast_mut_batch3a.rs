@@ -8,11 +8,9 @@
 //! `host.apply` lives in `tests/op_to_patch_batch3a.rs`.
 
 use lunco_modelica::ast_mut::{self, AstMutError, Edit};
-use lunco_modelica::pretty::{
-    CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl,
-};
-use rumoca_phase_parse::parse_to_ast;
+use lunco_modelica::pretty::{CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl};
 use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
+use rumoca_phase_parse::parse_to_ast;
 
 fn mutate_class<F>(source: &str, class_name: &str, op: F) -> ClassDef
 where
@@ -36,8 +34,7 @@ where
     F: FnOnce(&mut StoredDefinition, &mut Edit<'_>) -> Result<(), AstMutError>,
 {
     let sd = parse_to_ast(source, "test.mo").expect("first parse");
-    let (range, replacement, _) =
-        ast_mut::document_patch(source, &sd, op).expect("document_patch");
+    let (range, replacement, _) = ast_mut::document_patch(source, &sd, op).expect("document_patch");
     let mut patched = source.to_string();
     patched.replace_range(range, &replacement);
     parse_to_ast(&patched, "test.mo")

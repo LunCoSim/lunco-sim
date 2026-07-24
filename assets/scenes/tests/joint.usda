@@ -133,7 +133,9 @@ def Xform "SandboxScene" (
     {
         custom string lunco:scenario = "joint"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/joint.rhai@
         }

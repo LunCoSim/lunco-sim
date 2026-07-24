@@ -17,30 +17,30 @@
 //! `tests/ast_mut_preserves_untouched_source.rs` enforces this: for each op it
 //! asserts that every line the op did not target is byte-identical afterwards.
 
-pub mod errors;
-pub mod parsing;
-pub mod text;
-pub mod edit;
+pub mod classes;
 pub mod clause;
 pub mod components;
 pub mod connections;
-pub mod classes;
-pub mod graphics;
+pub mod edit;
 pub mod equations;
+pub mod errors;
+pub mod graphics;
+pub mod parsing;
+pub mod text;
 pub mod util;
 
-pub use errors::AstMutError;
-pub use edit::Edit;
+pub use classes::*;
 pub use components::*;
 pub use connections::*;
-pub use classes::*;
-pub use graphics::*;
+pub use edit::Edit;
 pub use equations::*;
+pub use errors::AstMutError;
+pub use graphics::*;
 pub use util::{lookup_class_mut, synth_token};
 
+use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use std::ops::Range;
 use std::sync::Arc;
-use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 
 /// Run a mutation against one class and return its minimal text patch.
 ///

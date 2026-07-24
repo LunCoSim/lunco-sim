@@ -57,10 +57,11 @@ def Xform "SkidRover" (
     # rover without one has wheels, motors and power and sits there, unable to be
     # driven by human, autopilot, script or API.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
-    prepend variantSets = ["drivetrain", "power"]
+    prepend variantSets = ["drivetrain", "power", "thermal"]
     variants = {
         string drivetrain = "raycast"
         string power = "infinite"
+        string thermal = "none"
     }
 )
 {
@@ -82,6 +83,8 @@ def Xform "SkidRover" (
     # Lift the spawn point 1 m so the rover settles onto terrain (read by the
     # spawn catalog — keeps spawn height as USD data, not Rust category logic).
     float lunco:spawnLift = 1.0
+    float outputs:drive_left = 0.0
+    float outputs:drive_right = 0.0
     float physxRigidBody:linearDamping = 0.5
     float physxRigidBody:angularDamping = 2.0
 
@@ -369,7 +372,7 @@ def Xform "SkidRover" (
     #       ]
     #   ) {}
     #
-    # A drive law is just a `LunCoProgram` on the vessel and the file extension
+    # A drive law is just a `LunCoProgramAPI` on the vessel and the file extension
     # picks the engine, so there is nothing for a closed variant list to add — it
     # could only ever name the laws that existed when this file was written.
     # The wheels here use the index-parity default (even ⇒ drive_left, odd ⇒
@@ -379,16 +382,66 @@ def Xform "SkidRover" (
     # ORTHOGONAL to the drive law (which decides how commands become drive) and
     # `drivetrain` (how wheels are realized): `infinite` is EMPTY — the absence
     # of a battery is today's drive-forever behavior. `battery` composes the
-    # RoverBattery.mo energy budget onto the root: drain follows the commanded
-    # drive magnitude, and its `alive` cutoff brownouts the drive ports over
-    # the last ~2% of charge — a variant chooses a component, it never
-    # restates one.
+    # electrical netlist onto the root. Its one generated Modelica DAE solves
+    # the battery and motor loads together; the `alive` boundary output
+    # browns out the drive ports over the last ~2% of charge.
     variantSet "power" = {
         "infinite" {
         }
 
-        "battery" (
-            prepend references = @lunco://components/power/rover_battery.usda@</Power>
+        "battery" {
+            def Xform "Battery" (
+                prepend references = @lunco://components/power/battery.usda@</Battery>
+            )
+            {
+                double3 xformOp:translate = (0, 0.35, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+            def Scope "Electrical" (
+                prepend apiSchemas = ["CollectionAPI:components"]
+            )
+            {
+                float inputs:drive_left.connect = </SkidRover.outputs:drive_left>
+                float inputs:drive_right.connect = </SkidRover.outputs:drive_right>
+                float outputs:soc.connect = </SkidRover/Battery.outputs:soc_out>
+                uniform token collection:components:expansionRule = "explicitOnly"
+                prepend rel collection:components:includes = [
+                    </SkidRover/Battery>,
+                    </SkidRover/Motor_FL>,
+                    </SkidRover/Motor_FR>,
+                    </SkidRover/Motor_RL>,
+                    </SkidRover/Motor_RR>,
+                ]
+            }
+            over "Motor_FL" {
+                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+            }
+            over "Motor_FR" {
+                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+            }
+            over "Motor_RL" {
+                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+            }
+            over "Motor_RR" {
+                float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+            }
+        }
+    }
+
+    # --- Thermal: do the motors have temperatures ---------------------------
+    # `none` is EMPTY. `basic` composes the RoverMotorThermal.mo per-side heat
+    # balance onto the root: pure telemetry (`temp_left`/`temp_right`, kelvin,
+    # 250 K ambient placeholder).
+    variantSet "thermal" = {
+        "none" {
+        }
+
+        "basic" (
+            prepend references = @lunco://components/thermal/motor_thermal.usda@</Thermal>
         ) {
         }
     }

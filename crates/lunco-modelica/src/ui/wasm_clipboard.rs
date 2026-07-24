@@ -101,14 +101,10 @@ mod native {
         // X11/Wayland/Cocoa/Windows connection internally, so this is
         // cheap, and avoids holding a long-lived handle that some
         // platforms (Wayland) dislike across compositor restarts.
-        let text = match arboard::Clipboard::new()
-            .and_then(|mut cb| cb.get_text())
-        {
+        let text = match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
             Ok(t) => t,
             Err(e) => {
-                bevy::log::warn!(
-                    "[clipboard] paste failed: {e}"
-                );
+                bevy::log::warn!("[clipboard] paste failed: {e}");
                 return;
             }
         };
@@ -158,8 +154,12 @@ mod inner {
     }
 
     pub(super) fn install() {
-        let Some(window) = web_sys::window() else { return };
-        let Some(document) = window.document() else { return };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
 
         // Single shared options object; capture phase for both
         // listeners (see module doc for the full rationale).
@@ -178,16 +178,15 @@ mod inner {
         // Note: we DON'T call `preventDefault` ourselves — that
         // would suppress the very paste event we want. We just keep
         // bevy_winit's handler from suppressing it.
-        let keydown_cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
-            |event: web_sys::KeyboardEvent| {
+        let keydown_cb =
+            Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|event: web_sys::KeyboardEvent| {
                 let key = event.key();
                 let is_v = key == "v" || key == "V";
                 let cmd = event.ctrl_key() || event.meta_key();
                 if is_v && cmd && !event.alt_key() {
                     event.stop_immediate_propagation();
                 }
-            },
-        );
+            });
         let _ = document.add_event_listener_with_callback_and_add_event_listener_options(
             "keydown",
             keydown_cb.as_ref().unchecked_ref(),
@@ -203,18 +202,21 @@ mod inner {
         // suppress propagation so bevy_egui's bubble-phase paste
         // listener doesn't *also* queue an `Event::Paste` that would
         // double-paste next frame.
-        let paste_cb = Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(
-            |event: web_sys::ClipboardEvent| {
-                let Some(cd) = event.clipboard_data() else { return };
-                let Ok(text) = cd.get_data("text/plain") else { return };
+        let paste_cb =
+            Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(|event: web_sys::ClipboardEvent| {
+                let Some(cd) = event.clipboard_data() else {
+                    return;
+                };
+                let Ok(text) = cd.get_data("text/plain") else {
+                    return;
+                };
                 if text.is_empty() {
                     return;
                 }
                 with_state(|s| s.pending_paste = Some(text));
                 event.prevent_default();
                 event.stop_immediate_propagation();
-            },
-        );
+            });
         let _ = document.add_event_listener_with_callback_and_add_event_listener_options(
             "paste",
             paste_cb.as_ref().unchecked_ref(),
@@ -239,7 +241,9 @@ mod inner {
     /// synchronous `paste` listener does. Some browsers (Firefox
     /// without the granted permission) reject — we log + drop.
     pub(super) fn request_paste_async() {
-        let Some(window) = web_sys::window() else { return };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
         let navigator = window.navigator();
         let clipboard = navigator.clipboard();
         let promise = clipboard.read_text();

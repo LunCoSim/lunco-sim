@@ -127,7 +127,9 @@ def Xform "SandboxScene" (
     {
         custom string lunco:scenario = "revolute-motor"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/revolute_motor.rhai@
         }

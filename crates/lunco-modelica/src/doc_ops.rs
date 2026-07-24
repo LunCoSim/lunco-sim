@@ -173,7 +173,11 @@ pub fn drain_pending_structural_ops(world: &mut bevy::prelude::World) {
     }
 
     // Phase 2: drain queues into a local Vec, dropping the resource borrow.
-    let ready: Vec<(lunco_doc::DocumentId, ModelicaOp, lunco_twin_journal::AuthorTag)> = {
+    let ready: Vec<(
+        lunco_doc::DocumentId,
+        ModelicaOp,
+        lunco_twin_journal::AuthorTag,
+    )> = {
         let mut pending = world.resource_mut::<PendingStructuralOps>();
         let mut out = Vec::new();
         for doc in &fresh_docs {

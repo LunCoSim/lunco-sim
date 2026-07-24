@@ -51,7 +51,9 @@ pub struct JournalPanelSettings {
 
 impl Default for JournalPanelSettings {
     fn default() -> Self {
-        Self { max_visible_rows: 1_000 }
+        Self {
+            max_visible_rows: 1_000,
+        }
     }
 }
 
@@ -101,11 +103,9 @@ impl Panel for JournalPanel {
         // Snapshot the journal slice for the active doc. Brief lock,
         // bounded copy — render path holds nothing across egui calls.
         let entries: Vec<DisplayRow> = match (active_doc, ctx.resource::<JournalResource>()) {
-            (Some(doc), Some(journal)) => journal.with_read(|j| {
-                j.entries_for_doc(doc)
-                    .map(display_row)
-                    .collect::<Vec<_>>()
-            }),
+            (Some(doc), Some(journal)) => {
+                journal.with_read(|j| j.entries_for_doc(doc).map(display_row).collect::<Vec<_>>())
+            }
             _ => Vec::new(),
         };
         let total = entries.len();
@@ -155,12 +155,7 @@ impl Panel for JournalPanel {
                     let offset = (row.at_ms.saturating_sub(session_start_ms) as f32) / 1000.0;
                     let ts = format!("[+{offset:>6.2}s]");
                     ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(&ts)
-                                .monospace()
-                                .size(10.0)
-                                .color(muted),
-                        );
+                        ui.label(egui::RichText::new(&ts).monospace().size(10.0).color(muted));
                         ui.label(
                             egui::RichText::new(format!("L{:>4}", row.lamport))
                                 .monospace()
@@ -206,9 +201,16 @@ struct DisplayRow {
 fn display_row(entry: &JournalEntry) -> DisplayRow {
     let (tag, summary, color) = match &entry.kind {
         EntryKind::Op { op, .. } => summarize_op(op),
-        EntryKind::TextEdit { range, replacement, .. } => (
+        EntryKind::TextEdit {
+            range, replacement, ..
+        } => (
             "TEXT".to_string(),
-            format!("{}..{} ← {} bytes", range.start, range.end, replacement.len()),
+            format!(
+                "{}..{} ← {} bytes",
+                range.start,
+                range.end,
+                replacement.len()
+            ),
             egui::Color32::from_rgb(180, 180, 180),
         ),
         EntryKind::Snapshot { source, .. } => (
@@ -260,10 +262,7 @@ fn display_row(entry: &JournalEntry) -> DisplayRow {
 /// known field shapes; unknown kinds fall through to a generic display.
 fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) {
     let kind = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
-    let class = payload
-        .get("class")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let class = payload.get("class").and_then(|v| v.as_str()).unwrap_or("");
     let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let component = payload
         .get("component")
@@ -280,31 +279,11 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
     let neutral = egui::Color32::from_rgb(180, 180, 180);
 
     match kind {
-        "AddComponent" => (
-            "ADD ".into(),
-            format!("{class} ← {name}"),
-            green,
-        ),
-        "RemoveComponent" => (
-            "DEL ".into(),
-            format!("{class} ✗ {name}"),
-            red,
-        ),
-        "AddConnection" => (
-            "WIRE".into(),
-            format!("{class}: {from} → {to}"),
-            blue,
-        ),
-        "RemoveConnection" => (
-            "UNWR".into(),
-            format!("{class}: {from} ⊘ {to}"),
-            orange,
-        ),
-        "SetPlacement" => (
-            "MOVE".into(),
-            format!("{class}.{name}"),
-            neutral,
-        ),
+        "AddComponent" => ("ADD ".into(), format!("{class} ← {name}"), green),
+        "RemoveComponent" => ("DEL ".into(), format!("{class} ✗ {name}"), red),
+        "AddConnection" => ("WIRE".into(), format!("{class}: {from} → {to}"), blue),
+        "RemoveConnection" => ("UNWR".into(), format!("{class}: {from} ⊘ {to}"), orange),
+        "SetPlacement" => ("MOVE".into(), format!("{class}.{name}"), neutral),
         "SetParameter" => {
             let param = payload.get("param").and_then(|v| v.as_str()).unwrap_or("");
             let value = payload.get("value").and_then(|v| v.as_str()).unwrap_or("");
@@ -314,11 +293,7 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
                 yellow,
             )
         }
-        "ReplaceSource" => (
-            "TEXT".into(),
-            "source replaced".into(),
-            neutral,
-        ),
+        "ReplaceSource" => ("TEXT".into(), "source replaced".into(), neutral),
         "EditText" => {
             let range = payload.get("range").and_then(|v| v.as_array());
             let len = payload
@@ -342,68 +317,27 @@ fn summarize_op(payload: &serde_json::Value) -> (String, String, egui::Color32) 
             };
             ("EDIT".into(), span, neutral)
         }
-        "AddClass" => (
-            "CLAS".into(),
-            format!("{class}/{name}"),
-            green,
-        ),
+        "AddClass" => ("CLAS".into(), format!("{class}/{name}"), green),
         "RemoveClass" => {
             let qualified = payload
                 .get("qualified")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            (
-                "CLAS".into(),
-                format!("✗ {qualified}"),
-                red,
-            )
+            ("CLAS".into(), format!("✗ {qualified}"), red)
         }
-        "AddShortClass" => (
-            "CLAS".into(),
-            format!("{class}/{name} (short)"),
-            green,
-        ),
-        "AddVariable" => (
-            "VAR ".into(),
-            format!("{class} ← {name}"),
-            green,
-        ),
-        "RemoveVariable" => (
-            "VAR ".into(),
-            format!("{class} ✗ {name}"),
-            red,
-        ),
-        "AddEquation" => (
-            "EQN ".into(),
-            format!("{class}"),
-            blue,
-        ),
-        "AddPlotNode" | "RemovePlotNode" | "SetPlotNodeExtent" | "SetPlotNodeTitle" => (
-            "PLOT".into(),
-            format!("{class}"),
-            neutral,
-        ),
-        "AddIconGraphic" | "AddDiagramGraphic" => (
-            "GFX ".into(),
-            format!("{class}"),
-            neutral,
-        ),
-        "SetDiagramTextExtent" | "SetDiagramTextString" | "RemoveDiagramText" => (
-            "TXT ".into(),
-            format!("{class}"),
-            neutral,
-        ),
-        "SetExperimentAnnotation" => (
-            "EXP ".into(),
-            format!("{class}"),
-            neutral,
-        ),
+        "AddShortClass" => ("CLAS".into(), format!("{class}/{name} (short)"), green),
+        "AddVariable" => ("VAR ".into(), format!("{class} ← {name}"), green),
+        "RemoveVariable" => ("VAR ".into(), format!("{class} ✗ {name}"), red),
+        "AddEquation" => ("EQN ".into(), format!("{class}"), blue),
+        "AddPlotNode" | "RemovePlotNode" | "SetPlotNodeExtent" | "SetPlotNodeTitle" => {
+            ("PLOT".into(), format!("{class}"), neutral)
+        }
+        "AddIconGraphic" | "AddDiagramGraphic" => ("GFX ".into(), format!("{class}"), neutral),
+        "SetDiagramTextExtent" | "SetDiagramTextString" | "RemoveDiagramText" => {
+            ("TXT ".into(), format!("{class}"), neutral)
+        }
+        "SetExperimentAnnotation" => ("EXP ".into(), format!("{class}"), neutral),
         // Fallback for unknown / new variants.
-        _ => (
-            "EDIT".into(),
-            format!("{kind}"),
-            neutral,
-        ),
+        _ => ("EDIT".into(), format!("{kind}"), neutral),
     }
 }
-

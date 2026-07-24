@@ -63,6 +63,7 @@ use lunco_lint::LintFinding;
 use lunco_usd_bevy::{StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
+use openusd::usd::{Collection, PrimPredicate, compute_included_paths};
 
 /// The lint domain these facts belong to: hook `lint.usd`, policy
 /// `assets/scripting/policy/lint_usd.rhai`.
@@ -433,24 +434,92 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     }
 
     // The GENERIC projection: every prim that applies any schema at all, with its
-    // type, its parent and its applied-schema list. `bodies`/`joints` above are
+    // type, its parent, applied schemas, and property names. `bodies`/`joints` above are
     // pre-chewed answers to the questions we already know we ask; this is what
     // lets a NEW rule ask a NEW question — "PhysicsMassAPI on a prim inside no
     // body", "LunCoMotorAPI with no drivenWheel", "a collider outside every
     // body" — without a Rust change, which is the whole point of putting rules in
     // rhai. Bounded by schema'd prims (hundreds), not by prim count (thousands).
     let mut prims: Vec<H> = Vec::new();
+    let mut collections: Vec<H> = Vec::new();
+    let mut network_scopes: Vec<H> = Vec::new();
     for p in &paths {
+        if reader
+            .attr_names(p)
+            .iter()
+            .any(|name| name.starts_with("collection:components:"))
+        {
+            let members = reader.rel_targets(p, "collection:components:includes");
+            network_scopes.push(H::map([
+                ("path", H::str(p.to_string())),
+                (
+                    "parent",
+                    H::str(p.parent().map(|parent| parent.to_string()).unwrap_or_default()),
+                ),
+                (
+                    "members",
+                    H::Array(members.into_iter().map(|member| H::str(member.to_string())).collect()),
+                ),
+            ]));
+        }
         let schemas = applied_schemas(reader, p);
         if schemas.is_empty() {
             continue;
         }
+        for schema in &schemas {
+            let Some(name) = schema.strip_prefix("CollectionAPI:") else {
+                continue;
+            };
+            let relationship = format!("collection:{name}:includes");
+            let explicit = reader
+                .value_str(p, &format!("collection:{name}:expansionRule"))
+                .as_deref()
+                == Some("explicitOnly");
+            let members = if explicit {
+                reader.rel_targets(p, &relationship)
+            } else {
+                let collection = Collection::new(p.clone(), name);
+                collection
+                    .compute_membership_query(reader.stage())
+                    .ok()
+                    .and_then(|query| {
+                        compute_included_paths(reader.stage(), &query, PrimPredicate::DEFAULT).ok()
+                    })
+                    .unwrap_or_default()
+            };
+            collections.push(H::map([
+                ("path", H::str(p.to_string())),
+                (
+                    "parent",
+                    H::str(p.parent().map(|parent| parent.to_string()).unwrap_or_default()),
+                ),
+                ("name", H::str(name)),
+                (
+                    "members",
+                    H::Array(members.into_iter().map(|member| H::str(member.to_string())).collect()),
+                ),
+            ]));
+        }
         let parent = p.parent().map(|x| x.to_string()).unwrap_or_default();
+        let attributes = reader.attr_names(p);
+        let connected_attributes: Vec<String> = attributes
+            .iter()
+            .filter(|name| !reader.connections(p, name).is_empty())
+            .cloned()
+            .collect();
         prims.push(H::map([
             ("path", H::str(p.to_string())),
             ("type", H::str(reader.prim_type_name(p).unwrap_or_default())),
             ("parent", H::str(parent)),
             ("schemas", H::Array(schemas.into_iter().map(H::str).collect())),
+            (
+                "attributes",
+                H::Array(attributes.into_iter().map(H::str).collect()),
+            ),
+            (
+                "connected_attributes",
+                H::Array(connected_attributes.into_iter().map(H::str).collect()),
+            ),
         ]));
     }
 
@@ -459,6 +528,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("joints", H::Array(joints)),
         ("filtered_pairs", H::Array(filtered_pairs)),
         ("collision_groups", H::Array(collision_groups)),
+        ("collections", H::Array(collections)),
+        ("network_scopes", H::Array(network_scopes)),
         ("prims", H::Array(prims)),
     ])
 }

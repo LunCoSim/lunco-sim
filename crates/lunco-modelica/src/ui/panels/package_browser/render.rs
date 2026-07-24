@@ -4,9 +4,9 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::state::{ModelLibrary};
-use crate::package_tree::types::{PackageNode, TwinNode};
 use crate::package_tree::cache::{PackageTreeCache, ScanResult};
+use crate::package_tree::types::{PackageNode, TwinNode};
+use crate::state::ModelLibrary;
 
 pub struct PackageBrowserPanel;
 
@@ -17,9 +17,15 @@ pub enum PackageAction {
 }
 
 impl Panel for PackageBrowserPanel {
-    fn id(&self) -> PanelId { PanelId("modelica_package_browser") }
-    fn title(&self) -> String { "📚 Package Browser".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    fn id(&self) -> PanelId {
+        PanelId("modelica_package_browser")
+    }
+    fn title(&self) -> String {
+        "📚 Package Browser".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::SideBrowser
+    }
     /// Not listed: legacy browser, superseded by the Twin browser and docked by
     /// no perspective. Still registered so old saved layouts resolve.
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
@@ -48,52 +54,69 @@ impl Panel for PackageBrowserPanel {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                ui.set_max_width(ui.available_width());
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                let cache = &mut *tree_cache;
+                    ui.set_max_width(ui.available_width());
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                    let cache = &mut *tree_cache;
 
-                let twin_label = if let Some(twin) = cache.twin.as_ref() {
-                    twin.root
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| twin.root.display().to_string())
-                } else {
-                    "No folder".to_string()
-                };
-                section_header(ui, &twin_label, |ui| {
-                    if ui.small_button("➕").clicked() { create_new = true; }
-                    if cache.twin_scan_task.is_some() {
-                        ui.spinner();
-                    } else if cache.twin.is_some() {
-                        if ui.small_button("✕").clicked() { close_twin = true; }
-                    } else if ui.small_button("📁").clicked() { open_twin_picker = true; }
-                });
+                    let twin_label = if let Some(twin) = cache.twin.as_ref() {
+                        twin.root
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| twin.root.display().to_string())
+                    } else {
+                        "No folder".to_string()
+                    };
+                    section_header(ui, &twin_label, |ui| {
+                        if ui.small_button("➕").clicked() {
+                            create_new = true;
+                        }
+                        if cache.twin_scan_task.is_some() {
+                            ui.spinner();
+                        } else if cache.twin.is_some() {
+                            if ui.small_button("✕").clicked() {
+                                close_twin = true;
+                            }
+                        } else if ui.small_button("📁").clicked() {
+                            open_twin_picker = true;
+                        }
+                    });
 
-                if let Some(twin) = cache.twin.as_mut() {
-                    for kid in &mut twin.root_node.children {
-                        if let Some(a) = render_twin_node(kid, ui, active_path, &theme) {
+                    if let Some(twin) = cache.twin.as_mut() {
+                        for kid in &mut twin.root_node.children {
+                            if let Some(a) = render_twin_node(kid, ui, active_path, &theme) {
+                                action = Some(a);
+                            }
+                        }
+                    }
+
+                    if !cache.in_memory_models.is_empty() {
+                        ui.add_space(8.0);
+                        section_header(ui, "Your Models", |_| {});
+                        for entry in &cache.in_memory_models {
+                            let is_active = active_path == Some(&entry.display_name);
+                            if ui
+                                .selectable_label(is_active, format!("📄 {}", entry.display_name))
+                                .clicked()
+                            {
+                                reopen_in_memory = Some(entry.id.clone());
+                            }
+                        }
+                    }
+
+                    for root in &mut cache.roots {
+                        if let Some(a) = render_node_single(
+                            root,
+                            ui,
+                            active_path,
+                            None,
+                            0,
+                            &mut cache.tasks,
+                            &theme,
+                        ) {
                             action = Some(a);
                         }
                     }
-                }
-
-                if !cache.in_memory_models.is_empty() {
-                    ui.add_space(8.0);
-                    section_header(ui, "Your Models", |_| {});
-                    for entry in &cache.in_memory_models {
-                        let is_active = active_path == Some(&entry.display_name);
-                        if ui.selectable_label(is_active, format!("📄 {}", entry.display_name)).clicked() {
-                            reopen_in_memory = Some(entry.id.clone());
-                        }
-                    }
-                }
-
-                for root in &mut cache.roots {
-                    if let Some(a) = render_node_single(root, ui, active_path, None, 0, &mut cache.tasks, &theme) {
-                        action = Some(a);
-                    }
-                }
-            });
+                });
         });
 
         if create_new {
@@ -144,7 +167,12 @@ impl Panel for PackageBrowserPanel {
 
 fn section_header(ui: &mut egui::Ui, title: &str, buttons: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title.to_uppercase()).strong().size(11.0).color(egui::Color32::GRAY));
+        ui.label(
+            egui::RichText::new(title.to_uppercase())
+                .strong()
+                .size(11.0)
+                .color(egui::Color32::GRAY),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), buttons);
     });
 }
@@ -204,13 +232,28 @@ pub(crate) fn render_node_single_ro(
 ) -> Option<PackageAction> {
     let mut action = None;
     match node {
-        PackageNode::Category { id, name, package_path, fs_path: _, children, is_loading } => {
+        PackageNode::Category {
+            id,
+            name,
+            package_path,
+            fs_path: _,
+            children,
+            is_loading,
+        } => {
             let header_resp = egui::CollapsingHeader::new(format!("📁 {}", name))
                 .id_salt(id.as_str())
                 .show(ui, |ui| {
                     if let Some(kids) = children {
                         for kid in kids {
-                            if let Some(a) = render_node_single_ro(kid, ui, active_path, active_drill, depth + 1, load_out, theme) {
+                            if let Some(a) = render_node_single_ro(
+                                kid,
+                                ui,
+                                active_path,
+                                active_drill,
+                                depth + 1,
+                                load_out,
+                                theme,
+                            ) {
                                 action = Some(a);
                             }
                         }
@@ -229,7 +272,12 @@ pub(crate) fn render_node_single_ro(
                 });
             let _ = header_resp;
         }
-        PackageNode::Model { id, name, library, class_kind } => {
+        PackageNode::Model {
+            id,
+            name,
+            library,
+            class_kind,
+        } => {
             let is_active = active_path == Some(name.as_str());
             let row = ui.horizontal(|ui| {
                 if let Some(kind) = *class_kind {
@@ -248,11 +296,20 @@ pub(crate) fn render_node_single_ro(
                 if is_active {
                     label = label.strong().color(theme.tokens.accent);
                 }
-                ui.add(egui::Label::new(label).selectable(false).sense(egui::Sense::click()))
+                ui.add(
+                    egui::Label::new(label)
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
+                )
             });
             let mut resp = row.inner;
             if resp.clicked() {
-                action = Some(PackageAction::Open(id.clone(), name.clone(), library.clone(), ui.input(|i| i.modifiers.command)));
+                action = Some(PackageAction::Open(
+                    id.clone(),
+                    name.clone(),
+                    library.clone(),
+                    ui.input(|i| i.modifiers.command),
+                ));
             }
             if let Some(kind) = class_kind {
                 resp = resp.on_hover_text(format!("Kind: {}", kind.as_keyword()));
@@ -280,13 +337,28 @@ pub(crate) fn render_node_single(
     let mut action = None;
 
     match node {
-        PackageNode::Category { id, name, package_path, fs_path: _, children, is_loading } => {
+        PackageNode::Category {
+            id,
+            name,
+            package_path,
+            fs_path: _,
+            children,
+            is_loading,
+        } => {
             let header_resp = egui::CollapsingHeader::new(format!("📁 {}", name))
                 .id_salt(id.as_str())
                 .show(ui, |ui| {
                     if let Some(kids) = children {
                         for kid in kids {
-                            if let Some(a) = render_node_single(kid, ui, active_path, active_drill, depth + 1, tasks, theme) {
+                            if let Some(a) = render_node_single(
+                                kid,
+                                ui,
+                                active_path,
+                                active_drill,
+                                depth + 1,
+                                tasks,
+                                theme,
+                            ) {
                                 action = Some(a);
                             }
                         }
@@ -296,8 +368,12 @@ pub(crate) fn render_node_single(
                         let pid = id.clone();
                         let pp = package_path.clone();
                         tasks.push(pool.spawn(async move {
-                            let kids = crate::package_tree::library_tree::library_tree().children(&pp);
-                            ScanResult { parent_id: pid, children: kids }
+                            let kids =
+                                crate::package_tree::library_tree::library_tree().children(&pp);
+                            ScanResult {
+                                parent_id: pid,
+                                children: kids,
+                            }
                         }));
                     }
                     if *is_loading {
@@ -309,7 +385,12 @@ pub(crate) fn render_node_single(
                 });
             let _ = header_resp;
         }
-        PackageNode::Model { id, name, library, class_kind } => {
+        PackageNode::Model {
+            id,
+            name,
+            library,
+            class_kind,
+        } => {
             let is_active = active_path == Some(name.as_str());
             let row = ui.horizontal(|ui| {
                 if let Some(kind) = *class_kind {
@@ -328,11 +409,20 @@ pub(crate) fn render_node_single(
                 if is_active {
                     label = label.strong().color(theme.tokens.accent);
                 }
-                ui.add(egui::Label::new(label).selectable(false).sense(egui::Sense::click()))
+                ui.add(
+                    egui::Label::new(label)
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
+                )
             });
             let mut resp = row.inner;
             if resp.clicked() {
-                action = Some(PackageAction::Open(id.clone(), name.clone(), library.clone(), ui.input(|i| i.modifiers.command)));
+                action = Some(PackageAction::Open(
+                    id.clone(),
+                    name.clone(),
+                    library.clone(),
+                    ui.input(|i| i.modifiers.command),
+                ));
             }
             if let Some(kind) = class_kind {
                 resp = resp.on_hover_text(format!("Kind: {}", kind.as_keyword()));

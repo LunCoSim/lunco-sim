@@ -1,11 +1,11 @@
 //! API handlers for component-level operations (Add, Remove).
 
-use bevy::prelude::*;
-use lunco_core::{Command, on_command};
-use lunco_doc::DocumentId;
+use super::util::{resolve_doc, strip_same_package_prefix};
 use crate::document::ModelicaOp;
 use crate::pretty::{ComponentDecl, Placement};
-use super::util::{resolve_doc, strip_same_package_prefix};
+use bevy::prelude::*;
+use lunco_core::{on_command, Command};
+use lunco_doc::DocumentId;
 
 /// Add a sub-component to a class.
 #[Command(default)]
@@ -23,10 +23,7 @@ pub struct AddModelicaComponent {
 }
 
 #[on_command(AddModelicaComponent)]
-pub fn on_add_modelica_component(
-    trigger: On<AddModelicaComponent>,
-    mut commands: Commands,
-) {
+pub fn on_add_modelica_component(trigger: On<AddModelicaComponent>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc(world, ev.doc) else {
@@ -34,9 +31,7 @@ pub fn on_add_modelica_component(
             return;
         };
         if ev.class.is_empty() || ev.type_name.is_empty() || ev.name.is_empty() {
-            bevy::log::warn!(
-                "[AddModelicaComponent] class/type_name/name must all be non-empty"
-            );
+            bevy::log::warn!("[AddModelicaComponent] class/type_name/name must all be non-empty");
             return;
         }
         let placement = if ev.width > 0.0 && ev.height > 0.0 {
@@ -109,10 +104,7 @@ pub struct RemoveModelicaComponent {
 }
 
 #[on_command(RemoveModelicaComponent)]
-pub fn on_remove_modelica_component(
-    trigger: On<RemoveModelicaComponent>,
-    mut commands: Commands,
-) {
+pub fn on_remove_modelica_component(trigger: On<RemoveModelicaComponent>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc(world, ev.doc) else {

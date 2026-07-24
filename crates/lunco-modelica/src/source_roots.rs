@@ -156,9 +156,7 @@ impl SourceRootRegistry {
         // under a sibling of `<cache>/msl/`. Discovery already
         // implemented for the package-browser tree; we reuse it here
         // for the compile-gate registry.
-        for (cache_subdir, root_name) in
-            crate::package_tree::scanner::discover_third_party_libs()
-        {
+        for (cache_subdir, root_name) in crate::package_tree::scanner::discover_third_party_libs() {
             let root_dir = lunco_assets::cache_dir()
                 .join(&cache_subdir)
                 .join(&root_name);
@@ -426,7 +424,10 @@ pub fn ensure_loaded(
     // Each branch can fail early (e.g. missing bundled blob, unreadable
     // workspace file); on failure mark `Failed` and bail.
     let (payload, summary) = match &entry.kind {
-        SourceRootKind::SystemLibrary { cache_subdir: _, root_dir } => {
+        SourceRootKind::SystemLibrary {
+            cache_subdir: _,
+            root_dir,
+        } => {
             let summary = format!("disk {}", root_dir.display());
             (
                 crate::worker::LoadSourceRootPayload::Disk {
@@ -440,7 +441,8 @@ pub fn ensure_loaded(
                 bevy::log::warn!(
                     "[source-roots] bundled dep `{}` (file {}): not found \
                      in embedded models — leaving Failed",
-                    id, filename,
+                    id,
+                    filename,
                 );
                 entry.state = LoadState::Failed(format!(
                     "bundled file `{}` missing from embedded models",
@@ -467,11 +469,10 @@ pub fn ensure_loaded(
                     bevy::log::warn!(
                         "[source-roots] workspace file dep `{}` (path {}): \
                          read failed: {e} — leaving Failed",
-                        id, path.display(),
+                        id,
+                        path.display(),
                     );
-                    entry.state = LoadState::Failed(format!(
-                        "workspace file read failed: {e}"
-                    ));
+                    entry.state = LoadState::Failed(format!("workspace file read failed: {e}"));
                     return false;
                 }
             };
@@ -510,7 +511,8 @@ pub fn ensure_loaded(
     }
     bevy::log::info!(
         "[source-roots] dispatched LoadSourceRoot `{}` ({}) to worker",
-        id, summary,
+        id,
+        summary,
     );
     entry.state = LoadState::Loading {
         progress: 0.0,
@@ -525,11 +527,7 @@ pub fn ensure_loaded(
 /// Diagnostic log: walk the given AST, find every source-root
 /// dependency, classify each against the registry, and emit a
 /// one-line summary.
-pub fn log_compile_deps(
-    registry: &SourceRootRegistry,
-    model_name: &str,
-    ast: &StoredDefinition,
-) {
+pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &StoredDefinition) {
     let deps = scan_source_root_deps(ast);
     if deps.is_empty() {
         bevy::log::info!(

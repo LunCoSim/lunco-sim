@@ -100,9 +100,8 @@ pub fn route(
             ((y - min_y) / grid).round() as i32,
         )
     };
-    let cell_world = |cx: i32, cy: i32| -> (f32, f32) {
-        (min_x + cx as f32 * grid, min_y + cy as f32 * grid)
-    };
+    let cell_world =
+        |cx: i32, cy: i32| -> (f32, f32) { (min_x + cx as f32 * grid, min_y + cy as f32 * grid) };
 
     let start = to_cell(from.0, from.1);
     let goal = to_cell(to.0, to.1);
@@ -144,9 +143,7 @@ pub fn route(
 
     // A*.
     type State = (i32, i32, Dir);
-    let h = |s: State| -> i64 {
-        ((s.0 - goal.0).abs() + (s.1 - goal.1).abs()) as i64
-    };
+    let h = |s: State| -> i64 { ((s.0 - goal.0).abs() + (s.1 - goal.1).abs()) as i64 };
     let mut g_score: HashMap<State, i64> = HashMap::new();
     let mut came_from: HashMap<State, State> = HashMap::new();
     let mut open: BinaryHeap<(Reverse<i64>, State)> = BinaryHeap::new();
@@ -177,10 +174,7 @@ pub fn route(
             // Disallow immediate U-turn from start (wire shouldn't
             // exit the port the wrong way) — only enforced when the
             // start has a meaningful outward.
-            if current == start_state
-                && start_dir != Dir::None
-                && opposite(ndir) == start_dir
-            {
+            if current == start_state && start_dir != Dir::None && opposite(ndir) == start_dir {
                 continue;
             }
             let bend = if current.2 != Dir::None && current.2 != ndir {
@@ -188,14 +182,12 @@ pub fn route(
             } else {
                 0
             };
-            let approach_penalty = if (nx, ny) == goal
-                && goal_in_dir != Dir::None
-                && ndir != goal_in_dir
-            {
-                bend_cost
-            } else {
-                0
-            };
+            let approach_penalty =
+                if (nx, ny) == goal && goal_in_dir != Dir::None && ndir != goal_in_dir {
+                    bend_cost
+                } else {
+                    0
+                };
             let tentative = g_curr + step_cost + bend + approach_penalty;
             let next: State = (nx, ny, ndir);
             if g_score.get(&next).map(|&g| tentative < g).unwrap_or(true) {
@@ -325,9 +317,7 @@ pub fn route(
             let candidates = [(a.0, c.1), (c.0, a.1)];
             let mut replacement: Option<(f32, f32)> = None;
             for cand in candidates {
-                if segment_clear(a, cand, &inflated)
-                    && segment_clear(cand, c, &inflated)
-                {
+                if segment_clear(a, cand, &inflated) && segment_clear(cand, c, &inflated) {
                     replacement = Some(cand);
                     break;
                 }
@@ -347,10 +337,8 @@ pub fn route(
             if next.len() >= 2 {
                 let a = next[next.len() - 2];
                 let b = next[next.len() - 1];
-                let collinear_x =
-                    (a.0 - b.0).abs() < eps && (b.0 - p.0).abs() < eps;
-                let collinear_y =
-                    (a.1 - b.1).abs() < eps && (b.1 - p.1).abs() < eps;
+                let collinear_x = (a.0 - b.0).abs() < eps && (b.0 - p.0).abs() < eps;
+                let collinear_y = (a.1 - b.1).abs() < eps && (b.1 - p.1).abs() < eps;
                 if collinear_x || collinear_y {
                     let last = next.len() - 1;
                     next[last] = p;
@@ -383,9 +371,8 @@ fn segment_clear(a: (f32, f32), b: (f32, f32), obs: &[Obstacle]) -> bool {
     let ymin = a.1.min(b.1);
     let ymax = a.1.max(b.1);
     // Treat segment as a thin rect; intersect against each obstacle.
-    obs.iter().all(|o| {
-        xmax < o.min_x || xmin > o.max_x || ymax < o.min_y || ymin > o.max_y
-    })
+    obs.iter()
+        .all(|o| xmax < o.min_x || xmin > o.max_x || ymax < o.min_y || ymin > o.max_y)
 }
 
 fn outward_to_dir(v: (f32, f32)) -> Dir {

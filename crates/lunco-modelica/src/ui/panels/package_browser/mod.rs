@@ -1,10 +1,10 @@
 //! Package Browser — Dymola-style library tree.
 
-use bevy::prelude::*;
-use bevy_egui::egui;
 use crate::class_ref::{ClassRef, Library};
 use crate::state::ModelicaDocumentRegistry;
-use std::path::{PathBuf};
+use bevy::prelude::*;
+use bevy_egui::egui;
+use std::path::PathBuf;
 
 pub mod render;
 
@@ -72,9 +72,13 @@ pub fn on_msl_became_ready(
     // ── 1. Canvas re-projection ───────────────────────────────────────
     if let Some(mut canvas) = canvas {
         canvas.request_reproject_all();
-        bevy::log::info!("[PackageBrowser] MslBecameReady: triggered reproject_all for open canvas tabs");
+        bevy::log::info!(
+            "[PackageBrowser] MslBecameReady: triggered reproject_all for open canvas tabs"
+        );
     } else {
-        bevy::log::debug!("[PackageBrowser] MslBecameReady: no canvas state yet — skipping force_reproject");
+        bevy::log::debug!(
+            "[PackageBrowser] MslBecameReady: no canvas state yet — skipping force_reproject"
+        );
     }
 
     // ── 2. Rebuild bundled examples tree ──────────────────────────────
@@ -105,10 +109,7 @@ pub fn on_msl_became_ready(
     cache.reconcile_library_roots();
 }
 
-
-pub fn handle_package_loading_tasks(
-    mut cache: ResMut<PackageTreeCache>,
-) {
+pub fn handle_package_loading_tasks(mut cache: ResMut<PackageTreeCache>) {
     use futures_lite::future;
 
     let mut finished_results = Vec::new();
@@ -134,10 +135,19 @@ pub fn handle_package_loading_tasks(
     }
 }
 
-fn find_and_update_node(nodes: &mut [PackageNode], parent_id: &str, children: Vec<PackageNode>) -> bool {
+fn find_and_update_node(
+    nodes: &mut [PackageNode],
+    parent_id: &str,
+    children: Vec<PackageNode>,
+) -> bool {
     for node in nodes {
         match node {
-            PackageNode::Category { id, children: node_children, is_loading, .. } => {
+            PackageNode::Category {
+                id,
+                children: node_children,
+                is_loading,
+                ..
+            } => {
                 if id == parent_id {
                     *node_children = Some(children);
                     *is_loading = false;
@@ -194,7 +204,13 @@ pub fn render_root_subtree(
             if let Some(kids) = children {
                 for kid in kids.iter() {
                     if let Some(a) = render::render_node_single_ro(
-                        kid, ui, active_path, None, 0, &mut load_out, &theme,
+                        kid,
+                        ui,
+                        active_path,
+                        None,
+                        0,
+                        &mut load_out,
+                        &theme,
                     ) {
                         action = Some(a);
                     }
@@ -225,7 +241,9 @@ pub fn render_root_subtree(
     for (id, pkg_path) in load_out {
         ctx.defer(move |world| {
             use bevy::tasks::AsyncComputeTaskPool;
-            let Some(mut cache) = world.get_resource_mut::<PackageTreeCache>() else { return };
+            let Some(mut cache) = world.get_resource_mut::<PackageTreeCache>() else {
+                return;
+            };
             // Resolve the package_path for `id` from the live tree (the
             // read-only renderer only had the id for nested categories).
             if let Some((children, is_loading, package_path)) =
@@ -237,12 +255,18 @@ pub fn render_root_subtree(
                     let parent_id = id.clone();
                     // Prefer the live package_path; fall back to the id-as-path
                     // hint passed from the read-only renderer for root rows.
-                    let pp = if package_path.is_empty() { pkg_path.clone() } else { package_path };
+                    let pp = if package_path.is_empty() {
+                        pkg_path.clone()
+                    } else {
+                        package_path
+                    };
                     let task = pool.spawn(async move {
                         let children =
-                            crate::package_tree::library_tree::library_tree()
-                                .children(&pp);
-                        crate::package_tree::cache::ScanResult { parent_id, children }
+                            crate::package_tree::library_tree::library_tree().children(&pp);
+                        crate::package_tree::cache::ScanResult {
+                            parent_id,
+                            children,
+                        }
                     });
                     cache.tasks.push(task);
                 }
@@ -282,7 +306,14 @@ fn find_category_scan_target<'a>(
     id: &str,
 ) -> Option<(&'a mut Option<Vec<PackageNode>>, &'a mut bool, String)> {
     for node in nodes {
-        if let PackageNode::Category { id: node_id, package_path, children, is_loading, .. } = node {
+        if let PackageNode::Category {
+            id: node_id,
+            package_path,
+            children,
+            is_loading,
+            ..
+        } = node
+        {
             if node_id == id {
                 let pp = package_path.clone();
                 return Some((children, is_loading, pp));
@@ -367,27 +398,43 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
         None => return, // Library root click — no class to open.
     };
     let drilled = class.qualified();
-    let drilled_for_tab = if class.path.len() > 1 { Some(drilled.clone()) } else { None };
+    let drilled_for_tab = if class.path.len() > 1 {
+        Some(drilled.clone())
+    } else {
+        None
+    };
 
     // Dedup: same bundled file already loaded → reuse the doc, just
     // ensure a tab keyed on the new drill target.
-    let already_open = world.resource::<ModelicaDocumentRegistry>().find_bundled(&filename);
+    let already_open = world
+        .resource::<ModelicaDocumentRegistry>()
+        .find_bundled(&filename);
     if let Some(doc) = already_open {
         let tab_id = world
             .resource_mut::<crate::model_tabs::ModelTabs>()
             .ensure_for(doc, drilled_for_tab.clone());
-        world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
+        world.commands().trigger(lunco_workbench::OpenTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
         return;
     }
 
-    let reserved_doc_id = world.resource_mut::<ModelicaDocumentRegistry>().reserve_id();
+    let reserved_doc_id = world
+        .resource_mut::<ModelicaDocumentRegistry>()
+        .reserve_id();
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(reserved_doc_id, drilled_for_tab.clone());
-    world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
+    world.commands().trigger(lunco_workbench::OpenTab {
+        kind: MODEL_VIEW_KIND,
+        instance: tab_id,
+    });
 
     let display_name = class.short_name().to_string();
-    let origin = lunco_doc::DocumentOrigin::Bundled { filename: filename.clone() };
+    let origin = lunco_doc::DocumentOrigin::Bundled {
+        filename: filename.clone(),
+    };
     let filename_for_task = filename.clone();
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let result = match crate::models::get_model(&filename_for_task) {
@@ -396,9 +443,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
                 source_text.to_string(),
                 origin,
             )),
-            None => Err(format!(
-                "Bundled model not found: {filename_for_task}"
-            )),
+            None => Err(format!("Bundled model not found: {filename_for_task}")),
         };
         crate::package_tree::cache::FileLoadResult {
             doc_id: reserved_doc_id,
@@ -433,7 +478,11 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
     use crate::ui::MODEL_VIEW_KIND;
     use bevy::tasks::AsyncComputeTaskPool;
 
-    let drilled = if class.path.is_empty() { None } else { Some(class.qualified()) };
+    let drilled = if class.path.is_empty() {
+        None
+    } else {
+        Some(class.qualified())
+    };
     // Non-`.mo` files have no Modelica classes to render in Canvas
     // mode — default the tab to Text mode so the user sees the raw
     // file contents instead of an empty diagram.
@@ -447,7 +496,9 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
     } else {
         Some(ModelViewMode::Text)
     };
-    let already_open = world.resource::<ModelicaDocumentRegistry>().find_by_path(&path);
+    let already_open = world
+        .resource::<ModelicaDocumentRegistry>()
+        .find_by_path(&path);
     if let Some(doc) = already_open {
         // Re-Opening an already-open file reloads it from disk so external
         // edits (an editor, a tool, an agent writing the `.mo`) are picked up
@@ -468,10 +519,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
                     ModelicaOp::ReplaceSource { new: disk },
                     lunco_twin_journal::AuthorTag::for_tool("open-file-reload"),
                 ) {
-                    Ok(_) => bevy::log::info!(
-                        "[OpenFile] reloaded `{}` from disk",
-                        path.display()
-                    ),
+                    Ok(_) => bevy::log::info!("[OpenFile] reloaded `{}` from disk", path.display()),
                     Err(e) => bevy::log::warn!(
                         "[OpenFile] reload-from-disk failed for {}: {e:?}",
                         path.display()
@@ -487,11 +535,16 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
                 .resource_mut::<crate::model_tabs::ModelTabs>()
                 .set_view_mode(tab_id, mode);
         }
-        world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
+        world.commands().trigger(lunco_workbench::OpenTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
         return;
     }
 
-    let reserved_doc_id = world.resource_mut::<ModelicaDocumentRegistry>().reserve_id();
+    let reserved_doc_id = world
+        .resource_mut::<ModelicaDocumentRegistry>()
+        .reserve_id();
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(reserved_doc_id, drilled.clone());
@@ -500,21 +553,27 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
             .resource_mut::<crate::model_tabs::ModelTabs>()
             .set_view_mode(tab_id, mode);
     }
-    world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
+    world.commands().trigger(lunco_workbench::OpenTab {
+        kind: MODEL_VIEW_KIND,
+        instance: tab_id,
+    });
 
-    let display_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Opened").to_string();
-    let origin = lunco_doc::DocumentOrigin::File { path: path.clone(), writable: true };
+    let display_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Opened")
+        .to_string();
+    let origin = lunco_doc::DocumentOrigin::File {
+        path: path.clone(),
+        writable: true,
+    };
     let path_for_task = path.clone();
     let task = AsyncComputeTaskPool::get().spawn(async move {
         // `lunco-storage`, not `std::fs`: on wasm the picked file's text is in
         // browser storage, and this is the same call site on both targets.
         let result = crate::source_asset::read_text_sync(&path_for_task)
             .map(|source_text| {
-                crate::document::ModelicaDocument::with_origin(
-                    reserved_doc_id,
-                    source_text,
-                    origin,
-                )
+                crate::document::ModelicaDocument::with_origin(reserved_doc_id, source_text, origin)
             })
             .map_err(|e| format!("Failed to read {}: {e}", path_for_task.display()));
         crate::package_tree::cache::FileLoadResult {
@@ -546,10 +605,16 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
 
 fn focus_existing_doc_tab(world: &mut World, doc: lunco_doc::DocumentId, qualified: String) {
     use crate::ui::MODEL_VIEW_KIND;
-    let drilled = if qualified.is_empty() { None } else { Some(qualified) };
+    let drilled = if qualified.is_empty() {
+        None
+    } else {
+        Some(qualified)
+    };
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(doc, drilled);
-    world.commands().trigger(lunco_workbench::OpenTab { kind: MODEL_VIEW_KIND, instance: tab_id });
+    world.commands().trigger(lunco_workbench::OpenTab {
+        kind: MODEL_VIEW_KIND,
+        instance: tab_id,
+    });
 }
-

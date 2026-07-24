@@ -79,7 +79,9 @@ def Xform "DiffRigTest" (
     {
         custom string lunco:scenario = "diff-rig"
 
-        def LunCoProgram "DiffTest"
+        def Scope "DiffTest" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/differential_rig.rhai@
 

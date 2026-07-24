@@ -1,12 +1,12 @@
 //! Canvas scene rendering and event routing.
 
+use super::super::{ops, overlays, CanvasDiagramState, CanvasSnapSettings};
+use super::interaction::{handle_context_menu, handle_drag_and_drop, handle_node_double_click};
+use super::snapshots::stash_snapshots;
+use super::util::{log_frame_times, mark};
+use crate::model_tabs_types::TabRenderContext;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use crate::model_tabs_types::TabRenderContext;
-use super::super::{CanvasDiagramState, CanvasSnapSettings, ops, overlays};
-use super::util::{mark, log_frame_times};
-use super::snapshots::stash_snapshots;
-use super::interaction::{handle_context_menu, handle_drag_and_drop, handle_node_double_click};
 
 pub(crate) fn render_diagram_canvas(
     _panel: &super::CanvasDiagramPanel,
@@ -24,16 +24,24 @@ pub(crate) fn render_diagram_canvas(
     mark("resolve_doc_context", &mut phase_t, &mut phase_log);
 
     let active_doc = doc_id;
-    let tab_read_only = active_doc.map(|d| crate::state::read_only_for_ctx(ctx, d)).unwrap_or(false);
+    let tab_read_only = active_doc
+        .map(|d| crate::state::read_only_for_ctx(ctx, d))
+        .unwrap_or(false);
 
-    let snap_settings = ctx.resource::<CanvasSnapSettings>().filter(|s| s.enabled).map(|s| lunco_canvas::SnapSettings { step: s.step });
+    let snap_settings = ctx
+        .resource::<CanvasSnapSettings>()
+        .filter(|s| s.enabled)
+        .map(|s| lunco_canvas::SnapSettings { step: s.step });
 
     {
         // Publish the active theme once per frame. Every egui paint
         // helper (canvas built-in layers, node/edge painters, icon
         // remap) reads it back via `lunco_theme::active(ctx)` — one
         // theme, one transport, no per-consumer projection caches.
-        let theme = ctx.resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
         lunco_theme::store_active(ui.ctx(), &theme);
     }
 
@@ -41,7 +49,10 @@ pub(crate) fn render_diagram_canvas(
     mark("snapshots+sigreg", &mut phase_t, &mut phase_log);
 
     let (response, events) = {
-        let docstate = match (render_tab_id, active_doc) { (Some(t), Some(d)) => state.get_mut_for_tab(t, d), _ => state.get_mut(active_doc) };
+        let docstate = match (render_tab_id, active_doc) {
+            (Some(t), Some(d)) => state.get_mut_for_tab(t, d),
+            _ => state.get_mut(active_doc),
+        };
         docstate.canvas.read_only = tab_read_only;
         docstate.canvas.snap = snap_settings;
         docstate.canvas.ui(ui)
@@ -50,7 +61,9 @@ pub(crate) fn render_diagram_canvas(
 
     let gesture_down = response.is_pointer_button_down_on();
     ctx.defer(move |world| {
-        if let Some(mut active) = world.get_resource_mut::<crate::ui::wasm_autosave::IsGestureActive>() {
+        if let Some(mut active) =
+            world.get_resource_mut::<crate::ui::wasm_autosave::IsGestureActive>()
+        {
             active.canvas = gesture_down;
         }
     });
@@ -69,7 +82,10 @@ pub(crate) fn render_diagram_canvas(
     // never momentarily empty mid-flight, so the overlay needs no
     // local fallback predicates.
     {
-        let theme = ctx.resource::<lunco_theme::Theme>().cloned().unwrap_or_else(lunco_theme::Theme::dark);
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
         let drilled_class = render_tab_id
             .and_then(|tid| {
                 ctx.resource::<crate::model_tabs::ModelTabs>()
@@ -77,24 +93,46 @@ pub(crate) fn render_diagram_canvas(
             })
             .unwrap_or_default();
         let lifecycle = {
-            let docstate = match render_tab_id { Some(t) => state.get_for_tab(t), None => state.get(active_doc) };
+            let docstate = match render_tab_id {
+                Some(t) => state.get_for_tab(t),
+                None => state.get(active_doc),
+            };
             let has_content = docstate.canvas.scene.node_count() > 0;
             active_doc
-                .and_then(|d| ctx.resource::<lunco_workbench::status_bus::StatusBus>().map(|bus| bus.lifecycle(lunco_workbench::status_bus::BusyScope::Document(d.0), has_content)))
+                .and_then(|d| {
+                    ctx.resource::<lunco_workbench::status_bus::StatusBus>()
+                        .map(|bus| {
+                            bus.lifecycle(
+                                lunco_workbench::status_bus::BusyScope::Document(d.0),
+                                has_content,
+                            )
+                        })
+                })
                 .unwrap_or(lunco_workbench::status_bus::LifecycleState::Empty)
         };
 
         use lunco_workbench::status_bus::LifecycleState;
         match lifecycle {
             LifecycleState::Loading => {
-                if let (Some(doc_id), Some(bus)) = (active_doc, ctx.resource::<lunco_workbench::status_bus::StatusBus>()) {
-                    lunco_ui::busy::LoadingIndicator::for_scope(lunco_workbench::status_bus::BusyScope::Document(doc_id.0))
-                        .overlay_on(ui, response.rect, bus, &theme);
+                if let (Some(doc_id), Some(bus)) = (
+                    active_doc,
+                    ctx.resource::<lunco_workbench::status_bus::StatusBus>(),
+                ) {
+                    lunco_ui::busy::LoadingIndicator::for_scope(
+                        lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
+                    )
+                    .overlay_on(ui, response.rect, bus, &theme);
                 }
                 ui.ctx().request_repaint();
             }
             LifecycleState::Failed(msg) => {
-                overlays::render_drill_in_error_overlay(ui, response.rect, &drilled_class, &msg, &theme);
+                overlays::render_drill_in_error_overlay(
+                    ui,
+                    response.rect,
+                    &drilled_class,
+                    &msg,
+                    &theme,
+                );
             }
             LifecycleState::Empty => {
                 overlays::render_empty_diagram_overlay(ui, response.rect, ctx);
@@ -163,8 +201,7 @@ pub(crate) fn render_diagram_canvas(
             // queued thing is what the user just clicked.
             let compile_pending = active_doc
                 .and_then(|d| {
-                    ctx
-                        .resource::<lunco_doc_bevy::DocumentDiagnostics>()
+                    ctx.resource::<lunco_doc_bevy::DocumentDiagnostics>()
                         .map(|cs| cs.is_compiling(d))
                 })
                 .unwrap_or(false);
@@ -223,8 +260,26 @@ pub(crate) fn render_diagram_canvas(
     }
     mark("overlays", &mut phase_t, &mut phase_log);
 
-    handle_drag_and_drop(ui, ctx, state, &response, active_doc, render_tab_id, tab_read_only, editing_class.clone());
-    let menu_ops = handle_context_menu(ui, ctx, state, &response, active_doc, render_tab_id, tab_read_only, editing_class.as_deref());
+    handle_drag_and_drop(
+        ui,
+        ctx,
+        state,
+        &response,
+        active_doc,
+        render_tab_id,
+        tab_read_only,
+        editing_class.clone(),
+    );
+    let menu_ops = handle_context_menu(
+        ui,
+        ctx,
+        state,
+        &response,
+        active_doc,
+        render_tab_id,
+        tab_read_only,
+        editing_class.as_deref(),
+    );
     handle_node_double_click(ctx, state, &events, active_doc);
 
     if let (Some(doc_id), Some(class)) = (doc_id, editing_class.as_ref()) {
@@ -269,7 +324,11 @@ pub(crate) fn render_diagram_canvas(
     // (no process env) — so the browser never got the breakdown that
     // localises a stall to a phase. Now any slow frame self-reports.
     if (trace_phases || frame_ms > 16.0) && !phase_log.is_empty() {
-        let breakdown = phase_log.iter().map(|(name, ms)| format!("{name}={ms:.1}ms")).collect::<Vec<_>>().join(" ");
+        let breakdown = phase_log
+            .iter()
+            .map(|(name, ms)| format!("{name}={ms:.1}ms"))
+            .collect::<Vec<_>>()
+            .join(" ");
         bevy::log::warn!("[CanvasDiagram] slow-frame phases (total={frame_ms:.1}ms): {breakdown}");
     }
 }
