@@ -32,13 +32,16 @@
 //! the collider ring (S4) both consume this.
 
 /// LOD **hysteresis** factor: a node refines when the focus is inside its refine
-/// range `r`, and coarsens back only past `1.15 · r`. The bare `dist < r` test has no
+/// range `r`, and coarsens back only past `1.30 · r`. The bare `dist < r` test has no
 /// dead band, so a focus resting ON a boundary re-splits and re-merges that node
-/// every frame — a despawn + spawn + reveal animation per flip on a tile whose LOD
-/// never changed. 15 % is wide enough to swallow camera jitter and narrow enough that
-/// the coarsen edge still lands inside the node's geomorph band (`morph_ratio` 0.7),
-/// so the swap that eventually happens is still blended, not popped.
-pub const REFINE_HYSTERESIS: f64 = 1.15;
+/// every frame. Thirty percent comfortably absorbs rover/chase-camera motion and
+/// keeps an already-resident child available until the camera has clearly left it.
+pub const REFINE_HYSTERESIS: f64 = 1.30;
+
+/// Fraction of a child node's refine range used for the start of its CDLOD morph.
+/// A child finishes morphing to its parent at `r` and starts at `0.55 · r`, leaving
+/// a broad distance-driven transition rather than a narrow visual snap.
+pub const CDLOD_MORPH_START_RATIO: f64 = 0.55;
 
 /// An axis-aligned **square** region in the terrain XZ plane (metres).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -162,7 +165,7 @@ impl Quadtree {
             max_depth,
             range_factor,
             root_geometric_error,
-            morph_ratio: 0.7,
+            morph_ratio: CDLOD_MORPH_START_RATIO,
         }
     }
 
