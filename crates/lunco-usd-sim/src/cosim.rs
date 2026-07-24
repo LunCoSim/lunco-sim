@@ -43,7 +43,7 @@ use lunco_usd_bevy::{
     UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use crate::UsdSimProcessed;
@@ -53,6 +53,28 @@ use crate::UsdSimProcessed;
 /// the same entity on the same tick.
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
+
+/// The scalar interface authored on a USD Modelica program.
+///
+/// USD declares the public causal boundary early so connection propagation can
+/// start while the source asset loads. The Modelica compiler remains the
+/// authority: after a successful compile, this contract is checked against the
+/// DAE-reported inputs and observed outputs before the model may step.
+#[derive(Component, Clone, Debug)]
+struct UsdModelicaPortContract {
+    inputs: BTreeSet<String>,
+    outputs: BTreeSet<String>,
+}
+
+/// A compile-specific port-contract verdict already reported to the console.
+///
+/// Keeping the session id makes validation reactive to a later recompile while
+/// ensuring an unchanged bad model produces one actionable diagnostic, not one
+/// per fixed tick.
+#[derive(Component)]
+struct ValidatedUsdModelicaPortContract {
+    session_id: u64,
+}
 
 /// Single-flight guard for [`LoadScene`]: set the instant a scene load is
 /// dispatched, cleared once `sync_usd_visuals` has drained every
@@ -404,6 +426,10 @@ fn process_usd_cosim_prim_read(
                 outputs.insert(name.to_owned(), 0.0);
             }
         }
+        commands.entity(entity).try_insert(UsdModelicaPortContract {
+            inputs: inputs.keys().cloned().collect(),
+            outputs: outputs.keys().cloned().collect(),
+        });
         commands.entity(entity).try_insert(SimComponent {
             model_name: asset_path.clone(),
             parameters: Default::default(),
@@ -445,6 +471,85 @@ fn process_usd_cosim_prim_read(
     );
 }
 
+/// Return an actionable discrepancy between USD's public causal boundary and
+/// the interface actually accepted by the Modelica compiler.
+fn modelica_port_contract_error(
+    contract: &UsdModelicaPortContract,
+    model: &ModelicaModel,
+) -> Option<String> {
+    let missing_inputs: Vec<_> = contract
+        .inputs
+        .difference(&model.compiled_input_names)
+        .cloned()
+        .collect();
+    let actual_outputs: BTreeSet<_> = model.variables.keys().cloned().collect();
+    let missing_outputs: Vec<_> = contract
+        .outputs
+        .difference(&actual_outputs)
+        .cloned()
+        .collect();
+    if missing_inputs.is_empty() && missing_outputs.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    if !missing_inputs.is_empty() {
+        parts.push(format!(
+            "USD inputs absent from compiled Modelica model: {}",
+            missing_inputs.join(", ")
+        ));
+    }
+    if !missing_outputs.is_empty() {
+        parts.push(format!(
+            "USD outputs absent from compiled Modelica model: {}",
+            missing_outputs.join(", ")
+        ));
+    }
+    Some(parts.join("; "))
+}
+
+/// Validate a USD program's declared causal ports once its DAE exists.
+///
+/// This runs after the Modelica worker response and before it can receive the
+/// next step. A failed contract pauses the model and projects as one durable
+/// `SimStatus::Error`; a fresh compiler session is checked again.
+fn validate_usd_modelica_port_contracts(
+    mut commands: Commands,
+    mut q: Query<(
+        Entity,
+        &UsdModelicaPortContract,
+        &mut ModelicaModel,
+        Option<&ValidatedUsdModelicaPortContract>,
+    )>,
+    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
+) {
+    for (entity, contract, mut model, validated) in &mut q {
+        if model.is_compiling || !model.is_compiled {
+            continue;
+        }
+        if validated.is_some_and(|state| state.session_id == model.session_id) {
+            continue;
+        }
+
+        if let Some(error) = modelica_port_contract_error(contract, &model) {
+            model.paused = true;
+            model.last_error = Some(error.clone());
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!(
+                    "[{}] USD/Modelica port contract error: {error}",
+                    model.model_name
+                ),
+            });
+        }
+        commands
+            .entity(entity)
+            .try_insert(ValidatedUsdModelicaPortContract {
+                session_id: model.session_id,
+            });
+    }
+}
+
 /// The languages this crate can put a solver behind. Everything else is a program
 /// somebody else runs — the rhai engine, the behaviour-tree compiler — and this
 /// crate leaves it alone.
@@ -472,10 +577,16 @@ fn solver_language(path: &str) -> Option<SolverLanguage> {
 /// frame.
 pub fn dispatch_loaded_modelica_sources(
     mut commands: Commands,
-    q: Query<(Entity, &PendingModelicaSource, &UsdPrimPath)>,
+    mut q: Query<(
+        Entity,
+        &PendingModelicaSource,
+        &UsdPrimPath,
+        &mut SimComponent,
+    )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
     channels: Option<Res<ModelicaChannels>>,
+    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
 ) {
     let Some(channels) = channels else { return };
 
@@ -490,17 +601,23 @@ pub fn dispatch_loaded_modelica_sources(
     //
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
-    let mut pending: Vec<_> = q.iter().collect();
-    pending.sort_unstable_by(|(_, _, a), (_, _, b)| a.path.cmp(&b.path));
+    let mut pending: Vec<_> = q.iter_mut().collect();
+    pending.sort_unstable_by(|(_, _, a, _), (_, _, b, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, _) in pending {
+    for (entity, pending, _, mut component) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
-            warn!(
-                "[usd-cosim] failed to load Modelica source `{}` via AssetServer",
+            let error = format!(
+                "failed to load Modelica source `{}` via AssetServer",
                 pending.asset_path
             );
+            warn!("[usd-cosim] {error}");
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!("[{}] Asset load error: {error}", component.model_name),
+            });
+            component.status = SimStatus::Error(error);
             commands.entity(entity).remove::<PendingModelicaSource>();
             continue;
         }
@@ -1959,6 +2076,11 @@ pub(crate) fn install(app: &mut App) {
         .init_asset::<PythonSource>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>();
+    // USD source-load and contract failures use the same core notice stream as
+    // the Modelica compiler, so the workbench console has one observable error
+    // surface. `add_message` is idempotent when the Modelica plugin registered
+    // it already.
+    app.add_message::<lunco_modelica::ModelicaNotice>();
 
     // A scene that is still spawning, and an object whose model has not
     // compiled, are the two things this module knows are not ready. Declaring
@@ -2009,6 +2131,9 @@ pub(crate) fn install(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
+            validate_usd_modelica_port_contracts
+                .after(ModelicaSet::HandleResponses)
+                .before(sync_modelica_outputs),
             sync_modelica_outputs
                 .after(ModelicaSet::HandleResponses)
                 .before(PropagateCosimSet::Propagate),
@@ -2130,6 +2255,37 @@ mod tests {
             modelica_status(&model),
             SimStatus::Error("singular system".into())
         );
+    }
+
+    #[test]
+    fn compiled_interface_rejects_usd_port_not_accepted_by_modelica() {
+        let contract = UsdModelicaPortContract {
+            inputs: ["throttle".to_string(), "typo".to_string()]
+                .into_iter()
+                .collect(),
+            outputs: ["thrust".to_string()].into_iter().collect(),
+        };
+        let mut model = dispatched_but_unsolved();
+        model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
+        model.variables.insert("mass".into(), 1.0);
+
+        let error = modelica_port_contract_error(&contract, &model)
+            .expect("a USD port the DAE does not expose must fail projection");
+        assert!(error.contains("typo"));
+        assert!(error.contains("thrust"));
+    }
+
+    #[test]
+    fn compiled_interface_accepts_matching_usd_ports() {
+        let contract = UsdModelicaPortContract {
+            inputs: ["throttle".to_string()].into_iter().collect(),
+            outputs: ["thrust".to_string()].into_iter().collect(),
+        };
+        let mut model = dispatched_but_unsolved();
+        model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
+        model.variables.insert("thrust".into(), 42.0);
+
+        assert_eq!(modelica_port_contract_error(&contract, &model), None);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! `handle_modelica_responses` exchange `ModelicaCommand` /
 //! `ModelicaResult` messages with it via crossbeam channels.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
@@ -1860,6 +1860,15 @@ pub struct ModelicaModel {
     pub parameters: HashMap<String, f64>,
     /// Control inputs (input Real ...)
     pub inputs: HashMap<String, f64>,
+    /// Input names reported by the successfully compiled DAE.
+    ///
+    /// This is deliberately separate from [`Self::inputs`]. Callers may seed
+    /// that map from an authored interface while a source asset is loading, so
+    /// it is a write buffer, not evidence that the compiler accepted a port.
+    /// The worker owns this set because only its compile result is authoritative
+    /// about the live solver interface.
+    #[reflect(ignore)]
+    pub compiled_input_names: BTreeSet<String>,
     /// All other observable variables (Real soc, etc)
     pub variables: HashMap<String, f64>,
     /// Last compile or solver failure for this model.
@@ -2362,6 +2371,7 @@ pub fn handle_modelica_responses(
                 // The UI extracts defaults from source code (e.g., `input Real g = 9.81` → g: 9.81),
                 // which is more reliable than the worker's DAE-discovered names (which may have 0.0).
                 let ui_inputs: HashMap<String, f64> = std::mem::take(&mut model.inputs);
+                model.compiled_input_names = result.detected_input_names.iter().cloned().collect();
                 for name in &result.detected_input_names {
                     model
                         .inputs
