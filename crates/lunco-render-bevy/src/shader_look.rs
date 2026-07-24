@@ -134,7 +134,7 @@ fn bind_shader_look(
     // pipelines (visible as bright, serrated fragments at wheel silhouettes).
     commands
         .entity(e)
-        .remove::<MeshMaterial3d<StandardMaterial>>()
+        .try_remove::<MeshMaterial3d<StandardMaterial>>()
         .try_insert(MeshMaterial3d(handle));
     apply_shadow_intent(&mut commands, e, look);
 }
@@ -226,7 +226,7 @@ fn rebind_changed_shader_look(
         let same_material = current.is_some_and(|m| m.0.id() == handle.id());
         commands
             .entity(e)
-            .remove::<MeshMaterial3d<StandardMaterial>>()
+            .try_remove::<MeshMaterial3d<StandardMaterial>>()
             .try_insert(MeshMaterial3d(handle.clone()));
 
         // The look changed but resolved to the material it is ALREADY on ⇒ only

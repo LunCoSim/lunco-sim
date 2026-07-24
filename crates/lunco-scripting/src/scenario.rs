@@ -250,6 +250,10 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
 struct Fsm {
     /// `ScriptDocument.generation` the current program was compiled from.
     generation: u64,
+    /// Source revision most recently sent to the compiler, including a failed
+    /// compile. A broken revision is terminal until the document changes; retrying
+    /// it every fixed tick only floods the log and repeats work that cannot succeed.
+    attempted_generation: Option<u64>,
     /// Whether `on_start` has run for the current program.
     started: bool,
     /// Whether the backend currently holds a compiled program for this entity.
@@ -262,6 +266,7 @@ impl Default for Fsm {
     fn default() -> Self {
         Self {
             generation: 0,
+            attempted_generation: None,
             started: false,
             compiled: false,
             gid: -1,
@@ -374,11 +379,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     // Only (re)compilation reads source/params, so clone them ONLY when a
                     // recompile is actually due (first sight or generation bump) — otherwise
                     // the multi-KB source was cloned and dropped unused every tick. This
-                    // predicate mirrors the loop's `!compiled || generation-changed` gate.
+                    // A failed compile is also an attempted revision. Do not compile it
+                    // again until the author changes the document: the diagnostic is
+                    // already published and the same text cannot become valid by ticking.
                     let needs_recompile = world
                         .get_resource::<ScenarioDriver<R>>()
                         .and_then(|d| d.fsm.get(&entity))
-                        .map_or(true, |st| !st.compiled || st.generation != generation);
+                        .map_or(true, |st| st.attempted_generation != Some(generation));
                     let maybe_src = needs_recompile
                         .then(|| (doc.source.clone(), doc.params.clone(), doc.asset_id.clone()));
                     (generation, maybe_src)
@@ -441,6 +448,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 // presence of the source IS the gate — no per-tick source clone.
                 if let Some((source, params, asset_id)) = &maybe_src {
                     recompiled = true;
+                    st.attempted_generation = Some(generation);
                     // Hot-reload teardown: the OUTGOING program cleans up first.
                     if st.started && st.compiled {
                         let _ = runtime.call_hook(entity, ScenarioHook::Stop, gid);
@@ -453,12 +461,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 .map(|prim| prim.0.as_str())
                                 .unwrap_or("<interactive scenario>");
                             error!(
-                                "[scenario] {:?} compile failed for program {} on entity {entity:?}",
+                                "[scenario] {:?} compile failed for program {} on entity {entity:?}: {}",
                                 language,
                                 program,
+                                diag.message,
                             );
                             st.compiled = false;
-                            st.generation = generation;
                             diag_updates.push((raw, Some(vec![diag])));
                             continue;
                         }
@@ -468,6 +476,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             compile_diag = top_level;
                         }
                     }
+                }
+
+                // A failed source revision has no lifecycle. It remains latched
+                // until its generation changes above, rather than being treated as
+                // a started-but-empty program on subsequent ticks.
+                if !st.compiled {
+                    continue;
                 }
 
                 // First runtime error from any hook this tick.

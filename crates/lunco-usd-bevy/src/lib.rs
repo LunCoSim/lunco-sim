@@ -3062,8 +3062,20 @@ fn attach_programs(
         let source_asset = reader
             .asset(&child, "info:sourceAsset")
             .filter(|s| !s.trim().is_empty());
+        // A behaviour tree is a declarative program for `lunco-autopilot`, not
+        // an inline Rhai program. Source code has no extension to dispatch on, so
+        // its XML root is the unambiguous discriminator; file-backed trees use the
+        // centralized extension predicate. Keep this decision here, at the sole
+        // point that can attach a `ScriptedModel`, so no tree can reach Rhai.
+        let behavior_tree = inline
+            .as_ref()
+            .is_some_and(|source| source.trim_start().starts_with('<'))
+            || source_asset
+                .as_deref()
+                .is_some_and(lunco_core::programs::is_behavior_tree_asset);
+        let rhai_inline = (!behavior_tree).then_some(inline).flatten();
         let file = source_asset.clone().filter(|s| s.ends_with(".rhai"));
-        if driver_id.is_none() && inline.is_none() && file.is_none() {
+        if driver_id.is_none() && rhai_inline.is_none() && file.is_none() {
             // A program prim that names its implementation NOWHERE the runtime looks is
             // silently inert — the failure mode that cost two days on the episode-01
             // recorder, which authored `lunco:program:sourceAsset` (a name nothing
@@ -3071,7 +3083,7 @@ fn attach_programs(
             // genuinely-unauthored case warns: a program whose `sourceAsset` this
             // engine does not run belongs to another one (`.mo` → co-sim) and is
             // skipped without noise, exactly as before.
-            if source_asset.is_none() {
+            if source_asset.is_none() && inline.is_none() {
                 warn!(
                     "[usd] program API on {} names no implementation — expected one of \
                      `info:sourceAsset` (a file; the extension picks the engine), \
@@ -3125,7 +3137,7 @@ fn attach_programs(
             continue;
         }
 
-        if let Some(src) = inline {
+        if let Some(src) = rhai_inline {
             commands
                 .entity(entity)
                 .try_insert(lunco_core::EmbeddedScenarioSource(src));

@@ -239,7 +239,7 @@ pub fn wire_terrain_materials(
             // draw twice (the contract in `rebind_changed_pbr_look`).
             commands
                 .entity(entity)
-                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .try_remove::<MeshMaterial3d<StandardMaterial>>()
                 .remove::<lunco_render::PbrLook>()
                 .try_insert(MeshMaterial3d(handle));
         }
