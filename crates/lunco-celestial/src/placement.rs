@@ -673,7 +673,9 @@ pub fn sync_terrain_body_curvature(
         };
         if punch != Some(&next) {
             commands.entity(e).try_insert(next);
-            debug!("globe hole-punched under site DEM (body {body}, footprint ±{half_extent:.0} m)");
+            debug!(
+                "globe hole-punched under site DEM (body {body}, footprint ±{half_extent:.0} m)"
+            );
         }
     }
 }

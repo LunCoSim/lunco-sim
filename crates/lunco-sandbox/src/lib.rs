@@ -2918,7 +2918,7 @@ fn bind_terrain_layers(
                 // and its per-depth weights are a LOD decision, not the author's.
                 _ => {}
             }
-            info!(
+            debug!(
                 "[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}",
                 role.name
             );

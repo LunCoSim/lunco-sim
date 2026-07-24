@@ -253,10 +253,10 @@ impl TerrainLayer for RockScatterLayer {
                 }
             });
 
-            info!(
-            "[terrain-layer/rocks] scattered {spawned} rock(s) (±{:.0} m region, density {}/ha)",
-            half, self.rocks.density
-        );
+            debug!(
+                "[terrain-layer/rocks] scattered {spawned} rock(s) (±{:.0} m region, density {}/ha)",
+                half, self.rocks.density
+            );
         }
     }
 }

@@ -607,7 +607,7 @@ pub(crate) fn on_usd_light_added(
     mut commands: Commands,
 ) {
     for e in &fallbacks {
-        info!("[usd-bevy] scene authored a light — despawning fallback light {e:?}");
+        debug!("[usd-bevy] scene authored a light — despawning fallback light {e:?}");
         commands.entity(e).try_despawn();
     }
     if let Some(mut ambient) = ambient {
