@@ -326,6 +326,10 @@ def Xform "SandboxScene" (
         prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
     )
     {
+        # Direct lunar daylight (128 klx) needs a daylight camera grade.  This
+        # is EV100 16 at ISO 100 / f16, authored on the standard UsdGeomCamera
+        # rather than inherited from a process-wide lighting resource.
+        float exposure:time = 0.00390625
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
