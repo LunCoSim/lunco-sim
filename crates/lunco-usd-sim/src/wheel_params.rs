@@ -136,8 +136,6 @@ pub struct WheelParams {
     pub steer_axis: DVec3,
     /// Velocity-tracking aggressiveness, 1/s (`lunco:wheel:driveDamping`).
     pub drive_damping: f64,
-    /// Motor stall torque = peakTorque x this (`lunco:wheel:stallTorqueGain`).
-    pub stall_torque_gain: f64,
     /// Suspension compliance; `None` ⇒ none resolves. A raycast wheel treats
     /// that as a hard asset error, a joint wheel does not need it.
     pub suspension: Option<SuspensionParams>,
@@ -196,7 +194,6 @@ impl WheelParams {
         let friction_mu = req("lunco:tire:frictionCoefficient");
         let contact_friction = req("physics:dynamicFriction");
         let drive_damping = req("lunco:wheel:driveDamping");
-        let stall_torque_gain = req("lunco:wheel:stallTorqueGain");
 
         // The ONE non-required number, and it is a DERIVATION, not a default:
         // 0/unauthored means "solid cylinder", i.e. ½·m·r² computed downstream
@@ -236,7 +233,6 @@ impl WheelParams {
             contact_friction,
             steer_axis,
             drive_damping,
-            stall_torque_gain,
             suspension,
         })
     }
@@ -288,15 +284,15 @@ impl WheelParams {
         true
     }
 
-    /// The ONE definition of the physical wheel's axle drive: the joint motor
-    /// MODEL (stiffness 0 — pure velocity control, mass-auto-scaled) that
-    /// [`lunco_hardware::MotorActuator`] then drives.
+    /// The physical wheel's axle motor model. The
+    /// [`lunco_hardware::MotorActuator`] enables it only for a non-zero command
+    /// and writes the live motor/gearbox torque curve every tick.
     ///
-    /// The torque cap is deliberately NOT set here. It is the authored motor
+    /// The torque cap is deliberately NOT fixed here. It is the authored motor
     /// curve `τ(ω) = τ_stall·(1 − ω/ω_noload)`, which depends on this tick's axle
     /// rate, so the actuator writes `motor.max_torque` every tick; a constant cap
-    /// authored at build time is exactly the `stallTorqueGain` fudge that made the
-    /// physical wheel a speed source (see `MotorActuator`).
+    /// authored at build time would turn the physical wheel into a speed source
+    /// disconnected from its motor power.
     ///
     /// It is built DISABLED, not left at `AngularMotor::new`'s `Scalar::MAX`
     /// torque. A motor born with unbounded torque and a target velocity of zero is
@@ -316,11 +312,13 @@ impl WheelParams {
     /// produced byte-identical traces — not a broken parameter, a parameter whose
     /// regime the rover never entered.
     pub fn drive_motor(&self) -> AngularMotor {
-        AngularMotor::new(MotorModel::AccelerationBased {
+        AngularMotor::new_disabled(MotorModel::AccelerationBased {
             stiffness: 0.0,
             damping: self.drive_damping,
         })
-        .with_max_torque(self.peak_torque * self.stall_torque_gain)
+        // `0` is Avian's unlimited sentinel, but the motor is disabled until
+        // MotorActuator writes a positive live torque cap in the first command.
+        .with_max_torque(0.0)
     }
 
     /// Axle moment of inertia, kg·m² — authored `physxVehicleWheel:moi` when it

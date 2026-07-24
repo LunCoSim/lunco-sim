@@ -64,44 +64,10 @@ fn mark_actuator_driven_steer(trigger: On<Add, SteeringActuator>, mut commands: 
         .try_insert(lunco_core::ActuatorDrivenJoint);
 }
 
-/// A wheel-hub motor that drives a rover the **physically correct** way: it
-/// commands the wheel's axle [RevoluteJoint] toward a target **spin velocity**
-/// (a velocity-controlled motor, capped at `max_torque`), and the wheel-ground
-/// friction propels the rover. Nothing is pushed on the chassis - the engine
-/// moves the body entirely through the contact, exactly like a real vehicle.
-/// This component lives on the **joint** entity (not the wheel), alongside the
-/// [RevoluteJoint] it drives.
-///
-/// # Why velocity control, and what was measured against it
-///
-/// A constant axle torque sits in avian's low-slip friction dead-zone at small
-/// magnitudes (the wheel barely grips and the rover hardly moves) and breaks
-/// traction wildly at large ones. A velocity motor commands the spin rate; the
-/// joint applies up to `max_torque` to reach it, the tyre friction does the rest.
-///
-/// The obvious objection is that this has no torque-speed characteristic at all:
-/// with `max_torque = peakTorque x stallTorqueGain` (6x) the motor reaches its
-/// target against any load, and `drivetrain_parity` confirms it - the physical
-/// wheel holds w = 12 rad/s (w.r = 4.8 m/s) while the chassis does 2.2 m/s, a
-/// permanent 2.6 m/s contact slip, where the raycast wheel rolls with centimetres
-/// per second of it. It is also why `lunco:wheel:driveDamping` measures as INERT:
-/// the motor is torque-saturated at every sample, so its regime is never entered.
-///
-/// **Replacing it with the authored curve was tried and MEASURED WORSE.** Setting
-/// `max_torque = tau_stall.(1 - w/w_noload).|throttle|` every tick - the same law
-/// `lunco_mobility::update_wheel_spin` integrates on the raycast side - makes the
-/// joint a torque source, and the physical rover's terminal speed FELL from
-/// 2.21 m/s to 1.46 m/s against a raycast 2.31 (an 8% gap became 37%), with the
-/// skid heading collapsing from 51 deg to 7 deg. Two follow-ups ruled out the
-/// obvious explanations: it is NOT the contact friction (doubling the tyre's
-/// authored `physics:dynamicFriction` moved the result by less than 0.01 m/s) and
-/// NOT swept-CCD interference (`SweptCcd::LINEAR` was byte-identical). Under the
-/// curve the axle settled at w = 9.5 rad/s with the motor capped at ~53 N.m while
-/// the chassis did 1.46 m/s - i.e. still sliding, but no longer able to buy back
-/// the torque, and NOT limited by the cone it was sliding against. The torque
-/// source is right in principle; something between the joint motor and the
-/// contact is eating the difference and has not been identified. Until it is,
-/// this is what parity is measured against. See `WheelParams::drive_motor`.
+/// A wheel-hub motor drives a rover through its axle [RevoluteJoint]. Its target
+/// velocity establishes direction and no-load speed; its torque ceiling is the
+/// same live, command-scaled DC curve used by raycast wheels. Wheel-ground
+/// contact supplies propulsion—no force is applied directly to the chassis.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct MotorActuator {
@@ -112,6 +78,9 @@ pub struct MotorActuator {
     /// `lunco:motor:noLoadSpeed` divided by the gearbox ratio. With wheel radius
     /// `r` the free-rolling top speed is about `max_omega * r`.
     pub max_omega: f64,
+    /// Stall torque at the axle (N m), after the gearbox ratio, efficiency, and
+    /// output limit. This is the physical wheel's sole torque authority.
+    pub peak_torque: f64,
     /// Sign mapping throttle to spin so a positive (forward) command rolls the
     /// rover along its chassis -Z. Depends on the joint's `hinge_axis`
     /// orientation; `-1` for the canonical `axle = rotation * Y` hinge.
@@ -123,6 +92,7 @@ impl Default for MotorActuator {
         Self {
             port_entity: Entity::PLACEHOLDER,
             max_omega: 0.0,
+            peak_torque: 0.0,
             drive_sign: -1.0,
         }
     }
@@ -135,6 +105,7 @@ impl Default for MotorActuator {
 /// hinge axis yaws with the wheel).
 fn motor_actuator_system(
     q_ports: Query<&Port>,
+    q_bodies: Query<(&AngularVelocity, &Rotation)>,
     mut q_joints: Query<(&MotorActuator, &mut RevoluteJoint)>,
 ) {
     for (motor, mut joint) in q_joints.iter_mut() {
@@ -147,7 +118,31 @@ fn motor_actuator_system(
         // gives the raycast rover full torque but the physical rover proportionally
         // more, and the two paths diverge.
         let throttle = port.value.clamp(-1.0, 1.0);
+        if throttle.abs() <= f64::EPSILON || motor.max_omega <= 0.0 || motor.peak_torque <= 0.0 {
+            // Zero demand disconnects the motor. It is neither a hidden brake nor
+            // a source of airborne wheel spin; bearing drag remains the wheel's
+            // own physical loss.
+            joint.motor.enabled = false;
+            continue;
+        }
+
+        let Ok((carrier_omega, carrier_rot)) = q_bodies.get(joint.body1) else {
+            continue;
+        };
+        let Ok((wheel_omega, _)) = q_bodies.get(joint.body2) else {
+            continue;
+        };
+
+        // The joint axis is in the carrier-body frame. The relative rate about
+        // its world-space form is the axle speed seen by the motor curve.
+        let axle = carrier_rot.0 * joint.hinge_axis;
+        let relative_omega = (wheel_omega.0 - carrier_omega.0).dot(axle);
+        let commanded_speed = relative_omega * motor.drive_sign * throttle.signum();
+        let rolloff = (1.0 - commanded_speed / motor.max_omega).clamp(0.0, 1.0);
+
+        joint.motor.enabled = true;
         joint.motor.target_velocity = motor.drive_sign * throttle * motor.max_omega;
+        joint.motor.max_torque = motor.peak_torque * throttle.abs() * rolloff;
     }
 }
 

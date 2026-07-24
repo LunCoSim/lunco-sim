@@ -777,16 +777,6 @@ class "LunCoWheelAPI" (
         }
         doc = """Joint-wheel drive tuning: damping of the axle motor."""
     )
-    double lunco:wheel:stallTorqueGain (
-        customData = {
-            double min = 0
-            double max = 20
-        }
-        doc = """Joint-wheel drive tuning: the axle motor's torque ceiling as a
-        multiple of the powertrain's stall torque. It is the joint motor's ONLY
-        torque limit — the motor is a velocity source, so this is what stops it
-        being an infinitely strong one."""
-    )
 }
 
 class "LunCoMotorAPI" (

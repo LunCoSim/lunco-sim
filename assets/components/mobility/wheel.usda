@@ -128,21 +128,7 @@ def Cylinder "Wheel" (
     # not on this prim at all: it is the motor's `lunco:motor:noLoadSpeed` divided by
     # the gearbox ratio, the one no-load speed both wheel realizations obey.
     #
-    # `driveDamping` is INERT as things stand, and honestly so: the motor is
-    # torque-saturated at every sample against the `stallTorqueGain` ceiling below,
-    # so the damping's regime (the last approach to no-load) is never entered.
-    # Sweeping it 30 → 60 → 150 produced byte-identical traces. It becomes live the
-    # day the ceiling becomes the motor's own τ(ω) curve.
     double lunco:wheel:driveDamping = 30.0          # axle motor damping
-    # The joint motor's torque ceiling, as a multiple of the powertrain's stall
-    # torque. 6× is deliberately far above the steady traction figure so a skid
-    # turn can enforce its left/right speed split — which also means the motor is
-    # a SPEED source, not a torque source: it reaches `noLoadSpeed` against any
-    # load, and the tyre slides for the whole run. Replacing this cap with the
-    # authored curve `τ(ω)` was tried and measured WORSE (terminal 2.21 → 1.46
-    # against a raycast 2.31); see `lunco_hardware::MotorActuator` for the full
-    # measurement and the two hypotheses it ruled out.
-    double lunco:wheel:stallTorqueGain = 6.0
 
     # A driven wheel has a motor behind it, but the motor is not IN here: it is its own
     # part (`components/mobility/motor.usda`) with its own mass, torque curve, efficiency

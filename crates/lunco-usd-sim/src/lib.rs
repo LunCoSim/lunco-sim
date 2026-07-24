@@ -2194,6 +2194,7 @@ fn setup_physical_wheel(
         MotorActuator {
             port_entity: p_drive,
             max_omega: params.max_rotation_speed,
+            peak_torque: params.peak_torque,
             drive_sign: -1.0,
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),

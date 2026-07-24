@@ -1,0 +1,325 @@
+#usda 1.0
+(
+    defaultPrim = "RoverComparison"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Simultaneous rover comparison field ──────────────────────────────────────
+#
+# Three rover tiers run at the same time on three copies of ONE short lunar
+# traverse.  A real shared lane would make the result depend on collisions and
+# who reaches an obstacle first, so each lane is a spatial copy of the exact
+# same terrain rather than a different course.  This makes the comparison fair:
+# gravity, surface material, start pose, command, obstacle order, and run time
+# are identical.
+#
+# Course, in driving order (rovers face -Z):
+#   1. flat launch / settling pad;
+#   2. a row of low, rounded cylinder ridges (rolling compliance);
+#   3. staggered cubes of increasing height (clearance and rocker travel);
+#   4. increasing 6, 12, and 18 degree ramps (traction, torque, stability);
+#   5. flat exits between grades (recovery and terminal speed).
+#
+# Run: sandbox --scene scenes/tests/rover_comparison.usda
+
+def Xform "RoverComparison" (
+    kind = "assembly"
+    doc = "Three rover variants simultaneously crossing identical primitive lunar terrain lanes for drivetrain, clearance, traction, and stability comparison."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Regolith" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            # Common, deliberately moderate grip: the variants' tyre choices,
+            # rather than lane-specific materials, decide the comparison.
+            float physics:dynamicFriction = 0.8
+            float physics:staticFriction = 0.8
+        }
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (40, 1, 90)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.24, 0.22, 0.19)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 128000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-35, 40, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0, 1, 0)
+        double3 xformOp:translate = (20, 20, 38)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Every obstacle group below is copied at x = -10, 0, +10.  Keep the three
+    # copies numerically identical apart from X; that is the test's invariant.
+    def Scope "Lanes"
+    {
+        # Rounded ridges: a row of modest cylinders that checks wheel rotation,
+        # contact retention, and suspension response without a vertical wall.
+        def Cylinder "Ridge_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            uniform token axis = "X"
+            double radius = 0.18
+            double height = 4.0
+            double3 xformOp:translate = (-10, 0.08, 17)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.33, 0.30, 0.25)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cylinder "Ridge_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            uniform token axis = "X"
+            double radius = 0.18
+            double height = 4.0
+            double3 xformOp:translate = (0, 0.08, 17)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.33, 0.30, 0.25)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cylinder "Ridge_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            uniform token axis = "X"
+            double radius = 0.18
+            double height = 4.0
+            double3 xformOp:translate = (10, 0.08, 17)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.33, 0.30, 0.25)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+
+        # Increasing discrete obstacles test clearance and rocker/bogie travel.
+        # They are staggered in Z so no wheel pair meets a vertical edge together.
+        def Cube "BlockLow_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (-10, 0.12, 9)
+            double3 xformOp:scale = (1.6, 0.24, 0.45)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.39, 0.35, 0.29)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "BlockLow_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, 0.12, 9)
+            double3 xformOp:scale = (1.6, 0.24, 0.45)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.39, 0.35, 0.29)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "BlockLow_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (10, 0.12, 9)
+            double3 xformOp:scale = (1.6, 0.24, 0.45)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.39, 0.35, 0.29)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "BlockHigh_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (-10, 0.22, 3)
+            double3 xformOp:scale = (1.4, 0.44, 0.5)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.45, 0.40, 0.32)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "BlockHigh_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, 0.22, 3)
+            double3 xformOp:scale = (1.4, 0.44, 0.5)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.45, 0.40, 0.32)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "BlockHigh_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (10, 0.22, 3)
+            double3 xformOp:scale = (1.4, 0.44, 0.5)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.45, 0.40, 0.32)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+
+        # Increasing grades turn the field into a capability envelope instead of
+        # a single pass/fail hill: 6 deg checks rolling resistance, 12 deg checks
+        # the normal traverse grade, and 18 deg approaches the medium tier's
+        # traction limit.  Flat gaps make the response to each grade observable.
+        def Cube "Ramp6_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (-10, 0.35, -8)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (6, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp6_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, 0.35, -8)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (6, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp6_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (10, 0.35, -8)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (6, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp12_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (-10, 0.62, -20)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (12, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp12_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, 0.62, -20)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (12, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp12_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (10, 0.62, -20)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (12, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp18_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (-10, 0.92, -32)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (18, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp18_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, 0.92, -32)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (18, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp18_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (10, 0.92, -32)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (18, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+    }
+
+    # Same initial Y/Z and same drive direction.  Only X and the referenced tier
+    # differ; simultaneous execution ensures no phase or terrain-state bias.
+    def Xform "Easy" (
+        prepend references = @lunco://vessels/rovers/variants/rover_easy.usda@</RoverEasy>
+    )
+    {
+        double3 xformOp:translate = (-10, 1.6, 32)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "Medium" (
+        prepend references = @lunco://vessels/rovers/variants/rover_medium.usda@</RoverMedium>
+    )
+    {
+        double3 xformOp:translate = (0, 1.6, 32)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "Awful" (
+        prepend references = @lunco://vessels/rovers/variants/rover_awful.usda@</RoverAwful>
+    )
+    {
+        double3 xformOp:translate = (10, 1.6, 32)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "rover-comparison"
+        def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"])
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/rover_comparison.rhai@
+        }
+    }
+}

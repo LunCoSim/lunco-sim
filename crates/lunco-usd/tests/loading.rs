@@ -80,7 +80,6 @@ def Xform "Rover" {
 
         double3 lunco:wheel:steerAxis = (0, 1, 0)
         double lunco:wheel:driveDamping = 30.0
-        double lunco:wheel:stallTorqueGain = 6.0
     }
 }
 "#;
