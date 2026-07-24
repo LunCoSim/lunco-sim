@@ -18,7 +18,8 @@
 #   1. flat launch / settling pad;
 #   2. a row of low, rounded cylinder ridges (rolling compliance);
 #   3. staggered cubes of increasing height (clearance and rocker travel);
-#   4. increasing 6, 12, and 18 degree ramps (traction, torque, stability);
+#   4. increasing 6, 12, 18 degree, then 40% (21.8 degree) ramps
+#      (traction, torque, stability);
 #   5. flat exits between grades (recovery and terminal speed).
 #
 # Run: sandbox --scene scenes/tests/rover_comparison.usda
@@ -41,12 +42,32 @@ def Xform "RoverComparison" (
     {
         def Material "Regolith" (
             prepend apiSchemas = ["PhysicsMaterialAPI"]
+            variants = {
+                string surfaceGrip = "nominal"
+            }
+            prepend variantSets = "surfaceGrip"
         )
         {
-            # Common, deliberately moderate grip: the variants' tyre choices,
-            # rather than lane-specific materials, decide the comparison.
-            float physics:dynamicFriction = 0.8
-            float physics:staticFriction = 0.8
+            # Standard USD PhysicsMaterialAPI, intentionally shared by every
+            # lane.  Select `surfaceGrip` in a stronger composition layer (or
+            # directly in usdview) to compare the same vehicles over a new
+            # terrain condition without changing code or cloning the course.
+            # Static friction governs breakaway; dynamic friction governs the
+            # rolling/sliding contact once a tyre is moving.
+            variantSet "surfaceGrip" = {
+                "slippery" {
+                    float physics:staticFriction = 0.35
+                    float physics:dynamicFriction = 0.28
+                }
+                "nominal" {
+                    float physics:staticFriction = 0.8
+                    float physics:dynamicFriction = 0.8
+                }
+                "highGrip" {
+                    float physics:staticFriction = 1.2
+                    float physics:dynamicFriction = 1.0
+                }
+            }
         }
     }
 
@@ -188,7 +209,8 @@ def Xform "RoverComparison" (
         # Increasing grades turn the field into a capability envelope instead of
         # a single pass/fail hill: 6 deg checks rolling resistance, 12 deg checks
         # the normal traverse grade, and 18 deg approaches the medium tier's
-        # traction limit.  Flat gaps make the response to each grade observable.
+        # traction limit.  The final 40% grade (21.8 degrees) establishes the
+        # high-grade envelope. Flat gaps make each response observable.
         def Cube "Ramp6_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
         {
             double size = 1.0
@@ -285,6 +307,39 @@ def Xform "RoverComparison" (
             double3 xformOp:rotateXYZ = (18, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.29, 0.27, 0.23)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp40Pct_Easy" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (-10, 1.0, -46)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (21.8014, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp40Pct_Medium" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, 1.0, -46)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (21.8014, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
+            bool physics:collisionEnabled = true
+            rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
+        }
+        def Cube "Ramp40Pct_Awful" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+        {
+            double size = 1.0
+            double3 xformOp:translate = (10, 1.0, -46)
+            double3 xformOp:scale = (3.0, 0.25, 5.0)
+            double3 xformOp:rotateXYZ = (21.8014, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.35, 0.29, 0.20)]
             bool physics:collisionEnabled = true
             rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
         }

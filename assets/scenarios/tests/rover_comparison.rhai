@@ -17,7 +17,7 @@ fn on_start(me) {
     this.distance = [0.0, 0.0, 0.0];
     this.max_tilt = [0.0, 0.0, 0.0];
     this.phase = "settle";
-    print("[rover-comparison] identical primitive terrain: cylinders, blocks, ramp");
+    print("[rover-comparison] identical primitive terrain: cylinders, blocks, 6/12/18 deg and 40% ramps");
     print("[rover-comparison] all tiers launch simultaneously after settling");
 }
 
@@ -74,9 +74,16 @@ fn on_tick(me) {
             checks.push(t_bounded(world_pos(rover), 200.0, this.names[i] + " rover"));
             checks.push(t_true(this.distance[i] > 8.0,
                 this.names[i] + " travelled only " + r2(this.distance[i]) + " m"));
-            checks.push(t_true(this.max_tilt[i] < 80.0,
-                this.names[i] + " overturned (peak tilt " + r2(this.max_tilt[i]) + " deg)"));
         }
+        // The three variants deliberately have different stability margins.  The
+        // easy and medium vehicles must stay upright; the top-heavy "Awful"
+        // vehicle is the explicit rollover discriminator on the same course.
+        checks.push(t_true(this.max_tilt[0] < 30.0,
+            "Easy lost its stability margin (peak tilt " + r2(this.max_tilt[0]) + " deg)"));
+        checks.push(t_true(this.max_tilt[1] < 80.0,
+            "Medium overturned (peak tilt " + r2(this.max_tilt[1]) + " deg)"));
+        checks.push(t_true(this.max_tilt[2] > 90.0,
+            "Awful did not expose its intended rollover margin (peak tilt " + r2(this.max_tilt[2]) + " deg)"));
         print("[rover-comparison] ── final comparison ─────────────────────");
         for i in 0..3 {
             print("[rover-comparison] " + this.names[i] +

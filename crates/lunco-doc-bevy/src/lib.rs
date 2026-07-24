@@ -482,6 +482,7 @@ impl Default for Keybindings {
 /// keyboard input (typically: text field has focus and wants its
 /// native undo/redo behavior). These intents defer; others (Save,
 /// Compile) fire regardless because no text widget handles them.
+#[cfg(feature = "ui")]
 fn intent_defers_to_text_widget(intent: EditorIntent) -> bool {
     matches!(intent, EditorIntent::Undo | EditorIntent::Redo)
 }

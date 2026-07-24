@@ -2,7 +2,6 @@
 
 pub mod apply;
 pub mod core;
-pub mod duplicate;
 pub mod ops;
 
 pub use core::{parse_diag_from_error, AstCache, ModelicaDocument, SyntaxCache};

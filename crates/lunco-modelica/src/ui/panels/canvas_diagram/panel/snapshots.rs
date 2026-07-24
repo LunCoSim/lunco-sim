@@ -159,7 +159,7 @@ pub(crate) fn stash_snapshots(
                 // to a value-derived range that runs away. Recover the real
                 // bounds (0..100) from the bundled package P.
                 let within_pkg = host.and_then(|h| {
-                    crate::document::duplicate::within_package(h.document().source())
+                    crate::ui::duplicate::within_package(h.document().source())
                 });
                 for (qualified, value) in &model.inputs {
                     let (mut mn, mut mx) = index_ref

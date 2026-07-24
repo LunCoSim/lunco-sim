@@ -32,9 +32,9 @@ pub(crate) struct ResolvedClassSource {
     /// backend (MSL, third-party, filesystem library). `None` for
     /// in-memory backends (open documents, bundled examples). Lets
     /// callers reuse the content-hash span cache via
-    /// [`crate::document::duplicate::extract_class_spans_via_path`] and
+    /// [`crate::ui::duplicate::extract_class_spans_via_path`] and
     /// harvest enclosing-package imports with
-    /// [`crate::document::duplicate::collect_parent_imports`].
+    /// [`crate::ui::duplicate::collect_parent_imports`].
     pub origin_path: Option<std::path::PathBuf>,
 }
 

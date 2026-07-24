@@ -8,7 +8,7 @@ use lunco_doc_bevy::{CloseDocument, DocumentSaved};
 use lunco_workbench::file_ops::{NewDocument, OpenFile};
 use std::sync::Arc;
 
-use crate::document::duplicate::{
+use crate::ui::duplicate::{
     build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
 use crate::model_tabs::ModelTabs;
@@ -719,7 +719,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         let spans = origin_path
             .as_ref()
             .and_then(|path| {
-                crate::document::duplicate::extract_class_spans_via_path(
+                crate::ui::duplicate::extract_class_spans_via_path(
                     path,
                     &source_full,
                     &origin_short_for_task,

@@ -70,6 +70,8 @@ pub const MODEL_VIEW_KIND: PanelId = PanelId("modelica_model_view");
 
 pub mod class_source;
 pub mod document_openings;
+/// Source extraction and rewriting for the UI's "Duplicate to edit" command.
+pub mod duplicate;
 
 pub mod commands;
 /// Reactive UI observers of core domain state (status-bus mirrors, etc.).
