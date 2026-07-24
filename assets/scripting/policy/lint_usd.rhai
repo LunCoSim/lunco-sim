@@ -55,7 +55,8 @@
 //
 //   facts.network_scopes[] #{ path, parent, members[], modelica_member_count,
 //                             island_count, dangling_connectors[],
-//                             invalid_program_sources[], multi_source_properties[] }
+//                             invalid_program_sources[], invalid_causal_properties[],
+//                             ambiguous_boundary_sources[] }
 //       scopes applying CollectionAPI:components, including codeless-schema
 //       runtimes whose applied-schema enumeration is incomplete.
 //
@@ -113,7 +114,8 @@ fn lint_usd(facts) {
     for f in disconnected_component_network(facts) { out.push(f); }
     for f in dangling_network_connector(facts) { out.push(f); }
     for f in invalid_network_program_source(facts) { out.push(f); }
-    for f in multi_source_modelica_property(facts) { out.push(f); }
+    for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
+    for f in ambiguous_modelica_boundary(facts) { out.push(f); }
     out
 }
 
@@ -150,13 +152,27 @@ fn invalid_network_program_source(facts) {
 
 /// Scalar causal Modelica members cannot silently select one source from a USD
 /// connection list.
-fn multi_source_modelica_property(facts) {
+fn invalid_modelica_causal_cardinality(facts) {
     let out = [];
     for scope in facts.network_scopes {
-        for property in scope.multi_source_properties {
-            let m = "has multiple causal connection sources —";
-            m += " author exactly one source for a scalar Modelica input or output.";
-            out.push(finding("multi-source-modelica-property", "error", property, m));
+        for property in scope.invalid_causal_properties {
+            let m = "has invalid causal connection cardinality —";
+            m += " a scalar Modelica input accepts at most one source and a network output requires exactly one.";
+            out.push(finding("invalid-modelica-causal-cardinality", "error", property, m));
+        }
+    }
+    out
+}
+
+/// Once OpenUSD resolves forwarding to the ultimate source, two boundary
+/// properties with that same source cannot be distinguished safely.
+fn ambiguous_modelica_boundary(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        for subject in scope.ambiguous_boundary_sources {
+            let m = "has multiple network inputs resolving to one composed source —";
+            m += " preserve distinct boundary sources or insert an explicit causal Modelica block.";
+            out.push(finding("ambiguous-modelica-boundary", "error", subject, m));
         }
     }
     out

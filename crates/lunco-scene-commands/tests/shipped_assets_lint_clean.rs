@@ -151,8 +151,15 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     assert!(
         lint_errors
             .iter()
-            .any(|e| e.contains("multi-source-modelica-property")),
+            .any(|e| e.contains("invalid-modelica-causal-cardinality")),
         "lint_selftest.usda must prove scalar Modelica fan-in is rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("ambiguous-modelica-boundary")),
+        "lint_selftest.usda must prove composed boundary aliasing is rejected — \
          got {lint_errors:?}"
     );
     assert!(!report.ok, "a file with lint ERRORS must not report ok");

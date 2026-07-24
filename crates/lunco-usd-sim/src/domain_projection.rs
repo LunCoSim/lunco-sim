@@ -476,9 +476,7 @@ fn read_network(
         let Some(source) = view.asset(&path, "info:sourceAsset") else {
             extraction_errors.push(DomainProjectionError {
                 path: format!("{path}.info:sourceAsset"),
-                message:
-                    "a Modelica network member must use info:implementationSource = sourceAsset"
-                        .into(),
+                message: "a Modelica network member must author a .mo info:sourceAsset".into(),
             });
             continue;
         };

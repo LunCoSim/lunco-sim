@@ -525,7 +525,32 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             let mut dangling_connectors = Vec::new();
             let mut modelica_member_count = 0_i64;
             let mut invalid_program_sources = Vec::new();
-            let mut multi_source_properties = Vec::new();
+            let mut invalid_causal_properties = Vec::new();
+            let mut boundary_sources: HashMap<String, Vec<String>> = HashMap::new();
+            for attr in reader.attr_names(p) {
+                let connections = reader.connections(p, &attr);
+                if (attr.starts_with("outputs:") && connections.len() != 1)
+                    || (attr.starts_with("inputs:") && connections.len() > 1)
+                {
+                    invalid_causal_properties.push(format!("{p}.{attr}"));
+                }
+                if let Some(name) = attr.strip_prefix("inputs:") {
+                    if let [source] = connections.as_slice() {
+                        boundary_sources
+                            .entry(source.to_string())
+                            .or_default()
+                            .push(name.to_string());
+                    }
+                }
+            }
+            let ambiguous_boundary_sources: Vec<String> = boundary_sources
+                .into_iter()
+                .filter_map(|(source, boundaries)| {
+                    (boundaries.len() > 1).then(|| {
+                        format!("{} inputs {} resolve to {source}", p, boundaries.join(", "))
+                    })
+                })
+                .collect();
             for member in &members {
                 if !reader.has_api_schema(member, "LunCoProgramAPI") {
                     continue;
@@ -548,7 +573,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     if (attr.starts_with("inputs:") || attr.starts_with("outputs:"))
                         && reader.connections(member, &attr).len() > 1
                     {
-                        multi_source_properties.push(format!("{member_name}.{attr}"));
+                        invalid_causal_properties.push(format!("{member_name}.{attr}"));
                     }
                     let Some(connector) = attr.strip_prefix("connectors:") else {
                         continue;
@@ -635,8 +660,12 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     H::Array(invalid_program_sources.into_iter().map(H::str).collect()),
                 ),
                 (
-                    "multi_source_properties",
-                    H::Array(multi_source_properties.into_iter().map(H::str).collect()),
+                    "invalid_causal_properties",
+                    H::Array(invalid_causal_properties.into_iter().map(H::str).collect()),
+                ),
+                (
+                    "ambiguous_boundary_sources",
+                    H::Array(ambiguous_boundary_sources.into_iter().map(H::str).collect()),
                 ),
             ]));
         }

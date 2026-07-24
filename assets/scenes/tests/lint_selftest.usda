@@ -346,6 +346,8 @@ def Xform "LintSelftest" (
         prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
+        float inputs:left.connect = </LintSelftest/IslandA.outputs:soc_out>
+        float inputs:right.connect = </LintSelftest/IslandA.outputs:soc_out>
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [</LintSelftest/MultiSourceLoad>]
     }
