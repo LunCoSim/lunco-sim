@@ -58,7 +58,6 @@ mod native {
     use std::time::Instant;
 
     use lunco_modelica::ModelicaCompiler;
-    use rumoca_sim::SimulationSession;
 
     /// CLI options. Hand-parsed (no `clap`) so the binary stays cheap to
     /// build and link — same rationale as `msl_indexer`.
