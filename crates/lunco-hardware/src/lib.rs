@@ -139,10 +139,20 @@ fn motor_actuator_system(
         let relative_omega = (wheel_omega.0 - carrier_omega.0).dot(axle);
         let commanded_speed = relative_omega * motor.drive_sign * throttle.signum();
         let rolloff = (1.0 - commanded_speed / motor.max_omega).clamp(0.0, 1.0);
+        let available_torque = motor.peak_torque * throttle.abs() * rolloff;
+
+        // Avian uses zero as the *unlimited* torque sentinel. At no-load the
+        // DC curve reaches exactly zero, so the physically correct operation is
+        // to release the motor rather than writing that sentinel and injecting an
+        // unbounded joint impulse.
+        if available_torque <= f64::EPSILON {
+            joint.motor.enabled = false;
+            continue;
+        }
 
         joint.motor.enabled = true;
         joint.motor.target_velocity = motor.drive_sign * throttle * motor.max_omega;
-        joint.motor.max_torque = motor.peak_torque * throttle.abs() * rolloff;
+        joint.motor.max_torque = available_torque;
     }
 }
 
