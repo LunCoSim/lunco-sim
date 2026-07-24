@@ -26,7 +26,7 @@ fn main() -> lunco_sandbox::AppExit {
                 .cloned()
                 .collect();
             if paths.is_empty() {
-                eprintln!("--validate needs at least one path (.mo/.usda/.wgsl/.rhai)");
+                eprintln!("--validate needs at least one path (.mo/.usda/.wgsl/.rhai/.btxml/.xml)");
                 std::process::exit(2);
             }
             std::process::exit(lunco_scene_commands::validate::run_cli(&paths));

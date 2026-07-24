@@ -136,7 +136,7 @@ FLAGS:
                          POST /api/commands  {{\"command\":\"Name\",\"params\":{{…}}}}
         --scene PATH     Load this USD scene at startup, relative to assets/.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
-        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai):
+        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai/.btxml/.xml):
                          parse-only, no window/GPU/app. Prints a report and
                          exits 0 (all ok) or 1 (any failed).
 

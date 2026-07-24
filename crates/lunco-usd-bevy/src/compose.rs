@@ -189,11 +189,25 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
 /// directory, so the on-disk reference tree resolves exactly as authored.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
+    let assets_root = lunco_assets::shipped_asset_root(path);
+    compose_file_to_stage_with_assets(path, assets_root)
+}
+
+/// Compose an on-disk USD layer while resolving `lunco://` references against
+/// an explicitly supplied shipped-asset root.
+///
+/// External Twin and campaign files do not live below the engine's `assets/`
+/// directory, so their path cannot reveal where `lunco://` is mounted. Runtime
+/// gets that mount from `AssetServer`; parse-only tools pass the same root here.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn compose_file_to_stage_with_assets(
+    path: &std::path::Path,
+    assets_root: Option<&std::path::Path>,
+) -> Result<Stage> {
     // Anchor the root at `lunco://` when the file lives under a shipped-asset
     // root. `canonicalize` passes `scheme://` ids through and PRESERVES the scheme
     // when anchoring a relative child, so one `lunco://` root makes every id in the
     // closure uniformly `lunco://` — a single resolution rule for the whole walk.
-    let assets_root = lunco_assets::shipped_asset_root(path);
     let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
         Some(rel) => {
             lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(rel))
@@ -388,4 +402,3 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         );
     }
 }
-

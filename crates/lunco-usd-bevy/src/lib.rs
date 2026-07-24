@@ -73,7 +73,7 @@ pub mod variants;
 pub mod view;
 pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageRecipe};
 #[cfg(not(target_arch = "wasm32"))]
-pub use compose::compose_file_to_stage;
+pub use compose::{compose_file_to_stage, compose_file_to_stage_with_assets};
 pub use light::{FallbackSceneLight, UsdAuthoredLight, get_attribute_as_bool};
 pub use read::{AttrUiHint, UsdRead};
 pub use units::{ConventionTransform, StageMetrics, UpAxis, stage_convention};
