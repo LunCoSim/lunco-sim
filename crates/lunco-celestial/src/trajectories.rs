@@ -19,8 +19,8 @@ pub struct TrajectoryPlugin;
 // `TrajectoryMaterial` (an `ExtendedMaterial<StandardMaterial, _>`),
 // `TrajectoryShaderPlugin` and `TrajectoryShaderHandle`. The material type was
 // DEAD — declared, `AsBindGroup`-derived, and never instantiated anywhere in the
-// workspace (`trajectory_mesh_init_system` has always used a plain unlit
-// `StandardMaterial`, now a `PbrLook`). All it did was pull `bevy_pbr` +
+// workspace (`trajectory_mesh_update_system` uses a plain unlit `PbrLook`).
+// All it did was pull `bevy_pbr` +
 // `bevy_shader` (→ naga) into every binary that links this crate, and register a
 // `trajectory.wgsl` no pipeline ever read. `assets/shaders/trajectory.wgsl` is left
 // on disk; nothing loads it.
@@ -156,7 +156,6 @@ impl Plugin for TrajectoryPlugin {
             (
                 spawn_trajectory_update_task,
                 handle_trajectory_tasks,
-                trajectory_mesh_init_system,
                 trajectory_mesh_update_system,
                 trajectory_alpha_update_system,
                 trajectory_visibility_system,
@@ -577,78 +576,19 @@ pub fn handle_trajectory_tasks(
             path.update_epoch = data.epoch;
             path.anchor = data.anchor;
             commands.entity(entity).remove::<TrajectoryTask>();
-            info!("Trajectory updated for entity {:?} with {} points (anchor |{:.3e}| m). Tracking {}, Reference {}",
+            debug!("Trajectory updated for entity {:?} with {} points (anchor |{:.3e}| m). Tracking {}, Reference {}",
                 entity, path.points.len(), path.anchor.length(), view.tracked_id, view.reference_id);
         }
     }
 }
 
-pub fn trajectory_mesh_init_system(
+pub fn trajectory_mesh_update_system(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    q_new_views: Query<(Entity, &TrajectoryView), Added<TrajectoryPath>>,
-) {
-    for (entity, view) in q_new_views.iter() {
-        let mut mesh = Mesh::new(
-            PrimitiveTopology::LineStrip,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new());
-
-        let mesh_handle = meshes.add(mesh);
-        let color = view.color;
-        let emissive_color = color * 15.0;
-
-        // The orbit line, stated as appearance intent. Unlit + 15× brightness, with
-        // the per-point fade carried in the mesh's ATTRIBUTE_COLOR alpha
-        // (`trajectory_alpha_update_system`), exactly as before.
-        //
-        // `SurfaceAlpha::Add` — the same `AlphaMode::Add` this used before the
-        // decoupling, so the compositing is unchanged. (It matters only where a line
-        // crosses a lit body: over the black sky additive and blended coincide,
-        // because `dst + src·a` ≡ `dst·(1−a) + src·a` when `dst ≈ 0`.)
-        //
-        // Not shared with anything: each view's colour differs, so this is 2–3
-        // materials in total.
-        let look = PbrLook {
-            base_color: LinearRgba::new(
-                emissive_color.red,
-                emissive_color.green,
-                emissive_color.blue,
-                1.0,
-            ),
-            unlit: true,
-            alpha: SurfaceAlpha::Add,
-            ..default()
-        };
-
-        commands.entity(entity).with_children(|parent| {
-            parent.spawn((
-                Mesh3d(mesh_handle),
-                look,
-                TrajectoryMeshMarker,
-                bevy::picking::Pickable::IGNORE,
-                Visibility::Visible,
-                NoFrustumCulling,
-                Transform::default(),
-                // Stamp what big_space 0.13 would insert via Commands one
-                // frame later anyway: a plain-Transform child of a
-                // cell-entity is a low-precision subtree root. Explicit =
-                // no spawn-frame validator report, no one-frame propagation
-                // gap.
-                big_space::grid::propagation::LowPrecisionRoot,
-            ));
-        });
-    }
-}
-
-pub fn trajectory_mesh_update_system(
-    mut meshes: ResMut<Assets<Mesh>>,
-    q_paths: Query<(&TrajectoryPath, &TrajectoryView, &Children), Changed<TrajectoryPath>>,
+    q_paths: Query<(Entity, &TrajectoryPath, &TrajectoryView, &Children), Changed<TrajectoryPath>>,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
-    for (path, view, children) in q_paths.iter() {
+    for (entity, path, view, children) in q_paths.iter() {
         if path.points.is_empty() {
             continue;
         }
@@ -673,16 +613,49 @@ pub fn trajectory_mesh_update_system(
         let colors: Vec<[f32; 4]> =
             vec![[color.red, color.green, color.blue, 1.0]; final_pts.len()];
 
-        info!("Updating trajectory mesh with {} points", final_pts.len());
-
-        for child in children.iter() {
-            if let Ok(mesh_handle) = q_marker.get(child) {
-                if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts.clone());
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors.clone());
-                }
+        let mesh_handle = children.iter().find_map(|child| q_marker.get(child).ok());
+        if let Some(mesh_handle) = mesh_handle {
+            if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
             }
+            continue;
         }
+
+        // Bevy 0.19's slab allocator allocates no storage for a zero-byte mesh,
+        // but the render extraction path still attempts its copy. Do not create a
+        // placeholder mesh: publish this child only with its first real point set.
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::LineStrip,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        let mesh_handle = meshes.add(mesh);
+        let emissive_color = view.color * 15.0;
+        let look = PbrLook {
+            base_color: LinearRgba::new(
+                emissive_color.red,
+                emissive_color.green,
+                emissive_color.blue,
+                1.0,
+            ),
+            unlit: true,
+            alpha: SurfaceAlpha::Add,
+            ..default()
+        };
+        commands.entity(entity).with_children(|parent| {
+            parent.spawn((
+                Mesh3d(mesh_handle),
+                look,
+                TrajectoryMeshMarker,
+                bevy::picking::Pickable::IGNORE,
+                Visibility::Visible,
+                NoFrustumCulling,
+                Transform::default(),
+                big_space::grid::propagation::LowPrecisionRoot,
+            ));
+        });
     }
 }
 

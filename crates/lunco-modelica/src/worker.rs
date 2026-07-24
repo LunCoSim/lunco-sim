@@ -615,15 +615,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             // visible in `RUST_LOG=info` output instead of silent.
             let cmd_label = command_label(&cmd);
             let cmd_started = web_time::Instant::now();
-            // `Step` fires at simulation rate (~60 Hz) — log at debug to
-            // avoid drowning the console. One-shot commands (Compile,
-            // Reset, …) stay at info because they're rare and useful.
-            let is_hot_path = matches!(cmd, ModelicaCommand::Step { .. });
-            if is_hot_path {
-                log::debug!("[worker] begin: {}", cmd_label);
-            } else {
-                log::info!("[worker] begin: {}", cmd_label);
-            }
+            // Lifecycle traffic is normal during a scene swap (one Compile per
+            // scene-owned model), so it belongs in debug alongside Step. Errors
+            // still surface through their result and diagnostics below.
+            log::debug!("[worker] begin: {}", cmd_label);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
                     ModelicaCommand::Reset { entity, session_id } => {
@@ -829,7 +824,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 t_init.elapsed().as_secs_f64(),
                             );
                         }
-                        bevy::log::info!(
+                        bevy::log::debug!(
                             "[worker] calling compile_str for `{}` ({} bytes)",
                             model_name,
                             stripped_source.len(),
@@ -845,7 +840,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 &extra_sources,
                             )
                         };
-                        bevy::log::info!(
+                        bevy::log::debug!(
                             "[worker] compile_str returned for `{}` in {:.2}s ({})",
                             model_name,
                             t_compile.elapsed().as_secs_f64(),
@@ -1188,10 +1183,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                     cmd_label,
                     elapsed
                 );
-            } else if is_hot_path {
-                log::debug!("[worker] end: {} took {:?}", cmd_label, elapsed);
             } else {
-                log::info!("[worker] end: {} took {:?}", cmd_label, elapsed);
+                log::debug!("[worker] end: {} took {:?}", cmd_label, elapsed);
             }
 
             if let Err(_) = result {
@@ -2195,7 +2188,7 @@ pub fn handle_modelica_responses(
 
             // Forward log messages to console via bevy_workbench's console system
             if let Some(msg) = &result.log_message {
-                info!("[Modelica] {msg}");
+                debug!("[Modelica] {msg}");
                 // Only forward lifecycle notes (compile / reset / param
                 // update). Skip the per-Step logs so the console doesn't
                 // flood at 60 Hz.
@@ -2249,7 +2242,7 @@ pub fn handle_modelica_responses(
                                 });
                             }
                             lunco_doc::CompileState::Ready => {
-                                info!(
+                                debug!(
                                     "[Modelica] Compile finished for `{}` in {}",
                                     model.model_name, human
                                 );

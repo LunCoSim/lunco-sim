@@ -398,12 +398,36 @@ pub struct TerrainSettings {
     /// If false, custom terrain shaders (such as procedural regolith FBM)
     /// are disabled and fall back to the simple flat-lit/unlit geomorph shader.
     pub enable_shaders: bool,
+    /// Radius around a visual-detail camera that the terrain streamer refines
+    /// aggressively. A camera marker can override this for a specific view.
+    #[serde(default = "TerrainSettings::default_visual_detail_radius_m")]
+    pub visual_detail_radius_m: f64,
+    /// Additional distance for retaining already-refined camera terrain. This
+    /// is hysteresis only: it avoids fine-to-coarse-to-fine churn while the
+    /// camera moves, without requesting new detail outside the radius above.
+    #[serde(default = "TerrainSettings::default_visual_detail_hysteresis_m")]
+    pub visual_detail_hysteresis_m: f64,
+}
+
+impl TerrainSettings {
+    const DEFAULT_VISUAL_DETAIL_RADIUS_M: f64 = 60.0;
+    const DEFAULT_VISUAL_DETAIL_HYSTERESIS_M: f64 = 45.0;
+
+    fn default_visual_detail_radius_m() -> f64 {
+        Self::DEFAULT_VISUAL_DETAIL_RADIUS_M
+    }
+
+    fn default_visual_detail_hysteresis_m() -> f64 {
+        Self::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M
+    }
 }
 
 impl Default for TerrainSettings {
     fn default() -> Self {
         Self {
             enable_shaders: true,
+            visual_detail_radius_m: Self::DEFAULT_VISUAL_DETAIL_RADIUS_M,
+            visual_detail_hysteresis_m: Self::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M,
         }
     }
 }
@@ -434,6 +458,19 @@ impl SettingsSection for DownloadSettings {
 #[cfg(test)]
 mod disk_guard_tests {
     use super::*;
+
+    #[test]
+    fn terrain_settings_migrate_missing_visual_lod_fields_to_defaults() {
+        let settings: TerrainSettings = serde_json::from_str(r#"{"enable_shaders":true}"#).unwrap();
+        assert_eq!(
+            settings.visual_detail_radius_m,
+            TerrainSettings::DEFAULT_VISUAL_DETAIL_RADIUS_M
+        );
+        assert_eq!(
+            settings.visual_detail_hysteresis_m,
+            TerrainSettings::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M
+        );
+    }
 
     /// Self-verifying: this assertion runs INSIDE a cargo-test binary, so if the detector
     /// is right it must say so. If cargo ever stops building test binaries into `deps/`,

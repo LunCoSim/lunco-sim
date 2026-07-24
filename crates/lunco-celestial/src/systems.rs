@@ -380,7 +380,7 @@ pub fn update_sun_light_system(
             if r2 > 1.0e-4 {
                 let target = (cal.illuminance_lux as f64 / r2) as f32;
                 if (light.illuminance - target).abs() > target * 5.0e-3 {
-                    info!(
+                    debug!(
                         "sun illuminance {:.0} lx (r = {:.4} AU, 1 AU cal {:.0} lx)",
                         target,
                         r2.sqrt(),

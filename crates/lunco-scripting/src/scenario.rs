@@ -448,6 +448,15 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     st.started = false;
                     match runtime.compile(entity, source, params, asset_id.as_deref()) {
                         CompileOutcome::Failed(diag) => {
+                            let program = world
+                                .get::<lunco_core::ScenarioProgramPrim>(entity)
+                                .map(|prim| prim.0.as_str())
+                                .unwrap_or("<interactive scenario>");
+                            error!(
+                                "[scenario] {:?} compile failed for program {} on entity {entity:?}",
+                                language,
+                                program,
+                            );
                             st.compiled = false;
                             st.generation = generation;
                             diag_updates.push((raw, Some(vec![diag])));

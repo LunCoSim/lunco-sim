@@ -222,10 +222,6 @@ impl Plugin for WorldShellPlugin {
                 PostUpdate,
                 anchor_owns_origin_by_default.before(BigSpaceSystems::RecenterLargeTransforms),
             )
-            .add_systems(
-                PostUpdate,
-                dbg_cell_drift.before(BigSpaceSystems::RecenterLargeTransforms),
-            )
             .add_systems(bevy::prelude::First, dbg_origin_bracket_first)
             .add_systems(bevy::prelude::Last, dbg_origin_bracket_last);
 
@@ -288,55 +284,6 @@ fn setup_world(world: &mut World) {
 /// vanish. This hands it back to the persistent anchor (exactly where a headless
 /// server keeps it), so the cleared scene correctly stays camera-less while the
 /// coordinate frame survives. No-op on every frame a camera holds the origin.
-/// TEMP DIAG: log the worst cell-drift each ~120 frames — which entity's `CellCoord`
-/// has run far from the origin, and whether it's the `FloatingOrigin`. Finds the
-/// system fighting big_space recentering.
-fn dbg_cell_drift(
-    mut n: Local<u32>,
-    q: Query<(
-        Entity,
-        &CellCoord,
-        &Transform,
-        Option<&Name>,
-        bevy::prelude::Has<FloatingOrigin>,
-    )>,
-) {
-    *n = n.wrapping_add(1);
-    if !(*n).is_multiple_of(120) {
-        return;
-    }
-    let mut worst: Option<(i64, String, CellCoord, bevy::math::Vec3, bool)> = None;
-    for (e, c, tf, name, is_origin) in &q {
-        // Saturating, and widened to i64 before summing, because the cells this
-        // is here to CATCH are exactly the ones that break the naive form:
-        // `Grid::translation_to_grid` casts `round(x / edge)` to `GridPrecision`,
-        // and a float→int cast saturates, so a non-finite pose lands on
-        // `GridPrecision::MIN/MAX`. On `MIN`, `abs()` overflows; three large
-        // magnitudes then overflow the sum. A diagnostic that panics on the
-        // pathology it exists to report tells you nothing — and, worse, blames
-        // itself. (`GridPrecision` is feature-selected, i8…i128, so this must
-        // not assume a width.)
-        let mag = (c.x.saturating_abs() as i64)
-            .saturating_add(c.y.saturating_abs() as i64)
-            .saturating_add(c.z.saturating_abs() as i64);
-        if mag > 8 && worst.as_ref().is_none_or(|w| mag > w.0) {
-            let nm = name
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| format!("{e}"));
-            worst = Some((mag, nm, *c, tf.translation, is_origin));
-        }
-    }
-    if let Some((mag, nm, c, t, o)) = worst {
-        bevy::log::warn!(
-            "[CELL-DRIFT] {nm}: cell=({},{},{}) tf={:.0?} floating_origin={o} (mag {mag})",
-            c.x,
-            c.y,
-            c.z,
-            t
-        );
-    }
-}
-
 fn dbg_origin_bracket_first(
     mut printed: Local<u32>,
     q: Query<(&CellCoord, &Transform), With<FloatingOrigin>>,

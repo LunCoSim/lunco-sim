@@ -63,8 +63,8 @@ use lunco_core::{on_command, register_commands, Command};
 use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
-mod panel;
 mod editor_tabs;
+mod panel;
 mod perspective;
 mod perspective_help;
 mod render_robustness;
@@ -201,8 +201,8 @@ impl HelpAnchors {
         self.rects.clear();
     }
 }
-pub use files_panel::{FilesPanel, FILES_PANEL_ID};
 pub use editor_tabs::{EditorTab, EditorTabId, EditorTabs};
+pub use files_panel::{FilesPanel, FILES_PANEL_ID};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserSection, BrowserSectionRegistry,
     FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
@@ -3319,7 +3319,7 @@ fn render_layout(
                 ui.label(egui::RichText::new("Theme").weak().small());
                 let mut theme = world.resource_mut::<lunco_theme::Theme>();
                 let mode = theme.mode;
-                
+
                 let label = match mode {
                     lunco_theme::ThemeMode::Dark => "🌙 Dark",
                     lunco_theme::ThemeMode::Light => "☀ Light",
@@ -4332,6 +4332,23 @@ fn register_terrain_settings_menu(world: &mut World) {
                 "Enable dynamic micro-relief normal mapping and albedo mottle. \
                      Turning this off improves WebAssembly/browser frame rate. \
                      Persisted to ~/.lunco/settings.json.",
+            );
+            ui.add(
+                egui::Slider::new(&mut settings.visual_detail_radius_m, 5.0..=200.0)
+                    .text("Camera detail radius (m)"),
+            )
+            .on_hover_text(
+                "Distance around each active terrain camera that requests the finest \
+                 available terrain geometry. Persisted to ~/.lunco/settings.json.",
+            );
+            ui.add(
+                egui::Slider::new(&mut settings.visual_detail_hysteresis_m, 0.0..=200.0)
+                    .text("Camera detail retention (m)"),
+            )
+            .on_hover_text(
+                "Extra distance that keeps already-refined tiles resident while the \
+                 camera moves away, preventing fine-to-coarse-to-fine flicker. \
+                 Persisted to ~/.lunco/settings.json.",
             );
         }
     });

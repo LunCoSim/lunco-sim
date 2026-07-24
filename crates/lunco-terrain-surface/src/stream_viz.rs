@@ -96,22 +96,24 @@ const NODE_ERROR_PROBE_RES: usize = 9;
 #[derive(Component, Reflect, Debug, Clone, Copy)]
 #[reflect(Component)]
 pub struct TerrainVisualFocus {
-    /// Radius around the camera guaranteed to use the finest visual geometry.
+    /// Optional per-camera override for the radius around the camera guaranteed
+    /// to use the finest visual geometry. `None` uses
+    /// [`lunco_settings::TerrainSettings::visual_detail_radius_m`].
     ///
     /// This covers nearby subjects (for example a third-person rover) without
     /// making physics bodies visual-LOD authorities.
-    pub near_detail_radius_m: f64,
-    /// Extra distance a previously refined near-field tile remains selected after
-    /// the camera moves away. This suppresses coarse/fine oscillation at a
-    /// quadtree boundary without broadening the area that requests new detail.
-    pub near_detail_hysteresis_m: f64,
+    pub near_detail_radius_m: Option<f64>,
+    /// Optional per-camera override for the extra distance a previously refined
+    /// near-field tile remains selected after the camera moves away. `None` uses
+    /// [`lunco_settings::TerrainSettings::visual_detail_hysteresis_m`].
+    pub near_detail_hysteresis_m: Option<f64>,
 }
 
 impl Default for TerrainVisualFocus {
     fn default() -> Self {
         Self {
-            near_detail_radius_m: 30.0,
-            near_detail_hysteresis_m: 12.0,
+            near_detail_radius_m: None,
+            near_detail_hysteresis_m: None,
         }
     }
 }
@@ -158,11 +160,13 @@ pub(crate) fn mark_terrain_visual_foci(
 /// Collect active visual cameras for the visual streamer.
 pub(crate) fn collect_terrain_detail_demands(
     mut demands: ResMut<TerrainDetailDemands>,
+    terrain_settings: Option<Res<lunco_settings::TerrainSettings>>,
     cameras: Query<(Entity, &Camera, &Projection, &TerrainVisualFocus)>,
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
+    let defaults = terrain_settings.as_deref().cloned().unwrap_or_default();
     demands.visual.clear();
     demands.visual.extend(
         cameras
@@ -177,8 +181,14 @@ pub(crate) fn collect_terrain_detail_demands(
                 Some(VisualDemand {
                     position,
                     forward: (transform.rotation * Vec3::NEG_Z).as_dvec3(),
-                    near_detail_radius_m: focus.near_detail_radius_m.max(0.0),
-                    near_detail_hysteresis_m: focus.near_detail_hysteresis_m.max(0.0),
+                    near_detail_radius_m: focus
+                        .near_detail_radius_m
+                        .unwrap_or(defaults.visual_detail_radius_m)
+                        .max(0.0),
+                    near_detail_hysteresis_m: focus
+                        .near_detail_hysteresis_m
+                        .unwrap_or(defaults.visual_detail_hysteresis_m)
+                        .max(0.0),
                 })
             }),
     );

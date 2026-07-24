@@ -25,7 +25,13 @@ fn log_telemetry_events(trigger: On<TelemetryEvent>) {
     // buries every real line in the terminal. They stay on the bus (scripts still
     // see them); they just stop being default-visible log output. Mission events
     // (touchdown, low-fuel, `emit("rover_deployed")`) keep `info!`.
-    if evt.name.starts_with("cmd:") || evt.name.starts_with("key:") {
+    if evt.name.starts_with("cmd:")
+        || evt.name.starts_with("key:")
+        // Link state transitions are still persisted to the black box and
+        // delivered to scenarios, but a scene starts several links at once and
+        // their routine AOS/LOS chatter obscures actionable load diagnostics.
+        || evt.name.starts_with("link.")
+    {
         debug!(
             "[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
             evt.name, evt.severity, evt.data, evt.timestamp

@@ -1929,7 +1929,7 @@ fn build_usd_physics_joints(
             continue;
         }
 
-        info!(
+        debug!(
             "Built USD joint {} -> {} <-> {}",
             pending.joint_type, pending.body0_path, pending.body1_path
         );
