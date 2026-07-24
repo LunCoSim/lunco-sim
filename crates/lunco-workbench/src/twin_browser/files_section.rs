@@ -13,7 +13,10 @@
 
 use bevy_egui::egui;
 
-use super::{BrowserAction, BrowserCtx, BrowserScope, BrowserSection};
+use super::{
+    path_tree::{build_path_tree, PathTree},
+    BrowserAction, BrowserCtx, BrowserScope, BrowserSection,
+};
 
 /// Map a domain kind id to its canonical file extension. Used to
 /// append `.mo`, `.usda`, … to display names for unsaved drafts that
@@ -41,47 +44,14 @@ fn display_name_with_ext(entry: &super::UnsavedDocEntry) -> String {
     }
 }
 
-/// A directory in the rendered tree. Built each frame from
-/// `Twin::files()` — Twin stores files flat, but the browser surfaces
-/// them as a real hierarchy so the user sees folder structure, not
-/// `subdir/Foo.mo` as a long-string row.
-///
-/// `subdirs` is a `BTreeMap` so directories render alphabetically.
-/// `files` is sorted by leaf name at render time. Both are pure
-/// references into the underlying `&[FileEntry]` slice — no clones.
-#[derive(Default)]
-struct DirNode<'a> {
-    files: Vec<&'a lunco_twin::FileEntry>,
-    subdirs: std::collections::BTreeMap<String, DirNode<'a>>,
-}
-
 /// Bucket a flat file list into nested directories by walking each
 /// `relative_path`'s components.
-fn build_tree<'a>(files: &'a [lunco_twin::FileEntry]) -> DirNode<'a> {
-    let mut root = DirNode::default();
-    for f in files {
-        let mut comps: Vec<String> = f
-            .relative_path
-            .components()
-            .filter_map(|c| match c {
-                std::path::Component::Normal(s) => {
-                    Some(s.to_string_lossy().to_string())
-                }
-                _ => None,
-            })
-            .collect();
-        if comps.is_empty() {
-            continue;
-        }
-        // Leaf is the file itself; everything before it is a directory chain.
-        comps.pop();
-        let mut cur = &mut root;
-        for c in comps {
-            cur = cur.subdirs.entry(c).or_default();
-        }
-        cur.files.push(f);
-    }
-    root
+fn build_tree(files: &[lunco_twin::FileEntry]) -> PathTree<&lunco_twin::FileEntry> {
+    build_path_tree(
+        files
+            .iter()
+            .map(|file| (file.relative_path.as_path(), file)),
+    )
 }
 
 /// In-progress inline rename. At most one row across the section can
@@ -183,12 +153,8 @@ impl BrowserSection for FilesSection {
         // but small and semi-transparent so it reads as a hint, not a
         // siren. The full-strength warning colour is for actual
         // problems (lints, parse errors), not unsaved drafts.
-        let dirty_dot_color = egui::Color32::from_rgba_unmultiplied(
-            warning.r(),
-            warning.g(),
-            warning.b(),
-            110,
-        );
+        let dirty_dot_color =
+            egui::Color32::from_rgba_unmultiplied(warning.r(), warning.g(), warning.b(), 110);
 
         // Workspace-doc rename intents (parallel to the Twin-tree
         // queues below). Drained once the loop finishes so the closures
@@ -206,11 +172,7 @@ impl BrowserSection for FilesSection {
                 .unwrap_or(false);
             ui.horizontal(|ui| {
                 if entry.is_unsaved {
-                    ui.label(
-                        egui::RichText::new("•")
-                            .color(dirty_dot_color)
-                            .size(8.0),
-                    );
+                    ui.label(egui::RichText::new("•").color(dirty_dot_color).size(8.0));
                 } else {
                     ui.label(egui::RichText::new("  "));
                 }
@@ -220,20 +182,16 @@ impl BrowserSection for FilesSection {
                         .as_mut()
                         .expect("in_rename ⇒ rename_doc Some");
                     let resp = ui.add(
-                        egui::TextEdit::singleline(&mut state.buffer)
-                            .desired_width(f32::INFINITY),
+                        egui::TextEdit::singleline(&mut state.buffer).desired_width(f32::INFINITY),
                     );
                     if state.needs_focus {
                         resp.request_focus();
                         state.needs_focus = false;
                     }
-                    let enter = resp.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let esc =
-                        ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                     if enter {
-                        doc_submit =
-                            Some((state.doc, state.buffer.clone()));
+                        doc_submit = Some((state.doc, state.buffer.clone()));
                     } else if esc || (resp.lost_focus() && !enter) {
                         doc_cancel = true;
                     }
@@ -271,26 +229,21 @@ impl BrowserSection for FilesSection {
                     // entry. Without this a restored draft has no
                     // delete path from the UI and resurrects on every
                     // reload. Right-aligned so it doesn't crowd names.
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            let close = ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("✕").size(10.0),
-                                    )
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let close = ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("✕").size(10.0))
                                     .frame(false)
                                     .small(),
-                                )
-                                .on_hover_text(
-                                    "Close document (discards unsaved \
+                            )
+                            .on_hover_text(
+                                "Close document (discards unsaved \
                                      changes)",
-                                );
-                            if close.clicked() {
-                                doc_close = Some(entry.id);
-                            }
-                        },
-                    );
+                            );
+                        if close.clicked() {
+                            doc_close = Some(entry.id);
+                        }
+                    });
                 }
             });
         }
@@ -309,10 +262,7 @@ impl BrowserSection for FilesSection {
             self.rename_doc = None;
             let new_name = new_name.trim().to_string();
             if !new_name.is_empty() {
-                ctx.trigger(super::super::file_ops::RenameOpenDocument {
-                    doc,
-                    new_name,
-                });
+                ctx.trigger(super::super::file_ops::RenameOpenDocument { doc, new_name });
             }
         }
         if doc_cancel {
@@ -326,15 +276,47 @@ impl BrowserSection for FilesSection {
             ctx.actions.push(BrowserAction::CloseDoc { doc });
         }
 
-        // Read every open Twin from the workspace resource. These are
-        // `&Twin` borrowed from `ctx` for the duration of the render
-        // loop below; the borrow ends before the post-loop dispatch
-        // (which re-borrows `ctx` mutably via `actions`/`trigger`), so
-        // NLL keeps both happy. Twin refs are cheap (just `&Twin`).
-        let twins: Vec<&lunco_twin::Twin> = ctx
-            .resource::<crate::WorkspaceResource>()
-            .map(|ws| ws.twins().map(|(_, t)| t).collect())
-            .unwrap_or_default();
+        // Read every open Twin from the workspace resource. Keep the
+        // `(TwinId, &Twin)` pairs so each header can be marked active, and the
+        // active id is comparable. `&Twin` borrows from `ctx` for the render
+        // loop below; the borrow ends before the post-loop dispatch (which
+        // re-borrows `ctx` mutably via `actions`/`trigger`), so NLL keeps both
+        // happy. Twin refs are cheap (just `&Twin`).
+        let ws_state = ctx.resource::<crate::WorkspaceResource>().map(|ws| {
+            (
+                ws.active_twin,
+                ws.twins()
+                    .map(|(id, t)| (id, t))
+                    .collect::<Vec<(lunco_workspace::TwinId, &lunco_twin::Twin)>>(),
+            )
+        });
+        let active_twin = ws_state.as_ref().and_then(|(a, _)| *a);
+        let twins: Vec<(lunco_workspace::TwinId, &lunco_twin::Twin)> =
+            ws_state.map(|(_, ts)| ts).unwrap_or_default();
+
+        // Open-document markers: which on-disk paths have an open editor tab,
+        // and which of those are dirty (never-saved this session). A file row
+        // whose absolute path matches an open doc gets a marker so the user can
+        // see "what am I editing right now" directly in the tree — the
+        // workspace-doc list above shows the same docs, but keyed by tab, not
+        // by location in the Twin's folders.
+        let mut open_paths: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+        let mut unsaved_paths: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+        if let Some(ws) = ctx.resource::<crate::WorkspaceResource>() {
+            // id → is_unsaved from the cross-domain UnsavedDocs projection.
+            let unsaved_ids: std::collections::HashSet<lunco_doc::DocumentId> =
+                docs.iter().filter(|d| d.is_unsaved).map(|d| d.id).collect();
+            for entry in ws.documents() {
+                if let Some(path) = entry.origin.canonical_path() {
+                    open_paths.insert(path.to_path_buf());
+                    if unsaved_ids.contains(&entry.id) {
+                        unsaved_paths.insert(path.to_path_buf());
+                    }
+                }
+            }
+        }
 
         if twins.is_empty() {
             if docs.is_empty() {
@@ -365,18 +347,23 @@ impl BrowserSection for FilesSection {
         let mut submit_rename: Option<RenameInProgress> = None;
         let mut cancel_rename = false;
 
-        let active_rename_abs: Option<std::path::PathBuf> = self
-            .rename
-            .as_ref()
-            .map(|r| r.target_abs.clone());
+        let active_rename_abs: Option<std::path::PathBuf> =
+            self.rename.as_ref().map(|r| r.target_abs.clone());
 
-        for twin in &twins {
+        for (twin_id, twin) in &twins {
             let folder_name = twin
                 .root
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| twin.root.to_string_lossy().to_string());
-            let header_label = format!("📁  {}", folder_name);
+            // Mark the workspace's focused Twin so it's clear which one the
+            // editor tabs belong to. `●` matches the loaded-scene marker.
+            let active_marker = if Some(*twin_id) == active_twin {
+                "● "
+            } else {
+                ""
+            };
+            let header_label = format!("📁  {active_marker}{folder_name}");
             let hover_path = twin.root.to_string_lossy().into_owned();
             let salt = twin.root.to_string_lossy().into_owned();
             let twin_root = twin.root.clone();
@@ -386,12 +373,7 @@ impl BrowserSection for FilesSection {
                 .show(ui, |ui| {
                     let files = twin.files();
                     if files.is_empty() {
-                        ui.label(
-                            egui::RichText::new("(empty)")
-                                .weak()
-                                .italics()
-                                .small(),
-                        );
+                        ui.label(egui::RichText::new("(empty)").weak().italics().small());
                         return;
                     }
                     // Render the directory tree DIRECTLY — no inner
@@ -415,6 +397,8 @@ impl BrowserSection for FilesSection {
                         &mut begin_rename,
                         &mut submit_rename,
                         &mut cancel_rename,
+                        &open_paths,
+                        &unsaved_paths,
                         ui,
                     );
                 });
@@ -444,10 +428,7 @@ impl BrowserSection for FilesSection {
             if !new_name.is_empty() && new_name != old_leaf {
                 ctx.trigger(super::super::file_ops::RenameTwinEntry {
                     twin_root: req.twin_root.to_string_lossy().into_owned(),
-                    relative_path: req
-                        .relative_path
-                        .to_string_lossy()
-                        .into_owned(),
+                    relative_path: req.relative_path.to_string_lossy().into_owned(),
                     new_name,
                 });
             }
@@ -470,7 +451,7 @@ impl BrowserSection for FilesSection {
 /// caller drains them after the egui pass completes.
 #[allow(clippy::too_many_arguments)]
 fn render_dir(
-    node: &DirNode<'_>,
+    node: &PathTree<&lunco_twin::FileEntry>,
     rel_prefix: &std::path::Path,
     twin_root: &std::path::Path,
     active_rename_abs: Option<&std::path::Path>,
@@ -479,6 +460,8 @@ fn render_dir(
     begin_rename: &mut Option<RenameInProgress>,
     submit_rename: &mut Option<RenameInProgress>,
     cancel_rename: &mut bool,
+    open_paths: &std::collections::HashSet<std::path::PathBuf>,
+    unsaved_paths: &std::collections::HashSet<std::path::PathBuf>,
     ui: &mut egui::Ui,
 ) {
     // Directories first, alphabetical.
@@ -488,13 +471,7 @@ fn render_dir(
         let in_rename = active_rename_abs == Some(abs.as_path());
 
         if in_rename {
-            render_inline_rename(
-                ui,
-                &abs,
-                rename,
-                submit_rename,
-                cancel_rename,
-            );
+            render_inline_rename(ui, &abs, rename, submit_rename, cancel_rename);
         } else {
             let salt = abs.to_string_lossy().into_owned();
             let header = egui::CollapsingHeader::new(format!("📁 {}", dir_name))
@@ -511,6 +488,8 @@ fn render_dir(
                     begin_rename,
                     submit_rename,
                     cancel_rename,
+                    open_paths,
+                    unsaved_paths,
                     ui,
                 );
             });
@@ -541,20 +520,31 @@ fn render_dir(
         let in_rename = active_rename_abs == Some(abs.as_path());
 
         if in_rename {
-            render_inline_rename(
-                ui,
-                &abs,
-                rename,
-                submit_rename,
-                cancel_rename,
-            );
+            render_inline_rename(ui, &abs, rename, submit_rename, cancel_rename);
         } else {
             let leaf = entry
                 .relative_path
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            let r = ui.selectable_label(false, &leaf);
+            // Status marker so the tree reads the Twin's current editing
+            // state at a glance: a dirty dot (•) when the file is open AND
+            // has unsaved edits, a hollow marker (○) when open but clean.
+            // Matches the workspace-doc list's dirty-dot convention above.
+            // Build the label from a borrow of `leaf` so `leaf` stays owned
+            // for the rename buffer below.
+            let marker = if unsaved_paths.contains(&abs) {
+                Some("• ")
+            } else if open_paths.contains(&abs) {
+                Some("○ ")
+            } else {
+                None
+            };
+            let label: String = match marker {
+                Some(m) => format!("{m}{leaf}"),
+                None => leaf.clone(),
+            };
+            let r = ui.selectable_label(false, &label);
             if r.double_clicked() {
                 *begin_rename = Some(RenameInProgress {
                     target_abs: abs.clone(),
@@ -583,16 +573,12 @@ fn render_inline_rename(
     if state.target_abs != target_abs {
         return;
     }
-    let resp = ui.add(
-        egui::TextEdit::singleline(&mut state.buffer)
-            .desired_width(f32::INFINITY),
-    );
+    let resp = ui.add(egui::TextEdit::singleline(&mut state.buffer).desired_width(f32::INFINITY));
     if state.needs_focus {
         resp.request_focus();
         state.needs_focus = false;
     }
-    let enter =
-        resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
     if enter {
         *submit_rename = Some(RenameInProgress {

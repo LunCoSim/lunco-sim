@@ -59,7 +59,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_dock::{
     widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
 };
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_theme::ColorAlpha;
 use std::collections::HashMap;
 
@@ -68,20 +68,21 @@ mod perspective;
 mod perspective_help;
 mod render_robustness;
 mod session;
+mod source_viewer;
 mod viewport;
 
 pub mod control_status;
 pub mod file_ops;
 pub mod files_panel;
-pub mod perf_hud;
 pub mod input_overlay;
+pub mod perf_hud;
+pub mod perspective_command;
+pub mod picker;
 /// Screenshot capture — the render-bound half of `CaptureScreenshot`. Here, and not in
 /// `lunco-api`, so that crate cannot link a GPU stack; and not in `lunco-render-bevy`,
 /// because lunica screenshots its egui workbench with no 3D renderer.
 #[cfg(feature = "api")]
 pub mod screenshot;
-pub mod perspective_command;
-pub mod picker;
 pub mod status_bus;
 pub mod theme_command;
 pub mod tracked_task;
@@ -97,20 +98,22 @@ pub use perspective_help::{
     HelpMouse, HelpPopup, HelpShortcut, HelpTourRequest, PerspectiveHelp, PerspectiveHelpPlugin,
     PerspectiveHelpRegistry,
 };
-pub use window_command::{merged_titlebar_window, MaximizeWindow, MinimizeWindow, CloseWindow, WindowMaximized};
-#[cfg(not(target_arch = "wasm32"))]
-pub use window_placement::WindowPlacement;
-pub use window_placement::wire_window_placement;
+pub use render_robustness::preferred_wgpu_settings;
+pub use window_command::{
+    merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
+};
 pub use window_persistence::{
     load_window_geometry, restored_window, SkipWindowGeometrySave, WindowGeometry,
     WindowPersistencePlugin, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
+pub use window_placement::wire_window_placement;
+#[cfg(not(target_arch = "wasm32"))]
+pub use window_placement::WindowPlacement;
 pub use workspace_state::{
     finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
     DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, WorkspaceState,
     WorkspaceStatePlugin,
 };
-pub use render_robustness::preferred_wgpu_settings;
 
 pub use panel::{InstancePanel, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot, TabId};
 
@@ -198,11 +201,12 @@ impl HelpAnchors {
     }
 }
 pub use files_panel::{FilesPanel, FILES_PANEL_ID};
-pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserSection, BrowserSectionRegistry,
-    FilesSection, TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs, TWIN_BROWSER_PANEL_ID,
+    FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
+    TWIN_BROWSER_PANEL_ID,
 };
+pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tab-management commands
@@ -291,10 +295,19 @@ pub struct FocusPanel {
 }
 
 #[on_command(FocusPanel)]
-fn on_focus_panel(
-    trigger: On<FocusPanel>,
-    mut layout: ResMut<WorkbenchLayout>,
-) {
+fn on_focus_panel(trigger: On<FocusPanel>, layout: Option<ResMut<WorkbenchLayout>>) {
+    // `FocusPanel` is safe to fire at any time (e.g. an asset-browser click
+    // before the workbench has finished setting up, or in a host config that
+    // doesn't add the full workbench). `WorkbenchLayout` is only present once
+    // `WorkbenchPlugin` has run; treat its absence as a no-op rather than
+    // panicking — there is no dock to focus into.
+    let Some(mut layout) = layout else {
+        bevy::log::debug!(
+            "[FocusPanel] id={:?} ignored — WorkbenchLayout not present",
+            trigger.event().id
+        );
+        return;
+    };
     let want = trigger.event().id.as_str();
     // PanelId wraps `&'static str`; we can't construct one from a
     // runtime String, so probe each tab in the dock and match by
@@ -310,10 +323,7 @@ fn on_focus_panel(
     }
     if let Some(pid) = hit {
         let ok = layout.focus_singleton(pid);
-        bevy::log::info!(
-            "[FocusPanel] id={:?} focus_singleton -> {}",
-            want, ok
-        );
+        bevy::log::info!("[FocusPanel] id={:?} focus_singleton -> {}", want, ok);
     } else {
         // Not in dock yet — look up the registered panel and insert
         // it at its default slot, then focus.
@@ -327,7 +337,9 @@ fn on_focus_panel(
             let focused = layout.focus_singleton(pid);
             bevy::log::info!(
                 "[FocusPanel] id={:?} inserted={} focused={}",
-                want, inserted, focused
+                want,
+                inserted,
+                focused
             );
         } else {
             bevy::log::warn!(
@@ -340,23 +352,46 @@ fn on_focus_panel(
 }
 
 register_commands!(on_focus_panel,);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenSourceView — open a file's text in the read-only source viewer
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Open a registered asset as read-only text in the source viewer panel.
+///
+/// Fired by the LunCo Library browser section when any file is clicked —
+/// uniformly for every source extension (`.usda`, `.rhai`, `.mo`, `.btxml`,
+/// `.wgsl`), because the library is a *browse + read* surface, not a load
+/// surface. Distinct from [`OpenFile`](lunco_doc_bevy::OpenFile) on purpose:
+/// `OpenFile` is extension-routed (USD and Modelica each claim their own types
+/// and open their native editors), so routing the library through it would
+/// double-open `.usda`/`.mo` (their observers fire too). `OpenSourceView` has
+/// exactly one observer — the workbench source viewer — so there is no conflict.
+///
+/// The command and its viewer live here because the LunCo Library is a
+/// workbench built-in and must behave consistently in every workbench host.
+#[Command(default)]
+pub struct OpenSourceView {
+    /// Registered `AssetFile::asset_path`; arbitrary filesystem paths are not
+    /// accepted by this library-only command.
+    pub asset_path: String,
+}
+
 pub use perspective::{Perspective, PerspectiveId};
 // The session binding (WorkspaceResource, WorkspacePlugin, add/close events)
 // lives in `lunco-workspace` now — consumers import it from there directly.
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{
-    auto_tag_workbench_3d_cameras, PanelRect, PanelRects, ScenePickGate, SceneTarget, ViewportPanel,
-    ViewportPlaceholder, WorkbenchEguiHost, WorkbenchSceneCamera, WorkbenchViewportCamera,
-    WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+    auto_tag_workbench_3d_cameras, PanelRect, PanelRects, ScenePickGate, SceneTarget,
+    ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost, WorkbenchSceneCamera,
+    WorkbenchViewportCamera, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.
 fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
     theme.colors.mantle
 }
-
-
 
 /// Plugin that installs the workbench shell into a Bevy app.
 ///
@@ -439,7 +474,10 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(perf_hud::PerfHudPlugin);
         }
         // Input overlay visualizer for video recording & AI observation.
-        if !app.world().contains_resource::<input_overlay::InputOverlaySettings>() {
+        if !app
+            .world()
+            .contains_resource::<input_overlay::InputOverlaySettings>()
+        {
             input_overlay::build_input_overlay(app);
         }
         if !app.is_plugin_added::<theme_command::ThemeCommandPlugin>() {
@@ -468,9 +506,7 @@ impl Plugin for WorkbenchPlugin {
         // here; consumers iterate the registry rather than matching
         // a fixed enum. Idempotent — domain plugins can also call
         // `init_resource::<DocumentKindRegistry>()` themselves.
-        if !app
-            .is_plugin_added::<lunco_twin::DocumentKindRegistryPlugin>()
-        {
+        if !app.is_plugin_added::<lunco_twin::DocumentKindRegistryPlugin>() {
             app.add_plugins(lunco_twin::DocumentKindRegistryPlugin);
         }
         // Native (rfd) / web (FSA, future) file-picker plumbing.
@@ -502,23 +538,28 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<BrowserSectionRegistry>()
             .init_resource::<BrowserActions>()
             .init_resource::<UnsavedDocs>()
+            .init_resource::<source_viewer::SourceViewerState>()
+            .init_resource::<source_viewer::PendingSourceReads>()
             // Cross-domain URI registry. Starts empty; each domain
             // plugin (lunco-modelica, a future lunco-usd, …) pushes
             // its own handler on build. See `uri.rs` for the trait.
             .init_resource::<UriRegistry>()
             .init_resource::<CurrentSceneName>()
             .add_observer(on_open_tab)
-            .add_observer(on_close_tab);
+            .add_observer(on_close_tab)
+            .add_systems(Update, source_viewer::drain_pending_source_reads);
         register_all_commands(app);
-        app
-            .add_systems(
-                EguiPrimaryContextPass,
-                render_workbench.in_set(WorkbenchRenderSet),
-            )
-            // Scene picking is handled by bevy_picking (egui occlusion via
-            // bevy_egui's picking backend) — no scene-pointer resource, no gate.
-            .add_systems(bevy::prelude::Update, maintain_dock_widths)
-            .add_systems(Startup, register_terrain_settings_menu);
+        source_viewer::__register_on_open_file_for_text(app);
+        source_viewer::__register_on_open_source_view(app);
+        app.register_panel(source_viewer::SourceViewerPanel);
+        app.add_systems(
+            EguiPrimaryContextPass,
+            render_workbench.in_set(WorkbenchRenderSet),
+        )
+        // Scene picking is handled by bevy_picking (egui occlusion via
+        // bevy_egui's picking backend) — no scene-pointer resource, no gate.
+        .add_systems(bevy::prelude::Update, maintain_dock_widths)
+        .add_systems(Startup, register_terrain_settings_menu);
 
         // Built-in Files section ships with the workbench so apps get
         // a usable browser even before any domain plugin registers.
@@ -528,6 +569,13 @@ impl Plugin for WorkbenchPlugin {
         app.world_mut()
             .resource_mut::<BrowserSectionRegistry>()
             .register(FilesSection::default());
+        // LunCo Library: the engine's bundled `assets/`, listed above Files
+        // (order 150 < 200). Names only; click opens as read-only text via
+        // `OpenSourceView`. Registered here, next to FilesSection, so every app
+        // gets the reference collection without a per-app hook.
+        app.world_mut()
+            .resource_mut::<BrowserSectionRegistry>()
+            .register(twin_browser::LuncoLibrarySection::default());
     }
 }
 
@@ -572,8 +620,7 @@ pub struct WorkbenchLayout {
     /// the closure is invoked each time the user opens the Settings
     /// drop-down. Keeps editor prefs / theme toggles / etc. in one
     /// discoverable place instead of scattered gear buttons.
-    pub(crate) settings_menu:
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) settings_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
 
     /// App-wide Edit menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
@@ -581,8 +628,7 @@ pub struct WorkbenchLayout {
     /// the global Edit menu can host domain-specific verbs (e.g. the
     /// code editor's Cut/Copy/Paste) without each plugin scattering its
     /// own toolbar.
-    pub(crate) edit_menu:
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) edit_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
 
     /// App-wide Help menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
@@ -597,8 +643,7 @@ pub struct WorkbenchLayout {
     /// closure via [`WorkbenchLayout::register_file_menu`] at Startup so
     /// the File menu can host domain-specific verbs (e.g. Load Example)
     /// without hardcoding them in `lunco-workbench`.
-    pub(crate) file_menu:
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) file_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
 
     /// App-wide Time menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
@@ -606,12 +651,13 @@ pub struct WorkbenchLayout {
     /// clock-shaped controls (sim rate, the sky clock, epoch readouts)
     /// live under ONE discoverable menu instead of on the toolbar and in
     /// floating overlays. The toolbar keeps pause/resume and nothing else.
-    pub(crate) time_menu:
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    pub(crate) time_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
 
     /// Dynamic top-level menus contributed by domain plugins.
-    pub(crate) custom_menus:
-        Vec<(&'static str, Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>)>,
+    pub(crate) custom_menus: Vec<(
+        &'static str,
+        Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>,
+    )>,
 
     /// The live dock tree — what egui_dock actually renders. Stores
     /// [`TabId`]s so both singleton panels and multi-instance tabs
@@ -791,10 +837,7 @@ impl WorkbenchLayout {
         // land in the same dock area as their kind's defaults — e.g.
         // a `VizPanel` (Bottom) opened next to the singleton `Graphs`
         // tab, NOT in the Center alongside the model view.
-        let preferred_slot = self
-            .instance_panels
-            .get(&kind)
-            .map(|p| p.default_slot());
+        let preferred_slot = self.instance_panels.get(&kind).map(|p| p.default_slot());
         // Build the set of singleton PanelIds occupying each slot so
         // we can find a leaf hosting any of them.
         let slot_ids: std::collections::HashSet<PanelId> = match preferred_slot {
@@ -804,8 +847,7 @@ impl WorkbenchLayout {
             Some(PanelSlot::RightInspector) => self.right_inspector.iter().copied().collect(),
             _ => std::collections::HashSet::new(),
         };
-        let center_ids: std::collections::HashSet<PanelId> =
-            self.center.iter().copied().collect();
+        let center_ids: std::collections::HashSet<PanelId> = self.center.iter().copied().collect();
         // The full-window 3D scene's leaf is EXCLUSIVE: an instance tab must never
         // be appended into it. That leaf's `ViewportPanel` renders nothing (the 3D
         // camera paints full-window behind it) but its render is what records the
@@ -818,28 +860,31 @@ impl WorkbenchLayout {
             let main = self.dock.main_surface_mut();
             // Priority 1: leaf already hosting another instance of
             // this kind — keeps families together.
-            find_leaf_matching(main, |t| matches!(*t, TabId::Instance { kind: k, .. } if k == kind))
-                // Priority 2: leaf hosting any singleton in the
-                // kind's preferred slot.
-                .or_else(|| {
-                    find_leaf_matching(main, |t| match *t {
-                        TabId::Singleton(id) => slot_ids.contains(&id),
-                        _ => false,
-                    })
+            find_leaf_matching(
+                main,
+                |t| matches!(*t, TabId::Instance { kind: k, .. } if k == kind),
+            )
+            // Priority 2: leaf hosting any singleton in the
+            // kind's preferred slot.
+            .or_else(|| {
+                find_leaf_matching(main, |t| match *t {
+                    TabId::Singleton(id) => slot_ids.contains(&id),
+                    _ => false,
                 })
-                // Priority 3: leaf hosting any Center singleton (the
-                // historical fallback, kept so kinds with no
-                // preferred slot still land somewhere visible).
-                .or_else(|| {
-                    find_leaf_matching(main, |t| match *t {
-                        TabId::Singleton(id) => center_ids.contains(&id),
-                        _ => false,
-                    })
+            })
+            // Priority 3: leaf hosting any Center singleton (the
+            // historical fallback, kept so kinds with no
+            // preferred slot still land somewhere visible).
+            .or_else(|| {
+                find_leaf_matching(main, |t| match *t {
+                    TabId::Singleton(id) => center_ids.contains(&id),
+                    _ => false,
                 })
-                // Priority 4: any leaf at all.
-                .or_else(|| first_leaf(main))
-                // …but never the exclusive scene-viewport leaf.
-                .filter(|n| Some(*n) != vp_leaf)
+            })
+            // Priority 4: any leaf at all.
+            .or_else(|| first_leaf(main))
+            // …but never the exclusive scene-viewport leaf.
+            .filter(|n| Some(*n) != vp_leaf)
         };
 
         if let Some(leaf) = target_leaf {
@@ -855,11 +900,10 @@ impl WorkbenchLayout {
                 }
             }
             // Focus the leaf/surface too so egui_dock foregrounds it.
-            self.dock
-                .set_focused_node_and_surface(egui_dock::NodePath {
-                    surface: egui_dock::SurfaceIndex::main(),
-                    node: leaf,
-                });
+            self.dock.set_focused_node_and_surface(egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node: leaf,
+            });
         } else if let Some(vp) = vp_leaf {
             // Only the scene-viewport leaf is available (e.g. Build, whose Bottom
             // slot is empty). Split a fresh leaf BELOW the viewport (~30% tall) and
@@ -886,7 +930,10 @@ impl WorkbenchLayout {
         if path.tab.0 == 0 {
             return;
         }
-        let surface_ref = self.dock.get_surface_mut(path.surface).and_then(|s| s.node_tree_mut());
+        let surface_ref = self
+            .dock
+            .get_surface_mut(path.surface)
+            .and_then(|s| s.node_tree_mut());
         let Some(tree) = surface_ref else { return };
         if let Some(removed) = tree[path.node].remove_tab(path.tab) {
             tree[path.node].insert_tab(egui_dock::TabIndex(0), removed);
@@ -910,11 +957,7 @@ impl WorkbenchLayout {
     /// Splits 50/50 to the right of `sibling_of`'s node. egui_dock
     /// auto-collapses the source leaf if removing the tab leaves it
     /// empty.
-    pub fn move_tab_next_to(
-        &mut self,
-        src: TabId,
-        sibling_of: TabId,
-    ) -> Option<TabLocation> {
+    pub fn move_tab_next_to(&mut self, src: TabId, sibling_of: TabId) -> Option<TabLocation> {
         let src_loc = self.dock.find_tab(&src)?;
         let sib = self.dock.find_tab(&sibling_of)?;
         if src_loc.surface == sib.surface && src_loc.node == sib.node {
@@ -954,10 +997,7 @@ impl WorkbenchLayout {
             .dock
             .get_surface(loc.surface)
             .and_then(|s| s.node_tree())
-            .map(|tree| {
-                loc.node.0 < tree.len()
-                    && tree[loc.node].is_leaf()
-            })
+            .map(|tree| loc.node.0 < tree.len() && tree[loc.node].is_leaf())
             .unwrap_or(false);
         if !dest_ok {
             return;
@@ -972,7 +1012,10 @@ impl WorkbenchLayout {
         self.dock.move_tab(
             src_loc,
             egui_dock::TabDestination::Node(
-                egui_dock::NodePath { surface: loc.surface, node: loc.node },
+                egui_dock::NodePath {
+                    surface: loc.surface,
+                    node: loc.node,
+                },
                 egui_dock::TabInsert::Insert(idx),
             ),
         );
@@ -1005,12 +1048,7 @@ impl WorkbenchLayout {
     /// - if `right_inspector` non-empty, the right-inspector split
     ///   is the previous root, i.e. at `NodeIndex(2)` when wrapped
     ///   by a side-left split, or at `NodeIndex(0)` otherwise.
-    pub fn enforce_widths(
-        &mut self,
-        window_w: f32,
-        side_px: f32,
-        right_px: f32,
-    ) {
+    pub fn enforce_widths(&mut self, window_w: f32, side_px: f32, right_px: f32) {
         // Reject non-finite inputs up front: `f32::clamp` propagates NaN, so a
         // NaN px width would be written straight into a split fraction and
         // panic egui_dock's separator layout on the next frame.
@@ -1048,11 +1086,7 @@ impl WorkbenchLayout {
             };
             let right_share = (right_px / parent_w).clamp(0.05, 0.5);
             let f = 1.0 - right_share;
-            let idx = if has_side {
-                NodeIndex(2)
-            } else {
-                NodeIndex(0)
-            };
+            let idx = if has_side { NodeIndex(2) } else { NodeIndex(0) };
             if idx.0 < tree.len() {
                 if let egui_dock::Node::Horizontal(ref mut s) = tree[idx] {
                     s.fraction = f;
@@ -1069,9 +1103,7 @@ impl WorkbenchLayout {
         self.dock
             .iter_all_tabs()
             .filter_map(|(_, t)| match t {
-                TabId::Instance { kind: k, instance } if *k == kind => {
-                    Some(*instance)
-                }
+                TabId::Instance { kind: k, instance } if *k == kind => Some(*instance),
                 _ => None,
             })
             .collect()
@@ -1382,10 +1414,8 @@ impl WorkbenchLayout {
         id_map: &HashMap<(&'static str, u64), u64>,
     ) -> Option<DockState<TabId>> {
         use std::collections::HashSet;
-        let valid_singletons: HashSet<&'static str> =
-            self.panels.keys().map(|p| p.0).collect();
-        let valid_kinds: HashSet<&'static str> =
-            self.instance_panels.keys().map(|p| p.0).collect();
+        let valid_singletons: HashSet<&'static str> = self.panels.keys().map(|p| p.0).collect();
+        let valid_kinds: HashSet<&'static str> = self.instance_panels.keys().map(|p| p.0).collect();
 
         // A NaN fraction (see `sanitize_dock_fractions`) serializes to JSON
         // `null`, which won't deserialize back into `f32` — so the load-time
@@ -1473,7 +1503,9 @@ impl WorkbenchLayout {
     /// it blanks the 3D and eats clicks. Operates on `dock` in place; no-op when the
     /// viewport isn't present or already has its leaf to itself.
     fn evict_scene_viewport_cotenants(dock: &mut DockState<TabId>, vp_tab: TabId) {
-        let Some(pos) = dock.find_tab(&vp_tab) else { return };
+        let Some(pos) = dock.find_tab(&vp_tab) else {
+            return;
+        };
         let vp_node = pos.node;
         let cotenants: Vec<TabId> = match &dock.main_surface()[vp_node] {
             egui_dock::Node::Leaf(leaf) => {
@@ -1585,10 +1617,7 @@ impl WorkbenchLayout {
     /// skipped (a `sandbox`-only perspective loaded into `lunica`).
     pub(crate) fn seed_perspective_docks(
         &mut self,
-        docks: &std::collections::HashMap<
-            String,
-            crate::workspace_state::PerspectiveDockSnapshot,
-        >,
+        docks: &std::collections::HashMap<String, crate::workspace_state::PerspectiveDockSnapshot>,
         id_map: &HashMap<(&'static str, u64), u64>,
     ) {
         let active_str = self.active_perspective().map(|p| p.as_str().to_string());
@@ -1953,8 +1982,7 @@ impl WorkbenchLayout {
             // the table in the doc above. Bumped from 0.15 → 0.22 so
             // the Twin Browser shows full library names ("Modelica
             // Standard Library") without truncation at default zoom.
-            let [_old_root, _left] =
-                main.split_left(NodeIndex::root(), 0.22, side_browser_tabs);
+            let [_old_root, _left] = main.split_left(NodeIndex::root(), 0.22, side_browser_tabs);
         }
 
         let _ = central;
@@ -2054,7 +2082,13 @@ impl WorkbenchLayout {
         }
         let in_dock: std::collections::HashSet<PanelId> = dock
             .iter_all_tabs()
-            .filter_map(|(_, t)| if let TabId::Singleton(id) = t { Some(*id) } else { None })
+            .filter_map(|(_, t)| {
+                if let TabId::Singleton(id) = t {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
             .collect();
         side_browser
             .iter()
@@ -2087,11 +2121,7 @@ pub trait WorkbenchAppExt {
     fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) -> &mut Self;
 
     /// Register help content for a perspective.
-    fn register_perspective_help(
-        &mut self,
-        id: PerspectiveId,
-        help: PerspectiveHelp,
-    ) -> &mut Self;
+    fn register_perspective_help(&mut self, id: PerspectiveId, help: PerspectiveHelp) -> &mut Self;
 }
 
 impl WorkbenchAppExt for App {
@@ -2099,7 +2129,9 @@ impl WorkbenchAppExt for App {
         if !self.world().contains_resource::<WorkbenchLayout>() {
             self.init_resource::<WorkbenchLayout>();
         }
-        self.world_mut().resource_mut::<WorkbenchLayout>().register(panel);
+        self.world_mut()
+            .resource_mut::<WorkbenchLayout>()
+            .register(panel);
         self
     }
 
@@ -2123,11 +2155,7 @@ impl WorkbenchAppExt for App {
         self
     }
 
-    fn register_perspective_help(
-        &mut self,
-        id: PerspectiveId,
-        help: PerspectiveHelp,
-    ) -> &mut Self {
+    fn register_perspective_help(&mut self, id: PerspectiveId, help: PerspectiveHelp) -> &mut Self {
         if !self.world().contains_resource::<PerspectiveHelpRegistry>() {
             self.init_resource::<PerspectiveHelpRegistry>();
         }
@@ -2166,10 +2194,7 @@ fn maintain_dock_widths(
     mut resize_events: bevy::prelude::MessageReader<bevy::window::WindowResized>,
     mut layout: ResMut<WorkbenchLayout>,
     sizes: Res<DockSizes>,
-    windows: Query<
-        &bevy::window::Window,
-        bevy::prelude::With<bevy::window::PrimaryWindow>,
-    >,
+    windows: Query<&bevy::window::Window, bevy::prelude::With<bevy::window::PrimaryWindow>>,
     mut applied_once: bevy::prelude::Local<bool>,
 ) {
     // Latest event wins — multiple events in one frame collapse.
@@ -2253,7 +2278,9 @@ fn render_workbench(world: &mut World) {
     let ctx = {
         let mut state: bevy::ecs::system::SystemState<EguiContexts> =
             bevy::ecs::system::SystemState::new(world);
-        let Ok(mut contexts) = state.get_mut(world) else { return };
+        let Ok(mut contexts) = state.get_mut(world) else {
+            return;
+        };
         match contexts.ctx_mut() {
             Ok(ctx) => ctx.clone(),
             Err(_) => return,
@@ -2308,9 +2335,7 @@ fn render_workbench(world: &mut World) {
 /// First leaf node (in walk order) in a `Surface`'s tree, if any.
 /// Used as a last-resort fallback when no more specific target leaf
 /// can be identified.
-fn first_leaf(
-    surface: &mut egui_dock::Tree<TabId>,
-) -> Option<NodeIndex> {
+fn first_leaf(surface: &mut egui_dock::Tree<TabId>) -> Option<NodeIndex> {
     for (index, node) in surface.iter_mut().enumerate() {
         if node.is_leaf() {
             return Some(NodeIndex(index));
@@ -2322,10 +2347,7 @@ fn first_leaf(
 /// First leaf containing any tab for which `pred` returns `true`.
 /// Used by [`WorkbenchLayout::open_instance`] to find the center
 /// tabset after perspective splits have moved it around.
-fn find_leaf_matching<F>(
-    surface: &mut egui_dock::Tree<TabId>,
-    pred: F,
-) -> Option<NodeIndex>
+fn find_leaf_matching<F>(surface: &mut egui_dock::Tree<TabId>, pred: F) -> Option<NodeIndex>
 where
     F: Fn(&TabId) -> bool,
 {
@@ -2397,10 +2419,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             TabId::Singleton(id) => Some(format!("panel.{}", id.as_str())),
             TabId::Instance { kind, .. } => Some(format!("panel.{}", kind.as_str())),
         };
-        if let (Some(mut a), Some(k)) = (
-            self.world.get_resource_mut::<HelpAnchors>(),
-            panel_key,
-        ) {
+        if let (Some(mut a), Some(k)) = (self.world.get_resource_mut::<HelpAnchors>(), panel_key) {
             a.set(k, panel_rect);
         }
 
@@ -2465,10 +2484,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                         .unwrap_or(egui::Color32::LIGHT_RED);
                     ui.colored_label(
                         error_color,
-                        format!(
-                            "InstancePanel kind `{}` not registered",
-                            kind.as_str()
-                        ),
+                        format!("InstancePanel kind `{}` not registered", kind.as_str()),
                     );
                 }
             }
@@ -2527,20 +2543,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                 // use the standalone `PendingTabCloses` resource. A
                 // domain-side system drains it each frame, prompts
                 // if needed, and fires `CloseTab` on user confirmation.
-                self.world
-                    .resource_mut::<PendingTabCloses>()
-                    .push(*tab);
+                self.world.resource_mut::<PendingTabCloses>().push(*tab);
                 OnCloseResponse::Ignore
             }
         }
     }
 
-    fn context_menu(
-        &mut self,
-        ui: &mut egui::Ui,
-        tab: &mut Self::Tab,
-        _path: egui_dock::NodePath,
-    ) {
+    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _path: egui_dock::NodePath) {
         // Domain hook: dispatch to the registered InstancePanel so it
         // can draw its own menu items (Pin, Open in new view, …).
         // Singletons and unknown-kind instance tabs get no extras —
@@ -2591,7 +2600,12 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 }
 
-fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World, theme: &lunco_theme::Theme) {
+fn render_layout(
+    ctx: &egui::Context,
+    layout: &mut WorkbenchLayout,
+    world: &mut World,
+    theme: &lunco_theme::Theme,
+) {
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
     // workbench chrome — menu/title bar, status strip (and its FPS readout),
@@ -2623,20 +2637,30 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         let screen = ctx.content_rect();
         let pointer = ctx.input(|i| i.pointer.hover_pos());
         if let Some(p) = pointer {
-            let dx = if p.x < screen.left() + RESIZE_BORDER { -1 }
-                else if p.x > screen.right() - RESIZE_BORDER { 1 } else { 0 };
-            let dy = if p.y < screen.top() + RESIZE_BORDER { -1 }
-                else if p.y > screen.bottom() - RESIZE_BORDER { 1 } else { 0 };
+            let dx = if p.x < screen.left() + RESIZE_BORDER {
+                -1
+            } else if p.x > screen.right() - RESIZE_BORDER {
+                1
+            } else {
+                0
+            };
+            let dy = if p.y < screen.top() + RESIZE_BORDER {
+                -1
+            } else if p.y > screen.bottom() - RESIZE_BORDER {
+                1
+            } else {
+                0
+            };
             use bevy::math::CompassOctant;
             let dir = match (dx, dy) {
                 (-1, -1) => Some(CompassOctant::NorthWest),
-                ( 0, -1) => Some(CompassOctant::North),
-                ( 1, -1) => Some(CompassOctant::NorthEast),
-                ( 1,  0) => Some(CompassOctant::East),
-                ( 1,  1) => Some(CompassOctant::SouthEast),
-                ( 0,  1) => Some(CompassOctant::South),
-                (-1,  1) => Some(CompassOctant::SouthWest),
-                (-1,  0) => Some(CompassOctant::West),
+                (0, -1) => Some(CompassOctant::North),
+                (1, -1) => Some(CompassOctant::NorthEast),
+                (1, 0) => Some(CompassOctant::East),
+                (1, 1) => Some(CompassOctant::SouthEast),
+                (0, 1) => Some(CompassOctant::South),
+                (-1, 1) => Some(CompassOctant::SouthWest),
+                (-1, 0) => Some(CompassOctant::West),
                 _ => None,
             };
             if let Some(dir) = dir {
@@ -3652,8 +3676,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // perspective's centre intent keeps `View` pure-3D and leaves the
     // parked docs hidden until the user switches to a centre-driven
     // perspective (which re-attaches them via `rebuild_dock`).
-    let has_dock_tabs =
-        !layout.center.is_empty() && layout.dock.iter_all_tabs().next().is_some();
+    let has_dock_tabs = !layout.center.is_empty() && layout.dock.iter_all_tabs().next().is_some();
 
     if has_dock_tabs {
         let WorkbenchLayout {
@@ -3755,7 +3778,9 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             // window. `in_dock` was then true everywhere and the chrome blanket
             // swallowed every click on bare 3D outside a dock leaf.
             let dock_rect = viewport_ui.available_rect_before_wrap();
-            DockArea::new(dock).style(style).show_inside(&mut viewport_ui, &mut viewer);
+            DockArea::new(dock)
+                .style(style)
+                .show_inside(&mut viewport_ui, &mut viewer);
             // The scene viewport LEAF's rect, straight from egui_dock's post-layout
             // tree. `LeafNode::rect` persists even when the leaf is COLLAPSED or the
             // viewport sits behind another tab — cases where `ViewportPanel::render`
@@ -3932,7 +3957,10 @@ fn render_status_bar_inner(
         .unwrap_or(false);
 
     ui.horizontal(|ui| {
-        let scene_name = world.get_resource::<CurrentSceneName>().map(|s| s.0.clone()).unwrap_or_default();
+        let scene_name = world
+            .get_resource::<CurrentSceneName>()
+            .map(|s| s.0.clone())
+            .unwrap_or_default();
 
         // Calculate the reserved width for all elements to the right of the status scope
         let right_reserve = 16.0
@@ -3957,10 +3985,8 @@ fn render_status_bar_inner(
                     // on a font that ships U+25CF (the wasm build's
                     // egui font fallback chain doesn't, hence "tofu"
                     // boxes for that glyph).
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(10.0, 10.0),
-                        egui::Sense::hover(),
-                    );
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                     ui.painter().circle_filled(rect.center(), 4.0, dot_color);
                     ui.label(egui::RichText::new(l.source).small().strong());
                     let text = egui::RichText::new(&l.message).small();
@@ -4092,11 +4118,7 @@ fn render_status_bar_inner(
 /// - **Host**: green dot, `HOST :PORT · N peers` (this window's listen port).
 /// - **Client (connected)**: green dot, `CLIENT → host:port`.
 /// - **Client (connecting)**: amber dot, `connecting → host:port`.
-fn render_net_chip(
-    ui: &mut egui::Ui,
-    world: &mut World,
-    theme: &lunco_theme::Theme,
-) {
+fn render_net_chip(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
     use lunco_core::{NetStatus, NetworkRole};
     let Some(status) = world.get_resource::<NetStatus>().cloned() else {
         return;
@@ -4111,9 +4133,10 @@ fn render_net_chip(
                 format!("HOST {} · {} peer{s}", status.endpoint, status.peers),
             )
         }
-        NetworkRole::Client if status.connected => {
-            (theme.tokens.success, format!("CLIENT → {}", status.endpoint))
-        }
+        NetworkRole::Client if status.connected => (
+            theme.tokens.success,
+            format!("CLIENT → {}", status.endpoint),
+        ),
         NetworkRole::Client => (
             theme.tokens.warning,
             format!("connecting → {}", status.endpoint),
@@ -4130,11 +4153,7 @@ fn render_net_chip(
 /// the smoothed `FPS` number hides become visible. Y axis auto-
 /// scales to whatever the worst recent sample was; a faint reference
 /// line at 16.67 ms (60 FPS) anchors the eye.
-fn draw_frame_time_sparkline(
-    ui: &mut egui::Ui,
-    frame_history: &[f32],
-    theme: &lunco_theme::Theme,
-) {
+fn draw_frame_time_sparkline(ui: &mut egui::Ui, frame_history: &[f32], theme: &lunco_theme::Theme) {
     if frame_history.is_empty() {
         return;
     }
@@ -4159,7 +4178,10 @@ fn draw_frame_time_sparkline(
     let muted_soft = muted.alpha(80);
     let ref_y = rect.bottom() - rect.height() * (16.67 / max_ms).min(1.0);
     painter.line_segment(
-        [egui::pos2(rect.left(), ref_y), egui::pos2(rect.right(), ref_y)],
+        [
+            egui::pos2(rect.left(), ref_y),
+            egui::pos2(rect.right(), ref_y),
+        ],
         egui::Stroke::new(0.5, muted_soft),
     );
 
@@ -4232,12 +4254,15 @@ fn register_terrain_settings_menu(world: &mut World) {
     layout.register_settings(|ui, world| {
         ui.label(egui::RichText::new("Terrain").weak().small());
         if let Some(mut settings) = world.get_resource_mut::<lunco_settings::TerrainSettings>() {
-            ui.checkbox(&mut settings.enable_shaders, "Enable high-quality procedural shaders")
-                .on_hover_text(
-                    "Enable dynamic micro-relief normal mapping and albedo mottle. \
+            ui.checkbox(
+                &mut settings.enable_shaders,
+                "Enable high-quality procedural shaders",
+            )
+            .on_hover_text(
+                "Enable dynamic micro-relief normal mapping and albedo mottle. \
                      Turning this off improves WebAssembly/browser frame rate. \
                      Persisted to ~/.lunco/settings.json.",
-                );
+            );
         }
     });
 }
@@ -4246,6 +4271,18 @@ fn register_terrain_settings_menu(world: &mut World) {
 mod tests {
     use super::*;
 
+    /// `FocusPanel` can arrive from another UI/domain plugin before (or without)
+    /// `WorkbenchPlugin`; an absent dock is a valid no-op state, not a fatal
+    /// observer-parameter error.
+    #[test]
+    fn focus_panel_without_workbench_layout_does_not_panic() {
+        let mut app = App::new();
+        app.add_observer(on_focus_panel);
+        app.world_mut().trigger(FocusPanel {
+            id: "not_mounted".into(),
+        });
+    }
+
     struct TestPerspective {
         id: PerspectiveId,
         title: &'static str,
@@ -4253,8 +4290,12 @@ mod tests {
     }
 
     impl Perspective for TestPerspective {
-        fn id(&self) -> PerspectiveId { self.id }
-        fn title(&self) -> String { self.title.to_string() }
+        fn id(&self) -> PerspectiveId {
+            self.id
+        }
+        fn title(&self) -> String {
+            self.title.to_string()
+        }
         fn apply(&self, layout: &mut WorkbenchLayout) {
             layout.set_side_browser(Some(self.marker));
             layout.set_right_inspector(None);
@@ -4400,8 +4441,7 @@ mod tests {
     /// its wire format.
     #[test]
     fn nan_split_fraction_survives_a_dock_json_round_trip() {
-        let mut dock: DockState<TabId> =
-            DockState::new(vec![TabId::Singleton(PanelId("a"))]);
+        let mut dock: DockState<TabId> = DockState::new(vec![TabId::Singleton(PanelId("a"))]);
         dock.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.5,
@@ -4429,13 +4469,14 @@ mod tests {
         let fractions: Vec<f32> = restored
             .iter_all_nodes()
             .filter_map(|(_surface, node)| match node {
-                egui_dock::Node::Horizontal(s) | egui_dock::Node::Vertical(s) => {
-                    Some(s.fraction)
-                }
+                egui_dock::Node::Horizontal(s) | egui_dock::Node::Vertical(s) => Some(s.fraction),
                 _ => None,
             })
             .collect();
-        assert!(!fractions.is_empty(), "split node did not survive the round trip");
+        assert!(
+            !fractions.is_empty(),
+            "split node did not survive the round trip"
+        );
         assert!(
             fractions.iter().all(|f| (*f - 0.5).abs() < f32::EPSILON),
             "healed fractions should default to 0.5, got {fractions:?}"

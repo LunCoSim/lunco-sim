@@ -74,6 +74,7 @@ serde = { workspace = true }
 # (Windows: `C:\Users\<user>\.lunco\`, etc.).
 lunco-assets = { path = "../lunco-assets" }
 lunco-settings = { path = "../lunco-settings" }
+crossbeam-channel = { workspace = true }
 # Native file dialogs. The web backend will use `wasm-bindgen`
 # directly against the File-System-Access API behind a `cfg`-gated
 # branch — no separate crate needed.

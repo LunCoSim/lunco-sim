@@ -13,23 +13,23 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
-use lunco_mobility::{WheelRaycast, Suspension};
-use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
 use lunco_core::ports::PortRegistry;
+use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
+use lunco_mobility::{Suspension, WheelRaycast};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.
 use lunco_materials::ShaderLook;
 use lunco_render::PbrLook;
 
-use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
+use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
 
 use crate::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
 // command layer (which is why they don't live in this panel — see `doc_resolve`).
 use crate::doc_resolve::{bound_shader_prim, resolve_doc_for_entity};
-use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 
 // ─────────────────────────────────────────────────────────────────────
@@ -85,8 +85,8 @@ pub struct InspectorView {
 /// a quiescent scene. All reads are bounded single-entity lookups or small
 /// scans the panel used to do in-paint.
 pub fn populate_inspector_view(world: &mut World) {
-    use bevy::camera::Exposure;
     use bevy::camera::visibility::RenderLayers;
+    use bevy::camera::Exposure;
     use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
     use bevy::post_process::bloom::Bloom;
 
@@ -116,7 +116,11 @@ pub fn populate_inspector_view(world: &mut World) {
             .get::<DirectionalLight>(e)
             .map(|l| {
                 let lin = l.color.to_linear();
-                (l.illuminance, l.shadow_maps_enabled, [lin.red, lin.green, lin.blue])
+                (
+                    l.illuminance,
+                    l.shadow_maps_enabled,
+                    [lin.red, lin.green, lin.blue],
+                )
             })
             .unwrap_or((0.0, false, [1.0, 1.0, 1.0]));
         let (shadow_first, shadow_max) = world
@@ -140,7 +144,9 @@ pub fn populate_inspector_view(world: &mut World) {
         }
     });
 
-    let ambient_brightness = world.get_resource::<GlobalAmbientLight>().map(|a| a.brightness);
+    let ambient_brightness = world
+        .get_resource::<GlobalAmbientLight>()
+        .map(|a| a.brightness);
     let earthshine_lux = world
         .query_filtered::<&DirectionalLight, With<lunco_environment::Earthshine>>()
         .iter(world)
@@ -148,8 +154,16 @@ pub fn populate_inspector_view(world: &mut World) {
         .map(|l| l.illuminance);
 
     // ── Camera.
-    let exposure_ev100 = world.query::<&Exposure>().iter(world).next().map(|e| e.ev100);
-    let bloom_intensity = world.query::<&Bloom>().iter(world).next().map(|b| b.intensity);
+    let exposure_ev100 = world
+        .query::<&Exposure>()
+        .iter(world)
+        .next()
+        .map(|e| e.ev100);
+    let bloom_intensity = world
+        .query::<&Bloom>()
+        .iter(world)
+        .next()
+        .map(|b| b.intensity);
 
     // ── Joint for the primary-selected entity.
     let selected = world
@@ -158,13 +172,22 @@ pub fn populate_inspector_view(world: &mut World) {
     let joint = if let Some(entity) = selected {
         if let Some(holder) = joint_angle_holder(world, entity) {
             let registry = world.resource::<PortRegistry>().clone();
-            let measured = registry.read_output_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
-            let commanded = registry.read_input_port(world, holder, JOINT_ANGLE_PORT).unwrap_or(0.0);
+            let measured = registry
+                .read_output_port(world, holder, JOINT_ANGLE_PORT)
+                .unwrap_or(0.0);
+            let commanded = registry
+                .read_input_port(world, holder, JOINT_ANGLE_PORT)
+                .unwrap_or(0.0);
             let mut cq = world.query::<&lunco_cosim::SimConnection>();
             let wired = cq
                 .iter(world)
                 .any(|c| c.end_element == holder && c.end_connector == JOINT_ANGLE_PORT);
-            Some(JointReadout { holder, measured, commanded, wired })
+            Some(JointReadout {
+                holder,
+                measured,
+                commanded,
+                wired,
+            })
         } else {
             None
         }
@@ -234,13 +257,21 @@ pub(crate) fn inspector_inputs_changed(
 pub struct Inspector;
 
 impl Panel for Inspector {
-    fn id(&self) -> PanelId { PanelId("sandbox_inspector") }
-    fn title(&self) -> String { "Inspector".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn id(&self) -> PanelId {
+        PanelId("sandbox_inspector")
+    }
+    fn title(&self) -> String {
+        "Inspector".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn transparent_background(&self) -> bool { true }
+    fn transparent_background(&self) -> bool {
+        true
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
@@ -263,13 +294,21 @@ impl Panel for Inspector {
 pub struct EnvironmentPanel;
 
 impl Panel for EnvironmentPanel {
-    fn id(&self) -> PanelId { PanelId("sandbox_environment") }
-    fn title(&self) -> String { "Environment".into() }
-    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn id(&self) -> PanelId {
+        PanelId("sandbox_environment")
+    }
+    fn title(&self) -> String {
+        "Environment".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
     fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
         lunco_workbench::PanelMenuGroup::Scene
     }
-    fn transparent_background(&self) -> bool { true }
+    fn transparent_background(&self) -> bool {
+        true
+    }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let mantle = ctx.resource_expect::<lunco_theme::Theme>().colors.mantle;
@@ -338,290 +377,317 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
 // API, the journal and networked peers — never saw. The Inspector triggers the command.
 
 fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-
-        // Delete hotkey
-        if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-            let primary = ctx
-                .resource::<SelectedEntities>()
-                .and_then(|s| s.primary());
-            if let Some(entity) = primary {
-                ctx.defer(move |world| {
-                    // The typed verb — despawns, drops the selection, AND authors the
-                    // `RemovePrim`, so the delete persists, journals, replicates, and
-                    // undoes (Ctrl+Z).
-                    world.trigger(crate::commands::DeleteEntity {
-                        target: entity,
-                        intent: lunco_core::EditIntent::Persistent,
-                    });
-                });
-                return;
-            }
-        }
-
-        // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
-        // system (the single mutation path), not here.
-
-        ui.heading("Inspector");
-
-        // Get current selection
-        let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
-            ui.label("No entity selected.");
-            ui.label("Press Shift+Left-click on an object to select it.");
-            return;
-        };
-
-        ui.label(format!("ID: {entity:?}"));
-
-        // Name (read-only)
-        if let Some(name) = ctx.get::<Name>(entity).map(|n| n.as_str().to_string()) {
-            ui.label(format!("Name: {name}"));
-        }
-
-        ui.separator();
-
-        // ── Comms & Orbit (doc 43): geodetic anchor / Kepler orbit /
-        //    antenna params + live link state ─────────────────────────
-        comms_orbit_section(ui, ctx, entity);
-
-        // ── USD parameters: data-driven bounded sliders for attributes that
-        //    author a `customData {min,max,unit}` UI hint. ────────────────
-        usd_parameters_section(ui, ctx, entity);
-
-        // ── Variants: which configuration this prim composes with — a rover's
-        //    drivetrain, a scenario scene's terrain site. ─────────────────
-        usd_variants_section(ui, ctx, entity);
-
-        // ── Mount: snap an attached part onto the socket it declares, re-deriving
-        //    its placement + joint anchor from the mount frames (doc 48 §3.1). ──
-        mount_section(ui, ctx, entity);
-
-        // ── Transform component ──────────────────────────────────────
-        // The sliders author a **document op**, they do not poke ECS: a committed
-        // edit fires `MoveEntity`, whose observers both move the body (physics
-        // seat + kinematic pulse — the old hand-copied CQ-510 block, now in ONE
-        // place) and author `UsdOp::SetTranslate` into the runtime layer. So an
-        // Inspector move survives reload, journals, syncs, and is undone by the
-        // same Ctrl+Z as a gizmo drag. Committed = drag released or value typed —
-        // per-frame firing during a drag would push one op per frame.
-        if ctx.get::<Transform>(entity).is_some() {
-            egui::CollapsingHeader::new("Transform")
-                .default_open(true)
-                .show(ui, |ui| {
-                    // GRID-ABSOLUTE, not `Transform.translation`: on a
-                    // grid-direct prim the raw local is only the cell
-                    // remainder, so the sliders showed a number that agreed with
-                    // neither the authored USD nor the object's actual place —
-                    // and committing it fed that short value to `MoveEntity`,
-                    // teleporting the object one cell. This is the same frame
-                    // the gizmo authors and the same one `MoveEntity` expects.
-                    if let Some(t) = grid_absolute_of(ctx, entity).map(|p| p.as_vec3()) {
-                        let (mut x, mut y, mut z) = (t.x, t.y, t.z);
-                        // `DragValue`, not a ±1000 `Slider`: a grid-absolute
-                        // coordinate is unbounded (a moonbase prim sits well
-                        // outside ±1000 m of the grid origin), and a slider would
-                        // CLAMP it — merely showing the panel and nudging one axis
-                        // would have hauled the object back inside the range.
-                        let rx = ui.add(egui::DragValue::new(&mut x).speed(0.1).prefix("X: "));
-                        let ry = ui.add(egui::DragValue::new(&mut y).speed(0.1).prefix("Y: "));
-                        let rz = ui.add(egui::DragValue::new(&mut z).speed(0.1).prefix("Z: "));
-                        // Author ONCE, on release — not on every `changed()` frame, which
-                        // would flood the journal with an op per mouse-move for a single
-                        // drag. Same rule as the gizmo's drag-end authoring.
-                        let committed = [&rx, &ry, &rz]
-                            .iter()
-                            .any(|r| r.drag_stopped() || (r.changed() && !r.dragged()));
-                        if committed {
-                            let new_t = Vec3::new(x, y, z);
-                            ctx.defer(move |world| {
-                                // Route through the typed `MoveEntity` verb rather than
-                                // poking `Transform` here. It already owns the
-                                // physics-aware pose seat (CQ-510: writing only
-                                // `Transform` silently no-ops on a body, because avian
-                                // re-derives it from the f64 `Position` each tick), and
-                                // its persister authors the `SetTranslate` — so the edit
-                                // journals, replicates, persists, and undoes. The
-                                // hand-rolled copy that used to live here did none of
-                                // that.
-                                let Some(gid) =
-                                    world.get::<lunco_core::GlobalEntityId>(entity).copied()
-                                else {
-                                    warn!(
-                                        "INSPECTOR: {entity:?} has no GlobalEntityId — not movable"
-                                    );
-                                    return;
-                                };
-                                world.trigger(crate::commands::MoveEntity {
-                                    entity_id: gid.get(),
-                                    translation: new_t,
-                                });
-                            });
-                        }
-                    }
-                });
-        }
-
-        // ── Physics component ────────────────────────────────────────
-        let has_physics = ctx.get::<avian3d::prelude::RigidBody>(entity).is_some()
-            || ctx.get::<avian3d::prelude::Mass>(entity).is_some()
-            || ctx.get::<avian3d::prelude::LinearDamping>(entity).is_some()
-            || ctx.get::<avian3d::prelude::AngularDamping>(entity).is_some();
-        if has_physics {
-            egui::CollapsingHeader::new("Physics")
-                .default_open(false)
-                .show(ui, |ui| {
-                    if let Some(rb) = ctx.get::<avian3d::prelude::RigidBody>(entity).map(|rb| format!("{rb:?}")) {
-                        ui.label(format!("Type: {rb}"));
-                    }
-                    if let Some(cur) = ctx.get::<avian3d::prelude::Mass>(entity).map(|c| c.0) {
-                        let mut m = cur;
-                        if ui.add(egui::Slider::new(&mut m, 0.1..=100000.0).text("Mass (kg)").logarithmic(true)).changed() {
-                            ctx.defer(move |world| {
-                                if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(entity) {
-                                    mass.0 = m;
-                                }
-                            });
-                        }
-                    }
-                    if let Some(cur) = ctx.get::<avian3d::prelude::LinearDamping>(entity).map(|c| c.0 as f32) {
-                        let mut d = cur;
-                        if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Linear Damping")).changed() {
-                            ctx.defer(move |world| {
-                                if let Some(mut damp) = world.get_mut::<avian3d::prelude::LinearDamping>(entity) {
-                                    damp.0 = d as f64;
-                                }
-                            });
-                        }
-                    }
-                    if let Some(cur) = ctx.get::<avian3d::prelude::AngularDamping>(entity).map(|c| c.0 as f32) {
-                        let mut d = cur;
-                        if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Angular Damping")).changed() {
-                            ctx.defer(move |world| {
-                                if let Some(mut damp) = world.get_mut::<avian3d::prelude::AngularDamping>(entity) {
-                                    damp.0 = d as f64;
-                                }
-                            });
-                        }
-                    }
-                });
-        }
-
-        // Wheel + suspension dynamics have NO hand-coded sections here: they are
-        // USD-authored (`lunco:wheel:*`, `lunco:suspension:*`, `physxVehicle*`)
-        // and surface as derived sliders via `usd_parameters_section` (customData
-        // UI hints). Edits go through `ApplyUsdOp` and re-derive the spawned
-        // components in place (`lunco_usd_sim::wheel_params::resync_wheels_for_stage`)
-        // — the direct-ECS sliders that used to live here bypassed the document,
-        // so their edits neither persisted, journaled, nor replicated, and the
-        // resync would now overwrite them on the next document change.
-
-        // ── Materials ────────────────────────────────────────────────
-        let parts = editable_parts(ctx, entity);
-        if !parts.is_empty() {
-            let stored = ctx
-                .resource::<crate::InspectorTarget>()
-                .and_then(|t| t.part)
-                .filter(|p| parts.iter().any(|(e, _)| e == p));
-            let mut target = stored.or_else(|| default_part(ctx, &parts));
-            if stored.is_none() {
-                if let Some(t) = target {
-                    ctx.defer(move |world| {
-                        world.resource_mut::<crate::InspectorTarget>().part = Some(t);
-                    });
-                }
-            }
-            // Multi-part object → a dropdown to switch parts (may retarget).
-            if parts.len() > 1 {
-                target = parts_selector(ui, ctx, &parts, target);
-            }
-
-            if let Some(part) = target {
-                shader_picker_for_part(ui, ctx, part);
-                shader_tools_ui(ui, ctx, part);
-
-                // One subtree pass yields both the shader holder and the
-                // distinct PBR material handles (CQ-204: was two independent
-                // `subtree` walks of the same part — `first_shader_holder` +
-                // `collect_std_handles`).
-                let (pbr_parts, shader_holder) = part_materials(ctx, part);
-                if let Some(holder) = shader_holder {
-                    egui::CollapsingHeader::new("Shader Parameters")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            shader_parameters_section(ui, ctx, holder);
-                        });
-                }
-                if !pbr_parts.is_empty() {
-                    egui::CollapsingHeader::new("Material (PBR)")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            material_pbr_section(ui, ctx, part, &pbr_parts);
-                        });
-                }
-            }
-        }
-
-        // ── Terrain shader mode (streamed DEM terrain) ──────────────
-        if let Some(mode) = ctx.get::<lunco_terrain_surface::TerrainShaderMode>(entity).copied() {
-            use lunco_terrain_surface::TerrainShaderMode as M;
-            egui::CollapsingHeader::new("Terrain Shader")
-                .default_open(true)
-                .show(ui, |ui| {
-                    let label = |m: M| match m {
-                        M::Lit => "Lit (regolith)",
-                        M::DebugLod => "Debug LOD (colours)",
-                        M::Plain => "Plain (no shader)",
-                    };
-                    let mut sel = mode;
-                    egui::ComboBox::from_label("Mode")
-                        .selected_text(label(sel))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut sel, M::Lit, label(M::Lit));
-                            ui.selectable_value(&mut sel, M::DebugLod, label(M::DebugLod));
-                            ui.selectable_value(&mut sel, M::Plain, label(M::Plain));
-                        });
-                    if sel != mode {
-                        ctx.defer(move |world| {
-                            if let Some(mut m) =
-                                world.get_mut::<lunco_terrain_surface::TerrainShaderMode>(entity)
-                            {
-                                *m = sel;
-                            }
-                        });
-                    }
-                });
-        }
-
-        // ── Modelica parameters component ───────────────────────────
-        let has_modelica = ctx.get::<lunco_modelica::ModelicaModel>(entity).is_some();
-        if has_modelica {
-            egui::CollapsingHeader::new("Modelica Parameters")
-                .default_open(true)
-                .show(ui, |ui| {
-                    modelica_parameters_section(ui, ctx, entity);
-                });
-        }
-
-        // ── Joint control ───────────────────────────────────────────
-        let joint = ctx.resource::<InspectorView>().and_then(|v| v.joint);
-        if let Some(j) = joint {
-            egui::CollapsingHeader::new("Joint")
-                .default_open(true)
-                .show(ui, |ui| {
-                    joint_control_section(ui, ctx, j);
-                });
-        }
-
-        // Delete button
-        ui.separator();
-        if ui.button("🗑 Delete Entity (Del)").clicked() {
+    // Delete hotkey
+    if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+        let primary = ctx.resource::<SelectedEntities>().and_then(|s| s.primary());
+        if let Some(entity) = primary {
             ctx.defer(move |world| {
+                // The typed verb — despawns, drops the selection, AND authors the
+                // `RemovePrim`, so the delete persists, journals, replicates, and
+                // undoes (Ctrl+Z).
                 world.trigger(crate::commands::DeleteEntity {
                     target: entity,
                     intent: lunco_core::EditIntent::Persistent,
                 });
             });
+            return;
         }
     }
+
+    // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
+    // system (the single mutation path), not here.
+
+    ui.heading("Inspector");
+
+    // Get current selection
+    let Some(entity) = ctx.resource::<SelectedEntities>().and_then(|s| s.primary()) else {
+        ui.label("No entity selected.");
+        ui.label("Press Shift+Left-click on an object to select it.");
+        return;
+    };
+
+    ui.label(format!("ID: {entity:?}"));
+
+    // Name (read-only)
+    if let Some(name) = ctx.get::<Name>(entity).map(|n| n.as_str().to_string()) {
+        ui.label(format!("Name: {name}"));
+    }
+
+    ui.separator();
+
+    // ── Comms & Orbit (doc 43): geodetic anchor / Kepler orbit /
+    //    antenna params + live link state ─────────────────────────
+    comms_orbit_section(ui, ctx, entity);
+
+    // ── USD parameters: data-driven bounded sliders for attributes that
+    //    author a `customData {min,max,unit}` UI hint. ────────────────
+    usd_parameters_section(ui, ctx, entity);
+
+    // ── Variants: which configuration this prim composes with — a rover's
+    //    drivetrain, a scenario scene's terrain site. ─────────────────
+    usd_variants_section(ui, ctx, entity);
+
+    // ── Mount: snap an attached part onto the socket it declares, re-deriving
+    //    its placement + joint anchor from the mount frames (doc 48 §3.1). ──
+    mount_section(ui, ctx, entity);
+
+    // ── Transform component ──────────────────────────────────────
+    // The sliders author a **document op**, they do not poke ECS: a committed
+    // edit fires `MoveEntity`, whose observers both move the body (physics
+    // seat + kinematic pulse — the old hand-copied CQ-510 block, now in ONE
+    // place) and author `UsdOp::SetTranslate` into the runtime layer. So an
+    // Inspector move survives reload, journals, syncs, and is undone by the
+    // same Ctrl+Z as a gizmo drag. Committed = drag released or value typed —
+    // per-frame firing during a drag would push one op per frame.
+    if ctx.get::<Transform>(entity).is_some() {
+        egui::CollapsingHeader::new("Transform")
+            .default_open(true)
+            .show(ui, |ui| {
+                // GRID-ABSOLUTE, not `Transform.translation`: on a
+                // grid-direct prim the raw local is only the cell
+                // remainder, so the sliders showed a number that agreed with
+                // neither the authored USD nor the object's actual place —
+                // and committing it fed that short value to `MoveEntity`,
+                // teleporting the object one cell. This is the same frame
+                // the gizmo authors and the same one `MoveEntity` expects.
+                if let Some(t) = grid_absolute_of(ctx, entity).map(|p| p.as_vec3()) {
+                    let (mut x, mut y, mut z) = (t.x, t.y, t.z);
+                    // `DragValue`, not a ±1000 `Slider`: a grid-absolute
+                    // coordinate is unbounded (a moonbase prim sits well
+                    // outside ±1000 m of the grid origin), and a slider would
+                    // CLAMP it — merely showing the panel and nudging one axis
+                    // would have hauled the object back inside the range.
+                    let rx = ui.add(egui::DragValue::new(&mut x).speed(0.1).prefix("X: "));
+                    let ry = ui.add(egui::DragValue::new(&mut y).speed(0.1).prefix("Y: "));
+                    let rz = ui.add(egui::DragValue::new(&mut z).speed(0.1).prefix("Z: "));
+                    // Author ONCE, on release — not on every `changed()` frame, which
+                    // would flood the journal with an op per mouse-move for a single
+                    // drag. Same rule as the gizmo's drag-end authoring.
+                    let committed = [&rx, &ry, &rz]
+                        .iter()
+                        .any(|r| r.drag_stopped() || (r.changed() && !r.dragged()));
+                    if committed {
+                        let new_t = Vec3::new(x, y, z);
+                        ctx.defer(move |world| {
+                            // Route through the typed `MoveEntity` verb rather than
+                            // poking `Transform` here. It already owns the
+                            // physics-aware pose seat (CQ-510: writing only
+                            // `Transform` silently no-ops on a body, because avian
+                            // re-derives it from the f64 `Position` each tick), and
+                            // its persister authors the `SetTranslate` — so the edit
+                            // journals, replicates, persists, and undoes. The
+                            // hand-rolled copy that used to live here did none of
+                            // that.
+                            let Some(gid) =
+                                world.get::<lunco_core::GlobalEntityId>(entity).copied()
+                            else {
+                                warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
+                                return;
+                            };
+                            world.trigger(crate::commands::MoveEntity {
+                                entity_id: gid.get(),
+                                translation: new_t,
+                            });
+                        });
+                    }
+                }
+            });
+    }
+
+    // ── Physics component ────────────────────────────────────────
+    let has_physics = ctx.get::<avian3d::prelude::RigidBody>(entity).is_some()
+        || ctx.get::<avian3d::prelude::Mass>(entity).is_some()
+        || ctx.get::<avian3d::prelude::LinearDamping>(entity).is_some()
+        || ctx
+            .get::<avian3d::prelude::AngularDamping>(entity)
+            .is_some();
+    if has_physics {
+        egui::CollapsingHeader::new("Physics")
+            .default_open(false)
+            .show(ui, |ui| {
+                if let Some(rb) = ctx
+                    .get::<avian3d::prelude::RigidBody>(entity)
+                    .map(|rb| format!("{rb:?}"))
+                {
+                    ui.label(format!("Type: {rb}"));
+                }
+                if let Some(cur) = ctx.get::<avian3d::prelude::Mass>(entity).map(|c| c.0) {
+                    let mut m = cur;
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut m, 0.1..=100000.0)
+                                .text("Mass (kg)")
+                                .logarithmic(true),
+                        )
+                        .changed()
+                    {
+                        ctx.defer(move |world| {
+                            if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(entity)
+                            {
+                                mass.0 = m;
+                            }
+                        });
+                    }
+                }
+                if let Some(cur) = ctx
+                    .get::<avian3d::prelude::LinearDamping>(entity)
+                    .map(|c| c.0 as f32)
+                {
+                    let mut d = cur;
+                    if ui
+                        .add(egui::Slider::new(&mut d, 0.0..=10.0).text("Linear Damping"))
+                        .changed()
+                    {
+                        ctx.defer(move |world| {
+                            if let Some(mut damp) =
+                                world.get_mut::<avian3d::prelude::LinearDamping>(entity)
+                            {
+                                damp.0 = d as f64;
+                            }
+                        });
+                    }
+                }
+                if let Some(cur) = ctx
+                    .get::<avian3d::prelude::AngularDamping>(entity)
+                    .map(|c| c.0 as f32)
+                {
+                    let mut d = cur;
+                    if ui
+                        .add(egui::Slider::new(&mut d, 0.0..=10.0).text("Angular Damping"))
+                        .changed()
+                    {
+                        ctx.defer(move |world| {
+                            if let Some(mut damp) =
+                                world.get_mut::<avian3d::prelude::AngularDamping>(entity)
+                            {
+                                damp.0 = d as f64;
+                            }
+                        });
+                    }
+                }
+            });
+    }
+
+    // Wheel + suspension dynamics have NO hand-coded sections here: they are
+    // USD-authored (`lunco:wheel:*`, `lunco:suspension:*`, `physxVehicle*`)
+    // and surface as derived sliders via `usd_parameters_section` (customData
+    // UI hints). Edits go through `ApplyUsdOp` and re-derive the spawned
+    // components in place (`lunco_usd_sim::wheel_params::resync_wheels_for_stage`)
+    // — the direct-ECS sliders that used to live here bypassed the document,
+    // so their edits neither persisted, journaled, nor replicated, and the
+    // resync would now overwrite them on the next document change.
+
+    // ── Materials ────────────────────────────────────────────────
+    let parts = editable_parts(ctx, entity);
+    if !parts.is_empty() {
+        let stored = ctx
+            .resource::<crate::InspectorTarget>()
+            .and_then(|t| t.part)
+            .filter(|p| parts.iter().any(|(e, _)| e == p));
+        let mut target = stored.or_else(|| default_part(ctx, &parts));
+        if stored.is_none() {
+            if let Some(t) = target {
+                ctx.defer(move |world| {
+                    world.resource_mut::<crate::InspectorTarget>().part = Some(t);
+                });
+            }
+        }
+        // Multi-part object → a dropdown to switch parts (may retarget).
+        if parts.len() > 1 {
+            target = parts_selector(ui, ctx, &parts, target);
+        }
+
+        if let Some(part) = target {
+            shader_picker_for_part(ui, ctx, part);
+            shader_tools_ui(ui, ctx, part);
+
+            // One subtree pass yields both the shader holder and the
+            // distinct PBR material handles (CQ-204: was two independent
+            // `subtree` walks of the same part — `first_shader_holder` +
+            // `collect_std_handles`).
+            let (pbr_parts, shader_holder) = part_materials(ctx, part);
+            if let Some(holder) = shader_holder {
+                egui::CollapsingHeader::new("Shader Parameters")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        shader_parameters_section(ui, ctx, holder);
+                    });
+            }
+            if !pbr_parts.is_empty() {
+                egui::CollapsingHeader::new("Material (PBR)")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        material_pbr_section(ui, ctx, part, &pbr_parts);
+                    });
+            }
+        }
+    }
+
+    // ── Terrain shader mode (streamed DEM terrain) ──────────────
+    if let Some(mode) = ctx
+        .get::<lunco_terrain_surface::TerrainShaderMode>(entity)
+        .copied()
+    {
+        use lunco_terrain_surface::TerrainShaderMode as M;
+        egui::CollapsingHeader::new("Terrain Shader")
+            .default_open(true)
+            .show(ui, |ui| {
+                let label = |m: M| match m {
+                    M::Lit => "Lit (regolith)",
+                    M::DebugLod => "Debug LOD (colours)",
+                    M::Plain => "Plain (no shader)",
+                };
+                let mut sel = mode;
+                egui::ComboBox::from_label("Mode")
+                    .selected_text(label(sel))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut sel, M::Lit, label(M::Lit));
+                        ui.selectable_value(&mut sel, M::DebugLod, label(M::DebugLod));
+                        ui.selectable_value(&mut sel, M::Plain, label(M::Plain));
+                    });
+                if sel != mode {
+                    ctx.defer(move |world| {
+                        if let Some(mut m) =
+                            world.get_mut::<lunco_terrain_surface::TerrainShaderMode>(entity)
+                        {
+                            *m = sel;
+                        }
+                    });
+                }
+            });
+    }
+
+    // ── Modelica parameters component ───────────────────────────
+    let has_modelica = ctx.get::<lunco_modelica::ModelicaModel>(entity).is_some();
+    if has_modelica {
+        egui::CollapsingHeader::new("Modelica Parameters")
+            .default_open(true)
+            .show(ui, |ui| {
+                modelica_parameters_section(ui, ctx, entity);
+            });
+    }
+
+    // ── Joint control ───────────────────────────────────────────
+    let joint = ctx.resource::<InspectorView>().and_then(|v| v.joint);
+    if let Some(j) = joint {
+        egui::CollapsingHeader::new("Joint")
+            .default_open(true)
+            .show(ui, |ui| {
+                joint_control_section(ui, ctx, j);
+            });
+    }
+
+    // Delete button
+    ui.separator();
+    if ui.button("🗑 Delete Entity (Del)").clicked() {
+        ctx.defer(move |world| {
+            world.trigger(crate::commands::DeleteEntity {
+                target: entity,
+                intent: lunco_core::EditIntent::Persistent,
+            });
+        });
+    }
+}
 
 /// Live sun + ambient controls. Reads the change-driven [`InspectorView`]
 /// snapshot and dispatches every edit through a single
@@ -766,7 +832,7 @@ fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
 /// Unknown tokens fall back to `Fixed` (the safe, axis-free default).
 #[cfg(not(target_arch = "wasm32"))]
 fn attach_joint_from(joint: &str, axis: Option<&str>) -> lunco_usd::attach::AttachJoint {
-    use lunco_usd::attach::{Axis, AttachJoint};
+    use lunco_usd::attach::{AttachJoint, Axis};
     let axis = match axis {
         Some("Y") => Axis::Y,
         Some("Z") => Axis::Z,
@@ -816,13 +882,23 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                     };
                     ui.label(format!("🔌 {} ({}, {joint})", item.socket, item.accepts));
                 });
-                match (&item.part_path, &item.part_leaf, item.placement, item.rotate_deg) {
+                match (
+                    &item.part_path,
+                    &item.part_leaf,
+                    item.placement,
+                    item.rotate_deg,
+                ) {
                     (Some(part), Some(leaf), Some(placement), Some(rotate)) => {
                         ui.horizontal(|ui| {
                             let btn = egui::Button::new(format!("⟳ Snap {leaf}"));
                             let resp = ui.add_enabled(!item.aligned, btn);
                             if resp.clicked() {
-                                snap = Some((part.clone(), item.joint_path.clone(), placement, rotate));
+                                snap = Some((
+                                    part.clone(),
+                                    item.joint_path.clone(),
+                                    placement,
+                                    rotate,
+                                ));
                             }
                             if item.aligned {
                                 ui.weak("aligned");
@@ -908,13 +984,19 @@ fn attach_component_at_socket(
     // library. A component authored by an open Twin is `twin://<name>/…`, which
     // has no path under `assets/` at all; joining one produced a path that never
     // existed and the attach was skipped with a "no plug frame" warning.
-    let schemes = world.get_resource::<lunco_assets::SchemeRegistry>().cloned().unwrap_or_default();
+    let schemes = world
+        .get_resource::<lunco_assets::SchemeRegistry>()
+        .cloned()
+        .unwrap_or_default();
     let Some(fs_path) = schemes.local_path(&asset) else {
         bevy::log::warn!("[mount] `{asset}` resolves to no local file; attach skipped");
         return;
     };
     let Some(plug) = lunco_usd_bevy::mount::read_asset_plug_frame(&fs_path) else {
-        bevy::log::warn!("[mount] no plug frame in asset `{asset}` ({}); attach skipped", fs_path.display());
+        bevy::log::warn!(
+            "[mount] no plug frame in asset `{asset}` ({}); attach skipped",
+            fs_path.display()
+        );
         return;
     };
     let Some(doc) = resolve_doc_for_entity(world, entity) else {
@@ -953,24 +1035,40 @@ fn animation_transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let playing = matches!(pb.mode, TransportMode::Playing);
 
     ui.horizontal(|ui| {
-        if ui.button(if playing { "⏸ Pause" } else { "▶ Play" }).clicked() {
-            ctx.trigger(ControlAnimation { playing: Some(!playing), ..Default::default() });
+        if ui
+            .button(if playing { "⏸ Pause" } else { "▶ Play" })
+            .clicked()
+        {
+            ctx.trigger(ControlAnimation {
+                playing: Some(!playing),
+                ..Default::default()
+            });
         }
         if ui.button("⏮ Rewind").clicked() {
-            ctx.trigger(ControlAnimation { seek_secs: Some(0.0), ..Default::default() });
+            ctx.trigger(ControlAnimation {
+                seek_secs: Some(0.0),
+                ..Default::default()
+            });
         }
     });
 
     // Scrub the playhead (seconds) over the bound clips' authored span (set by
     // `bind_animated_to_preview`); fall back to a default window when no clip has
     // bound yet (so the bar is still usable). Pausing first lets the slider hold.
-    let range = if pb.bounded() { pb.start..=pb.end } else { 0.0..=120.0 };
+    let range = if pb.bounded() {
+        pb.start..=pb.end
+    } else {
+        0.0..=120.0
+    };
     let mut head = pb.head;
     if ui
         .add(egui::Slider::new(&mut head, range).text("Time (s)"))
         .changed()
     {
-        ctx.trigger(ControlAnimation { seek_secs: Some(head), ..Default::default() });
+        ctx.trigger(ControlAnimation {
+            seek_secs: Some(head),
+            ..Default::default()
+        });
     }
 
     // Playback rate (1× = realtime). 0 freezes without changing the play flag.
@@ -979,7 +1077,10 @@ fn animation_transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         .add(egui::Slider::new(&mut rate, 0.0..=10.0).text("Rate ×"))
         .changed()
     {
-        ctx.trigger(ControlAnimation { rate: Some(rate), ..Default::default() });
+        ctx.trigger(ControlAnimation {
+            rate: Some(rate),
+            ..Default::default()
+        });
     }
 
     ui.label("Animation only — the physics clock is the toolbar ⏸.");
@@ -989,8 +1090,12 @@ fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     use lunco_environment::SetEnvironmentLight;
 
     let sun = ctx.resource::<InspectorView>().and_then(|v| v.sun.clone());
-    let ambient = ctx.resource::<InspectorView>().and_then(|v| v.ambient_brightness);
-    let earthshine = ctx.resource::<InspectorView>().and_then(|v| v.earthshine_lux);
+    let ambient = ctx
+        .resource::<InspectorView>()
+        .and_then(|v| v.ambient_brightness);
+    let earthshine = ctx
+        .resource::<InspectorView>()
+        .and_then(|v| v.earthshine_lux);
     if sun.is_none() && ambient.is_none() && earthshine.is_none() {
         return;
     }
@@ -1113,8 +1218,12 @@ fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     use lunco_environment::SetEnvironmentLight;
 
-    let exposure = ctx.resource::<InspectorView>().and_then(|v| v.exposure_ev100);
-    let bloom = ctx.resource::<InspectorView>().and_then(|v| v.bloom_intensity);
+    let exposure = ctx
+        .resource::<InspectorView>()
+        .and_then(|v| v.exposure_ev100);
+    let bloom = ctx
+        .resource::<InspectorView>()
+        .and_then(|v| v.bloom_intensity);
 
     let mut cmd = SetEnvironmentLight::default();
     let mut any_change = false;
@@ -1167,25 +1276,48 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
             .on_hover_text("Deepest refinement = closest-up detail.");
         ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
-            .on_hover_text("1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.");
+            .on_hover_text(
+                "1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.",
+            );
         ui.add(egui::Slider::new(&mut cfg.tile_budget, 64usize..=2048).text("Tile budget"))
             .on_hover_text(
                 "Cap on SELECTED tiles per terrain — the dominant terrain GPU cost. \
                  If the pixel-error metric wants more tiles than this, the excess \
                  splits are refused and the far field sits on coarser parents.",
             );
+        ui.add(
+            egui::Slider::new(&mut cfg.body_lookahead_seconds, 0.0..=10.0)
+                .text("Body lookahead (s)"),
+        )
+        .on_hover_text(
+            "Preload the finest terrain along each dynamic body's predicted path. \
+             Increase when vehicles can outrun asynchronous tile baking.",
+        );
     });
     // Streaming health — pure derived read of `TerrainStreamStatus`.
-    if let Some(status) = ctx.resource::<lunco_terrain_surface::TerrainStreamStatus>().copied() {
+    if let Some(status) = ctx
+        .resource::<lunco_terrain_surface::TerrainStreamStatus>()
+        .copied()
+    {
         ui.separator();
         ui.label(format!(
-            "Tiles: {}/{} resident · {} baking",
-            status.resident, status.wanted, status.pending
+            "Tiles: {}/{} resident · {} baking · {} urgent",
+            status.resident, status.wanted, status.pending, status.urgent_pending
         ))
         .on_hover_text(
             "Wanted tiles with a mesh on screen / wanted by the current selection; \
              baking = off-thread height bakes in flight (transient fill).",
         );
+        if status.stale_cancelled > 0 {
+            ui.label(format!(
+                "{} obsolete bake requests cancelled",
+                status.stale_cancelled
+            ))
+            .on_hover_text(
+                "Requests left behind by camera/body movement were removed so they \
+                 cannot occupy all terrain worker slots.",
+            );
+        }
         if status.budget_refused > 0 {
             // Semantic status colour from the active Theme (§3.1); egui
             // placeholder when headless.
@@ -1230,7 +1362,9 @@ fn terrain_overlay_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             ui.add(egui::Slider::new(&mut p.safe_deg, 0.0..=45.0).text("Safe ≤ (°)"))
                 .on_hover_text("Slopes at/below this stay green.");
             ui.add(egui::Slider::new(&mut p.cliff_deg, 0.0..=45.0).text("Cliff ≥ (°)"))
-                .on_hover_text("The critical angle: slopes at/above this go red. Tunes live, no re-bake.");
+                .on_hover_text(
+                    "The critical angle: slopes at/above this go red. Tunes live, no re-bake.",
+                );
             // Keep the band ordered so the ramp never inverts.
             if p.safe_deg > p.cliff_deg {
                 p.safe_deg = p.cliff_deg;
@@ -1262,7 +1396,11 @@ fn draw_slope_legend(ui: &mut egui::Ui, safe_deg: f32, cliff_deg: f32) {
         let t = i as f32 / n as f32;
         let deg = t * MAX_DEG;
         let c = hazard.sample(deg.to_radians());
-        let col = egui::Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8);
+        let col = egui::Color32::from_rgb(
+            (c[0] * 255.0) as u8,
+            (c[1] * 255.0) as u8,
+            (c[2] * 255.0) as u8,
+        );
         let x0 = rect.left() + rect.width() * t;
         let x1 = rect.left() + rect.width() * ((i + 1) as f32 / n as f32);
         painter.rect_filled(
@@ -1290,9 +1428,11 @@ fn draw_slope_legend(ui: &mut egui::Ui, safe_deg: f32, cliff_deg: f32) {
         });
     });
     ui.label(
-        egui::RichText::new(format!("safe ≤ {safe_deg:.0}°   ·   cliff ≥ {cliff_deg:.0}°"))
-            .weak()
-            .small(),
+        egui::RichText::new(format!(
+            "safe ≤ {safe_deg:.0}°   ·   cliff ≥ {cliff_deg:.0}°"
+        ))
+        .weak()
+        .small(),
     );
 }
 
@@ -1347,7 +1487,10 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             },
             _ => match spec.pattern {
                 p @ Pattern::Clustered { .. } => p,
-                _ => Pattern::Clustered { clusters: 8, spread: 25.0 },
+                _ => Pattern::Clustered {
+                    clusters: 8,
+                    spread: 25.0,
+                },
             },
         };
         if std::mem::discriminant(&spec.pattern) != std::mem::discriminant(&chosen) {
@@ -1364,67 +1507,91 @@ fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                 }
             }
             Pattern::Clustered { clusters, spread } => {
-                if ui.add(egui::Slider::new(clusters, 1u32..=32).text("Clusters")).drag_stopped() {
+                if ui
+                    .add(egui::Slider::new(clusters, 1u32..=32).text("Clusters"))
+                    .drag_stopped()
+                {
                     regen = true;
                 }
-                if ui.add(egui::Slider::new(spread, 2.0..=80.0).text("Spread (m)")).drag_stopped() {
+                if ui
+                    .add(egui::Slider::new(spread, 2.0..=80.0).text("Spread (m)"))
+                    .drag_stopped()
+                {
                     regen = true;
                 }
             }
             Pattern::Uniform => {}
         }
 
-        egui::CollapsingHeader::new("Craters").default_open(true).show(ui, |ui| {
-            let s = &mut *spec;
-            if ui.checkbox(&mut s.craters.enabled, "Enabled").changed() {
-                regen = true;
-            }
-            for (val, range, label) in [
-                (&mut s.craters.density, 0.0..=60.0, "Density /ha"),
-                (&mut s.craters.depth_ratio, 0.0..=0.8, "Depth ratio"),
-                (&mut s.craters.rim_height_ratio, 0.0..=1.5, "Wall height ratio"),
-                (&mut s.craters.size.min, 0.5..=20.0, "Radius min"),
-                (&mut s.craters.size.mode, 0.5..=20.0, "Radius mode"),
-                (&mut s.craters.size.max, 0.5..=40.0, "Radius max"),
-            ] {
-                if ui.add(egui::Slider::new(val, range).text(label)).drag_stopped() {
+        egui::CollapsingHeader::new("Craters")
+            .default_open(true)
+            .show(ui, |ui| {
+                let s = &mut *spec;
+                if ui.checkbox(&mut s.craters.enabled, "Enabled").changed() {
                     regen = true;
                 }
-            }
-            // Keep the size distribution valid: min ≤ mode ≤ max. If the sliders
-            // invert (e.g. min > mode) the log-normal sampler clamps EVERY crater to
-            // the high end → a dense field of oversized overlapping basins + rims that
-            // reads as jagged spike noise from altitude (the "craters look worse").
-            s.craters.size.min = s.craters.size.min.min(s.craters.size.mode);
-            s.craters.size.max = s.craters.size.max.max(s.craters.size.mode);
-        });
+                for (val, range, label) in [
+                    (&mut s.craters.density, 0.0..=60.0, "Density /ha"),
+                    (&mut s.craters.depth_ratio, 0.0..=0.8, "Depth ratio"),
+                    (
+                        &mut s.craters.rim_height_ratio,
+                        0.0..=1.5,
+                        "Wall height ratio",
+                    ),
+                    (&mut s.craters.size.min, 0.5..=20.0, "Radius min"),
+                    (&mut s.craters.size.mode, 0.5..=20.0, "Radius mode"),
+                    (&mut s.craters.size.max, 0.5..=40.0, "Radius max"),
+                ] {
+                    if ui
+                        .add(egui::Slider::new(val, range).text(label))
+                        .drag_stopped()
+                    {
+                        regen = true;
+                    }
+                }
+                // Keep the size distribution valid: min ≤ mode ≤ max. If the sliders
+                // invert (e.g. min > mode) the log-normal sampler clamps EVERY crater to
+                // the high end → a dense field of oversized overlapping basins + rims that
+                // reads as jagged spike noise from altitude (the "craters look worse").
+                s.craters.size.min = s.craters.size.min.min(s.craters.size.mode);
+                s.craters.size.max = s.craters.size.max.max(s.craters.size.mode);
+            });
 
-        egui::CollapsingHeader::new("Rocks").default_open(true).show(ui, |ui| {
-            let s = &mut *spec;
-            if ui.checkbox(&mut s.rocks.enabled, "Enabled").changed() {
-                regen = true;
-            }
-            for (val, range, label) in [
-                (&mut s.rocks.density, 0.0..=400.0, "Density /ha"),
-                (&mut s.rocks.size.min, 0.05..=5.0, "Radius min"),
-                (&mut s.rocks.size.mode, 0.05..=5.0, "Radius mode"),
-                (&mut s.rocks.size.max, 0.05..=8.0, "Radius max"),
-                (&mut s.rocks.dynamic_fraction, 0.0..=1.0, "Dynamic frac"),
-            ] {
-                if ui.add(egui::Slider::new(val, range).text(label)).drag_stopped() {
+        egui::CollapsingHeader::new("Rocks")
+            .default_open(true)
+            .show(ui, |ui| {
+                let s = &mut *spec;
+                if ui.checkbox(&mut s.rocks.enabled, "Enabled").changed() {
                     regen = true;
                 }
-            }
-            // Same validity clamp as craters: min ≤ mode ≤ max.
-            s.rocks.size.min = s.rocks.size.min.min(s.rocks.size.mode);
-            s.rocks.size.max = s.rocks.size.max.max(s.rocks.size.mode);
-        });
+                for (val, range, label) in [
+                    (&mut s.rocks.density, 0.0..=400.0, "Density /ha"),
+                    (&mut s.rocks.size.min, 0.05..=5.0, "Radius min"),
+                    (&mut s.rocks.size.mode, 0.05..=5.0, "Radius mode"),
+                    (&mut s.rocks.size.max, 0.05..=8.0, "Radius max"),
+                    (&mut s.rocks.dynamic_fraction, 0.0..=1.0, "Dynamic frac"),
+                ] {
+                    if ui
+                        .add(egui::Slider::new(val, range).text(label))
+                        .drag_stopped()
+                    {
+                        regen = true;
+                    }
+                }
+                // Same validity clamp as craters: min ≤ mode ≤ max.
+                s.rocks.size.min = s.rocks.size.min.min(s.rocks.size.mode);
+                s.rocks.size.max = s.rocks.size.max.max(s.rocks.size.mode);
+            });
 
         ui.separator();
         if ui.button("♻ Regenerate").clicked() {
             regen = true;
         }
-        ui.label(egui::RichText::new("Field rebuilds on slider release.").small().weak());
+        ui.label(
+            egui::RichText::new("Field rebuilds on slider release.")
+                .small()
+                .weak(),
+        );
 
         if regen {
             regen_spec = Some(spec.clone());
@@ -1526,7 +1693,13 @@ fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<(Entity, String)> {
         if has_shader || has_std {
             let label = ctx
                 .get::<Name>(e)
-                .map(|n| n.as_str().rsplit(['/', '\\']).next().unwrap_or(n.as_str()).to_string())
+                .map(|n| {
+                    n.as_str()
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(n.as_str())
+                        .to_string()
+                })
                 .unwrap_or_else(|| format!("{e:?}"));
             out.push((e, label));
         }
@@ -1692,7 +1865,9 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                 template: String,
                 import: String,
             }
-            let mut st: St = ui.memory_mut(|m| m.data.get_temp::<St>(id)).unwrap_or_default();
+            let mut st: St = ui
+                .memory_mut(|m| m.data.get_temp::<St>(id))
+                .unwrap_or_default();
             if st.template.is_empty() {
                 st.template = "solid".to_string();
             }
@@ -1836,12 +2011,7 @@ fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
 /// so there is nothing here to fall back to.
 ///
 /// Reads a snapshot via [`PanelCtx`]; the component + USD writes are deferred.
-fn material_pbr_section(
-    ui: &mut egui::Ui,
-    ctx: &mut PanelCtx,
-    part: Entity,
-    parts: &[Entity],
-) {
+fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, parts: &[Entity]) {
     let Some(&first) = parts.first() else {
         return;
     };
@@ -1864,7 +2034,8 @@ fn material_pbr_section(
             look.double_sided,
         )
     };
-    let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut ior, mut double_sided) = snap;
+    let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut ior, mut double_sided) =
+        snap;
 
     let mut changed = false;
     let mut base_changed = false;
@@ -1876,7 +2047,9 @@ fn material_pbr_section(
         base_changed |= r.changed();
         ui.label("Base color");
     });
-    let alpha_changed = ui.add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Alpha")).changed();
+    let alpha_changed = ui
+        .add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Alpha"))
+        .changed();
     changed |= alpha_changed;
     base_changed |= alpha_changed;
     ui.horizontal(|ui| {
@@ -1885,9 +2058,13 @@ fn material_pbr_section(
         emissive_changed |= r.changed();
         ui.label("Emissive");
     });
-    let metallic_changed = ui.add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic")).changed();
+    let metallic_changed = ui
+        .add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic"))
+        .changed();
     changed |= metallic_changed;
-    let roughness_changed = ui.add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness")).changed();
+    let roughness_changed = ui
+        .add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness"))
+        .changed();
     changed |= roughness_changed;
     // Index of refraction — `UsdPreviewSurface`'s `inputs:ior`, and the ONLY specular
     // knob. This slider used to say "Reflectance" and author a private
@@ -1898,7 +2075,9 @@ fn material_pbr_section(
     // There is no "Unlit" checkbox: `PbrLook::unlit` is render-only intent for overlay
     // geometry (trajectory lines, brush rings, labels) with no USD equivalent, so a
     // checkbox here could only edit a value that silently reverted on reload.
-    let ior_changed = ui.add(egui::Slider::new(&mut ior, 1.0..=2.33).text("IOR")).changed();
+    let ior_changed = ui
+        .add(egui::Slider::new(&mut ior, 1.0..=2.33).text("IOR"))
+        .changed();
     changed |= ior_changed;
     changed |= ui.checkbox(&mut double_sided, "Double-sided").changed();
     if parts.len() > 1 {
@@ -1912,7 +2091,9 @@ fn material_pbr_section(
                 // Intent only — the binder re-materialises it (and, sharing by
                 // look, gives this entity its own handle if the edit made it
                 // unique).
-                let Some(mut look) = world.get_mut::<PbrLook>(*e) else { continue };
+                let Some(mut look) = world.get_mut::<PbrLook>(*e) else {
+                    continue;
+                };
                 look.base_color = LinearRgba::new(base[0], base[1], base[2], alpha);
                 look.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
                 look.metallic = metallic;
@@ -1996,12 +2177,7 @@ fn material_pbr_section(
                 }
 
                 if let Some(doc) = resolve_doc_for_entity(world, part) {
-                    lunco_usd::commands::apply_ops_as_change_set(
-                        world,
-                        doc,
-                        "Edit material",
-                        ops,
-                    );
+                    lunco_usd::commands::apply_ops_as_change_set(world, doc, "Edit material", ops);
                 }
             }
         });
@@ -2019,7 +2195,10 @@ struct ShaderSchemaCache {
     #[allow(clippy::type_complexity)]
     map: std::collections::HashMap<
         bevy::asset::AssetId<bevy::shader::Shader>,
-        ((usize, usize), Option<std::sync::Arc<lunco_materials::ParamSchema>>),
+        (
+            (usize, usize),
+            Option<std::sync::Arc<lunco_materials::ParamSchema>>,
+        ),
     >,
 }
 
@@ -2035,7 +2214,9 @@ fn shader_schema_of(
     if path.is_empty() {
         return None;
     }
-    let handle = ctx.resource::<AssetServer>()?.load::<bevy::shader::Shader>(path.to_string());
+    let handle = ctx
+        .resource::<AssetServer>()?
+        .load::<bevy::shader::Shader>(path.to_string());
     let id = handle.id();
     let cached = ctx.resource_scope(|ctx, cache: &mut ShaderSchemaCache| {
         let shaders = ctx.resource::<Assets<bevy::shader::Shader>>()?;
@@ -2157,15 +2338,20 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         // overwrites whatever the user typed, so an enabled control would read as a
         // broken slider rather than as a value under someone else's authority.
         let locked = row.locked;
-        ui.add_enabled_ui(!locked, |ui| {
-        match row.ui {
+        ui.add_enabled_ui(!locked, |ui| match row.ui {
             UiKind::Slider { min, max } => {
-                if ui.add(egui::Slider::new(&mut row.scalar, min..=max).text(&row.label)).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut row.scalar, min..=max).text(&row.label))
+                    .changed()
+                {
                     edits.push((row.name, ParamValue::F32(row.scalar)));
                 }
             }
             UiKind::Int { min, max } => {
-                if ui.add(egui::Slider::new(&mut row.int, min..=max).text(&row.label)).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut row.int, min..=max).text(&row.label))
+                    .changed()
+                {
                     let v = match row.ty {
                         ParamType::U32 => ParamValue::U32(row.int.max(0) as u32),
                         ParamType::F32 => ParamValue::F32(row.int as f32),
@@ -2189,13 +2375,15 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
             }
             UiKind::Free | UiKind::Engine => {
                 ui.horizontal(|ui| {
-                    if ui.add(egui::DragValue::new(&mut row.scalar).speed(0.01)).changed() {
+                    if ui
+                        .add(egui::DragValue::new(&mut row.scalar).speed(0.01))
+                        .changed()
+                    {
                         edits.push((row.name, ParamValue::F32(row.scalar)));
                     }
                     ui.label(&row.label);
                 });
             }
-        }
         })
         .response
         .on_disabled_hover_text(
@@ -2235,7 +2423,10 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
                             };
                             (t, format!("({}, {}, {})", arr[0], arr[1], arr[2]))
                         }
-                        ParamValue::Vec4(arr) => ("float4", format!("({}, {}, {}, {})", arr[0], arr[1], arr[2], arr[3])),
+                        ParamValue::Vec4(arr) => (
+                            "float4",
+                            format!("({}, {}, {}, {})", arr[0], arr[1], arr[2], arr[3]),
+                        ),
                     };
                     apply_usd_attribute_change(world, entity, &usd_name, type_name, value_str);
                 }
@@ -2247,11 +2438,7 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
 /// Render editable sliders for every tunable `parameter Real` in the
 /// entity's Modelica model. Reads params via [`PanelCtx::get`]; the op
 /// dispatch + recompile signal run in a deferred `&mut World` closure.
-fn modelica_parameters_section(
-    ui: &mut egui::Ui,
-    ctx: &mut PanelCtx,
-    entity: Entity,
-) {
+fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     use lunco_modelica::ModelicaModel;
 
     // Snapshot the current params so we can render stable sliders.
@@ -2260,7 +2447,11 @@ fn modelica_parameters_section(
         None => return,
     };
     if params.is_empty() {
-        ui.label(egui::RichText::new("(no tunable parameters)").weak().small());
+        ui.label(
+            egui::RichText::new("(no tunable parameters)")
+                .weak()
+                .small(),
+        );
         return;
     }
 
@@ -2274,11 +2465,7 @@ fn modelica_parameters_section(
         ui.horizontal(|ui| {
             ui.label(format!("{key:14}"));
             if ui
-                .add(
-                    egui::DragValue::new(&mut v)
-                        .speed(0.01)
-                        .fixed_decimals(3),
-                )
+                .add(egui::DragValue::new(&mut v).speed(0.01).fixed_decimals(3))
                 .changed()
             {
                 changed_pair = Some((key.clone(), v));
@@ -2286,12 +2473,14 @@ fn modelica_parameters_section(
         });
     }
 
-    let Some((changed_key, new_value)) = changed_pair else { return };
+    let Some((changed_key, new_value)) = changed_pair else {
+        return;
+    };
 
     ctx.defer(move |world| {
+        use lunco_modelica::document::ModelicaOp;
         use lunco_modelica::state::ModelicaDocumentRegistry;
         use lunco_modelica::ui::panels::canvas_diagram::apply_ops_public;
-        use lunco_modelica::document::ModelicaOp;
         use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
         // Mirror the new value into ECS state for instant slider feedback;
@@ -2310,16 +2499,16 @@ fn modelica_parameters_section(
         let (doc_id, class_name) = {
             let registry = world.resource::<ModelicaDocumentRegistry>();
             let doc = registry.document_of(entity);
-            let class = doc
-                .and_then(|d| registry.host(d))
-                .and_then(|h| {
-                    lunco_modelica::ast_extract::extract_model_name_from_ast(
-                        h.document().syntax().ast(),
-                    )
-                });
+            let class = doc.and_then(|d| registry.host(d)).and_then(|h| {
+                lunco_modelica::ast_extract::extract_model_name_from_ast(
+                    h.document().syntax().ast(),
+                )
+            });
             (doc, class)
         };
-        let (Some(doc_id), Some(class_name)) = (doc_id, class_name) else { return };
+        let (Some(doc_id), Some(class_name)) = (doc_id, class_name) else {
+            return;
+        };
 
         apply_ops_public(
             world,
@@ -2375,15 +2564,26 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 let mut body = a.body;
                 let changed = ui
                     .horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut lat).speed(0.01).range(-90.0..=90.0).prefix("lat "))
+                        ui.add(
+                            egui::DragValue::new(&mut lat)
+                                .speed(0.01)
+                                .range(-90.0..=90.0)
+                                .prefix("lat "),
+                        )
+                        .changed()
+                            | ui.add(
+                                egui::DragValue::new(&mut lon)
+                                    .speed(0.01)
+                                    .range(-180.0..=180.0)
+                                    .prefix("lon "),
+                            )
                             .changed()
-                            | ui.add(egui::DragValue::new(&mut lon).speed(0.01).range(-180.0..=180.0).prefix("lon "))
-                                .changed()
                             | ui.add(egui::DragValue::new(&mut height).speed(1.0).prefix("h "))
                                 .changed()
                     })
                     .inner
-                    | ui.add(egui::DragValue::new(&mut body).prefix("body NAIF ")).changed();
+                    | ui.add(egui::DragValue::new(&mut body).prefix("body NAIF "))
+                        .changed();
                 if changed {
                     ctx.defer(move |world| {
                         if let Some(mut c) = world.get_mut::<GeodeticAnchor>(entity) {
@@ -2392,10 +2592,34 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                             c.geodetic.lon_deg = lon;
                             c.geodetic.height_m = height;
                         }
-                        apply_usd_attribute_change(world, entity, "lunco:anchor:lat", "double", format!("{lat}"));
-                        apply_usd_attribute_change(world, entity, "lunco:anchor:lon", "double", format!("{lon}"));
-                        apply_usd_attribute_change(world, entity, "lunco:anchor:height", "double", format!("{height}"));
-                        apply_usd_attribute_change(world, entity, "lunco:anchor:body", "int", format!("{body}"));
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:anchor:lat",
+                            "double",
+                            format!("{lat}"),
+                        );
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:anchor:lon",
+                            "double",
+                            format!("{lon}"),
+                        );
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:anchor:height",
+                            "double",
+                            format!("{height}"),
+                        );
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:anchor:body",
+                            "int",
+                            format!("{body}"),
+                        );
                     });
                 }
             }
@@ -2410,17 +2634,31 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 let mut m0 = o.elements.mean_anomaly_deg;
                 let changed = ui
                     .horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut a_m).speed(10_000.0).prefix("a ")).changed()
-                            | ui.add(egui::DragValue::new(&mut e).speed(0.005).range(0.0..=0.95).prefix("e "))
-                                .changed()
-                            | ui.add(egui::DragValue::new(&mut inc).speed(0.1).range(-180.0..=180.0).prefix("i "))
-                                .changed()
+                        ui.add(egui::DragValue::new(&mut a_m).speed(10_000.0).prefix("a "))
+                            .changed()
+                            | ui.add(
+                                egui::DragValue::new(&mut e)
+                                    .speed(0.005)
+                                    .range(0.0..=0.95)
+                                    .prefix("e "),
+                            )
+                            .changed()
+                            | ui.add(
+                                egui::DragValue::new(&mut inc)
+                                    .speed(0.1)
+                                    .range(-180.0..=180.0)
+                                    .prefix("i "),
+                            )
+                            .changed()
                     })
                     .inner
                     | ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut raan).speed(0.1).prefix("Ω ")).changed()
-                            | ui.add(egui::DragValue::new(&mut argp).speed(0.1).prefix("ω ")).changed()
-                            | ui.add(egui::DragValue::new(&mut m0).speed(0.1).prefix("M₀ ")).changed()
+                        ui.add(egui::DragValue::new(&mut raan).speed(0.1).prefix("Ω "))
+                            .changed()
+                            | ui.add(egui::DragValue::new(&mut argp).speed(0.1).prefix("ω "))
+                                .changed()
+                            | ui.add(egui::DragValue::new(&mut m0).speed(0.1).prefix("M₀ "))
+                                .changed()
                     })
                     .inner;
                 if changed {
@@ -2433,16 +2671,51 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                             c.elements.arg_periapsis_deg = argp;
                             c.elements.mean_anomaly_deg = m0;
                         }
-                        apply_usd_attribute_change(world, entity, "lunco:orbit:semiMajorAxisM", "double", format!("{a_m}"));
-                        apply_usd_attribute_change(world, entity, "lunco:orbit:eccentricity", "double", format!("{e}"));
-                        apply_usd_attribute_change(world, entity, "lunco:orbit:inclinationDeg", "double", format!("{inc}"));
-                        apply_usd_attribute_change(world, entity, "lunco:orbit:raanDeg", "double", format!("{raan}"));
-                        apply_usd_attribute_change(world, entity, "lunco:orbit:argPeriapsisDeg", "double", format!("{argp}"));
-                        apply_usd_attribute_change(world, entity, "lunco:orbit:meanAnomalyDeg", "double", format!("{m0}"));
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:orbit:semiMajorAxisM",
+                            "double",
+                            format!("{a_m}"),
+                        );
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:orbit:eccentricity",
+                            "double",
+                            format!("{e}"),
+                        );
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:orbit:inclinationDeg",
+                            "double",
+                            format!("{inc}"),
+                        );
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:orbit:raanDeg",
+                            "double",
+                            format!("{raan}"),
+                        );
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:orbit:argPeriapsisDeg",
+                            "double",
+                            format!("{argp}"),
+                        );
+                        apply_usd_attribute_change(
+                            world,
+                            entity,
+                            "lunco:orbit:meanAnomalyDeg",
+                            "double",
+                            format!("{m0}"),
+                        );
                     });
                 }
             }
-
         });
     ui.separator();
 }

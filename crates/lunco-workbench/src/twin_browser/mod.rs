@@ -45,8 +45,13 @@ use bevy_egui::egui;
 use crate::panel::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub mod files_section;
+/// LunCo Library section — the engine's bundled `assets/` listed as a
+/// sibling above the Twin's own files. Names only; click opens as text.
+pub mod library_section;
+mod path_tree;
 
 pub use files_section::FilesSection;
+pub use library_section::LuncoLibrarySection;
 
 /// Stable id of the Twin Browser singleton panel.
 pub const TWIN_BROWSER_PANEL_ID: PanelId = PanelId("lunco.workbench.twin_browser");
@@ -105,7 +110,6 @@ impl BrowserScope {
         }
     }
 }
-
 
 // ─────────────────────────────────────────────────────────────────────
 // Resources: section registry + action outbox
@@ -268,7 +272,10 @@ impl BrowserActions {
     /// frame. Used to partition `OpenFile` by file extension between
     /// domain crates (Modelica takes `.mo`, USD takes `.usda` / `.usdc`,
     /// …) without coupling the workbench to any domain's filetype list.
-    pub fn take_where<F: Fn(&BrowserAction) -> bool>(&mut self, predicate: F) -> Vec<BrowserAction> {
+    pub fn take_where<F: Fn(&BrowserAction) -> bool>(
+        &mut self,
+        predicate: F,
+    ) -> Vec<BrowserAction> {
         let mut taken = Vec::new();
         let mut kept = Vec::with_capacity(self.queued.len());
         for action in std::mem::take(&mut self.queued) {
@@ -469,10 +476,7 @@ impl Panel for TwinBrowserPanel {
                 .resource::<lunco_theme::Theme>()
                 .map(|t| t.tokens.error)
                 .unwrap_or(egui::Color32::LIGHT_RED);
-            ui.colored_label(
-                error_color,
-                "BrowserSectionRegistry resource missing",
-            );
+            ui.colored_label(error_color, "BrowserSectionRegistry resource missing");
         }
     }
 }

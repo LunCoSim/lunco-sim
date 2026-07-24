@@ -54,9 +54,13 @@ Design: [`56-asset-resolution-and-cache.md`](../../docs/architecture/56-asset-re
 | `assets/shaders/` | `.wgsl` |
 | `assets/celestial/`, `missions/`, `tutorials/`, `config/` | the rest |
 
-Only **`.usda`, `.wgsl`, `.rhai`** are walked into the discovery manifest
-(`MANIFEST_EXTS`, `crates/lunco-assets/src/discovery.rs:276`). A `.mo` is found
-because a `.usda` names it, never by scanning.
+The engine-recognized **source** extensions are walked into the discovery manifest
+(`SOURCE_EXTS`, `crates/lunco-assets/src/discovery.rs`): **`.usda`, `.wgsl`,
+`.rhai`, `.mo`, `.btxml`**. `.mo` (Modelica) and `.btxml` (BT.CPP behaviour trees)
+are catalogued both because a `.usda` names them and so they can be browsed
+directly — the Scenarios menu lists every registered source file, grouped by type.
+Non-source data (`.json`, `.toml`, `.py`) is not walked: it is read by a subsystem
+or evaluated ad hoc, not browsed as an authored asset.
 
 ## The `lunco://` scheme
 
@@ -287,7 +291,8 @@ fn on_tick(me) {
 
 Native runtime walks the filesystem, so **adding a file needs no step at all**.
 The **web** build has no filesystem: it fetches `assets/manifest.json`
-(`discovery.rs:160`). After adding or removing any `.usda`/`.wgsl`/`.rhai`:
+(`discovery.rs:160`). After adding or removing any catalogued source
+(`.usda`/`.wgsl`/`.rhai`/`.mo`/`.btxml`):
 
 ```bash
 ./scripts/build_web.sh build sandbox

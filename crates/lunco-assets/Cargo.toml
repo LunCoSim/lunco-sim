@@ -21,13 +21,9 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 # (native `FileStorage`, web `OpfsStorage`) rather than raw `std::fs`, so an open
 # Twin and a downloaded scenario are served uniformly on both platforms.
 lunco-storage = { path = "../lunco-storage" }
+lunco-twin = { path = "../lunco-twin" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# The Twin manifest type — `[usd] scenes` is what says which of a project's
-# `.usda` files are loadable scenes (see `discovery::list_scene_assets`).
-# Manifest-only use: no Bevy feature, no cycle (lunco-twin does not depend on
-# this crate).
-lunco-twin = { path = "../lunco-twin" }
 toml = { workspace = true }
 thiserror = { workspace = true }
 image = { workspace = true }
@@ -39,6 +35,9 @@ include_dir = "0.7"
 # Native-only — the wasm path uses OPFS / IndexedDB instead and skips
 # this helper entirely.
 dirs = "5"
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 # Native-only helper binary that packs MSL into a versioned, compressed
 # bundle for the web build. Path-gated to keep wasm32 builds away from it.
