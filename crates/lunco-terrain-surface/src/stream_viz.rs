@@ -385,11 +385,12 @@ pub(crate) fn retire_terrain_tiles(
 
 /// Build the DRAW partition: which tiles actually render this frame.
 ///
-/// For each selected node, the deepest node in its ancestor chain (itself first) that is
-/// READY — this is Cesium `ForbidHoles` / MSFS "best currently available data": when a fine
-/// tile has not baked yet, its parent draws **instead of** it. Then any node an ancestor
-/// already covers is dropped, so the result is DISJOINT — exactly one tile per point, which
-/// is what keeps a coarse stand-in from z-fighting through the fine surface it replaces.
+/// For each selected node, use its ready self, its complete ready child cover, or the deepest
+/// ready ancestor — this is Cesium `ForbidHoles` / MSFS "best currently available data".
+/// The child-cover case keeps outgoing detail visible while a newly-selected coarse parent
+/// bakes. Then any node an ancestor already covers is dropped, so the result is DISJOINT —
+/// exactly one tile per point, which keeps a coarse stand-in from z-fighting through the fine
+/// surface it replaces.
 ///
 /// Pure and separated from the streaming system on purpose: this is the invariant the whole
 /// design rests on ("never a hole, never an overlap"), it was previously three copies of the
@@ -398,11 +399,25 @@ pub(crate) fn retire_terrain_tiles(
 ///
 /// `scratch` is caller-owned to keep this allocation-free on the hot path.
 /// The one always-resident fallback. It covers the complete terrain from the
-/// first drawable frame; all non-root bakes belong to the actual camera-selected
-/// cover. Keeping a second, late-arriving hierarchy of coarse ancestors caused
-/// the exact fine → coarse → fine regression this stream is designed to prevent.
+/// first drawable frame. The only extra retained tiles are direct parents of
+/// selected leaves, held hidden as local handoff cover rather than as a second
+/// rendered hierarchy.
 fn fallback_coords() -> impl Iterator<Item = QuadCoord> {
     std::iter::once(QuadCoord::ROOT)
+}
+
+/// Keep the direct parents of the live cover resident as local, hidden fallback
+/// tiles. A refinement child is allowed to arrive asynchronously, but its parent
+/// must not be evicted in the meantime: otherwise an unready child can only fall
+/// all the way back to the root, which temporarily suppresses unrelated fine
+/// terrain in the draw partition.
+///
+/// These are not a second rendered LOD hierarchy. They stay hidden unless an
+/// exact child is briefly unavailable, at which point the normal disjoint
+/// partition selects the parent only for that local quadrant.
+fn wanted_parent_fallbacks(wanted: &HashSet<QuadCoord>, parents: &mut HashSet<QuadCoord>) {
+    parents.clear();
+    parents.extend(wanted.iter().filter_map(|coord| coord.parent()));
 }
 
 /// Choose what to draw for each selected node: itself if ready, else its deepest
@@ -767,6 +782,18 @@ fn build_draw_partition(
         loop {
             if is_drawable(c) {
                 draw.insert(c);
+                break;
+            }
+            // A just-coarsened parent is a new selected leaf, so it often has
+            // no mesh yet. Its four outgoing children were the previous exact
+            // cover and are already resident. Keep that complete child cover
+            // visible until the parent lands; otherwise the renderer drops to
+            // a distant ancestor and flashes coarse before fine disappears.
+            // A partial child set is unsafe because it would make a hole, so it
+            // follows the normal ancestor fallback below.
+            let children = c.children();
+            if children.iter().all(|child| is_drawable(*child)) {
+                draw.extend(children);
                 break;
             }
             match c.parent() {
@@ -1578,6 +1605,9 @@ pub struct StreamScratch {
     done: Vec<(QuadCoord, u32, BakedTile)>,
     keyed: Vec<(u8, u8, f64, Selected)>,
     wanted: HashSet<QuadCoord>,
+    /// Hidden, already-baked direct parents of wanted leaves. These make an
+    /// unready refinement fall back locally instead of exposing the root tile.
+    parent_fallbacks: HashSet<QuadCoord>,
     /// The DRAW partition: exactly one tile per covered area — a ready wanted node,
     /// or the deepest ready ancestor standing in for one that is not.
     draw: HashSet<QuadCoord>,
@@ -1649,6 +1679,7 @@ pub fn update_lod_tiles(
         done,
         keyed,
         wanted,
+        parent_fallbacks,
         draw,
         coarse,
         drop_covered,
@@ -2010,6 +2041,7 @@ pub fn update_lod_tiles(
         }
         wanted.clear();
         wanted.extend(sel.iter().map(|s| s.coord));
+        wanted_parent_fallbacks(wanted, parent_fallbacks);
 
         // Selection is authoritative. Drop superseded generations and camera
         // requests no longer selected before they can occupy every worker slot.
@@ -2032,6 +2064,7 @@ pub fn update_lod_tiles(
         pending.0.retain(|coord, (gen, _)| {
             *gen == cur_gen
                 && (wanted.contains(coord)
+                    || parent_fallbacks.contains(coord)
                     || *coord == QuadCoord::ROOT
                     || (!urgent_missing && coord.depth <= ROOT_FALLBACK_DEPTH))
         });
@@ -2159,7 +2192,9 @@ pub fn update_lod_tiles(
                 .0
                 .insert((terrain, coord, baked.res), (handle.clone(), oy));
             // No longer selected while it baked → keep the cached mesh, skip spawning.
-            if !wanted.contains(&coord) {
+            // Direct parent fallbacks are also live residents: they stay hidden until
+            // a child needs a local no-hole handoff.
+            if !wanted.contains(&coord) && !parent_fallbacks.contains(&coord) {
                 continue;
             }
             let depth = baked.depth;
@@ -2383,11 +2418,13 @@ pub fn update_lod_tiles(
             drop_covered,
         );
 
-        // Retain + visibility. The coarse base is never despawned; everything else lives
-        // while it is wanted or actively drawn as a stand-in.
+        // Retain + visibility. The root is never despawned; everything else lives
+        // while it is wanted, is a direct hidden fallback for a wanted child, or
+        // actively draws as a stand-in.
         tiles.tiles.retain(|coord, slot| {
             let keep = coord.depth <= ROOT_FALLBACK_DEPTH
                 || wanted.contains(coord)
+                || parent_fallbacks.contains(coord)
                 || draw.contains(coord);
             if !keep {
                 retire_tile(&mut commands, slot.entity);
@@ -2626,6 +2663,17 @@ mod draw_partition_tests {
         assert_eq!(fallback_coords().collect::<Vec<_>>(), vec![QuadCoord::ROOT]);
     }
 
+    #[test]
+    fn wanted_children_retain_only_their_direct_parent_fallback() {
+        let parent = c(2, 1, 2);
+        let wanted = parent.children().into_iter().collect::<HashSet<_>>();
+        let mut fallbacks = HashSet::new();
+
+        wanted_parent_fallbacks(&wanted, &mut fallbacks);
+
+        assert_eq!(fallbacks, HashSet::from([parent]));
+    }
+
     /// Every selected area must end up covered by exactly ONE drawn node — itself or an
     /// ancestor. This is the invariant whose absence rendered as black terrain.
     fn assert_covered_exactly_once(sel: &[QuadCoord], draw: &HashSet<QuadCoord>) {
@@ -2673,6 +2721,26 @@ mod draw_partition_tests {
         );
         assert!(draw.contains(&QuadCoord::ROOT));
         assert_covered_exactly_once(&sel, &draw);
+    }
+
+    #[test]
+    fn unready_coarsened_parent_keeps_its_ready_outgoing_children() {
+        // A cover merge selects `parent` immediately, but its mesh is only
+        // queued afterwards. The four outgoing children are the exact previous
+        // cover and must bridge that bake; otherwise the root flashes through
+        // before the parent arrives.
+        let parent = c(1, 0, 0);
+        let children = parent.children();
+        let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
+        build_draw_partition(
+            std::iter::once(parent),
+            |node| children.contains(&node),
+            &mut draw,
+            &mut scratch,
+        );
+
+        assert_eq!(draw, children.into_iter().collect());
+        assert!(!draw.contains(&QuadCoord::ROOT));
     }
 
     #[test]
