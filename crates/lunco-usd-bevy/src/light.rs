@@ -437,10 +437,11 @@ pub(crate) fn instantiate_light_prim(
             } else {
                 (light_radius.max(0.0) / DEFAULT_SPHERE_RADIUS).powi(2)
             };
-            // Cap local light lumens (headlights / work lamps) to a physical maximum of
-            // 5,000 lm so authored un-calibrated numbers (e.g. 1,000,000) do not blow out
-            // adjacent vessel meshes or wash out directional sun shadows.
-            let intensity_lm = (base_lm * area_scale).min(5000.0);
+            // `inputs:intensity` is the authored photometric power. Do not impose an
+            // importer-side ceiling: a lunar rover deliberately needs a much brighter
+            // work beam than a terrestrial cabin lamp to remain visible at its camera
+            // exposure, and clamping here silently changes the USD scene.
+            let intensity_lm = base_lm * area_scale;
 
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))

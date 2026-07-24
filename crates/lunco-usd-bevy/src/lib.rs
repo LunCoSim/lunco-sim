@@ -56,6 +56,7 @@ mod compose;
 pub mod dome;
 mod light;
 mod resolver;
+pub use camera::read_camera_exposure_ev100;
 pub use camera_switch::SetActiveCamera;
 pub mod author;
 pub mod camera_path;

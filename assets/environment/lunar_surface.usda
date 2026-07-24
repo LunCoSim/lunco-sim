@@ -11,6 +11,10 @@
 # camera attributes on its local Camera prim.
 def Camera "LunarSurfaceCamera"
 {
+    # Match the sandbox free-flight camera's former ~45° vertical view. USD's
+    # 50 mm default is a narrow photographic lens, not a navigation camera.
+    float focalLength = 18
+
     # EV100 = log2(fStop² / time) at ISO 100. f/16 for 44.19 ms is EV12.5.
     float exposure:fStop = 16
     float exposure:iso = 100

@@ -283,8 +283,6 @@ pub fn setup_big_space_hierarchy(
     q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     q_prior_fallback_lights: Query<Entity, With<lunco_core::FallbackSceneLight>>,
-    mut q_exposure: Query<&mut bevy::camera::Exposure>,
-    active_sun: Option<Res<lunco_environment::LunarSun>>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
 ) {
     // A site-anchored DEM twin authors its own rocks and bakes rock features
@@ -493,20 +491,16 @@ pub fn setup_big_space_hierarchy(
     }
     let sun = lunco_render::LunarSunShadow::default();
     // Physical sun identity (illuminance / angular size) is environmental state.
-    // Preserve a composed `LunCoEnvironment` opinion that arrived before the
-    // celestial hierarchy. Falling back only when no lighting resource exists
-    // avoids silently replacing a scene's authored exposure with EV16.
-    let ls = active_sun.as_deref().copied().unwrap_or_default();
-    // Taking over the lighting rig means taking over the EXPOSURE with it:
-    // this spawn replaces the sandbox's studio sun (10 klux, EV 9.7 — a
-    // matched pair) with the calibrated 128 klux lunar sun. Cameras left at
-    // studio EV under the real sun are +3.7 stops — "everything is
-    // overexposed", surface and orbit alike. Write the resource (cameras
-    // spawned later read it) AND the live cameras.
+    // A new celestial hierarchy starts with its physical lighting baseline.
+    // Per-scene display exposure belongs to a composed `UsdGeomCamera`, which
+    // is recreated with the scene; carrying the prior `LunarSun` resource here
+    // would leak one scenario's grade into the next.
+    let ls = lunco_environment::LunarSun::default();
+    // Physical sun identity is environmental state. Camera exposure remains
+    // authored by each `UsdGeomCamera`: changing every live `Exposure` here
+    // used to overwrite a scene's standard ISO/shutter/f-stop immediately
+    // after its Avatar had been composed, making low-light scenes black.
     commands.insert_resource(ls);
-    for mut exposure in q_exposure.iter_mut() {
-        exposure.ev100 = ls.exposure_ev100;
-    }
     // NOTE on shadow readability: the ~23-stop lunar range (128 klx direct
     // sun vs sub-lux earthshine) is NOT handled here with a global ambient —
     // that lit the sky dome gray while the terrain march (which multiplies
