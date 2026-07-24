@@ -13,10 +13,8 @@
 //! scene that places bodies explicitly; orbital sims add the heavy crate.
 
 use crate::frames::EclipticAu;
-use bevy::math::DVec3;
 use bevy::prelude::*;
 
-use serde::Deserialize;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]

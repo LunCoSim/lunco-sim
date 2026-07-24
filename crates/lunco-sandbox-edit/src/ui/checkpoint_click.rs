@@ -28,9 +28,9 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{
-    BehaviorXml, ReachedWaypoints, TargetBindings, append_waypoint_leaf, catmull_rom_path,
-    format_coord_target, insert_waypoint_after, remove_waypoint_leaf, route_is_smooth,
-    set_route_smooth, set_waypoint_dwell, set_waypoint_target,
+    append_waypoint_leaf, catmull_rom_path, format_coord_target, insert_waypoint_after,
+    remove_waypoint_leaf, route_is_smooth, set_route_smooth, set_waypoint_dwell,
+    set_waypoint_target, BehaviorXml, ReachedWaypoints, TargetBindings,
 };
 use lunco_controller::ControllerLink;
 use lunco_core::commands::SessionId;
@@ -44,8 +44,8 @@ use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 use serde_json::Value;
 
+use crate::spawn::{terrain_ray_hit, TerrainOracles};
 use crate::SelectedEntities;
-use crate::spawn::{TerrainOracles, terrain_ray_hit};
 
 /// Scope the authored waypoints are parented under, beneath the stage's default prim.
 /// A route lives in WORLD space, so it is deliberately NOT a child of the vessel —
@@ -199,50 +199,11 @@ impl<'w> WaypointDocContext<'w> {
     }
 }
 
-/// Grid-frame conversion bundle for the waypoint click observer. Bundled into one
-/// [`SystemParam`] so the observer stays under Bevy's 16-argument limit, and so the
-/// render→world math lives in one place. `cameras` rides along because it also reads
-/// `GlobalTransform` (read-only, no alias with `q_gt`).
+/// Click-ray inputs bundled into one [`SystemParam`] so the observer stays under
+/// Bevy's 16-argument limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct WaypointClickFrame<'w, 's> {
     pub cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera3d>>,
-    pub q_parents: Query<'w, 's, &'static ChildOf>,
-    pub q_grids: Query<'w, 's, (Entity, &'static big_space::prelude::Grid)>,
-    pub q_grids_only: Query<'w, 's, &'static big_space::prelude::Grid>,
-    pub q_spatial: Query<
-        'w,
-        's,
-        (
-            Option<&'static big_space::grid::cell::CellCoord>,
-            &'static Transform,
-        ),
-    >,
-    pub q_gt: Query<'w, 's, &'static GlobalTransform>,
-}
-
-impl WaypointClickFrame<'_, '_> {
-    /// Convert a point in the RENDER (floating-origin) frame to WORLD (grid-absolute)
-    /// space — the exact inverse of `bake_targets`' world→render bake, so a captured
-    /// waypoint round-trips to the same target the driver steers toward, even when the
-    /// floating origin is far from world zero or rebases mid-mission.
-    fn render_to_world(&self, p: DVec3) -> DVec3 {
-        let Some((grid_entity, _)) = self.q_grids.iter().next() else {
-            return p; // no grid → render and world coincide
-        };
-        let grid_world = lunco_core::coords::world_position(
-            grid_entity,
-            &self.q_parents,
-            &self.q_grids_only,
-            &self.q_spatial,
-        )
-        .unwrap_or(DVec3::ZERO);
-        let grid_floating = self
-            .q_gt
-            .get(grid_entity)
-            .map(|gt| gt.translation())
-            .unwrap_or(Vec3::ZERO);
-        grid_world + (p - grid_floating.as_dvec3())
-    }
 }
 
 /// Resolve the pointer to a point on the ground in **WORLD** (grid-absolute) space —
@@ -252,8 +213,8 @@ impl WaypointClickFrame<'_, '_> {
 /// Casts through the active camera against BOTH the DEM oracle (ground truth over open
 /// terrain, where the band-limited collider ring rounds a crater bowl) and the physics
 /// colliders (structures/props), taking the nearer hit — the same pairing
-/// `spawn::on_scene_click_spawn` uses. The hit comes back in the RENDER frame, so it is
-/// converted to world via [`WaypointClickFrame::render_to_world`].
+/// `spawn::on_scene_click_spawn` uses. [`GridSpatialQuery`] converts the winning
+/// render-frame hit to grid-absolute world coordinates.
 fn pick_ground_world(
     frame: &WaypointClickFrame,
     terrains: &TerrainOracles,
@@ -1409,7 +1370,7 @@ pub fn handle_autopilot_toggle_hotkey(
     }
 }
 
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 
 /// Command to engage autopilot on a vessel.
 #[Command]

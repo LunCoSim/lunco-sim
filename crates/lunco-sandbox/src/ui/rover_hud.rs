@@ -139,6 +139,16 @@ struct DrivenVessel {
     limits_derived: bool,
 }
 
+/// The optional geographic datum is one system parameter so the HUD remains
+/// below Bevy's flat system-parameter limit while retaining the authored site
+/// coordinate readout.
+#[derive(bevy::ecs::system::SystemParam)]
+struct GeodeticHud<'w, 's> {
+    site:
+        Query<'w, 's, &'static lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    bodies: Option<Res<'w, lunco_celestial::CelestialBodyRegistry>>,
+}
+
 /// The tilt bands to paint, in degrees: (amber, red).
 ///
 /// Pure arithmetic over the vessel's authored parts, kept as a free function so the
@@ -198,11 +208,6 @@ fn resolve_link(
     q_parents: &Query<&ChildOf>,
     q_name: &Query<&Name>,
     q_ids: &Query<(Entity, &GlobalEntityId)>,
-    q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-    // Site anchor + body radius, resolved once by the caller. `None` in a scene
-    // with no site frame — the peer still gets a name and a range.
-    // coordinates, exactly as the billboards degrade.
 ) -> Option<LinkInfo> {
     // Depth cap: a radio hangs a hop or two under its vessel. This also makes the
     // walk terminate on a malformed hierarchy instead of spinning.
@@ -505,9 +510,7 @@ fn resolve_driven(
         pitch_deg,
         heading_deg,
         speed: q_vel.get(vessel).ok().map(|v| v.length() as f32),
-        link: resolve_link(
-            vessel, q_links, q_parents, q_name, q_ids, q_grids, q_spatial,
-        ),
+        link: resolve_link(vessel, q_links, q_parents, q_name, q_ids),
         energy: resolve_energy(vessel, q_sim, q_parents),
         thermal: resolve_thermal(vessel, q_sim, q_parents),
         caution_deg,
@@ -936,8 +939,7 @@ pub(crate) fn draw_rover_hud(
     q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: Query<&ComputedCenterOfMass>,
     q_sim: Query<(Entity, &SimComponent)>,
-    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
-    bodies: Option<Res<lunco_celestial::CelestialBodyRegistry>>,
+    geo: GeodeticHud,
 ) {
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
@@ -955,8 +957,8 @@ pub(crate) fn draw_rover_hud(
         &q_wheels,
         &q_com,
         &q_sim,
-        q_site.iter().next(),
-        bodies.as_deref(),
+        geo.site.iter().next(),
+        geo.bodies.as_deref(),
     ) else {
         return;
     };

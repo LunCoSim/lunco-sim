@@ -258,8 +258,6 @@ impl PlotNodeVisual {
 
 impl NodeVisual for PlotNodeVisual {
     fn draw(&self, ctx: &mut DrawCtx, node: &Node, selected: bool) {
-        // Series colour from the active THEME, not a hardcoded palette.
-        let theme = lunco_theme::active(ctx.ui.ctx());
         // Transform the world rect to screen so the plot tracks
         // pan/zoom like any other node.
         let screen_rect = ctx

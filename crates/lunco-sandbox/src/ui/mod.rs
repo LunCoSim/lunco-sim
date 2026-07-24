@@ -884,7 +884,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .collect()
         };
 
-        let mut render =
+        let render =
             |ui: &mut bevy_egui::egui::Ui,
              world: &mut World,
              items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {

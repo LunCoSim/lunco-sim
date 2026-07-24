@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use crate::big_space_setup::{EarthRoot, InertialAnchor, MoonRoot, SolarSystemRoot};
+use crate::big_space_setup::InertialAnchor;
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
 use crate::ephemeris::EphemerisResource;
