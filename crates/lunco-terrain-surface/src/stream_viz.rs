@@ -374,24 +374,12 @@ pub(crate) fn retire_terrain_tiles(
 /// flicker rather than as anything a type error would catch.
 ///
 /// `scratch` is caller-owned to keep this allocation-free on the hot path.
-/// Every node of the always-resident coarse base, **shallowest depth first**.
-///
-/// The ordering is the guarantee, not an implementation detail. Enumerated
-/// depth-first (the natural `Vec::pop` stack this replaced) the bake descends to
-/// `COARSE_N` in one corner while the rest of the terrain has nothing at all, so
-/// for the whole startup window there is no complete cover at ANY depth — pan onto
-/// an un-baked region and there is no ready ancestor to unrefine to, leaving the
-/// clear colour, i.e. a black flash. Level by level, depth 0 covers everything
-/// after a single tile and each finer level re-covers it, so the fallback is total
-/// from the first frames.
-///
-/// A free function so the test exercises the REAL enumeration rather than a copy
-/// of it — the caller lives inside a system that needs a full `App` to drive.
-fn coarse_base_coords() -> impl Iterator<Item = QuadCoord> {
-    (0..=COARSE_N).flat_map(|d| {
-        let side = 1u32 << d;
-        (0..side).flat_map(move |z| (0..side).map(move |x| QuadCoord { depth: d, x, z }))
-    })
+/// The one always-resident fallback. It covers the complete terrain from the
+/// first drawable frame; all non-root bakes belong to the actual camera-selected
+/// cover. Keeping a second, late-arriving hierarchy of coarse ancestors caused
+/// the exact fine → coarse → fine regression this stream is designed to prevent.
+fn fallback_coords() -> impl Iterator<Item = QuadCoord> {
+    std::iter::once(QuadCoord::ROOT)
 }
 
 /// Choose what to draw for each selected node: itself if ready, else its deepest
@@ -766,22 +754,8 @@ fn build_draw_partition(
     }
 }
 
-/// Deepest level of the **always-resident coarse base** — depths `0..=COARSE_N` are
-/// baked at scene open and never evicted, so a fallback surface always exists over
-/// the whole footprint.
-///
-/// This is the thing whose absence made the terrain go BLACK rather than blurry.
-/// The old `CARPET_DEPTH` was only a sort key over nodes already selected, and the
-/// selection is a REPLACE cover that never contains depths 0-2 on a site DEM — so
-/// nothing was ever held in reserve, and panning somewhere new rendered clear
-/// colour until a bake landed.
-///
-/// `4` is measured, not guessed (`tests/precompute_sparse_set.rs`,
-/// `tests/precompute_bake_time.rs`): 341 tiles, ~52 MB resident, 236 ms to bake
-/// single-threaded — ~0.7 s worst case on wasm's main thread, inside a scene-open
-/// budget. Depth 4 nodes are 1 km across, so the fallback is a 1 km tile rather
-/// than a 16 km blur.
-const COARSE_N: u8 = 4;
+/// Root depth. The root tile alone is the permanent no-hole fallback.
+const ROOT_FALLBACK_DEPTH: u8 = QuadCoord::ROOT.depth;
 
 /// The LOD tile entities currently spawned for a terrain, keyed by quadtree node.
 /// `mode` is the shader the live tiles were built with (a mode change swaps their
@@ -802,7 +776,7 @@ pub struct LodTiles {
     /// `evolve_cover` instead of re-derived each frame, which is what removes the
     /// mass re-selection the old global budget fit caused.
     cover: HashSet<QuadCoord>,
-    /// Whether the always-resident coarse base (`COARSE_N`) is fully baked.
+    /// Whether the always-resident root fallback is fully baked.
     ///
     /// Load-bearing for correctness, not just speed: while this is false the idle
     /// fast path MUST NOT skip the frame body. The gate gives up when nothing is
@@ -1568,7 +1542,7 @@ pub struct StreamScratch {
     /// The DRAW partition: exactly one tile per covered area — a ready wanted node,
     /// or the deepest ready ancestor standing in for one that is not.
     draw: HashSet<QuadCoord>,
-    /// The always-resident coarse base (`COARSE_N`), as bake targets.
+    /// The always-resident root fallback, as a bake target.
     coarse: Vec<Selected>,
     /// Scratch for the disjointness pass over `draw`.
     drop_covered: Vec<QuadCoord>,
@@ -2020,7 +1994,7 @@ pub fn update_lod_tiles(
             *gen == cur_gen
                 && (wanted.contains(coord)
                     || *coord == QuadCoord::ROOT
-                    || (!urgent_missing && coord.depth <= COARSE_N))
+                    || (!urgent_missing && coord.depth <= ROOT_FALLBACK_DEPTH))
         });
         stream_status.stale_cancelled += pending_before - pending.0.len();
         // Intelligent baking, two phases:
@@ -2192,34 +2166,12 @@ pub fn update_lod_tiles(
         // to their OWN big_space `CellCoord` (vertices baked relative to the tile
         // centre) so far-from-origin tiles keep f32 precision.
         let pool = AsyncComputeTaskPool::get();
-        // The always-resident coarse base (`COARSE_N`), queued BEFORE the selection so it
-        // lands first: the terrain is then complete-but-blurry within the first frames
-        // instead of absent, and every later refinement has a fallback to unrefine to.
-        //
-        // It is the whole DEM footprint at depths 0..=COARSE_N — a fixed set per terrain,
-        // independent of the camera — so it is enumerated rather than selected. Cheap:
-        // 341 tiles, ~236 ms serial, and after the first session they are cache hits.
-        // Baking runs through the same budgeted async path as everything else, so it
-        // spreads across frames and never stalls one (wasm has no worker threads, so
-        // "async" there means "a few per frame on the main thread" — still fine at
-        // 0.69 ms/tile).
+        // The one root fallback is queued before the selection. It is a complete
+        // visual floor; every other job is selected detail, never a redundant
+        // coarse hierarchy that could later replace visible detail.
         coarse.clear();
-        // A frozen terrain draws ONE cinematic tile and nothing else — enumerating
-        // the coarse base would queue all ~341 fallback tiles at the cinematic
-        // resolution (~235 MB of CPU mesh EACH).
         if !frozen && !tiles.coarse_ready {
-            // BREADTH-FIRST, shallowest depth first. This ordering is the whole point
-            // of the coarse base, not a detail: enumerated depth-first (a LIFO stack)
-            // the bake dives to `COARSE_N` in ONE corner before touching the others,
-            // so for the entire startup window there is no complete cover at ANY
-            // depth — and a camera panned at an un-baked region falls through every
-            // fallback to the clear colour, i.e. flashes BLACK.
-            //
-            // Level by level, the terrain is completely covered by depth 0 after a
-            // single tile, then re-covered at each finer level. There is a full (if
-            // blurry) cover within a frame or two of load, which is what makes the
-            // "unrefine to a ready ancestor" fallback total rather than best-effort.
-            for c in coarse_base_coords() {
+            for c in fallback_coords() {
                 coarse.push(Selected {
                     coord: c,
                     region: qt.region(c),
@@ -2231,14 +2183,25 @@ pub fn update_lod_tiles(
                 });
             }
         }
-        // Only the root fallback precedes urgent work. Remaining coarse-base
-        // levels are preload and must not starve a rover's current corridor.
+        // The root fallback is a correctness prerequisite, not just the first item
+        // in a priority queue. Starting fine bakes beside it can saturate the worker
+        // pool on a cold cache, leaving the only complete visual floor pending while
+        // detail work runs. Until the root is actually drawable, admit *only* that
+        // bake. Once it is visible, the normal near-camera-first queue resumes.
+        let root_ready = tiles
+            .tiles
+            .get(&QuadCoord::ROOT)
+            .is_some_and(|slot| slot.ready);
+        // The root fallback precedes urgent work after that gate.
         for s in coarse
             .iter()
             .take(1)
             .chain(sel.iter())
             .chain(coarse.iter().skip(1))
         {
+            if !root_ready && s.coord != QuadCoord::ROOT {
+                continue;
+            }
             // Skip coords already satisfied at the current generation (resident tile
             // or in-flight current-gen bake). Stale tiles fall through → re-baked.
             let have_pending = pending.0.get(&s.coord).is_some_and(|(g, _)| *g == cur_gen);
@@ -2384,7 +2347,9 @@ pub fn update_lod_tiles(
         // Retain + visibility. The coarse base is never despawned; everything else lives
         // while it is wanted or actively drawn as a stand-in.
         tiles.tiles.retain(|coord, slot| {
-            let keep = coord.depth <= COARSE_N || wanted.contains(coord) || draw.contains(coord);
+            let keep = coord.depth <= ROOT_FALLBACK_DEPTH
+                || wanted.contains(coord)
+                || draw.contains(coord);
             if !keep {
                 retire_tile(&mut commands, slot.entity);
                 return false;
@@ -2617,51 +2582,9 @@ mod draw_partition_tests {
         QuadCoord { depth, x, z }
     }
 
-    /// The coarse base must be enumerated SHALLOWEST-FIRST, so each depth is a
-    /// COMPLETE cover before any deeper tile is queued.
-    ///
-    /// Enumerated depth-first (the natural `Vec::pop` stack) the bake descends to
-    /// `COARSE_N` in one corner while the rest of the terrain has nothing at all —
-    /// during that window a pan onto an unbaked region has no ancestor to fall back
-    /// to and renders the clear colour, i.e. a black flash. Ordering IS the
-    /// guarantee, so it is pinned here rather than left to the container's LIFO/FIFO
-    /// behaviour.
     #[test]
-    fn coarse_base_is_enumerated_shallowest_first() {
-        let order: Vec<QuadCoord> = coarse_base_coords().collect();
-        assert_eq!(order.len(), 341, "N=4 base is 1+4+16+64+256 tiles");
-
-        // Depth never decreases: no deep tile is queued before a shallower one.
-        for w in order.windows(2) {
-            assert!(
-                w[0].depth <= w[1].depth,
-                "depth went backwards: {:?} then {:?} — enumeration is not \
-                 breadth-first and the cover is incomplete mid-bake",
-                w[0],
-                w[1]
-            );
-        }
-
-        // Every depth is a COMPLETE cover of the root: that is what makes the
-        // fallback total. A partial level would leave holes exactly where the
-        // camera has not been.
-        let mut seen = 0usize;
-        for d in 0..=COARSE_N {
-            let side = 1u32 << d;
-            let n = (side * side) as usize;
-            let level = &order[seen..seen + n];
-            assert!(
-                level.iter().all(|q| q.depth == d),
-                "level {d} is not contiguous"
-            );
-            let uniq: HashSet<QuadCoord> = level.iter().copied().collect();
-            assert_eq!(
-                uniq.len(),
-                n,
-                "level {d} has duplicates — cover is not exact"
-            );
-            seen += n;
-        }
+    fn fallback_is_exactly_one_root_tile() {
+        assert_eq!(fallback_coords().collect::<Vec<_>>(), vec![QuadCoord::ROOT]);
     }
 
     /// Every selected area must end up covered by exactly ONE drawn node — itself or an
