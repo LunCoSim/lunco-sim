@@ -191,7 +191,7 @@ pub fn produce_usd_canvas(
     let first_for_stage = !state.built || state.stage_id != Some(stage_id);
     let scene = build_scene(nodes, wires);
     let bounds = scene.bounds();
-    bevy::log::info!(
+    bevy::log::debug!(
         "[usd-canvas] rebuilt: {} prim entities -> {} nodes, {} edges",
         prim_paths.len(),
         scene.node_count(),

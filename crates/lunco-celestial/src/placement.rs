@@ -616,7 +616,7 @@ pub fn sync_terrain_body_curvature(
         commands.insert_resource(lunco_terrain_surface::TerrainBodyCurvature {
             radius_m: desc.radius_m,
         });
-        info!(
+        debug!(
             "terrain anchored to body {}: DEM terrain curves to sphere radius {:.0} m",
             body, desc.radius_m
         );
@@ -673,7 +673,7 @@ pub fn sync_terrain_body_curvature(
         };
         if punch != Some(&next) {
             commands.entity(e).try_insert(next);
-            info!("globe hole-punched under site DEM (body {body}, footprint ±{half_extent:.0} m)");
+            debug!("globe hole-punched under site DEM (body {body}, footprint ±{half_extent:.0} m)");
         }
     }
 }

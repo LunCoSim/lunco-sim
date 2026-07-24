@@ -923,12 +923,15 @@ impl ModelicaCompiler {
         // No `join` — see spawn comment above. The thread is detached
         // and will exit on its own within one tick.
 
-        log::info!(
-            "[ModelicaCompiler] compile `{}` finished in {:.2}s ({})",
-            model_name,
-            t_total.elapsed().as_secs_f64(),
-            if result.is_ok() { "OK" } else { "ERR" },
-        );
+        let elapsed_s = t_total.elapsed().as_secs_f64();
+        match &result {
+            Ok(_) => log::debug!(
+                "[ModelicaCompiler] compile `{model_name}` finished in {elapsed_s:.2}s (OK)"
+            ),
+            Err(error) => log::error!(
+                "[ModelicaCompiler] compile `{model_name}` failed in {elapsed_s:.2}s: {error}"
+            ),
+        }
         result
     }
 

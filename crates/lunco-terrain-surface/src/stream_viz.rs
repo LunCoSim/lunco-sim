@@ -161,7 +161,13 @@ pub(crate) fn mark_terrain_visual_foci(
 pub(crate) fn collect_terrain_detail_demands(
     mut demands: ResMut<TerrainDetailDemands>,
     terrain_settings: Option<Res<lunco_settings::TerrainSettings>>,
-    cameras: Query<(Entity, &Camera, &Projection, &TerrainVisualFocus)>,
+    cameras: Query<(
+        Entity,
+        &Camera,
+        &Projection,
+        &TerrainVisualFocus,
+        Has<Camera3d>,
+    )>,
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -171,10 +177,17 @@ pub(crate) fn collect_terrain_detail_demands(
     demands.visual.extend(
         cameras
             .iter()
-            .filter(|(_, camera, projection, _)| {
-                camera.is_active && matches!(projection, Projection::Perspective(_))
+            .filter(|(_, camera, projection, _, has_pipeline)| {
+                // `Camera::is_active` alone is insufficient: USD and avatar
+                // setup briefly create bare Camera components before their 3D
+                // render graph exists. They emit Bevy's "no render graph"
+                // warning and cannot affect the image, so letting them steer
+                // terrain detail creates an invisible competing focus.
+                *has_pipeline
+                    && camera.is_active
+                    && matches!(projection, Projection::Perspective(_))
             })
-            .filter_map(|(entity, _, _, focus)| {
+            .filter_map(|(entity, _, _, focus, _)| {
                 let position =
                     lunco_core::coords::grid_absolute(entity, &parents, &grids, &spatial)?;
                 let (_, transform) = spatial.get(entity).ok()?;
@@ -3061,6 +3074,7 @@ mod draw_partition_tests {
                     is_active: true,
                     ..default()
                 },
+                Camera3d::default(),
                 Projection::Perspective(default()),
                 CellCoord::default(),
                 Transform::from_xyz(123.0, 10.0, -45.0),
@@ -3074,6 +3088,7 @@ mod draw_partition_tests {
                     is_active: false,
                     ..default()
                 },
+                Camera3d::default(),
                 Projection::Perspective(default()),
                 CellCoord::default(),
                 Transform::IDENTITY,
@@ -3093,6 +3108,25 @@ mod draw_partition_tests {
         let demands = app.world().resource::<TerrainDetailDemands>();
         assert_eq!(demands.visual.len(), 1);
         assert_eq!(demands.visual[0].position, DVec3::new(123.0, 10.0, -45.0));
+
+        // A bare active Camera has no render graph; it must not add a hidden
+        // terrain-detail focus that can churn the visible camera's LOD cover.
+        app.world_mut().spawn((
+            Camera {
+                is_active: true,
+                ..default()
+            },
+            Projection::Perspective(default()),
+            CellCoord::default(),
+            Transform::from_xyz(-300.0, 10.0, 0.0),
+            ChildOf(grid),
+            TerrainVisualFocus::default(),
+        ));
+        app.update();
+        assert_eq!(
+            app.world().resource::<TerrainDetailDemands>().visual.len(),
+            1
+        );
     }
 
     #[test]

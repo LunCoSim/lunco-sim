@@ -327,7 +327,7 @@ pub(crate) fn instantiate_light_prim(
                 sun.cascade_config(),
                 UsdAuthoredLight,
             ));
-            info!(
+            debug!(
                 "[usd-bevy] {} DistantLight illuminance={} shadow range {}..{} m",
                 sdf_path.as_str(),
                 illuminance_lux,
@@ -356,7 +356,7 @@ pub(crate) fn instantiate_light_prim(
                 commands
                     .entity(entity)
                     .try_insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
-                info!(
+                debug!(
                     "[usd-bevy] {} DomeLight ambient={intensity}",
                     sdf_path.as_str()
                 );

@@ -371,7 +371,7 @@ fn process_usd_cosim_prim_read(
         commands.entity(entity).try_insert(ModelEventRules(rules));
     }
 
-    info!(
+    debug!(
         "[usd-cosim] program {} bound ({})",
         prim_path.path,
         source.as_deref().unwrap_or("<none>"),

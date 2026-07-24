@@ -869,7 +869,7 @@ fn process_usd_sim_prim_read(
         .scalar::<bool>(&sdf_path, "lunco:avatar")
         .unwrap_or_else(|| reader.text(&sdf_path, "lunco:avatar").as_deref() == Some("true"));
     if is_avatar {
-        info!(
+        debug!(
             "Detected Avatar prim at {}, setting up camera",
             prim_path.path
         );
@@ -1175,7 +1175,7 @@ fn process_usd_sim_prim_read(
     // Stamps `ActuatorPorts`: the 4 canonical digital actuator ports, plus any the
     // vessel declares as `outputs:` attributes.
     if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
-        info!(
+        debug!(
             "Intercepted PhysxVehicleContextAPI for {}, initializing vessel control surface",
             prim_path.path
         );
@@ -1397,7 +1397,7 @@ fn process_usd_sim_prim_read(
             debug!("Wheel {} awaits ShaderLook, deferring", prim_path.path);
             return;
         }
-        info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
+        debug!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
         // ONE unified read for BOTH wheel kinds (see `wheel_params`): every
         // drivetrain/tire/inertia number plus suspension, resolved via the
@@ -1769,7 +1769,7 @@ fn setup_raycast_wheel(
     steer: Option<Entity>,
     max_steer_angle: f64,
 ) {
-    info!("Setting up RAYCAST wheel {}", prim_path.path);
+    debug!("Setting up RAYCAST wheel {}", prim_path.path);
 
     let mut wheel = params.to_wheel_raycast(p_drive, p_steer, Some(entity));
 
@@ -1938,7 +1938,7 @@ fn setup_physical_wheel(
     steer: Option<Entity>,
     max_steer_angle: f64,
 ) {
-    info!("Setting up PHYSICAL wheel {}", prim_path.path);
+    debug!("Setting up PHYSICAL wheel {}", prim_path.path);
     let radius = params.radius as f32;
 
     // `params.peak_torque` (N·m at full throttle) is the engine's `peakTorque`,
@@ -2610,7 +2610,7 @@ fn try_wire_wheel(
                         Name::new(format!("Conn_Steer_{}", name)),
                         ChildOf(ent),
                     ));
-                    info!(
+                    debug!(
                         "Wired wheel {} steering to FSW port {}",
                         prim_path.path, name
                     );
@@ -2753,7 +2753,7 @@ fn resolve_differential_coupling(
             damping: pending.damping,
         });
         commands.entity(joint).remove::<PendingDifferential>();
-        info!(
+        debug!(
             "Resolved gear joint {} ({} <-> {})",
             joint_path.path, pending.rocker_a, pending.rocker_b
         );
