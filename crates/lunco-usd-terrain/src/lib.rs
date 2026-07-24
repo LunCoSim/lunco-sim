@@ -723,7 +723,7 @@ fn cache_terrain_document(
         let Some(doc) = doc else {
             continue; // not mounted yet (retry next frame), or document-free.
         };
-        info!(
+        debug!(
             "[terrain-doc] terrain {entity} → doc {} (DocBackedTerrain attached)",
             doc.0
         );
@@ -1328,7 +1328,7 @@ fn bridge_dem_prim_read(
             georef.meters_per_unit
         );
     }
-    info!(
+    debug!(
         "[usd-dem] bridged layered terrain prim {} → DEM '{rel}' (target_res {target_res}, \
          lod_viz {lod_viz}, collider_ring {collider_ring}, {layer_count} composed layer(s))",
         prim_path.path

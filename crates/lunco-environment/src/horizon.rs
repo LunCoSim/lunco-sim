@@ -668,7 +668,7 @@ pub fn install_horizon_map_from_field(
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     ));
 
-    info!(
+    debug!(
         "[horizon] heightfield installed for {entity:?}: {}² in {} ms — far-field \
          ray-march shadows active (near field stays on CSM)",
         field.resolution, millis

@@ -88,23 +88,23 @@ pub(crate) fn start_streamed_horizon_bakes(
             Some(_) => {}
             // Map present and nothing armed → it is current; nothing to do.
             None if has_map => continue,
-            // No map and nothing armed → the terrain's FIRST bake. ARM the same
-            // debounce rather than baking now: composition is not finished when
-            // the entity appears (the DEM builds, then layers regenerate and swap
-            // the oracle), so an immediate bake runs against a pre-regeneration
-            // oracle and is thrown away. Arming coalesces build + regenerate into
-            // ONE bake; any further layer change inside the window pushes the
-            // deadline out, exactly as it does for edits.
-            // No map and nothing armed → start the initial bake immediately on Frame 1!
+            // No map and nothing armed → arm the first bake behind the same
+            // composition debounce as a live edit. A DEM is initially assembled
+            // before late scene inputs such as body curvature have necessarily
+            // reached its oracle; baking immediately captures that provisional
+            // surface, then forces a second heightfield upload and visible shadow
+            // transition when composition settles. Waiting makes initial terrain
+            // construction and the first shadow map one transaction.
             None => {
-                commands.entity(entity).try_insert(StreamedHorizonStale {
-                    since: now - REBAKE_DEBOUNCE_SECS,
-                });
+                commands
+                    .entity(entity)
+                    .try_insert(StreamedHorizonStale { since: now });
+                continue;
             }
         }
         let oracle = hf.0.clone();
         let res = cfg.resolution.max(2);
-        info!(
+        debug!(
             "[horizon] baking {res}² heightfield for streamed terrain {entity:?} \
              from the surface oracle…"
         );

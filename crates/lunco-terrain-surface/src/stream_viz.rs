@@ -623,23 +623,35 @@ fn evolve_cover_for_foci_with_retention(
     }
 
     // 2. Forced merges — over budget (the budget shrank, or forced splits pushed us
-    //    past it). Give up the LEAST valuable quad first. Not bounded by
-    //    `MAX_COVER_EDITS`: being over budget is a frame-rate problem, and unlike a
-    //    global metric change this only touches the quads it actually drops.
+    //    past it). Give up the LEAST valuable *non-retained* quad first. A retain
+    //    band is visual stability policy, not merely a voluntary-merge hint: the
+    //    old reverse sort put its zero-slack near-camera entries FIRST here, causing
+    //    the precise fine → coarse → fine flicker it was meant to prevent. Only if
+    //    no far merge can satisfy the hard budget may this pass touch retained tiles.
+    //    Not bounded by `MAX_COVER_EDITS`: being over budget is a frame-rate problem,
+    //    and unlike a global metric change this only touches the quads it drops.
     if cover.len() > budget {
-        for &(_, p) in merges.iter().rev() {
+        for retained in [false, true] {
+            for &(_, p) in merges.iter().rev() {
+                if cover.len() <= budget {
+                    break;
+                }
+                if retain_refinement(p, qt.region(p)) != retained {
+                    continue;
+                }
+                // Restricted merges are skipped, so a budget shrink can stay over
+                // budget for a frame or two — the deepest quads always merge freely
+                // (their neighbours can be at most one level deeper than THEM, never
+                // two below the parent), and each pass of bottom-up merging unlocks
+                // the next, so it converges instead of stalling.
+                if merge_violates_restriction(cover, p) {
+                    continue;
+                }
+                merge_one(cover, p);
+            }
             if cover.len() <= budget {
                 break;
             }
-            // Restricted merges are skipped, so a budget shrink can stay over
-            // budget for a frame or two — the deepest quads always merge freely
-            // (their neighbours can be at most one level deeper than THEM, never
-            // two below the parent), and each pass of bottom-up merging unlocks
-            // the next, so it converges instead of stalling.
-            if merge_violates_restriction(cover, p) {
-                continue;
-            }
-            merge_one(cover, p);
         }
     }
 
@@ -3144,6 +3156,39 @@ mod draw_partition_tests {
             cover.len() <= 16,
             "cover {} did not shrink to budget 16",
             cover.len()
+        );
+    }
+
+    #[test]
+    fn budget_pressure_sheds_far_cover_before_a_retained_quad() {
+        let qt = test_qt();
+        let retained = c(1, 0, 0);
+        let mut cover = (0..4)
+            .flat_map(|z| (0..4).map(move |x| c(2, x, z)))
+            .collect::<HashSet<_>>();
+        // Keep all quads inside the refine band so this exercises the forced,
+        // not voluntary, merge path.
+        let err = |_c: QuadCoord, _r: Square| 1_000_000.0f64;
+
+        evolve_cover_for_foci_with_retention(
+            &qt,
+            &mut cover,
+            &[([0.0, 0.0], 5.0)],
+            &err,
+            13,
+            &|coord, _| coord == retained,
+        );
+
+        assert!(
+            retained
+                .children()
+                .iter()
+                .all(|child| cover.contains(child)),
+            "a retained near-camera quad must survive while another merge can satisfy the budget"
+        );
+        assert!(
+            cover.len() <= 13,
+            "non-retained quads should absorb the budget cut"
         );
     }
 

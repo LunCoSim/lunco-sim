@@ -528,9 +528,9 @@ fn stamp_low_precision_roots(
 /// exists: inserts/updates [`lunco_terrain_surface::TerrainBodyCurvature`], so
 /// every oracle composition folds a body-curvature modifier and the
 /// tangent-plane DEM curves down onto the globe sphere instead of floating the
-/// sagitta above it (the "terrain over the lunar surface" seam). The terrain
-/// side re-composes on resource change, so the ordering between the USD site
-/// anchor landing and the DEM build starting doesn't matter.
+/// sagitta above it (the "terrain over the lunar surface" seam). Pending DEM
+/// requests participate too, allowing the terrain builder to capture curvature
+/// on its first pass rather than generating a provisional flat oracle first.
 ///
 /// **The body comes from each terrain's own [`lunco_terrain_surface::TerrainGeoref`],
 /// never from a `SiteAnchor` query.** The radius folds into the surface oracle,
@@ -546,10 +546,14 @@ pub fn sync_terrain_body_curvature(
     registry: Res<CelestialBodyRegistry>,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     current: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
-    q_dem: Query<(
-        &lunco_terrain_surface::DemHeightField,
+    q_dem: Query<
         Option<&lunco_terrain_surface::TerrainGeoref>,
-    )>,
+        Or<(
+            With<lunco_terrain_surface::DemHeightField>,
+            With<lunco_terrain_surface::DemTerrainRequest>,
+        )>,
+    >,
+    q_built_dem: Query<&lunco_terrain_surface::DemHeightField>,
     q_globes: Query<(
         Entity,
         &crate::registry::CelestialBody,
@@ -579,7 +583,7 @@ pub fn sync_terrain_body_curvature(
     // order choose a winner.
     let mut body: Option<i32> = None;
     let mut mixed = false;
-    for (_, georef) in &q_dem {
+    for georef in &q_dem {
         let b = georef.map_or(lunco_terrain_surface::DEFAULT_ANCHOR_BODY, |g| g.body);
         match body {
             None => body = Some(b),
@@ -639,9 +643,9 @@ pub fn sync_terrain_body_curvature(
     // field and the limb, and the punch is the seam between them.
     const SITE_PUNCH_DEG: f64 = 2.0;
     let half_extent = if has_dem {
-        q_dem
+        q_built_dem
             .iter()
-            .map(|(d, _)| d.0.half_extent() as f64)
+            .map(|d| d.0.half_extent() as f64)
             .fold(0.0, f64::max)
     } else {
         desc.radius_m * SITE_PUNCH_DEG.to_radians().sin()

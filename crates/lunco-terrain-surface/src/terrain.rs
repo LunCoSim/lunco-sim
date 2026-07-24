@@ -457,7 +457,7 @@ fn on_spawn_dem_terrain(
     if let Ok(grid) = grids.single() {
         e.try_insert((CellCoord::default(), GridAnchor, ChildOf(grid)));
     }
-    info!(
+    debug!(
         "[dem-terrain] queued build for {} (window {} m, target_res {})",
         ev.uri, ev.window_m, ev.target_res
     );
@@ -948,7 +948,8 @@ fn start_dem_builds(
     q: Query<
         (
             Entity,
-            &DemTerrainRequest,
+            Ref<DemTerrainRequest>,
+            Option<&crate::georef::TerrainGeoref>,
             Option<&crate::terrain_layers::TerrainLayerStack>,
         ),
         (Without<DemBuildTask>, Without<DemWorkerJob>),
@@ -956,11 +957,21 @@ fn start_dem_builds(
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
 ) {
     // Parent-body radius for site-anchored scenes — folded LAST over the layer
-    // stack so the tangent-plane DEM hugs the body sphere. (If the celestial
-    // anchor lands AFTER this build captured `None`, `restamp_on_curvature`
-    // re-composes the oracle with it.)
+    // stack so the tangent-plane DEM hugs the body sphere. Georeferenced
+    // requests wait one ECS update below, giving the celestial projection a
+    // chance to provide it before the async build captures its inputs.
     let curvature_radius = curvature.map(|c| c.radius_m);
-    for (entity, req, stack) in &q {
+    for (entity, req, georef, stack) in &q {
+        // A document-backed terrain and its celestial site anchor are projected in
+        // the same deferred ECS turn. Give the celestial bridge one update to publish
+        // the terrain's body radius before capturing the composition inputs for this
+        // irreversible async build. Without this barrier, the first oracle is flat,
+        // then immediately replaced by a curved one — duplicate tile generation and
+        // a visible startup LOD transition. Non-georeferenced terrain starts at once;
+        // a georeferenced standalone terrain only waits this single update.
+        if req.is_added() && georef.is_some() {
+            continue;
+        }
         let dir = std::path::PathBuf::from(&req.uri);
         let tif_path = dir.join("materials/textures/heightmap.tif");
         // Site identity = the DEM folder name (`terrain/apollo15/` → "apollo15").
@@ -1021,7 +1032,7 @@ fn start_dem_builds(
             AsyncComputeTaskPool::get()
                 .spawn(async move {
                     let tx = get_wasm_bake_failures_tx().clone();
-                    
+
                     // A scenario-synced twin's DEM already lives in the OPFS scenario
                     // cache — read it from there rather than re-fetching it over HTTP
                     // (where it doesn't exist: `assets/<scenario-id>/…` is a 404).
@@ -1373,12 +1384,12 @@ fn assemble_dem_build(
         (false, false) => "",
     };
     if built.res == built.native_res {
-        info!(
+        debug!(
             "[dem-terrain] built '{}' ({}² native, ±{:.0} m){}",
             built.site, built.res, h, mode
         );
     } else {
-        info!(
+        debug!(
             "[dem-terrain] built '{}' ({}² resampled from {}² native, ±{:.0} m){}",
             built.site, built.res, built.native_res, h, mode
         );
@@ -1962,7 +1973,7 @@ pub(crate) fn finish_dem_restamp(
                     TimerMode::Once,
                 )));
         }
-        info!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
+        debug!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
     }
 
     if any_full {
@@ -2246,14 +2257,11 @@ fn on_obstacle_spec_dirty(
     accumulate_terrain_dirty(&mut commands, &mut q, None);
 }
 
-/// Force a whole-oracle re-compose when parent-body curvature arrives or
-/// changes. Two orderings need covering: the [`crate::oracle::TerrainBodyCurvature`]
-/// resource landing AFTER a DEM build captured `None` (resource change → regen),
-/// and a build finishing AFTER the resource landed but having been SPAWNED
-/// before it (fresh `DemHeightField` while the resource exists → regen). When
-/// the finished build already composed the same curvature, the re-stamp
-/// produces an identical `surface_key`, so tile bakes hit their caches — the
-/// redundant pass is cheap.
+/// Force a whole-oracle re-compose when parent-body curvature changes. Initial
+/// georeferenced builds wait for the curvature resource, but this remains the
+/// correct path for a later site/body transition and for an old in-flight build
+/// that crossed such a transition. Identical composition is content-addressed
+/// and therefore leaves live tiles untouched.
 fn restamp_on_curvature(
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
     new_dems: Query<(), Added<crate::stream_viz::DemHeightField>>,
