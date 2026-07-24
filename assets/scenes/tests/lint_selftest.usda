@@ -318,6 +318,7 @@ def Xform "LintSelftest" (
     {
         uniform token info:implementationSource = "id"
         uniform token info:id = "skid"
+        custom token connectors:p
     }
 
     def Scope "InvalidProgramNetwork" (

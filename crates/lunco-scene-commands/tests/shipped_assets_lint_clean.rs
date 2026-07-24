@@ -151,6 +151,20 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     assert!(
         lint_errors
             .iter()
+            .any(|e| e.contains("connector-requires-modelica")),
+        "lint_selftest.usda must prove non-Modelica connectors are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("connector-requires-network-scope")),
+        "lint_selftest.usda must prove standalone connectors are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
             .any(|e| e.contains("invalid-modelica-causal-cardinality")),
         "lint_selftest.usda must prove scalar Modelica fan-in is rejected — \
          got {lint_errors:?}"

@@ -392,6 +392,26 @@ fn process_usd_cosim_prim_read(
     // `dispatch_loaded_python_sources`, once the asset is ready.
     // See `docs/architecture/40-asset-io.md`.
     if let Some(asset_path) = modelica_path {
+        // USD is the public contract: publish its scalar interface immediately,
+        // before the asset fetch and asynchronous Modelica compile.  Writes then
+        // latch in SimComponent instead of being misdiagnosed as unknown ports.
+        let mut inputs = HashMap::new();
+        let mut outputs = HashMap::new();
+        for attr in reader.attr_names(sdf_path) {
+            if let Some(name) = attr.strip_prefix("inputs:") {
+                inputs.insert(name.to_owned(), 0.0);
+            } else if let Some(name) = attr.strip_prefix("outputs:") {
+                outputs.insert(name.to_owned(), 0.0);
+            }
+        }
+        commands.entity(entity).try_insert(SimComponent {
+            model_name: asset_path.clone(),
+            parameters: Default::default(),
+            inputs,
+            outputs,
+            status: SimStatus::Compiling,
+            is_stepping: false,
+        });
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
