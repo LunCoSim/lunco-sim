@@ -1,0 +1,19 @@
+#usda 1.0
+(
+    defaultPrim = "LunarSurfaceCamera"
+)
+
+# Shared `UsdGeomCamera` grade for interactive lunar surface scenes.
+#
+# This is a standard USD camera component, not a process preference: the
+# physical Sun stays calibrated and every composed consumer receives the same
+# display exposure. A deliberate campaign take can override these standard
+# camera attributes on its local Camera prim.
+def Camera "LunarSurfaceCamera"
+{
+    # EV100 = log2(fStop² / time) at ISO 100. f/16 for 44.19 ms is EV12.5.
+    float exposure:fStop = 16
+    float exposure:iso = 100
+    float exposure:responsivity = 1
+    float exposure:time = 0.04419417
+}

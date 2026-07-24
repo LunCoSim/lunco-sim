@@ -52,8 +52,9 @@ def Xform "FirstDrive" (
         rel material:binding:physics = </FirstDrive/PhysicsMaterials/Friction_1_0>
     }
 
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true

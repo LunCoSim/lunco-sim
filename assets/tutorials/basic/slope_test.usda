@@ -99,8 +99,9 @@ def Xform "SlopeTest" (
         custom int lunco:shadow:numCascades = 4
     }
 
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true

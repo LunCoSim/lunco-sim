@@ -42,6 +42,51 @@ const DEFAULT_VERTICAL_APERTURE_MM: f32 = 15.2908;
 const DEFAULT_NEAR: f32 = 0.1;
 const DEFAULT_FAR: f32 = 1.0e6;
 
+/// Convert standard `UsdGeomCamera` photographic exposure into Bevy EV100.
+///
+/// This is deliberately shared by imported cameras and `LunCoAvatarAPI`
+/// cameras: a camera's ISO, shutter time and f-stop have one USD spelling and
+/// therefore one conversion. `exposure` is a post-photographic compensation in
+/// USD, so positive compensation opens the effective exposure (lowers EV).
+pub fn read_camera_exposure_ev100(reader: &crate::StageView<'_>, path: &SdfPath) -> Option<f32> {
+    let authored = [
+        "exposure:iso",
+        "exposure:time",
+        "exposure:fStop",
+        "exposure:responsivity",
+        "exposure",
+    ]
+    .iter()
+    .any(|name| reader.real_f32(path, name).is_some());
+    if !authored {
+        return None;
+    }
+
+    let iso = reader.real_f32(path, "exposure:iso").unwrap_or(100.0);
+    let time = reader.real_f32(path, "exposure:time").unwrap_or(1.0);
+    let f_stop = reader.real_f32(path, "exposure:fStop").unwrap_or(1.0);
+    let responsivity = reader
+        .real_f32(path, "exposure:responsivity")
+        .unwrap_or(1.0);
+    let compensation = reader.real_f32(path, "exposure").unwrap_or(0.0);
+    if !(iso.is_finite()
+        && time.is_finite()
+        && f_stop.is_finite()
+        && responsivity.is_finite()
+        && compensation.is_finite()
+        && iso > 0.0
+        && time > 0.0
+        && f_stop > 0.0
+        && responsivity > 0.0)
+    {
+        warn!(
+            "[usd-bevy] {path} has invalid UsdGeomCamera exposure; using calibrated scene exposure"
+        );
+        return None;
+    }
+    Some((f_stop * f_stop / time * (100.0 / iso) / responsivity).log2() - compensation)
+}
+
 /// If `prim_type` is `Camera`, attach an **inactive** Bevy camera to `entity`
 /// and return `true`. Called from `instantiate_usd_prim`; the prim's transform
 /// and visibility are applied by the shared path there.
@@ -96,7 +141,8 @@ pub(crate) fn instantiate_camera_prim(
         SceneCamera::agx(),
         projection,
         Exposure {
-            ev100: lunco_render::LUNAR_SUN_EXPOSURE_EV100,
+            ev100: read_camera_exposure_ev100(reader, sdf_path)
+                .unwrap_or(lunco_render::LUNAR_SUN_EXPOSURE_EV100),
         },
     ));
 

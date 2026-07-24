@@ -104,8 +104,9 @@ def Xform "DrivingBasics" (
     }
 
     # Chase-style fly-cam over the SW corner so the rover and ramp are both framed.
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true

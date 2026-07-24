@@ -67,14 +67,6 @@ def Xform "LanderTest" (
     }
     uniform bool lunco:spawnable = false
 
-    # This base scene is also composed by the Episode 1 marketing variants.
-    # Keep the surface display grade authored with the scene so those variants
-    # never inherit a host/global exposure policy.
-    def LunCoEnvironment "Environment"
-    {
-        float lunco:env:exposureEv100 = 12.5
-    }
-
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
@@ -91,7 +83,7 @@ def Xform "LanderTest" (
         # merely stylised: ~3x too bright for ANY lunar surface, and tinted VIOLET
         # (blue > red), which under a white sun reads as an alien world. MEASURED:
         # episode 01's ground came out at mean luma 135/255 against episode 02's
-        # 63/255 at the identical `exposureEv100 = 15.4` — a near-white slab where
+        # 63/255 at the identical photographic camera grade — a near-white slab where
         # Apollo surface photography is mid-grey.
         #
         # Corrected HERE, in the base scene, rather than only as an episode-level
@@ -105,8 +97,9 @@ def Xform "LanderTest" (
         rel material:binding:physics = </LanderTest/PhysicsMaterials/Friction_1_0>
     }
 
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true

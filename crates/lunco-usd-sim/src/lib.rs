@@ -1039,7 +1039,8 @@ fn process_usd_sim_prim_read(
         // on a wgpu bind-group validation error. Both failure modes look like
         // a lighting/camera bug. Keep workbench cameras SMAA-free; MSAA (from
         // `SceneCamera`, bound by `lunco-render-bevy`) handles geometry-edge AA.
-        let ev100 = active_sun.copied().unwrap_or_default().exposure_ev100;
+        let ev100 = lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path)
+            .unwrap_or_else(|| active_sun.copied().unwrap_or_default().exposure_ev100);
         // AgX tonemapping: a filmic curve that rolls off the blown highlights
         // and lifts the toe of the brutal grazing-sun terminator (vs the hard
         // clip that read as pure white/black), while keeping the realistic

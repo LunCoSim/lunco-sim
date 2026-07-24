@@ -496,7 +496,7 @@ pub fn setup_big_space_hierarchy(
     // Preserve a composed `LunCoEnvironment` opinion that arrived before the
     // celestial hierarchy. Falling back only when no lighting resource exists
     // avoids silently replacing a scene's authored exposure with EV16.
-    let ls = active_sun.copied().unwrap_or_default();
+    let ls = active_sun.as_deref().copied().unwrap_or_default();
     // Taking over the lighting rig means taking over the EXPOSURE with it:
     // this spawn replaces the sandbox's studio sun (10 klux, EV 9.7 — a
     // matched pair) with the calibrated 128 klux lunar sun. Cameras left at
@@ -813,7 +813,9 @@ pub fn setup_big_space_hierarchy(
                 SceneCamera::default(),
                 // Physical exposure paired with the canonical sun illuminance
                 // (single source of truth — lunco_environment::LunarSun).
-                bevy::camera::Exposure { ev100: ls.exposure_ev100 },
+                bevy::camera::Exposure {
+                    ev100: ls.exposure_ev100,
+                },
                 Projection::Perspective(PerspectiveProjection {
                     near: 1.0,
                     far: 1.0e15,

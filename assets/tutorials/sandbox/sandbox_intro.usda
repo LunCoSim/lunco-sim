@@ -49,8 +49,9 @@ def Xform "SandboxIntro" (
         rel material:binding:physics = </SandboxIntro/PhysicsMaterials/Friction_1_0>
     }
 
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true

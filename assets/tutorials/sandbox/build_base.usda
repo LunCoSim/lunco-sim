@@ -74,8 +74,9 @@ def Xform "BuildBase" (
 
     # Fly-cam looking down over the empty plot from the south-west, so the
     # student sees the whole build area and can fly in to place each part.
-    def Xform "Avatar" (
+    def Camera "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend references = @lunco://environment/lunar_surface.usda@</LunarSurfaceCamera>
     )
     {
         uniform bool lunco:avatar = true
