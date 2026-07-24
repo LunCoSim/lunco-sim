@@ -91,7 +91,15 @@ pub fn data_to_usda(data: &sdf::Data) -> Result<String> {
 /// Inverse of [`data_to_usda`]; used to load a document and to apply a
 /// full-source replacement.
 pub fn usda_to_data(text: &str) -> Result<sdf::Data> {
-    usda::parse(text).map_err(|e| anyhow!("USD parse error: {e}"))
+    let mut parser = usda::parser::Parser::new(text);
+    let specs = parser.parse().map_err(|e| {
+        let where_ = parser
+            .last_error_highlight()
+            .map(|highlight| format!("\n{}", highlight.render()))
+            .unwrap_or_default();
+        anyhow!("USD parse error: {e}{where_}")
+    })?;
+    Ok(sdf::Data::from_specs(specs))
 }
 
 /// Open `data` as the root layer of a transient, writable [`Stage`]. Authoring

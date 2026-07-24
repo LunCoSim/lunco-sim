@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{Path as SdfPath, Value};
+use openusd::sdf::{Data, Path as SdfPath, Value};
 use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
@@ -94,7 +94,18 @@ pub(crate) async fn fetch_layer_closure(
 /// inside a referenced `.usda` wrapper anchors on its COMPOSED prim.
 fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
-    let data = usda::parse(text).map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
+    // `usda::parse` drops the parser's source span. Keep the parser alive so a
+    // malformed authored layer reports the actual line, column and source text,
+    // rather than the unhelpful bare "attribute type expected".
+    let mut parser = usda::parser::Parser::new(text);
+    let specs = parser.parse().map_err(|e| {
+        let where_ = parser
+            .last_error_highlight()
+            .map(|highlight| format!("\n{}", highlight.render()))
+            .unwrap_or_default();
+        anyhow!("USD parse error in {id}: {e}{where_}")
+    })?;
+    let data = Data::from_specs(specs);
     let anchor = ResolvedPath::new(id);
     Ok(
         crate::closure::discover_arcs(&data, crate::closure::ArcFilter::LayersOnly)
