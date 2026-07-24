@@ -86,8 +86,9 @@ pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBody
 pub use plugin::TerrainSurfacePlugin;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use stream_viz::{
-    DemHeightField, LodFrozen, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainNodeErrors,
-    TerrainShaderMode, TerrainStreamLockstep, TerrainStreamStatus, TileShadowCache,
+    DemHeightField, LodFrozen, LodTiles, SetTerrainLod, TerrainLodConfig, TerrainLodViz,
+    TerrainNodeErrors, TerrainShaderMode, TerrainStreamLockstep, TerrainStreamStatus,
+    TerrainVisualFocus, TileShadowCache,
 };
 pub use terrain::{
     BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface,

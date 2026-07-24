@@ -21,6 +21,7 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_settings_section::<lunco_settings::TerrainSettings>();
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::stream_viz::TerrainShaderMode>();
+        app.register_type::<crate::stream_viz::TerrainVisualFocus>();
         // Runtime-tunable LOD knobs (Inspector → "Terrain LOD") + the tile-mesh cache.
         app.init_resource::<crate::stream_viz::TerrainLodConfig>();
         app.register_type::<crate::stream_viz::TerrainLodConfig>();
@@ -28,6 +29,7 @@ impl Plugin for TerrainSurfacePlugin {
         crate::stream_viz::register_all_commands(app);
         app.init_resource::<crate::stream_viz::LodMeshCache>();
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
+        app.init_resource::<crate::stream_viz::TerrainDetailDemands>();
         // Off by default: interactive play wants real-time-paced streaming. Set by
         // `lunco-sandbox` for the duration of an offline recording so the captured
         // tile set is a function of the frame index rather than of thread
@@ -60,7 +62,13 @@ impl Plugin for TerrainSurfacePlugin {
         app.add_systems(
             Update,
             (
-                crate::stream_viz::update_lod_tiles,
+                (
+                    crate::stream_viz::mark_terrain_visual_foci,
+                    crate::stream_viz::collect_terrain_detail_demands,
+                    crate::stream_viz::update_lod_tiles,
+                    crate::stream_viz::retire_terrain_tiles,
+                )
+                    .chain(),
                 // Late-bind: derived maps / shadow cache finish baking seconds
                 // after the first tiles exist — restate the resident tiles' looks
                 // (no tile churn, no re-bake).

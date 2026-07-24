@@ -36,7 +36,7 @@ use std::sync::Arc;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use big_space::prelude::Grid;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command, WorldGrid};
 use lunco_materials::{
     ParamValue, ShaderLook, TextureLayer, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
@@ -89,6 +89,95 @@ const CANON_FOV_Y_RAD: f64 = std::f64::consts::FRAC_PI_4; // 45°
 /// measurement senses "is there detail here worth refining toward," it does not
 /// need the tile's full 49² fidelity. ~657 oracle samples per (memoized) node.
 const NODE_ERROR_PROBE_RES: usize = 9;
+
+/// Marks a perspective camera as a visual terrain-detail authority.
+///
+/// Every active marked camera contributes to the same deterministic cover.
+/// `prefetch_distance_m` adds a second focus along the camera's ground-plane
+/// look direction so visible relief is resident before it reaches the foreground.
+#[derive(Component, Reflect, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct TerrainVisualFocus {
+    /// Distance ahead of the camera to pre-refine visible terrain.
+    pub prefetch_distance_m: f64,
+}
+
+impl Default for TerrainVisualFocus {
+    fn default() -> Self {
+        Self {
+            prefetch_distance_m: 80.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct VisualDemand {
+    position: DVec3,
+    forward: DVec3,
+    prefetch_distance_m: f64,
+}
+
+#[derive(Clone, Copy)]
+struct TerrainVisualDemand {
+    focus: [f64; 2],
+    eye_height: f64,
+    heading: Option<bevy::math::DVec2>,
+}
+
+/// Frame-local detail demands collected once from explicit ECS focus markers.
+#[derive(Resource, Default)]
+pub struct TerrainDetailDemands {
+    visual: Vec<VisualDemand>,
+}
+
+/// Give every perspective scene camera the standard visual-detail policy.
+pub(crate) fn mark_terrain_visual_foci(
+    mut commands: Commands,
+    cameras: Query<(Entity, &Projection), (Added<Camera>, Without<TerrainVisualFocus>)>,
+) {
+    for (entity, projection) in &cameras {
+        if matches!(projection, Projection::Perspective(_)) {
+            commands
+                .entity(entity)
+                .try_insert(TerrainVisualFocus::default());
+        }
+    }
+}
+
+/// Collect active visual cameras for the visual streamer.
+pub(crate) fn collect_terrain_detail_demands(
+    mut demands: ResMut<TerrainDetailDemands>,
+    cameras: Query<(Entity, &Camera, &Projection, &TerrainVisualFocus)>,
+    parents: Query<&ChildOf>,
+    grids: Query<&Grid>,
+    spatial: Query<(Option<&CellCoord>, &Transform)>,
+) {
+    demands.visual.clear();
+    demands.visual.extend(
+        cameras
+            .iter()
+            .filter(|(_, camera, projection, _)| {
+                camera.is_active && matches!(projection, Projection::Perspective(_))
+            })
+            .filter_map(|(entity, _, _, focus)| {
+                let position =
+                    lunco_core::coords::grid_absolute(entity, &parents, &grids, &spatial)?;
+                let (_, transform) = spatial.get(entity).ok()?;
+                Some(VisualDemand {
+                    position,
+                    forward: (transform.rotation * Vec3::NEG_Z).as_dvec3(),
+                    prefetch_distance_m: focus.prefetch_distance_m.max(0.0),
+                })
+            }),
+    );
+    demands.visual.sort_by(|a, b| {
+        a.position
+            .x
+            .total_cmp(&b.position.x)
+            .then(a.position.y.total_cmp(&b.position.y))
+            .then(a.position.z.total_cmp(&b.position.z))
+    });
+}
 
 /// The composed surface oracle retained on a terrain entity — the ONE height
 /// truth every consumer samples (LOD tile baker, collider ring, derived-layer
@@ -227,6 +316,36 @@ struct TileSlot {
     /// that should cover its area is not ready yet. Tracked so the `Visibility`
     /// command is issued on a flip, not every frame.
     drawn: bool,
+    /// A new entity stays hidden for one complete ECS turn so the render binder
+    /// can attach its shader material before the draw partition exposes it.
+    ready: bool,
+}
+
+/// Render extraction can still reference an entity for the frame in which main
+/// world visibility changes. Hide retired tiles first, then despawn after two
+/// complete updates so Bevy's render-world slab never observes a freed entity.
+#[derive(Component)]
+pub(crate) struct RetiringTerrainTile {
+    updates_left: u8,
+}
+
+fn retire_tile(commands: &mut Commands, entity: Entity) {
+    commands
+        .entity(entity)
+        .try_insert((Visibility::Hidden, RetiringTerrainTile { updates_left: 2 }));
+}
+
+pub(crate) fn retire_terrain_tiles(
+    mut commands: Commands,
+    mut retiring: Query<(Entity, &mut RetiringTerrainTile)>,
+) {
+    for (entity, mut retirement) in &mut retiring {
+        if retirement.updates_left == 0 {
+            commands.entity(entity).try_despawn();
+        } else {
+            retirement.updates_left -= 1;
+        }
+    }
 }
 
 /// Build the DRAW partition: which tiles actually render this frame.
@@ -392,6 +511,7 @@ fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool 
 /// Returns the number of splits refused because they would exceed `budget` —
 /// zero at any fixed point whose wanted set fits (see
 /// [`TerrainStreamStatus::budget_refused`]).
+#[cfg(test)]
 fn evolve_cover(
     qt: &Quadtree,
     cover: &mut HashSet<QuadCoord>,
@@ -400,11 +520,29 @@ fn evolve_cover(
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
 ) -> usize {
+    evolve_cover_for_foci(qt, cover, &[(focus, eye_height)], node_error, budget)
+}
+
+/// Multi-viewport form of [`evolve_cover`]. A node uses its nearest visual focus,
+/// so all active marked cameras contribute to one exact cover without one camera
+/// evicting another's terrain.
+fn evolve_cover_for_foci(
+    qt: &Quadtree,
+    cover: &mut HashSet<QuadCoord>,
+    foci: &[([f64; 2], f64)],
+    node_error: &impl Fn(QuadCoord, Square) -> f64,
+    budget: usize,
+) -> usize {
     if cover.is_empty() {
         cover.insert(QuadCoord::ROOT);
     }
     let range = |c: QuadCoord| qt.error_refine_range(node_error(c, qt.region(c)));
-    let dist = |c: QuadCoord| qt.focus_distance(c, focus, eye_height);
+    let dist = |c: QuadCoord| {
+        foci.iter()
+            .map(|(focus, eye_height)| qt.focus_distance(c, *focus, *eye_height))
+            .reduce(f64::min)
+            .unwrap_or(f64::INFINITY)
+    };
     // How far past its refine range a node sits: < 1 wants to be finer, > 1 coarser.
     let slack = |c: QuadCoord| dist(c) / range(c).max(1e-9);
 
@@ -621,8 +759,8 @@ pub struct LodTiles {
     mode: TerrainShaderMode,
     gen: u32,
     /// Signature of the inputs the tile SELECTION is a pure function of (camera
-    /// focus + eye height, dynamic-body footprints, generation, oracle identity,
-    /// LOD knobs). When it matches last frame's and no bake is in flight, the
+    /// focus + eye height, generation, oracle identity, LOD knobs). When it
+    /// matches last frame's and no bake is in flight, the
     /// resident tile set is already correct and the whole reselection is skipped —
     /// the idle-camera fast path (see [`update_lod_tiles`]). `None` = never selected.
     last_sig: Option<u64>,
@@ -769,7 +907,7 @@ fn snap_band(morph_end: f32) -> (f32, f32, u32) {
 /// Runtime-tunable LOD knobs (Inspector → "Terrain LOD"). Global across terrains.
 /// Changing these re-selects tiles live so you can dial detail-vs-distance and the
 /// load smoothness without a rebuild.
-#[derive(Resource, Clone, Copy, Reflect)]
+#[derive(Resource, Clone, Copy, Reflect, PartialEq)]
 #[reflect(Resource)]
 pub struct TerrainLodConfig {
     /// Screen-metric refinement threshold (px at the canonical viewport): a node
@@ -790,11 +928,6 @@ pub struct TerrainLodConfig {
     /// fits (so geomorph bands stay consistent with the actual transition
     /// distances), not by capping the walk. ~500 tiles ≈ 2.3M terrain triangles.
     pub tile_budget: usize,
-    /// Seconds of horizontal dynamic-body motion to refine ahead of the current
-    /// pose. Tile meshes bake asynchronously, so present-pose-only refinement
-    /// lets a rover cross into a coarse tile before its detailed replacement is
-    /// ready. `0` disables prediction.
-    pub body_lookahead_seconds: f64,
 }
 
 impl Default for TerrainLodConfig {
@@ -833,7 +966,6 @@ impl Default for TerrainLodConfig {
             max_depth: MAX_DEPTH,
             bakes_per_frame,
             tile_budget,
-            body_lookahead_seconds: 1.5,
         }
     }
 }
@@ -848,7 +980,6 @@ pub struct SetTerrainLod {
     pub max_depth: Option<u8>,
     pub bakes_per_frame: Option<usize>,
     pub tile_budget: Option<usize>,
-    pub body_lookahead_seconds: Option<f64>,
 }
 
 #[on_command(SetTerrainLod)]
@@ -865,9 +996,6 @@ fn on_set_terrain_lod(trigger: On<SetTerrainLod>, mut cfg: ResMut<TerrainLodConf
     }
     if let Some(v) = ev.tile_budget {
         cfg.tile_budget = v;
-    }
-    if let Some(v) = ev.body_lookahead_seconds {
-        cfg.body_lookahead_seconds = v;
     }
 }
 
@@ -1187,7 +1315,10 @@ fn spawn_tile(
             ),
             cell,
             Transform::from_translation(local),
-            Visibility::Inherited,
+            // The render binder reacts to `ShaderLook` after this deferred spawn.
+            // Keep the tile hidden for one complete ECS turn; the streamer promotes
+            // it on the next update, after its material exists.
+            Visibility::Hidden,
             LodTileOf(terrain),
             Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
             // Streamed runtime detail, not scene content — hidden from the Entity
@@ -1222,10 +1353,6 @@ pub struct TerrainStreamStatus {
     pub resident: usize,
     /// Off-thread bakes in flight.
     pub pending: usize,
-    /// In-flight bakes covering a dynamic body's current or predicted corridor.
-    /// A non-zero value while the body is about to enter an unready leaf is the
-    /// actionable latency signal hidden by the aggregate `pending` count.
-    pub urgent_pending: usize,
     /// Obsolete in-flight requests dropped this frame after selection moved on.
     pub stale_cancelled: usize,
     /// Splits the selection wanted but `tile_budget` refused (summed over
@@ -1311,16 +1438,11 @@ pub struct StreamScratch {
     coarse: Vec<Selected>,
     /// Scratch for the disjointness pass over `draw`.
     drop_covered: Vec<QuadCoord>,
-    /// Dynamic-body footprints (terrain-local XZ) for the current frame — used
-    /// to prioritise baking the forced-refined tiles under a moving rover ahead
-    /// of mid-field camera tiles. See `WHEEL_SINKING_ANALYSIS_v3` §5(3).
-    body_footprints: Vec<[f64; 2]>,
-    /// Exact finest-level cells crossed by dynamic-body swept paths.
-    body_leaves: Vec<QuadCoord>,
-    /// Quantized current + predicted dynamic-body footprints, sorted before
-    /// hashing so the idle signature is query-order independent without XOR
-    /// cancellation when two bodies occupy the same cell.
-    body_signatures: Vec<[u64; 4]>,
+    /// Active cameras projected into the terrain's local frame, including each
+    /// camera's forward-prefetch focus.
+    visual_foci: Vec<TerrainVisualDemand>,
+    /// Allocation-free projection of `visual_foci` into the pure CDLOD metric.
+    focus_metric: Vec<([f64; 2], f64)>,
 }
 
 /// Freeze this terrain's LOD selection once its tiles are up: authored
@@ -1342,194 +1464,14 @@ pub struct StreamScratch {
 #[reflect(Component)]
 pub struct LodFrozen;
 
-/// Horizontal terrain-refinement focus after a bounded velocity look-ahead.
-///
-/// Height is deliberately ignored: terrain tiles are selected in the DEM's XZ
-/// plane, and a rover bouncing on suspension must not shift its refinement focus.
-fn predicted_body_footprint(position: DVec3, velocity: DVec3, lookahead_seconds: f64) -> [f64; 2] {
-    let lead = if lookahead_seconds.is_finite() {
-        lookahead_seconds.clamp(0.0, 10.0)
-    } else {
-        0.0
-    };
-    [
-        position.x + velocity.x * lead,
-        position.z + velocity.z * lead,
-    ]
-}
-
-/// Append every finest-level cell crossed by a body's predicted XZ segment.
-///
-/// This is a 2-D voxel traversal, not point sampling: diagonal motion can cross
-/// a narrow tile between two samples even when those samples are less than one
-/// tile width apart.
-fn append_body_corridor_leaves(
-    out: &mut Vec<QuadCoord>,
-    position: DVec3,
-    velocity: DVec3,
-    lookahead_seconds: f64,
-    half_extent: f64,
-    depth: u8,
-) {
-    let mut start = [position.x, position.z];
-    let mut end = predicted_body_footprint(position, velocity, lookahead_seconds);
-    let delta = [end[0] - start[0], end[1] - start[1]];
-
-    // Clip the segment to the DEM square before mapping it to integer cells.
-    let mut enter: f64 = 0.0;
-    let mut leave: f64 = 1.0;
-    for axis in 0..2 {
-        if delta[axis].abs() <= f64::EPSILON {
-            if start[axis].abs() > half_extent {
-                return;
-            }
-            continue;
-        }
-        let a = (-half_extent - start[axis]) / delta[axis];
-        let b = (half_extent - start[axis]) / delta[axis];
-        enter = enter.max(a.min(b));
-        leave = leave.min(a.max(b));
-    }
-    if enter > leave {
-        return;
-    }
-    end = [start[0] + delta[0] * leave, start[1] + delta[1] * leave];
-    start = [start[0] + delta[0] * enter, start[1] + delta[1] * enter];
-
-    let cells = 1u32 << depth.min(31);
-    let side = 2.0 * half_extent / f64::from(cells);
-    let cell_of = |value: f64| {
-        (((value + half_extent) / side).floor() as i64).clamp(0, i64::from(cells) - 1) as u32
-    };
-    let mut x = cell_of(start[0]);
-    let mut z = cell_of(start[1]);
-    let end_x = cell_of(end[0]);
-    let end_z = cell_of(end[1]);
-    let dx = end[0] - start[0];
-    let dz = end[1] - start[1];
-    let step_x = if dx > 0.0 {
-        1
-    } else if dx < 0.0 {
-        -1
-    } else {
-        0
-    };
-    let step_z = if dz > 0.0 {
-        1
-    } else if dz < 0.0 {
-        -1
-    } else {
-        0
-    };
-    let next_x = if step_x > 0 {
-        -half_extent + f64::from(x + 1) * side
-    } else {
-        -half_extent + f64::from(x) * side
-    };
-    let next_z = if step_z > 0 {
-        -half_extent + f64::from(z + 1) * side
-    } else {
-        -half_extent + f64::from(z) * side
-    };
-    let mut t_max_x = if step_x == 0 {
-        f64::INFINITY
-    } else {
-        (next_x - start[0]) / dx
-    };
-    let mut t_max_z = if step_z == 0 {
-        f64::INFINITY
-    } else {
-        (next_z - start[1]) / dz
-    };
-    let t_delta_x = if step_x == 0 {
-        f64::INFINITY
-    } else {
-        side / dx.abs()
-    };
-    let t_delta_z = if step_z == 0 {
-        f64::INFINITY
-    } else {
-        side / dz.abs()
-    };
-
-    loop {
-        out.push(QuadCoord { depth, x, z });
-        if x == end_x && z == end_z {
-            break;
-        }
-        let order = t_max_x.total_cmp(&t_max_z);
-        if order != std::cmp::Ordering::Greater {
-            x = x.saturating_add_signed(step_x);
-            t_max_x += t_delta_x;
-        }
-        if order != std::cmp::Ordering::Less {
-            z = z.saturating_add_signed(step_z);
-            t_max_z += t_delta_z;
-        }
-    }
-}
-
-/// Stable priority bucket for an ascending bake queue.
-fn body_priority(region: &Square, body_footprints: &[[f64; 2]]) -> u8 {
-    if body_footprints
-        .iter()
-        .any(|fp| region.distance_to(*fp) <= 1e-6)
-    {
-        0
-    } else {
-        1
-    }
-}
-
-/// Quantized current and predicted XZ footprints used by the idle signature.
-fn body_footprint_signature(
-    position: DVec3,
-    velocity: DVec3,
-    lookahead_seconds: f64,
-    quantum: f64,
-) -> [u64; 4] {
-    let q = |v: f64| (v / quantum).round() as i64 as u64;
-    let predicted = predicted_body_footprint(position, velocity, lookahead_seconds);
-    [
-        q(position.x),
-        q(position.z),
-        q(predicted[0]),
-        q(predicted[1]),
-    ]
-}
-
 /// Per-frame: stream the LOD tile set for each streaming terrain against the camera.
 pub fn update_lod_tiles(
     mut commands: Commands,
-    // `Camera3d` lives in `bevy_core_pipeline` (→ bevy_render → wgpu). The
-    // render-FREE `bevy_camera` equivalent for "a 3D scene camera" is a `Camera`
-    // with a PERSPECTIVE `Projection` — which is also what excludes the egui host's
-    // orthographic `Camera2d`. Same set of cameras as before, no GPU stack.
-    cameras: Query<(&GlobalTransform, &Camera, &Projection)>,
-    // Dynamic bodies (rovers, payloads) are FORCED refinement foci: the
-    // physics collider ring under them is fixed-resolution, so the ground they
-    // stand on must be drawn at matching detail even when the camera-driven
-    // selection would keep it coarse (far chase cam, budget-coarsened metric)
-    // — otherwise wheels visibly hover on collider bumps the mesh doesn't show.
-    //
-    // ⚠ avian `Position`, NOT `GlobalTransform` — the SAME pose source
-    // `update_collider_ring` reads (see the frame rule there). Both systems ask
-    // "which node is under this rover"; a render GT is origin-relative f32 and
-    // can disagree with the grid-absolute f64 `Position` transiently around a
-    // floating-origin recentring, moving the forced-refined VISUAL tile one node
-    // away from the COLLIDER tile at exactly a seam — the wheel then sits on the
-    // boundary between a pinned full-detail leaf and its coarse neighbour. One
-    // pose source, one mapping. See `WHEEL_SINKING_ANALYSIS_v3.md` §4a.
-    bodies: Query<(
-        &avian3d::prelude::RigidBody,
-        &avian3d::prelude::Position,
-        Option<&avian3d::prelude::LinearVelocity>,
-    )>,
+    demands: Res<TerrainDetailDemands>,
     // The big_space world grid each tile anchors into (its own `CellCoord`).
     grids: Query<(Entity, &Grid), With<WorldGrid>>,
     mut terrains: Query<(
         Entity,
-        &GlobalTransform,
         &DemHeightField,
         &TerrainLodViz,
         &mut LodTiles,
@@ -1564,29 +1506,13 @@ pub fn update_lod_tiles(
         draw,
         coarse,
         drop_covered,
-        body_footprints,
-        body_leaves,
-        body_signatures,
+        visual_foci,
+        focus_metric,
     } = &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
-    // The ACTIVE 3D camera is the focus — the one being rendered, hence the one
-    // whose view has to be baked.
-    //
-    // This used to take the first perspective camera the query yielded, from back
-    // when the selection was only a debug viz. It decides which ground gets baked
-    // now, and a scene holds several perspective cameras (the avatar's, a
-    // cinematic's, an inactive USD `Camera` prim). Query order is archetype order:
-    // it is not the camera you are looking through, and it is not even stable —
-    // when it flips, the whole wanted set is recomputed around a viewpoint nobody
-    // is at, and the tiles you ARE looking at get evicted and re-baked.
-    let Some(cam) = cameras
-        .iter()
-        .find(|(_, c, p)| c.is_active && matches!(p, Projection::Perspective(_)))
-        .map(|(gt, _, _)| gt)
-    else {
+    if demands.visual.is_empty() {
         return;
-    };
-    let cam_pos = cam.translation();
+    }
     // No world grid yet → can't anchor tiles; skip this frame.
     let Ok((grid_entity, grid)) = grids.single() else {
         return;
@@ -1616,7 +1542,6 @@ pub fn update_lod_tiles(
 
     for (
         terrain,
-        t_gt,
         hf,
         viz,
         mut tiles,
@@ -1629,6 +1554,17 @@ pub fn update_lod_tiles(
         frozen,
     ) in &mut terrains
     {
+        // A tile spawned on the previous update has now had one complete ECS turn
+        // for `ShaderLook` → render-material binding. Only now may the draw
+        // partition expose it; until then its ready ancestor remains visible.
+        let mut promoted_tiles = false;
+        for slot in tiles.tiles.values_mut() {
+            if !slot.ready {
+                slot.ready = true;
+                promoted_tiles = true;
+            }
+        }
+
         // Frozen and already covered ⇒ the drawn set is final. Report it as fully
         // resident (it is — that is the point) so the status bar clears and anything
         // gating on residency, like a camera path waiting to start, is satisfied.
@@ -1679,38 +1615,58 @@ pub fn update_lod_tiles(
             tiles.mode = mode;
         }
 
-        // Camera in the terrain's local frame (the DEM frame, origin-centred).
-        let inv_t = t_gt.affine().inverse();
-        let local = inv_t.transform_point3(cam_pos);
-        let focus = [local.x as f64, local.z as f64];
-
+        // Project every active visual focus into this terrain's local DEM frame.
+        // Each camera contributes its actual position plus a forward prefetch
+        // corridor; intermediate samples keep the whole visible approach refined
+        // rather than concentrating detail only at the camera and one endpoint.
         let oracle = &hf.0;
         let h = oracle.half_extent() as f64;
-        // Eye height = camera height ABOVE the terrain surface directly below it.
-        // Feeding this to the 3D metric means looking down from altitude coarsens
-        // the ground below (true distance), instead of refining it as XZ-only would.
-        let ground = oracle.height_at(local.x as f64, local.z as f64);
-        let eye_height = (local.y as f64 - ground).max(0.0);
-
+        visual_foci.clear();
+        for demand in demands.visual.iter() {
+            let local = demand.position;
+            let local_forward = demand.forward;
+            let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
+            let heading = (heading.length() > 1e-3).then(|| heading.normalize());
+            let mut push_focus = |xz: [f64; 2]| {
+                let ground = oracle.height_at(xz[0], xz[1]);
+                visual_foci.push(TerrainVisualDemand {
+                    focus: xz,
+                    eye_height: (local.y - ground).max(0.0),
+                    heading,
+                });
+            };
+            let here = [local.x, local.z];
+            push_focus(here);
+            if let Some(direction) = heading {
+                let lead = demand.prefetch_distance_m.min(2.0 * h);
+                for fraction in [0.25, 0.5, 1.0] {
+                    push_focus([
+                        here[0] + direction.x * lead * fraction,
+                        here[1] + direction.y * lead * fraction,
+                    ]);
+                }
+            }
+        }
         // ── Idle-camera fast path ────────────────────────────────────────────
         // The selection below (quadtree walks + budget-coarsen loop + sort + queue
-        // + retain) is a pure function of (focus, eye height, dynamic-body
-        // footprints, generation, oracle identity, LOD knobs). Re-deriving it EVERY
+        // + retain) is a pure function of (focus, eye height, generation, oracle
+        // identity, LOD knobs). Re-deriving it EVERY
         // frame with a still camera was the dominant idle terrain CPU cost
         // (obs 23593). Fold those inputs into a signature; when it matches last
         // frame's AND no bake is mid-flight (nothing to finalize/spawn), last
         // frame's resident tiles are already correct — skip the whole body.
         // Quantise focus/eye so sub-tile jitter doesn't defeat the gate; a slow
         // creep re-runs the frame it crosses a quantum (a 1-frame-late reselection
-        // is invisible — tiles morph). Rovers moving continuously keep their tiles
-        // refining because their footprint enters the signature.
+        // is invisible — tiles morph).
         {
             const IDLE_QUANT_M: f64 = 0.5;
             let q = |v: f64| (v / IDLE_QUANT_M).round() as i64 as u64;
             let mut sig = lunco_precompute::Fnv1a::new();
-            sig.write_u64(q(focus[0]));
-            sig.write_u64(q(focus[1]));
-            sig.write_u64(q(eye_height));
+            for visual in visual_foci.iter() {
+                sig.write_u64(q(visual.focus[0]));
+                sig.write_u64(q(visual.focus[1]));
+                sig.write_u64(q(visual.eye_height));
+            }
             sig.write_u64(cur_gen as u64);
             // Oracle identity — a live re-compose changes the surface without
             // always bumping gen, and would otherwise be missed by the gate.
@@ -1721,39 +1677,12 @@ pub fn update_lod_tiles(
             sig.write_u64(cfg.pixel_error.to_bits());
             sig.write_u64(cfg.tile_budget as u64);
             sig.write_u64(cfg.max_depth as u64);
-            sig.write_u64(cfg.body_lookahead_seconds.to_bits());
-            // Dynamic-body footprints (rovers): selection refines BOTH the current
-            // and predicted positions, so both belong in its signature. Sort the
-            // quantized tuples for query-order independence; XOR is unsuitable
-            // because equal footprints cancel in pairs.
-            body_signatures.clear();
-            for (rb, pos, velocity) in &bodies {
-                if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
-                    continue;
-                }
-                // Grid-absolute avian `Position` IS DEM-local (the terrain is a
-                // grid-direct child at `CellCoord::default`), so no terrain
-                // transform belongs in between — same mapping the collider ring
-                // uses. See §4a and `update_collider_ring`.
-                let signature = body_footprint_signature(
-                    pos.0,
-                    velocity.map_or(DVec3::ZERO, |v| v.0),
-                    cfg.body_lookahead_seconds,
-                    IDLE_QUANT_M,
-                );
-                if pos.x.abs() > h || pos.z.abs() > h {
-                    continue; // off this DEM — doesn't affect its selection
-                }
-                body_signatures.push(signature);
-            }
-            body_signatures.sort_unstable();
-            for signature in body_signatures.iter() {
-                for value in signature {
-                    sig.write_u64(*value);
-                }
-            }
             let sig = sig.finish();
-            if pending.0.is_empty() && tiles.last_sig == Some(sig) && tiles.coarse_ready {
+            if !promoted_tiles
+                && pending.0.is_empty()
+                && tiles.last_sig == Some(sig)
+                && tiles.coarse_ready
+            {
                 // Idle: resident tiles already match. Contribute this terrain's
                 // resident count so the status bar still reads "done", not "0/0".
                 stream_status.wanted += tiles.tiles.len();
@@ -1868,14 +1797,14 @@ pub fn update_lod_tiles(
             // INCREMENTAL: evolve the persistent cover a bounded step, then read the
             // selection off it. No global metric moves, so no mass re-selection exists to
             // oscillate — see `evolve_cover`.
-            tiles.budget_refused = evolve_cover(
-                &qt,
-                &mut tiles.cover,
-                focus,
-                eye_height,
-                &node_error,
-                budget,
+            focus_metric.clear();
+            focus_metric.extend(
+                visual_foci
+                    .iter()
+                    .map(|demand| (demand.focus, demand.eye_height)),
             );
+            tiles.budget_refused =
+                evolve_cover_for_foci(&qt, &mut tiles.cover, focus_metric, &node_error, budget);
             sel = tiles
                 .cover
                 .iter()
@@ -1888,59 +1817,16 @@ pub fn update_lod_tiles(
                 })
                 .collect();
         }
-        // Ground under dynamic bodies is ALWAYS drawn at max depth — the
-        // fixed-resolution collider ring under a rover carries small-crater
-        // relief a coarse camera-driven tile doesn't, and the rover visibly
-        // hovers on the undrawn bumps. A handful of forced splits per body,
-        // outside the budget (the budget bounds the broad view, not this).
-        // Collect the body footprints (terrain-local XZ) so the bake-order sort
-        // below can prioritise tiles under a moving rover — its forced-refined
-        // tile must bake before mid-field camera tiles, or the rover drives
-        // correct physics over a temporarily coarse visual (§5(3)).
-        body_footprints.clear();
-        body_leaves.clear();
-        let leaf_depth = cfg.max_depth.min(31);
-        for (rb, pos, velocity) in &bodies {
-            if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
-                continue;
-            }
-            // Grid-absolute avian `Position` IS DEM-local (terrain is grid-direct
-            // at `CellCoord::default`) — the SAME pose source and mapping the
-            // collider ring uses, so the forced-refined visual tile lands on the
-            // exact node the collider tile does, not one seam away. See §4a.
-            append_body_corridor_leaves(
-                body_leaves,
-                pos.0,
-                velocity.map_or(DVec3::ZERO, |v| v.0),
-                cfg.body_lookahead_seconds,
-                h,
-                leaf_depth,
-            );
-        }
-        // Multiple rigid bodies in one articulated rover commonly occupy the
-        // same leaf. Deduplicate leaf coordinates, not floating-point poses.
-        body_leaves.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
-        body_leaves.dedup();
-        body_footprints.extend(body_leaves.iter().map(|coord| qt.region(*coord).center));
-        for footprint in body_footprints.iter().copied() {
-            // `pin_morph: true` keeps the collider-matching leaf at full detail.
-            qt.refine_selection_at_with(&mut sel, footprint, &node_error, true);
-        }
         wanted.clear();
         wanted.extend(sel.iter().map(|s| s.coord));
 
         // Selection is authoritative. Drop superseded generations and camera
         // requests no longer selected before they can occupy every worker slot.
-        // Coarse-base requests remain valid preload across camera movement.
         let pending_before = pending.0.len();
         pending.0.retain(|coord, (gen, _)| {
-            *gen == cur_gen && (coord.depth <= COARSE_N || wanted.contains(coord))
+            *gen == cur_gen && (wanted.contains(coord) || coord.depth <= COARSE_N)
         });
         stream_status.stale_cancelled += pending_before - pending.0.len();
-        // Remember this cover as the next selection's hysteresis memory. Stored AFTER
-        // the body-forced splits so a node force-refined under a rover is also held
-        // through the band instead of flipping back the moment the rover drifts.
-
         // Intelligent baking, two phases:
         //
         // 1. CARPET — the selection's coarsest tiles first (a depth-N tile costs
@@ -1965,53 +1851,37 @@ pub fn update_lod_tiles(
         // existed (that absence is what made the terrain go black). The coarse base now does
         // that job properly: it is enumerated, not selected, and queued ahead of `sel`. So
         // this sort only has to order the SELECTION, by screen-space benefit.
-        let dist2 = |s: &Selected| -> f64 {
-            (s.region.center[0] - focus[0]).powi(2) + (s.region.center[1] - focus[1]).powi(2)
-        };
-        // Camera heading in the terrain's local XZ, for view-direction weighting:
-        // of two tiles with equal screen-space benefit, the one AHEAD of the
-        // camera bakes first — the one behind isn't on screen. `None` when
-        // looking straight down (no meaningful heading; weight disabled).
-        let heading = {
-            let f = t_gt
-                .affine()
-                .inverse()
-                .transform_vector3(cam.forward().as_vec3());
-            let v = bevy::math::DVec2::new(f.x as f64, f.z as f64);
-            (v.length() > 1e-3).then(|| v.normalize())
-        };
+        // Minimum screen-space benefit across every active camera. A tile needed
+        // by either viewport ranks early; one camera can never starve another.
         let benefit = |s: &Selected| -> f64 {
             let size = s.region.half * 2.0;
-            let base = dist2(s) / (size * size).max(1e-9);
-            let Some(hd) = heading else { return base };
-            let to = bevy::math::DVec2::new(
-                s.region.center[0] - focus[0],
-                s.region.center[1] - focus[1],
-            );
-            let d = to.length();
-            if d < 1e-6 {
-                return base;
-            }
-            // cos 1 (dead ahead) → ×1 … cos −1 (behind) → ×4.
-            base * (2.5 - 1.5 * (to / d).dot(hd))
+            visual_foci
+                .iter()
+                .map(|visual| {
+                    let to = bevy::math::DVec2::new(
+                        s.region.center[0] - visual.focus[0],
+                        s.region.center[1] - visual.focus[1],
+                    );
+                    let base = to.length_squared() / (size * size).max(1e-9);
+                    let Some(heading) = visual.heading else {
+                        return base;
+                    };
+                    let distance = to.length();
+                    if distance < 1e-6 {
+                        return base;
+                    }
+                    // cos 1 (dead ahead) → ×1 … cos −1 (behind) → ×4.
+                    base * (2.5 - 1.5 * (to / distance).dot(heading))
+                })
+                .reduce(f64::min)
+                .unwrap_or(f64::INFINITY)
         };
         // Decorate-sort-undecorate: `dist2`/`benefit` pay a sqrt/dot per call and
         // the comparator re-ran them on BOTH sides of every comparison
         // (O(n log n) evaluations) — compute each tile's key once, sort on the
-        // cached key. The FIRST key byte is a body-proximity bucket (0 = a
-        // dynamic body stands on this tile, 1 = otherwise): a moving rover's
-        // forced-refined tile bakes before mid-field camera tiles, so the rover
-        // never drives correct physics over a temporarily coarse visual. See
-        // `WHEEL_SINKING_ANALYSIS_v3` §5(3).
+        // cached key.
         keyed.clear();
-        keyed.extend(sel.drain(..).map(|s| {
-            (
-                body_priority(&s.region, body_footprints),
-                0u8,
-                benefit(&s),
-                s,
-            )
-        }));
+        keyed.extend(sel.drain(..).map(|s| (0u8, 0u8, benefit(&s), s)));
         keyed.sort_by(|a, b| {
             (a.0, a.1)
                 .cmp(&(b.0, b.1))
@@ -2101,10 +1971,11 @@ pub fn update_lod_tiles(
                     entity: ent,
                     gen: cur_gen,
                     morph_end: baked.morph_end,
-                    drawn: true,
+                    drawn: false,
+                    ready: false,
                 },
             ) {
-                commands.entity(old.entity).try_despawn();
+                retire_tile(&mut commands, old.entity);
             }
         }
 
@@ -2202,10 +2073,11 @@ pub fn update_lod_tiles(
                         entity: ent,
                         gen: cur_gen,
                         morph_end,
-                        drawn: true,
+                        drawn: false,
+                        ready: false,
                     },
                 ) {
-                    commands.entity(old.entity).try_despawn();
+                    retire_tile(&mut commands, old.entity);
                 }
                 continue;
             }
@@ -2297,7 +2169,7 @@ pub fn update_lod_tiles(
             sel.iter().map(|s| s.coord),
             // RESIDENCY. A stale tile keeps drawing itself until its own re-bake
             // replaces it in place — see this function's docs.
-            |c| tiles.tiles.contains_key(&c),
+            |c| tiles.tiles.get(&c).is_some_and(|slot| slot.ready),
             draw,
             drop_covered,
         );
@@ -2307,7 +2179,7 @@ pub fn update_lod_tiles(
         tiles.tiles.retain(|coord, slot| {
             let keep = coord.depth <= COARSE_N || wanted.contains(coord) || draw.contains(coord);
             if !keep {
-                commands.entity(slot.entity).try_despawn();
+                retire_tile(&mut commands, slot.entity);
                 return false;
             }
             let vis = draw.contains(coord);
@@ -2356,14 +2228,9 @@ pub fn update_lod_tiles(
         stream_status.wanted += wanted.len();
         stream_status.resident += wanted
             .iter()
-            .filter(|c| tiles.tiles.contains_key(c))
+            .filter(|c| tiles.tiles.get(c).is_some_and(|slot| slot.ready))
             .count();
         stream_status.pending += pending.0.len();
-        stream_status.urgent_pending += pending
-            .0
-            .keys()
-            .filter(|coord| body_priority(&qt.region(**coord), body_footprints) == 0)
-            .count();
         stream_status.budget_refused += tiles.budget_refused;
 
         // Bound the mesh cache: when it grows past the cap, drop THIS terrain's
@@ -2515,137 +2382,6 @@ mod draw_partition_tests {
 
     fn c(depth: u8, x: u32, z: u32) -> QuadCoord {
         QuadCoord { depth, x, z }
-    }
-
-    /// A moving rover must request detail where it will be after the asynchronous
-    /// bake window, not only underneath its current pose.
-    #[test]
-    fn moving_body_refinement_looks_ahead_without_extrapolating_height() {
-        assert_eq!(
-            predicted_body_footprint(
-                DVec3::new(10.0, 20.0, 30.0),
-                DVec3::new(4.0, -8.0, -2.0),
-                1.5,
-            ),
-            [16.0, 27.0],
-            "visual terrain refinement should lead horizontal rover motion"
-        );
-    }
-
-    #[test]
-    fn body_refinement_lookahead_rejects_invalid_tuning() {
-        let position = DVec3::new(10.0, 20.0, 30.0);
-        let velocity = DVec3::new(4.0, 0.0, -2.0);
-        assert_eq!(
-            predicted_body_footprint(position, velocity, -1.0),
-            [10.0, 30.0]
-        );
-        assert_eq!(
-            predicted_body_footprint(position, velocity, f64::NAN),
-            [10.0, 30.0]
-        );
-    }
-
-    #[test]
-    fn moving_body_corridor_enumerates_every_crossed_leaf() {
-        let mut corridor = Vec::new();
-        append_body_corridor_leaves(
-            &mut corridor,
-            DVec3::new(-9.0, 0.0, -9.0),
-            DVec3::new(18.0, 0.0, 18.0),
-            1.0,
-            10.0,
-            2,
-        );
-        assert_eq!(
-            corridor,
-            vec![
-                QuadCoord {
-                    depth: 2,
-                    x: 0,
-                    z: 0
-                },
-                QuadCoord {
-                    depth: 2,
-                    x: 1,
-                    z: 1
-                },
-                QuadCoord {
-                    depth: 2,
-                    x: 2,
-                    z: 2
-                },
-                QuadCoord {
-                    depth: 2,
-                    x: 3,
-                    z: 3
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn moving_body_corridor_clips_motion_entering_the_dem() {
-        let mut corridor = Vec::new();
-        append_body_corridor_leaves(
-            &mut corridor,
-            DVec3::new(-20.0, 0.0, 0.0),
-            DVec3::new(30.0, 0.0, 0.0),
-            1.0,
-            10.0,
-            2,
-        );
-        assert_eq!(
-            corridor.first(),
-            Some(&QuadCoord {
-                depth: 2,
-                x: 0,
-                z: 2
-            })
-        );
-        assert_eq!(
-            corridor.last(),
-            Some(&QuadCoord {
-                depth: 2,
-                x: 3,
-                z: 2
-            })
-        );
-    }
-
-    #[test]
-    fn body_covered_region_has_first_queue_priority() {
-        let region = Square {
-            center: [0.0, 0.0],
-            half: 1.0,
-        };
-        assert_eq!(body_priority(&region, &[[0.0, 0.0]]), 0);
-        assert_eq!(body_priority(&region, &[[10.0, 10.0]]), 1);
-    }
-
-    #[test]
-    fn body_signature_includes_current_and_predicted_footprints() {
-        // Both states predict the same endpoint at t=1, but the rover has moved
-        // between them. Present-pose refinement must therefore invalidate the
-        // idle signature even though the look-ahead tile is unchanged.
-        let moving = body_footprint_signature(
-            DVec3::new(0.0, 0.0, 0.0),
-            DVec3::new(10.0, 0.0, 0.0),
-            1.0,
-            0.5,
-        );
-        let braking = body_footprint_signature(
-            DVec3::new(5.0, 0.0, 0.0),
-            DVec3::new(5.0, 0.0, 0.0),
-            1.0,
-            0.5,
-        );
-        assert_ne!(moving, braking);
-        assert_eq!(
-            &moving[2..],
-            &braking[2..],
-            "control: predicted endpoints match"
-        );
     }
 
     /// The coarse base must be enumerated SHALLOWEST-FIRST, so each depth is a
@@ -2993,6 +2729,98 @@ mod draw_partition_tests {
                 "cover still churning on a stationary camera — no fixed point"
             );
         }
+    }
+
+    #[test]
+    fn multiple_visual_foci_share_one_stable_cover() {
+        let qt = test_qt();
+        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
+        let foci = [([-700.0, 0.0], 5.0), ([700.0, 0.0], 5.0)];
+        let mut cover = HashSet::new();
+        for _ in 0..200 {
+            evolve_cover_for_foci(&qt, &mut cover, &foci, &err, 256);
+        }
+        let settled = cover.clone();
+        evolve_cover_for_foci(&qt, &mut cover, &foci, &err, 256);
+        assert_eq!(
+            cover, settled,
+            "multiple cameras must reach one fixed point"
+        );
+        assert_exact_cover(&cover);
+
+        for focus in foci.map(|(focus, _)| focus) {
+            let leaf = qt.node_containing(qt.max_depth, focus);
+            assert!(
+                covering_depth(&cover, leaf).is_none_or(|depth| depth >= 3),
+                "each active camera must retain local detail"
+            );
+        }
+    }
+
+    #[test]
+    fn ecs_focus_marker_collects_only_active_perspective_cameras() {
+        let mut app = App::new();
+        app.init_resource::<TerrainDetailDemands>().add_systems(
+            Update,
+            (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
+        );
+        let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    is_active: true,
+                    ..default()
+                },
+                Projection::Perspective(default()),
+                CellCoord::default(),
+                Transform::from_xyz(123.0, 10.0, -45.0),
+                ChildOf(grid),
+            ))
+            .id();
+        let inactive_camera = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    is_active: false,
+                    ..default()
+                },
+                Projection::Perspective(default()),
+                CellCoord::default(),
+                Transform::IDENTITY,
+                ChildOf(grid),
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app.world().get::<TerrainVisualFocus>(camera).is_some());
+        assert!(
+            app.world()
+                .get::<TerrainVisualFocus>(inactive_camera)
+                .is_some(),
+            "activation controls demand, not marker ownership"
+        );
+        let demands = app.world().resource::<TerrainDetailDemands>();
+        assert_eq!(demands.visual.len(), 1);
+        assert_eq!(demands.visual[0].position, DVec3::new(123.0, 10.0, -45.0));
+    }
+
+    #[test]
+    fn retired_tile_survives_two_render_extractions_before_despawn() {
+        let mut app = App::new();
+        app.add_systems(Update, retire_terrain_tiles);
+        let tile = app
+            .world_mut()
+            .spawn((Visibility::Hidden, RetiringTerrainTile { updates_left: 2 }))
+            .id();
+
+        app.update();
+        app.update();
+        assert!(app.world().get_entity(tile).is_ok());
+
+        app.update();
+        assert!(app.world().get_entity(tile).is_err());
     }
 
     /// The refusal counter is starvation, not fill progress: any budget that

@@ -1262,38 +1262,38 @@ fn camera_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 /// Runtime LOD knobs for streamed DEM terrain — detail-vs-distance + load
 /// smoothness, applied live (no rebuild). Edits the global `TerrainLodConfig`.
 fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-    use lunco_terrain_surface::TerrainLodConfig;
-    if ctx.resource::<TerrainLodConfig>().is_none() {
+    use lunco_terrain_surface::{SetTerrainLod, TerrainLodConfig};
+    let Some(mut cfg) = ctx.resource::<TerrainLodConfig>().copied() else {
         ui.label("No streaming terrain in this scene.");
         return;
-    }
-    ctx.resource_scope(|_ctx, cfg: &mut TerrainLodConfig| {
-        ui.add(egui::Slider::new(&mut cfg.pixel_error, 0.5..=16.0).text("Pixel error (px)"))
-            .on_hover_text(
-                "Screen-space error at which a tile refines (canonical viewport). \
-                 Lower = finer tiles wherever the surface earns it (rims, peaks).",
-            );
-        ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
-            .on_hover_text("Deepest refinement = closest-up detail.");
-        ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
-            .on_hover_text(
-                "1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.",
-            );
-        ui.add(egui::Slider::new(&mut cfg.tile_budget, 64usize..=2048).text("Tile budget"))
-            .on_hover_text(
-                "Cap on SELECTED tiles per terrain — the dominant terrain GPU cost. \
-                 If the pixel-error metric wants more tiles than this, the excess \
-                 splits are refused and the far field sits on coarser parents.",
-            );
-        ui.add(
-            egui::Slider::new(&mut cfg.body_lookahead_seconds, 0.0..=10.0)
-                .text("Body lookahead (s)"),
-        )
+    };
+    let before = cfg;
+    ui.add(egui::Slider::new(&mut cfg.pixel_error, 0.5..=16.0).text("Pixel error (px)"))
         .on_hover_text(
-            "Preload the finest terrain along each dynamic body's predicted path. \
-             Increase when vehicles can outrun asynchronous tile baking.",
+            "Screen-space error at which a tile refines (canonical viewport). \
+                 Lower = finer tiles wherever the surface earns it (rims, peaks).",
         );
-    });
+    ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
+        .on_hover_text("Deepest refinement = closest-up detail.");
+    ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
+        .on_hover_text(
+            "1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.",
+        );
+    ui.add(egui::Slider::new(&mut cfg.tile_budget, 64usize..=2048).text("Tile budget"))
+        .on_hover_text(
+            "Cap on SELECTED tiles per terrain — the dominant terrain GPU cost. \
+             If the pixel-error metric wants more tiles than this, the excess \
+             splits are refused and the far field sits on coarser parents.",
+        );
+    if cfg != before {
+        ctx.trigger(SetTerrainLod {
+            pixel_error: (cfg.pixel_error != before.pixel_error).then_some(cfg.pixel_error),
+            max_depth: (cfg.max_depth != before.max_depth).then_some(cfg.max_depth),
+            bakes_per_frame: (cfg.bakes_per_frame != before.bakes_per_frame)
+                .then_some(cfg.bakes_per_frame),
+            tile_budget: (cfg.tile_budget != before.tile_budget).then_some(cfg.tile_budget),
+        });
+    }
     // Streaming health — pure derived read of `TerrainStreamStatus`.
     if let Some(status) = ctx
         .resource::<lunco_terrain_surface::TerrainStreamStatus>()
@@ -1301,8 +1301,8 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     {
         ui.separator();
         ui.label(format!(
-            "Tiles: {}/{} resident · {} baking · {} urgent",
-            status.resident, status.wanted, status.pending, status.urgent_pending
+            "Tiles: {}/{} resident · {} baking",
+            status.resident, status.wanted, status.pending
         ))
         .on_hover_text(
             "Wanted tiles with a mesh on screen / wanted by the current selection; \

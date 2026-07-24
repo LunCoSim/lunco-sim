@@ -27,7 +27,7 @@ use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
 use lunco_core::WorldGrid;
-use lunco_terrain_core::{prepare_collider_heights, HeightSource};
+use lunco_terrain_core::{quantize, HeightSource};
 
 use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
@@ -44,11 +44,6 @@ const COLLIDER_DEPTH: u8 = 7;
 /// At the original 3.9 m spacing the gate faded out everything below ~12 m, so
 /// rovers drove flat across visually deep bowls.
 const COLLIDER_RES: usize = 129;
-/// Max height-delta/spacing ratio a collider tile may present (≈ 68° slope).
-/// Analytic crater rims sampled onto a coarse heightfield can rasterise to
-/// near-vertical steps that flip rover contacts; the monotone min-sweep shaves
-/// them to a drivable ramp (collider ONLY — visuals keep the crisp rim).
-const COLLIDER_MAX_SLOPE: f64 = 2.5;
 /// Determinism lattice (metres) collider heights snap to — peers build
 /// byte-identical heightfields from the same oracle.
 const COLLIDER_QUANT_STEP: f64 = 1e-3;
@@ -146,24 +141,12 @@ pub struct PendingColliderBakes(HashMap<QuadCoord, Task<(Collider, f64)>>);
 #[derive(Component)]
 pub struct ColliderTileOf(pub Entity);
 
-/// Halo cells sampled PAST each tile edge before slope-limiting, cropped after.
-/// `slope_limit_grid` is a min-sweep distance transform: run on a bare tile it
-/// converges toward that tile's own interior only, so the SAME shared-edge world
-/// column came out lowered by different amounts in two abutting tiles — a
-/// vertical step (≥ `max_step` ≈ 1.2 m, metres across a sharp rim) at every
-/// 62.5 m seam crossing an over-limit crater wall. The rover chassis snagged
-/// these as "invisible walls". A feature of height Δ influences the sweep over
-/// `Δ / (max_slope·spacing)` cells; 16 cells (≈7.8 m) covers a 12 m-deep fresh
-/// crater wall twice over, so cropped edge columns agree across seams.
-const COLLIDER_HALO_CELLS: usize = 16;
-
 /// Sample the composed surface oracle over a tile `region` into Avian's
 /// heightfield layout (`Vec<Vec<f64>>` indexed `[x][z]`, paired with a
-/// `(side, 1, side)` scale — Parry centres it at the entity origin). The SAME
-/// source the visual tile baker samples, so the bowl the rover hits is the bowl
-/// it sees. Heights are conditioned through the core collider firewall
-/// (slope-limit + quantize) on a halo-padded grid (see [`COLLIDER_HALO_CELLS`])
-/// for contact stability, peer determinism, and seam-exact neighbours.
+/// `(side, 1, side)` scale — Parry centres it at the entity origin). It samples
+/// the SAME band-limited source as the visual leaf and only quantizes to the
+/// deterministic 1 mm lattice; collision geometry must not silently reshape the
+/// visible terrain.
 fn sample_heights_xz(
     oracle: &SurfaceOracle,
     region: Square,
@@ -173,10 +156,8 @@ fn sample_heights_xz(
 ) -> Vec<Vec<f64>> {
     let res = res.max(2);
     let step = region.side() / (res as f64 - 1.0);
-    let halo = COLLIDER_HALO_CELLS;
-    let padded = res + 2 * halo;
-    let x0 = region.center[0] - region.half - halo as f64 * step;
-    let z0 = region.center[1] - region.half - halo as f64 * step;
+    let x0 = region.center[0] - region.half;
+    let z0 = region.center[1] - region.half;
     // The contact band — the shared filter policy floored at the visual leaf's
     // gate, so what the rover TOUCHES is the band the drawn leaf CARRIES (not a
     // finer band the mesh flattens out → wheel-sinking). Sub-sample features
@@ -185,30 +166,16 @@ fn sample_heights_xz(
     // nosing over an un-rounded lip stopped dead on a ~60° face ("stuck on a
     // wall inside the crater"). See `WHEEL_SINKING_ANALYSIS_v3.md` §4.1/§5(2).
     let limited = band.limited(oracle);
-    let mut flat = vec![0.0f64; padded * padded];
-    for iz in 0..padded {
-        let wz = z0 + iz as f64 * step;
-        for ix in 0..padded {
-            let wx = x0 + ix as f64 * step;
-            // Rebase to the tile-centre datum: heights become the LOCAL offset
-            // from `origin_y`, so the parry heightfield sits near its own entity
-            // origin instead of ~1945 m above it. See `spawn`-site anchoring.
-            flat[iz * padded + ix] = limited.height_at(wx, wz) - origin_y;
-        }
-    }
-    prepare_collider_heights(
-        &mut flat,
-        padded,
-        step,
-        COLLIDER_MAX_SLOPE,
-        COLLIDER_QUANT_STEP,
-    );
-    // …then crop the halo and transpose into Avian's [x][z] column layout.
     let mut cols = Vec::with_capacity(res);
     for ix in 0..res {
+        let wx = x0 + ix as f64 * step;
         let mut col = Vec::with_capacity(res);
         for iz in 0..res {
-            col.push(flat[(iz + halo) * padded + (ix + halo)]);
+            let wz = z0 + iz as f64 * step;
+            col.push(quantize(
+                limited.height_at(wx, wz) - origin_y,
+                COLLIDER_QUANT_STEP,
+            ));
         }
         cols.push(col);
     }
@@ -1085,11 +1052,8 @@ mod tests {
             "surface dips at TRANSPOSED local ({dz},{dx}): {transposed} — heightfield layout is flipped"
         );
 
-        // (b) Sweep: collider surface tracks the oracle within conditioning slack
-        // everywhere on a coarse probe lattice (rim shaving allowed near the lip,
-        // so tolerate slope-limit slack of one cell's max step there).
+        // (b) Collider surface tracks the same band-limited oracle everywhere.
         let step = side / (COLLIDER_RES as f64 - 1.0);
-        let slack = COLLIDER_MAX_SLOPE * step + 2.0 * COLLIDER_QUANT_STEP;
         // The collider samples the oracle through the same band
         // (`native_band(region)` above, = `2·step`) — compare against that same
         // band-limited surface.
@@ -1102,7 +1066,7 @@ mod tests {
                     HeightSource::height_at(&gated, region.center[0] + lx, region.center[1] + lz);
                 let got = surface_y(&collider, lx, lz, origin_y);
                 assert!(
-                    got <= expect + 1e-6 + 2.0 * COLLIDER_QUANT_STEP && got >= expect - slack - 1e-6,
+                    (got - expect).abs() <= COLLIDER_QUANT_STEP + 1e-6,
                     "collider/oracle mismatch at local ({lx:.2},{lz:.2}): collider {got}, oracle {expect}"
                 );
             }
@@ -1110,13 +1074,8 @@ mod tests {
     }
 
     /// Two abutting collider tiles must agree EXACTLY on their shared world
-    /// column. `slope_limit_grid` is a min-sweep whose result depends on every
-    /// cell it can reach — run per bare tile it converged toward each tile's own
-    /// interior, so a steep crater wall crossing a seam got lowered differently
-    /// on either side: a metre-scale vertical step between abutting Static
-    /// heightfields that the rover chassis snagged as an "invisible wall". The
-    /// halo pad (see [`COLLIDER_HALO_CELLS`]) makes both tiles condition the
-    /// seam with the same cross-seam content.
+    /// column. Both tiles sample and quantize the same world-space oracle points,
+    /// so the shared edge must remain byte-identical.
     #[test]
     fn adjacent_collider_tiles_agree_on_shared_edge() {
         let h = 4000.0_f64;
@@ -1137,9 +1096,7 @@ mod tests {
             z: 45,
         };
         let (ra, rb) = (qt.region(a), qt.region(b));
-        // A fresh, OVER-LIMIT-steep crater straddling the seam (bowl wall slope
-        // 4·depth/r = 3.2 > COLLIDER_MAX_SLOPE) so the min-sweep actively
-        // rewrites heights on both sides of the shared column.
+        // A fresh steep crater straddles the seam.
         let seam_x = ra.center[0] + ra.half;
         let crater = Crater {
             center: [seam_x + 4.0, ra.center[1] - 7.0],

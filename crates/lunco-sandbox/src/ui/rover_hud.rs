@@ -10,7 +10,8 @@
 //!   roll/pitch as one line of fine print. Tilt is the number that matters on a
 //!   slope: it is what puts a rover on its roof.
 //! - **NAV + COMMS** (bottom-right) — the vessel's name, ALT as the hero number,
-//!   then E/N/heading as one line, and the live link home.
+//!   then selenographic latitude/longitude and heading, and the live link home.
+//!   Un-georeferenced sandboxes fall back to site-frame E/N metres.
 //!
 //! ONE hero readout per cluster, centred and large; everything else is a compact
 //! inline row. A HUD of equal-weight rows makes the driver read all of it to find
@@ -80,6 +81,9 @@ struct DrivenVessel {
     label: String,
     /// Metres, root frame (site-ENU in a site-anchored scene).
     pos: DVec3,
+    /// Selenographic/geodetic position derived from the site's authored anchor.
+    /// `None` for an ordinary, un-georeferenced sandbox.
+    geo: Option<lunco_celestial::Geodetic>,
     /// Degrees from local up. The tip-over-relevant number.
     tilt_deg: f32,
     roll_deg: f32,
@@ -275,6 +279,8 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
+    site: Option<&lunco_celestial::GeodeticAnchor>,
+    bodies: Option<&lunco_celestial::CelestialBodyRegistry>,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
     let (pos, rot) = lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
@@ -363,6 +369,7 @@ fn resolve_driven(
     Some(DrivenVessel {
         label,
         pos,
+        geo: site.and_then(|site| hud_geodetic(site, bodies?, pos)),
         tilt_deg,
         roll_deg,
         pitch_deg,
@@ -377,9 +384,48 @@ fn resolve_driven(
     })
 }
 
+/// Convert the vessel's site-ENU position to the body's standard geodetic
+/// coordinates. The site anchor names the body; the registry is the authority
+/// for its datum radius.
+fn hud_geodetic(
+    site: &lunco_celestial::GeodeticAnchor,
+    bodies: &lunco_celestial::CelestialBodyRegistry,
+    pos: DVec3,
+) -> Option<lunco_celestial::Geodetic> {
+    let body = bodies
+        .bodies
+        .iter()
+        .find(|body| body.ephemeris_id == site.body)?;
+    Some(lunco_celestial::geo::local_to_geodetic(
+        &site.geodetic,
+        body.radius_m,
+        pos,
+    ))
+}
+
 #[cfg(test)]
 mod tilt_band_tests {
     use super::*;
+
+    #[test]
+    fn hud_coordinates_are_selenographic_not_local_metres() {
+        let bodies = lunco_celestial::CelestialBodyRegistry::default_system();
+        let site = lunco_celestial::GeodeticAnchor {
+            body: 301,
+            geodetic: lunco_celestial::Geodetic::new(26.0371, 3.6584, -1920.0),
+        };
+
+        let geo = hud_geodetic(&site, &bodies, DVec3::new(1000.0, 12.0, -500.0))
+            .expect("the Moon is in the standard body registry");
+
+        assert!(geo.lat_deg > site.geodetic.lat_deg);
+        assert!(geo.lon_deg > site.geodetic.lon_deg);
+        assert_eq!(geo.height_m, -1908.0);
+        assert!(
+            geo.lat_deg.abs() < 90.0 && geo.lon_deg.abs() <= 180.0,
+            "HUD must report degrees, not site-frame metre offsets: {geo:?}"
+        );
+    }
 
     /// The three tiers from the Summer Space School twin's `SURVEY.md` ladder,
     /// with the shipped `six_wheel_rover.usda` geometry: wheels at x = ±1.0,
@@ -655,7 +701,8 @@ fn hero_readout(ui: &mut egui::Ui, label: &str, value: String, unit: &str, color
 }
 
 /// Several label/value pairs on ONE centred line — the compact idiom for the
-/// secondary numbers (roll/pitch, E/N/heading). A stack of single-number rows
+/// secondary numbers (roll/pitch, latitude/longitude/heading). A stack of
+/// single-number rows
 /// costs a panel's whole height to say very little; inline pairs keep the same
 /// information under the hero readout without competing with it.
 fn inline_pairs(ui: &mut egui::Ui, pairs: &[(&str, String)], pal: &Palette) {
@@ -693,6 +740,27 @@ fn readout(ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32) 
     });
 }
 
+/// A compact geographic line for the narrow NAV card.
+///
+/// Four decimals are about three metres on the Moon: appropriate for the
+/// terrain resolution without turning the HUD into a coordinate debug dump.
+fn geo_line(ui: &mut egui::Ui, geo: lunco_celestial::Geodetic, pal: &Palette) {
+    let lat = if geo.lat_deg >= 0.0 { "N" } else { "S" };
+    let lon = if geo.lon_deg >= 0.0 { "E" } else { "W" };
+    ui.vertical_centered(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{:.4}° {lat}  ·  {:.4}° {lon}",
+                geo.lat_deg.abs(),
+                geo.lon_deg.abs()
+            ))
+            .color(pal.value)
+            .monospace()
+            .size(10.5),
+        );
+    });
+}
+
 /// ATTITUDE cluster (bottom-left) + NAV/COMMS cluster (bottom-right).
 /// Both early-out in free flight.
 // The driver HUD is NOT gated. It paints whenever a vessel is possessed.
@@ -720,6 +788,8 @@ pub(crate) fn draw_rover_hud(
     q_ids: Query<(Entity, &GlobalEntityId)>,
     q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: Query<&ComputedCenterOfMass>,
+    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    bodies: Option<Res<lunco_celestial::CelestialBodyRegistry>>,
 ) {
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
@@ -736,6 +806,8 @@ pub(crate) fn draw_rover_hud(
         &q_ids,
         &q_wheels,
         &q_com,
+        q_site.iter().next(),
+        bodies.as_deref(),
     ) else {
         return;
     };
@@ -784,7 +856,15 @@ pub(crate) fn draw_rover_hud(
                 .show(ui, |ui| {
                     ui.set_width(168.0);
                     ui.label(egui::RichText::new(&v.label).strong().size(15.0));
-                    ui.label(egui::RichText::new("site frame · metres").weak().size(9.0));
+                    ui.label(
+                        egui::RichText::new(if v.geo.is_some() {
+                            "SELENOGRAPHIC · °N/°E"
+                        } else {
+                            "SITE FRAME · METRES"
+                        })
+                        .weak()
+                        .size(9.0),
+                    );
                     ui.separator();
                     // ALT is the landing's hero number: what the narration and
                     // the audience track all the way to touchdown.
@@ -792,15 +872,20 @@ pub(crate) fn draw_rover_hud(
                     ui.separator();
                     // Position and heading on ONE line — three stacked rows of
                     // one number each was most of this panel's height.
-                    inline_pairs(
-                        ui,
-                        &[
-                            ("E", format!("{:+.0}", v.pos.x)),
-                            ("N", format!("{:+.0}", -v.pos.z)),
-                            ("HDG", format!("{:.0}°", v.heading_deg)),
-                        ],
-                        &pal,
-                    );
+                    if let Some(geo) = v.geo {
+                        geo_line(ui, geo, &pal);
+                        inline_pairs(ui, &[("HDG", format!("{:.0}°", v.heading_deg))], &pal);
+                    } else {
+                        inline_pairs(
+                            ui,
+                            &[
+                                ("E", format!("{:+.0}", v.pos.x)),
+                                ("N", format!("{:+.0}", -v.pos.z)),
+                                ("HDG", format!("{:.0}°", v.heading_deg)),
+                            ],
+                            &pal,
+                        );
+                    }
 
                     // COMMS — only for a vessel that actually carries a link node.
                     // A rover with no radio shows nothing rather than a permanent
