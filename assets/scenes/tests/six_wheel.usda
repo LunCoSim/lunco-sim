@@ -93,7 +93,9 @@ def Xform "SixWheelTest" (
     {
         custom string lunco:scenario = "six-wheel"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/six_wheel.rhai@
         }

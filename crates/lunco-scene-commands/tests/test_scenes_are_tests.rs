@@ -1,7 +1,7 @@
 //! A scene in `assets/scenes/tests/` must actually be a test.
 //!
 //! Several were not. `differential_rig`, `rocker_bogie`, `g7_joints`,
-//! `prismatic_drive` and `revolute_motor` carried no `LunCoProgram` at all, so
+//! `prismatic_drive` and `revolute_motor` carried no program API at all, so
 //! `scene_test` ran them for 20000 ticks, received no verdict, and exited 2 —
 //! every time, for as long as they had existed. Their invariants were real and
 //! written down; they were written down as instructions to a HUMAN, in the file
@@ -66,8 +66,8 @@ fn every_test_scene_carries_a_scenario() {
             continue;
         }
         // A verdict needs a scenario to emit it, and a scenario reaches the scene
-        // through a `LunCoProgram`. Both, so that neither half can rot alone.
-        if !src.contains("lunco:scenario") || !src.contains("LunCoProgram") {
+        // through `LunCoProgramAPI`. Both, so that neither half can rot alone.
+        if !src.contains("lunco:scenario") || !src.contains("LunCoProgramAPI") {
             silent.push(stem.clone());
         }
     }

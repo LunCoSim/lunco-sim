@@ -19,9 +19,9 @@
 //!
 //! These systems instead derive the wait from state that is *already* the truth:
 //! `SceneLoadInFlight` and unresolved `UsdAwaitingStage` prims for the scene, a
-//! `ModelicaModel` without its `SimComponent` for a model. There is no path to
-//! miss, because there is no transition being watched — each frame the wait
-//! either still describes the world or it does not.
+//! `ModelicaModel` whose interface has not compiled for a model. There is no
+//! path to miss, because there is no transition being watched — each frame the
+//! wait either still describes the world or it does not.
 
 use bevy::prelude::*;
 use lunco_modelica::ModelicaModel;
@@ -86,37 +86,46 @@ fn track_scene_load(
 /// compiler. Until it has, the object is not a vehicle — it is a rock with a
 /// pending appointment — and it must not be falling.
 ///
-/// `SimComponent` is the right "ready" signal rather than the compile callback:
-/// it is only inserted once the model has produced its variables, so it means
-/// *the model is stepping*, not merely *the compiler returned*.
+/// A compiling [`SimComponent`] is not ready even though it already exposes its
+/// USD-declared ports. The early interface prevents false dangling-wire errors;
+/// its status, rather than component existence, keeps the physics hold until a
+/// compiler result has made the model runnable or visibly failed.
 fn track_model_compiles(
-    unready: Query<
-        (Entity, &ModelicaModel),
-        (
-            With<UsdSourcedCosim>,
-            Without<SimComponent>,
-            Without<ModelCompileWait>,
-        ),
-    >,
-    ready: Query<(Entity, &ModelCompileWait), With<SimComponent>>,
+    models: Query<(Entity, &ModelicaModel, Option<&SimComponent>), With<UsdSourcedCosim>>,
+    waits: Query<(Entity, &ModelCompileWait)>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
-    for (entity, model) in &unready {
-        let ticket = registry.begin(
-            Subject::Entity(entity),
-            kinds::PROGRAM_COMPILE,
-            model.model_name.clone(),
-        );
-        commands
-            .entity(entity)
-            .try_insert(ModelCompileWait { ticket });
+    for (entity, model, component) in &models {
+        let compiling = model_compile_pending(component);
+        let wait = waits.get(entity).ok();
+        match (compiling, wait) {
+            (true, None) => {
+                let ticket = registry.begin(
+                    Subject::Entity(entity),
+                    kinds::PROGRAM_COMPILE,
+                    model.model_name.clone(),
+                );
+                commands
+                    .entity(entity)
+                    .try_insert(ModelCompileWait { ticket });
+            }
+            (false, Some((_, wait))) => {
+                registry.finish(wait.ticket);
+                commands.entity(entity).try_remove::<ModelCompileWait>();
+            }
+            _ => {}
+        }
     }
+}
 
-    for (entity, wait) in &ready {
-        registry.finish(wait.ticket);
-        commands.entity(entity).try_remove::<ModelCompileWait>();
-    }
+/// Whether the simulation must remain frozen for this model's compiler.
+///
+/// No component means the source has parsed but its public interface has not
+/// been projected yet. `Error` is deliberately terminal rather than pending:
+/// the user needs an actionable failure, not an indefinite frozen world.
+fn model_compile_pending(component: Option<&SimComponent>) -> bool {
+    component.is_none_or(|component| component.status == lunco_cosim::SimStatus::Compiling)
 }
 
 /// Registers the USD scene's readiness producers.
@@ -131,5 +140,29 @@ impl Plugin for UsdReadinessPlugin {
         // so a wait that closed this frame is not re-declared before the state
         // that closes it is visible.
         app.add_systems(PostUpdate, (track_scene_load, track_model_compiles));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn early_port_projection_does_not_release_compile_hold() {
+        let compiling = SimComponent {
+            status: lunco_cosim::SimStatus::Compiling,
+            ..default()
+        };
+        assert!(model_compile_pending(None));
+        assert!(model_compile_pending(Some(&compiling)));
+
+        let failed = SimComponent {
+            status: lunco_cosim::SimStatus::Error("bad model".into()),
+            ..default()
+        };
+        assert!(
+            !model_compile_pending(Some(&failed)),
+            "a failed model reports its error instead of freezing the world forever"
+        );
     }
 }

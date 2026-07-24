@@ -1,6 +1,6 @@
-//! Program drivers — the Rust half of `LunCoProgram`.
+//! Program drivers — the Rust half of `LunCoProgramAPI`.
 //!
-//! A `LunCoProgram` prim names its implementation one of three ways, exactly as
+//! A `LunCoProgramAPI` prim names its implementation one of three ways, exactly as
 //! `UsdShade.Shader` does: `info:sourceAsset` (a file — the engine comes
 //! from its extension), `info:sourceCode` (text in place), or
 //! **`info:id`** — a name the runtime already implements, resolved here.
@@ -35,7 +35,18 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-/// The program id authored on a `LunCoProgram` prim (`info:id`), stamped on
+/// Whether an asset path names BehaviorTree.CPP XML.
+///
+/// `.btxml` is LunCoSim's canonical, unambiguous authoring extension. Plain
+/// `.xml` remains accepted for direct BehaviorTree.CPP/Groot/ROS interchange.
+/// Keep extension dispatch centralized: a program must not select different
+/// engines depending on which USD consumer happened to inspect it.
+pub fn is_behavior_tree_asset(path: &str) -> bool {
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    path.ends_with(".btxml") || path.ends_with(".xml")
+}
+
+/// The program id authored on a `LunCoProgramAPI` prim (`info:id`), stamped on
 /// the prim that **owns** the program — not on the program prim itself.
 ///
 /// Owner, because that is what the program drives: `me` is the Cone, and the program
@@ -127,5 +138,19 @@ fn warn_unknown_program_drivers(
                 id.0, entity, names
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_behavior_tree_asset;
+
+    #[test]
+    fn behavior_tree_extensions_are_canonical_plus_interop() {
+        assert!(is_behavior_tree_asset("behaviors/patrol.btxml"));
+        assert!(is_behavior_tree_asset("imported/nav2_tree.xml"));
+        assert!(is_behavior_tree_asset("patrol.btxml#MainTree"));
+        assert!(!is_behavior_tree_asset("modelDescription.xml.backup"));
+        assert!(!is_behavior_tree_asset("controller.rhai"));
     }
 }

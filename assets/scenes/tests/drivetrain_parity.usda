@@ -164,7 +164,9 @@ def Xform "DrivetrainParity" (
     {
         custom string lunco:scenario = "drivetrain-parity"
 
-        def LunCoProgram "ParityTest"
+        def Scope "ParityTest" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/drivetrain_parity.rhai@
         }

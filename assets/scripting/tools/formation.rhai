@@ -1,14 +1,8 @@
 // formation.rhai — an example importable TOOL LIBRARY (L3).
 //
 // Tool libraries are named bundles of higher-level rhai policy, registered as a
-// static module namespace. Call them as `formation::fn(...)` from anywhere,
-// including inside on_tick — NO `import` statement needed (rhai's pure-function
-// scoping makes script imports invisible inside hooks; static modules aren't).
-//
-//   fn on_tick(me) {
-//       let leader = formation::nearest_rover(me);
-//       if leader != () { formation::hold_line(me, leader, 4.0, 1.0); }
-//   }
+// static module namespace. Call them as `formation::fn(...)` from event-driven
+// scenario policy. Continuous formation control belongs in Modelica or Rust.
 //
 // Every function here can freely call the prelude (all_of_type, world_pos,
 // vsub, nav_to, …) and the host verbs — they resolve through the engine's

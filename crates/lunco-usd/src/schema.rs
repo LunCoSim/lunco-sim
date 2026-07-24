@@ -882,18 +882,22 @@ mod tests {
         // replaced could not tell those two cases apart, which is exactly why a core
         // `uniform` property missing from it was authored wrong in silence.
         assert_eq!(variability_of("physics:mass"), sdf::Variability::Varying);
-        assert!(SchemaRegistry::global()
-            .read()
-            .unwrap()
-            .property("physics:mass")
-            .is_some());
+        assert!(
+            SchemaRegistry::global()
+                .read()
+                .unwrap()
+                .property("physics:mass")
+                .is_some()
+        );
         // Genuinely unknown (no schema we vendor declares it) → USD's default.
         assert_eq!(variability_of("nonesuch:madeUp"), sdf::Variability::Varying);
-        assert!(SchemaRegistry::global()
-            .read()
-            .unwrap()
-            .property("nonesuch:madeUp")
-            .is_none());
+        assert!(
+            SchemaRegistry::global()
+                .read()
+                .unwrap()
+                .property("nonesuch:madeUp")
+                .is_none()
+        );
     }
 
     /// An ASSET-SHIPPED schema library registers at runtime.
@@ -1050,7 +1054,7 @@ class "SquatterAPI" (
         assert!(reg.property("primvars:doNotCastShadows").is_none());
         // A program names a built-in instead of supplying one — the third arm of
         // `info:implementationSource`, `UsdShade`'s own property which
-        // `LunCoProgram` declares directly. `schema.usda` is never read at
+        // `LunCoProgramAPI` declares directly. `schema.usda` is never read at
         // runtime, so this asserts the GENERATED file carries it; the two drift
         // in silence otherwise.
         assert_eq!(reg.property("info:id").unwrap().type_name, "token");

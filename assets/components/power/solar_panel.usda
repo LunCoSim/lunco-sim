@@ -19,9 +19,8 @@
 #
 # What the panel GENERATES is not here: a source's output is an equation
 # (`LunCo.Electrical.SolarPanel`), and it is one component of a circuit. The vessel that
-# mounts this panel instantiates it in its electrical system
-# (`vessels/rovers/rucheyok/rucheyok_electrical.mo`) and sets this panel's area and
-# efficiency there. USD assembles the part; the circuit is the maths.
+# mounts this panel adds the corresponding Modelica component to its electrical
+# Scope and sets area and efficiency there. USD assembles; Modelica is the maths.
 def Xform "SolarPanel" (
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI"]

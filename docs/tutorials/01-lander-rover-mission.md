@@ -680,31 +680,28 @@ dies to nothing the instant the engine cuts.
 ## Step 6 — Warn about low fuel, and notice the landing
 
 We want a warning when propellant runs low. The fuel level (`m_prop`) is a signal
-the model already publishes — we just need to fire an *event* when it crosses a line.
+the model already publishes — expose the condition as a 0/1 Modelica output and
+connect that signal to the event bus.
 
-Rather than poll the fuel every frame in a script, declare the thresholds right on
-the vehicle and let the engine watch them. Add to the `MyLander` prim:
+Rather than poll fuel or encode physical thresholds in a script/runtime adapter,
+add `low_fuel` and `depleted` equations to the model, then add to `MyLander`:
 
 ```usda
-    # One prim per rule: the port, the comparison, the threshold and the name.
-    def LunCoPortEvent "LowFuel"
+    def LunCoEvent "LowFuel"
     {
-        uniform token lunco:event:port = "m_prop"
-        uniform token lunco:event:op = "lt"
-        double lunco:event:threshold = 200.0
-        uniform token lunco:event:emit = "lander_low_fuel"
+        float inputs:trigger.connect = </MyLander.outputs:low_fuel>
+        uniform token lunco:event:name = "lander_low_fuel"
+        uniform token lunco:event:severity = "warning"
     }
-    def LunCoPortEvent "Depleted"
+    def LunCoEvent "Depleted"
     {
-        uniform token lunco:event:port = "m_prop"
-        uniform token lunco:event:op = "le"
-        double lunco:event:threshold = 0.5
-        uniform token lunco:event:emit = "lander_depleted"
+        float inputs:trigger.connect = </MyLander.outputs:depleted>
+        uniform token lunco:event:name = "lander_depleted"
+        uniform token lunco:event:severity = "critical"
     }
 
     # And the supervisor that reacts to them — bolted on, so a child program prim.
-    def LunCoProgram "Supervisor"
-    {
+    def Scope "Supervisor" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @scenarios/my_mission/lander_supervisor.rhai@
     }
 ```
@@ -772,9 +769,8 @@ scene (`my_mission.usda`) and clamp it to the lander with a fixed joint:
         double3 xformOp:translate = (0, 58.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        def LunCoProgram "Autopilot"
-        {
-            uniform asset info:sourceAsset = @scenarios/my_mission/rover_autopilot.rhai@
+        def Scope "Autopilot" (prepend apiSchemas = ["LunCoProgramAPI"]) {
+            uniform asset info:sourceAsset = @behaviors/lander_rover_patrol.btxml@
         }
     }
 
@@ -873,8 +869,7 @@ Add it to `my_mission.usda`:
     {
         custom string lunco:scenario = "my-surface-ops"
 
-        def LunCoProgram "Mission"
-        {
+        def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
             uniform asset info:sourceAsset = @scenarios/my_mission/mission.rhai@
         }
     }
@@ -970,90 +965,11 @@ W belongs to the lander. An autopilot that grabs possession on any keypress will
 the camera off the lander mid-descent, which is a genuinely baffling thing to
 experience. Authority is a question you *ask*, never one you assume.
 
-Create `assets/scenarios/my_mission/rover_autopilot.rhai`:
-
-```rhai
-fn wp_pos(i) { world_pos(find("/Mission/RoverTarget" + i)) }
-
-/// True if a HUMAN drives `id`. `controller(id)` names the driver's role —
-/// "AiAgent" for an autopilot, "Owner"/"Operator" for a person — so this is the
-/// human-vs-AI test, not a bare "is anyone driving". find() gives -1 when absent.
-fn human_drives(id) {
-    if id < 0 { return false; }
-    let role = controller(id);
-    role != () && role != "AiAgent"
-}
-
-/// Is the player at the controls of some OTHER vehicle? Their keys are its keys.
-fn __player_flies_elsewhere(me) {
-    let lander = find("/Mission/Lander");
-    lander != me && human_drives(lander)
-}
-
-/// The side-effects of standing down. `this.manual` is NOT set here — see below.
-fn __stand_down(me) {
-    brake(me);
-    notify_kind("Manual control - autopilot off.", "info");
-}
-
-fn on_tick(me) {
-    if this.active != true { return; }        // not deployed yet
-    if this.manual == true { return; }        // player has the wheel
-    // They possessed us themselves (clicked, or pressed F). Yield — and possess
-    // nothing on their behalf: they already own it.
-    if human_drives(me) { this.manual = true; __stand_down(me); return; }
-
-    if this.i == () { this.i = 1; }
-    if this.i > 3 { brake(me); return; }      // course done
-
-    let target = wp_pos(this.i);
-    if target == () { return; }
-    if nav_to(me, target, 0.7, 4.0) {         // steer there; true once arrived
-        this.i += 1;
-    }
-}
-
-fn on_event(me, evt) {
-    if evt.name == "rover_deployed" {
-        this.active = true; this.i = 1;
-        return;
-    }
-    if !evt.name.starts_with("key:") { return; }
-    if this.active != true || this.manual == true { return; }
-    if __player_flies_elsewhere(me) { return; }   // that key was for the lander
-    // Nothing else is possessed, so the key IS a takeover request. Give them the
-    // rover so their keys reach it, and stand down.
-    possess(me);
-    this.manual = true;
-    __stand_down(me);
-}
-```
-
-Driving is a moment-to-moment thing — steer a little this frame, a little the next —
-so it lives in `on_tick`. `nav_to(rover, target, speed, radius)` does the steering
-for you and returns `true` once it's arrived (and brakes); then we move on to the
-next waypoint.
-
-One rhai rule bites here, so learn it now: **`this` is bound only inside the hook
-the engine calls** — `on_tick`, `on_event` — and *not* inside functions those hooks
-call. That's why `__stand_down` brakes and notifies but leaves `this.manual = true`
-to its callers. Move that assignment into the helper and the autopilot will cheerfully
-keep driving forever, having "stood down" into a `this` that nobody reads.
-
-When the autopilot *turns on and off*, though, those are events and state reads. It
-wakes on the `rover_deployed` event the mission fired (so it doesn't fight the
-descent while still bolted to the lander), and it stands down the first time a human
-holds the rover. There are two ways for that to happen, and both funnel through
-possession:
-
-- the player possesses the rover directly (clicks it, presses F) — `on_tick` sees a
-  human owner and yields, possessing nothing;
-- the player presses a drive key with nothing else possessed — the autopilot
-  possesses the rover *for* them as a convenience, then yields.
-
-Every key you hit shows up as an event named `key:<something>`, so "any key" is just
-checking the name starts with `key:` — but only after `__player_flies_elsewhere`
-confirms the key wasn't meant for someone else.
+The referenced behaviour tree sequences the waypoint actions and yields when manual
+authority takes over. Continuous steering remains in the native navigation action; it is
+not interpreted each tick by rhai. The mission script has only one job here: when
+`rover_deployed` arrives, dispatch `EngageAutopilot` for the rover. This keeps mission
+policy event-driven and leaves numerical control in the compiled runtime.
 
 Reload one more time. The lander flies down, the rover drops and drives the course
 on its own, the domes light up one by one — and the moment you click it, the rover is
@@ -1112,8 +1028,8 @@ or give each waypoint a time limit and fail the mission if it's missed.
   wire is reported as dangling.
 - A model line with `if … else if …`? Flatten it into separate single `if`s,
   `min`/`max`, or arithmetic; chained `else if` doesn't translate cleanly.
-- Need a model to *decide* something from a wired-in value? Don't — declare a
-  `LunCoPortEvent` threshold prim instead (Step 6).
+- Need a model to *decide* something from a wired-in value? Put the condition and
+  hysteresis in Modelica, then connect its 0/1 output to `LunCoEvent` (Step 6).
 - A trigger zone never fires? Check what's entering it. Raycast-wheeled rovers don't
   reliably overlap sensors; read a distance instead (Step 8).
 - Possessed the vehicle, and only Space does anything? Your model has no `pitch` /

@@ -35,6 +35,7 @@ fn task(me) {
         once(|m| {
             set_camera("RoverCam");
             emit("rover_deployed");
+            cmd("EngageAutopilot", #{ vessel: find("/SolarRoverTest/SolarRover") });
             notify_kind("Autopilot engaged. Battery begins draining under load...", "info");
         }),
 

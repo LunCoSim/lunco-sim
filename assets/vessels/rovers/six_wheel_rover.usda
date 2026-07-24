@@ -319,23 +319,69 @@ def Xform "SixWheelRover" (
     #       ]
     #   ) {}
     #
-    # A drive law is just a `LunCoProgram` on the vessel, and the file extension
+    # A drive law is just a `LunCoProgramAPI` on the vessel, and the file extension
     # picks the engine — a closed variant list could only ever name the laws that
     # existed when this file was written.
 
     # --- Power: does driving cost anything ----------------------------------
     # ORTHOGONAL to the drive law: `infinite` is EMPTY — the absence of a battery
-    # is today's drive-forever behavior. `battery` composes the RoverBattery.mo
-    # energy budget onto the root: drain follows the commanded drive magnitude,
-    # and its `alive` cutoff brownouts the drive ports over the last ~2% of
-    # charge — a variant chooses a component, it never restates one.
+    # is today's drive-forever behavior. `battery` composes the reusable
+    # six-motor electrical network; its connected island is projected to one
+    # Modelica DAE.
     variantSet "power" = {
         "infinite" {
         }
 
-        "battery" (
-            prepend references = @lunco://components/power/rover_battery.usda@</Power>
-        ) {
+        "battery" {
+            def Xform "Battery" (
+                prepend references = @lunco://components/power/battery.usda@</Battery>
+            )
+            {
+                double3 xformOp:translate = (0, 0.35, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+            def Scope "Electrical" (
+                prepend apiSchemas = ["CollectionAPI:components"]
+            )
+            {
+                float inputs:drive_left.connect = </SixWheelRover.outputs:drive_left>
+                float inputs:drive_right.connect = </SixWheelRover.outputs:drive_right>
+                float outputs:soc.connect = </SixWheelRover/Battery.outputs:soc_out>
+                uniform token collection:components:expansionRule = "explicitOnly"
+                prepend rel collection:components:includes = [
+                    </SixWheelRover/Battery>,
+                    </SixWheelRover/Motor_FL>,
+                    </SixWheelRover/Motor_ML>,
+                    </SixWheelRover/Motor_RL>,
+                    </SixWheelRover/Motor_FR>,
+                    </SixWheelRover/Motor_MR>,
+                    </SixWheelRover/Motor_RR>,
+                ]
+            }
+            over "Motor_FL" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+            }
+            over "Motor_ML" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+            }
+            over "Motor_RL" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_left>
+                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+            }
+            over "Motor_FR" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+            }
+            over "Motor_MR" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+            }
+            over "Motor_RR" {
+                float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+            }
         }
     }
 

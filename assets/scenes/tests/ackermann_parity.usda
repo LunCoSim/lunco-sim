@@ -184,7 +184,9 @@ def Xform "AckermannParity" (
     {
         custom string lunco:scenario = "ackermann-parity"
 
-        def LunCoProgram "ParityTest"
+        def Scope "ParityTest" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/ackermann_parity.rhai@
         }

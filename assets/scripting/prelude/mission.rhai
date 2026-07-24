@@ -166,10 +166,8 @@ fn __init_mission(me) {
 // of the timeline's host (so one scenario can orchestrate a separate vessel).
 // Unknown steps lower to a no-op (skipped) — forward-compatible with new fields.
 //
-// Generic executor (RunTimeline injects exactly this around a `const TIMELINE`):
-//   fn on_start(me)      { this.cur = seq_init(); this.steps = compile_timeline(TIMELINE.steps); }
-//   fn on_tick(me)       { this.cur = run_steps(me, this.steps, this.cur); }
-//   fn on_event(me, evt) { this.cur = seq_note_event(this.cur, evt); }
+// `RunTimeline` owns progression internally. Scenario rhai supplies declarative
+// steps and reacts to events; it does not install a per-tick hook.
 
 /// Resolve a step's subject entity: an explicit `subject` path, else host `m`.
 fn timeline_subject(m, s) {
@@ -221,4 +219,3 @@ fn timeline_step(s) {
 /// Lower a whole data timeline (array of data steps) to Layer-1 steps. Call ONCE
 /// in on_start and hold the result on `this`; feed it to run_steps each tick.
 fn compile_timeline(steps) { steps.map(|s| timeline_step(s)) }
-

@@ -167,7 +167,9 @@ def Xform "SixIndependentParity" (
     {
         custom string lunco:scenario = "six-independent-motion"
 
-        def LunCoProgram "MotionTest"
+        def Scope "MotionTest" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/six_independent_parity.rhai@
         }

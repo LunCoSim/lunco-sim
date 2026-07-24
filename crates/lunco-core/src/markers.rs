@@ -206,7 +206,7 @@ pub struct EmbeddedScenarioSource(pub String);
 
 /// A per-entity scenario referenced by FILE PATH in USD — the
 /// `uniform asset info:sourceAsset = @scenarios/foo.rhai@` of a
-/// `LunCoProgram` prim — awaiting load.
+/// `LunCoProgramAPI` prim — awaiting load.
 ///
 /// The asset-relative path to a `.rhai` source. The USD loader
 /// (`lunco-usd-bevy`) stamps this on the prim that OWNS the program;
@@ -220,7 +220,7 @@ pub struct EmbeddedScenarioSource(pub String);
 #[reflect(Component)]
 pub struct EmbeddedScenarioPath(pub String);
 
-/// The USD path of the `LunCoProgram` prim a running scenario came from.
+/// The USD path of the `LunCoProgramAPI` prim a running scenario came from.
 ///
 /// A script's `me` is its OWNER — the vessel it acts for — so the runtime hangs the
 /// scenario on the owner's entity. But the program is a prim of its own, and that is

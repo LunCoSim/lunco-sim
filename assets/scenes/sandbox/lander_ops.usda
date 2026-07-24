@@ -156,9 +156,11 @@ def Xform "LanderTest" (
         # program the SCENE adds to a stock rover — the same separation the lander's
         # guidance gets, and for the same reason: a rover asset that patrolled the
         # moment you spawned it would be a surprise, not a feature.
-        def LunCoProgram "Autopilot"
+        def Scope "Autopilot" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
-            uniform asset info:sourceAsset = @lunco://scenarios/rover_autopilot.rhai@
+            uniform asset info:sourceAsset = @lunco://behaviors/lander_rover_patrol.btxml@
         }
     }
 
@@ -228,7 +230,9 @@ def Xform "LanderTest" (
         # the AssetServer → RhaiSource → EmbeddedScenarioSource). It's a declarative
         # prelude `task` — timing from internal sim time (`wait`), advancement from
         # state predicates (`wait_until`); no tick-counting / dt integration in rhai.
-        def LunCoProgram "Mission"
+        def Scope "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/rover_surface_ops.rhai@
         }

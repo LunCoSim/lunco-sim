@@ -7,13 +7,13 @@ description = "Unified tutorial launcher for every workbench app: a registry of 
 
 [dependencies]
 bevy = { workspace = true }
-bevy_egui = { workspace = true }
+bevy_egui = { workspace = true, optional = true }
 # `Command` / `on_command` / `register_commands!` macros + `TelemetryEvent`
 # (mission-complete detection) + `SubsystemToggles` (fidelity ramp).
 lunco-core = { path = "../lunco-core" }
 # `Panel` / `PanelCtx` / `WorkbenchAppExt::register_panel` for the launcher,
 # and `TutorialHud` to clear the HUD on skip.
-lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
 # `ApiCommandEvent` — the fidelity toggle & notifications dispatch generically.
 # `default-features = false` is LOAD-BEARING — lunco-api's defaults include its
 # `render` feature (→ bevy_render → wgpu/naga), and cargo unifies features across
@@ -36,6 +36,12 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[features]
+default = ["ui"]
+# The launcher menu, panel, HUD cleanup, and confirmation popup.  Lesson
+# execution itself remains available to headless simulation hosts.
+ui = ["dep:bevy_egui", "dep:lunco-workbench"]
 
 [lints]
 workspace = true

@@ -2,7 +2,7 @@
 name: use-asset-library
 description: >
   How to GROW THE LUNCO ASSET LIBRARY without writing any Rust — drop in a new
-  USD component, a WGSL shader, a Modelica `.mo` behaviour, or a rhai actuator,
+  USD component, a WGSL shader, a Modelica `.mo` behaviour, or an event-driven Rhai policy,
   and have the engine find and use it.
   USE THIS SKILL when the user asks "where do I put this file", "how do I add a
   new part/shader/model/script", "how does the spawn palette find things", "why
@@ -49,7 +49,7 @@ Design: [`56-asset-resolution-and-cache.md`](../../docs/architecture/56-asset-re
 | `assets/props/` | simple scene objects — ball, ramp, wall |
 | `assets/scenes/` | loadable stages — `sandbox/*.usda` |
 | `assets/models/` | behaviour sources: `.mo` (Modelica), `.py` |
-| `assets/scenarios/` | `.rhai` bound as a `LunCoProgram` source |
+| `assets/scenarios/` | `.rhai` bound as a `LunCoProgramAPI` source |
 | `assets/scripting/` | importable rhai modules — `lib/`, `prelude/`, `policy/`, `tools/` |
 | `assets/shaders/` | `.wgsl` |
 | `assets/celestial/`, `missions/`, `tutorials/`, `config/` | the rest |
@@ -82,7 +82,7 @@ document's directory, keeping that document's scheme.** That is why it bites:
 ```usda
 # ✅ engine library — works no matter who mounts this file
 prepend references = @lunco://components/mobility/wheel.usda@
-uniform asset info:sourceAsset = @lunco://models/RoverBattery.mo@
+prepend references = @lunco://components/power/battery.usda@
 
 # ✅ a file sitting next to a Twin scene
 uniform asset info:sourceAsset = @twin://my_mission/gnc.rhai@
@@ -213,21 +213,14 @@ name warns and packs to its `//!@default` (or zero) — nothing fills it.
 
 ## Add a Modelica behaviour (`.mo`)
 
-Two files: the maths in `assets/models/`, the binding in a `.usda`.
-
-```usda
-def LunCoProgram "Battery" {
-    uniform asset info:sourceAsset = @lunco://models/RoverBattery.mo@
-    uniform bool  lunco:program:realtimeSafe = true
-    float inputs:drive_left.connect  = </Power.outputs:drive_left>
-    float inputs:drive_right.connect = </Power.outputs:drive_right>
-}
-```
+For an acausal physical domain, author component class/nameplate facts and
+connector topology in USD. The runtime projector compiles each connected island
+into one Modelica model; never bind one solver program per electrical part.
 
 Three gates, each of which silently does nothing when unmet:
 
 1. **The language is the file extension**, nothing else. `.mo` → Modelica,
-   `.py` → Python, `.rhai` → rhai, `.xml` → behaviour tree.
+   `.py` → Python, `.rhai` → rhai, `.btxml` → behaviour tree (`.xml` accepted for interop).
 2. **No `inputs:`/`outputs:` ⇒ never stepped.** `cosim.rs:264` requires at least
    one port-prefixed attribute. A model with no ports is a documentation-only
    reference.
@@ -241,51 +234,9 @@ visible to the resolver, the reference closure, and packaging.
 **Write it branch-free.** rumoca's solver path has no `if`/`when` in equations —
 express clamps as `der(x) = expr` with `max()`/`min()`.
 [`validate-assets`](../validate-assets/SKILL.md) enforces this as an error;
-`assets/models/RoverBattery.mo` is the worked example.
-
-## Add a rhai actuator
-
-A rhai program is bound exactly like a `.mo` — same `LunCoProgram` prim, same
-`sourceAsset`. Its job is usually to move a Modelica output onto a port.
-
-Entry point is `fn on_tick(me)`, and **`me` is the OWNER prim** (the rover root),
-not the `LunCoProgram` prim. The bridge API
-(`crates/lunco-scripting/src/world_bridge.rs`):
-
-| Call | Does |
-|---|---|
-| `get(id, "name")` | reflection first, then **port read**; `()` if neither |
-| `set(id, "name", v)` | reflection first, then **port write**; `false` on failure |
-| `children(id)` / `parent(id)` / `find(name)` | hierarchy |
-| `param(id, "key", default)` | typed per-prim config from `lunco:params` |
-
-`assets/scenarios/rover_battery.rhai` is the canonical shape, and its two idioms
-should be copied into any new bridge:
-
-```rhai
-fn sibling_out(me, name) {              // find the sibling by what it PUBLISHES,
-    for c in children(me) {             // never by prim name
-        let v = get(c, name);
-        if v != () { return v; }
-    }
-    ()
-}
-
-fn on_tick(me) {
-    let alive = sibling_out(me, "alive");
-    if alive == () { return; }          // model still compiling — leave ports ALONE
-    if alive >= 0.999 { return; }       // healthy — never race the owning writer
-    let dl = get(me, "drive_left");
-    if dl != () { set(me, "drive_left", dl * alive); }
-}
-```
-
-- **Discover siblings by published port, not by name.** Name-matching breaks the
-  moment a variant renames a prim.
-- **Respect write order.** Another program owns `drive_left` every tick. Two
-  unordered writers is a race — so this bridge touches nothing until the clamp
-  genuinely bites, where both orderings converge within a tick.
-- A `()` read means *leave the port alone*, never *write 0*.
+`assets/models/LunCo/Electrical/Battery.mo` plus the reusable rover electrical
+assemblies are the worked examples. Rhai is event and mission glue only; an
+`on_tick` is appropriate in tests, not as an actuator or numerical bridge.
 
 ## Regenerate the web manifest
 
@@ -330,7 +281,7 @@ strict wheel reader. See [`validate-assets`](../validate-assets/SKILL.md).
 - ❌ `lunco:spawnable` on a prim that is not the stage `defaultPrim` — invisible
   to the palette.
 - ❌ Encoding a category in the filename — the category IS the parent folder.
-- ❌ A `LunCoProgram` with no `inputs:`/`outputs:` and expecting it to run.
+- ❌ A `LunCoProgramAPI` with no `inputs:`/`outputs:` and expecting it to run.
 - ❌ `info:sourceAsset` typed `string` — must be `asset`.
 - ❌ `if`/`when` in a `.mo` equation section — rumoca is branch-free.
 - ❌ Authoring `inputs:display_color` instead of `primvars:displayColor` — it

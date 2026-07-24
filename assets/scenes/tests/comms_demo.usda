@@ -201,7 +201,9 @@ def Xform "CommsDemoScene" (
     {
         custom string lunco:scenario = "comms-demo"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/comms_demo.rhai@
         }

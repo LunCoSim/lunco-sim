@@ -17,14 +17,11 @@ use rhai::Engine;
 
 /// An engine configured like the runtime's.
 ///
-/// **The limits must match `world_bridge.rs`.** A bare `Engine::new()` uses rhai's
-/// default expression-depth caps, which are far below the `set_max_expr_depths(128,
-/// 128)` the real engine sets — so it rejects prelude files that run perfectly well,
-/// and the test becomes a false alarm rather than a check. A parse test is only worth
-/// having if it parses under the same rules as production.
+/// **The policy must match runtime.** A bare engine can accept a different language
+/// than production, making this a false alarm rather than a check.
 fn runtime_engine() -> Engine {
     let mut engine = Engine::new();
-    engine.set_max_expr_depths(128, 128);
+    lunco_scripting::rhai_limits::apply(&mut engine);
     engine
 }
 

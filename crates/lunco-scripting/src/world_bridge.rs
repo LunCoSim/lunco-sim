@@ -638,15 +638,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // Replace rhai's default file-reading resolver before anything can import.
     engine.set_module_resolver(crate::module_resolver::AssetModuleResolver::new(sources));
 
-    engine.set_max_operations(1_000_000);
-    engine.set_max_call_levels(64);
-    engine.set_max_string_size(64 * 1024);
-    engine.set_max_array_size(10_000);
-    // Above rhai's defaults (64 global / 32 in functions): task-tree literals
-    // nest composites (e.g. par_all → seq → leaf) as one map expression. The
-    // tick recursion itself is native now (task_tree.rs), so this only widens
-    // the structural nesting allowance for authored trees.
-    engine.set_max_expr_depths(128, 128);
+    crate::rhai_limits::apply(&mut engine);
 
     // cmd(name, #{params}) -> #{ id, ok, data, error }. Routes through
     // ApiCommandEvent so it inherits macro-reflected dispatch, GlobalEntityId
@@ -2186,7 +2178,7 @@ mod tests {
         // prelude's sequencer legitimately needs it; a stock engine's lower default
         // rejects it (this test used to fail on that pre-existing mismatch).
         let mut engine = rhai::Engine::new();
-        engine.set_max_expr_depths(128, 128);
+        crate::rhai_limits::apply(&mut engine);
         super::compile_prelude(&engine).expect("prelude must parse");
 
         // Every embedded example scenario, built-in tool library, AND bundled

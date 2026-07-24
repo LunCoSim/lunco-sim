@@ -9,7 +9,7 @@
 # radio, a ground station, a relay), exactly as `wheel.usda` is shared across rovers.
 #
 # Authored the SAME way the altimeter beam is (`altimeter.usda`): unit `Cylinder`s with
-# bound emissive `Material`s, plus `LunCoProgram` prims naming a driver and its
+# bound emissive `Material`s, plus `LunCoProgramAPI` prims naming a driver and its
 # `lunco:param:*` tuning. Nothing about the look or the numbers lives in Rust.
 #
 # COLOUR BY STATE. There is one beam per connectivity STATE — `Up` (green) and `Down`
@@ -40,7 +40,9 @@ def Xform "LinkBeam" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
 
-        def LunCoProgram "Driver"
+        def Scope "Driver" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform token info:implementationSource = "id"
             uniform token info:id = "link_beams"
@@ -73,7 +75,9 @@ def Xform "LinkBeam" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
 
-        def LunCoProgram "Driver"
+        def Scope "Driver" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform token info:implementationSource = "id"
             uniform token info:id = "link_beams"

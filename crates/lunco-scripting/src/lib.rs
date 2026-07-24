@@ -30,6 +30,8 @@ pub mod repl;
 /// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
 #[cfg(feature = "rhai")]
 pub mod rhai_math;
+/// Shared bounded-resource policy for every Rhai engine.
+pub mod rhai_limits;
 /// Language-neutral scenario lifecycle driver (`on_start`/`on_tick`/`on_event`/
 /// `on_stop`, hot-reload, pause, teardown). Backends implement `ScenarioRuntime`.
 #[cfg(any(feature = "rhai", feature = "python"))]
@@ -191,6 +193,7 @@ fn register_builtin_policies() {
         // are entirely here, and `register_hook("lint.usd", …)` replaces them on a
         // running sim.
         ("lint_usd", "lint.usd", "lint_usd"),
+        ("lint_rhai", "lint.rhai", "lint_rhai"),
         // (Link availability is not a builtin policy. The generic link kernel
         // computes the geometry and applies a builtin range+mask+occlusion rule;
         // an authored `link.connected` hook overrides the verdict, and routing is

@@ -112,7 +112,9 @@ def Xform "LanderRoverStack" (
     {
         custom string lunco:scenario = "lander-rover-stack"
 
-        def LunCoProgram "Mission"
+        def Scope "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/lander_rover_stack.rhai@
         }

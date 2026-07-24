@@ -98,7 +98,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 | **USD integration** | OpenUSD↔Bevy: visuals, physics, sim schemas, materials | `lunco-usd`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-materials` |
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
 | **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-sandbox-edit` |
-| **Scripting & modeling** | Modelica, rhai bridge, tools, hooks, behavior trees, tutorials | `lunco-modelica`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-tutorial` |
+| **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, tutorials | `lunco-modelica`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-tutorial` |
 | **Applications** | the entry-point binaries above | `luncosim`, `lunco-sandbox`, `lunco-sandbox-server`, `lunco-modelica` |
 
 ## Where does X live? (routing)

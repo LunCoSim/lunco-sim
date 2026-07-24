@@ -120,7 +120,109 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
         "lint_selftest.usda must trip nested-body-no-joint through ValidateAsset — \
          got {lint_errors:?}"
     );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("empty-component-network")),
+        "lint_selftest.usda must prove empty domain networks are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("disconnected-component-network")),
+        "lint_selftest.usda must prove disconnected domain networks are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("dangling-network-connector")),
+        "lint_selftest.usda must prove out-of-network connectors are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("invalid-network-program-source")),
+        "lint_selftest.usda must prove non-Modelica program members are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("connector-requires-modelica")),
+        "lint_selftest.usda must prove non-Modelica connectors are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("connector-requires-network-scope")),
+        "lint_selftest.usda must prove standalone connectors are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("invalid-modelica-causal-cardinality")),
+        "lint_selftest.usda must prove scalar Modelica fan-in is rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("ambiguous-modelica-boundary")),
+        "lint_selftest.usda must prove composed boundary aliasing is rejected — \
+         got {lint_errors:?}"
+    );
     assert!(!report.ok, "a file with lint ERRORS must not report ok");
+}
+
+#[test]
+fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
+    use lunco_hooks::HookValue as H;
+
+    register_usd_lint_policy();
+    let empty = || H::Array(Vec::new());
+    let scope = H::map([
+        ("path", H::str("/BrokenNetwork")),
+        ("parent", H::str("/")),
+        ("members", empty()),
+        ("modelica_member_count", H::Int(0)),
+        (
+            "collection_error",
+            H::str("OpenUSD membership query failed"),
+        ),
+        ("island_count", H::Int(0)),
+        ("dangling_connectors", empty()),
+        ("invalid_program_sources", empty()),
+        ("invalid_causal_properties", empty()),
+        ("ambiguous_boundary_sources", empty()),
+    ]);
+    let facts = H::map([
+        ("bodies", empty()),
+        ("joints", empty()),
+        ("prims", empty()),
+        ("collections", empty()),
+        ("filtered_pairs", empty()),
+        ("collision_groups", empty()),
+        ("network_scopes", H::Array(vec![scope])),
+    ]);
+
+    let findings = lunco_lint::run_lint("usd", facts);
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.rule == "invalid-component-collection"),
+        "the OpenUSD error must survive into policy findings: {findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding.rule != "empty-component-network"),
+        "a failed membership query is not evidence of an empty collection: {findings:?}"
+    );
 }
 
 /// The GEOMETRIC rule has teeth too, and it needs its own case.

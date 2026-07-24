@@ -43,7 +43,7 @@ use lunco_usd_bevy::{
     UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use crate::UsdSimProcessed;
@@ -53,6 +53,28 @@ use crate::UsdSimProcessed;
 /// the same entity on the same tick.
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
+
+/// The scalar interface authored on a USD Modelica program.
+///
+/// USD declares the public causal boundary early so connection propagation can
+/// start while the source asset loads. The Modelica compiler remains the
+/// authority: after a successful compile, this contract is checked against the
+/// DAE-reported inputs and observed outputs before the model may step.
+#[derive(Component, Clone, Debug)]
+struct UsdModelicaPortContract {
+    inputs: BTreeSet<String>,
+    outputs: BTreeSet<String>,
+}
+
+/// A compile-specific port-contract verdict already reported to the console.
+///
+/// Keeping the session id makes validation reactive to a later recompile while
+/// ensuring an unchanged bad model produces one actionable diagnostic, not one
+/// per fixed tick.
+#[derive(Component)]
+struct ValidatedUsdModelicaPortContract {
+    session_id: u64,
+}
 
 /// Single-flight guard for [`LoadScene`]: set the instant a scene load is
 /// dispatched, cleared once `sync_usd_visuals` has drained every
@@ -111,13 +133,6 @@ pub struct PendingModelicaSource {
 pub struct PendingPythonSource {
     pub handle: Handle<PythonSource>,
     pub asset_path: String,
-    /// The program interface is declared by the standard USD `inputs:` / `outputs:`
-    /// attributes on the program prim.  Python is dynamically typed, so unlike
-    /// Modelica there is no source AST from which to recover this contract later.
-    /// Preserve it across the asynchronous source load rather than inventing a
-    /// second, per-script interface declaration.
-    pub inputs: Vec<String>,
-    pub outputs: Vec<String>,
 }
 
 /// Reads cosim attributes from USD prims and dispatches model
@@ -267,6 +282,61 @@ fn process_usd_cosim_prim_read(
     commands: &mut Commands,
     asset_server: &AssetServer,
 ) {
+    if reader.type_name(sdf_path).as_deref() == Some("LunCoEvent") {
+        let sources = reader.connections(sdf_path, "inputs:trigger");
+        let Some(source) = sources.first() else {
+            warn!(
+                "[usd-cosim] {}: LunCoEvent has no inputs:trigger connection",
+                sdf_path
+            );
+            return;
+        };
+        let source = source.to_string();
+        let Some((source_path, output)) = source.split_once(".outputs:") else {
+            warn!(
+                "[usd-cosim] {}: event trigger source `{source}` is not an outputs:* property",
+                sdf_path
+            );
+            return;
+        };
+        let Some(name) = reader.text(sdf_path, "lunco:event:name") else {
+            warn!(
+                "[usd-cosim] {}: LunCoEvent has no lunco:event:name",
+                sdf_path
+            );
+            return;
+        };
+        commands.entity(entity).try_insert(EventBinding {
+            source_path: source_path.to_string(),
+            output: output.to_string(),
+            name,
+            severity: parse_event_severity(
+                reader
+                    .text(sdf_path, "lunco:event:severity")
+                    .as_deref()
+                    .unwrap_or("info"),
+            ),
+            armed: true,
+        });
+        return;
+    }
+
+    if !reader.has_api_schema(sdf_path, "LunCoProgramAPI") {
+        return;
+    }
+
+    // Connector-bearing Modelica components are compiled together by the
+    // network projector. Compiling the same class here would create a second,
+    // physically independent solver for one authored component.
+    if reader
+        .attr_names(sdf_path)
+        .iter()
+        .any(|name| name.starts_with("connectors:"))
+    {
+        commands.entity(entity).try_insert(UsdSimProcessed);
+        return;
+    }
+
     // Active-cosim gate: a prim is stepped iff it BOTH binds a behavior model
     // AND declares connectable ports (`inputs:`/`outputs:` attributes). The two
     // non-active cases skip silently: a model with no ports is a
@@ -290,16 +360,10 @@ fn process_usd_cosim_prim_read(
         Some(None) => return,
         None => return,
     };
-    let attrs = reader.attr_names(sdf_path);
-    let inputs: Vec<String> = attrs
+    let has_ports = reader
+        .attr_names(sdf_path)
         .iter()
-        .filter_map(|name| name.strip_prefix("inputs:").map(str::to_owned))
-        .collect();
-    let outputs: Vec<String> = attrs
-        .iter()
-        .filter_map(|name| name.strip_prefix("outputs:").map(str::to_owned))
-        .collect();
-    let has_ports = !inputs.is_empty() || !outputs.is_empty();
+        .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
     if !has_ports {
         return;
     }
@@ -350,6 +414,30 @@ fn process_usd_cosim_prim_read(
     // `dispatch_loaded_python_sources`, once the asset is ready.
     // See `docs/architecture/40-asset-io.md`.
     if let Some(asset_path) = modelica_path {
+        // USD is the public contract: publish its scalar interface immediately,
+        // before the asset fetch and asynchronous Modelica compile.  Writes then
+        // latch in SimComponent instead of being misdiagnosed as unknown ports.
+        let mut inputs = HashMap::new();
+        let mut outputs = HashMap::new();
+        for attr in reader.attr_names(sdf_path) {
+            if let Some(name) = attr.strip_prefix("inputs:") {
+                inputs.insert(name.to_owned(), 0.0);
+            } else if let Some(name) = attr.strip_prefix("outputs:") {
+                outputs.insert(name.to_owned(), 0.0);
+            }
+        }
+        commands.entity(entity).try_insert(UsdModelicaPortContract {
+            inputs: inputs.keys().cloned().collect(),
+            outputs: outputs.keys().cloned().collect(),
+        });
+        commands.entity(entity).try_insert(SimComponent {
+            model_name: asset_path.clone(),
+            parameters: Default::default(),
+            inputs,
+            outputs,
+            status: SimStatus::Compiling,
+            is_stepping: false,
+        });
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
@@ -359,8 +447,6 @@ fn process_usd_cosim_prim_read(
         commands.entity(entity).try_insert(PendingPythonSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
-            inputs,
-            outputs,
         });
     }
 
@@ -378,19 +464,90 @@ fn process_usd_cosim_prim_read(
             .try_insert(lunco_cosim::RealtimeSafe);
     }
 
-    // Event rules are `LunCoPortEvent` CHILD prims — one prim per rule, each with a
-    // port, a comparison, a threshold and a name. Each turns a threshold crossing on
-    // a model output into a discrete TelemetryEvent (see `fire_model_port_events`).
-    let rules = read_port_event_prims(reader, sdf_path);
-    if !rules.is_empty() {
-        commands.entity(entity).try_insert(ModelEventRules(rules));
-    }
-
-    debug!(
+    info!(
         "[usd-cosim] program {} bound ({})",
         prim_path.path,
         source.as_deref().unwrap_or("<none>"),
     );
+}
+
+/// Return an actionable discrepancy between USD's public causal boundary and
+/// the interface actually accepted by the Modelica compiler.
+fn modelica_port_contract_error(
+    contract: &UsdModelicaPortContract,
+    model: &ModelicaModel,
+) -> Option<String> {
+    let missing_inputs: Vec<_> = contract
+        .inputs
+        .difference(&model.compiled_input_names)
+        .cloned()
+        .collect();
+    let actual_outputs: BTreeSet<_> = model.variables.keys().cloned().collect();
+    let missing_outputs: Vec<_> = contract
+        .outputs
+        .difference(&actual_outputs)
+        .cloned()
+        .collect();
+    if missing_inputs.is_empty() && missing_outputs.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    if !missing_inputs.is_empty() {
+        parts.push(format!(
+            "USD inputs absent from compiled Modelica model: {}",
+            missing_inputs.join(", ")
+        ));
+    }
+    if !missing_outputs.is_empty() {
+        parts.push(format!(
+            "USD outputs absent from compiled Modelica model: {}",
+            missing_outputs.join(", ")
+        ));
+    }
+    Some(parts.join("; "))
+}
+
+/// Validate a USD program's declared causal ports once its DAE exists.
+///
+/// This runs after the Modelica worker response and before it can receive the
+/// next step. A failed contract pauses the model and projects as one durable
+/// `SimStatus::Error`; a fresh compiler session is checked again.
+fn validate_usd_modelica_port_contracts(
+    mut commands: Commands,
+    mut q: Query<(
+        Entity,
+        &UsdModelicaPortContract,
+        &mut ModelicaModel,
+        Option<&ValidatedUsdModelicaPortContract>,
+    )>,
+    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
+) {
+    for (entity, contract, mut model, validated) in &mut q {
+        if model.is_compiling || !model.is_compiled {
+            continue;
+        }
+        if validated.is_some_and(|state| state.session_id == model.session_id) {
+            continue;
+        }
+
+        if let Some(error) = modelica_port_contract_error(contract, &model) {
+            model.paused = true;
+            model.last_error = Some(error.clone());
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!(
+                    "[{}] USD/Modelica port contract error: {error}",
+                    model.model_name
+                ),
+            });
+        }
+        commands
+            .entity(entity)
+            .try_insert(ValidatedUsdModelicaPortContract {
+                session_id: model.session_id,
+            });
+    }
 }
 
 /// The languages this crate can put a solver behind. Everything else is a program
@@ -412,61 +569,6 @@ fn solver_language(path: &str) -> Option<SolverLanguage> {
     }
 }
 
-/// Read a program's [`LunCoPortEvent`] children into threshold rules.
-///
-/// One prim per rule, so each part of it — the port, the comparison, the threshold,
-/// the event name — is a typed property that validates, inspects, journals and
-/// replicates like any other. A rule packed into a string is none of those things.
-fn read_port_event_prims(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    sdf_path: &SdfPath,
-) -> Vec<PortEventRule> {
-    let mut rules = Vec::new();
-    for child in reader.children(sdf_path) {
-        if reader.type_name(&child).as_deref() != Some("LunCoPortEvent") {
-            continue;
-        }
-        let (Some(port), Some(emit)) = (
-            reader.text(&child, "lunco:event:port"),
-            reader.text(&child, "lunco:event:emit"),
-        ) else {
-            warn!(
-                "[usd-cosim] {}: a LunCoPortEvent needs both `lunco:event:port` and \
-                 `lunco:event:emit` — ignoring it",
-                child.as_str(),
-            );
-            continue;
-        };
-        let op = match reader
-            .text(&child, "lunco:event:op")
-            .unwrap_or_else(|| "lt".to_string())
-            .as_str()
-        {
-            "lt" => EdgeOp::Lt,
-            "le" => EdgeOp::Le,
-            "gt" => EdgeOp::Gt,
-            "ge" => EdgeOp::Ge,
-            other => {
-                warn!(
-                    "[usd-cosim] {}: `lunco:event:op = \"{}\"` is not one of lt/le/gt/ge — \
-                     ignoring this rule",
-                    child.as_str(),
-                    other,
-                );
-                continue;
-            }
-        };
-        rules.push(PortEventRule {
-            port,
-            op,
-            threshold: reader.real(&child, "lunco:event:threshold").unwrap_or(0.0),
-            event: emit,
-            armed: true,
-        });
-    }
-    rules
-}
-
 /// Drain `PendingModelicaSource` for entities whose `.mo` text has
 /// finished loading via `AssetServer`. Parses the source, populates a
 /// `ModelicaModel` stub, dispatches `ModelicaCommand::Compile`, and
@@ -475,10 +577,16 @@ fn read_port_event_prims(
 /// frame.
 pub fn dispatch_loaded_modelica_sources(
     mut commands: Commands,
-    q: Query<(Entity, &PendingModelicaSource, &UsdPrimPath)>,
+    mut q: Query<(
+        Entity,
+        &PendingModelicaSource,
+        &UsdPrimPath,
+        &mut SimComponent,
+    )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
     channels: Option<Res<ModelicaChannels>>,
+    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
 ) {
     let Some(channels) = channels else { return };
 
@@ -493,17 +601,23 @@ pub fn dispatch_loaded_modelica_sources(
     //
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
-    let mut pending: Vec<_> = q.iter().collect();
-    pending.sort_unstable_by(|(_, _, a), (_, _, b)| a.path.cmp(&b.path));
+    let mut pending: Vec<_> = q.iter_mut().collect();
+    pending.sort_unstable_by(|(_, _, a, _), (_, _, b, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, _) in pending {
+    for (entity, pending, _, mut component) in pending {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
-            warn!(
-                "[usd-cosim] failed to load Modelica source `{}` via AssetServer",
+            let error = format!(
+                "failed to load Modelica source `{}` via AssetServer",
                 pending.asset_path
             );
+            warn!("[usd-cosim] {error}");
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!("[{}] Asset load error: {error}", component.model_name),
+            });
+            component.status = SimStatus::Error(error);
             commands.entity(entity).remove::<PendingModelicaSource>();
             continue;
         }
@@ -591,8 +705,8 @@ pub fn dispatch_loaded_python_sources(
                 language: ScriptLanguage::Python,
                 source: src.text.clone(),
                 origin: DocumentOrigin::untitled(format!("Python-{}", doc_id.raw())),
-                inputs: pending.inputs.clone(),
-                outputs: pending.outputs.clone(),
+                inputs: vec!["height".to_string(), "velocity".to_string()],
+                outputs: vec!["netForce".to_string()],
                 params: String::new(),
                 // No asset id: this source is SYNTHESIZED from a USD prim's inline
                 // script, so it has no location for a relative `import` to anchor
@@ -618,18 +732,8 @@ pub fn dispatch_loaded_python_sources(
         commands.entity(entity).try_insert(SimComponent {
             model_name: format!("Python:{}", pending.asset_path),
             parameters: Default::default(),
-            inputs: pending
-                .inputs
-                .iter()
-                .cloned()
-                .map(|name| (name, 0.0))
-                .collect(),
-            outputs: pending
-                .outputs
-                .iter()
-                .cloned()
-                .map(|name| (name, 0.0))
-                .collect(),
+            inputs: Default::default(),
+            outputs: Default::default(),
             status: SimStatus::Running,
             is_stepping: false,
         });
@@ -682,11 +786,13 @@ pub fn wrap_modelica_into_simcomponent(
 
 /// The status a `ModelicaModel` projects onto its `SimComponent`.
 ///
-/// No solved variables yet ⇒ the interface is declared but the solver has not
-/// produced a state: `Compiling`. One place, so the bind-time insert and the
-/// per-tick sync can never disagree about when a model becomes `Running`.
+/// A durable worker error wins; otherwise no solved variables yet means the
+/// interface is declared but the solver has not produced a state: `Compiling`.
+/// One place keeps bind-time insertion and per-tick sync consistent.
 fn modelica_status(model: &ModelicaModel) -> SimStatus {
-    if model.variables.is_empty() {
+    if let Some(error) = &model.last_error {
+        SimStatus::Error(error.clone())
+    } else if model.variables.is_empty() {
         SimStatus::Compiling
     } else if model.paused {
         SimStatus::Paused
@@ -759,82 +865,84 @@ pub fn sync_script_inputs(
     }
 }
 
-// ── Modelica `when` / port-edge → event bridge ───────────────────────────────
-//
-// Modelica HAS discrete events (`when`, zero-crossings), but our rumoca codegen
-// surfaces only continuous variable VALUES as ports, and conditions on wired
-// INPUTS read defaults — so putting the event condition INSIDE the model is
-// unreliable. Instead the model stays a continuous SIGNAL emitter, and the edge
-// detection happens HERE in trusted Rust: a declarative `lunco:portEvents` rule
-// turns a threshold crossing of a model OUTPUT into a discrete `TelemetryEvent`
-// on the shared bus — the same bus rhai reads via `on_event` / `wait_for`.
+// ── Connected discrete signal → event bus ───────────────────────────────────
 
-#[derive(Clone, Copy)]
-enum EdgeOp {
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
-
-impl EdgeOp {
-    fn holds(self, v: f64, thr: f64) -> bool {
-        match self {
-            EdgeOp::Lt => v < thr,
-            EdgeOp::Le => v <= thr,
-            EdgeOp::Gt => v > thr,
-            EdgeOp::Ge => v >= thr,
-        }
-    }
-}
-
-/// One declarative port-edge rule: emit `event` when output `port` `op`-crosses
-/// `threshold`. Re-triggerable — `armed` clears on fire and re-arms when the
-/// condition is false again, so it fires once per rising edge.
-#[derive(Clone)]
-struct PortEventRule {
-    port: String,
-    op: EdgeOp,
-    threshold: f64,
-    event: String,
+/// Runtime projection of one authored `LunCoEvent`.
+#[derive(Component)]
+pub struct EventBinding {
+    source_path: String,
+    output: String,
+    name: String,
+    severity: lunco_core::Severity,
     armed: bool,
 }
 
-/// Port-edge event rules on a program, read from its [`LunCoPortEvent`] children.
-#[derive(Component, Default)]
-pub struct ModelEventRules(Vec<PortEventRule>);
+fn parse_event_severity(value: &str) -> lunco_core::Severity {
+    match value {
+        "debug" => lunco_core::Severity::Debug,
+        "warning" => lunco_core::Severity::Warning,
+        "error" => lunco_core::Severity::Error,
+        "critical" => lunco_core::Severity::Critical,
+        _ => lunco_core::Severity::Info,
+    }
+}
 
-/// Per-tick: evaluate each entity's port-edge rules against its fresh
-/// `SimComponent.outputs` and fire a `TelemetryEvent` (source = the model
-/// entity) on each rising edge. This is the "Modelica events" bridge — a
-/// continuous model signal in, a discrete event out.
-pub fn fire_model_port_events(
-    mut q: Query<(
-        &mut ModelEventRules,
+fn event_rising_edge(armed: &mut bool, value: f64) -> bool {
+    let active = value >= 0.5;
+    if active && *armed {
+        *armed = false;
+        true
+    } else {
+        if !active {
+            *armed = true;
+        }
+        false
+    }
+}
+
+/// Project rising edges of connected 0/1 model outputs onto [`TelemetryEvent`].
+pub fn fire_connected_events(
+    mut bindings: Query<(Entity, &UsdPrimPath, &mut EventBinding)>,
+    sources: Query<(
+        Entity,
+        &UsdPrimPath,
         &SimComponent,
         Option<&lunco_core::GlobalEntityId>,
     )>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
-    for (mut rules, comp, gid) in &mut q {
-        let src = gid.map(|g| g.get()).unwrap_or(0);
-        for rule in rules.0.iter_mut() {
-            let Some(&v) = comp.outputs.get(&rule.port) else {
-                continue;
-            };
-            let cond = rule.op.holds(v, rule.threshold);
-            if cond && rule.armed {
-                rule.armed = false;
-                commands.trigger(lunco_core::TelemetryEvent {
-                    name: rule.event.clone(),
-                    source: src,
-                    severity: lunco_core::Severity::Info,
-                    data: lunco_core::TelemetryValue::F64(v),
-                    timestamp: 0.0,
-                });
-            } else if !cond {
-                rule.armed = true;
-            }
+    let instance_of =
+        |entity| lunco_usd_bevy::instance_key(entity, &q_provenance, &q_gid, &q_instance_root);
+    let mut by_path = HashMap::new();
+    for (entity, path, component, gid) in &sources {
+        by_path.insert(
+            (instance_of(entity), path.path.as_str()),
+            (component, gid.map(|id| id.get()).unwrap_or(0)),
+        );
+    }
+    for (entity, _, mut binding) in &mut bindings {
+        let Some((value, source)) = by_path
+            .get(&(instance_of(entity), binding.source_path.as_str()))
+            .and_then(|(component, source)| {
+                component
+                    .outputs
+                    .get(&binding.output)
+                    .map(|value| (*value, *source))
+            })
+        else {
+            continue;
+        };
+        if event_rising_edge(&mut binding.armed, value) {
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: binding.name.clone(),
+                source,
+                severity: binding.severity,
+                data: lunco_core::TelemetryValue::F64(value),
+                timestamp: 0.0,
+            });
         }
     }
 }
@@ -853,9 +961,8 @@ pub struct UsdWiredConnection;
 #[derive(Resource, Default)]
 pub struct WiringDirty(pub bool);
 
-/// Derive the co-sim wiring from native USD `connectionPaths` — the USD-native,
-/// journaled, distributed replacement for the deleted `lunco:simWires` / wire-prim
-/// producers. `SimConnection`s are a **pure derived cache**: whenever the wiring
+/// Derive the co-sim wiring from native USD `connectionPaths`. `SimConnection`s
+/// are a **pure derived cache**: whenever the wiring
 /// topology may have changed, the whole derived set is rebuilt from the composed
 /// stage. A full rebuild (not a per-prim patch) is what makes the lifecycle
 /// correct — an edge exists exactly when *both* its endpoints do, regardless of
@@ -965,6 +1072,22 @@ pub fn rewire_usd_connections(
         let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
             continue;
         };
+        // `LunCoEvent.inputs:trigger` is a standard USD connection, but its
+        // consumer is the event projector below rather than the scalar
+        // SimConnection fabric.
+        if view.type_name(&sink_sdf).as_deref() == Some("LunCoEvent") {
+            continue;
+        }
+        if view
+            .attr_names(&sink_sdf)
+            .iter()
+            .any(|name| name.starts_with("connectors:"))
+        {
+            // This is a component inside a synthesized Modelica network.
+            // Its causal and acausal edges are compiled into the wrapper; only
+            // the containing Scope participates in scalar runtime propagation.
+            continue;
+        }
 
         // Resolve this prim's wires within its OWN instance — a source path names a
         // prim of the same spawn, never a same-named prim of a different one.
@@ -1952,6 +2075,11 @@ pub(crate) fn install(app: &mut App) {
         .init_asset::<PythonSource>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>();
+    // USD source-load and contract failures use the same core notice stream as
+    // the Modelica compiler, so the workbench console has one observable error
+    // surface. `add_message` is idempotent when the Modelica plugin registered
+    // it already.
+    app.add_message::<lunco_modelica::ModelicaNotice>();
 
     // A scene that is still spawning, and an object whose model has not
     // compiled, are the two things this module knows are not ready. Declaring
@@ -1981,6 +2109,7 @@ pub(crate) fn install(app: &mut App) {
             // to load (network on wasm, async I/O on native).
             dispatch_loaded_modelica_sources,
             dispatch_loaded_python_sources,
+            crate::domain_projection::project_domain_islands,
             // Wiring is derived from native `connectionPaths`: rebuilds the
             // `SimConnection` set whenever prims spawn/despawn (structural) or a
             // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
@@ -2001,6 +2130,9 @@ pub(crate) fn install(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
+            validate_usd_modelica_port_contracts
+                .after(ModelicaSet::HandleResponses)
+                .before(sync_modelica_outputs),
             sync_modelica_outputs
                 .after(ModelicaSet::HandleResponses)
                 .before(PropagateCosimSet::Propagate),
@@ -2014,7 +2146,7 @@ pub(crate) fn install(app: &mut App) {
                 .after(ApplyForcesCosimSet::ApplyForces)
                 .before(ModelicaSet::SpawnRequests),
             // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
-            fire_model_port_events
+            fire_connected_events
                 .after(sync_modelica_outputs)
                 .after(sync_script_outputs),
         ),
@@ -2110,12 +2242,70 @@ mod tests {
     }
 
     #[test]
-    fn status_becomes_running_once_variables_populate() {
+    fn status_tracks_compile_run_pause_and_failure() {
         let mut model = dispatched_but_unsolved();
         assert_eq!(modelica_status(&model), SimStatus::Compiling);
         model.variables.insert("soc_out".into(), 1.0);
         assert_eq!(modelica_status(&model), SimStatus::Running);
         model.paused = true;
         assert_eq!(modelica_status(&model), SimStatus::Paused);
+        model.last_error = Some("singular system".into());
+        assert_eq!(
+            modelica_status(&model),
+            SimStatus::Error("singular system".into())
+        );
+    }
+
+    #[test]
+    fn compiled_interface_rejects_usd_port_not_accepted_by_modelica() {
+        let contract = UsdModelicaPortContract {
+            inputs: ["throttle".to_string(), "typo".to_string()]
+                .into_iter()
+                .collect(),
+            outputs: ["thrust".to_string()].into_iter().collect(),
+        };
+        let mut model = dispatched_but_unsolved();
+        model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
+        model.variables.insert("mass".into(), 1.0);
+
+        let error = modelica_port_contract_error(&contract, &model)
+            .expect("a USD port the DAE does not expose must fail projection");
+        assert!(error.contains("typo"));
+        assert!(error.contains("thrust"));
+    }
+
+    #[test]
+    fn compiled_interface_accepts_matching_usd_ports() {
+        let contract = UsdModelicaPortContract {
+            inputs: ["throttle".to_string()].into_iter().collect(),
+            outputs: ["thrust".to_string()].into_iter().collect(),
+        };
+        let mut model = dispatched_but_unsolved();
+        model.compiled_input_names = ["throttle".to_string()].into_iter().collect();
+        model.variables.insert("thrust".into(), 42.0);
+
+        assert_eq!(modelica_port_contract_error(&contract, &model), None);
+    }
+
+    #[test]
+    fn connected_event_fires_once_per_rising_edge_and_rearms() {
+        let mut armed = true;
+        assert!(!event_rising_edge(&mut armed, 0.0));
+        assert!(event_rising_edge(&mut armed, 0.5));
+        assert!(!event_rising_edge(&mut armed, 1.0));
+        assert!(!event_rising_edge(&mut armed, 0.49));
+        assert!(event_rising_edge(&mut armed, 1.0));
+    }
+
+    #[test]
+    fn event_severity_defaults_to_info() {
+        assert_eq!(
+            parse_event_severity("not-a-severity"),
+            lunco_core::Severity::Info
+        );
+        assert_eq!(
+            parse_event_severity("critical"),
+            lunco_core::Severity::Critical
+        );
     }
 }

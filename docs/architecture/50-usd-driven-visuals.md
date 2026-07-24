@@ -60,13 +60,13 @@ parameter the appearance is a function of, wire it to a shader —
 
 ## Binding a name to Rust — `ProgramDriverRegistry`
 
-`LunCoProgram` names its implementation one of two ways, mirroring `UsdShade.Shader`'s own
+`LunCoProgramAPI` names its implementation one of two ways, mirroring `UsdShade.Shader`'s own
 `info:id` (a named built-in the renderer implements) versus `info:sourceAsset` (external
 source):
 
 | Attribute | Resolves to |
 |---|---|
-| `uniform asset info:sourceAsset = @scenarios/rover_autopilot.rhai@` | the script engine (`.rhai`) or the behaviour-tree engine (`.xml`) |
+| `uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@` | the behaviour-tree engine (`.btxml` canonical; `.xml` accepted for interop) |
 | `uniform token info:id = "range_beam"` | a Rust driver, from `ProgramDriverRegistry` |
 
 Same prim type, same discovery, same per-instance params. The registry follows

@@ -94,7 +94,7 @@ validation. See §8.
 
 **(d) Per-domain scope — `def Scope "<Domain>"`.** A vehicle groups its domain content under scopes
 (`Rover/Electrical`, `Rover/Thermal`, `Rover/Comms`) — doc-34 sub-prim-per-model generalized. Each scope
-holds that domain's network + its synthesized program prim (a `LunCoProgram`). Keeps domains
+holds that domain's network + its synthesized program prim (a `LunCoProgramAPI`). Keeps domains
 navigable and separable.
 
 **(e) Per-domain composition LAYER (the powerful part).** Ride the **canonical layered document**
@@ -519,7 +519,7 @@ The mapping is near-total (this is why A1–A9 are "choose the standard spelling
 - **component** → connectable prim (`kind=component`); **public port** → `inputs:`/`outputs:` attribute;
   **wire** → connection; **domain container** → `NodeGraph` (a `Scope` with connectability); **connection
   legality** → `ConnectableAPIBehavior`; **layout** → `NodeGraphNodeAPI`; **fidelity** → variants;
-  **per-domain sub-model** → a `LunCoProgram` prim in the `Scope`; **runtime values** → PortRegistry
+  **per-domain sub-model** → a `LunCoProgramAPI` prim in the `Scope`; **runtime values** → PortRegistry
   today, OpenExec-shaped tomorrow; **behavior/rules** → connectable graph persisted, rhai executed.
 - The **two-plane split** we already have (USD authored structure + PortRegistry f64 runtime) is *exactly*
   USD's own authored-vs-computed split (connections + OpenExec). We independently arrived at USD's model.
@@ -751,7 +751,7 @@ governs:
 | a wire | attribute **connection** (`.connect`) | `SimConnection` | `connection` / `interface` |
 | a signal on a wire | connected value | f64 exchange | `flow` (item flow; item = Real) |
 | a parameter | attribute | `SimComponent.parameters` | `attribute` |
-| behavior binding | a `LunCoProgram` prim + `info:*` | model backend | **`allocation`** (part → model) |
+| behavior binding | a `LunCoProgramAPI` prim + `info:*` | model backend | **`allocation`** (part → model) |
 
 These are intentionally the *same* concepts, so a name in one layer is recognizable in the others — and
 the SysML-v2→USD and USD→FMI projections become near-mechanical.
@@ -765,7 +765,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 | a parameter: an `inputs:` attribute with a constant instead of a connection (`float inputs:kv = 1.2`) | FMI parameter / SysML `attribute` | wire it later and nothing about the model changes |
 | `lunco:factor` | **SSP LinearTransformation `factor`** | matches SSP exactly (not "gain") |
 | `lunco:offset` | SSP LinearTransformation `offset` | |
-| a threshold event: a `LunCoPortEvent` child prim (`lunco:event:port`/`op`/`threshold`/`emit`) | (no std; our event edge) | one prim per rule — every part of the rule is typed |
+| a model event: `LunCoEvent.inputs:trigger.connect` plus event name/severity | USD connection + engine event projection | physical condition is a Modelica output; USD only wires and names it |
 | attr `typeName` + `ConnectableAPIBehavior` (not a Rust `PortType`/`classify` taxonomy) | USD | connection legality is USD's job |
 | Rust `PortDirection {In,Out,InOut}` | FMI causality `input/output` + SysML in/out/inout + the `inputs:`/`outputs:` namespaces (all agree) | **keep** |
 | Rust `SimPort.connector`, `SimConnection.{start,end}_connector` | already SSP `Connector` | **keep** |
@@ -783,7 +783,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 | `LunCoPowerComponentAPI`, `LunCoActuatorAPI`, `LunCoMobilityComponentAPI`, `LunCoPowerDistributionAPI` (authored but **not dispatched** — dead-ish) | **make load-bearing** codeless applied schemas; keep the PascalCase+`API` convention | promote to real |
 | implicit model kind | author `kind = "component"` / `"assembly"` | USD `kind` | add |
 | rigid-body/collision/mass/drive/articulation/vehicle | `PhysicsRigidBodyAPI`, `PhysicsDriveAPI`, `PhysicsArticulationRootAPI`, `PhysxVehicle*` (already used) | USD/PhysX standard | keep |
-| the program binding: a `LunCoProgram` prim (or `info:*` authored in place) carrying `info:sourceAsset` — role is never declared, and the engine follows the file's extension | it is a **SysML allocation** (part→behavior); converges with USD+FMI | keep |
+| the program binding: a `LunCoProgramAPI` prim (or `info:*` authored in place) carrying `info:sourceAsset` — role is never declared, and the engine follows the file's extension | it is a **SysML allocation** (part→behavior); converges with USD+FMI | keep |
 | `info:sourceAsset:subIdentifier` — which definition inside the source, when the file holds several (adopted verbatim from `UsdShadeShader`) | — | keep |
 
 ### 14.3 Domain params — fold into model parameters, adopt standard where it exists
@@ -821,11 +821,11 @@ SysML v2 (OMG-final 7/2025, KerML + a standard **REST/HTTP API**) is the **feder
 - `connection`/`interface` ↔ our connection;
 - `flow` (item flow, typed payload) ↔ our directed signal wire (payload = `Real`/`f64`);
 - `attribute` ↔ model parameters;
-- **`allocation`** ↔ the behavior binding — **a `LunCoProgram` prim is literally a SysML allocation**
+- **`allocation`** ↔ the behavior binding — **a `LunCoProgramAPI` prim is literally a SysML allocation**
   (system part *allocated to* a Modelica/FMU/rhai realization). Name it as such so the mapping is explicit.
 
 **Payoff:** if our USD names mirror SysML v2 (part→prim, port→`inputs:`/`outputs:`, connection→connection,
-flow→signal, allocation→`LunCoProgram`), the future **SysML-v2-API → USD projection** (doc §11) is
+flow→signal, allocation→`LunCoProgramAPI`), the future **SysML-v2-API → USD projection** (doc §11) is
 near-mechanical — the same "federate, don't absorb" seam, with matching vocabulary on both sides. Keep
 SysML as the requirements/architecture source of truth; project structure into USD; realize behavior in
 Modelica/rhai; exchange values via the FMI/SSP runtime. Four standards, **one concept model, four

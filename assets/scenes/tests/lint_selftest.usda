@@ -252,11 +252,114 @@ def Xform "LintSelftest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
+    # A domain network with no components cannot produce any equations.
+    def Scope "EmptyElectrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+    }
+
+    # Two independent pins in one compiler scope are ambiguous failure domains.
+    def Xform "IslandA" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+    def Xform "IslandB" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+    def Scope "DisconnectedElectrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </LintSelftest/IslandA>,
+            </LintSelftest/IslandB>,
+        ]
+    }
+
+    def Xform "DanglingLoad" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
+        custom token connectors:p.connect = </LintSelftest/OutsideBattery.connectors:p>
+    }
+    def Xform "OutsideBattery" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
+        custom token connectors:p
+    }
+    def Scope "DanglingElectrical" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [</LintSelftest/DanglingLoad>]
+    }
+
+    def Scope "BuiltinInCompilerNetwork" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "id"
+        uniform token info:id = "skid"
+        custom token connectors:p
+    }
+
+    def Scope "InvalidProgramNetwork" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [
+            </LintSelftest/BuiltinInCompilerNetwork>
+        ]
+    }
+
+    def Scope "MultiSourceLoad" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
+        float inputs:demand.connect = [
+            </LintSelftest/IslandA.outputs:soc_out>,
+            </LintSelftest/IslandB.outputs:soc_out>,
+        ]
+    }
+
+    def Scope "MultiSourceNetwork" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        float inputs:left.connect = </LintSelftest/IslandA.outputs:soc_out>
+        float inputs:right.connect = </LintSelftest/IslandA.outputs:soc_out>
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [</LintSelftest/MultiSourceLoad>]
+    }
+
     def Scope "Scenario"
     {
         custom string lunco:scenario = "lint-selftest"
 
-        def LunCoProgram "LintTest"
+        def Scope "LintTest" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/lint_selftest.rhai@
         }

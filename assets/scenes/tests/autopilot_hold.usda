@@ -106,7 +106,9 @@ def Xform "AutopilotHoldTest" (
     {
         custom string lunco:scenario = "autopilot-hold"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/autopilot_hold.rhai@
         }

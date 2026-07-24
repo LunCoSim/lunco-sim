@@ -13,7 +13,7 @@
 //!   every tick — wasted work (a nozzle's shape does not change while the engine
 //!   burns) and an error thrown 25×/second that masks every other scenario error.
 //! - **The shape gets authored twice.** A bell carrying literal control points AND a
-//!   `LunCoProgram` whose `inputs:` say what the bell is — throat, exit, length,
+//!   `LunCoProgramAPI` whose `inputs:` say what the bell is — throat, exit, length,
 //!   contour — has two spellings of one shape, free to disagree: a drawn contour
 //!   exponent of ≈1.3 (a flaring cone) against a declared 0.55 (a real bell).
 //!   Making that disagreement observable is a tripwire, not a fix. Deriving the

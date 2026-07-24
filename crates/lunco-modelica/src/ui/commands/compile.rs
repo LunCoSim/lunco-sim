@@ -22,7 +22,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use lunco_core::{on_command, register_commands, Command};
 
@@ -924,6 +924,7 @@ pub fn on_compile_model(
             // second Modelica compiles.
             model.is_stepping = true;
             model.is_compiling = true;
+            model.last_error = None;
             // Capture the generation being compiled; promoted to
             // `compiled_generation` by the post-compile success handler.
             model.pending_generation = doc_generation;
@@ -996,7 +997,9 @@ pub fn on_compile_model(
                         }
                         map
                     },
+                    compiled_input_names: BTreeSet::new(),
                     variables: HashMap::new(),
+                    last_error: None,
                     document: doc,
                     is_stepping: true,
                     is_compiling: true,

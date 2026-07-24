@@ -1126,10 +1126,9 @@ def Xform "RockerBogie" (
 
     # --- Power: does driving cost anything ----------------------------------
     # ORTHOGONAL to the drive law: `infinite` is EMPTY — the absence of a battery
-    # is today's drive-forever behavior. `battery` composes the RoverBattery.mo
-    # energy budget onto the root: drain follows the commanded drive magnitude,
-    # and its `alive` cutoff brownouts the drive ports over the last ~2% of
-    # charge — a variant chooses a component, it never restates one.
+    # is today's drive-forever behavior. `battery` composes the reusable
+    # six-motor electrical network; its connected island is projected to one
+    # Modelica DAE.
     #
     # Same two sets `six_wheel_rover.usda` carries, because the difficulty tiers
     # (`variants/rover_*.usda`) sit on THIS chassis now and a tier must not lose a
@@ -1138,9 +1137,64 @@ def Xform "RockerBogie" (
         "infinite" {
         }
 
-        "battery" (
-            prepend references = @lunco://components/power/rover_battery.usda@</Power>
-        ) {
+        "battery" {
+            def Xform "Battery" (
+                prepend references = @lunco://components/power/battery.usda@</Battery>
+            )
+            {
+                double3 xformOp:translate = (0, 0.35, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+            def Scope "Electrical" (
+                prepend apiSchemas = ["CollectionAPI:components"]
+            )
+            {
+                float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
+                float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
+                float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
+                uniform token collection:components:expansionRule = "explicitOnly"
+                prepend rel collection:components:includes = [
+                    </RockerBogie/Battery>,
+                    </RockerBogie/RockerL/Motor_FL>,
+                    </RockerBogie/BogieL/Motor_ML>,
+                    </RockerBogie/BogieL/Motor_RL>,
+                    </RockerBogie/RockerR/Motor_FR>,
+                    </RockerBogie/BogieR/Motor_MR>,
+                    </RockerBogie/BogieR/Motor_RR>,
+                ]
+            }
+            over "RockerL" {
+                over "Motor_FL" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+            }
+            over "BogieL" {
+                over "Motor_ML" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+                over "Motor_RL" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_left>
+                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+            }
+            over "RockerR" {
+                over "Motor_FR" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+            }
+            over "BogieR" {
+                over "Motor_MR" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+                over "Motor_RR" {
+                    float inputs:demand.connect = </RockerBogie/Electrical.inputs:drive_right>
+                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+            }
         }
     }
 

@@ -30,7 +30,7 @@ coordinates — which is how BT.CPP is meant to be used anyway (leaves read port
 constants):
 
 ```xml
-<!-- behaviors/rover_patrol.btxml — Groot2 opens this -->
+<!-- behaviors/rover_patrol.btxml — canonical LunCoSim name; Groot2 opens this -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Repeat><Sequence>
@@ -44,7 +44,7 @@ constants):
 
 ```usda
 def Xform "Rover" {
-    def LunCoProgram "Patrol" {
+    def Scope "Patrol" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@
     }
 }
@@ -57,7 +57,7 @@ def Scope "Behaviors" {
 }
 ```
 
-A behaviour tree is a program like any other: a `LunCoProgram` child prim naming the
+A behaviour tree is a program like any other: a `LunCoProgramAPI` child prim naming the
 XML through `info:sourceAsset` (or carrying it in `info:sourceCode`).
 The engine that runs it comes from the source's extension, so nothing about the tree
 needs a binding of its own — and deleting the prim deletes the mission, which is exactly
@@ -94,7 +94,7 @@ A tree naming a deleted waypoint **refuses to compile** and keeps its last good 
 
 **No new command verbs.** Alt+LMB triggers `ApplyUsdOp` three times: `AddPrim` (the
 pin, referencing the marker asset), `SetTranslate` (where it landed), `SetAttribute`
-(`info:sourceCode` on the mission's `LunCoProgram` prim — the tree that now
+(`info:sourceCode` on the mission's `LunCoProgramAPI` prim — the tree that now
 names it).
 
 Everything else about a waypoint is *already implemented*, by code that knows nothing

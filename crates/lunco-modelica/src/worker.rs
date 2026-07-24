@@ -6,7 +6,7 @@
 //! `handle_modelica_responses` exchange `ModelicaCommand` /
 //! `ModelicaResult` messages with it via crossbeam channels.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use bevy::prelude::*;
@@ -83,7 +83,7 @@ fn live_stepper_options() -> rumoca_sim::SimOptions {
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
 ) -> Result<SimulationSession, rumoca_sim::SimulationDiagnosticError> {
-    SimulationSession::new(&comp_res.dae, live_stepper_options())
+    crate::simulation_session::live(&comp_res.dae, live_stepper_options())
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -1853,8 +1853,23 @@ pub struct ModelicaModel {
     pub parameters: HashMap<String, f64>,
     /// Control inputs (input Real ...)
     pub inputs: HashMap<String, f64>,
+    /// Input names reported by the successfully compiled DAE.
+    ///
+    /// This is deliberately separate from [`Self::inputs`]. Callers may seed
+    /// that map from an authored interface while a source asset is loading, so
+    /// it is a write buffer, not evidence that the compiler accepted a port.
+    /// The worker owns this set because only its compile result is authoritative
+    /// about the live solver interface.
+    #[reflect(ignore)]
+    pub compiled_input_names: BTreeSet<String>,
     /// All other observable variables (Real soc, etc)
     pub variables: HashMap<String, f64>,
+    /// Last compile or solver failure for this model.
+    ///
+    /// This persists after the one-shot notice is consumed so status
+    /// projections remain truthful. Any successful worker response clears it.
+    #[reflect(ignore)]
+    pub last_error: Option<String>,
     /// Canonical id of the Modelica source document backing this entity,
     /// looked up in [`crate::state::ModelicaDocumentRegistry`]. `DocumentId::default()`
     /// (`0`) means "no document assigned yet"; systems should treat it as
@@ -2307,8 +2322,12 @@ pub fn handle_modelica_responses(
                 // fresh Compile rather than a doomed Step. Compile
                 // errors flip this in the `is_new_model` block below.
                 model.is_compiled = false;
-            } else if let Some(cs) = compile_states.as_mut() {
-                cs.clear_error(model.document);
+                model.last_error = Some(err.clone());
+            } else {
+                model.last_error = None;
+                if let Some(cs) = compile_states.as_mut() {
+                    cs.clear_error(model.document);
+                }
             }
 
             if result.is_new_model {
@@ -2345,6 +2364,7 @@ pub fn handle_modelica_responses(
                 // The UI extracts defaults from source code (e.g., `input Real g = 9.81` → g: 9.81),
                 // which is more reliable than the worker's DAE-discovered names (which may have 0.0).
                 let ui_inputs: HashMap<String, f64> = std::mem::take(&mut model.inputs);
+                model.compiled_input_names = result.detected_input_names.iter().cloned().collect();
                 for name in &result.detected_input_names {
                     model
                         .inputs

@@ -328,7 +328,6 @@ def Xform "SixWheelIndependent" (
     #       ]
     #   ) {}
     #
-    # That component reuses `RoverDrivetrain.mo` (the law is per-SIDE; fanning a
-    # side out to w0/w1/w2 and w3/w4/w5 is wiring, not physics — the bridge
-    # `rover_modelica_drive_w6.rhai` owns the fan-out).
+    # That component reuses `RoverDrivetrain.mo` (the law is per-SIDE; native
+    # USD connections fan each side out to its three wheel ports).
 }

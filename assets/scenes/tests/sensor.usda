@@ -114,7 +114,9 @@ def Xform "SandboxScene" (
     {
         custom string lunco:scenario = "sensors"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/sensor.rhai@
         }

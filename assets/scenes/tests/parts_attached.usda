@@ -179,7 +179,9 @@ def Xform "PartsAttached" (
     {
         custom string lunco:scenario = "parts-attached"
 
-        def LunCoProgram "PartsTest"
+        def Scope "PartsTest" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/parts_attached.rhai@
         }

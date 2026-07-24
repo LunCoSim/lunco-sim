@@ -24,7 +24,7 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
   (verbs/hooks/prelude/tools/commands/queries).
 - **Timeline storage** — `RegisterTimeline` / `RunStoredTimeline` +
   `ListTimelines` / `GetTimeline`, persisted to `<twin>/timelines/*.json`.
-- **USD-embedded scenarios (load)** — a `LunCoProgram` child prim naming a `.rhai`
+- **USD-embedded scenarios (load)** — a `LunCoProgramAPI` child prim naming a `.rhai`
   (`info:sourceAsset`, or `info:sourceCode` authored in place)
   auto-attaches + runs on spawn.
 - **Host-authoritative gate** — script systems run on Host / Standalone, never on

@@ -47,10 +47,10 @@ use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
 // The USD-reading systems read the LIVE canonical stage via `StageView`, which
 // implements `UsdRead` (the COMPOSED stage — as opposed to `UsdDataExt`, a raw
 // AUTHORED layer; the retired flattened reader used to blur the two). Since the
-// terrain projector moved to `lunco-usd-terrain`, the only reader left in this crate
-// is the `ui`-gated terrain layer-map binding.
+// terrain projector moved to `lunco-usd-terrain`, the remaining readers are the
+// networking policy extractor and the UI terrain layer-map binding.
 use bevy::asset::AssetLoadFailedEvent;
-#[cfg(feature = "ui")]
+#[cfg(any(feature = "ui", feature = "networking"))]
 use lunco_usd_bevy::UsdRead;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
@@ -136,7 +136,7 @@ FLAGS:
                          POST /api/commands  {{\"command\":\"Name\",\"params\":{{…}}}}
         --scene PATH     Load this USD scene at startup, relative to assets/.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
-        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai):
+        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai/.btxml/.xml):
                          parse-only, no window/GPU/app. Prints a report and
                          exits 0 (all ok) or 1 (any failed).
 
@@ -1190,7 +1190,7 @@ const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 /// authored EITHER inline (`info:sourceCode`, a `string` that rides the USD journal
 /// plane — live-editable, per-op synced) OR by file reference (`info:sourceAsset`,
 /// an `asset` `@…rhai@` that rides the whole-twin content plane, CID-verified). Inline
-/// wins over the file — the same rule every `LunCoProgram` source follows, whatever
+/// wins over the file — the same rule every `LunCoProgramAPI` source follows, whatever
 /// engine its extension selects (`.rhai`, `.mo`, `.xml`).
 #[cfg(feature = "networking")]
 struct AuthoredPolicy {
@@ -1399,33 +1399,24 @@ fn project_usd_policies(
 /// EV 9.7 (~6 stops open) no matter what the USD said. Splitting the two makes
 /// the read authoritative and the application idempotent.
 #[cfg(feature = "ui")]
-#[derive(Resource, Default, Clone, Copy, PartialEq)]
+#[derive(Resource, Default, Clone, Copy)]
 pub struct AuthoredEnv {
     pub exposure_ev100: Option<f32>,
     pub bloom_intensity: Option<f32>,
 }
 
-/// Re-apply scene environment values only when a value or render target arrives.
+/// Apply [`AuthoredEnv`] to every camera/bloom that exists RIGHT NOW.
 ///
-/// `project_env_settings` owns the composed USD read; this system is its sole
-/// render-side writer. The `Added` gates cover deferred camera/bloom spawning
-/// without a per-frame write or a competing exposure policy.
-#[cfg(feature = "ui")]
-fn authored_env_needs_apply(
-    authored: Res<AuthoredEnv>,
-    new_exposures: Query<(), Added<bevy::camera::Exposure>>,
-    new_blooms: Query<(), Added<bevy::post_process::bloom::Bloom>>,
-) -> bool {
-    authored.is_changed() || !new_exposures.is_empty() || !new_blooms.is_empty()
-}
-
-/// Apply [`AuthoredEnv`] to the render targets that exist right now.
+/// Runs every frame and is a no-op when the values already match, so a camera
+/// spawned (or respawned, or reparented on possession) long after the scene
+/// loaded still gets the scene's exposure.
 #[cfg(feature = "ui")]
 fn apply_authored_env(
-    authored: Res<AuthoredEnv>,
+    authored: Option<Res<AuthoredEnv>>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
     mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
 ) {
+    let Some(authored) = authored else { return };
     if let Some(ev) = authored.exposure_ev100 {
         for mut e in &mut q_exposure {
             if e.ev100 != ev {
@@ -1446,6 +1437,8 @@ fn apply_authored_env(
 fn project_env_settings(
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut authored: ResMut<AuthoredEnv>,
+    mut q_exposure: Query<&mut bevy::camera::Exposure>,
+    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
     // Ambient is NOT projected here any more — it is composed from authored
     // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
     _ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
@@ -1463,10 +1456,6 @@ fn project_env_settings(
     }
     *last = Some(signal);
 
-    // Scene replacement must reset the prior scene's grade. Otherwise a
-    // `LunCoEnvironment` authored by one Twin leaks into a later Twin that has
-    // no environment settings prim at all.
-    let mut next = AuthoredEnv::default();
     for (_, cs) in canonical.iter() {
         let view = cs.view();
         for prim in view.prim_paths() {
@@ -1477,16 +1466,23 @@ fn project_env_settings(
             }
             if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100") {
                 // RECORD it — `apply_authored_env` owns getting it onto cameras,
-                // including cameras that do not exist yet. `LunarSun` is seeded
-                // after the full composed read, so an absent Environment resets
-                // to the calibrated default instead of inheriting a prior Twin.
-                if next.exposure_ev100.replace(ev).is_some() {
-                    warn!("[environment] multiple LunCoEnvironment exposure opinions; later composed prim overrides earlier value");
+                // including cameras that do not exist yet. Also seed `LunarSun`,
+                // the documented single source the sun spawn and the celestial
+                // auto-exposure both read, so a scene that later gains a
+                // celestial hierarchy ramps toward the authored value instead of
+                // the studio default.
+                authored.exposure_ev100 = Some(ev);
+                if let Some(sun) = lunar_sun.as_mut() {
+                    sun.exposure_ev100 = ev;
+                }
+                for mut e in &mut q_exposure {
+                    e.ev100 = ev;
                 }
             }
             if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {
-                if next.bloom_intensity.replace(bi).is_some() {
-                    warn!("[environment] multiple LunCoEnvironment bloom opinions; later composed prim overrides earlier value");
+                authored.bloom_intensity = Some(bi);
+                for mut b in &mut q_bloom {
+                    b.intensity = bi;
                 }
             }
             // `lunco:env:ambientBrightness` is DELETED, not deprecated. Uniform
@@ -1516,14 +1512,6 @@ fn project_env_settings(
                 }
             }
         }
-    }
-    if *authored != next {
-        *authored = next;
-    }
-    if let Some(sun) = lunar_sun.as_mut() {
-        sun.exposure_ev100 = next
-            .exposure_ev100
-            .unwrap_or_else(|| lunco_environment::LunarSun::default().exposure_ev100);
     }
 }
 
@@ -1652,7 +1640,7 @@ fn on_set_rhai_policy(
     );
 }
 
-/// Save a live-edited rhai scenario's current source back onto the `LunCoProgram`
+/// Save a live-edited rhai scenario's current source back onto the `LunCoProgramAPI`
 /// prim it came from — the other half of scenario authoring.
 ///
 /// The source is authored onto that prim's `info:sourceCode`, which is what
@@ -2102,7 +2090,7 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
             // 12 solver substeps (avian default 6): joint-based rovers buzz the
             // chassis under drive torque at 6 substeps. Quantified in the headless
-            // authored physical-rover scene tests. See `project_physical_rover_suspension`.
+            // `rover_jitter` probe. See `project_physical_rover_suspension`.
             //
             // WEB: 8 substeps — the single wasm thread runs the whole solver inline,
             // so 12 substeps is a third of the physics budget per frame. 8 keeps the
@@ -2187,6 +2175,12 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(lunco_autopilot::AutopilotPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
+            // Tutorials are executable scenario products, not a UI-only feature:
+            // headless hosts expose StartTutorial through the same command API.
+            // The menu/HUD projection is added separately by SandboxUiPlugin.
+            .add_plugins(lunco_tutorial::TutorialCorePlugin {
+                app: "sandbox".into(),
+            })
             // Default scene-wide fill for scenes that author no lighting; a
             // scene-authored UsdLux light takes ambient over.
             .insert_resource(bevy::light::GlobalAmbientLight {
@@ -2459,18 +2453,12 @@ impl Plugin for SandboxCorePlugin {
         // persistence (authoring the prim) happens in `lunco-scene-commands`.
         #[cfg(feature = "ui")]
         app.init_resource::<AuthoredEnv>();
-        // The composed stage is read on change. Projection is independently
-        // change-gated so deferred cameras receive the current scene grade,
-        // without retaining a previous Twin's settings or writing every frame.
+        // Read-on-stage-change, then apply-every-frame. The application is a
+        // separate system because cameras outlive neither the stage change nor
+        // each other: possession reparents them, the recorder spawns its own.
+        // Only the READ is change-gated.
         #[cfg(feature = "ui")]
-        app.add_systems(
-            Update,
-            (
-                project_env_settings,
-                apply_authored_env.run_if(authored_env_needs_apply),
-            )
-                .chain(),
-        );
+        app.add_systems(Update, (project_env_settings, apply_authored_env).chain());
 
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
@@ -2936,7 +2924,7 @@ fn bind_terrain_layers(
                 // and its per-depth weights are a LOD decision, not the author's.
                 _ => {}
             }
-            debug!(
+            info!(
                 "[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}",
                 role.name
             );
@@ -3000,7 +2988,9 @@ impl Plugin for SandboxOffscreenPlugin {
             (retarget_cameras_to_offscreen, activate_offscreen_camera),
         );
 
-        info!("[offscreen] GPU-full windowless recording mode: no window, scene renders to an offscreen target");
+        info!(
+            "[offscreen] GPU-full windowless recording mode: no window, scene renders to an offscreen target"
+        );
     }
 }
 
@@ -3192,7 +3182,9 @@ impl Plugin for SandboxHeadlessPlugin {
             std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ as f64),
         ));
 
-        info!("[net] sandbox running HEADLESS (--no-ui): no window/GPU/egui; sim + networking host only");
+        info!(
+            "[net] sandbox running HEADLESS (--no-ui): no window/GPU/egui; sim + networking host only"
+        );
     }
 }
 
@@ -3253,7 +3245,9 @@ fn setup_sandbox(world: &mut World) {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (world, scene_path);
-        info!("[sandbox] web startup: no built-in scene load — the page autoload hook loads the default twin directly");
+        info!(
+            "[sandbox] web startup: no built-in scene load — the page autoload hook loads the default twin directly"
+        );
     }
 }
 

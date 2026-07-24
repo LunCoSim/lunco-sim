@@ -70,7 +70,7 @@ over "OBC"
         # instead, an avatar's `forward`/`side`/`up`. Same part, different ports, zero
         # engine branches.
         #
-        # What TURNS these into wheel torque is a `LunCoProgram` child — the drive law
+        # What TURNS these into wheel torque is a `LunCoProgramAPI` child — the drive law
         # (`components/mobility/drive_laws/*.usda`, builtin or Modelica). The OBC says
         # what the vessel accepts; the law says what it does about it.
         float inputs:throttle = 0.0

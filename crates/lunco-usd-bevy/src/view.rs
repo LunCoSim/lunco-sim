@@ -8,7 +8,7 @@
 //! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::Stage;
+use openusd::usd::{compute_included_paths, Collection, PrimPredicate, Stage};
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from a `NonSend` `CanonicalStage`.
@@ -110,6 +110,30 @@ impl<'a> StageView<'a> {
             .unwrap_or_default()
     }
 
+    /// Composed members of a standard USD collection.
+    ///
+    /// `explicitOnly` can use the relationship targets directly. Every other
+    /// expansion rule goes through OpenUSD so excludes, subtree expansion,
+    /// references, and variants retain standard semantics.
+    pub fn collection_members(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+    ) -> Result<Vec<SdfPath>, String> {
+        let expansion = format!("collection:{instance_name}:expansionRule");
+        let includes = format!("collection:{instance_name}:includes");
+        if self.value_str(prim, &expansion).as_deref() == Some("explicitOnly") {
+            return Ok(self.rel_targets(prim, &includes));
+        }
+
+        let collection = Collection::new(prim.clone(), instance_name);
+        let query = collection
+            .compute_membership_query(self.stage)
+            .map_err(|error| format!("could not compute collection membership: {error}"))?;
+        compute_included_paths(self.stage, &query, PrimPredicate::DEFAULT)
+            .map_err(|error| format!("could not expand collection membership: {error}"))
+    }
+
     /// Attribute `name` on `prim` as a 3-vector (`double3`/`float3`). Mirrors the
     /// legacy `get_attribute_as_vec3` free helper.
     pub fn value_vec3(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]> {
@@ -153,6 +177,41 @@ mod compose_tests {
             Some("throttle"),
             "StageView must read the cross-file inherited composed opinion"
         );
+    }
+
+    #[test]
+    fn collection_members_uses_standard_subtree_expansion() {
+        let dir = tempfile::tempdir().expect("scratch dir");
+        let scene = dir.path().join("collection.usda");
+        std::fs::write(
+            &scene,
+            "#usda 1.0\n\
+             def Xform \"World\"\n\
+             {\n\
+                 def Scope \"Group\"\n\
+                 {\n\
+                     def Scope \"Child\" {}\n\
+                 }\n\
+                 def Scope \"Network\" (\n\
+                     prepend apiSchemas = [\"CollectionAPI:components\"]\n\
+                 )\n\
+                 {\n\
+                     uniform token collection:components:expansionRule = \"expandPrims\"\n\
+                     prepend rel collection:components:includes = [</World/Group>]\n\
+                 }\n\
+             }\n",
+        )
+        .expect("write collection scene");
+
+        let stage = compose_file_to_stage(&scene).expect("compose collection scene");
+        let view = StageView::new(&stage);
+        let members = view
+            .collection_members(&SdfPath::new("/World/Network").unwrap(), "components")
+            .expect("compute collection members");
+        let members: Vec<String> = members.into_iter().map(|path| path.to_string()).collect();
+
+        assert!(members.contains(&"/World/Group".to_string()));
+        assert!(members.contains(&"/World/Group/Child".to_string()));
     }
 
     /// A local `over` must win over the prim it overrides through a `references` arc.

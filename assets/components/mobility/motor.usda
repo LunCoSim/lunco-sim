@@ -44,20 +44,28 @@
 # THE CURVE IS TWO SCALARS. τ(ω) = stallTorque · (1 − ω / noLoadSpeed), clamped at zero —
 # the linear DC/BLDC characteristic, and the whole first-order motor. See `LunCoMotorAPI`
 # in the schema for why a sampled array was rejected. A motor whose real curve is not
-# linear gets a `LunCoProgram` child that computes torque instead.
+# linear gets a `LunCoProgramAPI` child that computes torque instead.
 #
 #   inputs:demand ──► τ(ω) curve ──► outputs:torque ──► gearbox ──► driven wheel
 #                            └─────► outputs:heat ───► thermal program / radiator
 #
-# THE SHAFT SIDE IS HERE; THE BUS SIDE IS THE VESSEL'S CIRCUIT. `outputs:heat` and the
-# power implied by `efficiency` are this motor's contribution to a vessel-level
-# electrical and thermal model — a circuit is one Modelica model, not one per part.
+# THE SHAFT SIDE AND ELECTRICAL FACET LIVE ON THE SAME PART. A vessel's Electrical
+# Scope includes the actual motor path in `CollectionAPI:components`; runtime projection
+# compiles all included facets into one circuit DAE, never one solver per part.
 def Xform "Motor" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoMotorAPI"]
+    prepend apiSchemas = [
+        "LunCoCatalogAPI",
+        "PhysicsMassAPI",
+        "LunCoMotorAPI",
+        "LunCoProgramAPI",
+    ]
 )
 {
     uniform bool lunco:spawnable = true
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
+    custom token connectors:p
 
     # --- Physics ---
     # NO `PhysicsRigidBodyAPI`, and this is the whole story of a bug that shipped:
@@ -121,7 +129,8 @@ def Xform "Motor" (
     # stall, the usual margin — it was 0.15 against a 0.11 stall, i.e. a motor rated to
     # sustain more than it could ever produce.
     float lunco:motor:continuousTorque = 0.15
-    float lunco:motor:efficiency = 0.85
+    float inputs:efficiency = 0.85
+    float inputs:rated_power = 2000.0
     # A small rotor, but through a 1200:1 reduction it reflects to the axle multiplied by
     # the ratio SQUARED — 1.2e-4 × 1200² ≈ 173 kg·m², an order more than the wheel's own
     # ½mr² ≈ 2 kg·m². That reflected inertia is most of what a geared rover feels.
@@ -169,14 +178,15 @@ def Xform "Motor" (
     # --- Optional: thermal behaviour ---
     # A motor that does not model its temperature is still a motor. This child is where
     # the state lives when it does: delete the prim and the mechanics are untouched,
-    # which is exactly the separability a `LunCoProgram` child is for (a bolted-on
+    # which is exactly the separability a `LunCoProgramAPI` child is for (a bolted-on
     # program, not the part's own engine).
     #
     # NOT `realtimeSafe`: it drives no force port, only telemetry. `RoverMotorThermal.mo`
     # is a per-SIDE bank model, so a vessel wires the side command into `drive_left` /
     # `drive_right` and reads `temp_left` / `temp_right` back; a per-motor model replaces
     # only this one asset path.
-    def LunCoProgram "Thermal" (
+    def Scope "Thermal" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
         doc = "First-order lumped heat balance for the motor bank. Pure telemetry — nothing in the sim acts on the temperature."
     )
     {

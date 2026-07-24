@@ -197,7 +197,9 @@ def Xform "SandboxScene" (
     {
         custom string lunco:scenario = "g7-joints"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/g7_joints.rhai@
         }

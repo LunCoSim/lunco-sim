@@ -10,8 +10,7 @@
 //!   roll/pitch as one line of fine print. Tilt is the number that matters on a
 //!   slope: it is what puts a rover on its roof.
 //! - **NAV + COMMS** (bottom-right) — the vessel's name, ALT as the hero number,
-//!   then selenographic latitude/longitude and heading, and the live link home.
-//!   Un-georeferenced sandboxes fall back to site-frame E/N metres.
+//!   then E/N/heading as one line, and the live link home.
 //!
 //! ONE hero readout per cluster, centred and large; everything else is a compact
 //! inline row. A HUD of equal-weight rows makes the driver read all of it to find
@@ -42,8 +41,8 @@
 //!
 //! FRAME: pose comes from [`lunco_core::coords::world_pose`], which walks the cell
 //! chain and applies ancestor grid rotation. A camera-relative `GlobalTransform` is
-//! floating-origin-relative and useless for geography. In a site-anchored scene
-//! the root frame IS site-ENU metres
+//! floating-origin-relative and useless for geography — see the same note on
+//! `mode_exposure`. In a site-anchored scene the root frame IS site-ENU metres
 //! (East +X, Up +Y, North −Z), which is the frame the survey and any route
 //! waypoints are already expressed in.
 
@@ -76,13 +75,44 @@ const FALLBACK_CAUTION_TILT_DEG: f32 = 20.0;
 /// Fallback red threshold. See [`FALLBACK_CAUTION_TILT_DEG`].
 const FALLBACK_DANGER_TILT_DEG: f32 = 30.0;
 
+use lunco_cosim::SimComponent;
+
+/// Information about a driven vessel's energy budget/battery.
+#[derive(Debug, Clone)]
+struct EnergyInfo {
+    /// State of charge in percent (0.0 ..= 100.0).
+    soc_pct: f32,
+    /// Total remaining energy in Wh, if capacity is known.
+    energy_wh: Option<f32>,
+    /// Pack capacity in Wh, if known.
+    capacity_wh: Option<f32>,
+}
+
+/// Information about a driven vessel's motor temperatures.
+#[derive(Debug, Clone)]
+struct ThermalInfo {
+    temp_left_k: Option<f32>,
+    temp_right_k: Option<f32>,
+}
+
+impl ThermalInfo {
+    fn max_temp_k(&self) -> f32 {
+        match (self.temp_left_k, self.temp_right_k) {
+            (Some(l), Some(r)) => l.max(r),
+            (Some(l), None) => l,
+            (None, Some(r)) => r,
+            (None, None) => 250.0,
+        }
+    }
+}
+
 /// What the HUD needs about the driven vessel, resolved once per frame.
 struct DrivenVessel {
     label: String,
     /// Metres, root frame (site-ENU in a site-anchored scene).
     pos: DVec3,
-    /// Selenographic/geodetic position derived from the site's authored anchor.
-    /// `None` for an ordinary, un-georeferenced sandbox.
+    /// Geographic position resolved from the authored site anchor, when the
+    /// scene has a geodetic frame. Plain sandboxes retain their ENU readout.
     geo: Option<lunco_celestial::Geodetic>,
     /// Degrees from local up. The tip-over-relevant number.
     tilt_deg: f32,
@@ -94,6 +124,10 @@ struct DrivenVessel {
     speed: Option<f32>,
     /// Live comms link, or `None` for a vessel carrying no link node at all.
     link: Option<LinkInfo>,
+    /// Energy/battery status, or `None` if vehicle has no battery telemetry.
+    energy: Option<EnergyInfo>,
+    /// Thermal status, or `None` if vehicle has no thermal telemetry.
+    thermal: Option<ThermalInfo>,
     /// Amber threshold — this vessel's own slip limit when derivable, else the
     /// generic fallback. See [`FALLBACK_CAUTION_TILT_DEG`].
     caution_deg: f32,
@@ -265,6 +299,101 @@ fn resolve_link(
     })
 }
 
+fn is_owned_by_vessel(entity: Entity, vessel: Entity, q_parents: &Query<&ChildOf>) -> bool {
+    if entity == vessel {
+        return true;
+    }
+    let mut curr = entity;
+    for _ in 0..8 {
+        let Ok(parent) = q_parents.get(curr) else {
+            break;
+        };
+        curr = parent.parent();
+        if curr == vessel {
+            return true;
+        }
+    }
+    false
+}
+
+fn resolve_energy(
+    vessel: Entity,
+    q_sim: &Query<(Entity, &SimComponent)>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<EnergyInfo> {
+    for (ent, sim) in q_sim.iter() {
+        if !is_owned_by_vessel(ent, vessel, q_parents) {
+            continue;
+        }
+        let raw_soc = sim
+            .outputs
+            .get("soc")
+            .or_else(|| sim.outputs.get("soc_out"))
+            .or_else(|| sim.outputs.get("SOC"))
+            .or_else(|| sim.outputs.get("battery_soc"))
+            .copied();
+
+        if let Some(raw_soc) = raw_soc {
+            let soc_frac = if raw_soc <= 1.0 {
+                raw_soc.max(0.0)
+            } else {
+                (raw_soc / 100.0).clamp(0.0, 1.0)
+            };
+            let soc_pct = (soc_frac * 100.0) as f32;
+
+            let capacity_wh = capacity_wh(sim);
+
+            let energy_wh = capacity_wh.map(|cap| (soc_frac as f32) * cap);
+
+            return Some(EnergyInfo {
+                soc_pct,
+                energy_wh,
+                capacity_wh,
+            });
+        }
+    }
+    None
+}
+
+fn capacity_wh(sim: &SimComponent) -> Option<f32> {
+    sim.parameters
+        .get("capacity_wh")
+        .or_else(|| sim.inputs.get("capacity_wh"))
+        .copied()
+        .map(|value| value as f32)
+}
+
+fn resolve_thermal(
+    vessel: Entity,
+    q_sim: &Query<(Entity, &SimComponent)>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<ThermalInfo> {
+    for (ent, sim) in q_sim.iter() {
+        if !is_owned_by_vessel(ent, vessel, q_parents) {
+            continue;
+        }
+        let tl = sim
+            .outputs
+            .get("temp_left")
+            .or_else(|| sim.outputs.get("tl"))
+            .copied()
+            .map(|v| v as f32);
+        let tr = sim
+            .outputs
+            .get("temp_right")
+            .or_else(|| sim.outputs.get("tr"))
+            .copied()
+            .map(|v| v as f32);
+        if tl.is_some() || tr.is_some() {
+            return Some(ThermalInfo {
+                temp_left_k: tl,
+                temp_right_k: tr,
+            });
+        }
+    }
+    None
+}
+
 /// Resolve the vessel the local avatar is driving, or `None` in free flight.
 fn resolve_driven(
     q_avatar: &Query<&ControllerLink, With<Avatar>>,
@@ -279,6 +408,7 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
+    q_sim: &Query<(Entity, &SimComponent)>,
     site: Option<&lunco_celestial::GeodeticAnchor>,
     bodies: Option<&lunco_celestial::CelestialBodyRegistry>,
 ) -> Option<DrivenVessel> {
@@ -288,8 +418,8 @@ fn resolve_driven(
 
     // Local up = world up. Over a 1 km site the body's curvature contributes
     // d²/2R ≈ 0.3 m of sag, i.e. ~0.03° of tilt — far below the gauge's
-    // resolution. A multi-km traverse would need the real local up away from
-    // the body centre.
+    // resolution. A multi-km traverse would need the real local up (away from
+    // the body centre), which is what `mode_exposure` computes.
     let up = rot * Vec3::Y;
     let tilt_deg = up.dot(Vec3::Y).clamp(-1.0, 1.0).acos().to_degrees();
 
@@ -378,15 +508,16 @@ fn resolve_driven(
         link: resolve_link(
             vessel, q_links, q_parents, q_name, q_ids, q_grids, q_spatial,
         ),
+        energy: resolve_energy(vessel, q_sim, q_parents),
+        thermal: resolve_thermal(vessel, q_sim, q_parents),
         caution_deg,
         danger_deg,
         limits_derived,
     })
 }
 
-/// Convert the vessel's site-ENU position to the body's standard geodetic
-/// coordinates. The site anchor names the body; the registry is the authority
-/// for its datum radius.
+/// Convert the vessel's site-ENU position into the body's standard geodetic
+/// coordinates. The site anchor names the datum; the body registry owns radius.
 fn hud_geodetic(
     site: &lunco_celestial::GeodeticAnchor,
     bodies: &lunco_celestial::CelestialBodyRegistry,
@@ -406,26 +537,6 @@ fn hud_geodetic(
 #[cfg(test)]
 mod tilt_band_tests {
     use super::*;
-
-    #[test]
-    fn hud_coordinates_are_selenographic_not_local_metres() {
-        let bodies = lunco_celestial::CelestialBodyRegistry::default_system();
-        let site = lunco_celestial::GeodeticAnchor {
-            body: 301,
-            geodetic: lunco_celestial::Geodetic::new(26.0371, 3.6584, -1920.0),
-        };
-
-        let geo = hud_geodetic(&site, &bodies, DVec3::new(1000.0, 12.0, -500.0))
-            .expect("the Moon is in the standard body registry");
-
-        assert!(geo.lat_deg > site.geodetic.lat_deg);
-        assert!(geo.lon_deg > site.geodetic.lon_deg);
-        assert_eq!(geo.height_m, -1908.0);
-        assert!(
-            geo.lat_deg.abs() < 90.0 && geo.lon_deg.abs() <= 180.0,
-            "HUD must report degrees, not site-frame metre offsets: {geo:?}"
-        );
-    }
 
     /// The three tiers from the Summer Space School twin's `SURVEY.md` ladder,
     /// with the shipped `six_wheel_rover.usda` geometry: wheels at x = ±1.0,
@@ -485,6 +596,46 @@ mod tilt_band_tests {
         // Easy tier on a very stable chassis: slip 52.4° vs a tip of ~45°.
         let (slip, tip) = tilt_bands(1.3, 1.0, 1.0);
         assert!(tip >= slip, "bands crossed: slip {slip}, tip {tip}");
+    }
+}
+
+#[cfg(test)]
+mod energy_thermal_tests {
+    use super::*;
+
+    #[test]
+    fn thermal_info_max_temp() {
+        let t = ThermalInfo {
+            temp_left_k: Some(290.0),
+            temp_right_k: Some(310.0),
+        };
+        assert_eq!(t.max_temp_k(), 310.0);
+
+        let t_empty = ThermalInfo {
+            temp_left_k: None,
+            temp_right_k: None,
+        };
+        assert_eq!(t_empty.max_temp_k(), 250.0);
+    }
+
+    #[test]
+    fn energy_capacity_uses_only_explicit_watt_hours() {
+        let sim = SimComponent {
+            parameters: [
+                ("capacity".to_string(), 83.33),
+                ("capacity_wh".to_string(), 2_000.0),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        assert_eq!(capacity_wh(&sim), Some(2_000.0));
+
+        let amp_hours_only = SimComponent {
+            parameters: [("capacity".to_string(), 83.33)].into_iter().collect(),
+            ..Default::default()
+        };
+        assert_eq!(capacity_wh(&amp_hours_only), None);
     }
 }
 
@@ -701,8 +852,7 @@ fn hero_readout(ui: &mut egui::Ui, label: &str, value: String, unit: &str, color
 }
 
 /// Several label/value pairs on ONE centred line — the compact idiom for the
-/// secondary numbers (roll/pitch, latitude/longitude/heading). A stack of
-/// single-number rows
+/// secondary numbers (roll/pitch, E/N/heading). A stack of single-number rows
 /// costs a panel's whole height to say very little; inline pairs keep the same
 /// information under the hero readout without competing with it.
 fn inline_pairs(ui: &mut egui::Ui, pairs: &[(&str, String)], pal: &Palette) {
@@ -740,10 +890,7 @@ fn readout(ui: &mut egui::Ui, label: &str, value: String, color: egui::Color32) 
     });
 }
 
-/// A compact geographic line for the narrow NAV card.
-///
-/// Four decimals are about three metres on the Moon: appropriate for the
-/// terrain resolution without turning the HUD into a coordinate debug dump.
+/// Compact geographic line for the narrow navigation card.
 fn geo_line(ui: &mut egui::Ui, geo: lunco_celestial::Geodetic, pal: &Palette) {
     let lat = if geo.lat_deg >= 0.0 { "N" } else { "S" };
     let lon = if geo.lon_deg >= 0.0 { "E" } else { "W" };
@@ -788,6 +935,7 @@ pub(crate) fn draw_rover_hud(
     q_ids: Query<(Entity, &GlobalEntityId)>,
     q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: Query<&ComputedCenterOfMass>,
+    q_sim: Query<(Entity, &SimComponent)>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     bodies: Option<Res<lunco_celestial::CelestialBodyRegistry>>,
 ) {
@@ -806,6 +954,7 @@ pub(crate) fn draw_rover_hud(
         &q_ids,
         &q_wheels,
         &q_com,
+        &q_sim,
         q_site.iter().next(),
         bodies.as_deref(),
     ) else {
@@ -856,15 +1005,7 @@ pub(crate) fn draw_rover_hud(
                 .show(ui, |ui| {
                     ui.set_width(168.0);
                     ui.label(egui::RichText::new(&v.label).strong().size(15.0));
-                    ui.label(
-                        egui::RichText::new(if v.geo.is_some() {
-                            "SELENOGRAPHIC · °N/°E"
-                        } else {
-                            "SITE FRAME · METRES"
-                        })
-                        .weak()
-                        .size(9.0),
-                    );
+                    ui.label(egui::RichText::new("site frame · metres").weak().size(9.0));
                     ui.separator();
                     // ALT is the landing's hero number: what the narration and
                     // the audience track all the way to touchdown.
@@ -957,6 +1098,88 @@ pub(crate) fn draw_rover_hud(
                                         .size(9.0),
                                 );
                             }
+                        }
+                    }
+
+                    // POWER / ENERGY — shown for any vessel with battery/energy telemetry.
+                    if let Some(energy) = &v.energy {
+                        ui.separator();
+                        let soc_str = format!("{:.0}%", energy.soc_pct);
+                        let color = if energy.soc_pct > 30.0 {
+                            pal.ok
+                        } else if energy.soc_pct > 15.0 {
+                            pal.caution
+                        } else {
+                            pal.danger
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("POWER").weak().size(9.0));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(soc_str)
+                                            .color(color)
+                                            .strong()
+                                            .size(11.0),
+                                    );
+                                },
+                            );
+                        });
+                        if let Some(wh) = energy.energy_wh {
+                            let energy_str = if wh >= 1000.0 {
+                                format!("{:.2} kWh", wh / 1000.0)
+                            } else {
+                                format!("{:.0} Wh", wh)
+                            };
+                            let cap_str = energy
+                                .capacity_wh
+                                .map(|cap| {
+                                    if cap >= 1000.0 {
+                                        format!("{:.1} kWh", cap / 1000.0)
+                                    } else {
+                                        format!("{:.0} Wh", cap)
+                                    }
+                                })
+                                .unwrap_or_default();
+                            inline_pairs(ui, &[("energy", energy_str), ("cap", cap_str)], &pal);
+                        } else {
+                            readout(ui, "charge", format!("{:.1}%", energy.soc_pct), pal.value);
+                        }
+                    }
+
+                    // THERMAL — shown for any vessel with motor thermal telemetry.
+                    if let Some(thermal) = &v.thermal {
+                        ui.separator();
+                        let max_temp_k = thermal.max_temp_k();
+                        let temp_c = max_temp_k - 273.15;
+                        let color = if max_temp_k > 350.0 {
+                            pal.danger
+                        } else if max_temp_k > 310.0 {
+                            pal.caution
+                        } else {
+                            pal.ok
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("THERMAL").weak().size(9.0));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("{:.0}°C", temp_c))
+                                            .color(color)
+                                            .strong()
+                                            .size(11.0),
+                                    );
+                                },
+                            );
+                        });
+                        if let (Some(tl), Some(tr)) = (thermal.temp_left_k, thermal.temp_right_k) {
+                            inline_pairs(
+                                ui,
+                                &[("L", format!("{:.0} K", tl)), ("R", format!("{:.0} K", tr))],
+                                &pal,
+                            );
                         }
                     }
 

@@ -28,6 +28,8 @@
 //!   Full naga module validation is deliberately absent: naga is not a direct
 //!   dependency of this crate and the light path adds none.
 //! - `.rhai` — `rhai::Engine::compile` only; nothing is executed.
+//! - `.btxml` / `.xml` — the same BehaviorTree.CPP v4 parser and semantic
+//!   validation used by the runtime asset loader; nothing is executed.
 //!
 //! Registered as an [`ApiQueryProvider`] (it returns data, like
 //! [`crate::usd_prim_query`]), so one implementation answers rhai `query()`,
@@ -48,7 +50,8 @@ use std::path::{Path, PathBuf};
 pub struct ValidationReport {
     /// The path as the caller gave it.
     pub path: String,
-    /// Asset kind, from the extension: `modelica` | `usd` | `wgsl` | `rhai`.
+    /// Asset kind, from the extension: `modelica` | `usd` | `wgsl` | `rhai` |
+    /// `behavior_tree`.
     pub kind: String,
     /// True iff `errors` is empty — the file would survive the load path.
     pub ok: bool,
@@ -131,7 +134,7 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
         Ok(t) => t,
         Err(e) => {
             return ValidationReport::new(reference, "unknown")
-                .error(format!("cannot read {}: {e}", path.display()))
+                .error(format!("cannot read {}: {e}", path.display()));
         }
     };
     let report = match ext.as_str() {
@@ -139,8 +142,9 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
         "usda" => validate_usda(reference, &path, &text),
         "wgsl" => validate_wgsl(reference, &text),
         "rhai" => validate_rhai(reference, &text),
+        "btxml" | "xml" => validate_behavior_tree(reference, &text),
         other => ValidationReport::new(reference, "unknown").error(format!(
-            "unsupported extension `.{other}` — supported: .mo, .usda, .wgsl, .rhai"
+            "unsupported extension `.{other}` — supported: .mo, .usda, .wgsl, .rhai, .btxml, .xml"
         )),
     };
     apply_lint_policy(report, &text)
@@ -274,26 +278,47 @@ fn branch_lint(text: &str) -> Vec<String> {
         "rumoca's solver path is branch-free — rewrite as der(x) = expr using max()/min() clamps";
     let mut errors = Vec::new();
     let mut in_block_comment = false;
+    let mut in_string = false;
     let mut in_equations = false;
     for (idx, raw) in text.lines().enumerate() {
         let n = idx + 1;
-        // Strip comments (line-granular approximation of /* */).
-        let mut line = raw.to_string();
-        if in_block_comment {
-            match line.find("*/") {
-                Some(p) => {
-                    line = line[p + 2..].to_string();
+        // Strip strings and comments in source order. A quote inside a comment
+        // is inert, and comment markers inside a description string are text.
+        let mut line = String::with_capacity(raw.len());
+        let mut chars = raw.chars().peekable();
+        let mut escaped = false;
+        while let Some(ch) = chars.next() {
+            if in_block_comment {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
                     in_block_comment = false;
                 }
-                None => continue,
+                continue;
             }
-        }
-        if let Some(p) = line.find("/*") {
-            in_block_comment = !line[p..].contains("*/");
-            line.truncate(p);
-        }
-        if let Some(p) = line.find("//") {
-            line.truncate(p);
+            if in_string {
+                if ch == '"' && !escaped {
+                    in_string = false;
+                }
+                escaped = ch == '\\' && !escaped;
+                continue;
+            }
+            if ch == '/' {
+                match chars.peek() {
+                    Some('/') => break,
+                    Some('*') => {
+                        chars.next();
+                        in_block_comment = true;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            if ch == '"' {
+                in_string = true;
+                escaped = false;
+            } else {
+                line.push(ch);
+            }
         }
         let trimmed = line.trim();
 
@@ -335,7 +360,11 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
         return report.error(format!("usda parse: {e}"));
     }
 
-    let stage = match lunco_usd_bevy::compose_file_to_stage(path) {
+    let engine_assets = engine_assets_root();
+    let stage = match lunco_usd_bevy::compose_file_to_stage_with_assets(
+        path,
+        Some(engine_assets.as_path()),
+    ) {
         Ok(s) => s,
         Err(e) => return report.error(format!("compose: {e}")),
     };
@@ -410,6 +439,20 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
         "control_bindings": control_bindings,
     });
     report.finish()
+}
+
+/// The shipped `lunco://` root for a parse-only tool.
+///
+/// A deployed binary runs from the workspace/application directory, which is
+/// the same CWD-based root the AssetServer uses. Cargo tests instead run from
+/// the crate directory, so use the compile-time workspace layout only when the
+/// runtime root is absent.
+fn engine_assets_root() -> PathBuf {
+    let runtime_root = lunco_assets::assets_dir_abs();
+    if runtime_root.is_dir() {
+        return runtime_root;
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets")
 }
 
 /// A prim whose children carry intent→port bindings. Named `Controls` is the
@@ -538,6 +581,24 @@ fn validate_rhai(reference: &str, text: &str) -> ValidationReport {
     }
 }
 
+// ─── .btxml / .xml ─────────────────────────────────────────────────────────
+
+/// Parse BehaviorTree.CPP through the runtime's authoritative codec.
+///
+/// The codec validates XML structure, entry-tree selection, composite arity,
+/// subtree references and recursion. Calling it here keeps preflight and load
+/// semantics identical instead of maintaining a second XML walk.
+fn validate_behavior_tree(reference: &str, text: &str) -> ValidationReport {
+    let mut report = ValidationReport::new(reference, "behavior_tree");
+    match lunco_autopilot::btcpp_xml::xml_to_value(text) {
+        Ok(tree) => report.info = json!({ "tree": tree }),
+        Err(error) => report
+            .errors
+            .push(format!("BehaviorTree.CPP parse: {error}")),
+    }
+    report.finish()
+}
+
 // ─── CLI ────────────────────────────────────────────────────────────────────
 
 /// One-shot CLI leg (`sandbox --validate <path>…`): print each report
@@ -616,6 +677,18 @@ mod tests {
         assert!(branch_lint(src).is_empty());
     }
 
+    #[test]
+    fn branch_lint_ignores_multiline_model_descriptions() {
+        let src = "model M\n  \"Active when commanded;\n   otherwise idle\"\n  Real x;\nequation\n  der(x) = 0;\nend M;\n";
+        assert!(branch_lint(src).is_empty());
+    }
+
+    #[test]
+    fn branch_lint_ignores_quotes_and_keywords_in_comments() {
+        let src = "model M\n  // \"if this comment never closes\n  Real x;\nequation\n  /* when false then */ der(x) = 0;\nend M;\n";
+        assert!(branch_lint(src).is_empty());
+    }
+
     /// Write a `.usda` under the temp dir and hand back its path — the control
     /// checks run on a COMPOSED stage, so they can only be exercised through the
     /// real `validate_asset` entry point.
@@ -657,6 +730,23 @@ mod tests {
     }
 
     #[test]
+    fn external_twin_scene_resolves_lunco_references_for_preflight() {
+        let path = temp_usda(
+            "external_twin.usda",
+            "#usda 1.0\n\
+def Xform \"Battery\" (\n\
+    prepend references = @lunco://components/power/battery.usda@</Battery>\n\
+)\n{\n}\n",
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(
+            report.ok,
+            "an external Twin gets the same lunco:// mount as runtime: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
     fn misspelled_intent_is_reported_once_with_a_suggestion() {
         let path = temp_usda(
             "typo_profile.usda",
@@ -690,5 +780,56 @@ mod tests {
     fn unknown_extension_lists_supported() {
         let report = validate_asset("no/such/file.xyz");
         assert!(!report.ok);
+    }
+
+    fn temp_text(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("lunco-validate-text");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write temp text asset");
+        path
+    }
+
+    #[test]
+    fn validates_canonical_btxml_through_runtime_codec() {
+        let path = temp_text(
+            "route.btxml",
+            r#"<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <Action ID="drive_to" target="/Route/W1"/>
+      <Action ID="drive_to" target="/Route/W2"/>
+    </Sequence>
+  </BehaviorTree>
+</root>"#,
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(report.ok, "{:?}", report.errors);
+        assert_eq!(report.kind, "behavior_tree");
+        assert!(
+            report.info["tree"].is_object(),
+            "the parser must return a real runtime tree: {}",
+            report.info
+        );
+    }
+
+    #[test]
+    fn rejects_semantically_invalid_btxml() {
+        let path = temp_text(
+            "missing-entry.btxml",
+            r#"<root BTCPP_format="4" main_tree_to_execute="Missing">
+  <BehaviorTree ID="MainTree"><Action ID="hold"/></BehaviorTree>
+</root>"#,
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(!report.ok);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.contains("names no <BehaviorTree>")),
+            "{:?}",
+            report.errors
+        );
     }
 }

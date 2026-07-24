@@ -15,9 +15,8 @@
 // with `max`/`min` clamps only, no `if`/`when`. Compiled by rumoca via
 // `info:sourceAsset`; ports wire natively via `inputs:x.connect`.
 //
-// The outputs are NORMALIZED commands (−1..1) so the rhai bridge
-// (`assets/scenarios/rover_modelica_ackermann_drive.rhai`) can write them
-// straight onto the FSW ports, which expect normalized values.
+// The outputs are NORMALIZED commands (−1..1); native USD connections publish
+// them onto the FSW ports.
 
 model RoverAckermannDrivetrain
   parameter Real tau_m = 0.15 "Motor electrical + inertia lag (s)";

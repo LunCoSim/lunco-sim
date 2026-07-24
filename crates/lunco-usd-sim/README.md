@@ -42,7 +42,7 @@ entities; `lunco-cosim` itself stays engine-agnostic.
 
 A model is not an attribute on the body it drives: it is a program with typed ports,
 and ports connect. A body that IS its own model authors the `info:*` properties in
-place; a model that is bolted on is a `LunCoProgram` child prim, so deleting the prim
+place; a model that is bolted on is a a child `Scope` applying `LunCoProgramAPI`, so deleting the prim
 removes the behaviour.
 
 ```usda

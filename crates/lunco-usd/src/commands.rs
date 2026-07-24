@@ -201,9 +201,8 @@ impl Plugin for UsdCommandsPlugin {
 ///
 /// - **Has `[usd] default_scene`** → [`LoadScene`] it (path relative to
 ///   the Twin root). `LoadScene` clears the old scene, then mounts this
-///   one as the single active stage; cosim wires `lunco:modelicaModel`
-///   / `lunco:simWires` participants from its prim attributes through
-///   [`UsdSimPlugin`](lunco_usd_sim::UsdSimPlugin).
+///   one as the single active stage; [`UsdSimPlugin`](lunco_usd_sim::UsdSimPlugin)
+///   derives its native `connectionPaths` wiring from the composed prims.
 /// - **No starting scene** (Twin without `default_scene`, or a plain
 ///   folder with no manifest — including one with **no `.usda` at all**)
 ///   → [`ClearScene`]: empty viewport. The folder's files are still
@@ -636,8 +635,8 @@ register_commands!(
 //      `lunco-storage`, idempotent allocate into `DocumentRegistry<UsdDocument>`.
 //   2. `on_open_file` (this one) — additive **scene import** (Blender's
 //      File → Append): brings the stage into the running 3D scene so
-//      `UsdSimPlugin` can wire `lunco:modelicaModel` / `lunco:simWires`
-//      participants (the path `open_usd_docs_on_twin_added` relies on).
+//      `UsdSimPlugin` can derive native connection paths (the path
+//      `open_usd_docs_on_twin_added` relies on).
 //
 // `spawn_scene_root_world` loads the stage through the `AssetServer` (by
 // path, no fs), so this half carries no I/O of its own.

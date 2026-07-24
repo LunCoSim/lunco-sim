@@ -291,7 +291,9 @@ def Xform "PrismaticSpringTest" (
     {
         custom string lunco:scenario = "prismatic-spring"
 
-        def LunCoProgram "Mission"
+        def Scope "Mission" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/prismatic_spring.rhai@
         }

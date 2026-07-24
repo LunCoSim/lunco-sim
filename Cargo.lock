@@ -7482,6 +7482,7 @@ dependencies = [
  "futures-lite",
  "lunco-api",
  "lunco-assets",
+ "lunco-autopilot",
  "lunco-avatar",
  "lunco-celestial",
  "lunco-core",

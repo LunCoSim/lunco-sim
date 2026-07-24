@@ -55,6 +55,7 @@ lunco-materials = { path = "../lunco-materials" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-autopilot = { path = "../lunco-autopilot", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
 lunco-storage = { path = "../lunco-storage" }
 # `ValidateAsset` (validate.rs) — the parse-only pre-flight. `lunco-modelica`

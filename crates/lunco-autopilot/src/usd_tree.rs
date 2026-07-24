@@ -25,8 +25,8 @@
 //!
 //! ```usda
 //! def Xform "Rover" {
-//!     def LunCoProgram "Mission" {
-//!         uniform asset info:sourceAsset = @behaviors/rover_patrol.xml@   # or inline info:sourceCode
+//!     def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
+//!         uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@ # or inline info:sourceCode
 //!     }
 //! }
 //! def Scope "Behaviors" { def "RoverPatrol" {
@@ -37,12 +37,13 @@
 //! }}
 //! ```
 //!
-//! A mission is BOLTED ON: it is a `LunCoProgram` child prim (conventionally named
+//! A mission is BOLTED ON: it is a `LunCoProgramAPI` child prim (conventionally named
 //! `Mission`) carrying the standard UsdShade-style source properties —
 //! `info:sourceCode` (inline) / `info:sourceAsset` (file), inline winning over the
 //! file. Delete the prim and the behaviour is gone. The engine is chosen by the
-//! source's EXTENSION: `.xml` → BT.CPP, exactly as `.mo` → Modelica and `.rhai` →
-//! script already work. There is no behaviour-specific schema and no separate
+//! source's EXTENSION: canonical `.btxml` (or interoperable `.xml`) → BT.CPP,
+//! exactly as `.mo` → Modelica and `.rhai` → script already work. There is no
+//! behaviour-specific schema and no separate
 //! "which child is the tree" pointer.
 //!
 //! ## Waypoints are not children of the vessel
@@ -63,26 +64,26 @@
 //! the XML/JSON intermediate, and is gone by the time a tree is built.
 
 use crate::{Autopilot, AutopilotBehavior, AutopilotBehaviorSpec, BehaviorSpec};
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy::math::DVec3;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde_json::Value;
 
 /// The XML text of a vessel's behaviour tree — inline `info:sourceCode` on the
-/// vessel's `LunCoProgram` mission child, or the loaded contents of that prim's
+/// vessel's `LunCoProgramAPI` mission child, or the loaded contents of that prim's
 /// `info:sourceAsset`. Stamped on the VESSEL entity by the USD bridge
 /// (`lunco-usd-sim`).
 #[derive(Component, Debug, Clone)]
 pub struct BehaviorXml(pub String);
 
-/// A vessel whose mission prim's `info:sourceAsset` names a `.xml` asset still being
+/// A vessel whose mission prim's `info:sourceAsset` names a `.btxml`/`.xml` asset still being
 /// loaded.
 /// [`load_behavior_xml_assets`] swaps it for [`BehaviorXml`] once the asset lands.
 #[derive(Component, Debug, Clone)]
 pub struct BehaviorXmlPath(pub String);
 
-/// Handle to the in-flight `.xml` asset for a [`BehaviorXmlPath`].
+/// Handle to the in-flight BehaviorTree.CPP XML asset for a [`BehaviorXmlPath`].
 #[derive(Component)]
 pub struct BehaviorXmlHandle(pub Handle<BehaviorXmlAsset>);
 
@@ -108,7 +109,7 @@ pub struct TargetBindings(pub HashMap<String, Entity>);
 #[derive(Component, Debug, Clone, Default)]
 pub struct ReachedWaypoints(pub std::collections::HashSet<String>);
 
-/// Raw text of a `.xml` behaviour tree — the file-backed twin of inline
+/// Raw text of a `.btxml`/`.xml` behaviour tree — the file-backed twin of inline
 /// `info:sourceCode`, so a mission stays an editable, hot-reloadable file that Groot2
 /// can open.
 #[derive(Asset, TypePath, Debug, Clone)]
@@ -139,7 +140,9 @@ impl AssetLoader for BehaviorXmlLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["btxml"]
+        // Canonical first; `.xml` accepts upstream BehaviorTree.CPP/Groot/ROS
+        // assets without requiring a rename.
+        &["btxml", "xml"]
     }
 }
 

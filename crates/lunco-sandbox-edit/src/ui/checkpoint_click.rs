@@ -5,7 +5,7 @@
 //!
 //! There is no checkpoint domain. A waypoint is an ordinary prim referencing
 //! `vessels/markers/waypoint.usda`, and the vessel's BT.CPP mission
-//! (the `info:sourceCode` of its `LunCoProgram "Mission"` child) gains a `drive_to`
+//! (the `info:sourceCode` of its `LunCoProgramAPI "Mission"` child) gains a `drive_to`
 //! leaf that names it by path. Both edits go
 //! through the one authoring funnel, [`ApplyUsdOp`] — so the waypoint is journaled,
 //! undoable, persisted to `.usda`, and replicated exactly like every other prim, with
@@ -28,9 +28,9 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{
-    append_waypoint_leaf, catmull_rom_path, format_coord_target, insert_waypoint_after,
-    remove_waypoint_leaf, route_is_smooth, set_route_smooth, set_waypoint_dwell,
-    set_waypoint_target, BehaviorXml, ReachedWaypoints, TargetBindings,
+    BehaviorXml, ReachedWaypoints, TargetBindings, append_waypoint_leaf, catmull_rom_path,
+    format_coord_target, insert_waypoint_after, remove_waypoint_leaf, route_is_smooth,
+    set_route_smooth, set_waypoint_dwell, set_waypoint_target,
 };
 use lunco_controller::ControllerLink;
 use lunco_core::commands::SessionId;
@@ -44,15 +44,15 @@ use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
 use serde_json::Value;
 
-use crate::spawn::{terrain_ray_hit, TerrainOracles};
 use crate::SelectedEntities;
+use crate::spawn::{TerrainOracles, terrain_ray_hit};
 
 /// Scope the authored waypoints are parented under, beneath the stage's default prim.
 /// A route lives in WORLD space, so it is deliberately NOT a child of the vessel —
 /// parented under the rover, the waypoints would ride along as it drives.
 const BEHAVIORS_SCOPE: &str = "Behaviors";
 
-/// Name of the `LunCoProgram` child that carries a vessel's mission tree.
+/// Name of the `LunCoProgramAPI` child that carries a vessel's mission tree.
 const MISSION_PROGRAM: &str = "Mission";
 
 /// Track context menu state for right-clicking waypoints.
@@ -1129,7 +1129,7 @@ fn join_prim(parent: &str, name: &str) -> String {
     }
 }
 
-/// The `LunCoProgram` prim that carries a vessel's mission tree, creating it if
+/// The API-applied Scope that carries a vessel's mission tree, creating it if
 /// this is the first waypoint — returns the path to author `info:sourceCode` onto.
 ///
 /// The tree is a PROGRAM, not an attribute on the vessel: a mission is bolted on,
@@ -1154,8 +1154,16 @@ fn ensure_mission_program(
                 edit_target: LayerId::runtime(),
                 parent_path: vessel_path.to_string(),
                 name: MISSION_PROGRAM.to_string(),
-                type_name: Some("LunCoProgram".to_string()),
+                type_name: Some("Scope".to_string()),
                 reference: None,
+            },
+        });
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::SetApiSchemas {
+                edit_target: LayerId::runtime(),
+                path: path.clone(),
+                schemas: vec!["LunCoProgramAPI".to_string()],
             },
         });
     }
@@ -1401,7 +1409,7 @@ pub fn handle_autopilot_toggle_hotkey(
     }
 }
 
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 /// Command to engage autopilot on a vessel.
 #[Command]

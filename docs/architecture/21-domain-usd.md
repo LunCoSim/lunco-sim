@@ -449,7 +449,7 @@ USD references (e.g., `@/components/mobility/wheel.usda@`) are resolved relative
 - URI schemes (`lunco://`, `twin://`) pass through to the `AssetSource`.
 
 See [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md) for which form to
-author, and why a relative `../` escape fails (silently, for `LunCoProgram` source assets).
+author, and why a relative `../` escape fails (silently, for `LunCoProgramAPI` source assets).
 
 > [!WARNING]
 > **Never try to remove a referenced arc by re-authoring `references =` in an `over`.**

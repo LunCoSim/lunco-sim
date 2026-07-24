@@ -491,7 +491,9 @@ def Xform "SandboxScene" (
             }
 
             # Earth Tracker Controller (Modelica co-sim model)
-            def Xform "EarthTrackerController"
+            def Xform "EarthTrackerController" (
+                prepend apiSchemas = ["LunCoProgramAPI"]
+            )
             {
                 uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
                 float inputs:earth_azimuth.connect = </SandboxScene/Skid_Raycast_1/Comms/EarthTrackerController.outputs:earth_azimuth>
@@ -591,6 +593,35 @@ def Xform "SandboxScene" (
 
     }
 
+    # === Skid-Steer with Traction Battery + Motor Thermal ===
+
+    def Xform "Skid_Battery_Thermal_1" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = {
+            string power = "battery"
+            string thermal = "basic"
+        }
+    )
+    {
+        double3 xformOp:translate = (25.0, 5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # Per-instance livery: magenta display color
+        over "Chassis"
+        {
+            color3f[] primvars:displayColor = [(0.75, 0.25, 0.75)]   # magenta
+        }
+
+        def Camera "ChaseCam"
+        {
+            custom double3 lunco:cameraLookAt = (0.0, 0.4, -12.0)
+            double3 xformOp:translate = (0.0, 0.9, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float focalLength = 28.0
+            float2 clippingRange = (0.1, 100000.0)
+        }
+    }
+
     # --- glTF rover (NASA Mars 2020 Perseverance) ---
     #
     # **USD placeholder + payload pattern**: an `Xform` root holds the
@@ -674,14 +705,18 @@ def Xform "SandboxScene" (
     # resolves them to ECS entities and spawns one `SimConnection` each.
     # Result: the target sphere bobs ±50 N at 1 Hz.
 
-    def "Oscillator"
+    def Scope "Oscillator" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         uniform asset info:sourceAsset = @lunco://models/Oscillator.mo@
         # Pure source: declares its output port (the active-cosim marker).
         float outputs:signal
     }
 
-    def "Amplifier"
+    def Scope "Amplifier" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
         uniform asset info:sourceAsset = @lunco://models/Amplifier.py@
         # Its `scaled` output lands on CosimTarget's `force_y` — a force on a body

@@ -48,7 +48,7 @@ def Xform "DescentLander" (
     # contain component models, and the kind is what tells a browser (and the UI)
     # whether a prim is a thing you open up or a thing you place.
     kind = "assembly"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
     # The ON-BOARD COMPUTER, as a reference arc — the vessel's COMMAND SURFACE.
     # Its `inputs:` ports (`external_throttle`/`pitch`/`roll`/`yaw`/`release`) ARE
     # the set of commands this vessel accepts; there is no lander class in engine
@@ -342,24 +342,31 @@ def Xform "DescentLander" (
     # so it cannot land anything by itself and does not make the vehicle a mission.
     # A scene that wants the raw unaugmented airframe overrides this to 0.
     float inputs:attitude_hold = 1.0
+    float inputs:leg_force_px.connect = </DescentLander/LegPX_Spring.outputs:force>
+    float inputs:leg_force_nx.connect = </DescentLander/LegNX_Spring.outputs:force>
+    float inputs:leg_force_pz.connect = </DescentLander/LegPZ_Spring.outputs:force>
+    float inputs:leg_force_nz.connect = </DescentLander/LegNZ_Spring.outputs:force>
 
     # ── Propellant events ────────────────────────────────────────────────────
-    # A threshold crossing on a model output, published as an event the supervisory
-    # script (and anything else) reacts to. One prim per rule: the port, the
-    # comparison, the threshold and the name are each a typed property.
-    def LunCoPortEvent "LowFuel"
+    # Conditions are equations in Lander.mo. These prims only bind the model's
+    # discrete outputs to names on the shared engine event bus.
+    def LunCoEvent "LowFuel"
     {
-        uniform token lunco:event:port = "m_prop"
-        uniform token lunco:event:op = "lt"
-        double lunco:event:threshold = 200.0
-        uniform token lunco:event:emit = "lander_low_fuel"
+        float inputs:trigger.connect = </DescentLander.outputs:low_fuel>
+        uniform token lunco:event:name = "lander_low_fuel"
+        uniform token lunco:event:severity = "warning"
     }
-    def LunCoPortEvent "Depleted"
+    def LunCoEvent "Depleted"
     {
-        uniform token lunco:event:port = "m_prop"
-        uniform token lunco:event:op = "le"
-        double lunco:event:threshold = 0.5
-        uniform token lunco:event:emit = "lander_depleted"
+        float inputs:trigger.connect = </DescentLander.outputs:depleted>
+        uniform token lunco:event:name = "lander_depleted"
+        uniform token lunco:event:severity = "warning"
+    }
+
+    def LunCoEvent "Touchdown"
+    {
+        float inputs:trigger.connect = </DescentLander.outputs:touchdown>
+        uniform token lunco:event:name = "lander_touchdown"
     }
 
     # ── Onboard supervisor ───────────────────────────────────────────────────
@@ -367,8 +374,9 @@ def Xform "DescentLander" (
     # fly the descent — mission orchestration is a separate concern and lives on a
     # scene's own `Scenario` prim. A program prim, so it can be deleted, replaced, or
     # referenced in without touching the airframe.
-    def LunCoProgram "Subsystems" (
-        doc = "Touchdown latch and propellant-event notices. Does not fly the vehicle."
+    def Scope "Subsystems" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+        doc = "Reacts to touchdown and propellant events. Does not fly the vehicle."
     )
     {
         uniform asset info:sourceAsset = @lunco://scenarios/lander_subsystems.rhai@
@@ -558,7 +566,9 @@ def Xform "DescentLander" (
         # cosim change. What is gone is the duplication that actually bit: the
         # 36-point control net that encoded a DIFFERENT bell to the one the model
         # was computing thrust for.
-        def LunCoProgram "Design"
+        def Scope "Design" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/BellNozzle.mo@
             uniform bool lunco:program:realtimeSafe = true
@@ -644,7 +654,9 @@ def Xform "DescentLander" (
         # The outer shroud mounts no photometry and carries no light: one source
         # under the vehicle is the physical situation, and two would double-count
         # the same plume.
-        def LunCoProgram "Photometry"
+        def Scope "Photometry" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PlumePhotometry.mo@
             uniform bool lunco:program:realtimeSafe = true

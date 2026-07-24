@@ -1,6 +1,6 @@
 // Mission orchestration for the on-surface rover scenario (doc 34, Decision 3).
 //
-// Bound from USD by the `def LunCoProgram "Mission"` child prim of
+// Bound from USD by `LunCoProgramAPI` on the `Mission` Scope of
 // `/LanderTest/Scenario`, whose `uniform asset info:sourceAsset` names this
 // file.
 // This is a DECLARATIVE task: the prelude sequencer advances it each tick using
@@ -65,6 +65,7 @@ fn task(me) {
             // Engage the rover's autopilot (it drives the course until the player
             // takes the wheel). The rover's own script listens for this event.
             emit("rover_deployed");
+            cmd("EngageAutopilot", #{ vessel: find("/LanderTest/SkidRover") });
             notify_kind("Rover deployed - autopilot driving the course. Click the rover (or press F) to take over.", "success");
         }),
 

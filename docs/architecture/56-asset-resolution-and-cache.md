@@ -86,7 +86,7 @@ need to symlink external content into the engine tree.
 
 > [!WARNING]
 > **A relative `../` path escapes the twin root (or the asset root) and fails to load.**
-> For `info:sourceAsset` on a `LunCoProgram` prim this failure is **silent**: the
+> For `info:sourceAsset` on a `LunCoProgramAPI` prim this failure is **silent**: the
 > prim is simply never driven, with nothing in the log. If a scenario doesn't run, check
 > the path before you debug the script.
 

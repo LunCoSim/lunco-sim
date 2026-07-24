@@ -93,7 +93,7 @@ mod native {
         let mut opts = lunco_modelica::experiments_runner::stepper_options_from_bounds(&bounds);
         opts.atol = atol;
         opts.rtol = rtol;
-        let mut stepper = match rumoca_sim::SimulationSession::new(&result.dae, opts) {
+        let mut stepper = match lunco_modelica::simulation_session::cli(&result.dae, opts) {
             Ok(s) => {
                 println!("Stepper built OK.");
                 s

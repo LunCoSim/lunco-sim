@@ -191,8 +191,7 @@ impl Plugin for UsdSimPlugin {
         // of invisible deadlock into a loud `error!` AND recovers by building the
         // physics without the missing visual.
         app.add_systems(Update, recover_stuck_usd_prims);
-        // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
-        // `lunco:simWires`) — see `cosim.rs`.
+        // USD → cosim wiring through native `connectionPaths` — see `cosim.rs`.
         cosim::install(app);
     }
 }
@@ -202,6 +201,7 @@ impl Plugin for UsdSimPlugin {
 pub mod billboard;
 pub mod celestial;
 pub mod cosim;
+pub mod domain_projection;
 pub mod powertrain;
 pub mod readiness;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
@@ -869,7 +869,7 @@ fn process_usd_sim_prim_read(
         .scalar::<bool>(&sdf_path, "lunco:avatar")
         .unwrap_or_else(|| reader.text(&sdf_path, "lunco:avatar").as_deref() == Some("true"));
     if is_avatar {
-        debug!(
+        info!(
             "Detected Avatar prim at {}, setting up camera",
             prim_path.path
         );
@@ -1039,6 +1039,9 @@ fn process_usd_sim_prim_read(
         // on a wgpu bind-group validation error. Both failure modes look like
         // a lighting/camera bug. Keep workbench cameras SMAA-free; MSAA (from
         // `SceneCamera`, bound by `lunco-render-bevy`) handles geometry-edge AA.
+        // An authored camera is authoritative over the calibrated scene default.
+        // Both paths use the one USD photographic conversion, so ISO/shutter/
+        // f-stop never acquire a second spelling at the avatar boundary.
         let ev100 = lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path)
             .unwrap_or_else(|| active_sun.copied().unwrap_or_default().exposure_ev100);
         // AgX tonemapping: a filmic curve that rolls off the blown highlights
@@ -1176,7 +1179,7 @@ fn process_usd_sim_prim_read(
     // Stamps `ActuatorPorts`: the 4 canonical digital actuator ports, plus any the
     // vessel declares as `outputs:` attributes.
     if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
-        debug!(
+        info!(
             "Intercepted PhysxVehicleContextAPI for {}, initializing vessel control surface",
             prim_path.path
         );
@@ -1258,18 +1261,19 @@ fn process_usd_sim_prim_read(
             .try_insert(lunco_core::ActuatorPorts::new(port_map));
     }
 
-    // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a `LunCoProgram`
+    // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a program-API
     // child of this prim — the vessel OWNS the tree, so the tree is read from
     // here, its owner. Inline source wins over a file: an author editing a tree in
     // place means it. The tree's spatial leaves reference WAYPOINT PRIMS by path;
     // `resolve_behavior_targets` binds those, and `lunco_autopilot::usd_tree` bakes
     // their live positions into the compiled tree.
     //
-    // A `.xml` is the one program with a role of its own: a declarative tree is
+    // A `.btxml` (canonical) or interoperable `.xml` is the one program with a role
+    // of its own: a declarative tree is
     // not a script, it is compiled and ticked by the behaviour engine. Extension
     // picks the engine, exactly as it does for `.mo` and `.rhai`.
     for child in reader.children(&sdf_path) {
-        if reader.type_name(&child).as_deref() != Some("LunCoProgram") {
+        if !reader.has_api_schema(&child, "LunCoProgramAPI") {
             continue;
         }
         if let Some(xml) = reader
@@ -1281,7 +1285,7 @@ fn process_usd_sim_prim_read(
                 .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
         } else if let Some(path) = reader
             .asset(&child, "info:sourceAsset")
-            .filter(|s| s.ends_with(".xml"))
+            .filter(|s| lunco_core::programs::is_behavior_tree_asset(s))
         {
             commands
                 .entity(entity)
@@ -1398,7 +1402,7 @@ fn process_usd_sim_prim_read(
             debug!("Wheel {} awaits ShaderLook, deferring", prim_path.path);
             return;
         }
-        debug!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
+        info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
         // ONE unified read for BOTH wheel kinds (see `wheel_params`): every
         // drivetrain/tire/inertia number plus suspension, resolved via the
@@ -1770,7 +1774,7 @@ fn setup_raycast_wheel(
     steer: Option<Entity>,
     max_steer_angle: f64,
 ) {
-    debug!("Setting up RAYCAST wheel {}", prim_path.path);
+    info!("Setting up RAYCAST wheel {}", prim_path.path);
 
     let mut wheel = params.to_wheel_raycast(p_drive, p_steer, Some(entity));
 
@@ -1939,7 +1943,7 @@ fn setup_physical_wheel(
     steer: Option<Entity>,
     max_steer_angle: f64,
 ) {
-    debug!("Setting up PHYSICAL wheel {}", prim_path.path);
+    info!("Setting up PHYSICAL wheel {}", prim_path.path);
     let radius = params.radius as f32;
 
     // `params.peak_torque` (N·m at full throttle) is the engine's `peakTorque`,
@@ -2131,7 +2135,7 @@ fn setup_physical_wheel(
     // INJECTS energy (the idle rover spins and drifts metres with zero throttle);
     // a knuckle light enough to be stable can't hold the steer and the response
     // is pure noise. Verified across mass, inertia, motor stiffness and drive
-    // mode with the authored Ackermann parity scene.
+    // mode with the headless `rover_turn` probe.
     //
     // Instead every wheel hangs off the chassis by a SINGLE revolute (stable,
     // like the rigid rear axle). The drive is a velocity-controlled motor on that
@@ -2611,7 +2615,7 @@ fn try_wire_wheel(
                         Name::new(format!("Conn_Steer_{}", name)),
                         ChildOf(ent),
                     ));
-                    debug!(
+                    info!(
                         "Wired wheel {} steering to FSW port {}",
                         prim_path.path, name
                     );
@@ -2754,7 +2758,7 @@ fn resolve_differential_coupling(
             damping: pending.damping,
         });
         commands.entity(joint).remove::<PendingDifferential>();
-        debug!(
+        info!(
             "Resolved gear joint {} ({} <-> {})",
             joint_path.path, pending.rocker_a, pending.rocker_b
         );

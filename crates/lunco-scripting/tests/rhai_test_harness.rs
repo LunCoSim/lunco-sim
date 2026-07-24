@@ -32,13 +32,11 @@ use rhai::Engine;
 
 /// An engine configured like the runtime's.
 ///
-/// Mirrors `prelude_parses.rs::runtime_engine` for the same reason: a bare
-/// `Engine::new()` uses rhai's default expression-depth caps, well below the
-/// `set_max_expr_depths(128, 128)` the real engine sets, so it would reject
-/// files that run fine in production and make this a false alarm.
+/// Mirrors `prelude_parses.rs::runtime_engine`: a bare engine can drift from the
+/// runtime's bounded-resource policy and make this a false alarm.
 fn runtime_engine() -> Engine {
     let mut engine = Engine::new();
-    engine.set_max_expr_depths(128, 128);
+    lunco_scripting::rhai_limits::apply(&mut engine);
     engine
 }
 
@@ -181,4 +179,45 @@ fn t_report_surfaces_a_failure() {
         "t_report must name the failing check, got:\n{}",
         printed.join("\n")
     );
+}
+
+#[test]
+fn rhai_lint_rejects_production_tick_but_allows_test_tick() {
+    let policy = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/scripting/policy/lint_rhai.rhai"),
+    )
+    .expect("rhai lint policy");
+    let engine = runtime_engine();
+
+    let production = r#"
+        let facts = #{
+            path: "assets/scenarios/bad.rhai",
+            kind: "rhai",
+            source: "fn on_tick(me) { set(me, \"x\", 1.0); }"
+        };
+        lint_rhai(facts)
+    "#;
+    let findings = engine
+        .eval::<rhai::Array>(&format!("{policy}\n{production}"))
+        .expect("production lint result");
+    assert_eq!(findings.len(), 1);
+    let finding = findings[0].clone().cast::<rhai::Map>();
+    assert_eq!(
+        finding["rule"].clone().into_string().unwrap(),
+        "production-rhai-on-tick"
+    );
+
+    let test = r#"
+        let facts = #{
+            path: "assets/scenarios/tests/step.rhai",
+            kind: "rhai",
+            source: "fn on_tick(me) { this.t += 1; }"
+        };
+        lint_rhai(facts)
+    "#;
+    let findings = engine
+        .eval::<rhai::Array>(&format!("{policy}\n{test}"))
+        .expect("test lint result");
+    assert!(findings.is_empty());
 }

@@ -99,7 +99,7 @@ equation
   // has its base radius), so without this gate a dead engine would emit some
   // thousands of lumens and every coasting shot would pick up a phantom glow from
   // underneath.
-  intensity = if t <= 0.0 then 0.0 else exitance * luminance * area;
+  intensity = t * exitance * luminance * area;
 
   radius = r_idle + t * r_gain;
 end PlumePhotometry;

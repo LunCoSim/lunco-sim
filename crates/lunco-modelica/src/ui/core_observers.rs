@@ -198,16 +198,24 @@ pub fn drain_sim_samples_to_viz(
 pub fn drain_notices_to_console(
     mut notices: MessageReader<crate::ModelicaNotice>,
     console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
+    bus: Option<ResMut<StatusBus>>,
 ) {
-    let Some(mut console) = console else {
-        notices.clear();
-        return;
-    };
+    let mut console = console;
+    let mut bus = bus;
     for n in notices.read() {
-        match n.level {
-            crate::NoticeLevel::Info => console.info(n.text.clone()),
-            crate::NoticeLevel::Warn => console.warn(n.text.clone()),
-            crate::NoticeLevel::Error => console.error(n.text.clone()),
+        if let Some(console) = console.as_deref_mut() {
+            match n.level {
+                crate::NoticeLevel::Info => console.info(n.text.clone()),
+                crate::NoticeLevel::Warn => console.warn(n.text.clone()),
+                crate::NoticeLevel::Error => console.error(n.text.clone()),
+            }
+        }
+        if n.level == crate::NoticeLevel::Error {
+            if let Some(bus) = bus.as_deref_mut() {
+                // A notice is emitted for a worker response, never by a
+                // polling system, so a failure produces one status entry.
+                bus.push("Modelica", StatusLevel::Error, n.text.clone());
+            }
         }
     }
 }

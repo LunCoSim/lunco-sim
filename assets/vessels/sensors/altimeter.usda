@@ -58,7 +58,9 @@ def Xform "Altimeter" (
         # the shadow map. Omniverse's name, so RTX reads it too.
         bool primvars:doNotCastShadows = true
 
-        def LunCoProgram "RangeBeam"
+        def Scope "RangeBeam" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform token info:implementationSource = "id"
             uniform token info:id = "range_beam"
@@ -90,7 +92,9 @@ def Xform "Altimeter" (
         bool physics:collisionEnabled = false
         bool primvars:doNotCastShadows = true
 
-        def LunCoProgram "RangeHit"
+        def Scope "RangeHit" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform token info:implementationSource = "id"
             uniform token info:id = "range_hit"

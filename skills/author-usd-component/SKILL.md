@@ -292,9 +292,10 @@ That is a legitimate technique, not a bug — but write down that you did it.
 
 ## Behaviour — one binding for every language
 
-There is **no per-language schema**. `LunCoProgram` / `LunCoProgramAPI` is modelled
-on `UsdShade.Shader`, and **the engine comes from the source's file extension**,
-exactly as USD picks a file-format plugin.
+There is **one program contract, not a per-language schema**. `LunCoProgramAPI` is
+modelled on `UsdShade.Shader`: its implementation is selected with the standard
+`info:implementationSource` / `info:id` / `info:sourceAsset` / `info:sourceCode`
+vocabulary. The LunCo runtime dispatches file-backed programs by their source extension.
 
 ```usda
 def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
@@ -306,31 +307,33 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 }
 ```
 
-`.mo` → Modelica, `.py` → Python, `.rhai` → Rhai, `.xml` → behaviour tree.
+`.mo` → Modelica, `.py` → Python, `.rhai` → Rhai, `.btxml` → behaviour tree
+(`.xml` is accepted only for upstream interoperability).
 **Nothing else about the prim changes.**
 
 - **Role is derived, never declared.** A program with `inputs:`/`outputs:` ports
   is a node in the port graph and is stepped; one without them runs for effects
   only. **Parameters are ports** — a gain is `float inputs:kv = 1.2`.
-- `LunCoProgramAPI` when the program *is* the thing (a vessel's flight control);
-  a child `LunCoProgram` **prim** for a guidance law or patrol tree, so deleting
-  the prim deletes the behaviour. Only the prim form has `sourceAsset:subIdentifier`
-  for multi-model `.mo` files.
+- Apply `LunCoProgramAPI` directly when the program *is* intrinsic to the thing
+  (a vessel's flight control); apply it to a child `Scope` for a separable guidance
+  law or patrol tree, so deleting that prim deletes the behaviour. Both placements
+  have `info:sourceAsset:subIdentifier` for multi-model `.mo` files.
 - **`realtimeSafe` defaults to `false`, and the wiring pass will then refuse it a
   force/torque port on a client-predicted body.** A correctly-wired program can do
   nothing until this is authored `true`.
 - **`sourceAsset` must be typed `asset`, never `string`** — only an `asset` is
   visible to the resolver, the reference closure, and packaging.
-- `lunco:program:id` names a registered Rust driver instead of a source. It is a
-  `token`. An unregistered id is a **warning no-op, not an error** (forward compat) —
-  easy to miss.
-- Wiring is native USD `connectionPaths`. `lunco:simWires` and wire-prims are
-  **deleted**; `SimConnection` is a derived cache, so hand-authoring one is pointless.
+- Programs use standard `info:id` for a registered driver, `info:sourceAsset` for
+  authored source, or `info:sourceCode` for live, journalled editing. Production
+  programs normally use the asset form. An unknown id is a fail-safe no-op with a
+  warning so an older runtime can still open a newer scene.
+- Wiring is native USD `connectionPaths`; `SimConnection` is a derived cache, so
+  hand-authoring it is pointless.
 
-Older attributes still exist and **inline always wins over path**: `lunco:script` /
-`lunco:scriptPath`. Prefer `lunco:program:*`. Behaviour trees follow the ordinary
-`LunCoProgram` rule — a child prim (conventionally `Mission`) whose `info:sourceCode` /
-`info:sourceAsset` ends in `.xml`, exactly as `.rhai` and `.mo` select their engines.
+Behaviour trees follow the ordinary `LunCoProgramAPI` rule — a child prim
+(conventionally `Mission`) whose `info:sourceAsset` ends in canonical `.btxml`,
+exactly as `.rhai` and `.mo` select their engines. Imported BehaviorTree.CPP/Groot/ROS
+`.xml` is also accepted.
 
 Vehicles are a special case with **no fallbacks**: a wheel missing any
 `LunCoWheelAPI` / `LunCoTireAPI` attribute logs an error and **refuses to spawn**.

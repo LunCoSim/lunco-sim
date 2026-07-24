@@ -31,7 +31,7 @@ lunco-hardware = { path = "../lunco-hardware" }
 # headless server build.
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
-# USD → autopilot bridge: a `LunCoProgram` prim whose `info:sourceAsset` is a
+# USD → autopilot bridge: a `LunCoProgramAPI` prim whose `info:sourceAsset` is a
 # BT.CPP XML tree, and the waypoint prims its leaves reference. This crate owns
 # prim-path → entity resolution;
 # lunco-autopilot stays USD-free and just compiles what it is handed.

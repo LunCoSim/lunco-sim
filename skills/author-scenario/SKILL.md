@@ -13,7 +13,7 @@ description: >
   "scenario" or "rhai". (For the agent mid-code, it also covers: an `on_tick` /
   `on_event` / `on_start` hook, `RunScenario`, `nav_to` / `run_plan` / a
   sequencer step, `emit` / a `TelemetryEvent`, `this`-state that resets or
-  reads empty, a `find`/`cmd`/`query` verb, or a `LunCoProgram` prim.) These
+  reads empty, a `find`/`cmd`/`query` verb, or a `LunCoProgramAPI` prim.) These
   rules are project-specific: rhai `fn`s are pure (they can't see top-level
   `let`, so naive state silently vanishes), `this` binds ONLY in the hook the
   engine calls, `goto` is reserved, events arrive one tick late, scripts are
@@ -203,7 +203,7 @@ and differ only in whether the drive is live, so one scenario serves both — bu
 must be TOLD which:
 
 ```usda
-def LunCoProgram "Test" {
+def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"]) {
     uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie.rhai@
     float lunco:param:coupled = 1.0        # read: param(me, "coupled", -1.0)
 }
@@ -277,9 +277,9 @@ see `docs/behaviour-trees.md`) over hand-rolled `on_tick` state machines.
 **one tick later** (deterministic actor model — "A emits, B reacts" is
 order-independent). Scripts interact ONLY through events + shared ECS state,
 never by calling each other's functions (isolated VMs). Producers also include
-physics (`COLLISION_START`), lifecycle (`SCENE_LOADED`), and model-port thresholds
-authored as `LunCoPortEvent` child prims of a program (one prim per rule:
-`lunco:event:port`, `lunco:event:op`, `lunco:event:threshold`, `lunco:event:emit`).
+physics (`COLLISION_START`), lifecycle (`SCENE_LOADED`), and Modelica condition outputs
+connected to `LunCoEvent.inputs:trigger`. The event prim adds the bus-facing name and
+severity; threshold and hysteresis equations remain in Modelica.
 
 ## 6. Running & debugging
 
@@ -298,16 +298,14 @@ Prefer the HTTP API (curl-first; canonical port **4101** — launch per the
 
 ## 7. Persistence — bake into the scene (USD)
 
-A script is a PRIM — give the entity a `LunCoProgram` child and it auto-runs on spawn.
+A script is a PRIM — give the entity a `LunCoProgramAPI` child and it auto-runs on spawn.
 Delete the prim and the behaviour is gone:
 ```usda
 def Xform "Rover_01"
 {
-    def LunCoProgram "Patrol"
-    {
+    def Scope "Patrol" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @scenarios/patrol.rhai@
-        # or author the source in place:
-        # uniform string lunco:program:sourceCode = '''fn on_tick(me){ ... }'''
+        # File-backed source is canonical for production programs.
 
         # per-instance config: one typed attribute per key, read by param(me, "speed", 1.0)
         custom float lunco:param:speed = 2.0
@@ -324,7 +322,7 @@ libraries → `<twin>/tools/*.rhai`.
 3. Drive with prelude verbs (`nav_to`/`drive`/`cmd`) — never a control loop (that's Modelica).
 4. Wire reactions through `emit`/`on_event` (remember the one-tick delay).
 5. `RunScenario` on the target gid; verify with `ScriptInspect`; iterate by re-running (hot-reload).
-6. Persist it as a `LunCoProgram` child prim on the target once it works.
+6. Persist it as a `LunCoProgramAPI` child prim on the target once it works.
 
 ## Anti-patterns (each has cost real time)
 
@@ -386,7 +384,7 @@ rovers being wrong together.
 ```bash
 cargo run -j2 --bin sandbox -- --scene scenes/tests/drivetrain_parity.usda 2>&1 | tee /tmp/parity.log
 ```
-The `LunCoProgram` prim in the scene auto-runs the script on load; the run takes
+The `LunCoProgramAPI` prim in the scene auto-runs the script on load; the run takes
 ~21 s of sim time (3 s settle → 12 s straight → 6 s steer). Then:
 ```bash
 grep -E 'DRIVETRAIN PARITY|PARITY FAIL|TESTS_' /tmp/parity.log

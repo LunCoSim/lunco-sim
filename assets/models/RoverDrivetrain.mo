@@ -12,9 +12,8 @@
 // with `max`/`min` clamps only, no `if`/`when`. Compiled by rumoca via
 // `info:sourceAsset`; ports wire natively via `inputs:x.connect`.
 //
-// The outputs are NORMALIZED per-side drive commands (−1..1, torque/peak) so
-// the rhai bridge (`assets/scenarios/rover_modelica_drive.rhai`) can write
-// them straight onto the wheel drive ports, which expect normalized throttle.
+// The outputs are NORMALIZED per-side drive commands (−1..1, torque/peak).
+// Native USD connections fan them onto wheel drive ports.
 
 model RoverDrivetrain
   parameter Real tau_m = 0.15 "Motor electrical + inertia lag (s)";

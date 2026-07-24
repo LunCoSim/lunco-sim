@@ -32,6 +32,8 @@ pub mod overlays;
 /// Rhai behaviour editor — edit + save + hot-reload the script on the selected
 /// prim, with a diagnostics list. The writable counterpart of `code_panel`.
 mod rhai_editor_panel;
+/// In-app rhai REPL panel (web + native). Empty unless the API bridge is
+/// available — the file carries its own `#![cfg(…)]`.
 mod rhai_repl_panel;
 /// Driver cockpit overlay for the View perspective — attitude/tilt, nav readout,
 /// and the physics-real transport band. Paints only while possessing a vessel.
@@ -231,6 +233,11 @@ impl Plugin for SandboxUiPlugin {
             scenario_download::draw_scenario_download,
         );
 
+        // Deterministic per-view-mode exposure for celestial scenes (orbital
+        // = calibrated EV, surface = 4 stops open for the earthshine-lit
+        // polar site).
+        app.add_systems(Update, mode_exposure);
+
         // Extra tutorial TRACKS — Basic (rover fundamentals) and Space School
         // (the IKI event scenario). `TutorialPlugin` is added once above for the
         // primary "sandbox" app (its build() does the one-time command/panel/
@@ -340,6 +347,65 @@ fn force_hard_shadow_filtering(
         commands
             .entity(e)
             .try_insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
+    }
+}
+
+/// Per-view-mode exposure for celestial scenes. One physical scene spans ~14
+/// stops: a sunlit globe from orbit is correct at the calibrated EV 15, while
+/// the polar moonbase under a grazing sun is earthshine-lit — pitch black at
+/// that same fixed EV. Histogram auto-exposure was tried and metered the
+/// mostly-black space background instead (whole frame blown white), so this
+/// is DETERMINISTIC: orbital → the calibrated EV, surface → 4 stops open
+/// (earthshine-readable), eased like eye adaptation. Inert without the
+/// celestial hierarchy — studio scenes keep their authored EV.
+fn mode_exposure(
+    time: Res<Time>,
+    // "Is there a sky?" is now the SCENE's answer, not a host flag: a celestial
+    // hierarchy exists iff the scene declared bodies (`LunCoCelestialBodyAPI`).
+    q_hierarchy: Query<(), With<lunco_celestial::SolarSystemRoot>>,
+    pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
+    sun: Option<Res<lunco_environment::LunarSun>>,
+    sun_dir: Option<Res<lunco_celestial::SunDirectionWorld>>,
+    mut q_exposure: Query<
+        (
+            &mut bevy::camera::Exposure,
+            Option<&CellCoord>,
+            &GlobalTransform,
+            Option<&bevy::ecs::hierarchy::ChildOf>,
+        ),
+        With<lunco_core::Avatar>,
+    >,
+    q_grids: Query<&Grid>,
+) {
+    let Some(sun) = sun else { return };
+    // No celestial hierarchy (studio / flat sandbox scenes) → keep the authored EV.
+    if q_hierarchy.is_empty() {
+        return;
+    }
+    let orbital = pin.is_some_and(|p| p.active);
+    for (mut exposure, cell, _gtf, child_of) in &mut q_exposure {
+        // The camera must be mounted under a celestial `Grid` before its
+        // geographic placement settles. Hold exposure until mounted.
+        let mounted = cell.is_some()
+            && child_of
+                .and_then(|c| q_grids.get(c.parent()).ok())
+                .is_some();
+        if !mounted {
+            warn_once!(
+                "mode_exposure: avatar camera has no CellCoord/Grid parent — holding \
+                 exposure until the mount settles."
+            );
+            continue;
+        }
+        let (target, sunlit_val) = if orbital {
+            (sun.exposure_ev100, 1.0)
+        } else {
+            let to_sun_site_enu = sun_dir.as_ref().map(|d| -d.0).unwrap_or(Vec3::Y);
+            let elev = to_sun_site_enu.y.clamp(-1.0, 1.0).asin();
+            let sunlit = ((elev + 0.02) / 0.02).clamp(0.0, 1.0);
+            (9.0 + (sun.exposure_ev100 - 9.0) * sunlit, sunlit)
+        };
+        exposure.ev100 = target;
     }
 }
 
@@ -558,17 +624,11 @@ fn init_current_scene_path(
 fn register_downloadable_assets_settings(world: &mut World) {
     use bevy_egui::egui;
     use lunco_assets::datasets::{DatasetRegistry, DatasetState};
-    use std::collections::BTreeMap;
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
     layout.register_settings(|ui, world| {
-        // The preference is application-wide; Twin-declared datasets are not.
-        // Keep the former in the ordinary Settings flow and put every open
-        // Twin's potentially long asset list behind its own nested menu. This
-        // keeps Settings usable for a Twin such as SummerSpaceSchool, which
-        // declares dozens of terrain products.
-        ui.label(egui::RichText::new("General").weak().small());
+        ui.label(egui::RichText::new("Downloadable data").weak().small());
         if let Some(mut settings) = world.get_resource_mut::<lunco_settings::DownloadSettings>() {
             ui.horizontal(|ui| {
                 ui.label("Max parallel downloads:");
@@ -596,38 +656,72 @@ fn register_downloadable_assets_settings(world: &mut World) {
             return;
         }
         // Snapshot: the rows below need `&mut World` to request a download.
-        // Keep engine data inline, grouped by its owning library. A Twin's
-        // manifest belongs to that Twin, so its rows get a nested menu instead
-        // of stretching the global Settings menu to a full-screen list.
-        type DatasetRow = (String, String, DatasetState);
-        let mut engine_rows: BTreeMap<String, Vec<DatasetRow>> = BTreeMap::new();
-        let mut twin_rows: BTreeMap<String, Vec<DatasetRow>> = BTreeMap::new();
-        for entry in registry.entries() {
-            let row = (entry.key.clone(), entry.name.clone(), entry.state.clone());
-            match &entry.scope {
-                lunco_assets::datasets::DatasetScope::Engine => {
-                    engine_rows
-                        .entry(entry.group.clone())
-                        .or_default()
-                        .push(row);
-                }
-                lunco_assets::datasets::DatasetScope::Twin { name, .. } => {
-                    twin_rows.entry(name.clone()).or_default().push(row);
-                }
-            }
-        }
+        //
+        // The heading is WHO declared it — the LunCo library that owns the
+        // dataset ("celestial", "ephemeris", "modelica") or the twin's own
+        // name. `scope.label()` says "engine" for every engine dataset, which
+        // is true and useless: a user looking for Earth imagery is looking for
+        // the celestial library, not for the fact that it isn't a twin's.
+        let rows: Vec<(String, String, String, DatasetState)> = registry
+            .entries()
+            .iter()
+            .map(|e| {
+                let owner = match &e.scope {
+                    lunco_assets::datasets::DatasetScope::Engine => e.group.clone(),
+                    lunco_assets::datasets::DatasetScope::Twin { name, .. } => name.clone(),
+                };
+                (e.key.clone(), owner, e.name.clone(), e.state.clone())
+            })
+            .collect();
+        // Registration order already groups by owner; sorting makes that a
+        // guarantee rather than a coincidence, so the headings below can be
+        // emitted on change instead of buffering the whole list.
+        let mut rows = rows;
+        rows.sort_by(|a, b| a.1.cmp(&b.1));
         let mut requested: Option<String> = None;
-        for (owner, rows) in &engine_rows {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(owner).weak().small());
-            render_dataset_rows(ui, rows, &mut requested);
-        }
-        if !twin_rows.is_empty() {
-            ui.separator();
-            ui.label(egui::RichText::new("Twin data").weak().small());
-            for (twin, rows) in &twin_rows {
-                ui.menu_button(twin, |ui| render_dataset_rows(ui, rows, &mut requested));
+        let mut heading: Option<&str> = None;
+        for (key, owner, name, state) in &rows {
+            if heading != Some(owner.as_str()) {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(owner).weak().small());
+                heading = Some(owner.as_str());
             }
+            ui.horizontal(|ui| {
+                ui.label(name.as_str());
+                match state {
+                    DatasetState::Installed => {
+                        ui.label(egui::RichText::new("✔ cached").weak());
+                    }
+                    DatasetState::Downloading {
+                        bytes_done,
+                        bytes_total,
+                    } => {
+                        let mb = |b: &u64| *b as f64 / (1024.0 * 1024.0);
+                        ui.label(if *bytes_total > 0 {
+                            format!("⬇ {:.1}/{:.1} MB", mb(bytes_done), mb(bytes_total))
+                        } else {
+                            format!("⬇ {:.1} MB", mb(bytes_done))
+                        });
+                    }
+                    DatasetState::Missing | DatasetState::Failed(_) => {
+                        if let DatasetState::Failed(e) = state {
+                            ui.label(egui::RichText::new("⚠").color(egui::Color32::RED))
+                                .on_hover_text(e.clone());
+                        }
+                        if ui
+                            .button("⬇ Download")
+                            .on_hover_text(
+                                "Fetches this dataset and caches it — engine data in the \
+                                 shared cache, a twin's data in that twin's .cache. \
+                                 Downloads only happen from this button.",
+                            )
+                            .clicked()
+                        {
+                            requested = Some(key.clone());
+                        }
+                    }
+                }
+            });
         }
         if let Some(key) = requested {
             if let Some(mut registry) = world.get_resource_mut::<DatasetRegistry>() {
@@ -635,56 +729,6 @@ fn register_downloadable_assets_settings(world: &mut World) {
             }
         }
     });
-}
-
-/// Render one owner-scoped set of datasets. The caller decides whether that
-/// scope belongs inline under General (engine data) or in a Twin submenu.
-fn render_dataset_rows(
-    ui: &mut bevy_egui::egui::Ui,
-    rows: &[(String, String, lunco_assets::datasets::DatasetState)],
-    requested: &mut Option<String>,
-) {
-    use bevy_egui::egui;
-    use lunco_assets::datasets::DatasetState;
-
-    for (key, name, state) in rows {
-        ui.horizontal(|ui| {
-            ui.label(name);
-            match state {
-                DatasetState::Installed => {
-                    ui.label(egui::RichText::new("✔ cached").weak());
-                }
-                DatasetState::Downloading {
-                    bytes_done,
-                    bytes_total,
-                } => {
-                    let mb = |b: &u64| *b as f64 / (1024.0 * 1024.0);
-                    ui.label(if *bytes_total > 0 {
-                        format!("⬇ {:.1}/{:.1} MB", mb(bytes_done), mb(bytes_total))
-                    } else {
-                        format!("⬇ {:.1} MB", mb(bytes_done))
-                    });
-                }
-                DatasetState::Missing | DatasetState::Failed(_) => {
-                    if let DatasetState::Failed(error) = state {
-                        ui.label(egui::RichText::new("⚠").color(egui::Color32::RED))
-                            .on_hover_text(error);
-                    }
-                    if ui
-                        .button("⬇ Download")
-                        .on_hover_text(
-                            "Fetches this dataset and caches it — engine data in the \
-                             shared cache, a twin's data in that twin's .cache. \
-                             Downloads only happen from this button.",
-                        )
-                        .clicked()
-                    {
-                        *requested = Some(key.clone());
-                    }
-                }
-            }
-        });
-    }
 }
 
 fn register_sandbox_scenarios_menu(world: &mut World) {
@@ -793,20 +837,21 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         }
 
-        // The Scenarios menu contains loadable scene entry layers only. Twins
-        // declare these through `[usd] scenes`; reference-only USD layers and
-        // other source types remain available in the Library browser.
+        // Every loadable scene in the project. WHICH files those are is the
+        // project's answer, not this menu's: each Twin declares `[usd] scenes`
+        // in its `twin.toml`, the engine library uses its own `scenes/` layout.
+        // See `discovery::list_scene_assets` for why the menu stopped deciding.
         let mut assets = lunco_assets::discovery::list_scene_assets(manifest, roots);
         // Names copied out here: `roots`/`manifest` borrow the world, and every
         // click below needs `&mut World` to trigger the load.
         let twin_names = roots.names();
 
-        // Test assets are hidden unless the user asks for them: they are rigs
+        // Test scenes are hidden unless the user asks for them: they are rigs
         // `scripts/run_scene_tests.sh` runs for a verdict, and there are more of
-        // them than there are scenes worth opening. `is_test_asset` keys on the
-        // `tests/` DIRECTORY — so a `scenarios/tests/` script or a `scenes/tests/`
-        // scene is hidden the same way. The pref is one checkbox in the Settings
-        // menu, so a test asset is never unreachable.
+        // them than there are scenes worth opening. Orthogonal to the globs
+        // above — a project's `scenes` pattern says what IS a scene, this says
+        // which of them this menu offers. The pref is one checkbox in the
+        // Settings menu, so a test scene is never unreachable.
         let show_tests = world
             .get_resource::<lunco_sandbox_edit::ui::asset_visibility::AssetVisibilitySettings>()
             .is_some_and(|s| s.show_test_assets);
@@ -817,20 +862,18 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
 
         if assets.is_empty() {
             ui.label(
-                bevy_egui::egui::RichText::new("(no assets found)")
+                bevy_egui::egui::RichText::new("(no scenes found)")
                     .weak()
                     .italics(),
             );
             return;
         }
 
-        // Each asset's `lunco:description`, straight from the catalogue's
+        // Each scene's `lunco:description`, straight from the catalogue's
         // metadata store — the scan already read and parsed every project
         // `*.usda`, so re-reading them here would be a second parse of the
         // same default prim of the same file. (It used to be exactly that:
-        // a `SceneDescCache` that lazily re-parsed on first hover.) Only scenes
-        // carry a description; `.rhai`/`.mo`/`.btxml`/`.wgsl` files map to
-        // `None` and simply show no tooltip.
+        // a `SceneDescCache` that lazily re-parsed on first hover.)
         //
         // The store fills asynchronously, so a scene not yet read simply
         // shows no tooltip this frame and gets one on the next redraw.
@@ -841,6 +884,29 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .map(|a| store.description(&a.asset_path).map(str::to_string))
                 .collect()
         };
+
+        let mut render =
+            |ui: &mut bevy_egui::egui::Ui,
+             world: &mut World,
+             items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
+                for (asset, desc) in items {
+                    let label = clean_scene_name(&asset.stem);
+                    let resp = ui.button(label);
+                    // Show the plain-language "what is this demo" blurb on hover.
+                    // `on_hover_text` consumes and returns the `Response` (chaining API).
+                    let resp = match desc {
+                        Some(d) => resp.on_hover_text(d.as_str()),
+                        None => resp,
+                    };
+                    if resp.clicked() {
+                        world.trigger(lunco_usd::LoadScene {
+                            path: asset.asset_path.clone(),
+                            root_prim: String::new(),
+                        });
+                        ui.close();
+                    }
+                }
+            };
 
         let paired: Vec<(&lunco_assets::discovery::AssetFile, &Option<String>)> =
             assets.iter().zip(descs.iter()).collect();
@@ -858,7 +924,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 continue;
             }
             ui.menu_button(format!("🌍 {name}  ({})", group.len()), |ui| {
-                render_scene_buttons(ui, world, &group);
+                render(ui, world, &group);
             });
         }
 
@@ -869,35 +935,10 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .collect();
         if !library.is_empty() {
             ui.menu_button(format!("📚 Library  ({})", library.len()), |ui| {
-                render_scene_buttons(ui, world, &library);
+                render(ui, world, &library);
             });
         }
     });
-}
-
-/// Render buttons for loadable scene entry layers.
-fn render_scene_buttons(
-    ui: &mut bevy_egui::egui::Ui,
-    world: &mut World,
-    items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)],
-) {
-    for (asset, desc) in items {
-        let label = clean_scene_name(&asset.stem);
-        let resp = ui.button(label);
-        // Show the plain-language "what is this" blurb on hover. Only scenes
-        // carry one (from the spawn catalogue); other types simply show none.
-        let resp = match desc {
-            Some(d) => resp.on_hover_text(d.as_str()),
-            None => resp,
-        };
-        if resp.clicked() {
-            world.trigger(lunco_usd::LoadScene {
-                path: asset.asset_path.clone(),
-                root_prim: String::new(),
-            });
-            ui.close();
-        }
-    }
 }
 
 /// Render the "🎓 Tutorials" submenu inside the Scenarios menu. Lists every

@@ -5,7 +5,7 @@ within;
 // Kirchhoff balances source against load — SoC falls out of the circuit, nothing sums a
 // current. Top-level (`within;`), bound to the scene's `PowerSubsystem` prim via
 // `info:sourceAsset` and importing the seated `LunCo` library: components in the
-// library, the assembly per vehicle (the `rucheyok_electrical.mo` shape).
+// library, with the assembly projected from each vehicle's USD electrical Scope.
 //
 // Boundary (where cosim crosses): `sun_azimuth` from the solar bridge, `panel_yaw` from
 // the SunTracker, `vehicle_throttle` from the autopilot. The demo wires no wheel speed, so

@@ -51,6 +51,7 @@
 def Xform "CommsRadio" (
     prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     kind = "component"
+    prepend apiSchemas = ["LunCoProgramAPI"]
 )
 {
     uniform asset info:sourceAsset = @lunco://models/CommsLink.mo@

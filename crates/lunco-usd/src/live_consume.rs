@@ -328,7 +328,7 @@ pub(crate) fn apply_rotates_live(world: &mut World, id: AssetId<UsdStageAsset>, 
 /// the live entity (`lunco_usd_bevy::dome`). The HDRI, its tint/intensity and
 /// the skybox toggle are plain attributes, so only this sees them move.
 pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[String]) {
-    use lunco_usd_bevy::{dome, CanonicalStages};
+    use lunco_usd_bevy::{CanonicalStages, dome};
     if paths.is_empty() {
         return;
     }
@@ -424,8 +424,9 @@ pub(crate) fn refresh_edited_prims_live(
                 continue;
             }
         }
-        // A mission tree is a `LunCoProgram` child carrying `info:sourceCode` (inline
-        // XML) or `info:sourceAsset` (`@…xml@`); the behaviour engine is picked by the
+        // A mission tree is a `LunCoProgramAPI` child carrying `info:sourceCode` (inline
+        // XML) or `info:sourceAsset` (`@…btxml@`, with `.xml` accepted for
+        // upstream interop); the behaviour engine is picked by the
         // extension, the same rule `.mo` and `.rhai` follow. A live edit to either
         // re-reads the tree from the prim that owns it.
         if attr == "info:sourceCode" || attr == "info:sourceAsset" {
@@ -439,8 +440,8 @@ pub(crate) fn refresh_edited_prims_live(
                             .filter(|s| s.trim_start().starts_with('<'));
                         let path_val =
                             lunco_usd_bevy::UsdRead::asset(&view, &sp, "info:sourceAsset")
-                                .filter(|s| s.ends_with(".xml"));
-                        // The tree is authored on the `LunCoProgram` child, but the
+                                .filter(|s| lunco_core::programs::is_behavior_tree_asset(s));
+                        // The tree is authored on the `LunCoProgramAPI` child, but the
                         // VESSEL owns it — `process_usd_sim_prims` inserts `BehaviorXml`
                         // on the parent entity, so a live edit must resolve to the same
                         // one or it would stamp the tree onto the program prim instead.

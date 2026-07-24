@@ -74,7 +74,7 @@ pub mod variants;
 pub mod view;
 pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageRecipe};
 #[cfg(not(target_arch = "wasm32"))]
-pub use compose::compose_file_to_stage;
+pub use compose::{compose_file_to_stage, compose_file_to_stage_with_assets};
 pub use light::{get_attribute_as_bool, FallbackSceneLight, UsdAuthoredLight};
 pub use read::{AttrUiHint, UsdRead};
 pub use units::{stage_convention, ConventionTransform, StageMetrics, UpAxis};
@@ -1105,7 +1105,7 @@ fn instantiate_usd_prim_read(
             );
         }
 
-        // Scripts are `LunCoProgram` CHILD prims whose source is a `.rhai` — read
+        // Scripts are `LunCoProgramAPI` CHILD prims whose source is a `.rhai` — read
         // from here, the owner, because a script acts on behalf of the thing that
         // carries it: `me` is the vessel, not the program prim. The program prim is
         // what makes the binding composable (it arrives on a `references` arc and can
@@ -1309,7 +1309,7 @@ fn instantiate_usd_prim_read(
             if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
                 transform.rotation = transform.rotation * q_axis;
             }
-            debug!(
+            info!(
                 "[usd-bevy] {} {} axis={} rot={:?}",
                 sdf_path.as_str(),
                 prim_type.as_deref().unwrap_or(""),
@@ -3002,7 +3002,7 @@ pub fn get_attribute_as_vec3(reader: &StageView<'_>, path: &SdfPath, attr: &str)
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
-/// Attach the programs a prim carries — its `LunCoProgram` children — to `entity`,
+/// Attach the programs a prim carries — API-applied child scopes — to `entity`,
 /// the prim that OWNS them.
 ///
 /// The program's `me` is its owner, because that is what a program is for: it acts on
@@ -3025,11 +3025,20 @@ fn attach_programs(
     entity: Entity,
     commands: &mut Commands,
 ) {
-    for child in reader.children(owner) {
-        if reader.type_name(&child).as_deref() != Some("LunCoProgram") {
-            continue;
-        }
-
+    let mut programs: Vec<_> = reader
+        .children(owner)
+        .into_iter()
+        .filter(|child| reader.has_api_schema(child, "LunCoProgramAPI"))
+        .collect();
+    // Intrinsic behavior is authored directly on a physical prim. A separable
+    // program is a child Scope and is attached by its owner above, never to the
+    // implementation Scope itself.
+    if reader.type_name(owner).as_deref() != Some("Scope")
+        && reader.has_api_schema(owner, "LunCoProgramAPI")
+    {
+        programs.push(owner.clone());
+    }
+    for child in programs {
         // A program that NAMES its implementation rather than supplying it.
         //
         // `text()`, NOT `scalar::<String>()`. `info:id` is a `token` (as
@@ -3047,11 +3056,6 @@ fn attach_programs(
         let inline = reader
             .scalar::<String>(&child, "info:sourceCode")
             .filter(|s| !s.trim().is_empty());
-        // BT.CPP XML is an inline `LunCoProgram` too, but it is not a scripting
-        // language. `lunco-usd-sim` owns its `BehaviorXml` projection.  Do this
-        // classification before the generic inline-source path below: otherwise
-        // the first `<` reaches Rhai and produces an entity-only parse error.
-        let inline_behavior_tree = inline.as_deref().is_some_and(is_behavior_tree_source);
         // Read the ref UNFILTERED first, so the two reasons this loop skips a program
         // stay distinguishable below: a `.mo`/`.xml` belongs to another engine (normal,
         // silent), whereas NO recognised source name at all is an authoring mistake.
@@ -3069,21 +3073,13 @@ fn attach_programs(
             // skipped without noise, exactly as before.
             if source_asset.is_none() {
                 warn!(
-                    "[usd] `LunCoProgram` {} names no implementation — expected one of \
+                    "[usd] program API on {} names no implementation — expected one of \
                      `info:sourceAsset` (a file; the extension picks the engine), \
                      `info:sourceCode` (inline), or `info:id` (a registered driver). \
                      The prim is INERT. (`lunco:program:sourceAsset` is read by nothing.)",
                     child.as_str()
                 );
             }
-            continue;
-        }
-
-        if inline_behavior_tree {
-            debug!(
-                "[usd] program {} routed to the behavior-tree runtime (inline XML)",
-                child.as_str()
-            );
             continue;
         }
 
@@ -3111,6 +3107,13 @@ fn attach_programs(
                 .try_insert(lunco_core::ScriptParams(params));
         }
 
+        // Remember WHICH program this scenario came from. The script runs for the
+        // owner, but its source belongs to the program prim — that is where a live
+        // edit is saved back to.
+        commands
+            .entity(entity)
+            .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
+
         // A built-in: the registry resolves the name, there is no source to load. An
         // id nothing implements is reported by `warn_unknown_program_drivers` and the
         // prim simply is not driven — a scene authored against a newer runtime must
@@ -3123,12 +3126,6 @@ fn attach_programs(
         }
 
         if let Some(src) = inline {
-            // Remember WHICH program this scenario came from. The script runs for the
-            // owner, but its source belongs to the program prim — that is where a live
-            // edit is saved back to.
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
             commands
                 .entity(entity)
                 .try_insert(lunco_core::EmbeddedScenarioSource(src));
@@ -3138,24 +3135,9 @@ fn attach_programs(
             // depends on the other, and the marker is the whole contract.
             commands
                 .entity(entity)
-                .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()))
                 .try_insert(lunco_core::EmbeddedScenarioPath(path));
         }
     }
-}
-
-/// BT.CPP inline documents begin with XML markup. This is intentionally kept at
-/// the USD boundary: a `LunCoProgram` selects its runtime by source form, and
-/// Rhai must never be asked to parse a behavior tree.
-fn is_behavior_tree_source(source: &str) -> bool {
-    source.trim_start().starts_with('<')
-}
-
-#[cfg(test)]
-#[test]
-fn inline_behavior_tree_is_not_a_rhai_source() {
-    assert!(is_behavior_tree_source("\n  <root BTCPP_format=\"4\"/>"));
-    assert!(!is_behavior_tree_source("fn on_start(self) {}"));
 }
 
 /// USD `xformOp:rotateXYZ` (Euler XYZ, **degrees** as authored) → Bevy
@@ -4289,7 +4271,7 @@ fn build_usd_nurbs_patch_mesh(
     // prim was never traversed at all. Telling those two apart is exactly what
     // you need when a surface is missing from the render, and not being able to
     // is what made the HAB-1 dome expensive to diagnose.
-    bevy::log::debug!(
+    bevy::log::info!(
         "[usd-bevy] {} untrimmed patch: {}x{} net{}, {} verts",
         path.as_str(),
         surface.u_count,

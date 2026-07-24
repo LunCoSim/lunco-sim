@@ -54,7 +54,7 @@ pub struct AssetFile {
     pub twin: Option<String>,
 }
 
-/// The engine asset library's source-file listing.
+/// The engine asset library's file listing — every `*.usda`/`*.wgsl` that ships.
 ///
 /// Populated once at startup: by walking `<cwd>/assets` on native, by fetching
 /// `assets/manifest.json` on the web.
@@ -292,30 +292,45 @@ pub fn list_usd_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<Asset
     list_assets(manifest, roots, "usda")
 }
 
-/// Every loadable `*.usda` scene in the project.
+/// Every `*.usda` in the project that is a **loadable scene** — what a Scenarios
+/// menu offers, as opposed to the vessels, structures, looks and library layers
+/// that exist to be referenced by one.
 ///
-/// Twins declare scene entry layers through `[usd] scenes`; undeclared Twins
-/// use [`lunco_twin::DEFAULT_SCENE_GLOBS`]. The engine library owns its
-/// `scenes/` convention. Reference-only USD layers are intentionally excluded.
+/// **A project says where its scenes are; the engine does not guess.** Each open
+/// Twin answers for itself via `[usd] scenes` in its `twin.toml`
+/// ([`UsdManifest::scenes`](lunco_twin::UsdManifest::scenes)); the
+/// engine library uses its own `scenes/` layout. Undeclared Twins fall back to
+/// [`DEFAULT_SCENE_GLOBS`].
+///
+/// This replaced a `rel.starts_with("scenes/")` test applied to every asset from
+/// every source — the engine library's folder layout imposed on projects that do
+/// not share it. A Twin keeping scenes in `sim/scenes/` had none of them listed:
+/// its own scene could be on screen while the menu said the project had none.
 pub fn list_scene_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<AssetFile> {
     let mut out = list_assets(manifest, roots, "usda");
+    // One manifest read per Twin, not per asset.
     let globs: std::collections::HashMap<String, Vec<String>> = roots
         .names()
         .into_iter()
         .map(|name| {
-            let patterns = roots
+            let g = roots
                 .root_of(&name)
                 .map(|root| scene_globs_of_twin(&root))
                 .unwrap_or_else(default_scene_globs);
-            (name, patterns)
+            (name, g)
         })
         .collect();
+
     out.retain(|asset| match &asset.twin {
-        Some(name) => globs.get(name).is_some_and(|patterns| {
-            patterns
-                .iter()
-                .any(|pattern| lunco_twin::glob_matches(pattern, &asset.rel))
-        }),
+        Some(name) => globs
+            .get(name)
+            .map(|g| {
+                g.iter()
+                    .any(|glob| lunco_twin::glob_matches(glob, &asset.rel))
+            })
+            .unwrap_or(false),
+        // The engine library's own layout, which it is entitled to assert about
+        // itself — it ships the folder.
         None => asset.rel.starts_with("scenes/"),
     });
     out
@@ -324,102 +339,38 @@ pub fn list_scene_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<Ass
 fn default_scene_globs() -> Vec<String> {
     lunco_twin::DEFAULT_SCENE_GLOBS
         .iter()
-        .map(ToString::to_string)
+        .map(|s| s.to_string())
         .collect()
 }
 
+/// The scene globs a Twin declares, or [`DEFAULT_SCENE_GLOBS`] if it declares
+/// none (or has no readable `twin.toml` — a folder opened as a Twin root need
+/// not have been promoted to one).
 #[cfg(not(target_arch = "wasm32"))]
 fn scene_globs_of_twin(root: &Path) -> Vec<String> {
     lunco_twin::TwinManifest::read(&root.join(lunco_twin::MANIFEST_FILENAME))
         .ok()
-        .and_then(|manifest| manifest.usd.and_then(|usd| usd.scenes))
+        .and_then(|m| m.usd.and_then(|u| u.scenes))
         .unwrap_or_else(default_scene_globs)
 }
 
+/// Web has no Twin folders to read a manifest from — Twin roots are a native
+/// concept (see [`list_assets`]), so this is unreachable there.
 #[cfg(target_arch = "wasm32")]
 fn scene_globs_of_twin(_root: &Path) -> Vec<String> {
     default_scene_globs()
 }
 
-/// Every catalogued source in the immutable engine library.
-///
-/// Unlike [`list_all_assets`], this never walks open Twin directories and is
-/// therefore safe for a UI catalogue to rebuild when the manifest changes.
-pub fn list_library_assets(manifest: &AssetManifest) -> Vec<AssetFile> {
-    let mut out = Vec::new();
-    #[cfg(not(target_arch = "wasm32"))]
-    let assets_dir = crate::assets_dir_abs();
-    for rel in manifest
-        .rels()
-        .iter()
-        .filter(|rel| source_extension(rel).is_some())
-    {
-        out.push(AssetFile {
-            asset_path: rel.clone(),
-            stem: stem_of(rel),
-            #[cfg(not(target_arch = "wasm32"))]
-            abs_path: assets_dir.join(rel),
-            #[cfg(target_arch = "wasm32")]
-            abs_path: PathBuf::from(rel),
-            twin: None,
-            rel: rel.clone(),
-        });
-    }
-    out.sort_by(|a, b| a.asset_path.cmp(&b.asset_path));
-    out
-}
-
-/// Every catalogued asset across **all** recognized source extensions — the
-/// unified "every registered file" listing an asset browser offers. Unlike
-/// [`list_usd_assets`] this is not filtered to scenes: it returns every
-/// `.usda`, `.rhai`, `.mo`, `.btxml` and `.wgsl` the project ships, from the
-/// engine library and every open Twin. Which extensions those are is the same
-/// [`SOURCE_EXTS`] answer `scan_library` walks — there is one definition of
-/// "an asset," and this reads it back. (Grouping by type is the caller's job;
-/// this returns one flat, sorted, deduplicated vector.)
-///
-/// Entries are deduplicated by `asset_path` (a Twin file and a library file
-/// cannot collide, but the same extension loop is defensive) and sorted by
-/// `asset_path` for a stable ordering.
-pub fn list_all_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<AssetFile> {
-    let mut out = Vec::new();
-    for ext in SOURCE_EXTS {
-        out.extend(list_assets(manifest, roots, ext));
-    }
-    out.sort_by(|a, b| a.asset_path.cmp(&b.asset_path));
-    out.dedup_by(|a, b| a.asset_path == b.asset_path);
-    out
-}
-
-/// The extensions both [`list_all_assets`] and the native manifest walk use.
-/// One constant is shared by discovery and listing so adding a source type
-/// cannot create a scanned-but-hidden or listed-but-unscanned half-state.
-const SOURCE_EXTS: &[&str] = &["usda", "wgsl", "rhai", "mo", "btxml"];
-
-fn source_extension(path: &str) -> Option<&str> {
-    path.rsplit_once('.')
-        .map(|(_, ext)| ext)
-        .filter(|ext| SOURCE_EXTS.contains(ext))
-}
-
 /// Every catalogued file under `dir`, regardless of extension — the native walk
 /// that produces the manifest. Mirrors what `build_web.sh` writes for the web.
 ///
-/// The catalogue is the set of engine-recognized **source** files — what an
-/// author edits, not data a subsystem reads at runtime:
-/// - `usda` — USD scenes and library layers (loadable, referenceable).
-/// - `wgsl` — shader sources a material can bind.
-/// - `rhai` — scripts; importable as modules from any asset source, and on the
-///   web the manifest is the only way a file is discoverable at all (omitting
-///   it once made script modules a native-only feature by accident).
-/// - `mo` — Modelica models (thermal/electrical/propulsion equations).
-/// - `btxml` — BT.CPP v4 behaviour-tree sources, the file-backed twin of inline
-///   `info:sourceCode`.
-///
-/// Non-source data (`.json`, `.toml`, `.py` one-shot eval) is intentionally NOT
-/// here: those are read by a subsystem or evaluated ad hoc, not browsed as
-/// authored assets. Add an extension here only when the engine has a loader
-/// (or a baked-source path) for it.
+/// `rhai` is catalogued because scripts are importable assets: a scenario can
+/// `import` a module from any asset source, and on the web the manifest is the
+/// only way a file is discoverable at all. Omitting it made script modules a
+/// native-only feature by accident.
+#[cfg(not(target_arch = "wasm32"))]
+const MANIFEST_EXTS: &[&str] = &["usda", "wgsl", "rhai"];
+
 #[cfg(not(target_arch = "wasm32"))]
 fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -435,7 +386,7 @@ fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
         } else if p
             .extension()
             .and_then(|s| s.to_str())
-            .is_some_and(|e| SOURCE_EXTS.contains(&e))
+            .is_some_and(|e| MANIFEST_EXTS.contains(&e))
         {
             if let Ok(rel) = p.strip_prefix(base) {
                 if let Some(rel_s) = rel.to_str() {
@@ -489,7 +440,7 @@ mod tests {
         assert!(is_test_asset("scenes/tests/landing_legs.usda"));
         assert!(is_test_asset("scenarios/tests/landing_legs.rhai"));
         assert!(!is_test_asset("scenes/sandbox/lander_cinematic.usda"));
-        assert!(!is_test_asset("scenarios/rover_autopilot.rhai"));
+        assert!(!is_test_asset("behaviors/solar_rover_patrol.btxml"));
         // The suffix convention it replaces — a file that merely READS as a test
         // is still shown, because nothing but its folder makes it one.
         assert!(!is_test_asset("scenes/sandbox/something_test.usda"));
@@ -522,89 +473,5 @@ mod tests {
         assert_eq!(usd[0].stem, "skid_rover");
         assert_eq!(usd[0].rel, "vessels/rovers/skid_rover.usda");
         assert_eq!(list_assets(&m, &roots, "wgsl").len(), 1);
-    }
-
-    /// `list_all_assets` is the unified browser listing — it must return every
-    /// catalogued source extension, not just scenes. The whole point of the
-    /// function is that a `.rhai`/`.mo`/`.btxml`/`.wgsl` becomes discoverable.
-    #[test]
-    fn list_all_returns_every_source_extension() {
-        let mut m = AssetManifest::default();
-        m.set(vec![
-            "scenes/sandbox/demo.usda".into(),
-            "scenarios/rover_autopilot.rhai".into(),
-            "models/RoverMotorThermal.mo".into(),
-            "behaviors/rover_patrol.btxml".into(),
-            "shaders/regolith.wgsl".into(),
-        ]);
-        let roots = TwinRoots::default();
-        let all = list_all_assets(&m, &roots);
-        let exts: std::collections::HashSet<&str> = all
-            .iter()
-            .filter_map(|a| a.rel.rsplit('.').next())
-            .collect();
-        for expected in SOURCE_EXTS {
-            assert!(
-                exts.contains(*expected),
-                "missing .{expected} in list_all_assets"
-            );
-        }
-        assert_eq!(
-            all.len(),
-            SOURCE_EXTS.len(),
-            "one entry per fixture extension"
-        );
-    }
-
-    #[test]
-    fn scene_listing_does_not_offer_reference_only_usd_layers() {
-        let mut manifest = AssetManifest::default();
-        manifest.set(vec![
-            "scenes/sandbox/demo.usda".into(),
-            "materials/regolith.usda".into(),
-            "vessels/rovers/skid_rover.usda".into(),
-        ]);
-        let scenes = list_scene_assets(&manifest, &TwinRoots::default());
-        assert_eq!(scenes.len(), 1);
-        assert_eq!(scenes[0].rel, "scenes/sandbox/demo.usda");
-    }
-
-    /// `scan_library` walks every catalogued extension — Modelica `.mo` and
-    /// behaviour-tree `.btxml` were added to `SOURCE_EXTS` so they are
-    /// discoverable, and this is the gate that keeps them listed: a regression
-    /// that drops them from `SOURCE_EXTS` would silently make them invisible
-    /// in the browser (the manifest would simply not contain them).
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn scan_library_catalogues_modelica_and_behaviour_sources() {
-        let temp = tempfile::tempdir_in(std::env::current_dir().expect("crate cwd")).unwrap();
-        let tmp = temp.path();
-        std::fs::create_dir_all(tmp.join("models/sub")).unwrap();
-        std::fs::create_dir_all(tmp.join("behaviors")).unwrap();
-        lunco_storage::write_file_sync(&tmp.join("models/sub/Motor.mo"), b"model Motor end Motor;")
-            .unwrap();
-        lunco_storage::write_file_sync(&tmp.join("behaviors/patrol.btxml"), b"<root></root>")
-            .unwrap();
-        lunco_storage::write_file_sync(&tmp.join("scene.usda"), b"#usda 1.0").unwrap();
-        // Noise that must NOT be catalogued.
-        lunco_storage::write_file_sync(&tmp.join("data.json"), b"{}").unwrap();
-
-        let rels = scan_library(&tmp);
-        assert!(
-            rels.iter().any(|r| r.ends_with("Motor.mo")),
-            "mo missing: {rels:?}"
-        );
-        assert!(
-            rels.iter().any(|r| r.ends_with("patrol.btxml")),
-            "btxml missing: {rels:?}"
-        );
-        assert!(
-            rels.iter().any(|r| r.ends_with("scene.usda")),
-            "usda missing: {rels:?}"
-        );
-        assert!(
-            !rels.iter().any(|r| r.ends_with("data.json")),
-            "json leaked in: {rels:?}"
-        );
     }
 }

@@ -13,7 +13,6 @@ model SolarPanel
   Pin p;
   output Real power_out "Electrical power generated, W";
 equation
-  power_out = area * efficiency * irradiance
-              * (if cos_incidence > 0.0 then cos_incidence else 0.0);
+  power_out = area * efficiency * irradiance * max(0.0, cos_incidence);
   p.i = -power_out / p.v;
 end SolarPanel;

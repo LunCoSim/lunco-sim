@@ -267,7 +267,8 @@ mod native {
         };
         let stepper_opts = lunco_modelica::experiments_runner::stepper_options_from_bounds(&bounds);
 
-        let mut stepper = match SimulationSession::new(&comp_res.dae, stepper_opts) {
+        let mut stepper = match lunco_modelica::simulation_session::cli(&comp_res.dae, stepper_opts)
+        {
             Ok(s) => s,
             Err(e) => die(&format!("stepper init failed: {e:?}")),
         };

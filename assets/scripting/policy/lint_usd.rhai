@@ -45,9 +45,27 @@
 //       (a SUBTREE each), `filtered` the groups it does not collide with, and the
 //       two `missing_*` lists the targets that resolve to nothing.
 //
-//   facts.prims[]   #{ path, type, parent, schemas[] }
+//   facts.prims[]   #{ path, type, parent, schemas[], attributes[],
+//                      connected_attributes[] }
 //       EVERY prim applying any schema at all — the generic projection, so a new
 //       rule about a schema nobody has thought about yet needs no Rust change.
+//
+//   facts.legacy_program_prims[]  paths authored as the retired `LunCoProgram`
+//       concrete type. This narrow fact exists because an unregistered concrete
+//       type has no applied schemas and therefore cannot appear in `facts.prims`.
+//
+//   facts.connector_programs[] #{ path, source_asset, connectors[] }
+//       every program that declares an acausal `connectors:*` interface.
+//
+//   facts.collections[] #{ path, parent, name, members[] }
+//       standard computed collection membership from the composed stage.
+//
+//   facts.network_scopes[] #{ path, parent, members[], modelica_member_count,
+//                             island_count, dangling_connectors[],
+//                             invalid_program_sources[], invalid_causal_properties[],
+//                             ambiguous_boundary_sources[], collection_error }
+//       scopes applying CollectionAPI:components, including codeless-schema
+//       runtimes whose applied-schema enumeration is incomplete.
 //
 // ── WHAT A RULE RETURNS ─────────────────────────────────────────────────────
 //
@@ -91,6 +109,9 @@ fn schemas_of(facts, path) {
 
 fn lint_usd(facts) {
     let out = [];
+    for f in retired_program_prim_type(facts) { out.push(f); }
+    for f in connector_requires_modelica(facts) { out.push(f); }
+    for f in connector_requires_network_scope(facts) { out.push(f); }
     for f in nested_body_no_joint(facts) { out.push(f); }
     for f in joint_target_not_a_body(facts) { out.push(f); }
     for f in dynamic_body_no_collider(facts) { out.push(f); }
@@ -99,6 +120,159 @@ fn lint_usd(facts) {
     for f in body_is_its_own_scaled_mesh(facts) { out.push(f); }
     for f in filtered_pair_is_inert(facts) { out.push(f); }
     for f in collision_group_is_inert(facts) { out.push(f); }
+    for f in empty_component_network(facts) { out.push(f); }
+    for f in invalid_component_collection(facts) { out.push(f); }
+    for f in disconnected_component_network(facts) { out.push(f); }
+    for f in dangling_network_connector(facts) { out.push(f); }
+    for f in invalid_network_program_source(facts) { out.push(f); }
+    for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
+    for f in ambiguous_modelica_boundary(facts) { out.push(f); }
+    out
+}
+
+/// A connector only has meaning inside the one generated Modelica island that
+/// owns its `connect()` equations. A standalone program would otherwise look
+/// wired in USD while no solver ever receives its topology.
+fn connector_requires_network_scope(facts) {
+    let out = [];
+    for program in facts.connector_programs {
+        let collected = false;
+        for scope in facts.network_scopes {
+            for member in scope.members {
+                if member == program.path { collected = true; }
+            }
+        }
+        if collected { continue; }
+        let m = "declares connectors:* outside a CollectionAPI:components network scope — ";
+        m += "include this Modelica program in exactly one compiler network so its connect() ";
+        m += "topology is generated and solved.";
+        out.push(finding("connector-requires-network-scope", "error", program.path, m));
+    }
+    out
+}
+
+/// Acausal connections are compiler topology, not a generic runtime signal.
+fn connector_requires_modelica(facts) {
+    let out = [];
+    for program in facts.connector_programs {
+        if program.source_asset.ends_with(".mo") { continue; }
+        let m = "declares connectors:* but is not backed by a Modelica .mo asset — ";
+        m += "acausal connectors require the generated Modelica network; use inputs:/outputs: ";
+        m += "or LunCoEvent for Rhai, BTXML, and other non-physical programs.";
+        out.push(finding("connector-requires-modelica", "error", program.path, m));
+    }
+    out
+}
+
+/// `LunCoProgram` was a concrete type. Programs are an applied capability so
+/// they compose onto a `Scope` (or intrinsic owner) instead.
+fn retired_program_prim_type(facts) {
+    let out = [];
+    for path in facts.legacy_program_prims {
+        let m = "uses retired concrete type LunCoProgram — author a Scope with ";
+        m += "prepend apiSchemas = [LunCoProgramAPI] and keep the standard info:* source fields.";
+        out.push(finding("retired-program-prim-type", "error", path, m));
+    }
+    out
+}
+
+/// A declared compiler network with an empty standard component collection.
+///
+/// It cannot generate equations and would otherwise be silently skipped.
+fn empty_component_network(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        if scope.collection_error != "" || scope.modelica_member_count != 0 { continue; }
+        let m = "declares CollectionAPI:components but includes no components —";
+        m += " the domain compiler has no equations to compile.";
+        m += " Add the Modelica component facets to";
+        m += " collection:components:includes or remove the empty network scope.";
+        out.push(finding("empty-component-network", "error", scope.path, m));
+    }
+    out
+}
+
+/// OpenUSD is authoritative for collection membership. Preserve its failure
+/// instead of disguising it as an empty compiler network.
+fn invalid_component_collection(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        if scope.collection_error == "" { continue; }
+        let m = "has an invalid CollectionAPI:components definition — ";
+        m += scope.collection_error;
+        m += ". Fix its standard collection expansion/include/exclude opinions.";
+        out.push(finding("invalid-component-collection", "error", scope.path, m));
+    }
+    out
+}
+
+/// Network members are compiler inputs, so only source-backed Modelica
+/// programs belong in the collection working set.
+fn invalid_network_program_source(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        for member in scope.invalid_program_sources {
+            let m = "is not a sourceAsset-backed .mo program —";
+            m += " set info:implementationSource = sourceAsset and author a Modelica source asset,";
+            m += " or remove the prim from CollectionAPI:components.";
+            out.push(finding("invalid-network-program-source", "error", member, m));
+        }
+    }
+    out
+}
+
+/// Scalar causal Modelica members cannot silently select one source from a USD
+/// connection list.
+fn invalid_modelica_causal_cardinality(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        for property in scope.invalid_causal_properties {
+            let m = "has invalid causal connection cardinality —";
+            m += " a scalar Modelica input accepts at most one source and a network output requires exactly one.";
+            out.push(finding("invalid-modelica-causal-cardinality", "error", property, m));
+        }
+    }
+    out
+}
+
+/// Once OpenUSD resolves forwarding to the ultimate source, two boundary
+/// properties with that same source cannot be distinguished safely.
+fn ambiguous_modelica_boundary(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        for subject in scope.ambiguous_boundary_sources {
+            let m = "has multiple network inputs resolving to one composed source —";
+            m += " preserve distinct boundary sources or insert an explicit causal Modelica block.";
+            out.push(finding("ambiguous-modelica-boundary", "error", subject, m));
+        }
+    }
+    out
+}
+
+/// One compiler scope must describe exactly one independently solved acausal
+/// network. Separate failure/scheduling domains belong in separate USD scopes.
+fn disconnected_component_network(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        if scope.island_count <= 1 { continue; }
+        let m = "contains " + scope.island_count + " disconnected acausal networks —";
+        m += " author one Scope with CollectionAPI:components per independently solved network.";
+        out.push(finding("disconnected-component-network", "error", scope.path, m));
+    }
+    out
+}
+
+/// A connector outside the collection would otherwise be omitted from the
+/// generated Modelica wrapper, changing Kirchhoff topology silently.
+fn dangling_network_connector(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        for connector in scope.dangling_connectors {
+            let m = "targets a connector outside its CollectionAPI:components working set —";
+            m += " include the target component or move the connection into the correct network scope.";
+            out.push(finding("dangling-network-connector", "error", connector, m));
+        }
+    }
     out
 }
 

@@ -197,7 +197,9 @@ def Xform "LinkTest" (
     {
         custom string lunco:scenario = "link"
 
-        def LunCoProgram "Test"
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
             uniform asset info:sourceAsset = @lunco://scenarios/tests/link.rhai@
         }
