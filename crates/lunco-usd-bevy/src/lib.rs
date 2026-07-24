@@ -3056,6 +3056,7 @@ fn attach_programs(
         let inline = reader
             .scalar::<String>(&child, "info:sourceCode")
             .filter(|s| !s.trim().is_empty());
+        let has_inline = inline.is_some();
         // Read the ref UNFILTERED first, so the two reasons this loop skips a program
         // stay distinguishable below: a `.mo`/`.xml` belongs to another engine (normal,
         // silent), whereas NO recognised source name at all is an authoring mistake.
@@ -3083,7 +3084,7 @@ fn attach_programs(
             // genuinely-unauthored case warns: a program whose `sourceAsset` this
             // engine does not run belongs to another one (`.mo` → co-sim) and is
             // skipped without noise, exactly as before.
-            if source_asset.is_none() && inline.is_none() {
+            if source_asset.is_none() && !has_inline {
                 warn!(
                     "[usd] program API on {} names no implementation — expected one of \
                      `info:sourceAsset` (a file; the extension picks the engine), \
