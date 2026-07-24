@@ -28,7 +28,7 @@ fn on_start(me) {
     this.max_tilt = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     this.max_grade = [0, 0, 0, 0, 0, 0, 0];
     this.phase = "settle";
-    print("[rover-comparison] identical continuous terrain: stepped wall, then 5/10/15/20/25/30/35/40 deg grades");
+    print("[rover-comparison] identical terrain: repeated rounded/square suspension bands, then one continuous 5/10/15/20/25/30/35/40 deg grade");
     print("[rover-comparison] all tiers launch simultaneously after settling");
 }
 
@@ -130,14 +130,14 @@ fn on_tick(me) {
 // The grade boundaries are authored course stations, not a control law.  This
 // scenario test records the highest actual ramp entered by each rover.
 fn grade_reached(z) {
-    if z <= -89.49 { return 40; }
-    if z <= -76.39 { return 35; }
-    if z <= -62.53 { return 30; }
-    if z <= -48.03 { return 25; }
-    if z <= -32.99 { return 20; }
-    if z <= -17.53 { return 15; }
-    if z <= -1.77 { return 10; }
-    if z <= 14.17 { return 5; }
+    if z <= -19.0 { return 40; }
+    if z <= -18.0 { return 35; }
+    if z <= -17.0 { return 30; }
+    if z <= -16.0 { return 25; }
+    if z <= -15.0 { return 20; }
+    if z <= -14.0 { return 15; }
+    if z <= -13.0 { return 10; }
+    if z <= -12.0 { return 5; }
     return 0;
 }
 

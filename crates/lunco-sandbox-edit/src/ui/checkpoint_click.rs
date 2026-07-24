@@ -813,6 +813,23 @@ pub struct WaypointVisual {
     pub passed: bool,
 }
 
+/// Resolve a picked sub-part (wheel, hull panel, antenna, ...) to the vehicle
+/// whose mission owns the route.  Selection is intentionally granular; routes
+/// are intentionally vehicle-level.
+fn route_owner(
+    entity: Option<Entity>,
+    q_parents: &Query<&ChildOf>,
+    vessels: &std::collections::HashSet<Entity>,
+) -> Option<Entity> {
+    let mut current = entity?;
+    loop {
+        if vessels.contains(&current) {
+            return Some(current);
+        }
+        current = q_parents.get(current).ok()?.parent();
+    }
+}
+
 /// System that spawns and updates local visual-only translucent green spheres
 /// for all coordinate-based waypoints stored in vessels' BehaviorXml.
 /// This prevents polluting the USD stage with waypoint prims.
@@ -822,29 +839,48 @@ pub fn sync_waypoint_visuals(
         &BehaviorXml,
         Option<&TargetBindings>,
         Option<&ReachedWaypoints>,
+        Option<&UsdPrimPath>,
     )>,
+    selected: Res<SelectedEntities>,
+    q_avatar: Query<&ControllerLink, With<Avatar>>,
     q_visuals: Query<(Entity, &WaypointVisual)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
     q_grids_only: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
-    // A rover's hull is a direct child with a PbrLook projected from its
-    // USD-authored `primvars:displayColor`.  Route visuals borrow that resolved
-    // livery instead of carrying a second, hand-maintained palette.
-    q_hull_looks: Query<(&PbrLook, &ChildOf)>,
+    // Route visuals borrow the resolved look of the USD body prim.  The route
+    // carries no palette: its livery remains the vehicle's authored display color.
+    q_hull_looks: Query<(&PbrLook, &UsdPrimPath)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    // 1. Gather all desired waypoints (coordinates or resolved USD prim paths) from ALL vessels.
+    let vessel_entities: std::collections::HashSet<Entity> =
+        q_vessels.iter().map(|(entity, ..)| entity).collect();
+    let selected_vessel = route_owner(selected.primary(), &q_parents, &vessel_entities);
+    let possessed_vessel = route_owner(
+        q_avatar.iter().next().map(|link| link.vessel_entity),
+        &q_parents,
+        &vessel_entities,
+    );
+
+    // 1. Gather desired waypoints only for the active route.  Every rover still
+    // owns its own USD route; showing all seven simultaneously hides the course.
     // Key: (vessel, coord_key) → (index, world_pos, passed, USD-derived livery).
     // coord_key is the raw "x;y;z" string or USD prim path — stable across sequence-index shifts.
     // `passed` is read from the live-only `ReachedWaypoints` set, never the XML.
     let mut desired: std::collections::HashMap<(Entity, String), (usize, DVec3, bool, LinearRgba)> =
         std::collections::HashMap::new();
-    for (vessel, xml, bindings, reached) in q_vessels.iter() {
+    for (vessel, xml, bindings, reached, vessel_path) in q_vessels.iter() {
+        if Some(vessel) != selected_vessel && Some(vessel) != possessed_vessel {
+            continue;
+        }
         let livery = q_hull_looks
             .iter()
-            .find_map(|(look, child)| (child.parent() == vessel).then_some(look.base_color))
+            .find_map(|(look, path)| {
+                vessel_path
+                    .is_some_and(|vessel_path| path.path == format!("{}/Body", vessel_path.path))
+                    .then_some(look.base_color)
+            })
             .unwrap_or(LinearRgba::WHITE);
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
             continue;
@@ -899,23 +935,21 @@ pub fn sync_waypoint_visuals(
         emissive.alpha = 1.0;
         if let Some((entity, existing_passed)) = existing.remove(&(vessel, coord_key.clone())) {
             if existing_passed == passed {
-                // Same colour: just update position. `try_insert`, not `insert`: a scene
+                // `try_insert`, not `insert`: a scene
                 // load can despawn this visual between the query snapshot and command
                 // application, and a bare `insert` on the dead entity panics the schedule.
-                commands
-                    .entity(entity)
-                    .try_insert((
-                        PbrLook {
-                            base_color,
-                            emissive,
-                            alpha: SurfaceAlpha::Blend,
-                            unlit: true,
-                            no_shadow_cast: true,
-                            ..default()
-                        },
-                        cell,
-                        Transform::from_translation(local_pos),
-                    ));
+                commands.entity(entity).try_insert((
+                    PbrLook {
+                        base_color,
+                        emissive,
+                        alpha: SurfaceAlpha::Blend,
+                        unlit: true,
+                        no_shadow_cast: true,
+                        ..default()
+                    },
+                    cell,
+                    Transform::from_translation(local_pos),
+                ));
                 continue;
             }
             // Passed state changed (green → grey): despawn and fall through to re-spawn.
@@ -996,11 +1030,17 @@ pub fn draw_waypoint_overlay(
         "waypoint_overlay",
     ));
 
-    let primary_selected = selected.primary();
-    let possessed_vessel = q_avatar_cam
-        .iter()
-        .next()
-        .and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity));
+    let vessel_entities: std::collections::HashSet<Entity> =
+        q_vessels.iter().map(|(entity, ..)| entity).collect();
+    let primary_selected = route_owner(selected.primary(), &q_parents, &vessel_entities);
+    let possessed_vessel = route_owner(
+        q_avatar_cam
+            .iter()
+            .next()
+            .and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity)),
+        &q_parents,
+        &vessel_entities,
+    );
 
     for (vessel, xml, bindings) in q_vessels.iter() {
         let empty_bindings = TargetBindings::default();
@@ -1008,10 +1048,7 @@ pub fn draw_waypoint_overlay(
 
         let is_possessed = Some(vessel) == possessed_vessel;
         let is_selected = Some(vessel) == primary_selected;
-        if (possessed_vessel.is_some() || primary_selected.is_some())
-            && !is_possessed
-            && !is_selected
-        {
+        if !is_possessed && !is_selected {
             continue;
         }
 
@@ -1607,6 +1644,8 @@ pub fn sync_waypoint_path_mesh(
         Option<&TargetBindings>,
         Option<&ReachedWaypoints>,
     )>,
+    selected: Res<SelectedEntities>,
+    q_avatar: Query<&ControllerLink, With<Avatar>>,
     q_paths: Query<(Entity, &WaypointPathMesh)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<(Entity, &big_space::prelude::Grid)>,
@@ -1629,7 +1668,18 @@ pub fn sync_waypoint_path_mesh(
         existing.insert((path.vessel, path.part), (e, path.signature));
     }
 
+    let vessel_entities: std::collections::HashSet<Entity> =
+        q_vessels.iter().map(|(entity, ..)| entity).collect();
+    let selected_vessel = route_owner(selected.primary(), &q_parents, &vessel_entities);
+    let possessed_vessel = route_owner(
+        q_avatar.iter().next().map(|link| link.vessel_entity),
+        &q_parents,
+        &vessel_entities,
+    );
     for (vessel, xml, bindings, reached) in q_vessels.iter() {
+        if Some(vessel) != selected_vessel && Some(vessel) != possessed_vessel {
+            continue;
+        }
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else {
             continue;
         };
