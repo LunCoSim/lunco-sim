@@ -1399,24 +1399,33 @@ fn project_usd_policies(
 /// EV 9.7 (~6 stops open) no matter what the USD said. Splitting the two makes
 /// the read authoritative and the application idempotent.
 #[cfg(feature = "ui")]
-#[derive(Resource, Default, Clone, Copy)]
+#[derive(Resource, Default, Clone, Copy, PartialEq)]
 pub struct AuthoredEnv {
     pub exposure_ev100: Option<f32>,
     pub bloom_intensity: Option<f32>,
 }
 
-/// Apply [`AuthoredEnv`] to every camera/bloom that exists RIGHT NOW.
+/// Re-apply scene environment values only when a value or render target arrives.
 ///
-/// Runs every frame and is a no-op when the values already match, so a camera
-/// spawned (or respawned, or reparented on possession) long after the scene
-/// loaded still gets the scene's exposure.
+/// `project_env_settings` owns the composed USD read; this system is its sole
+/// render-side writer. The `Added` gates cover deferred camera/bloom spawning
+/// without a per-frame write or a competing exposure policy.
+#[cfg(feature = "ui")]
+fn authored_env_needs_apply(
+    authored: Res<AuthoredEnv>,
+    new_exposures: Query<(), Added<bevy::camera::Exposure>>,
+    new_blooms: Query<(), Added<bevy::post_process::bloom::Bloom>>,
+) -> bool {
+    authored.is_changed() || !new_exposures.is_empty() || !new_blooms.is_empty()
+}
+
+/// Apply [`AuthoredEnv`] to the render targets that exist right now.
 #[cfg(feature = "ui")]
 fn apply_authored_env(
-    authored: Option<Res<AuthoredEnv>>,
+    authored: Res<AuthoredEnv>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
     mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
 ) {
-    let Some(authored) = authored else { return };
     if let Some(ev) = authored.exposure_ev100 {
         for mut e in &mut q_exposure {
             if e.ev100 != ev {
@@ -1437,8 +1446,6 @@ fn apply_authored_env(
 fn project_env_settings(
     canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
     mut authored: ResMut<AuthoredEnv>,
-    mut q_exposure: Query<&mut bevy::camera::Exposure>,
-    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
     // Ambient is NOT projected here any more — it is composed from authored
     // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
     _ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
@@ -1456,6 +1463,10 @@ fn project_env_settings(
     }
     *last = Some(signal);
 
+    // Scene replacement must reset the prior scene's grade. Otherwise a
+    // `LunCoEnvironment` authored by one Twin leaks into a later Twin that has
+    // no environment settings prim at all.
+    let mut next = AuthoredEnv::default();
     for (_, cs) in canonical.iter() {
         let view = cs.view();
         for prim in view.prim_paths() {
@@ -1466,23 +1477,16 @@ fn project_env_settings(
             }
             if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100") {
                 // RECORD it — `apply_authored_env` owns getting it onto cameras,
-                // including cameras that do not exist yet. Also seed `LunarSun`,
-                // the documented single source the sun spawn and the celestial
-                // auto-exposure both read, so a scene that later gains a
-                // celestial hierarchy ramps toward the authored value instead of
-                // the studio default.
-                authored.exposure_ev100 = Some(ev);
-                if let Some(sun) = lunar_sun.as_mut() {
-                    sun.exposure_ev100 = ev;
-                }
-                for mut e in &mut q_exposure {
-                    e.ev100 = ev;
+                // including cameras that do not exist yet. `LunarSun` is seeded
+                // after the full composed read, so an absent Environment resets
+                // to the calibrated default instead of inheriting a prior Twin.
+                if next.exposure_ev100.replace(ev).is_some() {
+                    warn!("[environment] multiple LunCoEnvironment exposure opinions; later composed prim overrides earlier value");
                 }
             }
             if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {
-                authored.bloom_intensity = Some(bi);
-                for mut b in &mut q_bloom {
-                    b.intensity = bi;
+                if next.bloom_intensity.replace(bi).is_some() {
+                    warn!("[environment] multiple LunCoEnvironment bloom opinions; later composed prim overrides earlier value");
                 }
             }
             // `lunco:env:ambientBrightness` is DELETED, not deprecated. Uniform
@@ -1512,6 +1516,14 @@ fn project_env_settings(
                 }
             }
         }
+    }
+    if *authored != next {
+        *authored = next;
+    }
+    if let Some(sun) = lunar_sun.as_mut() {
+        sun.exposure_ev100 = next
+            .exposure_ev100
+            .unwrap_or_else(|| lunco_environment::LunarSun::default().exposure_ev100);
     }
 }
 
@@ -2447,12 +2459,18 @@ impl Plugin for SandboxCorePlugin {
         // persistence (authoring the prim) happens in `lunco-scene-commands`.
         #[cfg(feature = "ui")]
         app.init_resource::<AuthoredEnv>();
-        // Read-on-stage-change, then apply-every-frame. The application is a
-        // separate system because cameras outlive neither the stage change nor
-        // each other: possession reparents them, the recorder spawns its own.
-        // Only the READ is change-gated.
+        // The composed stage is read on change. Projection is independently
+        // change-gated so deferred cameras receive the current scene grade,
+        // without retaining a previous Twin's settings or writing every frame.
         #[cfg(feature = "ui")]
-        app.add_systems(Update, (project_env_settings, apply_authored_env).chain());
+        app.add_systems(
+            Update,
+            (
+                project_env_settings,
+                apply_authored_env.run_if(authored_env_needs_apply),
+            )
+                .chain(),
+        );
 
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.

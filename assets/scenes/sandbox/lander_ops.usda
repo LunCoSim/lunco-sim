@@ -67,6 +67,14 @@ def Xform "LanderTest" (
     }
     uniform bool lunco:spawnable = false
 
+    # This base scene is also composed by the Episode 1 marketing variants.
+    # Keep the surface display grade authored with the scene so those variants
+    # never inherit a host/global exposure policy.
+    def LunCoEnvironment "Environment"
+    {
+        float lunco:env:exposureEv100 = 12.5
+    }
+
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )

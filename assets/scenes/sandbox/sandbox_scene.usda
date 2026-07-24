@@ -84,6 +84,15 @@ def Xform "SandboxScene" (
         }
     }
 
+    # Display exposure is scene data, not a host preference: both the sandbox
+    # and authored Twins use this same grazing-surface grade. The Sun stays at
+    # its physical illuminance; EV 12.5 opens the camera for regolith under a
+    # low lunar sun without clipping direct-lit rover surfaces.
+    def LunCoEnvironment "Environment"
+    {
+        float lunco:env:exposureEv100 = 12.5
+    }
+
     # ── Sky ────────────────────────────────────────────────────────────────
     #
     # The Moon has no atmosphere, so the sky is the star field itself. A finite
@@ -932,5 +941,4 @@ def Xform "SandboxScene" (
     }
 
 }
-
 

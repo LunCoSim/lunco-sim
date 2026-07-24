@@ -42,8 +42,8 @@
 //!
 //! FRAME: pose comes from [`lunco_core::coords::world_pose`], which walks the cell
 //! chain and applies ancestor grid rotation. A camera-relative `GlobalTransform` is
-//! floating-origin-relative and useless for geography — see the same note on
-//! `mode_exposure`. In a site-anchored scene the root frame IS site-ENU metres
+//! floating-origin-relative and useless for geography. In a site-anchored scene
+//! the root frame IS site-ENU metres
 //! (East +X, Up +Y, North −Z), which is the frame the survey and any route
 //! waypoints are already expressed in.
 
@@ -288,8 +288,8 @@ fn resolve_driven(
 
     // Local up = world up. Over a 1 km site the body's curvature contributes
     // d²/2R ≈ 0.3 m of sag, i.e. ~0.03° of tilt — far below the gauge's
-    // resolution. A multi-km traverse would need the real local up (away from
-    // the body centre), which is what `mode_exposure` computes.
+    // resolution. A multi-km traverse would need the real local up away from
+    // the body centre.
     let up = rot * Vec3::Y;
     let tilt_deg = up.dot(Vec3::Y).clamp(-1.0, 1.0).acos().to_degrees();
 

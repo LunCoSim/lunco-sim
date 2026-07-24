@@ -284,6 +284,7 @@ pub fn setup_big_space_hierarchy(
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     q_prior_fallback_lights: Query<Entity, With<lunco_core::FallbackSceneLight>>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
+    active_sun: Option<Res<lunco_environment::LunarSun>>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
 ) {
     // A site-anchored DEM twin authors its own rocks and bakes rock features
@@ -492,7 +493,10 @@ pub fn setup_big_space_hierarchy(
     }
     let sun = lunco_render::LunarSunShadow::default();
     // Physical sun identity (illuminance / angular size) is environmental state.
-    let ls = lunco_environment::LunarSun::default();
+    // Preserve a composed `LunCoEnvironment` opinion that arrived before the
+    // celestial hierarchy. Falling back only when no lighting resource exists
+    // avoids silently replacing a scene's authored exposure with EV16.
+    let ls = active_sun.copied().unwrap_or_default();
     // Taking over the lighting rig means taking over the EXPOSURE with it:
     // this spawn replaces the sandbox's studio sun (10 klux, EV 9.7 — a
     // matched pair) with the calibrated 128 klux lunar sun. Cameras left at
@@ -809,9 +813,7 @@ pub fn setup_big_space_hierarchy(
                 SceneCamera::default(),
                 // Physical exposure paired with the canonical sun illuminance
                 // (single source of truth — lunco_environment::LunarSun).
-                bevy::camera::Exposure {
-                    ev100: lunco_environment::LunarSun::default().exposure_ev100,
-                },
+                bevy::camera::Exposure { ev100: ls.exposure_ev100 },
                 Projection::Perspective(PerspectiveProjection {
                     near: 1.0,
                     far: 1.0e15,

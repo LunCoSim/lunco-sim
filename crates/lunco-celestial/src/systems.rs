@@ -245,9 +245,10 @@ pub fn sun_emit_direction(
 /// authoritative writer per context resolves the earlier web-build conflict
 /// where two systems fought over the sun direction every frame.
 /// The sun's EMIT direction in world (site-ENU) axes, published each frame by
-/// [`update_sun_light_system`]. Consumers: per-view-mode exposure (sun
-/// elevation at the site decides whether the surface is sunlit or
-/// earthshine-lit), future eclipse/illumination logic.
+/// [`update_sun_light_system`]. Consumers include future eclipse and local
+/// illumination logic. Camera exposure deliberately does not consume this:
+/// earthshine is a lighting contribution, not a reason to open the camera and
+/// wash out direct sunlight.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub struct SunDirectionWorld(pub Vec3);
 

@@ -231,11 +231,6 @@ impl Plugin for SandboxUiPlugin {
             scenario_download::draw_scenario_download,
         );
 
-        // Deterministic per-view-mode exposure for celestial scenes (orbital
-        // = calibrated EV, surface = 4 stops open for the earthshine-lit
-        // polar site).
-        app.add_systems(Update, mode_exposure);
-
         // Extra tutorial TRACKS — Basic (rover fundamentals) and Space School
         // (the IKI event scenario). `TutorialPlugin` is added once above for the
         // primary "sandbox" app (its build() does the one-time command/panel/
@@ -345,65 +340,6 @@ fn force_hard_shadow_filtering(
         commands
             .entity(e)
             .try_insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
-    }
-}
-
-/// Per-view-mode exposure for celestial scenes. One physical scene spans ~14
-/// stops: a sunlit globe from orbit is correct at the calibrated EV 15, while
-/// the polar moonbase under a grazing sun is earthshine-lit — pitch black at
-/// that same fixed EV. Histogram auto-exposure was tried and metered the
-/// mostly-black space background instead (whole frame blown white), so this
-/// is DETERMINISTIC: orbital → the calibrated EV, surface → 4 stops open
-/// (earthshine-readable), eased like eye adaptation. Inert without the
-/// celestial hierarchy — studio scenes keep their authored EV.
-fn mode_exposure(
-    time: Res<Time>,
-    // "Is there a sky?" is now the SCENE's answer, not a host flag: a celestial
-    // hierarchy exists iff the scene declared bodies (`LunCoCelestialBodyAPI`).
-    q_hierarchy: Query<(), With<lunco_celestial::SolarSystemRoot>>,
-    pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
-    sun: Option<Res<lunco_environment::LunarSun>>,
-    sun_dir: Option<Res<lunco_celestial::SunDirectionWorld>>,
-    mut q_exposure: Query<
-        (
-            &mut bevy::camera::Exposure,
-            Option<&CellCoord>,
-            &GlobalTransform,
-            Option<&bevy::ecs::hierarchy::ChildOf>,
-        ),
-        With<lunco_core::Avatar>,
-    >,
-    q_grids: Query<&Grid>,
-) {
-    let Some(sun) = sun else { return };
-    // No celestial hierarchy (studio / flat sandbox scenes) → keep the authored EV.
-    if q_hierarchy.is_empty() {
-        return;
-    }
-    let orbital = pin.is_some_and(|p| p.active);
-    for (mut exposure, cell, _gtf, child_of) in &mut q_exposure {
-        // The camera must be mounted under a celestial `Grid` before its
-        // geographic placement settles. Hold exposure until mounted.
-        let mounted = cell.is_some()
-            && child_of
-                .and_then(|c| q_grids.get(c.parent()).ok())
-                .is_some();
-        if !mounted {
-            warn_once!(
-                "mode_exposure: avatar camera has no CellCoord/Grid parent — holding \
-                 exposure until the mount settles."
-            );
-            continue;
-        }
-        let (target, sunlit_val) = if orbital {
-            (sun.exposure_ev100, 1.0)
-        } else {
-            let to_sun_site_enu = sun_dir.as_ref().map(|d| -d.0).unwrap_or(Vec3::Y);
-            let elev = to_sun_site_enu.y.clamp(-1.0, 1.0).asin();
-            let sunlit = ((elev + 0.02) / 0.02).clamp(0.0, 1.0);
-            (9.0 + (sun.exposure_ev100 - 9.0) * sunlit, sunlit)
-        };
-        exposure.ev100 = target;
     }
 }
 
