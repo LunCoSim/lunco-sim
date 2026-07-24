@@ -92,9 +92,15 @@ fn register_linux(exe: &str) {
     }
     // Make it the default handler + refresh the desktop DB (both best-effort).
     let _ = Command::new("xdg-mime")
-        .args(["default", desktop_name, &format!("x-scheme-handler/{SCHEME}")])
+        .args([
+            "default",
+            desktop_name,
+            &format!("x-scheme-handler/{SCHEME}"),
+        ])
         .status();
-    let _ = Command::new("update-desktop-database").arg(&apps_dir).status();
+    let _ = Command::new("update-desktop-database")
+        .arg(&apps_dir)
+        .status();
     info!("[net] url-scheme: registered {SCHEME}:// handler → {desktop_path}");
 }
 
@@ -105,8 +111,21 @@ fn register_windows(exe: &str) {
     let base = format!(r"HKCU\Software\Classes\{SCHEME}");
     // `reg add` is idempotent (/f overwrites) and per-user (no admin).
     let cmds: [Vec<String>; 3] = [
-        vec![base.clone(), "/ve".into(), "/d".into(), "URL:LunCoSim".into(), "/f".into()],
-        vec![base.clone(), "/v".into(), "URL Protocol".into(), "/d".into(), "".into(), "/f".into()],
+        vec![
+            base.clone(),
+            "/ve".into(),
+            "/d".into(),
+            "URL:LunCoSim".into(),
+            "/f".into(),
+        ],
+        vec![
+            base.clone(),
+            "/v".into(),
+            "URL Protocol".into(),
+            "/d".into(),
+            "".into(),
+            "/f".into(),
+        ],
         vec![
             format!(r"{base}\shell\open\command"),
             "/ve".into(),

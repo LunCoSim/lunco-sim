@@ -13,7 +13,7 @@
 //!
 //! So this crate is the thin **shell** shared by all apps:
 //! - [`TutorialRegistry`] — the catalog; apps register their own tutorials via
-//!   [`TutorialAppExt::register_tutorial`] after adding [`TutorialPlugin`].
+//!   [`TutorialAppExt::register_tutorial`] after adding [`TutorialCorePlugin`].
 //! - a top-level **🎓 Tutorials** menu + a dockable [`TutorialsPanel`].
 //! - [`StartTutorial`] — load `<script>` and run it on the host (the single
 //!   launch path; menu, F1, HTTP API, MCP, and other scripts all funnel here).
@@ -22,15 +22,21 @@
 //!   (via [`EditorIntent::ShowTutorial`](lunco_doc_bevy::EditorIntent)), and the
 //!   progressive-fidelity toggle ([`SetSubsystemEnabled`]).
 //!
-//! UI-gated and holds no simulation state — headless CI/CD pays nothing.
+//! The execution core is headless-safe; the menu, launcher panel, HUD, and
+//! confirmation popup are an optional UI projection.
 
 use bevy::prelude::*;
+#[cfg(feature = "ui")]
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_core::subsystems::{SubsystemToggles, SUBSYSTEMS};
-use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::{
+    on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
+};
 use lunco_doc_bevy::EditorIntent;
 use lunco_settings::AppSettingsExt;
+#[cfg(feature = "ui")]
 use lunco_workbench::tutorial_overlay::TutorialHud;
+#[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +44,7 @@ use serde::{Deserialize, Serialize};
 /// this is what the menu/panel needs to list + launch it.
 ///
 /// **Data, not code.** Entries live in a per-app JSON manifest
-/// (`assets/tutorials/<app>/tutorials.json`) and are scanned by [`TutorialPlugin`]
+/// (`assets/tutorials/<app>/tutorials.json`) and are scanned by [`TutorialCorePlugin`]
 /// at startup — adding a lesson never touches Rust.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TutorialMeta {
@@ -143,7 +149,7 @@ impl TutorialRegistry {
     }
 }
 
-/// Register a tutorial at app-build time. Add [`TutorialPlugin`] first (it inits
+/// Register a tutorial at app-build time. Add [`TutorialCorePlugin`] first (it inits
 /// the registry), then call this for each lesson.
 pub trait TutorialAppExt {
     fn register_tutorial(&mut self, meta: TutorialMeta) -> &mut Self;
@@ -294,6 +300,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
 }
 
 #[on_command(SkipTutorial)]
+#[cfg(feature = "ui")]
 fn on_skip_tutorial(
     _t: On<SkipTutorial>,
     mut hud: ResMut<TutorialHud>,
@@ -308,6 +315,19 @@ fn on_skip_tutorial(
     pending.0 = None;
 }
 
+/// Headless runs have no presentation state to clear, but stopping a lesson
+/// must retain the same execution semantics as the UI command.
+#[on_command(SkipTutorial)]
+#[cfg(not(feature = "ui"))]
+fn on_skip_tutorial(
+    _t: On<SkipTutorial>,
+    mut progress: ResMut<TutorialProgress>,
+    mut pending: ResMut<PendingAdvance>,
+) {
+    progress.current = None;
+    pending.0 = None;
+}
+
 #[on_command(SetSubsystemEnabled)]
 fn on_set_subsystem_enabled(
     trigger: On<SetSubsystemEnabled>,
@@ -316,7 +336,10 @@ fn on_set_subsystem_enabled(
 ) {
     let ev = trigger.event();
     if !SubsystemToggles::is_known(&ev.name) {
-        warn!("[subsystem] unknown subsystem '{}' (allow-list: {:?}) — ignored", ev.name, SUBSYSTEMS);
+        warn!(
+            "[subsystem] unknown subsystem '{}' (allow-list: {:?}) — ignored",
+            ev.name, SUBSYSTEMS
+        );
         return;
     }
     toggles.set(ev.name.clone(), ev.on);
@@ -330,7 +353,11 @@ fn on_set_subsystem_enabled(
     });
 }
 
-register_commands!(on_start_tutorial, on_skip_tutorial, on_set_subsystem_enabled,);
+register_commands!(
+    on_start_tutorial,
+    on_skip_tutorial,
+    on_set_subsystem_enabled,
+);
 
 /// On `MISSION_COMPLETE`, record the completion and advance the chain by starting
 /// the current tutorial's [`TutorialMeta::next`] — the chain lives entirely in
@@ -359,7 +386,9 @@ fn on_mission_complete(
     };
     if progress.autoproceed {
         info!("[tutorial] auto-advancing → '{next}'");
-        commands.trigger(StartTutorial { id: next.to_string() });
+        commands.trigger(StartTutorial {
+            id: next.to_string(),
+        });
     } else {
         info!("[tutorial] complete — awaiting confirm to advance → '{next}'");
         pending.0 = Some(next.to_string());
@@ -367,13 +396,18 @@ fn on_mission_complete(
 }
 
 /// A tidy display name for a tutorial id: prefer its registered title, else the id.
+#[cfg(feature = "ui")]
 fn pretty_tutorial(registry: &TutorialRegistry, id: &str) -> String {
-    registry.get(id).map(|m| m.title.to_string()).unwrap_or_else(|| id.to_string())
+    registry
+        .get(id)
+        .map(|m| m.title.to_string())
+        .unwrap_or_else(|| id.to_string())
 }
 
 /// Modal confirm popup shown when a tutorial finishes and a successor is queued
 /// (unless [`TutorialProgress::autoproceed`]). Continue starts the next tutorial;
 /// Stay dismisses. The checkbox flips `autoproceed`.
+#[cfg(feature = "ui")]
 fn draw_advance_prompt(
     mut egui_ctx: EguiContexts,
     mut pending: ResMut<PendingAdvance>,
@@ -474,6 +508,7 @@ fn resolve_show_tutorial_intent(
 /// A perspective help popup's "🎓 Show Tour" button publishes a
 /// [`HelpTourRequest`](lunco_workbench::HelpTourRequest). Consume it → start the
 /// app's onboarding (`first_start`) tutorial. Works for any app/perspective.
+#[cfg(feature = "ui")]
 fn consume_tour_request(
     mut req: ResMut<lunco_workbench::HelpTourRequest>,
     registry: Res<TutorialRegistry>,
@@ -515,11 +550,17 @@ fn hookvalue_to_json(v: &lunco_hooks::HookValue) -> serde_json::Value {
     match v {
         H::Unit => J::Null,
         H::Int(i) => J::from(*i),
-        H::Float(f) => serde_json::Number::from_f64(*f).map(J::Number).unwrap_or(J::Null),
+        H::Float(f) => serde_json::Number::from_f64(*f)
+            .map(J::Number)
+            .unwrap_or(J::Null),
         H::Bool(b) => J::Bool(*b),
         H::Str(s) => J::String(s.clone()),
         H::Array(a) => J::Array(a.iter().map(hookvalue_to_json).collect()),
-        H::Map(m) => J::Object(m.iter().map(|(k, v)| (k.clone(), hookvalue_to_json(v))).collect()),
+        H::Map(m) => J::Object(
+            m.iter()
+                .map(|(k, v)| (k.clone(), hookvalue_to_json(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -535,10 +576,16 @@ fn hookvalue_to_json(v: &lunco_hooks::HookValue) -> serde_json::Value {
 /// (e.g. the shared [`boot_seam`] after a sandbox's own `consult_boot`) no-ops.
 pub fn consult_boot(world: &mut World, has_scene_arg: bool, automated: bool) -> bool {
     use lunco_hooks::HookValue as H;
-    let onboarded = world.get_resource::<TutorialSeen>().map(|s| s.onboarded).unwrap_or(false);
-    let first_start_id = world
-        .get_resource::<TutorialRegistry>()
-        .and_then(|r| r.tutorials.iter().find(|t| t.first_start).map(|t| t.id.to_string()));
+    let onboarded = world
+        .get_resource::<TutorialSeen>()
+        .map(|s| s.onboarded)
+        .unwrap_or(false);
+    let first_start_id = world.get_resource::<TutorialRegistry>().and_then(|r| {
+        r.tutorials
+            .iter()
+            .find(|t| t.first_start)
+            .map(|t| t.id.to_string())
+    });
     let mut ctx = vec![
         ("onboarded".to_string(), H::Bool(onboarded)),
         ("has_scene_arg".to_string(), H::Bool(has_scene_arg)),
@@ -559,7 +606,11 @@ pub fn consult_boot(world: &mut World, has_scene_arg: bool, automated: bool) -> 
         .map(hookvalue_to_json)
         .unwrap_or(serde_json::Value::Object(Default::default()));
     info!("[tutorial] boot policy → {command}");
-    world.trigger(lunco_api::ApiCommandEvent { command: command.to_string(), params, id: 0 });
+    world.trigger(lunco_api::ApiCommandEvent {
+        command: command.to_string(),
+        params,
+        id: 0,
+    });
     if let Some(mut s) = world.get_resource_mut::<TutorialSeen>() {
         s.onboarded = true;
     }
@@ -630,7 +681,10 @@ fn sync_twin_tutorials(
                 m.from_twin = Some(id);
                 registry.register_tutorial(m);
             }
-            info!("[tutorial] loaded {n} lesson(s) from twin at {}", twin.root.display());
+            info!(
+                "[tutorial] loaded {n} lesson(s) from twin at {}",
+                twin.root.display()
+            );
         }
         // Say so. A malformed manifest previously failed silently, and the lessons
         // simply never appeared — with nothing anywhere to say why.
@@ -642,21 +696,37 @@ fn sync_twin_tutorials(
 
 /// Register the top-level **🎓 Tutorials** menu, listing the app's tutorials with
 /// a completion tick; clicking starts one. Shared by every workbench app.
+#[cfg(feature = "ui")]
 fn register_tutorials_menu(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
         return;
     };
     layout.register_custom_menu("🎓 Tutorials", |ui, world| {
-        let registry = world.get_resource::<TutorialRegistry>().cloned().unwrap_or_default();
-        let progress = world.get_resource::<TutorialProgress>().cloned().unwrap_or_default();
+        let registry = world
+            .get_resource::<TutorialRegistry>()
+            .cloned()
+            .unwrap_or_default();
+        let progress = world
+            .get_resource::<TutorialProgress>()
+            .cloned()
+            .unwrap_or_default();
         if registry.tutorials.is_empty() {
-            ui.label(egui::RichText::new("(no tutorials registered)").weak().italics());
+            ui.label(
+                egui::RichText::new("(no tutorials registered)")
+                    .weak()
+                    .italics(),
+            );
             return;
         }
-        ui.label(egui::RichText::new("Interactive, scripted lessons").weak().small());
+        ui.label(
+            egui::RichText::new("Interactive, scripted lessons")
+                .weak()
+                .small(),
+        );
         ui.separator();
 
-        let mut grouped: std::collections::HashMap<String, Vec<&TutorialMeta>> = std::collections::HashMap::new();
+        let mut grouped: std::collections::HashMap<String, Vec<&TutorialMeta>> =
+            std::collections::HashMap::new();
         for meta in registry.ordered() {
             grouped.entry(meta.app.clone()).or_default().push(meta);
         }
@@ -686,7 +756,9 @@ fn register_tutorials_menu(world: &mut World) {
                             .on_hover_text(meta.blurb.as_str())
                             .clicked()
                         {
-                            world.trigger(StartTutorial { id: meta.id.to_string() });
+                            world.trigger(StartTutorial {
+                                id: meta.id.to_string(),
+                            });
                             ui.close();
                         }
                     }
@@ -706,7 +778,9 @@ fn register_tutorials_menu(world: &mut World) {
                             .on_hover_text(meta.blurb.as_str())
                             .clicked()
                         {
-                            world.trigger(StartTutorial { id: meta.id.to_string() });
+                            world.trigger(StartTutorial {
+                                id: meta.id.to_string(),
+                            });
                             ui.close();
                         }
                     }
@@ -725,12 +799,15 @@ fn register_tutorials_menu(world: &mut World) {
 }
 
 /// Panel id for the tutorials launcher.
+#[cfg(feature = "ui")]
 pub const TUTORIALS_PANEL_ID: PanelId = PanelId("tutorials");
 
 /// Dockable launcher: lists registered tutorials with a completion tick and a
 /// Start button; offers Stop while one is running.
+#[cfg(feature = "ui")]
 pub struct TutorialsPanel;
 
+#[cfg(feature = "ui")]
 impl Panel for TutorialsPanel {
     fn id(&self) -> PanelId {
         TUTORIALS_PANEL_ID
@@ -747,12 +824,22 @@ impl Panel for TutorialsPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let registry = ctx.resource::<TutorialRegistry>().cloned().unwrap_or_default();
-        let progress = ctx.resource::<TutorialProgress>().cloned().unwrap_or_default();
+        let registry = ctx
+            .resource::<TutorialRegistry>()
+            .cloned()
+            .unwrap_or_default();
+        let progress = ctx
+            .resource::<TutorialProgress>()
+            .cloned()
+            .unwrap_or_default();
 
         ui.add_space(4.0);
         ui.heading("🎓 Tutorials");
-        ui.label(egui::RichText::new("Interactive, scripted lessons.").weak().small());
+        ui.label(
+            egui::RichText::new("Interactive, scripted lessons.")
+                .weak()
+                .small(),
+        );
 
         let mut auto = progress.autoproceed;
         if ui
@@ -770,12 +857,18 @@ impl Panel for TutorialsPanel {
         }
 
         if let Some(cur) = &progress.current {
-            let title = registry.get(cur).map(|m| m.title.to_string()).unwrap_or_else(|| cur.clone());
+            let title = registry
+                .get(cur)
+                .map(|m| m.title.to_string())
+                .unwrap_or_else(|| cur.clone());
             ui.horizontal(|ui| {
                 // TODO(theme): migrate to lunco-theme once the token set covers this.
                 // "Currently running" accent for the launcher row. Blocked on the
                 // dep, as above.
-                ui.label(egui::RichText::new(format!("▶ Running: {title}")).color(egui::Color32::from_rgb(120, 200, 255)));
+                ui.label(
+                    egui::RichText::new(format!("▶ Running: {title}"))
+                        .color(egui::Color32::from_rgb(120, 200, 255)),
+                );
                 if ui.small_button("Stop").clicked() {
                     ctx.trigger(SkipTutorial {});
                 }
@@ -791,7 +884,11 @@ impl Panel for TutorialsPanel {
                         if done {
                             // TODO(theme): migrate to lunco-theme once the token set covers this.
                             // Completed-tutorial tick -> `tokens.success`. Blocked on the dep.
-                            ui.label(egui::RichText::new("✓").color(egui::Color32::from_rgb(120, 210, 140)).strong());
+                            ui.label(
+                                egui::RichText::new("✓")
+                                    .color(egui::Color32::from_rgb(120, 210, 140))
+                                    .strong(),
+                            );
                         }
                         ui.label(egui::RichText::new(meta.title.as_str()).strong());
                         ui.label(egui::RichText::new(meta.difficulty.as_str()).weak().small());
@@ -800,9 +897,15 @@ impl Panel for TutorialsPanel {
                     ui.horizontal(|ui| {
                         let label = if done { "Replay" } else { "Start" };
                         if ui.button(label).clicked() {
-                            ctx.trigger(StartTutorial { id: meta.id.to_string() });
+                            ctx.trigger(StartTutorial {
+                                id: meta.id.to_string(),
+                            });
                         }
-                        ui.label(egui::RichText::new(format!("· {}", meta.app)).weak().small());
+                        ui.label(
+                            egui::RichText::new(format!("· {}", meta.app))
+                                .weak()
+                                .small(),
+                        );
                     });
                 });
                 ui.add_space(4.0);
@@ -811,25 +914,17 @@ impl Panel for TutorialsPanel {
     }
 }
 
-/// Adds the registry, persisted progress, the commands, the mission-complete +
-/// F1 observers, onboarding, the confirm popup, the 🎓 menu, and the launcher
-/// panel. Tutorials are loaded from the per-app JSON manifest
-/// `assets/tutorials/<app>/tutorials.json` (data, not code — see [`TutorialMeta`]).
-/// UI-gated: harmless headless (the panel/menu just aren't drawn).
-///
-/// ```ignore
-/// app.add_plugins(lunco_tutorial::TutorialPlugin { app: "sandbox".into() });
-/// ```
-pub struct TutorialPlugin {
+/// Headless-safe tutorial execution: registry, source loading, typed commands,
+/// completion chaining, boot policy, and twin curriculum discovery. Tutorials
+/// are loaded from `assets/tutorials/<app>/tutorials.json`.
+pub struct TutorialCorePlugin {
     /// App name — selects `assets/tutorials/<app>/tutorials.json`.
     pub app: String,
 }
 
-impl Plugin for TutorialPlugin {
+impl Plugin for TutorialCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialRegistry>();
-        // Load this app's tutorial catalog from its JSON manifest. Disk on native
-        // (live-editable — add a lesson with no rebuild), embedded on wasm.
         let manifest_path = format!("{}/tutorials.json", self.app);
         match lunco_assets::tutorials::tutorial_source(&manifest_path) {
             Some(src) => match serde_json::from_str::<Vec<TutorialMeta>>(&src) {
@@ -846,22 +941,70 @@ impl Plugin for TutorialPlugin {
         app.init_resource::<TutorialHost>();
         app.init_resource::<PendingAdvance>();
         app.register_settings_section::<TutorialProgress>();
-        // `tour_seen` flag — reflect-registered so the boot policy (`boot.rhai`)
-        // reads it and `consult_boot` marshals it into the boot ctx.
         app.register_type::<TutorialSeen>();
         app.register_settings_section::<TutorialSeen>();
         register_all_commands(app);
         app.add_observer(on_mission_complete);
         app.add_observer(resolve_show_tutorial_intent);
-        app.add_systems(Startup, register_tutorials_menu);
-        // A twin brings its own curriculum: load it when that twin is opened, and
-        // unload it when the active twin changes. A load-time concern, so a system —
-        // it used to run inside the 🎓 menu's draw closure, which meant a twin's
-        // lessons existed only once someone opened the menu.
         app.init_resource::<LoadedTwinCurriculum>();
         app.add_systems(Update, sync_twin_tutorials);
-        app.add_systems(Update, (boot_seam, consume_tour_request));
+        app.add_systems(Update, boot_seam);
+    }
+}
+
+/// Optional UI projection for [`TutorialCorePlugin`]: menu, launcher panel,
+/// HUD cleanup, and the completion confirmation popup.
+///
+/// ```ignore
+/// app.add_plugins(lunco_tutorial::TutorialPlugin { app: "sandbox".into() });
+/// ```
+#[cfg(feature = "ui")]
+pub struct TutorialPlugin {
+    /// App name — selects `assets/tutorials/<app>/tutorials.json`.
+    pub app: String,
+}
+
+#[cfg(feature = "ui")]
+impl Plugin for TutorialPlugin {
+    fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<TutorialCorePlugin>() {
+            app.add_plugins(TutorialCorePlugin {
+                app: self.app.clone(),
+            });
+        }
+        app.add_systems(Startup, register_tutorials_menu);
+        app.add_systems(Update, consume_tour_request);
         app.add_systems(EguiPrimaryContextPass, draw_advance_prompt);
         app.register_panel(TutorialsPanel);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_executes_and_stops_a_lesson_without_the_ui_plugin() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+
+        app.world_mut().trigger(StartTutorial {
+            id: "first-drive".into(),
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TutorialProgress>()
+                .current
+                .as_deref(),
+            Some("first-drive")
+        );
+
+        app.world_mut().trigger(SkipTutorial {});
+        app.update();
+        assert!(app.world().resource::<TutorialProgress>().current.is_none());
     }
 }

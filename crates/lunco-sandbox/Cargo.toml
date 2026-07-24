@@ -119,6 +119,9 @@ serde_json = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
+# Tutorial execution is scenario runtime, so it stays available to headless
+# hosts. Its menu/HUD projection is enabled by `lunco-tutorial/ui` below.
+lunco-tutorial = { path = "../lunco-tutorial", default-features = false }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
 # viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
 lunco-usd = { path = "../lunco-usd", default-features = false }
@@ -171,7 +174,6 @@ lunco-materials = { path = "../lunco-materials", optional = true }
 lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
-lunco-tutorial = { path = "../lunco-tutorial", optional = true }
 bevy_egui = { workspace = true, optional = true }
 # `default-features = false` so the native (`lunco-api`) and web (`web`)
 # features choose the transport: `transport-http` (axum/TcpListener) vs.
@@ -233,7 +235,7 @@ ui = [
     "lunco-networking?/ui",
     "lunco-api?/winit",
     "dep:lunco-workbench",
-    "dep:lunco-tutorial",
+    "lunco-tutorial/ui",
     "dep:lunco-materials",
     "dep:lunco-theme",
     "dep:lunco-settings",

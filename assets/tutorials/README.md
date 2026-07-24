@@ -35,7 +35,9 @@ in with `load_scene(...)`. A lesson that needs a model just `cmd("OpenClass", �
      and is rejected; see `docs/architecture/55-scene-addressing-and-roots.md`.
 2. Declare its catalog entry in the **JSON manifest** `tutorials/<app>/tutorials.json`
    — **data, not Rust**. The single catalog; a 3D lesson's `.usda` is just the
-   environment its script loads. The app loads it via `TutorialPlugin { app: "<app>" }`.
+   environment its script loads. The simulation host loads it via
+   `TutorialCorePlugin { app: "<app>" }`; a workbench host additionally adds
+   `TutorialPlugin { app: "<app>" }` for the launcher UI.
    Strict JSON — **no comments** (the `//` below are for the doc only).
    ```json
    {

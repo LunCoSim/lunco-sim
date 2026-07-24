@@ -961,9 +961,8 @@ pub struct UsdWiredConnection;
 #[derive(Resource, Default)]
 pub struct WiringDirty(pub bool);
 
-/// Derive the co-sim wiring from native USD `connectionPaths` — the USD-native,
-/// journaled, distributed replacement for the deleted `lunco:simWires` / wire-prim
-/// producers. `SimConnection`s are a **pure derived cache**: whenever the wiring
+/// Derive the co-sim wiring from native USD `connectionPaths`. `SimConnection`s
+/// are a **pure derived cache**: whenever the wiring
 /// topology may have changed, the whole derived set is rebuilt from the composed
 /// stage. A full rebuild (not a per-prim patch) is what makes the lifecycle
 /// correct — an edge exists exactly when *both* its endpoints do, regardless of

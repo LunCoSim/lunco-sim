@@ -80,7 +80,11 @@ impl Panel for RhaiReplPanel {
                     ui.label(egui::RichText::new("No output yet. Try: pause()").weak());
                 }
                 for (code, out) in &self.history {
-                    ui.label(egui::RichText::new(format!("› {code}")).monospace().strong());
+                    ui.label(
+                        egui::RichText::new(format!("› {code}"))
+                            .monospace()
+                            .strong(),
+                    );
                     ui.label(egui::RichText::new(out).monospace().weak());
                     ui.add_space(4.0);
                 }

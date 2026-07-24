@@ -74,7 +74,11 @@ fn sky_clock_ui(
             .font(egui::TextStyle::Monospace)
             // Invalid text is marked, never silently ignored: a seek that does
             // nothing and says nothing reads as a broken clock.
-            .text_color_opt(parsed.is_none().then_some(egui::Color32::from_rgb(220, 120, 120)));
+            .text_color_opt(
+                parsed
+                    .is_none()
+                    .then_some(egui::Color32::from_rgb(220, 120, 120)),
+            );
         let resp = ui.add(field).on_hover_text(
             "UTC date to put the sky at — `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DD HH:MM` \
              or `YYYY-MM-DD`. Moves the SKY only; the simulation clock is untouched.",
@@ -202,13 +206,7 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, world: &mut World) {
     let independent = domain.is_some_and(|d| d.parent == Some(clocks.real));
     let scale = domain.map(|d| d.scale).unwrap_or(1.0);
 
-    if let Some(req) = sky_clock_ui(
-        ui,
-        &time.utc_string(),
-        time.epoch_jd,
-        independent,
-        scale,
-    ) {
+    if let Some(req) = sky_clock_ui(ui, &time.utc_string(), time.epoch_jd, independent, scale) {
         world.trigger(req);
     }
 }
@@ -227,7 +225,9 @@ pub(crate) fn draw_celestial_time(
     if q_bodies.is_empty() {
         return;
     }
-    let (Some(clocks), Some(world)) = (clocks, world) else { return };
+    let (Some(clocks), Some(world)) = (clocks, world) else {
+        return;
+    };
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
 
     // The sky is "independent" exactly when its clock hangs off the wall root.
@@ -243,13 +243,9 @@ pub(crate) fn draw_celestial_time(
             egui::Frame::popup(ui.style())
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    if let Some(req) = sky_clock_ui(
-                        ui,
-                        &world.utc_string(),
-                        world.epoch_jd,
-                        independent,
-                        scale,
-                    ) {
+                    if let Some(req) =
+                        sky_clock_ui(ui, &world.utc_string(), world.epoch_jd, independent, scale)
+                    {
                         commands.trigger(req);
                     }
                 });

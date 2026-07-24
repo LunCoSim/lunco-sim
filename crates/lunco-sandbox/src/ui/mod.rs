@@ -13,36 +13,38 @@
 //! is now structurally identical to them.
 
 use bevy::prelude::*;
-use leafwing_input_manager::prelude::*;
 use big_space::prelude::*;
+use leafwing_input_manager::prelude::*;
 
-use lunco_workbench::auto_tag_workbench_3d_cameras;
-use lunco_avatar::{IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane, ProvisionalAvatarCamera};
+use lunco_avatar::{
+    AdaptiveNearPlane, FreeFlightCamera, IntentAnalogState, ProvisionalAvatarCamera,
+};
 use lunco_core::{Avatar, LocalAvatar};
-use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
+use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
+use lunco_workbench::auto_tag_workbench_3d_cameras;
 
+/// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
+mod celestial_time;
 mod code_panel;
+mod models_palette;
+/// Which floating viewport overlays are shown (persisted, off by default).
+pub mod overlays;
 /// Rhai behaviour editor — edit + save + hot-reload the script on the selected
 /// prim, with a diagnostics list. The writable counterpart of `code_panel`.
 mod rhai_editor_panel;
-mod models_palette;
 /// In-app rhai REPL panel (web + native). Empty unless the API bridge is
 /// available — the file carries its own `#![cfg(…)]`.
 mod rhai_repl_panel;
-/// Centered "Generating terrain…" overlay during the initial DEM bake.
-mod terrain_progress;
-/// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
-mod celestial_time;
 /// Driver cockpit overlay for the View perspective — attitude/tilt, nav readout,
 /// and the physics-real transport band. Paints only while possessing a vessel.
 mod rover_hud;
-mod view_mode;
-/// Which floating viewport overlays are shown (persisted, off by default).
-pub mod overlays;
 /// Centered "Downloading <scenario>" overlay during scenario-sync asset fetch.
 /// Networking-only — the file carries its own `#![cfg(feature = "networking")]`.
 #[cfg(feature = "networking")]
 mod scenario_download;
+/// Centered "Generating terrain…" overlay during the initial DEM bake.
+mod terrain_progress;
+mod view_mode;
 
 /// The sandbox's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
@@ -107,7 +109,9 @@ impl Plugin for SandboxUiPlugin {
             // The shared tutorial launcher: registry + 🎓 menu + panel +
             // Start/Skip/SetSubsystemEnabled + progress + onboarding + F1.
             // Tutorials load from assets/tutorials/sandbox/tutorials.json (data, not code).
-            .add_plugins(lunco_tutorial::TutorialPlugin { app: "sandbox".into() })
+            .add_plugins(lunco_tutorial::TutorialPlugin {
+                app: "sandbox".into(),
+            })
             // Rover panels. ONE closure: Bevy keys plugin uniqueness by type-name,
             // and every `|app| {…}` in this `build` shares the name `{{closure}}` — a
             // second one panics ("plugin already added"). So all app-level panel
@@ -137,25 +141,35 @@ impl Plugin for SandboxUiPlugin {
             // ModelicaPlugin's AnalyzePerspective registers before SandboxEditUiPlugin's
             // workspaces; without this nudge we'd boot into the Modelica layout.
             // Activate the 3D-only View workspace by default.
-            .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-                layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
-            })
+            .add_systems(
+                Startup,
+                |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
+                    layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
+                },
+            )
             .insert_resource(CurrentScenePath::default())
-            .add_systems(Startup, (
-                init_current_scene_path,
-                register_sandbox_scenarios_menu,
-                register_downloadable_assets_settings,
-            ))
-            .add_observer(|t: On<lunco_usd::LoadScene>, mut current: ResMut<CurrentScenePath>, current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>| {
-                current.0 = t.event().path.clone();
-                if let Some(mut name) = current_name {
-                    name.0 = std::path::Path::new(&t.event().path)
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or(&t.event().path)
-                        .to_string();
-                }
-            })
+            .add_systems(
+                Startup,
+                (
+                    init_current_scene_path,
+                    register_sandbox_scenarios_menu,
+                    register_downloadable_assets_settings,
+                ),
+            )
+            .add_observer(
+                |t: On<lunco_usd::LoadScene>,
+                 mut current: ResMut<CurrentScenePath>,
+                 current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>| {
+                    current.0 = t.event().path.clone();
+                    if let Some(mut name) = current_name {
+                        name.0 = std::path::Path::new(&t.event().path)
+                            .file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or(&t.event().path)
+                            .to_string();
+                    }
+                },
+            )
             // Confine window-targeting cameras to the ViewportPanel rect (prevents
             // the full-window 3D bleed-on-pass-skip bug). RTT cameras are skipped.
             .add_systems(Update, auto_tag_workbench_3d_cameras)
@@ -163,8 +177,10 @@ impl Plugin for SandboxUiPlugin {
             .add_systems(Update, force_hard_shadow_filtering)
             // Fallback free-flight camera when the scene authors none — interactive
             // only; a headless server has no user to control.
-            .add_systems(PostUpdate,
-                spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback))
+            .add_systems(
+                PostUpdate,
+                spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback),
+            )
             // Centered "Generating terrain…" card during the initial DEM bake
             // (heightmap decode + crater stamp), so the black startup viewport
             // reads as progress. Clears itself once the bake finishes.
@@ -239,17 +255,18 @@ impl Plugin for SandboxUiPlugin {
             for track in ["basic"] {
                 let path = format!("{track}/tutorials.json");
                 match lunco_assets::tutorials::tutorial_source(&path) {
-                    Some(src) => match serde_json::from_str::<Vec<lunco_tutorial::TutorialMeta>>(&src)
-                    {
-                        Ok(metas) => {
-                            for m in metas {
-                                app.register_tutorial(m);
+                    Some(src) => {
+                        match serde_json::from_str::<Vec<lunco_tutorial::TutorialMeta>>(&src) {
+                            Ok(metas) => {
+                                for m in metas {
+                                    app.register_tutorial(m);
+                                }
+                            }
+                            Err(e) => {
+                                bevy::log::warn!("tutorials manifest '{path}' failed to parse: {e}")
                             }
                         }
-                        Err(e) => {
-                            bevy::log::warn!("tutorials manifest '{path}' failed to parse: {e}")
-                        }
-                    },
+                    }
                     None => bevy::log::warn!("no tutorials manifest at 'assets/tutorials/{path}'"),
                 }
             }
@@ -414,7 +431,9 @@ fn spawn_fallback_avatar(
     mut commands: Commands,
     mut done: Local<bool>,
 ) {
-    if *done { return; }
+    if *done {
+        return;
+    }
     // A USD-spawned camera ends the wait immediately.
     if q_cameras.iter().next().is_some() {
         *done = true;
@@ -424,7 +443,9 @@ fn spawn_fallback_avatar(
     if time.elapsed_secs() < FALLBACK_AVATAR_GRACE_SECS {
         return;
     }
-    let Some(grid) = q_grids.iter().next() else { return; };
+    let Some(grid) = q_grids.iter().next() else {
+        return;
+    };
 
     info!("No USD camera after {FALLBACK_AVATAR_GRACE_SECS}s, spawning fallback FreeFlightCamera");
     commands.spawn((
@@ -457,7 +478,9 @@ fn spawn_fallback_avatar(
         // Exposure read from the active-scene `LunarSun` resource — the SAME
         // source as the sun illuminance, so they stay matched. Tunable live via
         // SetEnvironmentLight / the Inspector.
-        bevy::camera::Exposure { ev100: active_sun.exposure_ev100 },
+        bevy::camera::Exposure {
+            ev100: active_sun.exposure_ev100,
+        },
         FreeFlightCamera {
             yaw: -2.245559,
             pitch: -0.303039,
@@ -523,7 +546,9 @@ fn sandbox_boot_from_url(
     msl: Option<bevy::prelude::Res<lunco_assets::msl::MslLoadState>>,
     mut state: bevy::prelude::Local<SandboxBootState>,
 ) {
-    if state.done { return; }
+    if state.done {
+        return;
+    }
 
     // ── First-run: parse URL, kick the workspace switch ──────────
     if !state.parsed {
@@ -607,7 +632,10 @@ fn register_downloadable_assets_settings(world: &mut World) {
         if let Some(mut settings) = world.get_resource_mut::<lunco_settings::DownloadSettings>() {
             ui.horizontal(|ui| {
                 ui.label("Max parallel downloads:");
-                ui.add(egui::Slider::new(&mut settings.max_parallel_downloads, 1..=10));
+                ui.add(egui::Slider::new(
+                    &mut settings.max_parallel_downloads,
+                    1..=10,
+                ));
             });
             ui.add_space(8.0);
         }
@@ -708,8 +736,10 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("Scenarios", |ui, world| {
-        let current_path = world.get_resource::<CurrentScenePath>().map(|c| c.0.clone());
-        
+        let current_path = world
+            .get_resource::<CurrentScenePath>()
+            .map(|c| c.0.clone());
+
         ui.add_enabled_ui(current_path.is_some(), |ui| {
             if ui.button("🔄 Restart Scenario").clicked() {
                 if let Some(path) = current_path {
@@ -855,27 +885,28 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 .collect()
         };
 
-        let mut render = |ui: &mut bevy_egui::egui::Ui,
-                          world: &mut World,
-                          items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
-            for (asset, desc) in items {
-                let label = clean_scene_name(&asset.stem);
-                let resp = ui.button(label);
-                // Show the plain-language "what is this demo" blurb on hover.
-                // `on_hover_text` consumes and returns the `Response` (chaining API).
-                let resp = match desc {
-                    Some(d) => resp.on_hover_text(d.as_str()),
-                    None => resp,
-                };
-                if resp.clicked() {
-                    world.trigger(lunco_usd::LoadScene {
-                        path: asset.asset_path.clone(),
-                        root_prim: String::new(),
-                    });
-                    ui.close();
+        let mut render =
+            |ui: &mut bevy_egui::egui::Ui,
+             world: &mut World,
+             items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
+                for (asset, desc) in items {
+                    let label = clean_scene_name(&asset.stem);
+                    let resp = ui.button(label);
+                    // Show the plain-language "what is this demo" blurb on hover.
+                    // `on_hover_text` consumes and returns the `Response` (chaining API).
+                    let resp = match desc {
+                        Some(d) => resp.on_hover_text(d.as_str()),
+                        None => resp,
+                    };
+                    if resp.clicked() {
+                        world.trigger(lunco_usd::LoadScene {
+                            path: asset.asset_path.clone(),
+                            root_prim: String::new(),
+                        });
+                        ui.close();
+                    }
                 }
-            }
-        };
+            };
 
         let paired: Vec<(&lunco_assets::discovery::AssetFile, &Option<String>)> =
             assets.iter().zip(descs.iter()).collect();
@@ -897,7 +928,11 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             });
         }
 
-        let library: Vec<_> = paired.iter().copied().filter(|(a, _)| a.twin.is_none()).collect();
+        let library: Vec<_> = paired
+            .iter()
+            .copied()
+            .filter(|(a, _)| a.twin.is_none())
+            .collect();
         if !library.is_empty() {
             ui.menu_button(format!("📚 Library  ({})", library.len()), |ui| {
                 render(ui, world, &library);
@@ -913,28 +948,48 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
 fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
     use bevy_egui::egui;
 
-    let registry = world.get_resource::<lunco_tutorial::TutorialRegistry>().cloned();
-    let progress = world.get_resource::<lunco_tutorial::TutorialProgress>().cloned().unwrap_or_default();
+    let registry = world
+        .get_resource::<lunco_tutorial::TutorialRegistry>()
+        .cloned();
+    let progress = world
+        .get_resource::<lunco_tutorial::TutorialProgress>()
+        .cloned()
+        .unwrap_or_default();
 
     ui.menu_button("🎓 Tutorials", |ui| {
         let Some(registry) = registry else {
-            ui.label(egui::RichText::new("(tutorials unavailable)").weak().italics());
+            ui.label(
+                egui::RichText::new("(tutorials unavailable)")
+                    .weak()
+                    .italics(),
+            );
             return;
         };
         if registry.tutorials.is_empty() {
-            ui.label(egui::RichText::new("(no tutorials registered)").weak().italics());
+            ui.label(
+                egui::RichText::new("(no tutorials registered)")
+                    .weak()
+                    .italics(),
+            );
             return;
         }
 
         for meta in registry.ordered() {
             let done = progress.completed.iter().any(|c| c == &meta.id);
             // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
-            let label = format!("{} {}  ·  {}", if done { "✓" } else { "🎓" }, meta.title, meta.difficulty);
+            let label = format!(
+                "{} {}  ·  {}",
+                if done { "✓" } else { "🎓" },
+                meta.title,
+                meta.difficulty
+            );
             let resp = ui.button(label);
             // Hover tip: the plain-language "what this teaches" blurb.
             let resp = resp.on_hover_text(meta.blurb.as_str());
             if resp.clicked() {
-                world.trigger(lunco_tutorial::StartTutorial { id: meta.id.to_string() });
+                world.trigger(lunco_tutorial::StartTutorial {
+                    id: meta.id.to_string(),
+                });
                 ui.close();
             }
         }
@@ -983,7 +1038,11 @@ fn release_msl_after_terrain(
         commands.remove_resource::<lunco_modelica::msl_remote::DeferMslLoad>();
         info!(
             "[sandbox] releasing deferred MSL load ({})",
-            if terrain_done { "terrain baked" } else { "timeout" }
+            if terrain_done {
+                "terrain baked"
+            } else {
+                "timeout"
+            }
         );
     }
 }

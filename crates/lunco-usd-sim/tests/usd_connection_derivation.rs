@@ -4,9 +4,8 @@
 //! `connectionPaths` whenever prim entities spawn/despawn (structural) or a
 //! connection edit is drained (`WiringDirty`). These tests cover: the reader
 //! (`UsdRead::connections`, all-sources), derivation-at-load through the real
-//! system, the SSP factor/offset transform, and that every migrated asset's
-//! `.connect` authoring reads back the exact edges the old `lunco:simWires` /
-//! wire-prims encoded. The wiring is a **pure derived cache** of USD.
+//! system, the SSP factor/offset transform, and shipped `.connect` authoring.
+//! The wiring is a **pure derived cache** of USD.
 
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
@@ -133,8 +132,8 @@ fn rewire_derives_at_load_and_clears() {
     );
 }
 
-// ── Migrated-asset wiring — the `.connect` authoring parses and reads back the
-//    exact edges the old `lunco:simWires` / wire-prims encoded (P1.3/P1.4). ────
+// ── Shipped-asset wiring — `.connect` authoring parses and reads back the
+//    causal edges each component declares. ────────────────────────────────────
 
 fn asset_src(rel: &str) -> String {
     let p = format!("{}/../../assets/{}", env!("CARGO_MANIFEST_DIR"), rel);

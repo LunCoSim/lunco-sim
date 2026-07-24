@@ -191,8 +191,7 @@ impl Plugin for UsdSimPlugin {
         // of invisible deadlock into a loud `error!` AND recovers by building the
         // physics without the missing visual.
         app.add_systems(Update, recover_stuck_usd_prims);
-        // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
-        // `lunco:simWires`) — see `cosim.rs`.
+        // USD → cosim wiring through native `connectionPaths` — see `cosim.rs`.
         cosim::install(app);
     }
 }

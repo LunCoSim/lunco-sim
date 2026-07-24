@@ -17,7 +17,10 @@ use lunco_terrain_surface::TerrainGenStatus;
 
 /// Paint the centered generation card when a terrain build is active. Runs in
 /// `EguiPrimaryContextPass`; a no-op (early return) whenever nothing is baking.
-pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, mut status: ResMut<TerrainGenStatus>) {
+pub(crate) fn draw_terrain_progress(
+    mut egui_ctx: EguiContexts,
+    mut status: ResMut<TerrainGenStatus>,
+) {
     if !status.active {
         return;
     }
@@ -63,7 +66,9 @@ pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, mut status: ResM
                             None => {
                                 // No incremental signal from the bake → indeterminate.
                                 ui.add(
-                                    egui::ProgressBar::new(0.0).desired_width(260.0).animate(true),
+                                    egui::ProgressBar::new(0.0)
+                                        .desired_width(260.0)
+                                        .animate(true),
                                 );
                             }
                         }
@@ -72,11 +77,7 @@ pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, mut status: ResM
                         // native "Baking" phase now shows the decode/stamp caption
                         // instead of falling through to "Preparing…").
                         let subtext = status.phase.caption();
-                        ui.label(
-                            egui::RichText::new(subtext)
-                                .weak()
-                                .size(11.0),
-                        );
+                        ui.label(egui::RichText::new(subtext).weak().size(11.0));
                         ui.add_space(12.0);
                         if ui.button("Dismiss Overlay").clicked() {
                             status.user_dismissed = true;

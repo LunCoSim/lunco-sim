@@ -45,7 +45,8 @@ the lesson has a scene:
 
 **(a) JSON manifest** `assets/tutorials/<app>/tutorials.json` — the default,
 required for **scene-less** lessons (coach tours, model lessons).
-`TutorialPlugin { app }` scans it at startup. Note: strict JSON, **no comments**.
+`TutorialCorePlugin { app }` scans it at startup; `TutorialPlugin { app }` adds
+the optional launcher UI. Note: strict JSON, **no comments**.
 
 ```json
 {
@@ -82,8 +83,9 @@ def Xform "FirstDrive"
 ```
 
 **Prerequisite (once per app):** the host app includes the scripting runtime
-(`LunCoScriptingPlugin`) + `lunco_tutorial::TutorialPlugin { app: "<app>".into() }`,
-and calls `lunco_tutorial::consult_boot(world, has_scene_arg, automated)` at startup
+(`LunCoScriptingPlugin`) + `lunco_tutorial::TutorialCorePlugin { app: "<app>".into() }`.
+Add `TutorialPlugin` as well when the host provides the optional workbench UI,
+and have the host call `lunco_tutorial::consult_boot(world, has_scene_arg, automated)` at startup
 for first-run onboarding. `sandbox` and `lunica` have this; a bare app does not.
 Adding *lessons* after that never touches Rust — just the manifest + a `.rhai`.
 

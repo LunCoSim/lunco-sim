@@ -58,9 +58,9 @@ use lunco_usd_bevy::UsdRead;
 pub use bevy::app::AppExit;
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
-use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
+use lunco_cosim::CoSimPlugin;
 use lunco_environment::EnvironmentPlugin;
 use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_globe::TerrainPlugin;
@@ -222,7 +222,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     // below; a Bevy system drains it into the confirm prompt. Headless skips it.
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
     let deeplink_inbox = if !headless && !offscreen {
-        use lunco_networking::single_instance::{LaunchOutcome, acquire};
+        use lunco_networking::single_instance::{acquire, LaunchOutcome};
         url_scheme::register_best_effort();
         match acquire() {
             // This process is just a courier — it forwarded the link to the
@@ -2175,6 +2175,12 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(lunco_autopilot::AutopilotPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
+            // Tutorials are executable scenario products, not a UI-only feature:
+            // headless hosts expose StartTutorial through the same command API.
+            // The menu/HUD projection is added separately by SandboxUiPlugin.
+            .add_plugins(lunco_tutorial::TutorialCorePlugin {
+                app: "sandbox".into(),
+            })
             // Default scene-wide fill for scenes that author no lighting; a
             // scene-authored UsdLux light takes ambient over.
             .insert_resource(bevy::light::GlobalAmbientLight {

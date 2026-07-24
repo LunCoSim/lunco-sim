@@ -49,7 +49,7 @@
 use avian3d::prelude::{ComputedCenterOfMass, LinearVelocity};
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{egui, EguiContexts};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
