@@ -56,7 +56,7 @@
 //   facts.network_scopes[] #{ path, parent, members[], modelica_member_count,
 //                             island_count, dangling_connectors[],
 //                             invalid_program_sources[], invalid_causal_properties[],
-//                             ambiguous_boundary_sources[] }
+//                             ambiguous_boundary_sources[], collection_error }
 //       scopes applying CollectionAPI:components, including codeless-schema
 //       runtimes whose applied-schema enumeration is incomplete.
 //
@@ -111,6 +111,7 @@ fn lint_usd(facts) {
     for f in filtered_pair_is_inert(facts) { out.push(f); }
     for f in collision_group_is_inert(facts) { out.push(f); }
     for f in empty_component_network(facts) { out.push(f); }
+    for f in invalid_component_collection(facts) { out.push(f); }
     for f in disconnected_component_network(facts) { out.push(f); }
     for f in dangling_network_connector(facts) { out.push(f); }
     for f in invalid_network_program_source(facts) { out.push(f); }
@@ -125,12 +126,26 @@ fn lint_usd(facts) {
 fn empty_component_network(facts) {
     let out = [];
     for scope in facts.network_scopes {
-        if scope.modelica_member_count != 0 { continue; }
+        if scope.collection_error != "" || scope.modelica_member_count != 0 { continue; }
         let m = "declares CollectionAPI:components but includes no components —";
         m += " the domain compiler has no equations to compile.";
         m += " Add the Modelica component facets to";
         m += " collection:components:includes or remove the empty network scope.";
         out.push(finding("empty-component-network", "error", scope.path, m));
+    }
+    out
+}
+
+/// OpenUSD is authoritative for collection membership. Preserve its failure
+/// instead of disguising it as an empty compiler network.
+fn invalid_component_collection(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        if scope.collection_error == "" { continue; }
+        let m = "has an invalid CollectionAPI:components definition — ";
+        m += scope.collection_error;
+        m += ". Fix its standard collection expansion/include/exclude opinions.";
+        out.push(finding("invalid-component-collection", "error", scope.path, m));
     }
     out
 }

@@ -20,6 +20,12 @@ use openusd::sdf::Path as SdfPath;
 
 use crate::cosim::{UsdSourcedCosim, WiringDirty};
 
+fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
+    commands
+        .entity(entity)
+        .remove::<lunco_cosim::SimComponent>();
+}
+
 /// Fingerprint of the generated wrapper currently installed on a network scope.
 #[derive(Component)]
 pub struct DomainProjectionState {
@@ -296,9 +302,7 @@ pub fn project_domain_islands(
                     text: format!("[{model_name}] Projection error: {message}"),
                 });
                 error!("[domain-projection] `{}` rejected: {message}", prim.path);
-                commands
-                    .entity(entity)
-                    .remove::<lunco_cosim::SimComponent>();
+                retire_sim_interface(&mut commands, entity);
                 commands.entity(entity).try_insert((
                     ModelicaModel {
                         model_path: PathBuf::from(format!("generated://{model_name}.mo")),
@@ -325,12 +329,12 @@ pub fn project_domain_islands(
                 // The authored collection ceased to describe a compilable
                 // network. Retire its runtime projection in the same update;
                 // keeping the old solver would simulate stale authoring.
+                retire_sim_interface(&mut commands, entity);
                 commands.entity(entity).remove::<(
                     ModelicaModel,
                     UsdSourcedCosim,
                     DomainProjectionState,
                     GeneratedModelicaSource,
-                    lunco_cosim::SimComponent,
                 )>();
             }
             continue;
@@ -390,9 +394,7 @@ pub fn project_domain_islands(
         // A changed wrapper may expose a different port interface. Rebuild the
         // derived co-sim projection instead of retaining values and port names
         // from the previous compiled topology.
-        commands
-            .entity(entity)
-            .remove::<lunco_cosim::SimComponent>();
+        retire_sim_interface(&mut commands, entity);
         commands.entity(entity).try_insert((
             model,
             UsdSourcedCosim,
@@ -1113,5 +1115,38 @@ mod tests {
         assert!(validate_network(&network)
             .iter()
             .any(|error| error.message.contains("not a valid Modelica identifier")));
+    }
+
+    #[test]
+    fn retiring_a_changed_projection_removes_stale_outputs() {
+        fn retire_once(mut commands: Commands, q: Query<Entity, With<GeneratedModelicaSource>>) {
+            for entity in &q {
+                retire_sim_interface(&mut commands, entity);
+            }
+        }
+
+        let mut app = App::new();
+        app.add_systems(Update, retire_once);
+        let entity = app
+            .world_mut()
+            .spawn((
+                GeneratedModelicaSource {
+                    network_root: "/Electrical".into(),
+                    source: "model Electrical end Electrical;".into(),
+                    component_paths: vec!["/Battery".into()],
+                },
+                lunco_cosim::SimComponent {
+                    outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),
+                    ..default()
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert!(
+            app.world().get::<lunco_cosim::SimComponent>(entity).is_none(),
+            "a changed or rejected projection must not retain solved values from its previous topology"
+        );
     }
 }

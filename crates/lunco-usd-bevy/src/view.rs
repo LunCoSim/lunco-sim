@@ -179,6 +179,41 @@ mod compose_tests {
         );
     }
 
+    #[test]
+    fn collection_members_uses_standard_subtree_expansion() {
+        let dir = tempfile::tempdir().expect("scratch dir");
+        let scene = dir.path().join("collection.usda");
+        std::fs::write(
+            &scene,
+            "#usda 1.0\n\
+             def Xform \"World\"\n\
+             {\n\
+                 def Scope \"Group\"\n\
+                 {\n\
+                     def Scope \"Child\" {}\n\
+                 }\n\
+                 def Scope \"Network\" (\n\
+                     prepend apiSchemas = [\"CollectionAPI:components\"]\n\
+                 )\n\
+                 {\n\
+                     uniform token collection:components:expansionRule = \"expandPrims\"\n\
+                     prepend rel collection:components:includes = [</World/Group>]\n\
+                 }\n\
+             }\n",
+        )
+        .expect("write collection scene");
+
+        let stage = compose_file_to_stage(&scene).expect("compose collection scene");
+        let view = StageView::new(&stage);
+        let members = view
+            .collection_members(&SdfPath::new("/World/Network").unwrap(), "components")
+            .expect("compute collection members");
+        let members: Vec<String> = members.into_iter().map(|path| path.to_string()).collect();
+
+        assert!(members.contains(&"/World/Group".to_string()));
+        assert!(members.contains(&"/World/Group/Child".to_string()));
+    }
+
     /// A local `over` must win over the prim it overrides through a `references` arc.
     ///
     /// This is the exact composition shape the video campaign's episode scenes use:

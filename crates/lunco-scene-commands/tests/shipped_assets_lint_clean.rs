@@ -165,6 +165,52 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     assert!(!report.ok, "a file with lint ERRORS must not report ok");
 }
 
+#[test]
+fn a_collection_query_failure_is_not_misreported_as_an_empty_network() {
+    use lunco_hooks::HookValue as H;
+
+    register_usd_lint_policy();
+    let empty = || H::Array(Vec::new());
+    let scope = H::map([
+        ("path", H::str("/BrokenNetwork")),
+        ("parent", H::str("/")),
+        ("members", empty()),
+        ("modelica_member_count", H::Int(0)),
+        (
+            "collection_error",
+            H::str("OpenUSD membership query failed"),
+        ),
+        ("island_count", H::Int(0)),
+        ("dangling_connectors", empty()),
+        ("invalid_program_sources", empty()),
+        ("invalid_causal_properties", empty()),
+        ("ambiguous_boundary_sources", empty()),
+    ]);
+    let facts = H::map([
+        ("bodies", empty()),
+        ("joints", empty()),
+        ("prims", empty()),
+        ("collections", empty()),
+        ("filtered_pairs", empty()),
+        ("collision_groups", empty()),
+        ("network_scopes", H::Array(vec![scope])),
+    ]);
+
+    let findings = lunco_lint::run_lint("usd", facts);
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.rule == "invalid-component-collection"),
+        "the OpenUSD error must survive into policy findings: {findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding.rule != "empty-component-network"),
+        "a failed membership query is not evidence of an empty collection: {findings:?}"
+    );
+}
+
 /// The GEOMETRIC rule has teeth too, and it needs its own case.
 ///
 /// Every other rule reads schemas, ancestry or joint targets — topology, which is

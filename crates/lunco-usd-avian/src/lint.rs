@@ -516,9 +516,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .iter()
             .any(|name| name.starts_with("collection:components:"))
         {
-            let members = reader
-                .collection_members(p, "components")
-                .unwrap_or_default();
+            let (members, collection_error) = match reader.collection_members(p, "components") {
+                Ok(members) => (members, String::new()),
+                Err(error) => (Vec::new(), error),
+            };
             let member_names: HashSet<String> = members.iter().map(ToString::to_string).collect();
             let mut acausal_members = HashSet::new();
             let mut adjacency: HashMap<String, HashSet<String>> = HashMap::new();
@@ -651,6 +652,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 ),
                 ("island_count", H::Int(island_count)),
                 ("modelica_member_count", H::Int(modelica_member_count)),
+                ("collection_error", H::str(collection_error)),
                 (
                     "dangling_connectors",
                     H::Array(dangling_connectors.into_iter().map(H::str).collect()),
