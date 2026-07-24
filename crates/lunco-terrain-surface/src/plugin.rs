@@ -121,7 +121,11 @@ impl Plugin for TerrainSurfacePlugin {
         // This is a `lunco_time::SimHolds` hold, NOT a transport pause: the user's
         // play state is untouched, so the scene does not open "paused" while the
         // DEM bakes and resumes on its own the moment the terrain is safe to step.
-        app.add_systems(Update, crate::collider_ring::hold_physics_until_dem_ready);
+        app.add_systems(
+            Update,
+            crate::collider_ring::hold_physics_until_dem_ready
+                .after(crate::collider_ring::update_collider_ring),
+        );
         // NOTE: the "tunnel rescue" safety net was DELETED. It masked the real
         // defect — physics resumed one frame before the ring collider was live in
         // avian's broad-phase (`hold_physics_until_dem_ready` gated on queued map

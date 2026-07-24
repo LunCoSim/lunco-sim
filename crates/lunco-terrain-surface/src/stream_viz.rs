@@ -100,12 +100,18 @@ const NODE_ERROR_PROBE_RES: usize = 9;
 pub struct TerrainVisualFocus {
     /// Distance ahead of the camera to pre-refine visible terrain.
     pub prefetch_distance_m: f64,
+    /// Radius around the camera guaranteed to use the finest visual geometry.
+    ///
+    /// This covers nearby subjects (for example a third-person rover) without
+    /// making physics bodies visual-LOD authorities.
+    pub near_detail_radius_m: f64,
 }
 
 impl Default for TerrainVisualFocus {
     fn default() -> Self {
         Self {
             prefetch_distance_m: 80.0,
+            near_detail_radius_m: 30.0,
         }
     }
 }
@@ -115,6 +121,7 @@ struct VisualDemand {
     position: DVec3,
     forward: DVec3,
     prefetch_distance_m: f64,
+    near_detail_radius_m: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -122,6 +129,10 @@ struct TerrainVisualDemand {
     focus: [f64; 2],
     eye_height: f64,
     heading: Option<bevy::math::DVec2>,
+    /// The camera's actual ground position. Prefetch samples influence selection
+    /// and priority, but only this exact point gates startup readiness.
+    required: bool,
+    near_detail_radius_m: f64,
 }
 
 /// Frame-local detail demands collected once from explicit ECS focus markers.
@@ -167,6 +178,7 @@ pub(crate) fn collect_terrain_detail_demands(
                     position,
                     forward: (transform.rotation * Vec3::NEG_Z).as_dvec3(),
                     prefetch_distance_m: focus.prefetch_distance_m.max(0.0),
+                    near_detail_radius_m: focus.near_detail_radius_m.max(0.0),
                 })
             }),
     );
@@ -958,9 +970,10 @@ impl Default for TerrainLodConfig {
         #[cfg(target_arch = "wasm32")]
         let bakes_per_frame = 1;
         #[cfg(not(target_arch = "wasm32"))]
-        // Sized so the coarse-parent fallback fills before it reads as missing
-        // terrain at the default pixel error.
-        let bakes_per_frame = 8;
+        // Native bakes stay off-thread. Issue enough work to fill the guaranteed
+        // camera near field as one burst instead of revealing a few sibling
+        // groups per rendered frame (the visible startup "clickering").
+        let bakes_per_frame = 24;
         TerrainLodConfig {
             pixel_error: TARGET_PIXEL_ERROR,
             max_depth: MAX_DEPTH,
@@ -1360,6 +1373,72 @@ pub struct TerrainStreamStatus {
     /// camera means areas hold on coarser parents until `tile_budget` is raised
     /// or `pixel_error` coarsened.
     pub budget_refused: usize,
+    /// Active camera positions inside a streaming terrain footprint.
+    pub focus_wanted: usize,
+    /// Camera positions whose exact selected tile (not a coarse fallback) is ready.
+    pub focus_resident: usize,
+}
+
+fn required_focus_depth(
+    cover: &HashSet<QuadCoord>,
+    demands: &[TerrainVisualDemand],
+    quadtree: &Quadtree,
+) -> Option<u8> {
+    demands
+        .iter()
+        .filter(|demand| demand.required)
+        .filter_map(|demand| {
+            cover
+                .iter()
+                .copied()
+                .find(|&coord| quadtree.region(coord).distance_to(demand.focus) <= f64::EPSILON)
+                .map(|coord| coord.depth)
+        })
+        .min()
+}
+
+fn near_field_error_floor(region: Square, tile_res: usize, demands: &[TerrainVisualDemand]) -> f64 {
+    demands
+        .iter()
+        .any(|focus| {
+            focus.required && region.distance_to(focus.focus) <= focus.near_detail_radius_m
+        })
+        .then(|| region.side() / (tile_res - 1) as f64)
+        .unwrap_or(0.0)
+}
+
+fn cached_node_error(
+    cache: &std::cell::RefCell<&mut HashMap<QuadCoord, f64>>,
+    coord: QuadCoord,
+    measure: impl FnOnce() -> f64,
+) -> f64 {
+    // Copy the value out in its own scope. Keeping the `Ref` temporary alive
+    // through the miss branch and then calling `borrow_mut` is a runtime panic.
+    if let Some(error) = { cache.borrow().get(&coord).copied() } {
+        return error;
+    }
+    let error = measure();
+    cache.borrow_mut().insert(coord, error);
+    error
+}
+
+fn add_focus_readiness(
+    status: &mut TerrainStreamStatus,
+    demands: &[TerrainVisualDemand],
+    selected: impl IntoIterator<Item = QuadCoord> + Clone,
+    quadtree: &Quadtree,
+    is_ready: impl Fn(QuadCoord) -> bool,
+) {
+    for demand in demands.iter().filter(|demand| demand.required) {
+        status.focus_wanted += 1;
+        let selected_coord = selected
+            .clone()
+            .into_iter()
+            .find(|&coord| quadtree.region(coord).distance_to(demand.focus) <= f64::EPSILON);
+        if selected_coord.is_some_and(&is_ready) {
+            status.focus_resident += 1;
+        }
+    }
 }
 
 /// **Run tile streaming in LOCKSTEP with the frame instead of against the wall
@@ -1627,26 +1706,49 @@ pub fn update_lod_tiles(
             let local_forward = demand.forward;
             let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
             let heading = (heading.length() > 1e-3).then(|| heading.normalize());
-            let mut push_focus = |xz: [f64; 2]| {
+            let mut push_focus = |xz: [f64; 2], required: bool| {
+                if xz[0].abs() > h || xz[1].abs() > h {
+                    return;
+                }
                 let ground = oracle.height_at(xz[0], xz[1]);
                 visual_foci.push(TerrainVisualDemand {
                     focus: xz,
                     eye_height: (local.y - ground).max(0.0),
                     heading,
+                    required,
+                    near_detail_radius_m: required
+                        .then_some(demand.near_detail_radius_m)
+                        .unwrap_or(0.0),
                 });
             };
             let here = [local.x, local.z];
-            push_focus(here);
+            push_focus(here, true);
             if let Some(direction) = heading {
                 let lead = demand.prefetch_distance_m.min(2.0 * h);
                 for fraction in [0.25, 0.5, 1.0] {
-                    push_focus([
-                        here[0] + direction.x * lead * fraction,
-                        here[1] + direction.y * lead * fraction,
-                    ]);
+                    push_focus(
+                        [
+                            here[0] + direction.x * lead * fraction,
+                            here[1] + direction.y * lead * fraction,
+                        ],
+                        false,
+                    );
                 }
             }
         }
+        let quadtree_for = |px: f64| {
+            Quadtree::from_screen_metric(
+                h,
+                cfg.max_depth.max(1),
+                h,
+                CANON_SCREEN_H_PX,
+                CANON_FOV_Y_RAD,
+                px,
+            )
+        };
+        let base_px = cfg.pixel_error.clamp(0.5, 32.0);
+        let pixel_error = base_px;
+        let qt = quadtree_for(pixel_error);
         // ── Idle-camera fast path ────────────────────────────────────────────
         // The selection below (quadtree walks + budget-coarsen loop + sort + queue
         // + retain) is a pure function of (focus, eye height, generation, oracle
@@ -1688,6 +1790,18 @@ pub fn update_lod_tiles(
                 stream_status.wanted += tiles.tiles.len();
                 stream_status.resident += tiles.tiles.len();
                 stream_status.budget_refused += tiles.budget_refused;
+                add_focus_readiness(
+                    &mut stream_status,
+                    visual_foci,
+                    tiles.cover.iter().copied(),
+                    &qt,
+                    |coord| {
+                        tiles
+                            .tiles
+                            .get(&coord)
+                            .is_some_and(|slot| slot.ready && slot.drawn)
+                    },
+                );
                 continue;
             }
             tiles.last_sig = Some(sig);
@@ -1696,24 +1810,11 @@ pub fn update_lod_tiles(
         // per-terrain (changing it would invalidate the mesh cache). The range
         // factor derives from the CANONICAL screen metric (fixed viewport + the
         // pixel_error knob) so selection stays view-independent + peer-identical.
-        let quadtree_for = |px: f64| {
-            Quadtree::from_screen_metric(
-                h,
-                cfg.max_depth.max(1),
-                h,
-                CANON_SCREEN_H_PX,
-                CANON_FOV_Y_RAD,
-                px,
-            )
-        };
-        let base_px = cfg.pixel_error.clamp(0.5, 32.0);
         // FIXED metric. `pixel_error` is a pure quality knob again — it is never
         // moved to chase the tile budget, so every refine distance (and therefore
         // every tile's `morph_end` and material band bucket) is stable frame to
         // frame. The budget is enforced incrementally instead; see `evolve_cover`.
         // This also restores view-independent, peer-identical selection.
-        let pixel_error = base_px;
-        let qt = quadtree_for(pixel_error);
         // ERROR-DRIVEN selection: refine where the MEASURED surface error says
         // there is detail worth refining toward (crater rims, peaks), not on the
         // uniform per-depth schedule. Errors are memoized per node against the
@@ -1726,18 +1827,25 @@ pub fn update_lod_tiles(
         let err_map = std::cell::RefCell::new(&mut errs.map);
         let src: &SurfaceOracle = hf.0.as_ref();
         let node_error = |c: QuadCoord, region: Square| -> f64 {
-            if let Some(&e) = err_map.borrow().get(&c) {
-                return e;
-            }
-            // Gate over-zoom synthesis at the probe's own spacing: sub-probe
-            // detail can't inform THIS node's refinement (it surfaces at deeper
-            // nodes, whose finer probes see it) — and it keeps coarse-node
-            // probes cheap.
-            let probe_step = region.side() / (NODE_ERROR_PROBE_RES - 1) as f64;
-            let limited = src.detail_limited(probe_step);
-            let e = measure_node_error(&limited, region, NODE_ERROR_PROBE_RES);
-            err_map.borrow_mut().insert(c, e);
-            e
+            let measured = cached_node_error(&err_map, c, || {
+                // The probe estimates the resolved parent approximation error.
+                // Over-zoom remains Nyquist-gated here so the cached measurement
+                // stays camera-independent.
+                let probe_step = region.side() / (NODE_ERROR_PROBE_RES - 1) as f64;
+                let limited = src.detail_limited(probe_step);
+                measure_node_error(&limited, region, NODE_ERROR_PROBE_RES)
+            });
+            // A sparse coarse-node probe cannot discover a small crater that lies
+            // between its samples. Without a conservative near-field floor, that
+            // zero error prevents the camera's branch from ever being split, so
+            // the deeper probe that *could* see the crater is never reached.
+            //
+            // Use the tile's own vertex pitch as its conservative geometric error
+            // only on branches containing an actual camera. This is standard
+            // observer-centred CDLOD: it guarantees fine geometry under the view
+            // without globally refining flat/far terrain or turning look-ahead
+            // samples into false camera positions.
+            measured.max(near_field_error_floor(region, tile_res, visual_foci))
         };
         // Fit the tile budget by COARSENING THE METRIC, not by capping the walk.
         // A hard cap (`select_with_error_budgeted`) stops refinement at a
@@ -1803,8 +1911,21 @@ pub fn update_lod_tiles(
                     .iter()
                     .map(|demand| (demand.focus, demand.eye_height)),
             );
-            tiles.budget_refused =
-                evolve_cover_for_foci(&qt, &mut tiles.cover, focus_metric, &node_error, budget);
+            tiles.budget_refused = 0;
+            // One evolve pass can split a branch by one level because candidates
+            // are snapshotted before edits. Drive only the required camera
+            // branches to their fixed point in this same update; otherwise an
+            // eight-level tree takes eight rendered frames to discover the tile
+            // beneath a newly active camera.
+            for _ in 0..cfg.max_depth.max(1) {
+                let before = required_focus_depth(&tiles.cover, visual_foci, &qt);
+                tiles.budget_refused +=
+                    evolve_cover_for_foci(&qt, &mut tiles.cover, focus_metric, &node_error, budget);
+                let after = required_focus_depth(&tiles.cover, visual_foci, &qt);
+                if after == before || after == Some(cfg.max_depth) {
+                    break;
+                }
+            }
             sel = tiles
                 .cover
                 .iter()
@@ -1822,9 +1943,27 @@ pub fn update_lod_tiles(
 
         // Selection is authoritative. Drop superseded generations and camera
         // requests no longer selected before they can occupy every worker slot.
+        // While an exact camera-underfoot tile is missing, background coarse-base
+        // preload (except the root safety carpet) must yield its worker slots.
+        // Otherwise a camera arriving during startup can wait behind an entire
+        // breadth-first preload even though its selected tile is first in the new
+        // queue.
+        let urgent_missing = sel.iter().any(|selected| {
+            visual_foci.iter().any(|demand| {
+                demand.required
+                    && selected.region.distance_to(demand.focus) <= f64::EPSILON
+                    && !tiles
+                        .tiles
+                        .get(&selected.coord)
+                        .is_some_and(|slot| slot.gen == cur_gen && slot.ready)
+            })
+        });
         let pending_before = pending.0.len();
         pending.0.retain(|coord, (gen, _)| {
-            *gen == cur_gen && (wanted.contains(coord) || coord.depth <= COARSE_N)
+            *gen == cur_gen
+                && (wanted.contains(coord)
+                    || *coord == QuadCoord::ROOT
+                    || (!urgent_missing && coord.depth <= COARSE_N))
         });
         stream_status.stale_cancelled += pending_before - pending.0.len();
         // Intelligent baking, two phases:
@@ -1851,12 +1990,15 @@ pub fn update_lod_tiles(
         // existed (that absence is what made the terrain go black). The coarse base now does
         // that job properly: it is enumerated, not selected, and queued ahead of `sel`. So
         // this sort only has to order the SELECTION, by screen-space benefit.
-        // Minimum screen-space benefit across every active camera. A tile needed
-        // by either viewport ranks early; one camera can never starve another.
+        // Minimum screen-space benefit across actual active camera positions.
+        // Prefetch samples shape the selected cover, but are not substitute
+        // viewpoints: letting an 80 m look-ahead endpoint compete as an equal
+        // focus delayed the tile directly beneath the camera.
         let benefit = |s: &Selected| -> f64 {
             let size = s.region.half * 2.0;
             visual_foci
                 .iter()
+                .filter(|visual| visual.required)
                 .map(|visual| {
                     let to = bevy::math::DVec2::new(
                         s.region.center[0] - visual.focus[0],
@@ -1876,12 +2018,20 @@ pub fn update_lod_tiles(
                 .reduce(f64::min)
                 .unwrap_or(f64::INFINITY)
         };
+        let camera_underfoot = |s: &Selected| {
+            visual_foci
+                .iter()
+                .any(|visual| visual.required && s.region.distance_to(visual.focus) <= f64::EPSILON)
+        };
         // Decorate-sort-undecorate: `dist2`/`benefit` pay a sqrt/dot per call and
         // the comparator re-ran them on BOTH sides of every comparison
         // (O(n log n) evaluations) — compute each tile's key once, sort on the
         // cached key.
         keyed.clear();
-        keyed.extend(sel.drain(..).map(|s| (0u8, 0u8, benefit(&s), s)));
+        keyed.extend(sel.drain(..).map(|s| {
+            let priority = u8::from(!camera_underfoot(&s));
+            (priority, 0, benefit(&s), s)
+        }));
         keyed.sort_by(|a, b| {
             (a.0, a.1)
                 .cmp(&(b.0, b.1))
@@ -2232,6 +2382,18 @@ pub fn update_lod_tiles(
             .count();
         stream_status.pending += pending.0.len();
         stream_status.budget_refused += tiles.budget_refused;
+        add_focus_readiness(
+            &mut stream_status,
+            visual_foci,
+            sel.iter().map(|selected| selected.coord),
+            &qt,
+            |coord| {
+                tiles
+                    .tiles
+                    .get(&coord)
+                    .is_some_and(|slot| slot.ready && slot.drawn)
+            },
+        );
 
         // Bound the mesh cache: when it grows past the cap, drop THIS terrain's
         // non-resident meshes (deterministic geometry → they re-bake on demand).
@@ -2553,6 +2715,90 @@ mod draw_partition_tests {
         // range_factor 1.0 → refine_range == node error, so the tests state
         // distances directly in metres.
         Quadtree::new(1000.0, 6, 1.0, 100.0)
+    }
+
+    #[test]
+    fn camera_near_field_reaches_finest_cover_while_prefetch_does_not_force_it() {
+        let qt = Quadtree::from_screen_metric(
+            1000.0,
+            6,
+            1000.0,
+            CANON_SCREEN_H_PX,
+            CANON_FOV_Y_RAD,
+            TARGET_PIXEL_ERROR,
+        );
+        let actual = TerrainVisualDemand {
+            focus: [0.0, 0.0],
+            eye_height: 3.0,
+            heading: None,
+            required: true,
+            near_detail_radius_m: 30.0,
+        };
+        let prefetch = TerrainVisualDemand {
+            focus: [80.0, 0.0],
+            eye_height: 3.0,
+            heading: None,
+            required: false,
+            near_detail_radius_m: 0.0,
+        };
+        let demands = [actual, prefetch];
+        let foci = demands
+            .iter()
+            .map(|demand| (demand.focus, demand.eye_height))
+            .collect::<Vec<_>>();
+        let error =
+            |_coord: QuadCoord, region: Square| near_field_error_floor(region, TILE_RES, &demands);
+        let mut cover = HashSet::new();
+
+        for _ in 0..qt.max_depth {
+            evolve_cover_for_foci(&qt, &mut cover, &foci, &error, 768);
+        }
+
+        assert_eq!(
+            required_focus_depth(&cover, &demands, &qt),
+            Some(qt.max_depth),
+            "the exact camera branch must reach finest detail in the opening update"
+        );
+        let nearby_depth = cover
+            .iter()
+            .find(|&&coord| qt.region(coord).distance_to([20.0, 0.0]) <= f64::EPSILON)
+            .map(|coord| coord.depth)
+            .expect("nearby subject point must remain covered");
+        assert_eq!(
+            nearby_depth, qt.max_depth,
+            "the guaranteed camera near field must cover nearby visible subjects"
+        );
+        let prefetch_depth = cover
+            .iter()
+            .find(|&&coord| qt.region(coord).distance_to(prefetch.focus) <= f64::EPSILON)
+            .map(|coord| coord.depth)
+            .expect("prefetch point must remain covered");
+        assert!(
+            prefetch_depth < qt.max_depth,
+            "look-ahead may guide normal error selection but must not masquerade as a camera"
+        );
+    }
+
+    #[test]
+    fn repeated_same_frame_node_error_cache_miss_then_hits_do_not_overlap_borrows() {
+        let coord = QuadCoord::ROOT;
+        let mut storage = HashMap::new();
+        let cache = std::cell::RefCell::new(&mut storage);
+        let measurements = std::cell::Cell::new(0usize);
+
+        for _ in 0..16 {
+            let error = cached_node_error(&cache, coord, || {
+                measurements.set(measurements.get() + 1);
+                42.0
+            });
+            assert_eq!(error, 42.0);
+        }
+
+        assert_eq!(
+            measurements.get(),
+            1,
+            "one miss must insert once; repeated refinement passes must be cache hits"
+        );
     }
 
     /// The cover must remain an exact, disjoint REPLACE cover of the root after any

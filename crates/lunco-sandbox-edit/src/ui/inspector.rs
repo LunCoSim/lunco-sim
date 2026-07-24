@@ -1301,12 +1301,17 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     {
         ui.separator();
         ui.label(format!(
-            "Tiles: {}/{} resident · {} baking",
-            status.resident, status.wanted, status.pending
+            "Tiles: {}/{} resident · view {}/{} ready · {} baking",
+            status.resident,
+            status.wanted,
+            status.focus_resident,
+            status.focus_wanted,
+            status.pending
         ))
         .on_hover_text(
             "Wanted tiles with a mesh on screen / wanted by the current selection; \
-             baking = off-thread height bakes in flight (transient fill).",
+             view ready requires the exact selected tile beneath every active camera, \
+             not merely a coarse fallback; baking = off-thread height bakes in flight.",
         );
         if status.stale_cancelled > 0 {
             ui.label(format!(
