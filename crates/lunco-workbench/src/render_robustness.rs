@@ -1,5 +1,5 @@
 //! Render-backend robustness: keep the app alive through transient GPU
-//! validation errors, and steer Windows onto DX12.
+//! validation errors, and steer Windows away from the failing DX12 resize path.
 //!
 //! Motivated by two wgpu panics seen on Windows when *resizing the window*:
 //!
@@ -15,9 +15,9 @@
 //!
 //! Two independent, complementary mitigations:
 //!
-//! * [`preferred_wgpu_settings`] narrows the backend mask to DX12 on Windows so
-//!   wgpu never selects the Vulkan adapter that exhibits both bugs. *Prevents*
-//!   the races entirely on Windows; overridable via `WGPU_BACKEND`.
+//! * [`preferred_wgpu_settings`] selects Vulkan on Windows. The DX12 backend
+//!   can leave a swapchain permanently invalid after `ResizeBuffers` rejects a
+//!   resize; `WGPU_BACKEND` remains the explicit override.
 //! * [`install_wgpu_error_handler`] replaces wgpu's default panic-on-uncaptured
 //!   -error with a logging handler. *Survives* a stray validation error on any
 //!   platform/backend: validation errors do not lose the device, so the bad
@@ -31,7 +31,7 @@ use bevy::render::{renderer::RenderDevice, settings::WgpuSettings, RenderApp, Re
 
 /// Base [`WgpuSettings`] with a platform-tuned backend preference.
 ///
-/// Windows: default to DX12 (sidesteps the Vulkan resize panics) unless the
+/// Windows: default to Vulkan (sidesteps DX12 swapchain resize failures) unless the
 /// user set `WGPU_BACKEND` explicitly — that env var stays the escape hatch.
 /// Every other platform keeps wgpu's defaults untouched.
 pub fn preferred_wgpu_settings() -> WgpuSettings {
@@ -40,10 +40,26 @@ pub fn preferred_wgpu_settings() -> WgpuSettings {
     #[cfg(target_os = "windows")]
     {
         if std::env::var_os("WGPU_BACKEND").is_none() {
-            settings.backends = Some(bevy::render::settings::Backends::DX12);
+            settings.backends = Some(bevy::render::settings::Backends::VULKAN);
         }
     }
     settings
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::preferred_wgpu_settings;
+    use bevy::render::settings::Backends;
+
+    #[test]
+    fn windows_defaults_to_vulkan_when_not_overridden() {
+        // Cargo test inherits the environment, so this test only describes the
+        // default path. An explicit `WGPU_BACKEND` is intentionally allowed to
+        // select another backend for driver diagnostics.
+        if std::env::var_os("WGPU_BACKEND").is_none() {
+            assert_eq!(preferred_wgpu_settings().backends, Some(Backends::VULKAN));
+        }
+    }
 }
 
 /// Replace wgpu's default panic-on-uncaptured-error with a logging handler.

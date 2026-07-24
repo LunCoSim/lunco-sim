@@ -319,6 +319,60 @@ pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
     app
 }
 
+/// Construct the sandbox's primary window for the custom workbench chrome.
+///
+/// The workbench owns the edge hit testing for undecorated Windows/Linux
+/// windows. It delegates the actual OS gesture to winit, which requires this
+/// window to remain resizable.
+#[cfg(feature = "ui")]
+fn sandbox_window(
+    title: String,
+    present_mode: bevy::window::PresentMode,
+    vertical: bool,
+) -> Window {
+    let mut window = Window {
+        // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
+        #[cfg(target_arch = "wasm32")]
+        canvas: Some("#bevy".to_string()),
+        #[cfg(target_arch = "wasm32")]
+        fit_canvas_to_parent: true,
+        present_mode,
+        // Centralized merged-titlebar chrome + persisted geometry.
+        ..lunco_workbench::restored_window(title)
+    };
+    if vertical {
+        window.resolution = bevy::window::WindowResolution::new(540, 960);
+    } else {
+        window.resolution = bevy::window::WindowResolution::new(1280, 720);
+    }
+    // `merged_titlebar_window` removes Windows' native frame, so the workbench
+    // supplies edge-resize hit testing and forwards it to winit with
+    // `start_drag_resize`. That API only accepts a resizable window; disabling
+    // it makes the custom resize path invalid and can leave DX12's swap chain in
+    // use during a ResizeBuffers reconfiguration.
+    window.resizable = true;
+    window
+}
+
+#[cfg(all(test, feature = "ui"))]
+mod window_tests {
+    use super::sandbox_window;
+
+    #[test]
+    fn custom_chrome_window_remains_resizable() {
+        let window = sandbox_window(
+            "sandbox test".to_string(),
+            bevy::window::PresentMode::Fifo,
+            false,
+        );
+
+        assert!(
+            window.resizable,
+            "the workbench delegates border drags to winit, which requires a resizable window"
+        );
+    }
+}
+
 /// Engine-level plugin set, render/UI stripped when `headless`.
 ///
 /// `pub` so [`build_sim_app`] is not the only way in for a binary that genuinely
@@ -432,25 +486,7 @@ pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGrou
             .disable::<bevy::winit::WinitPlugin>()
     } else {
         group.set(WindowPlugin {
-            primary_window: Some({
-                let mut window = Window {
-                    // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
-                    #[cfg(target_arch = "wasm32")]
-                    canvas: Some("#bevy".to_string()),
-                    #[cfg(target_arch = "wasm32")]
-                    fit_canvas_to_parent: true,
-                    present_mode,
-                    // Centralized merged-titlebar chrome + persisted geometry.
-                    ..lunco_workbench::restored_window(window_title)
-                };
-                if vertical {
-                    window.resolution = bevy::window::WindowResolution::new(540, 960);
-                } else {
-                    window.resolution = bevy::window::WindowResolution::new(1280, 720);
-                }
-                window.resizable = false;
-                window
-            }),
+            primary_window: Some(sandbox_window(window_title, present_mode, vertical)),
             ..default()
         })
     };
