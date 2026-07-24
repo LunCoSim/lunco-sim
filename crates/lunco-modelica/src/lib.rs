@@ -1152,6 +1152,8 @@ pub mod ui;
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
 pub mod msl_remote;
+/// Profile-aware construction boundary for rumoca simulation sessions.
+pub mod simulation_session;
 pub mod source_asset;
 
 /// Tuning resource for [`ModelicaPlugin`] / [`ui::ModelicaUiPlugin`].
@@ -1891,7 +1893,6 @@ pub struct ModelicaOutput {
 mod observables_smoke {
     use super::*;
     use lunco_experiments::RunBounds;
-    use rumoca_sim::SimulationSession;
 
     /// End-to-end smoke test for the observables pipeline: compile the
     /// bundled RocketEngine, run one step at full throttle, and assert
@@ -1945,7 +1946,7 @@ mod observables_smoke {
             t_end: 10.0,
             ..Default::default()
         });
-        let mut stepper = SimulationSession::new(&r.dae, opts).expect("stepper ok");
+        let mut stepper = crate::simulation_session::interactive(&r.dae, opts).expect("stepper ok");
         stepper
             .set_input("throttle", 1.0)
             .expect("throttle is an input");

@@ -50,6 +50,10 @@
 //       EVERY prim applying any schema at all — the generic projection, so a new
 //       rule about a schema nobody has thought about yet needs no Rust change.
 //
+//   facts.legacy_program_prims[]  paths authored as the retired `LunCoProgram`
+//       concrete type. This narrow fact exists because an unregistered concrete
+//       type has no applied schemas and therefore cannot appear in `facts.prims`.
+//
 //   facts.collections[] #{ path, parent, name, members[] }
 //       standard computed collection membership from the composed stage.
 //
@@ -102,6 +106,7 @@ fn schemas_of(facts, path) {
 
 fn lint_usd(facts) {
     let out = [];
+    for f in retired_program_prim_type(facts) { out.push(f); }
     for f in nested_body_no_joint(facts) { out.push(f); }
     for f in joint_target_not_a_body(facts) { out.push(f); }
     for f in dynamic_body_no_collider(facts) { out.push(f); }
@@ -117,6 +122,18 @@ fn lint_usd(facts) {
     for f in invalid_network_program_source(facts) { out.push(f); }
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
+    out
+}
+
+/// `LunCoProgram` was a concrete type. Programs are an applied capability so
+/// they compose onto a `Scope` (or intrinsic owner) instead.
+fn retired_program_prim_type(facts) {
+    let out = [];
+    for path in facts.legacy_program_prims {
+        let m = "uses retired concrete type LunCoProgram — author a Scope with ";
+        m += "prepend apiSchemas = [LunCoProgramAPI] and keep the standard info:* source fields.";
+        out.push(finding("retired-program-prim-type", "error", path, m));
+    }
     out
 }
 

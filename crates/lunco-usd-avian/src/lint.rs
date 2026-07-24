@@ -442,7 +442,11 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     sorted.sort();
 
     let mut body_facts: Vec<H> = Vec::new();
+    let mut legacy_program_prims: Vec<H> = Vec::new();
     for p in &paths {
+        if reader.prim_type_name(p).as_deref() == Some("LunCoProgram") {
+            legacy_program_prims.push(H::str(p.to_string()));
+        }
         let path = p.to_string();
         if !bodies.contains(&path) {
             continue;
@@ -752,6 +756,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("collections", H::Array(collections)),
         ("network_scopes", H::Array(network_scopes)),
         ("prims", H::Array(prims)),
+        ("legacy_program_prims", H::Array(legacy_program_prims)),
     ])
 }
 

@@ -166,8 +166,7 @@ def Scope "Scenario" ( kind = "component" )
 
     def Scope "Mission" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @scenarios/rover_surface_ops.rhai@
-        # or author the mission state machine in place:
-        # uniform string lunco:program:sourceCode = """ … """
+        # Keep production mission logic in the referenced source asset.
     }
 }
 ```

@@ -305,8 +305,7 @@ def Xform "Rover_01"
 {
     def Scope "Patrol" (prepend apiSchemas = ["LunCoProgramAPI"]) {
         uniform asset info:sourceAsset = @scenarios/patrol.rhai@
-        # or author the source in place:
-        # uniform string lunco:program:sourceCode = '''fn on_tick(me){ ... }'''
+        # File-backed source is canonical for production programs.
 
         # per-instance config: one typed attribute per key, read by param(me, "speed", 1.0)
         custom float lunco:param:speed = 2.0

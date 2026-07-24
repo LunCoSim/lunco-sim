@@ -83,7 +83,7 @@ fn live_stepper_options() -> rumoca_sim::SimOptions {
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
 ) -> Result<SimulationSession, rumoca_sim::SimulationDiagnosticError> {
-    SimulationSession::new(&comp_res.dae, live_stepper_options())
+    crate::simulation_session::live(&comp_res.dae, live_stepper_options())
 }
 
 /// Channels for communicating with the background simulation worker.

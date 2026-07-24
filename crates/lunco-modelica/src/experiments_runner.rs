@@ -888,7 +888,7 @@ pub fn drive_run(
             run_batch_sim(dae, &batch_opts, started, sink);
         }
         lunco_experiments::RuntimeMode::Interactive => {
-            let mut stepper = match rumoca_sim::SimulationSession::new(dae, stepper_opts) {
+            let mut stepper = match crate::simulation_session::interactive(dae, stepper_opts) {
                 Ok(s) => s,
                 Err(e) => {
                     sink.emit(RunUpdate::Failed {
@@ -1819,7 +1819,7 @@ mod tests {
         };
         let opts = stepper_options_from_bounds(&bounds);
         let mut stepper =
-            rumoca_sim::SimulationSession::new(&compiled.dae, opts).expect("build stepper");
+            crate::simulation_session::interactive(&compiled.dae, opts).expect("build stepper");
         let step_dt =
             crate::sim_target::resolve_step_dt(0.0, bounds.t_end, bounds.dt, bounds.n_intervals);
         println!(
