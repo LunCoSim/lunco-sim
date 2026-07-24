@@ -203,7 +203,16 @@ impl<'w> WaypointDocContext<'w> {
 /// Bevy's 16-argument limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct WaypointClickFrame<'w, 's> {
-    pub cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera3d>>,
+    pub cameras: Query<
+        'w,
+        's,
+        (
+            &'static Camera,
+            &'static GlobalTransform,
+            &'static bevy::camera::RenderTarget,
+        ),
+        With<Camera3d>,
+    >,
     pub q_parents: Query<'w, 's, &'static ChildOf>,
 }
 
@@ -223,7 +232,9 @@ fn pick_ground_world(
     egui_focus: &EguiFocus,
     pointer: Vec2,
 ) -> Option<DVec3> {
-    let (camera, cam_gtf) = frame.cameras.iter().find(|(c, _)| c.is_active)?;
+    let (camera, cam_gtf, _) = frame.cameras.iter().find(|(camera, _, target)| {
+        camera.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
+    })?;
     let ray = lunco_core::scene_click_ray(egui_focus, camera, cam_gtf, pointer)?;
     let origin = ray.origin.as_dvec3();
     let dir = ray.direction.as_dvec3();

@@ -2,7 +2,7 @@
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
+use big_space::prelude::Grid;
 use lunco_usd_bevy::UsdStageAsset;
 use std::collections::HashMap;
 
@@ -514,7 +514,7 @@ pub fn on_scene_click_spawn(
     keys: Res<ButtonInput<KeyCode>>,
     q_grids: Query<(Entity, &Grid)>,
     q_ghost: Query<Entity, With<SpawnGhost>>,
-    cameras: Query<(&Camera, &GlobalTransform, &CellCoord, &Transform), With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     // `GridSpatialQuery`, not raw `SpatialQuery` — same choke point the ghost preview
     // (and wheels / altimeter) use: the click ray + corner probes originate in the
@@ -538,9 +538,9 @@ pub fn on_scene_click_spawn(
     // cast the ray against colliders so placement works on streamed terrain even
     // when no pickable tile is under the cursor (the old `hit.position` guard
     // silently rejected those clicks — the "can't place on the ground" bug).
-    let Some((camera, cam_gtf, _cam_cell, _cam_local)) =
-        cameras.iter().find(|(c, _, _, _)| c.is_active)
-    else {
+    let Some((camera, cam_gtf, _)) = cameras.iter().find(|(camera, _, target)| {
+        camera.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
+    }) else {
         return;
     };
     let Some(ray) = lunco_core::scene_click_ray(
