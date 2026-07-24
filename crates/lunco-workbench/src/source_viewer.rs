@@ -265,9 +265,7 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
                     else {
                         continue;
                     };
-                    lunco_assets::discovery::list_all_assets(manifest, roots)
-                        .into_iter()
-                        .find(|asset| asset.asset_path == asset_path)
+                    lunco_assets::discovery::resolve_asset(manifest, roots, &asset_path)
                 };
                 if let Some(asset) = asset {
                     let path = asset.abs_path.clone();

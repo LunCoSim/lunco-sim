@@ -185,7 +185,7 @@ impl Plugin for CoSimPlugin {
                     // then skips force application, which is the intent.
                     .run_if(
                         resource_exists::<Time<avian3d::prelude::Physics>>
-                            .and(lunco_physics::physics_is_live),
+                            .and_then(lunco_physics::physics_is_live),
                     )
                     .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
                         // Absent role (single-player, headless tests) → run.

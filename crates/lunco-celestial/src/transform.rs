@@ -62,7 +62,7 @@ use bevy::prelude::{Component, Reflect, ReflectComponent};
 use crate::coords::ecliptic_to_bevy;
 use crate::ephemeris::EphemerisProvider;
 use crate::frames::{
-    BodyFixed, BodyId, BodyInertial, Center, LPoint, Pair, Pos, SiteEnu, Solar, Synodic,
+    BodyFixed, BodyId, BodyInertial, Center, LPoint, Pair, Pos, Solar, Synodic,
 };
 use crate::geo;
 use crate::registry::CelestialBodyRegistry;

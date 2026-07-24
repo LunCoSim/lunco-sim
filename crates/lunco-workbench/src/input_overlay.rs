@@ -18,6 +18,7 @@ pub struct InputOverlaySettings {
 /// Simulated inputs from scripts or playback.
 #[derive(Resource, Default, Clone, Debug)]
 pub struct SimulatedInputs {
+    /// The set of keys currently held by the simulated input source.
     pub keys: HashSet<KeyCode>,
 }
 

@@ -362,7 +362,6 @@ impl NodeVisual for IconNodeVisual {
                 .port_connector_paths
                 .iter()
                 .find(|(name, _, _, _, _)| name == port.id.as_str());
-            let connector_path: &str = port_info.map(|(_, p, _, _, _)| p.as_str()).unwrap_or("");
             let (port_size_x_icon, port_size_y_icon, port_rotation_deg) = port_info
                 .map(|(_, _, sx, sy, rot)| (*sx, *sy, *rot))
                 .unwrap_or((20.0, 20.0, 0.0));

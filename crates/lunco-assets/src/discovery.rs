@@ -96,6 +96,85 @@ impl AssetManifest {
     }
 }
 
+/// Every file supplied by the engine library, independent of its extension.
+///
+/// This is the library-browser projection of the authoritative manifest. It is
+/// deliberately separate from [`list_assets`]: the latter answers a typed
+/// catalog question across the library and open Twins, while this answers which
+/// source files the shipped library itself exposes.
+pub fn list_library_assets(manifest: &AssetManifest) -> Vec<AssetFile> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let assets_dir = crate::assets_dir_abs();
+
+    manifest
+        .rels()
+        .iter()
+        .map(|rel| AssetFile {
+            asset_path: rel.clone(),
+            stem: stem_of(rel),
+            #[cfg(not(target_arch = "wasm32"))]
+            abs_path: assets_dir.join(rel),
+            #[cfg(target_arch = "wasm32")]
+            abs_path: std::path::PathBuf::from(rel),
+            twin: None,
+            rel: rel.clone(),
+        })
+        .collect()
+}
+
+/// Resolve a registered asset address to its native file record.
+///
+/// The library half comes solely from [`AssetManifest`]; Twin paths are accepted
+/// only when their URI names an open root and a normal relative file beneath it.
+/// This is a lookup, not a second catalog walker, so the source editor cannot
+/// open an arbitrary filesystem path by spelling it as an asset address.
+pub fn resolve_asset(
+    manifest: &AssetManifest,
+    roots: &TwinRoots,
+    asset_path: &str,
+) -> Option<AssetFile> {
+    if let Some(asset) = list_library_assets(manifest)
+        .into_iter()
+        .find(|asset| asset.asset_path == asset_path)
+    {
+        return Some(asset);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (name, rel) = crate::twin_source::parse_twin_uri(asset_path)?;
+        let rel_path = Path::new(rel);
+        if rel_path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        }) {
+            return None;
+        }
+        let root = roots.root_of(name)?;
+        let abs_path = root.join(rel_path);
+        if !abs_path.is_file() {
+            return None;
+        }
+        return Some(AssetFile {
+            asset_path: asset_path.to_string(),
+            stem: stem_of(rel),
+            rel: rel.to_string(),
+            abs_path,
+            twin: Some(name.to_string()),
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = roots;
+        None
+    }
+}
+
 /// Is `rel` a TEST asset — a scene or scenario that exists to be run by
 /// `scene_test`, not opened by a person?
 ///

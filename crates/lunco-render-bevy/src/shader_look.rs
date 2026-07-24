@@ -145,13 +145,11 @@ fn bind_shader_look(
 /// *here*, in the only crate that binds materials, so the render-free half of the
 /// graph states the intent and never names the flag.
 ///
-/// **Insert-only, deliberately.** `horizon_shade` also stamps `NotShadowCaster` on
-/// terrain entities that carry a `ShaderLook`, and it tracks its own insertions
-/// precisely so it never removes one it did not make. Clearing the flag here
-/// whenever a look says nothing about shadows would undo that from the other side.
-/// The cost is that turning `primvars:doNotCastShadows` back off needs a reload
-/// rather than taking effect live — a fair trade against silently re-enabling a
-/// shadow pass someone else switched off.
+/// **Insert-only, deliberately.** Clearing the flag here whenever a look says
+/// nothing about shadows would re-enable a shadow pass that some other authoring
+/// path switched off. The cost is that turning `primvars:doNotCastShadows` back
+/// off needs a reload rather than taking effect live — a fair trade against
+/// silently re-enabling a shadow pass someone else switched off.
 fn apply_shadow_intent(commands: &mut Commands, e: Entity, look: &ShaderLook) {
     if look.no_shadow_cast {
         commands.entity(e).try_insert(NotShadowCaster);

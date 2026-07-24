@@ -15,7 +15,6 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::ports::PortRegistry;
 use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
-use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.
@@ -1842,7 +1841,7 @@ fn bound_shader_prim_path(world: &mut World, part: Entity) -> Option<String> {
     let stage_id = prim.stage_handle.id();
     let sdf = SdfPath::new(&prim.path).ok()?;
 
-    let mut canonical = world.get_non_send_resource_mut::<CanonicalStages>()?;
+    let canonical = world.get_non_send_mut::<CanonicalStages>()?;
     let cs = canonical.get(stage_id)?;
     let view = cs.view();
 

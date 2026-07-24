@@ -130,7 +130,7 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
 /// never a source another prim reads. Exposing them as readable inputs (and not as
 /// outputs) is what keeps `read_output_port` from resolving a material parameter as
 /// a connection SOURCE and silently forming a feedback wire.
-pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
+pub(crate) const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
     list: |world, entity, out| {
         if world.get::<ShaderLook>(entity).is_none() {
             return;

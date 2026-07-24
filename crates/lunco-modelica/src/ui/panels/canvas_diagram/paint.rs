@@ -104,42 +104,6 @@ pub(super) fn paint_wire_tooltip(
     top.galley(rect.min + pad, galley, egui::Color32::PLACEHOLDER);
 }
 
-/// Paint a small filled triangle pointing from `tail` to `tip`.
-/// Used to indicate signal direction at the input end of causal
-/// connections — matches `arrow={Arrow.None,Arrow.Filled}` in MLS
-/// `Line` annotations.
-pub(super) fn paint_arrowhead(
-    painter: &egui::Painter,
-    tail: egui::Pos2,
-    tip: egui::Pos2,
-    color: egui::Color32,
-    scale: f32,
-) {
-    let dx = tip.x - tail.x;
-    let dy = tip.y - tail.y;
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < 1.0 {
-        return;
-    }
-    let (ux, uy) = (dx / len, dy / len);
-    let (px, py) = (-uy, ux); // perpendicular
-                              // Base ~9×4.5 filled triangle to match OMEdit's heavier arrow
-                              // weight on signal connections. Clamp head_len to ≤40 % of the
-                              // final-segment length so the tail never reaches past the
-                              // previous waypoint (orthogonal routing leaves a small stub at
-                              // the input port; an oversized head would eat the whole stub).
-    let head_len: f32 = (9.0 * scale).min(len * 0.4);
-    let head_halfw: f32 = head_len * 0.5;
-    let base = egui::pos2(tip.x - ux * head_len, tip.y - uy * head_len);
-    let b1 = egui::pos2(base.x + px * head_halfw, base.y + py * head_halfw);
-    let b2 = egui::pos2(base.x - px * head_halfw, base.y - py * head_halfw);
-    painter.add(egui::Shape::convex_polygon(
-        vec![tip, b1, b2],
-        color,
-        egui::Stroke::NONE,
-    ));
-}
-
 /// Selection-state brightener — shifts each channel ~30% toward white
 /// while preserving hue. Used so wires keep their domain colour even
 /// while highlighted.
