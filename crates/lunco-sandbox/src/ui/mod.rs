@@ -28,7 +28,7 @@ mod celestial_time;
 mod code_panel;
 mod models_palette;
 /// Which floating viewport overlays are shown (persisted, off by default).
-pub mod overlays;
+mod overlays;
 /// Rhai behaviour editor — edit + save + hot-reload the script on the selected
 /// prim, with a diagnostics list. The writable counterpart of `code_panel`.
 mod rhai_editor_panel;
@@ -357,7 +357,6 @@ fn force_hard_shadow_filtering(
 /// (earthshine-readable), eased like eye adaptation. Inert without the
 /// celestial hierarchy — studio scenes keep their authored EV.
 fn mode_exposure(
-    time: Res<Time>,
     // "Is there a sky?" is now the SCENE's answer, not a host flag: a celestial
     // hierarchy exists iff the scene declared bodies (`LunCoCelestialBodyAPI`).
     q_hierarchy: Query<(), With<lunco_celestial::SolarSystemRoot>>,
@@ -395,13 +394,13 @@ fn mode_exposure(
             );
             continue;
         }
-        let (target, sunlit_val) = if orbital {
-            (sun.exposure_ev100, 1.0)
+        let target = if orbital {
+            sun.exposure_ev100
         } else {
             let to_sun_site_enu = sun_dir.as_ref().map(|d| -d.0).unwrap_or(Vec3::Y);
             let elev = to_sun_site_enu.y.clamp(-1.0, 1.0).asin();
             let sunlit = ((elev + 0.02) / 0.02).clamp(0.0, 1.0);
-            (9.0 + (sun.exposure_ev100 - 9.0) * sunlit, sunlit)
+            9.0 + (sun.exposure_ev100 - 9.0) * sunlit
         };
         exposure.ev100 = target;
     }

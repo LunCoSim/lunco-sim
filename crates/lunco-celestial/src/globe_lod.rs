@@ -150,7 +150,7 @@ fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
 // the real window, not via screenshot. See memory
 // project_luncosim_viewport_and_globe_fix.
 /// Per-frame: stream each body's cube-sphere tile set against the camera.
-pub fn update_globe_lod(
+pub(crate) fn update_globe_lod(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     // `With<SceneCamera>`, NOT `With<Camera3d>`: "which entity is the scene camera?"

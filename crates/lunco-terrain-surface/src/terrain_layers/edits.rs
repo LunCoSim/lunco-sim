@@ -162,10 +162,10 @@ impl EditsLayer {
 /// kind, and no other DCC can read it. Packing bought undo atomicity ("one attribute =
 /// one undo step"), but `apply_ops_as_change_set` commits N ops as a single labelled
 /// undo step, so the reason had outlived the encoding.
-pub const EDIT_KIND: &str = "kind";
-pub const EDIT_CENTER: &str = "center";
-pub const EDIT_RADIUS: &str = "radius";
-pub const EDIT_AMOUNT: &str = "amount";
+pub(super) const EDIT_KIND: &str = "kind";
+pub(super) const EDIT_CENTER: &str = "center";
+pub(super) const EDIT_RADIUS: &str = "radius";
+pub(super) const EDIT_AMOUNT: &str = "amount";
 
 /// Parse an edit prim's `LunCoTerrainEditAPI` attributes into an identified
 /// [`EditKind`]. `id` is the prim's stable identity (its path). `None` if the prim

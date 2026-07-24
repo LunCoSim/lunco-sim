@@ -286,7 +286,6 @@ impl NodeVisual for PlotNodeVisual {
                 centre,
                 egui::vec2(2.0, 2.0),
             );
-            let theme = lunco_theme::active(ctx.ui.ctx());
             ctx.ui.painter().rect_filled(marker, 1.0, theme.colors.surface2);
             return;
         }
@@ -297,7 +296,6 @@ impl NodeVisual for PlotNodeVisual {
         // area (e.g. paint over the Telemetry panel when the plot
         // node is dragged near the right edge of the canvas).
         let canvas_clip = ctx.ui.clip_rect();
-        let theme = lunco_theme::active(ctx.ui.ctx());
         let stroke = if selected {
             egui::Stroke::new(2.0, theme.tokens.accent)
         } else {

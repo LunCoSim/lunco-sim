@@ -19,7 +19,6 @@
 //! `lunco_environment::horizon::finish_shadow_cache_bake`, preserving the original
 //! single-crate `.chain()`.
 
-use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
@@ -49,28 +48,6 @@ pub(crate) fn build(app: &mut App) {
             // below so an app without `ShaderMaterialPlugin` degrades quietly).
             .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
     );
-}
-
-/// Marker: the horizon system inserted [`NotShadowCaster`] on this entity
-/// (it sits in terrain shadow, so it cannot block sunlight). Only what we
-/// inserted is ever removed — authored `NotShadowCaster`s are left alone.
-#[derive(Component)]
-pub struct HorizonShadowed;
-
-/// Engine-applied darkening of a `StandardMaterial` entity inside terrain
-/// shadow. Records the authored base colour (restored as visibility returns
-/// to 1) and the last visibility written, to avoid re-uploading the asset
-/// every frame.
-#[derive(Component)]
-pub struct HorizonShade {
-    original: Color,
-    last_vis: f32,
-    /// The authored shared `StandardMaterial` handle (held strongly here while
-    /// the entity is darkened). Restored when the entity returns to full
-    /// sunlight, at which point the entity's only strong handle to the unique
-    /// darkened clone drops and the clone is freed — so a shadowed prop never
-    /// keeps a permanent extra material (CPU-4).
-    shared: Handle<StandardMaterial>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -327,27 +304,12 @@ const SUN_EPSILON_COS: f32 = 0.999_998_5;
 /// repacking every terrain material every frame.
 const SUN_DIR_EPSILON: f32 = 1e-4;
 
-/// Scales a colour's linear RGB by `q`, keeping alpha.
-fn scale_color(c: Color, q: f32) -> Color {
-    let l = c.to_linear();
-    Color::LinearRgba(LinearRgba::new(l.red * q, l.green * q, l.blue * q, l.alpha))
-}
-
-/// Fill floor for a horizon-shadowed body's albedo scale. `sun_vis` gates the
-/// SUN, but the shadowless earthshine/ambient fill is ALWAYS present, so a body
-/// in horizon shadow is dim — never a pure-black hole. Without it, a grazing sun
-/// drives an occluded chassis's albedo to 0 (`scale_color(_, 0)`), so the whole
-/// body reads black even though the terrain around it is fill-lit. Mirrors
-/// `wheel.wgsl`'s `HORIZON_AMBIENT_FLOOR` for the ShaderMaterial (wheels) path.
-const HORIZON_FILL_FLOOR: f32 = 0.22;
-
 /// Runs every mesh entity's position through the same heightfield march the
 /// terrain shader uses and darkens the entity by its sun visibility (see
 /// `lunco_environment::horizon` §3). Change-driven: a full pass only when the
 /// sun moved; otherwise only entities whose `GlobalTransform` changed.
 #[allow(clippy::type_complexity)]
 pub fn shade_dynamic_entities(
-    mut commands: Commands,
     mut last_sun: Local<Option<Vec3>>,
     mut sweep_timer: Local<Option<Timer>>,
     time: Res<Time>,
@@ -360,11 +322,8 @@ pub fn shade_dynamic_entities(
             Entity,
             Ref<GlobalTransform>,
             Has<RenderLayers>,
-            Has<HorizonShadowed>,
-            Has<NotShadowCaster>,
             Option<&MeshMaterial3d<ShaderMaterial>>,
             Option<&MeshMaterial3d<StandardMaterial>>,
-            Option<&mut HorizonShade>,
             Option<&Name>,
         ),
         (With<Mesh3d>, Without<HorizonMap>, Without<DirectionalLight>),
@@ -411,9 +370,7 @@ pub fn shade_dynamic_entities(
         })
         .collect();
 
-    for (entity, gt, has_layers, shadowed, has_nsc, shader_mat, std_mat, shade, name) in
-        &mut entities
-    {
+    for (_entity, gt, has_layers, shader_mat, std_mat, _name) in &mut entities {
         if !do_full && !gt.is_changed() {
             continue;
         }

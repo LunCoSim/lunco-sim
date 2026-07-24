@@ -774,7 +774,7 @@ fn apply_wheel_drive(
 ) {
     for (wheel, wheel_tf, hits, parent) in q_wheels.iter() {
         let parent_entity = parent.parent();
-        if let Ok((mut forces, body, inputs)) = q_chassis.get_mut(parent_entity) {
+        if let Ok((mut forces, body, _inputs)) = q_chassis.get_mut(parent_entity) {
             // drive-diag: the drive port the wheel reads, the body kind (Dynamic
             // vs Kinematic — the snap-back tell), and ground contact. Throttle-
             // gated so it only fires while driving. Whole block compiles out
@@ -789,16 +789,9 @@ fn apply_wheel_drive(
             });
             // Skip forces if body is kinematic
             if matches!(body, RigidBody::Kinematic) { continue; }
-            // Braking: the wheel-spin model locks the spin, but the chassis only
-            // stops if the contact grips. We make friction saturate (full cone)
-            // while braking so a locked wheel actually decelerates the rover.
-            let braking = inputs.is_some_and(|c| c.brake_active);
-
-            if let Ok(port) = q_ports.get(wheel.drive_port) {
-                // Traction only exists when the ray is hitting the ground. Bind
-                // the hit so its surface normal defines the contact plane (needed
-                // for leaning single-track wheels).
-                if let Some(ground_hit) = hits.iter_sorted().next() {
+            if q_ports.get(wheel.drive_port).is_ok() {
+                // Traction only exists when the ray is hitting the ground.
+                if let Some(_ground_hit) = hits.iter_sorted().next() {
                     let normal_force = wheel.last_normal_force;
                     if normal_force < 1.0 {
                         // Not enough contact to transmit meaningful force
@@ -813,40 +806,19 @@ fn apply_wheel_drive(
                     // `hub - forces.position()` then used a point offset by the whole
                     // origin-rebasing distance, producing spurious torque/slip once the
                     // rover drove away from the floating origin (masked near it).
-                    // `wheel_tf.rotation` carries the steer angle (set in
-                    // `apply_wheel_steering`); roll-spin lives on the child visual, so the
-                    // drive direction stays correct.
-                    let (hub_pos_world, wheel_world_rot) = wheel_hub_pose(
+                    let (hub_pos_world, _wheel_world_rot) = wheel_hub_pose(
                         forces.position().0,
                         forces.rotation().0,
                         wheel_tf.translation.as_dvec3(),
                         wheel_tf.rotation.as_dquat(),
                     );
-                    // Single-track / lean support: build the traction basis in
-                    // the ACTUAL contact plane (the ray hit normal), not a flat
-                    // wheel basis. For an upright wheel (normal ≈ wheel up) this
-                    // reproduces the old forward/right exactly, so existing rovers
-                    // are unchanged; a leaning bike gets its drive + lateral grip
-                    // in the tilted contact plane instead of fighting a phantom
-                    // flat patch.
-                    let wheel_forward: DVec3 = wheel_world_rot * DVec3::NEG_Z;
-                    let wheel_right: DVec3 = wheel_world_rot * DVec3::X;
-                    let (forward, right) =
-                        contact_plane_basis(wheel_forward, wheel_right, ground_hit.normal);
-
-                    // Hub velocity in the contact plane. Needed BEFORE the drive
-                    // force: its longitudinal component is the ground speed the
-                    // torque–speed rolloff reads.
-                    let chassis_vel = forces.linear_velocity();
-                    let chassis_ang_vel = forces.angular_velocity();
-                    let hub_vel =
-                        wheel_hub_velocity(chassis_vel, chassis_ang_vel, hub_pos_world, forces.position().0);
-                    let long_vel = hub_vel.dot(forward); // longitudinal slip
-                    let lat_vel = hub_vel.dot(right); // lateral slip
 
                     // The tire force was already solved this tick, from the real
                     // contact slip `ω·r − v` and the wheel's own lateral slip —
-                    // see `update_wheel_spin`. Applying it is all that is left.
+                    // see `update_wheel_spin`. Applying it at the hub is all that
+                    // is left; the contact-plane basis and slip/velocity math that
+                    // used to live here computed a force inline, which the
+                    // wheel-spin solver now owns.
                     forces.apply_force_at_point(wheel.tire_force, hub_pos_world);
                 }
             }

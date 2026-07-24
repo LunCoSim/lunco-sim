@@ -160,8 +160,6 @@ fn resolve_link(
     q_parents: &Query<&ChildOf>,
     q_name: &Query<&Name>,
     q_ids: &Query<(Entity, &GlobalEntityId)>,
-    q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     // Site anchor + body radius, resolved once by the caller. `None` in a scene
     // with no site frame — the peer still gets a name and a range.
     // coordinates, exactly as the billboards degrade.
@@ -360,9 +358,7 @@ fn resolve_driven(
         pitch_deg,
         heading_deg,
         speed: q_vel.get(vessel).ok().map(|v| v.length() as f32),
-        link: resolve_link(
-            vessel, q_links, q_parents, q_name, q_ids, q_grids, q_spatial,
-        ),
+        link: resolve_link(vessel, q_links, q_parents, q_name, q_ids),
         caution_deg,
         danger_deg,
         limits_derived,

@@ -412,14 +412,13 @@ pub fn on_spawn_entity_command(
     };
 
     // Prefer the requested grid; fall back to the first grid (a wire-applied
-    // spawn may carry a grid id that doesn't resolve on this peer).
-    let grid = match q_grids.get(cmd.target).ok().or_else(|| q_grids.iter().next()) {
-        Some(g) => g,
-        None => {
-            warn!("SPAWN_ENTITY: no grid to spawn under");
-            return;
-        }
-    };
+    // spawn may carry a grid id that doesn't resolve on this peer). The selected
+    // grid is only needed to confirm a spawn target EXISTS here — the spawn
+    // itself parents to the scene root, not to a specific grid entity.
+    if q_grids.get(cmd.target).is_err() && q_grids.iter().next().is_none() {
+        warn!("SPAWN_ENTITY: no grid to spawn under");
+        return;
+    }
 
     // Terrain-fit the drop height so ANY spawn (GUI, API, headless, rhai) rests ON
     // the surface rather than embedded in it. The ground is whatever is actually
@@ -522,7 +521,6 @@ pub fn apply_replicated_spawns(
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
-    q_grids: Query<Entity, With<Grid>>,
     q_scene_root: Query<Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
 ) {
     if pending.0.is_empty() {

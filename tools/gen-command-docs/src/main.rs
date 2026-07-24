@@ -42,7 +42,7 @@ use std::{
 
 use quote::ToTokens;
 use serde::Deserialize;
-use syn::{visit::Visit, Attribute, Field, File, ItemStruct};
+use syn::{visit::Visit, Attribute, Field, ItemStruct};
 
 // ── The runtime schema (`DiscoverSchema`) ───────────────────────────────────
 

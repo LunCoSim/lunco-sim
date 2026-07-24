@@ -13,11 +13,9 @@
 //! scene that places bodies explicitly; orbital sims add the heavy crate.
 
 use bevy::prelude::*;
-use bevy::math::DVec3;
 use crate::frames::EclipticAu;
 
 use std::sync::Arc;
-use serde::Deserialize;
 
 #[derive(Debug, Clone)]
 pub struct CsvDataPoint {

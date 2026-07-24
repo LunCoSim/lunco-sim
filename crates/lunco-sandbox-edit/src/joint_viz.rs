@@ -70,7 +70,6 @@ register_commands!(on_toggle_joint_viz,);
 const ANCHOR_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
 const AXIS_COLOR: Color = Color::srgb(0.2, 0.8, 1.0);
 const LINK_COLOR: Color = Color::srgb(0.55, 0.55, 0.55);
-const FORCE_COLOR: Color = Color::srgb(1.0, 0.3, 0.3);
 const BOX_COLOR: Color = Color::srgb(0.9, 0.9, 0.2);
 
 const ANCHOR_RADIUS: f32 = 0.06;

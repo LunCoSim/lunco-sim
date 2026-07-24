@@ -7,7 +7,6 @@
 use bevy::prelude::*;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;
-use transform_gizmo_bevy::GizmoTarget;
 
 use bevy::camera::primitives::Aabb;
 use bevy::math::Isometry3d;
@@ -99,8 +98,8 @@ pub(crate) fn clear_selection(
     selected.entities.clear();
 }
 
-/// Observer for [`SelectEntity`]: resolves the api_id and routes through the
-/// shared [`apply_selection`] (or [`clear_selection`] on id 0).
+// Observer for [`SelectEntity`]: resolves the api_id and routes through the
+// shared [`apply_selection`] (or [`clear_selection`] on id 0).
 // `SelectEntity` is editor-only (Inspector highlight + gizmo), so it is registered
 // by `SandboxEditPlugin` rather than the headless `SpawnCommandPlugin` — but it goes
 // through the SAME type+observer registration as every other verb.

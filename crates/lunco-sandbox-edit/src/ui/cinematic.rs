@@ -26,7 +26,6 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
-use lunco_render::SceneCamera;
 use lunco_time::{AnimationPreview, ControlAnimation, Playback, TransportMode};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{LayerId, UsdOp};

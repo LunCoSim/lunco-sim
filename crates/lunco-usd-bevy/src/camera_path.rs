@@ -406,12 +406,6 @@ pub fn resolve_camera_paths(
         else {
             continue;
         };
-        let by_path = |t: &crate::SdfPath| {
-            q_prims
-                .iter()
-                .find(|(_, p)| p.path.as_str() == t.as_str())
-                .map(|(e, _)| e)
-        };
 
         // ── Aim track ────────────────────────────────────────────────────────
         // `lunco:path:aim:times` + `lunco:path:aim:modes` (+ `…:targets` rel, one

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use crate::big_space_setup::{SolarSystemRoot, EarthRoot, InertialAnchor, MoonRoot};
+use crate::big_space_setup::InertialAnchor;
 use crate::ephemeris::EphemerisResource;
 use lunco_time::WorldTime;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};

@@ -37,13 +37,10 @@ use avian3d::prelude::*;
 // ── Authored rover parameters (mirror assets/.../*rover*.usda + scene) ──
 const CHASSIS_MASS: f64 = 1000.0;
 const WHEEL_MASS: f64 = 100.0;
-const KNUCKLE_MASS: f64 = 30.0;
 const WHEEL_RADIUS: f64 = 0.4;
 const WHEEL_WIDTH: f64 = 0.3;
 const PEAK_TORQUE: f64 = 300.0; // physxVehicleEngine:peakTorque (N·m) — drive motor max_torque
 const MAX_STEER: f64 = 0.5; // physxVehicleAckermannSteering:maxSteerAngle (rad)
-const STEER_FREQ: f64 = 2.0; // knuckle SpringDamper frequency (Hz)
-const STEER_DAMP: f64 = 1.0; // knuckle SpringDamper damping ratio
 const MAX_OMEGA: f64 = 12.0; // wheel spin (rad/s) at full throttle ≈ v_max/r
 const DRIVE_DAMP: f64 = 30.0; // AccelerationBased velocity-tracking damping (1/s)
 
@@ -73,9 +70,6 @@ struct Config {
     ang_damp: f64,
     peak_torque: f64,
     omega: f64,
-    steer_freq: f64,
-    knuckle_mass: f64,
-    knuckle_radius: f64,
     max_steer: f64,
     front_drive: bool,
     settle_ticks: u64,
@@ -146,9 +140,6 @@ fn parse_args() -> Config {
     let mut ang_damp = 0.3;
     let mut peak_torque = PEAK_TORQUE;
     let mut omega = MAX_OMEGA;
-    let mut steer_freq = STEER_FREQ;
-    let mut knuckle_mass = KNUCKLE_MASS;
-    let mut knuckle_radius = 0.1f64;
     let mut max_steer = MAX_STEER;
     let mut front_drive = true;
     let mut settle = 1.0f64;
@@ -178,9 +169,6 @@ fn parse_args() -> Config {
             "angdamp" => ang_damp = v.parse().unwrap_or(0.3),
             "torque" => peak_torque = v.parse().unwrap_or(PEAK_TORQUE),
             "omega" => omega = v.parse().unwrap_or(MAX_OMEGA),
-            "steerfreq" => steer_freq = v.parse().unwrap_or(STEER_FREQ),
-            "knucklemass" => knuckle_mass = v.parse().unwrap_or(KNUCKLE_MASS),
-            "knuckleradius" => knuckle_radius = v.parse().unwrap_or(0.1),
             "frontdrive" => front_drive = v != "0",
             "maxsteer" => max_steer = v.parse().unwrap_or(MAX_STEER),
             "settle" => settle = v.parse().unwrap_or(1.0),
@@ -200,9 +188,6 @@ fn parse_args() -> Config {
         ang_damp,
         peak_torque,
         omega,
-        steer_freq,
-        knuckle_mass,
-        knuckle_radius,
         max_steer,
         front_drive,
         settle_ticks: (settle * 60.0).round() as u64,

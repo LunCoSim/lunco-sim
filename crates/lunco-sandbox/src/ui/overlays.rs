@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// trajectory lines already follow — content and chrome appear because something
 /// asked for them, never because a default said yes.
 #[derive(Resource, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Debug)]
-pub struct OverlaySettings {
+pub(crate) struct OverlaySettings {
     /// The sky-clock pill (top-left): celestial epoch, follow/independent, rate.
     pub sky_clock: bool,
     /// The view-mode switcher pill (top-centre): Surface / Moon / Earth, which
