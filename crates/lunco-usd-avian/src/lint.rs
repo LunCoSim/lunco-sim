@@ -443,6 +443,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
 
     let mut body_facts: Vec<H> = Vec::new();
     let mut legacy_program_prims: Vec<H> = Vec::new();
+    let mut connector_programs: Vec<H> = Vec::new();
     for p in &paths {
         if reader.prim_type_name(p).as_deref() == Some("LunCoProgram") {
             legacy_program_prims.push(H::str(p.to_string()));
@@ -679,6 +680,23 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         if schemas.is_empty() {
             continue;
         }
+        if schemas.iter().any(|schema| schema == "LunCoProgramAPI") {
+            let connectors: Vec<H> = reader
+                .attr_names(p)
+                .into_iter()
+                .filter_map(|name| name.strip_prefix("connectors:").map(H::str))
+                .collect();
+            if !connectors.is_empty() {
+                connector_programs.push(H::map([
+                    ("path", H::str(p.to_string())),
+                    (
+                        "source_asset",
+                        H::str(reader.asset(p, "info:sourceAsset").unwrap_or_default()),
+                    ),
+                    ("connectors", H::Array(connectors)),
+                ]));
+            }
+        }
         for schema in &schemas {
             let Some(name) = schema.strip_prefix("CollectionAPI:") else {
                 continue;
@@ -757,6 +775,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         ("network_scopes", H::Array(network_scopes)),
         ("prims", H::Array(prims)),
         ("legacy_program_prims", H::Array(legacy_program_prims)),
+        ("connector_programs", H::Array(connector_programs)),
     ])
 }
 
@@ -841,6 +860,25 @@ mod tests {
         assert_eq!(field(motor, "host_body"), &H::str("/Rover"));
         assert_eq!(field(motor, "jointed"), &H::Bool(false));
         assert_eq!(field(motor, "subtree_collider"), &H::Bool(false));
+    }
+
+    #[test]
+    fn connector_program_fact_keeps_acausal_capability_out_of_runtime_ports() {
+        let f = facts(
+            "#usda 1.0\n\
+             def Scope \"Battery\" ( prepend apiSchemas = [\"LunCoProgramAPI\"] )\n\
+             {\n\
+                 uniform asset info:sourceAsset = @models/Battery.mo@\n\
+                 token connectors:p\n\
+             }\n",
+        );
+        let programs = entries(&f, "connector_programs");
+        assert_eq!(programs.len(), 1);
+        assert_eq!(field(&programs[0], "path"), &H::str("/Battery"));
+        assert_eq!(
+            field(&programs[0], "source_asset"),
+            &H::str("models/Battery.mo")
+        );
     }
 
     /// The SAME nesting with a joint is the normal wheel mount and must be

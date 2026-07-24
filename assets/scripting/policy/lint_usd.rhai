@@ -54,6 +54,9 @@
 //       concrete type. This narrow fact exists because an unregistered concrete
 //       type has no applied schemas and therefore cannot appear in `facts.prims`.
 //
+//   facts.connector_programs[] #{ path, source_asset, connectors[] }
+//       every program that declares an acausal `connectors:*` interface.
+//
 //   facts.collections[] #{ path, parent, name, members[] }
 //       standard computed collection membership from the composed stage.
 //
@@ -107,6 +110,8 @@ fn schemas_of(facts, path) {
 fn lint_usd(facts) {
     let out = [];
     for f in retired_program_prim_type(facts) { out.push(f); }
+    for f in connector_requires_modelica(facts) { out.push(f); }
+    for f in connector_requires_network_scope(facts) { out.push(f); }
     for f in nested_body_no_joint(facts) { out.push(f); }
     for f in joint_target_not_a_body(facts) { out.push(f); }
     for f in dynamic_body_no_collider(facts) { out.push(f); }
@@ -122,6 +127,40 @@ fn lint_usd(facts) {
     for f in invalid_network_program_source(facts) { out.push(f); }
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
+    out
+}
+
+/// A connector only has meaning inside the one generated Modelica island that
+/// owns its `connect()` equations. A standalone program would otherwise look
+/// wired in USD while no solver ever receives its topology.
+fn connector_requires_network_scope(facts) {
+    let out = [];
+    for program in facts.connector_programs {
+        let collected = false;
+        for scope in facts.network_scopes {
+            for member in scope.members {
+                if member == program.path { collected = true; }
+            }
+        }
+        if collected { continue; }
+        let m = "declares connectors:* outside a CollectionAPI:components network scope — ";
+        m += "include this Modelica program in exactly one compiler network so its connect() ";
+        m += "topology is generated and solved.";
+        out.push(finding("connector-requires-network-scope", "error", program.path, m));
+    }
+    out
+}
+
+/// Acausal connections are compiler topology, not a generic runtime signal.
+fn connector_requires_modelica(facts) {
+    let out = [];
+    for program in facts.connector_programs {
+        if program.source_asset.ends_with(".mo") { continue; }
+        let m = "declares connectors:* but is not backed by a Modelica .mo asset — ";
+        m += "acausal connectors require the generated Modelica network; use inputs:/outputs: ";
+        m += "or LunCoEvent for Rhai, BTXML, and other non-physical programs.";
+        out.push(finding("connector-requires-modelica", "error", program.path, m));
+    }
     out
 }
 

@@ -573,6 +573,13 @@ class "LunCoProgramAPI" (
     PARAMETERS ARE PORTS. A gain is `float inputs:kv = 1.2` — an input with a constant
     instead of a connection. Wire it later and nothing about the program changes.
 
+    INTERFACES HAVE THREE KINDS. `inputs:` / `outputs:` are causal scalar signals and
+    travel through the runtime port registry. `connectors:` are acausal physical
+    interfaces: they are valid only for Modelica programs collected into one compiler
+    network, where generated `connect()` equations enforce conservation laws. A
+    connector is never a runtime scalar port. Discrete conditions project through
+    `LunCoEvent`, not either port kind.
+
     Which placement to use is not a style question, it is whether the program is separable
     from the thing. A vessel's flight-control system is its airframe: it is what the
     stick talks to, its `inputs:` ARE the vessel's control surface, and a lander
