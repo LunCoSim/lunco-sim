@@ -130,14 +130,14 @@ fn on_tick(me) {
 // The grade boundaries are authored course stations, not a control law.  This
 // scenario test records the highest actual ramp entered by each rover.
 fn grade_reached(z) {
-    if z <= -19.0 { return 40; }
-    if z <= -18.0 { return 35; }
-    if z <= -17.0 { return 30; }
-    if z <= -16.0 { return 25; }
-    if z <= -15.0 { return 20; }
-    if z <= -14.0 { return 15; }
-    if z <= -13.0 { return 10; }
-    if z <= -12.0 { return 5; }
+    if z <= -37.0 { return 40; }
+    if z <= -34.0 { return 35; }
+    if z <= -31.0 { return 30; }
+    if z <= -28.0 { return 25; }
+    if z <= -25.0 { return 20; }
+    if z <= -22.0 { return 15; }
+    if z <= -19.0 { return 10; }
+    if z <= -16.0 { return 5; }
     return 0;
 }
 

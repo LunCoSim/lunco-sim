@@ -1202,10 +1202,6 @@ fn prim_exists(
         || host.document().runtime_data().spec(&sdf).is_some()
 }
 
-/// Component that marks reached waypoints to prevent double deletion.
-#[derive(Component)]
-pub struct WaypointReached;
-
 /// How close (world units) the vessel must get for a waypoint to count as reached.
 pub const WAYPOINT_ARRIVAL: f64 = 4.0;
 
@@ -1235,34 +1231,25 @@ fn parse_coord_target(target: &str) -> Option<DVec3> {
 /// saved `.usda` and survive a reload. Keeping it in a component means it simply
 /// resets each session.
 ///
-/// A **prim** waypoint (the legacy path-based form) is a real authored prim, so
-/// reaching it genuinely deletes it through the one authoring funnel.
+/// A **prim** waypoint is also live-only arrival state.  A path may name a
+/// reusable scene route, not an editor-created disposable prim; deleting it
+/// changes composed source data and makes another rover's comparison invalid.
+/// The compiled tree consumes reached targets from [`ReachedWaypoints`], so no
+/// authored mission or target needs mutation to advance a rover.
 pub fn delete_reached_waypoints(
     mut q_vessels: Query<(
         Entity,
-        &mut BehaviorXml,
+        &BehaviorXml,
         Option<&TargetBindings>,
-        &UsdPrimPath,
         Option<&mut ReachedWaypoints>,
     )>,
-    q_waypoints: Query<(Entity, &UsdPrimPath), Without<WaypointReached>>,
+    q_waypoints: Query<Entity, With<UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
     mut commands: Commands,
 ) {
-    let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace
-        .0
-        .active_document
-        .or_else(|| usd_registry.as_ref().and_then(|r| r.ids().next()))
-    else {
-        return;
-    };
-
-    for (vessel, mut xml, bindings, vessel_path, mut reached) in q_vessels.iter_mut() {
+    for (vessel, xml, bindings, mut reached) in q_vessels.iter_mut() {
         let Some(vessel_pos) =
             lunco_core::coords::world_position(vessel, &q_parents, &q_grids, &q_spatial)
         else {
@@ -1293,41 +1280,24 @@ pub fn delete_reached_waypoints(
                 continue;
             }
 
-            // 2. Try path resolution
+            // 2. USD-prim target → the same live-only arrival state.
             if let Some(bindings) = bindings {
                 if let Some(&wp_entity) = bindings.0.get(target) {
-                    if let Ok((entity, prim_path)) = q_waypoints.get(wp_entity) {
+                    if let Ok(entity) = q_waypoints.get(wp_entity) {
                         let Some(wp_pos) = lunco_core::coords::world_position(
                             entity, &q_parents, &q_grids, &q_spatial,
                         ) else {
                             continue;
                         };
                         let distance = (wp_pos - vessel_pos).length();
-                        if distance < 4.0 {
-                            info!("Waypoint prim reached: deleting {}", prim_path.path);
-
-                            commands.entity(entity).insert(WaypointReached);
-
-                            commands.trigger(ApplyUsdOp {
-                                doc,
-                                op: UsdOp::RemovePrim {
-                                    edit_target: LayerId::runtime(),
-                                    path: prim_path.path.clone(),
-                                },
-                            });
-
-                            if let Ok(new_xml) = remove_waypoint_leaf(&xml.0, &prim_path.path) {
-                                xml.0 = new_xml.clone();
-                                commands.trigger(ApplyUsdOp {
-                                    doc,
-                                    op: UsdOp::SetAttribute {
-                                        edit_target: LayerId::runtime(),
-                                        path: join_prim(&vessel_path.path, MISSION_PROGRAM),
-                                        name: "info:sourceCode".to_string(),
-                                        type_name: "string".to_string(),
-                                        value: new_xml,
-                                    },
-                                });
+                        if distance < WAYPOINT_ARRIVAL {
+                            let known = reached
+                                .as_ref()
+                                .map(|r| r.0.contains(target))
+                                .unwrap_or(false);
+                            if !known && !newly_reached.iter().any(|t| t == target) {
+                                info!("Waypoint reached (live-only): {}", target);
+                                newly_reached.push(target.clone());
                             }
                         }
                     }
