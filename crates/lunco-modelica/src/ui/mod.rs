@@ -1083,9 +1083,8 @@ fn register_settings_menu(world: &mut World) {
             );
         });
         drop(snap);
-        ui.separator();
-        render_assets_settings(ui, world);
     });
+    layout.register_settings_submenu("Data & libraries", render_assets_settings);
 }
 
 /// Settings rows for the "Assets" section — MSL load state, bundle URL,

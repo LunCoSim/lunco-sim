@@ -227,16 +227,7 @@ pub fn update_spawn_ghost(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut footprint_cache: ResMut<FootprintCache>,
-    cameras: Query<
-        (
-            &Camera,
-            &GlobalTransform,
-            &bevy::camera::RenderTarget,
-            &CellCoord,
-            &Transform,
-        ),
-        With<Camera3d>,
-    >,
+    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
     grids: Query<(Entity, &Grid)>,
@@ -267,12 +258,12 @@ pub fn update_spawn_ghost(
 
     // Ray through the ACTIVE window camera (the one you're looking through) —
     // not merely the first Camera3d, which may now be an inactive scene camera.
-    let (camera, cam_tf, _cam_cell, _cam_local) = match cameras
+    let (camera, cam_tf) = match cameras
         .iter()
-        .find(|(cam, _, target, _, _)| {
+        .find(|(cam, _, target)| {
             cam.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
         })
-        .map(|(cam, tf, _, cell, local)| (cam, tf, cell, local))
+        .map(|(cam, tf, _)| (cam, tf))
     {
         Some(c) => c,
         None => return,

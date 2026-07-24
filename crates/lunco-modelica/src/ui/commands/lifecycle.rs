@@ -8,12 +8,12 @@ use lunco_doc_bevy::{CloseDocument, DocumentSaved};
 use lunco_workbench::file_ops::{NewDocument, OpenFile};
 use std::sync::Arc;
 
-use crate::ui::duplicate::{
-    build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
-};
 use crate::model_tabs::ModelTabs;
 use crate::package_tree::PackageTreeCache;
 use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::duplicate::{
+    build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
+};
 use crate::ui::MODEL_VIEW_KIND;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────

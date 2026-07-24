@@ -1601,13 +1601,12 @@ fn dispatch_experiment(
         // package as an extra source so `compile_str_multi` merges the siblings
         // back into the same `within` scope. MSL within-packages are not
         // bundled (return None here) and are left untouched.
-        let extras: Vec<(String, String)> =
-            match crate::ui::duplicate::within_package(&source) {
-                Some(pkg) => crate::ui::class_source::bundled_source_for(&pkg)
-                    .map(|s| vec![(format!("{pkg}.mo"), s.to_string())])
-                    .unwrap_or_default(),
-                None => Vec::new(),
-            };
+        let extras: Vec<(String, String)> = match crate::ui::duplicate::within_package(&source) {
+            Some(pkg) => crate::ui::class_source::bundled_source_for(&pkg)
+                .map(|s| vec![(format!("{pkg}.mo"), s.to_string())])
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
 
         // Host-authoritative runs: a networked Client never launches sims
         // locally. The RunExperiment / FastRun command replicates to the host,

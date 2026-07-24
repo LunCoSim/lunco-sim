@@ -692,6 +692,14 @@ pub struct WorkbenchLayout {
     /// discoverable place instead of scattered gear buttons.
     pub(crate) settings_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
 
+    /// Named, scrollable groups within Settings.  Use this for a coherent
+    /// feature area with enough rows that keeping it in the root menu would
+    /// obscure unrelated preferences.
+    pub(crate) settings_submenus: Vec<(
+        String,
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+    )>,
+
     /// App-wide Edit menu contributions. Same pattern as
     /// [`settings_menu`](Self::settings_menu) — domain plugins push a
     /// closure via [`WorkbenchLayout::register_edit_menu`] at Startup so
@@ -811,6 +819,7 @@ impl Default for WorkbenchLayout {
             bottom: Vec::new(),
             status: None,
             settings_menu: Vec::new(),
+            settings_submenus: Vec::new(),
             edit_menu: Vec::new(),
             help_menu: Vec::new(),
             file_menu: Vec::new(),
@@ -1211,6 +1220,26 @@ impl WorkbenchLayout {
         F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
     {
         self.settings_menu.push(Box::new(callback));
+    }
+
+    /// Register rows under one named, scrollable Settings submenu. Multiple
+    /// plugins can contribute to the same submenu without coupling to one
+    /// another; the label is the single grouping key.
+    pub fn register_settings_submenu<F>(&mut self, label: impl Into<String>, callback: F)
+    where
+        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+    {
+        let label = label.into();
+        if let Some((_, callbacks)) = self
+            .settings_submenus
+            .iter_mut()
+            .find(|(existing, _)| existing == &label)
+        {
+            callbacks.push(Box::new(callback));
+        } else {
+            self.settings_submenus
+                .push((label, vec![Box::new(callback)]));
+        }
     }
 
     /// Register a closure that contributes entries to the global Edit
@@ -3349,6 +3378,27 @@ fn render_layout(
                     }
                 }
                 layout.settings_menu = callbacks;
+
+                // Feature areas with many rows stay discoverable without
+                // forcing the root Settings menu to fill the viewport.
+                let submenus = std::mem::take(&mut layout.settings_submenus);
+                for (label, callbacks) in &submenus {
+                    ui.menu_button(label, |ui| {
+                        let max_height = ui.spacing().interact_size.y * 24.0;
+                        egui::ScrollArea::vertical()
+                            .max_height(max_height)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for (i, callback) in callbacks.iter().enumerate() {
+                                    if i > 0 {
+                                        ui.separator();
+                                    }
+                                    callback(ui, world);
+                                }
+                            });
+                    });
+                }
+                layout.settings_submenus = submenus;
             });
             anchor_rects.push(("menu.settings", r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {

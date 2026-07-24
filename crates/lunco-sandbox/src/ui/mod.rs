@@ -626,7 +626,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
     let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
         return;
     };
-    layout.register_settings(|ui, world| {
+    layout.register_settings_submenu("Data & libraries", |ui, world| {
         ui.label(egui::RichText::new("Downloadable data").weak().small());
         if let Some(mut settings) = world.get_resource_mut::<lunco_settings::DownloadSettings>() {
             ui.horizontal(|ui| {
@@ -661,7 +661,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
         // name. `scope.label()` says "engine" for every engine dataset, which
         // is true and useless: a user looking for Earth imagery is looking for
         // the celestial library, not for the fact that it isn't a twin's.
-        let rows: Vec<(String, String, String, String, DatasetState)> = registry
+        let rows: Vec<(String, String, String, DatasetState)> = registry
             .entries()
             .iter()
             .map(|e| {
@@ -669,72 +669,45 @@ fn register_downloadable_assets_settings(world: &mut World) {
                     lunco_assets::datasets::DatasetScope::Engine => e.group.clone(),
                     lunco_assets::datasets::DatasetScope::Twin { name, .. } => name.clone(),
                 };
-                // Keep categorisation presentation-only and derived from the
-                // manifest's product name/path. The registry remains generic:
-                // adding a dataset still requires no UI schema or Rust type.
-                let haystack = format!("{} {}", e.name, e.artifact_rel).to_lowercase();
-                let category = if haystack.contains("dtm") || haystack.contains("dem") {
-                    "Elevation terrain"
-                } else if haystack.contains("normal")
-                    || haystack.contains("slope")
-                    || haystack.contains("hillshade")
-                    || haystack.contains("gradient")
-                {
-                    "Derived terrain maps"
-                } else if haystack.contains("vector") || haystack.contains("ephemeris") {
-                    "Ephemerides"
-                } else if haystack.contains("ortho") || haystack.contains("imagery") {
-                    "Imagery"
-                } else {
-                    "Other data"
-                };
-                (
-                    e.key.clone(),
-                    owner,
-                    category.to_string(),
-                    e.name.clone(),
-                    e.state.clone(),
-                )
+                (e.key.clone(), owner, e.name.clone(), e.state.clone())
             })
             .collect();
         // Registration order already groups by owner; sorting makes that a
         // guarantee rather than a coincidence, so the headings below can be
         // emitted on change instead of buffering the whole list.
         let mut rows = rows;
-        rows.sort_by(|a, b| (&a.1, &a.2, &a.3).cmp(&(&b.1, &b.2, &b.3)));
+        rows.sort_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)));
         let mut requested: Option<String> = None;
-        // Render complete owner/category groups. Collapsing headers keep the
-        // cached catalogue compact while a pending download expands naturally.
+        // One stable section per existing owner keeps Settings compact without
+        // inventing a second categorisation system for generic datasets.
         let mut index = 0;
         while index < rows.len() {
-            let owner = &rows[index].1;
+            let owner = rows[index].1.clone();
+            let start = index;
+            while index < rows.len() && rows[index].1 == owner {
+                index += 1;
+            }
+            let slice = &rows[start..index];
+            let installed = slice
+                .iter()
+                .filter(|row| matches!(row.3, DatasetState::Installed))
+                .count();
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(owner).weak().small());
-            while index < rows.len() && &rows[index].1 == owner {
-                let group = rows[index].2.clone();
-                let start = index;
-                while index < rows.len() && rows[index].1 == *owner && rows[index].2 == group {
-                    index += 1;
-                }
-                let slice = &rows[start..index];
-                let installed = slice
-                    .iter()
-                    .filter(|row| matches!(row.4, DatasetState::Installed))
-                    .count();
-                egui::CollapsingHeader::new(format!("{} ({}/{})", group, installed, slice.len()))
-                    .default_open(
-                        slice
-                            .iter()
-                            .any(|row| !matches!(row.4, DatasetState::Installed)),
-                    )
-                    .show(ui, |ui| {
-                        for (key, _, _, name, state) in slice {
-                            ui.horizontal(|ui| {
-                                ui.label(name);
-                                match state {
-                                    DatasetState::Installed => {
-                                        ui.label(egui::RichText::new("✔ cached").weak());
-                                    }
+            egui::CollapsingHeader::new(format!("{} ({}/{})", owner, installed, slice.len()))
+                .id_salt(("download-owner", owner.as_str()))
+                .default_open(
+                    slice
+                        .iter()
+                        .any(|row| !matches!(row.3, DatasetState::Installed)),
+                )
+                .show(ui, |ui| {
+                    for (key, _, name, state) in slice {
+                        ui.horizontal(|ui| {
+                            ui.label(name);
+                            match state {
+                                DatasetState::Installed => {
+                                    ui.label(egui::RichText::new("✔ cached").weak());
+                                }
                                 DatasetState::Downloading {
                                     bytes_done,
                                     bytes_total,
@@ -745,16 +718,15 @@ fn register_downloadable_assets_settings(world: &mut World) {
                                         *bytes_total as f64 / 1_048_576.0
                                     ));
                                 }
-                                    DatasetState::Missing | DatasetState::Failed(_) => {
-                                        if ui.button("⬇ Download").clicked() {
-                                            requested = Some(key.clone());
-                                        }
+                                DatasetState::Missing | DatasetState::Failed(_) => {
+                                    if ui.button("⬇ Download").clicked() {
+                                        requested = Some(key.clone());
                                     }
                                 }
-                            });
-                        }
-                    });
-            }
+                            }
+                        });
+                    }
+                });
         }
         if let Some(key) = requested {
             if let Some(mut registry) = world.get_resource_mut::<DatasetRegistry>() {
@@ -943,12 +915,22 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
 
         let paired: Vec<(&lunco_assets::discovery::AssetFile, &Option<String>)> =
             assets.iter().zip(descs.iter()).collect();
+        let regular: Vec<_> = paired
+            .iter()
+            .copied()
+            .filter(|(asset, _)| !lunco_assets::discovery::is_test_asset(&asset.rel))
+            .collect();
+        let tests: Vec<_> = paired
+            .iter()
+            .copied()
+            .filter(|(asset, _)| lunco_assets::discovery::is_test_asset(&asset.rel))
+            .collect();
 
         // Open Twins FIRST as submenus: the twin you have open is
         // the project you are working in, and its scenarios are what you came to
         // the menu for. The engine library is the reference collection below it.
         for name in &twin_names {
-            let group: Vec<_> = paired
+            let group: Vec<_> = regular
                 .iter()
                 .copied()
                 .filter(|(a, _)| a.twin.as_deref() == Some(name.as_str()))
@@ -961,7 +943,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             });
         }
 
-        let library: Vec<_> = paired
+        let library: Vec<_> = regular
             .iter()
             .copied()
             .filter(|(a, _)| a.twin.is_none())
@@ -969,6 +951,20 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         if !library.is_empty() {
             ui.menu_button(format!("📚 Library  ({})", library.len()), |ui| {
                 render(ui, world, &library);
+            });
+        }
+        if show_tests {
+            ui.separator();
+            ui.menu_button(format!("🧪 Test scenes  ({})", tests.len()), |ui| {
+                if tests.is_empty() {
+                    ui.label(
+                        bevy_egui::egui::RichText::new("(no test scenes discovered)")
+                            .weak()
+                            .italics(),
+                    );
+                } else {
+                    render(ui, world, &tests);
+                }
             });
         }
     });
