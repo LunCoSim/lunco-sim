@@ -143,7 +143,7 @@ struct DrivenVessel {
 /// below Bevy's flat system-parameter limit while retaining the authored site
 /// coordinate readout.
 #[derive(bevy::ecs::system::SystemParam)]
-struct GeodeticHud<'w, 's> {
+pub(crate) struct GeodeticHud<'w, 's> {
     site:
         Query<'w, 's, &'static lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     bodies: Option<Res<'w, lunco_celestial::CelestialBodyRegistry>>,
