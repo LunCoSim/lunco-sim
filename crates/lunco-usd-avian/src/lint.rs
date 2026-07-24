@@ -516,17 +516,40 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .iter()
             .any(|name| name.starts_with("collection:components:"))
         {
-            let members = reader.rel_targets(p, "collection:components:includes");
+            let members = reader
+                .collection_members(p, "components")
+                .unwrap_or_default();
             let member_names: HashSet<String> = members.iter().map(ToString::to_string).collect();
             let mut acausal_members = HashSet::new();
             let mut adjacency: HashMap<String, HashSet<String>> = HashMap::new();
             let mut dangling_connectors = Vec::new();
+            let mut modelica_member_count = 0_i64;
+            let mut invalid_program_sources = Vec::new();
+            let mut multi_source_properties = Vec::new();
             for member in &members {
                 if !reader.has_api_schema(member, "LunCoProgramAPI") {
                     continue;
                 }
                 let member_name = member.to_string();
+                let implementation = reader
+                    .value_str(member, "info:implementationSource")
+                    .unwrap_or_default();
+                let source = reader.asset(member, "info:sourceAsset");
+                if implementation != "sourceAsset"
+                    || !source
+                        .as_deref()
+                        .is_some_and(|asset| asset.ends_with(".mo"))
+                {
+                    invalid_program_sources.push(member_name.clone());
+                    continue;
+                }
+                modelica_member_count += 1;
                 for attr in reader.attr_names(member) {
+                    if (attr.starts_with("inputs:") || attr.starts_with("outputs:"))
+                        && reader.connections(member, &attr).len() > 1
+                    {
+                        multi_source_properties.push(format!("{member_name}.{attr}"));
+                    }
                     let Some(connector) = attr.strip_prefix("connectors:") else {
                         continue;
                     };
@@ -602,9 +625,18 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     ),
                 ),
                 ("island_count", H::Int(island_count)),
+                ("modelica_member_count", H::Int(modelica_member_count)),
                 (
                     "dangling_connectors",
                     H::Array(dangling_connectors.into_iter().map(H::str).collect()),
+                ),
+                (
+                    "invalid_program_sources",
+                    H::Array(invalid_program_sources.into_iter().map(H::str).collect()),
+                ),
+                (
+                    "multi_source_properties",
+                    H::Array(multi_source_properties.into_iter().map(H::str).collect()),
                 ),
             ]));
         }

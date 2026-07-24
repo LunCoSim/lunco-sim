@@ -17,6 +17,7 @@ def Xform "Battery" (
 )
 {
     uniform bool lunco:spawnable = true
+    uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
 
     # Model parameters consumed when an enclosing CollectionAPI:components

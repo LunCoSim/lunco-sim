@@ -53,7 +53,9 @@
 //   facts.collections[] #{ path, parent, name, members[] }
 //       standard computed collection membership from the composed stage.
 //
-//   facts.network_scopes[] #{ path, parent, members[] }
+//   facts.network_scopes[] #{ path, parent, members[], modelica_member_count,
+//                             island_count, dangling_connectors[],
+//                             invalid_program_sources[], multi_source_properties[] }
 //       scopes applying CollectionAPI:components, including codeless-schema
 //       runtimes whose applied-schema enumeration is incomplete.
 //
@@ -110,6 +112,8 @@ fn lint_usd(facts) {
     for f in empty_component_network(facts) { out.push(f); }
     for f in disconnected_component_network(facts) { out.push(f); }
     for f in dangling_network_connector(facts) { out.push(f); }
+    for f in invalid_network_program_source(facts) { out.push(f); }
+    for f in multi_source_modelica_property(facts) { out.push(f); }
     out
 }
 
@@ -119,12 +123,41 @@ fn lint_usd(facts) {
 fn empty_component_network(facts) {
     let out = [];
     for scope in facts.network_scopes {
-        if scope.members.len() != 0 { continue; }
+        if scope.modelica_member_count != 0 { continue; }
         let m = "declares CollectionAPI:components but includes no components —";
         m += " the domain compiler has no equations to compile.";
         m += " Add the Modelica component facets to";
         m += " collection:components:includes or remove the empty network scope.";
         out.push(finding("empty-component-network", "error", scope.path, m));
+    }
+    out
+}
+
+/// Network members are compiler inputs, so only source-backed Modelica
+/// programs belong in the collection working set.
+fn invalid_network_program_source(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        for member in scope.invalid_program_sources {
+            let m = "is not a sourceAsset-backed .mo program —";
+            m += " set info:implementationSource = sourceAsset and author a Modelica source asset,";
+            m += " or remove the prim from CollectionAPI:components.";
+            out.push(finding("invalid-network-program-source", "error", member, m));
+        }
+    }
+    out
+}
+
+/// Scalar causal Modelica members cannot silently select one source from a USD
+/// connection list.
+fn multi_source_modelica_property(facts) {
+    let out = [];
+    for scope in facts.network_scopes {
+        for property in scope.multi_source_properties {
+            let m = "has multiple causal connection sources —";
+            m += " author exactly one source for a scalar Modelica input or output.";
+            out.push(finding("multi-source-modelica-property", "error", property, m));
+        }
     }
     out
 }

@@ -8,7 +8,7 @@
 //! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::Stage;
+use openusd::usd::{compute_included_paths, Collection, PrimPredicate, Stage};
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from a `NonSend` `CanonicalStage`.
@@ -24,7 +24,10 @@ pub struct StageView<'a> {
 
 impl<'a> StageView<'a> {
     pub fn new(stage: &'a Stage) -> Self {
-        Self { stage, binary_sites: None }
+        Self {
+            stage,
+            binary_sites: None,
+        }
     }
 
     /// Construct with the stage's precomputed binary-arc sites (from
@@ -33,7 +36,10 @@ impl<'a> StageView<'a> {
         stage: &'a Stage,
         sites: &'a crate::compose::BinarySites,
     ) -> Self {
-        Self { stage, binary_sites: Some(sites) }
+        Self {
+            stage,
+            binary_sites: Some(sites),
+        }
     }
 
     /// The underlying stage (escape hatch for reads not yet wrapped).
@@ -79,7 +85,14 @@ impl<'a> StageView<'a> {
     /// whose value type is genuinely either (`lunco:resolvedAsset`, authored by
     /// the composer as a path but read as plain text).
     pub fn value_str(&self, prim: &SdfPath, name: &str) -> Option<String> {
-        match self.stage.prim(prim.clone()).attribute(name).get::<Value>().ok().flatten()? {
+        match self
+            .stage
+            .prim(prim.clone())
+            .attribute(name)
+            .get::<Value>()
+            .ok()
+            .flatten()?
+        {
             Value::String(s) => Some(s),
             Value::Token(t) => Some(t.to_string()),
             Value::AssetPath(a) => Some(a.as_str().to_string()),
@@ -95,6 +108,30 @@ impl<'a> StageView<'a> {
             .relationship(name)
             .targets()
             .unwrap_or_default()
+    }
+
+    /// Composed members of a standard USD collection.
+    ///
+    /// `explicitOnly` can use the relationship targets directly. Every other
+    /// expansion rule goes through OpenUSD so excludes, subtree expansion,
+    /// references, and variants retain standard semantics.
+    pub fn collection_members(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+    ) -> Result<Vec<SdfPath>, String> {
+        let expansion = format!("collection:{instance_name}:expansionRule");
+        let includes = format!("collection:{instance_name}:includes");
+        if self.value_str(prim, &expansion).as_deref() == Some("explicitOnly") {
+            return Ok(self.rel_targets(prim, &includes));
+        }
+
+        let collection = Collection::new(prim.clone(), instance_name);
+        let query = collection
+            .compute_membership_query(self.stage)
+            .map_err(|error| format!("could not compute collection membership: {error}"))?;
+        compute_included_paths(self.stage, &query, PrimPredicate::DEFAULT)
+            .map_err(|error| format!("could not expand collection membership: {error}"))
     }
 
     /// Attribute `name` on `prim` as a 3-vector (`double3`/`float3`). Mirrors the
@@ -131,8 +168,8 @@ mod compose_tests {
     /// cross-file inherit landing `lunco:port = throttle` on the vessel).
     #[test]
     fn stageview_reads_composed_inherit_opinion() {
-        let stage = compose_file_to_stage(&asset("vessels/rovers/skid_rover.usda"))
-            .expect("compose stage");
+        let stage =
+            compose_file_to_stage(&asset("vessels/rovers/skid_rover.usda")).expect("compose stage");
         let view = StageView::new(&stage);
         let fwd = SdfPath::new("/SkidRover/Controls/forward").unwrap();
         assert_eq!(

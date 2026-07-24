@@ -18,6 +18,8 @@ When building any vehicle assembly in LunCoSim:
      `CollectionAPI:components`.
    - The collection includes the actual assembled part prims; it does not create proxy
      copies below the Scope.
+   - Every included Modelica facet explicitly uses
+     `info:implementationSource = "sourceAsset"` with a `.mo` source.
    - Runtime Rust projection reads the composed stage and emits the transient Modelica wrapper. Rhai does not synthesize equations.
    - One collection must contain one connected acausal island. A disconnected island
      is another compilation and failure domain, so it gets another named Scope.

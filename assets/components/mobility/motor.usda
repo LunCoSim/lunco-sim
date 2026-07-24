@@ -63,6 +63,7 @@ def Xform "Motor" (
 )
 {
     uniform bool lunco:spawnable = true
+    uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/DCMotor.mo@
     custom token connectors:p
 

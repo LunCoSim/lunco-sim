@@ -17,7 +17,6 @@ use lunco_modelica::{
 };
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
-use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
 
 use crate::cosim::{UsdSourcedCosim, WiringDirty};
 
@@ -119,7 +118,7 @@ pub fn partition_islands(mut components: Vec<DomainComponent>) -> Vec<Vec<Domain
 
 /// Emit one deterministic Modelica wrapper for a composed network scope.
 pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
-    let model_name = sanitize_identifier(model_name);
+    let model_name = modelica_identifier(model_name);
     let mut source = format!("model {model_name}\n");
     let names: BTreeMap<_, _> = network
         .components
@@ -138,10 +137,10 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
         .collect();
 
     for input in &network.inputs {
-        source.push_str(&format!("  input Real {};\n", sanitize_identifier(input)));
+        source.push_str(&format!("  input Real {};\n", modelica_identifier(input)));
     }
     for output in network.outputs.keys() {
-        source.push_str(&format!("  output Real {};\n", sanitize_identifier(output)));
+        source.push_str(&format!("  output Real {};\n", modelica_identifier(output)));
     }
     for component in &network.components {
         source.push_str(&format!("  // USD: {}\n", component.path));
@@ -195,7 +194,7 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             if let Some(boundary) = target.strip_prefix(&boundary_prefix) {
                 source.push_str(&format!(
                     "  {local_instance}.{input} = {};\n",
-                    sanitize_identifier(boundary)
+                    modelica_identifier(boundary)
                 ));
             } else if let Some(boundary) = boundary_by_source.get(target.as_str()) {
                 // OpenUSD may resolve a connection through the Scope input and
@@ -203,7 +202,7 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
                 // boundary instead of bypassing it.
                 source.push_str(&format!(
                     "  {local_instance}.{input} = {};\n",
-                    sanitize_identifier(boundary)
+                    modelica_identifier(boundary)
                 ));
             } else if let Some((target_prim, output)) = target.split_once(".outputs:") {
                 if let Some(target_instance) = names.get(target_prim) {
@@ -219,7 +218,7 @@ pub fn emit_modelica(network: &DomainNetwork, model_name: &str) -> String {
             if let Some(instance) = names.get(target_prim) {
                 source.push_str(&format!(
                     "  {} = {instance}.{member};\n",
-                    sanitize_identifier(output)
+                    modelica_identifier(output)
                 ));
             }
         }
@@ -297,6 +296,9 @@ pub fn project_domain_islands(
                     text: format!("[{model_name}] Projection error: {message}"),
                 });
                 error!("[domain-projection] `{}` rejected: {message}", prim.path);
+                commands
+                    .entity(entity)
+                    .remove::<lunco_cosim::SimComponent>();
                 commands.entity(entity).try_insert((
                     ModelicaModel {
                         model_path: PathBuf::from(format!("generated://{model_name}.mo")),
@@ -328,6 +330,7 @@ pub fn project_domain_islands(
                     UsdSourcedCosim,
                     DomainProjectionState,
                     GeneratedModelicaSource,
+                    lunco_cosim::SimComponent,
                 )>();
             }
             continue;
@@ -384,6 +387,12 @@ pub fn project_domain_islands(
                 text: format!("[{}] Compile error: {message}", model.model_name),
             });
         }
+        // A changed wrapper may expose a different port interface. Rebuild the
+        // derived co-sim projection instead of retaining values and port names
+        // from the previous compiled topology.
+        commands
+            .entity(entity)
+            .remove::<lunco_cosim::SimComponent>();
         commands.entity(entity).try_insert((
             model,
             UsdSourcedCosim,
@@ -407,7 +416,7 @@ pub fn project_domain_islands(
 /// scopes named `Electrical`. Including the composed prim path also keeps
 /// worker sessions and diagnostics attributable to the authored network.
 fn network_model_name(root: &str, global_id: Option<u64>) -> String {
-    let path = sanitize_identifier(root.trim_matches('/'));
+    let path = modelica_path_identifier(root.trim_matches('/'));
     match global_id {
         Some(global_id) => format!("{path}_G{global_id}_System"),
         None => format!("{path}_System"),
@@ -435,29 +444,14 @@ fn read_network(
     {
         return Ok(None);
     }
-    let member_paths = if view
-        .value_str(root, "collection:components:expansionRule")
-        .as_deref()
-        == Some("explicitOnly")
-    {
-        view.rel_targets(root, "collection:components:includes")
-    } else {
-        let collection = Collection::new(root.clone(), "components");
-        let query = collection
-            .compute_membership_query(view.stage())
-            .map_err(|error| {
-                vec![DomainProjectionError {
-                    path: root_string.clone(),
-                    message: format!("could not compute component collection: {error}"),
-                }]
-            })?;
-        compute_included_paths(view.stage(), &query, PrimPredicate::DEFAULT).map_err(|error| {
+    let member_paths = view
+        .collection_members(root, "components")
+        .map_err(|error| {
             vec![DomainProjectionError {
                 path: root_string.clone(),
-                message: format!("could not expand component collection: {error}"),
+                message: format!("could not read component collection: {error}"),
             }]
-        })?
-    };
+        })?;
     let mut components = Vec::new();
     let mut extraction_errors = Vec::new();
     for path in member_paths {
@@ -465,6 +459,18 @@ fn read_network(
             continue;
         }
         if !view.has_api_schema(&path, "LunCoProgramAPI") {
+            continue;
+        }
+        let implementation = view
+            .value_str(&path, "info:implementationSource")
+            .unwrap_or_default();
+        if implementation != "sourceAsset" {
+            extraction_errors.push(DomainProjectionError {
+                path: format!("{path}.info:implementationSource"),
+                message:
+                    "a Modelica network member must use info:implementationSource = sourceAsset"
+                        .into(),
+            });
             continue;
         }
         let Some(source) = view.asset(&path, "info:sourceAsset") else {
@@ -506,7 +512,14 @@ fn read_network(
                     connectors.insert(name.to_string(), targets);
                 }
             } else if let Some(name) = attr.strip_prefix("inputs:") {
-                if let Some(target) = view.connections(&path, &attr).first() {
+                let targets = view.connections(&path, &attr);
+                if targets.len() > 1 {
+                    extraction_errors.push(DomainProjectionError {
+                        path: format!("{path}.{attr}"),
+                        message: "a scalar Modelica input must have at most one connection source"
+                            .into(),
+                    });
+                } else if let Some(target) = targets.first() {
                     inputs.insert(name.to_string(), target.to_string());
                 } else if let Some(value) = view.real(&path, &attr) {
                     constants.insert(name.to_string(), value);
@@ -547,22 +560,39 @@ fn read_network(
         .iter()
         .filter_map(|attr| attr.strip_prefix("inputs:").map(str::to_string))
         .collect();
-    let input_sources = attrs
-        .iter()
-        .filter_map(|attr| {
-            let name = attr.strip_prefix("inputs:")?;
-            let target = view.connections(root, attr).first()?.to_string();
-            Some((name.to_string(), target))
-        })
-        .collect();
-    let outputs = attrs
-        .iter()
-        .filter_map(|attr| {
-            let name = attr.strip_prefix("outputs:")?;
-            let target = view.connections(root, attr).first()?.to_string();
-            Some((name.to_string(), target))
-        })
-        .collect();
+    let mut input_sources = BTreeMap::new();
+    let mut outputs = BTreeMap::new();
+    for attr in &attrs {
+        let Some(name) = attr.strip_prefix("inputs:") else {
+            continue;
+        };
+        let targets = view.connections(root, attr);
+        if targets.len() > 1 {
+            extraction_errors.push(DomainProjectionError {
+                path: format!("{root}.{attr}"),
+                message: "a scalar network input must have at most one connection source".into(),
+            });
+        } else if let Some(target) = targets.first() {
+            input_sources.insert(name.to_string(), target.to_string());
+        }
+    }
+    for attr in &attrs {
+        let Some(name) = attr.strip_prefix("outputs:") else {
+            continue;
+        };
+        let targets = view.connections(root, attr);
+        if targets.len() != 1 {
+            extraction_errors.push(DomainProjectionError {
+                path: format!("{root}.{attr}"),
+                message: "a network output must have exactly one component source".into(),
+            });
+        } else {
+            outputs.insert(name.to_string(), targets[0].to_string());
+        }
+    }
+    if !extraction_errors.is_empty() {
+        return Err(extraction_errors);
+    }
     let network = DomainNetwork {
         root: root_string,
         components,
@@ -586,7 +616,55 @@ pub fn validate_network(network: &DomainNetwork) -> Vec<DomainProjectionError> {
         .iter()
         .map(|component| (component.path.as_str(), component))
         .collect();
-    let boundary_sources: BTreeSet<_> = network.input_sources.values().map(String::as_str).collect();
+    let boundary_sources: BTreeSet<_> =
+        network.input_sources.values().map(String::as_str).collect();
+
+    let mut boundaries_by_source = BTreeMap::<&str, Vec<&str>>::new();
+    for (boundary, source) in &network.input_sources {
+        boundaries_by_source
+            .entry(source)
+            .or_default()
+            .push(boundary);
+    }
+    for (source, boundaries) in boundaries_by_source {
+        if boundaries.len() > 1 {
+            errors.push(DomainProjectionError {
+                path: network.root.clone(),
+                message: format!(
+                    "network inputs {} resolve to the same composed source `{source}`; their authored boundary identity is ambiguous",
+                    boundaries.join(", ")
+                ),
+            });
+        }
+    }
+
+    let mut generated_names = BTreeMap::<String, String>::new();
+    for component in &network.components {
+        let generated = instance_identifier(&network.root, &component.path);
+        if let Some(previous) = generated_names.insert(generated.clone(), component.path.clone()) {
+            errors.push(DomainProjectionError {
+                path: component.path.clone(),
+                message: format!(
+                    "component paths `{previous}` and `{}` produce the same Modelica identifier `{generated}`",
+                    component.path
+                ),
+            });
+        }
+        for member in component
+            .constants
+            .keys()
+            .chain(component.declared_connectors.iter())
+            .chain(component.inputs.keys())
+            .chain(component.declared_outputs.iter())
+        {
+            if !is_modelica_identifier(member) {
+                errors.push(DomainProjectionError {
+                    path: component.path.clone(),
+                    message: format!("public member `{member}` is not a valid Modelica identifier"),
+                });
+            }
+        }
+    }
 
     for component in &network.components {
         for (connector, targets) in &component.connectors {
@@ -716,18 +794,11 @@ fn model_class_from_asset(asset: &str, sub_identifier: Option<&str>) -> Option<S
 }
 
 fn is_modelica_class_name(class: &str) -> bool {
-    !class.is_empty()
-        && class.split('.').all(|part| {
-            let mut chars = part.chars();
-            chars
-                .next()
-                .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-                && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
-        })
+    !class.is_empty() && class.split('.').all(is_modelica_identifier)
 }
 
 fn instance_identifier(root: &str, path: &str) -> String {
-    sanitize_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
+    modelica_path_identifier(path.strip_prefix(root).unwrap_or(path).trim_matches('/'))
 }
 
 fn find(parent: &mut [usize], node: usize) -> usize {
@@ -745,20 +816,107 @@ fn union(parent: &mut [usize], left: usize, right: usize) {
     }
 }
 
-fn sanitize_identifier(raw: &str) -> String {
+fn is_modelica_identifier(raw: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "algorithm",
+        "and",
+        "annotation",
+        "block",
+        "break",
+        "class",
+        "connect",
+        "connector",
+        "constant",
+        "constrainedby",
+        "der",
+        "discrete",
+        "each",
+        "else",
+        "elseif",
+        "elsewhen",
+        "encapsulated",
+        "end",
+        "enumeration",
+        "equation",
+        "expandable",
+        "extends",
+        "external",
+        "false",
+        "final",
+        "flow",
+        "for",
+        "function",
+        "if",
+        "import",
+        "impure",
+        "in",
+        "initial",
+        "inner",
+        "input",
+        "loop",
+        "model",
+        "not",
+        "operator",
+        "or",
+        "outer",
+        "output",
+        "package",
+        "parameter",
+        "partial",
+        "protected",
+        "public",
+        "pure",
+        "record",
+        "redeclare",
+        "replaceable",
+        "return",
+        "stream",
+        "then",
+        "true",
+        "type",
+        "when",
+        "while",
+        "within",
+    ];
+    let mut chars = raw.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+        && !KEYWORDS.contains(&raw)
+}
+
+/// Injective ASCII spelling for arbitrary USD path/name text.
+///
+/// `_` is escaped too, so punctuation replacement cannot collapse `Motor-A`
+/// and `Motor_A` onto one Modelica instance.
+fn modelica_identifier(raw: &str) -> String {
+    if is_modelica_identifier(raw) {
+        return raw.to_string();
+    }
+    let mut result = modelica_path_identifier(raw);
+    if !result.starts_with("usd_") {
+        result.insert_str(0, "usd_");
+    }
+    result
+}
+
+fn modelica_path_identifier(raw: &str) -> String {
     let mut result = String::with_capacity(raw.len() + 1);
-    for (index, character) in raw.chars().enumerate() {
-        if character.is_ascii_alphanumeric() || character == '_' {
-            if index == 0 && character.is_ascii_digit() {
-                result.push('_');
-            }
+    for character in raw.chars() {
+        if character.is_ascii_alphanumeric() {
             result.push(character);
+        } else if character == '_' {
+            result.push_str("__");
         } else {
-            result.push('_');
+            result.push_str(&format!("_x{:x}_", character as u32));
         }
     }
     if result.is_empty() {
         result.push_str("ModelicaNetwork");
+    }
+    if result.as_bytes()[0].is_ascii_digit() || !is_modelica_identifier(&result) {
+        result.insert_str(0, "usd_");
     }
     result
 }
@@ -817,8 +975,8 @@ mod tests {
         };
         let source = emit_modelica(&network, "Electrical System");
         assert!(source.contains("input Real drive_left;"));
-        assert!(source.contains("Left_Motor_Model.demand = drive_left;"));
-        assert!(source.contains("connect(Battery_Model.p, Left_Motor_Model.p);"));
+        assert!(source.contains("Left_x2f_Motor_x2f_Model.demand = drive_left;"));
+        assert!(source.contains("connect(Battery_x2f_Model.p, Left_x2f_Motor_x2f_Model.p);"));
     }
 
     #[test]
@@ -843,8 +1001,8 @@ mod tests {
             outputs: BTreeMap::new(),
         };
         let source = emit_modelica(&network, "Electrical");
-        assert!(source.contains("connect(Bus_Model.p, LoadA_Model.p);"));
-        assert!(source.contains("connect(Bus_Model.p, LoadB_Model.p);"));
+        assert!(source.contains("connect(Bus_x2f_Model.p, LoadA_x2f_Model.p);"));
+        assert!(source.contains("connect(Bus_x2f_Model.p, LoadB_x2f_Model.p);"));
     }
 
     #[test]
@@ -896,7 +1054,7 @@ mod tests {
         );
         assert_eq!(
             network_model_name("/Rover/Electrical", Some(42)),
-            "Rover_Electrical_G42_System"
+            "Rover_x2f_Electrical_G42_System"
         );
         assert_ne!(
             network_model_name("/Rover/Electrical", Some(10)),
@@ -912,5 +1070,50 @@ mod tests {
             source_fingerprint(source),
             source_fingerprint("model A\n  Real y;\nend A;\n")
         );
+    }
+
+    #[test]
+    fn generated_identifiers_are_injective_and_avoid_keywords() {
+        assert_ne!(
+            modelica_path_identifier("Motor-A"),
+            modelica_path_identifier("Motor_A")
+        );
+        assert_eq!(modelica_identifier("model"), "usd_model");
+        assert_eq!(modelica_identifier("3phase"), "usd_3phase");
+        assert!(is_modelica_identifier(&modelica_identifier("left/right")));
+    }
+
+    #[test]
+    fn rejects_ambiguous_forwarded_boundary_sources() {
+        let network = DomainNetwork {
+            root: "/Electrical".into(),
+            components: vec![component("/Electrical/Battery", None)],
+            inputs: BTreeSet::from(["left".into(), "right".into()]),
+            input_sources: BTreeMap::from([
+                ("left".into(), "/Controls.outputs:throttle".into()),
+                ("right".into(), "/Controls.outputs:throttle".into()),
+            ]),
+            outputs: BTreeMap::new(),
+        };
+        assert!(validate_network(&network)
+            .iter()
+            .any(|error| error.message.contains("boundary identity is ambiguous")));
+    }
+
+    #[test]
+    fn rejects_modelica_keywords_as_public_members() {
+        let mut bad = component("/Electrical/Load", None);
+        bad.inputs
+            .insert("equation".into(), "/Electrical.inputs:demand".into());
+        let network = DomainNetwork {
+            root: "/Electrical".into(),
+            components: vec![bad],
+            inputs: BTreeSet::from(["demand".into()]),
+            input_sources: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+        };
+        assert!(validate_network(&network)
+            .iter()
+            .any(|error| error.message.contains("not a valid Modelica identifier")));
     }
 }

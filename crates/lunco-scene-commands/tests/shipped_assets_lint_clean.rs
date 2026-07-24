@@ -32,7 +32,9 @@ fn register_usd_lint_policy() {
 
 /// Every `.usda` under `dir`, recursively.
 fn usda_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -65,7 +67,11 @@ fn shipped_usd_assets_have_no_lint_errors() {
         usda_files(&assets.join(sub), &mut files);
     }
     files.sort();
-    assert!(files.len() > 20, "expected the shipped asset tree, found {} files", files.len());
+    assert!(
+        files.len() > 20,
+        "expected the shipped asset tree, found {} files",
+        files.len()
+    );
 
     let mut offenders = Vec::new();
     for f in &files {
@@ -101,11 +107,16 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
 
     let broken = assets_dir().join("scenes/tests/lint_selftest.usda");
     let report = lunco_scene_commands::validate::validate_asset(&broken.to_string_lossy());
-    let lint_errors: Vec<&String> =
-        report.errors.iter().filter(|e| e.starts_with("[usd/")).collect();
+    let lint_errors: Vec<&String> = report
+        .errors
+        .iter()
+        .filter(|e| e.starts_with("[usd/"))
+        .collect();
 
     assert!(
-        lint_errors.iter().any(|e| e.contains("nested-body-no-joint")),
+        lint_errors
+            .iter()
+            .any(|e| e.contains("nested-body-no-joint")),
         "lint_selftest.usda must trip nested-body-no-joint through ValidateAsset — \
          got {lint_errors:?}"
     );
@@ -130,6 +141,20 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
         "lint_selftest.usda must prove out-of-network connectors are rejected — \
          got {lint_errors:?}"
     );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("invalid-network-program-source")),
+        "lint_selftest.usda must prove non-Modelica program members are rejected — \
+         got {lint_errors:?}"
+    );
+    assert!(
+        lint_errors
+            .iter()
+            .any(|e| e.contains("multi-source-modelica-property")),
+        "lint_selftest.usda must prove scalar Modelica fan-in is rejected — \
+         got {lint_errors:?}"
+    );
     assert!(!report.ok, "a file with lint ERRORS must not report ok");
 }
 
@@ -148,11 +173,16 @@ fn a_strut_that_outreaches_its_foot_is_caught_by_geometry_alone() {
 
     let broken = assets_dir().join("scenes/tests/lint_selftest.usda");
     let report = lunco_scene_commands::validate::validate_asset(&broken.to_string_lossy());
-    let lint_errors: Vec<&String> =
-        report.errors.iter().filter(|e| e.starts_with("[usd/")).collect();
+    let lint_errors: Vec<&String> = report
+        .errors
+        .iter()
+        .filter(|e| e.starts_with("[usd/"))
+        .collect();
 
     assert!(
-        lint_errors.iter().any(|e| e.contains("sprung-foot-thin-clearance")),
+        lint_errors
+            .iter()
+            .any(|e| e.contains("sprung-foot-thin-clearance")),
         "the selftest leg must trip sprung-foot-thin-clearance — got {lint_errors:?}"
     );
 }

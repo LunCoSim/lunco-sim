@@ -32,6 +32,10 @@ checkable claim. That is the whole reason the split exists — not tidiness.
 ## 2. USD assembles components; runtime projects one acausal model
 
 Each physical component applies `LunCoProgramAPI` and names its reusable Modelica class.
+Compiler-network members explicitly author
+`info:implementationSource = "sourceAsset"` and a `.mo` `info:sourceAsset`; built-in
+`info:id` programs and inline `info:sourceCode` programs are valid elsewhere, but are not
+Modelica compiler inputs.
 Its causal boundary uses `inputs:`/`outputs:`; its acausal Modelica connector members use
 `connectors:`. Ordinary USD property connections author topology. There is no electrical
 USD schema and no exposed `Pin` prim. An ordinary network `Scope` applies the standard
@@ -96,7 +100,9 @@ The projector rejects, and `lint.usd` reports, a scope containing multiple disco
 acausal islands or a connector targeting a component outside the collection. This is
 intentional failure isolation: one independently compiled network has one explicit USD
 scope. USD multi-target connections remain multi-way Modelica `connect()` equations;
-the projector never selects only the first target.
+the projector never selects only the first target. Causal scalar properties instead
+require at most one source (and network outputs exactly one); multi-source authoring is
+an error rather than an implicit first-source choice.
 
 When the `.mo` contains one conventionally named class, its package-qualified class is
 derived from the path. When a source contains several definitions, author the standard
