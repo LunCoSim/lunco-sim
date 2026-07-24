@@ -204,6 +204,7 @@ impl<'w> WaypointDocContext<'w> {
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct WaypointClickFrame<'w, 's> {
     pub cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera3d>>,
+    pub q_parents: Query<'w, 's, &'static ChildOf>,
 }
 
 /// Resolve the pointer to a point on the ground in **WORLD** (grid-absolute) space —
