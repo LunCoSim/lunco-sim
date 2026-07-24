@@ -47,10 +47,10 @@ use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
 // The USD-reading systems read the LIVE canonical stage via `StageView`, which
 // implements `UsdRead` (the COMPOSED stage — as opposed to `UsdDataExt`, a raw
 // AUTHORED layer; the retired flattened reader used to blur the two). Since the
-// terrain projector moved to `lunco-usd-terrain`, the only reader left in this crate
-// is the `ui`-gated terrain layer-map binding.
+// terrain projector moved to `lunco-usd-terrain`, the remaining readers are the
+// networking policy extractor and the UI terrain layer-map binding.
 use bevy::asset::AssetLoadFailedEvent;
-#[cfg(feature = "ui")]
+#[cfg(any(feature = "ui", feature = "networking"))]
 use lunco_usd_bevy::UsdRead;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
