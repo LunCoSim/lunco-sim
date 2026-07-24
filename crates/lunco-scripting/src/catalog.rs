@@ -115,12 +115,10 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             .map(|(name, doc)| serde_json::json!({ "name": name, "doc": doc }))
             .collect();
 
-        // Prelude helpers — compiled & introspected (name + param names). Uses the
-        // same raised expr-depth the scenario engine uses (the sequencer needs it;
-        // a stock engine rejects the prelude, which used to leave this list empty).
+        // Prelude helpers — compiled and introspected under the runtime policy.
         let prelude: Vec<serde_json::Value> = {
             let mut engine = rhai::Engine::new();
-            engine.set_max_expr_depths(128, 128);
+            crate::rhai_limits::apply(&mut engine);
             crate::world_bridge::compile_prelude(&engine)
                 .map(|ast| {
                     let mut fns: Vec<serde_json::Value> = ast

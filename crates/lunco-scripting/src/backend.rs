@@ -47,11 +47,7 @@ impl ScriptBackend for RhaiBackend {
 
         let mut engine = rhai::Engine::new();
 
-        // Sandbox caps — defend against runaway / oversized untrusted scripts.
-        engine.set_max_operations(1_000_000);
-        engine.set_max_call_levels(64);
-        engine.set_max_string_size(64 * 1024);
-        engine.set_max_array_size(10_000);
+        crate::rhai_limits::apply(&mut engine);
 
         // Capture `print(...)` output so callers get script stdout, mirroring
         // the Python backend's StringIO redirect.

@@ -30,6 +30,8 @@ pub mod repl;
 /// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
 #[cfg(feature = "rhai")]
 pub mod rhai_math;
+/// Shared bounded-resource policy for every Rhai engine.
+pub mod rhai_limits;
 /// Language-neutral scenario lifecycle driver (`on_start`/`on_tick`/`on_event`/
 /// `on_stop`, hot-reload, pause, teardown). Backends implement `ScenarioRuntime`.
 #[cfg(any(feature = "rhai", feature = "python"))]

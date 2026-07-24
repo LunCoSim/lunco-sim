@@ -32,13 +32,11 @@ use rhai::Engine;
 
 /// An engine configured like the runtime's.
 ///
-/// Mirrors `prelude_parses.rs::runtime_engine` for the same reason: a bare
-/// `Engine::new()` uses rhai's default expression-depth caps, well below the
-/// `set_max_expr_depths(128, 128)` the real engine sets, so it would reject
-/// files that run fine in production and make this a false alarm.
+/// Mirrors `prelude_parses.rs::runtime_engine`: a bare engine can drift from the
+/// runtime's bounded-resource policy and make this a false alarm.
 fn runtime_engine() -> Engine {
     let mut engine = Engine::new();
-    engine.set_max_expr_depths(128, 128);
+    lunco_scripting::rhai_limits::apply(&mut engine);
     engine
 }
 
