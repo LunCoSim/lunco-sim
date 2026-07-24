@@ -243,6 +243,10 @@ fn bind_pbr_look(
     let handle = material_for(look, &mut cache, &mut materials);
 
     let mut ec = commands.entity(e);
+    // Keep the concrete render material exclusive too. Although callers must
+    // replace the render-free look, a late observer can otherwise leave an old
+    // WGSL material beside this StandardMaterial and submit the same mesh twice.
+    ec.remove::<MeshMaterial3d<ShaderMaterial>>();
     ec.try_insert(MeshMaterial3d(handle));
     if look.no_shadow_cast {
         ec.try_insert(NotShadowCaster);
@@ -286,7 +290,10 @@ fn rebind_changed_pbr_look(
         // real state. `try_insert` is Bevy's answer to exactly that; here it is
         // correct rather than a cover-up — the entity is genuinely gone, so there
         // is nothing to render and nothing to lose.
-        commands.entity(e).try_insert(MeshMaterial3d(handle));
+        commands
+            .entity(e)
+            .remove::<MeshMaterial3d<ShaderMaterial>>()
+            .try_insert(MeshMaterial3d(handle));
         apply_shadow_flag(&mut commands, e, look);
     }
 }
@@ -370,6 +377,36 @@ mod tests {
         let e = app.world_mut().spawn(PbrLook::default().no_shadows()).id();
         app.update();
         assert!(app.world().entity(e).contains::<NotShadowCaster>());
+    }
+
+    /// A late PBR projection supersedes an existing WGSL material instead of
+    /// leaving two render pipelines attached to one mesh.
+    #[test]
+    fn pbr_look_replaces_a_preexisting_shader_material() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>()
+            .add_plugins(LuncoRenderPlugin);
+        let shader = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        let e = app
+            .world_mut()
+            .spawn((
+                MeshMaterial3d(shader),
+                PbrLook::matte(LinearRgba::rgb(0.2, 0.2, 0.2)),
+            ))
+            .id();
+
+        app.update();
+
+        let entity = app.world().entity(e);
+        assert!(entity.contains::<MeshMaterial3d<StandardMaterial>>());
+        assert!(
+            !entity.contains::<MeshMaterial3d<ShaderMaterial>>(),
+            "the PBR material must replace, not overlay, the shader material"
+        );
     }
 
     fn app_with_n_distinct_looks(n: usize) -> (App, Vec<Entity>) {

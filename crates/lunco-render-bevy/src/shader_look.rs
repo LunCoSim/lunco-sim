@@ -34,7 +34,7 @@ use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
 use crate::shader_material::{build_shader_material, ShaderMaterial};
 use bevy::asset::AssetId;
 use bevy::light::NotShadowCaster;
-use bevy::pbr::MeshMaterial3d;
+use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::shader::Shader;
@@ -126,7 +126,16 @@ fn bind_shader_look(
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
     let handle = material_for(look, &mut cache, &mut materials, &asset_server);
-    commands.entity(e).try_insert(MeshMaterial3d(handle));
+    // Appearance intent is exclusive, but USD's visual projection and this
+    // observer run in different schedules. A `PbrLook` may therefore already
+    // have produced its concrete material before the projection swaps to a
+    // `ShaderLook`. Remove that stale draw before adding ours: leaving both
+    // material component types on one mesh submits it twice with incompatible
+    // pipelines (visible as bright, serrated fragments at wheel silhouettes).
+    commands
+        .entity(e)
+        .remove::<MeshMaterial3d<StandardMaterial>>()
+        .try_insert(MeshMaterial3d(handle));
     apply_shadow_intent(&mut commands, e, look);
 }
 
@@ -219,6 +228,7 @@ fn rebind_changed_shader_look(
         let same_material = current.is_some_and(|m| m.0.id() == handle.id());
         commands
             .entity(e)
+            .remove::<MeshMaterial3d<StandardMaterial>>()
             .try_insert(MeshMaterial3d(handle.clone()));
 
         // The look changed but resolved to the material it is ALREADY on ⇒ only
@@ -416,5 +426,34 @@ mod tests {
         assert_eq!(m.normal_map.as_ref(), Some(&normal));
         assert!(m.height_map.is_none());
         assert_eq!(mats.len(), 2, "a bound texture is part of the sharing key");
+    }
+
+    /// A USD material can be projected as plain PBR before its WGSL binding is
+    /// resolved. Taking the shader path must replace the concrete material too,
+    /// not merely the render-free intent, or Bevy draws the mesh twice.
+    #[test]
+    fn shader_look_replaces_a_preexisting_standard_material() {
+        let mut app = app();
+        app.init_asset::<StandardMaterial>();
+        let standard = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let e = app
+            .world_mut()
+            .spawn((
+                MeshMaterial3d(standard),
+                ShaderLook::new("shaders/wheel.wgsl"),
+            ))
+            .id();
+
+        app.update();
+
+        let entity = app.world().entity(e);
+        assert!(entity.contains::<MeshMaterial3d<ShaderMaterial>>());
+        assert!(
+            !entity.contains::<MeshMaterial3d<StandardMaterial>>(),
+            "the shader material must replace, not overlay, the PBR material"
+        );
     }
 }
