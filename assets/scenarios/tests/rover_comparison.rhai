@@ -1,4 +1,4 @@
-// Simultaneous three-tier rover comparison over the primitive field in
+// Simultaneous rocker-bogie tier and conventional-control comparison over the
 // `scenes/tests/rover_comparison.usda`.  This is intentionally one shared
 // command timeline: the scene compares vehicle properties, never driver timing.
 
@@ -7,17 +7,21 @@ fn on_start(me) {
     this.settle_s = 4.0;
     this.run_s = 28.0;
     this.next_sample = 0.0;
-    this.names = ["Easy", "Medium", "Awful"];
+    this.names = ["Easy", "Medium", "Awful", "Conventional", "Skid4", "AckermannRaycast4", "AckermannJoint4"];
     this.rovers = [
         find("/RoverComparison/Easy"),
         find("/RoverComparison/Medium"),
         find("/RoverComparison/Awful"),
+        find("/RoverComparison/Conventional"),
+        find("/RoverComparison/SkidFourWheel"),
+        find("/RoverComparison/AckermannRaycast4"),
+        find("/RoverComparison/AckermannJoint4"),
     ];
-    this.prev = [(), (), ()];
-    this.distance = [0.0, 0.0, 0.0];
-    this.max_tilt = [0.0, 0.0, 0.0];
+    this.prev = [(), (), (), (), (), (), ()];
+    this.distance = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    this.max_tilt = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     this.phase = "settle";
-    print("[rover-comparison] identical primitive terrain: cylinders, blocks, 6/12/18 deg and 40% ramps");
+    print("[rover-comparison] identical primitive terrain: cylinders, blocks, 6/12/18/40 deg ramps");
     print("[rover-comparison] all tiers launch simultaneously after settling");
 }
 
@@ -25,7 +29,7 @@ fn on_tick(me) {
     if this.phase == "done" { return; }
     this.t += dt();
 
-    for i in 0..3 {
+    for i in 0..7 {
         let rover = this.rovers[i];
         if rover == () || rover < 0 {
             print("ROVER COMPARISON: FAIL — missing " + this.names[i] + " rover");
@@ -46,7 +50,7 @@ fn on_tick(me) {
         return;
     }
 
-    for i in 0..3 {
+    for i in 0..7 {
         let rover = this.rovers[i];
         drive(rover, 1.0, 0.0);
         let pos = world_pos(rover);
@@ -58,7 +62,7 @@ fn on_tick(me) {
 
     if this.t >= this.next_sample {
         let line = "[rover-comparison] t=" + r2(this.t);
-        for i in 0..3 {
+        for i in 0..7 {
             line += "  " + this.names[i] + " d=" + r2(this.distance[i]);
             line += " tilt=" + r2(this.max_tilt[i]);
         }
@@ -69,7 +73,7 @@ fn on_tick(me) {
     if this.t >= this.settle_s + this.run_s {
         for rover in this.rovers { brake(rover); }
         let checks = [];
-        for i in 0..3 {
+        for i in 0..7 {
             let rover = this.rovers[i];
             checks.push(t_bounded(world_pos(rover), 200.0, this.names[i] + " rover"));
             checks.push(t_true(this.distance[i] > 8.0,

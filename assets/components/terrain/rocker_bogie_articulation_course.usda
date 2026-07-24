@@ -1,0 +1,82 @@
+#usda 1.0
+(
+    defaultPrim = "RockerBogieArticulationCourse"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Reusable primitive obstacle course.  A scene instances this component with a
+# reference arc and binds its `Regolith` material at the instance root.  The
+# asymmetric steps are intentional: a rocker-bogie must transfer load through
+# its rockers and bogies while a rigid conventional axle is forced to lift its
+# chassis or lose an opposing wheel contact.
+def Xform "RockerBogieArticulationCourse" (
+    kind = "component"
+)
+{
+    def Cylinder "Ridge" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        uniform token axis = "X"
+        double radius = 0.18
+        double height = 4.0
+        double3 xformOp:translate = (0, 0.08, 17)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:collisionEnabled = true
+    }
+
+    # Alternating single-side steps are the articulation discriminator.  They
+    # are deliberately below the wheel diameter: this measures contact keeping
+    # and chassis clearance, not a vertical-wall collision exploit.
+    def Cube "LeftStep" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-0.85, 0.28, 4)
+        double3 xformOp:scale = (0.55, 0.56, 0.55)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+    def Cube "RightStep" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.85, 0.36, -1)
+        double3 xformOp:scale = (0.55, 0.72, 0.55)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+    def Cube "Crest" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 0.32, -7)
+        double3 xformOp:scale = (1.6, 0.64, 0.6)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+
+    def Cube "Ramp6Deg" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 0.35, -18)
+        double3 xformOp:scale = (3.0, 0.25, 5.0)
+        double3 xformOp:rotateXYZ = (6, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+    def Cube "Ramp18Deg" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 0.92, -32)
+        double3 xformOp:scale = (3.0, 0.25, 5.0)
+        double3 xformOp:rotateXYZ = (18, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+    def Cube "Ramp40Deg" (prepend apiSchemas = ["PhysicsCollisionAPI"])
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 2.0, -46)
+        double3 xformOp:scale = (3.0, 0.25, 5.0)
+        double3 xformOp:rotateXYZ = (40, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        bool physics:collisionEnabled = true
+    }
+}
