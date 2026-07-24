@@ -101,12 +101,17 @@ pub struct TerrainVisualFocus {
     /// This covers nearby subjects (for example a third-person rover) without
     /// making physics bodies visual-LOD authorities.
     pub near_detail_radius_m: f64,
+    /// Extra distance a previously refined near-field tile remains selected after
+    /// the camera moves away. This suppresses coarse/fine oscillation at a
+    /// quadtree boundary without broadening the area that requests new detail.
+    pub near_detail_hysteresis_m: f64,
 }
 
 impl Default for TerrainVisualFocus {
     fn default() -> Self {
         Self {
             near_detail_radius_m: 30.0,
+            near_detail_hysteresis_m: 12.0,
         }
     }
 }
@@ -116,6 +121,7 @@ struct VisualDemand {
     position: DVec3,
     forward: DVec3,
     near_detail_radius_m: f64,
+    near_detail_hysteresis_m: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +132,7 @@ struct TerrainVisualDemand {
     /// The camera's actual ground position.
     required: bool,
     near_detail_radius_m: f64,
+    near_detail_hysteresis_m: f64,
 }
 
 /// Frame-local detail demands collected once from explicit ECS focus markers.
@@ -171,6 +178,7 @@ pub(crate) fn collect_terrain_detail_demands(
                     position,
                     forward: (transform.rotation * Vec3::NEG_Z).as_dvec3(),
                     near_detail_radius_m: focus.near_detail_radius_m.max(0.0),
+                    near_detail_hysteresis_m: focus.near_detail_hysteresis_m.max(0.0),
                 })
             }),
     );
@@ -530,12 +538,27 @@ fn evolve_cover(
 /// Multi-viewport form of [`evolve_cover`]. A node uses its nearest visual focus,
 /// so all active marked cameras contribute to one exact cover without one camera
 /// evicting another's terrain.
+#[cfg(test)]
 fn evolve_cover_for_foci(
     qt: &Quadtree,
     cover: &mut HashSet<QuadCoord>,
     foci: &[([f64; 2], f64)],
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
+) -> usize {
+    evolve_cover_for_foci_with_retention(qt, cover, foci, node_error, budget, &|_, _| false)
+}
+
+/// The persistent-cover evolution with an optional retain band. A retain band
+/// blocks voluntary merges of already-refined tiles, but never requests new
+/// splits; it is therefore hysteresis rather than a larger detail radius.
+fn evolve_cover_for_foci_with_retention(
+    qt: &Quadtree,
+    cover: &mut HashSet<QuadCoord>,
+    foci: &[([f64; 2], f64)],
+    node_error: &impl Fn(QuadCoord, Square) -> f64,
+    budget: usize,
+    retain_refinement: &impl Fn(QuadCoord, Square) -> bool,
 ) -> usize {
     if cover.is_empty() {
         cover.insert(QuadCoord::ROOT);
@@ -560,7 +583,14 @@ fn evolve_cover_for_foci(
     let mut merges: Vec<(f64, QuadCoord)> = parents
         .into_iter()
         .filter(|p| p.children().iter().all(|k| cover.contains(k)))
-        .map(|p| (slack(p), p))
+        .map(|p| {
+            let slack = if retain_refinement(p, qt.region(p)) {
+                0.0
+            } else {
+                slack(p)
+            };
+            (slack, p)
+        })
         .collect();
     // Total order for peer determinism: slack, then coord (a slack-only sort
     // leaves equal keys in HashSet iteration order, so a budget truncation
@@ -786,6 +816,11 @@ pub struct LodTiles {
     /// on the component because the idle fast path skips selection — a
     /// starved-but-idle terrain must keep reporting, not read as healthy.
     budget_refused: usize,
+    /// The first camera cover is immutable until its full near-camera patch is ready.
+    /// Camera rigs often settle over several startup frames; re-selecting in that
+    /// interval cancelled and replaced the same near tiles repeatedly, producing
+    /// coarse → fine → coarse flicker before normal traversal had even begun.
+    bootstrap_ready: bool,
 }
 
 impl LodTiles {
@@ -1399,6 +1434,14 @@ fn near_field_error_floor(region: Square, tile_res: usize, demands: &[TerrainVis
         .unwrap_or(0.0)
 }
 
+fn near_field_retains_refinement(region: Square, demands: &[TerrainVisualDemand]) -> bool {
+    demands.iter().any(|focus| {
+        focus.required
+            && region.distance_to(focus.focus)
+                <= focus.near_detail_radius_m + focus.near_detail_hysteresis_m
+    })
+}
+
 fn cached_node_error(
     cache: &std::cell::RefCell<&mut HashMap<QuadCoord, f64>>,
     coord: QuadCoord,
@@ -1431,6 +1474,26 @@ fn add_focus_readiness(
             status.focus_resident += 1;
         }
     }
+}
+
+fn bootstrap_cover_is_ready(
+    selected: &[Selected],
+    demands: &[TerrainVisualDemand],
+    is_ready: impl Fn(QuadCoord) -> bool,
+) -> bool {
+    demands.iter().filter(|focus| focus.required).all(|focus| {
+        selected
+            .iter()
+            // Unlocking after only the tile under the camera was ready still made
+            // its neighbours hand off one at a time. Keep the opening cover fixed
+            // until every selected tile touching the guaranteed near field has a
+            // mesh. The draw partition then reveals that local patch as one stable
+            // cover instead of a succession of coarse/fine substitutions.
+            .filter(|selected| {
+                selected.region.distance_to(focus.focus) <= focus.near_detail_radius_m
+            })
+            .all(|selected| is_ready(selected.coord))
+    })
 }
 
 /// **Run tile streaming in LOCKSTEP with the frame instead of against the wall
@@ -1708,6 +1771,7 @@ pub fn update_lod_tiles(
                 heading,
                 required: true,
                 near_detail_radius_m: demand.near_detail_radius_m,
+                near_detail_hysteresis_m: demand.near_detail_hysteresis_m,
             });
         }
         let quadtree_for = |px: f64| {
@@ -1879,25 +1943,44 @@ pub fn update_lod_tiles(
             // INCREMENTAL: evolve the persistent cover a bounded step, then read the
             // selection off it. No global metric moves, so no mass re-selection exists to
             // oscillate — see `evolve_cover`.
-            focus_metric.clear();
-            focus_metric.extend(
-                visual_foci
-                    .iter()
-                    .map(|demand| (demand.focus, demand.eye_height)),
-            );
-            tiles.budget_refused = 0;
-            // One evolve pass can split a branch by one level because candidates
-            // are snapshotted before edits. Drive only the required camera
-            // branches to their fixed point in this same update; otherwise an
-            // eight-level tree takes eight rendered frames to discover the tile
-            // beneath a newly active camera.
-            for _ in 0..cfg.max_depth.max(1) {
-                let before = required_focus_depth(&tiles.cover, visual_foci, &qt);
-                tiles.budget_refused +=
-                    evolve_cover_for_foci(&qt, &mut tiles.cover, focus_metric, &node_error, budget);
-                let after = required_focus_depth(&tiles.cover, visual_foci, &qt);
-                if after == before || after == Some(cfg.max_depth) {
-                    break;
+            if tiles.cover.is_empty() || tiles.bootstrap_ready {
+                focus_metric.clear();
+                focus_metric.extend(
+                    visual_foci
+                        .iter()
+                        .map(|demand| (demand.focus, demand.eye_height)),
+                );
+                tiles.budget_refused = 0;
+                // One evolve pass can split a branch by one level because candidates
+                // are snapshotted before edits. Build the initial cover to its fixed
+                // point once, then keep it unchanged until its camera tile is visibly
+                // ready. This avoids cancelling/rebuilding startup tiles while the
+                // camera rig settles over its first few frames.
+                if tiles.cover.is_empty() {
+                    for _ in 0..cfg.max_depth.max(1) {
+                        let before = required_focus_depth(&tiles.cover, visual_foci, &qt);
+                        tiles.budget_refused += evolve_cover_for_foci_with_retention(
+                            &qt,
+                            &mut tiles.cover,
+                            focus_metric,
+                            &node_error,
+                            budget,
+                            &|_, region| near_field_retains_refinement(region, visual_foci),
+                        );
+                        let after = required_focus_depth(&tiles.cover, visual_foci, &qt);
+                        if after == before || after == Some(cfg.max_depth) {
+                            break;
+                        }
+                    }
+                } else if tiles.bootstrap_ready {
+                    tiles.budget_refused = evolve_cover_for_foci_with_retention(
+                        &qt,
+                        &mut tiles.cover,
+                        focus_metric,
+                        &node_error,
+                        budget,
+                        &|_, region| near_field_retains_refinement(region, visual_foci),
+                    );
                 }
             }
             sel = tiles
@@ -2318,6 +2401,20 @@ pub fn update_lod_tiles(
             true
         });
 
+        // The first cover may now begin adapting normally. Until its complete
+        // camera-near patch is prepared it is intentionally immutable: changing
+        // that cover while the rig settles only creates startup churn.
+        if !tiles.bootstrap_ready
+            && bootstrap_cover_is_ready(&sel, visual_foci, |coord| {
+                tiles.tiles.get(&coord).is_some_and(|slot| slot.ready)
+            })
+        {
+            tiles.bootstrap_ready = true;
+            // The cover was intentionally held while the camera rig settled;
+            // force one clean signature pass now that normal adaptation resumes.
+            tiles.last_sig = None;
+        }
+
         // How many selected areas have NO cover at all — the metric that must stay 0.
         // Non-zero means something rendered as clear colour, and it can only happen
         // before the coarse base has finished baking.
@@ -2707,6 +2804,7 @@ mod draw_partition_tests {
             heading: None,
             required: true,
             near_detail_radius_m: 30.0,
+            near_detail_hysteresis_m: 12.0,
         };
         let demands = [actual];
         let foci = demands
@@ -2743,6 +2841,39 @@ mod draw_partition_tests {
         assert!(
             forward_depth < qt.max_depth,
             "forward direction must not create a separate finest-detail island"
+        );
+    }
+
+    #[test]
+    fn bootstrap_waits_for_the_entire_camera_near_field() {
+        let qt = test_qt();
+        let selected = QuadCoord::ROOT
+            .children()
+            .into_iter()
+            .map(|coord| Selected {
+                coord,
+                region: qt.region(coord),
+                morph_start: f64::INFINITY,
+                morph_end: f64::INFINITY,
+            })
+            .collect::<Vec<_>>();
+        let demand = TerrainVisualDemand {
+            focus: [0.0, 0.0],
+            eye_height: 3.0,
+            heading: None,
+            required: true,
+            near_detail_radius_m: 30.0,
+            near_detail_hysteresis_m: 12.0,
+        };
+        let missing = selected[0].coord;
+
+        assert!(
+            !bootstrap_cover_is_ready(&selected, &[demand], |coord| coord != missing),
+            "one unprepared neighbouring tile must keep the opening cover stable"
+        );
+        assert!(
+            bootstrap_cover_is_ready(&selected, &[demand], |_| true),
+            "the cover may adapt once every near-camera tile is prepared"
         );
     }
 
