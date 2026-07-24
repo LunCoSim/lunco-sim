@@ -92,14 +92,10 @@ const NODE_ERROR_PROBE_RES: usize = 9;
 
 /// Marks a perspective camera as a visual terrain-detail authority.
 ///
-/// Every active marked camera contributes to the same deterministic cover.
-/// `prefetch_distance_m` adds a second focus along the camera's ground-plane
-/// look direction so visible relief is resident before it reaches the foreground.
+/// Every active marked camera contributes one stable, camera-centred detail cover.
 #[derive(Component, Reflect, Debug, Clone, Copy)]
 #[reflect(Component)]
 pub struct TerrainVisualFocus {
-    /// Distance ahead of the camera to pre-refine visible terrain.
-    pub prefetch_distance_m: f64,
     /// Radius around the camera guaranteed to use the finest visual geometry.
     ///
     /// This covers nearby subjects (for example a third-person rover) without
@@ -110,7 +106,6 @@ pub struct TerrainVisualFocus {
 impl Default for TerrainVisualFocus {
     fn default() -> Self {
         Self {
-            prefetch_distance_m: 80.0,
             near_detail_radius_m: 30.0,
         }
     }
@@ -120,7 +115,6 @@ impl Default for TerrainVisualFocus {
 struct VisualDemand {
     position: DVec3,
     forward: DVec3,
-    prefetch_distance_m: f64,
     near_detail_radius_m: f64,
 }
 
@@ -129,8 +123,7 @@ struct TerrainVisualDemand {
     focus: [f64; 2],
     eye_height: f64,
     heading: Option<bevy::math::DVec2>,
-    /// The camera's actual ground position. Prefetch samples influence selection
-    /// and priority, but only this exact point gates startup readiness.
+    /// The camera's actual ground position.
     required: bool,
     near_detail_radius_m: f64,
 }
@@ -177,7 +170,6 @@ pub(crate) fn collect_terrain_detail_demands(
                 Some(VisualDemand {
                     position,
                     forward: (transform.rotation * Vec3::NEG_Z).as_dvec3(),
-                    prefetch_distance_m: focus.prefetch_distance_m.max(0.0),
                     near_detail_radius_m: focus.near_detail_radius_m.max(0.0),
                 })
             }),
@@ -1517,8 +1509,7 @@ pub struct StreamScratch {
     coarse: Vec<Selected>,
     /// Scratch for the disjointness pass over `draw`.
     drop_covered: Vec<QuadCoord>,
-    /// Active cameras projected into the terrain's local frame, including each
-    /// camera's forward-prefetch focus.
+    /// Active cameras projected into the terrain's local frame.
     visual_foci: Vec<TerrainVisualDemand>,
     /// Allocation-free projection of `visual_foci` into the pure CDLOD metric.
     focus_metric: Vec<([f64; 2], f64)>,
@@ -1694,10 +1685,10 @@ pub fn update_lod_tiles(
             tiles.mode = mode;
         }
 
-        // Project every active visual focus into this terrain's local DEM frame.
-        // Each camera contributes its actual position plus a forward prefetch
-        // corridor; intermediate samples keep the whole visible approach refined
-        // rather than concentrating detail only at the camera and one endpoint.
+        // Project every active visual camera into this terrain's local DEM frame.
+        // Direction remains a bake-priority bias, but it is deliberately not a
+        // second selection focus: startup camera settling otherwise creates a
+        // transient high-detail island that visibly appears and disappears.
         let oracle = &hf.0;
         let h = oracle.half_extent() as f64;
         visual_foci.clear();
@@ -1706,35 +1697,18 @@ pub fn update_lod_tiles(
             let local_forward = demand.forward;
             let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
             let heading = (heading.length() > 1e-3).then(|| heading.normalize());
-            let mut push_focus = |xz: [f64; 2], required: bool| {
-                if xz[0].abs() > h || xz[1].abs() > h {
-                    return;
-                }
-                let ground = oracle.height_at(xz[0], xz[1]);
-                visual_foci.push(TerrainVisualDemand {
-                    focus: xz,
-                    eye_height: (local.y - ground).max(0.0),
-                    heading,
-                    required,
-                    near_detail_radius_m: required
-                        .then_some(demand.near_detail_radius_m)
-                        .unwrap_or(0.0),
-                });
-            };
             let here = [local.x, local.z];
-            push_focus(here, true);
-            if let Some(direction) = heading {
-                let lead = demand.prefetch_distance_m.min(2.0 * h);
-                for fraction in [0.25, 0.5, 1.0] {
-                    push_focus(
-                        [
-                            here[0] + direction.x * lead * fraction,
-                            here[1] + direction.y * lead * fraction,
-                        ],
-                        false,
-                    );
-                }
+            if here[0].abs() > h || here[1].abs() > h {
+                continue;
             }
+            let ground = oracle.height_at(here[0], here[1]);
+            visual_foci.push(TerrainVisualDemand {
+                focus: here,
+                eye_height: (local.y - ground).max(0.0),
+                heading,
+                required: true,
+                near_detail_radius_m: demand.near_detail_radius_m,
+            });
         }
         let quadtree_for = |px: f64| {
             Quadtree::from_screen_metric(
@@ -2718,7 +2692,7 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn camera_near_field_reaches_finest_cover_while_prefetch_does_not_force_it() {
+    fn camera_near_field_reaches_finest_cover_without_a_transient_forward_focus() {
         let qt = Quadtree::from_screen_metric(
             1000.0,
             6,
@@ -2734,14 +2708,7 @@ mod draw_partition_tests {
             required: true,
             near_detail_radius_m: 30.0,
         };
-        let prefetch = TerrainVisualDemand {
-            focus: [80.0, 0.0],
-            eye_height: 3.0,
-            heading: None,
-            required: false,
-            near_detail_radius_m: 0.0,
-        };
-        let demands = [actual, prefetch];
+        let demands = [actual];
         let foci = demands
             .iter()
             .map(|demand| (demand.focus, demand.eye_height))
@@ -2768,14 +2735,14 @@ mod draw_partition_tests {
             nearby_depth, qt.max_depth,
             "the guaranteed camera near field must cover nearby visible subjects"
         );
-        let prefetch_depth = cover
+        let forward_depth = cover
             .iter()
-            .find(|&&coord| qt.region(coord).distance_to(prefetch.focus) <= f64::EPSILON)
+            .find(|&&coord| qt.region(coord).distance_to([80.0, 0.0]) <= f64::EPSILON)
             .map(|coord| coord.depth)
-            .expect("prefetch point must remain covered");
+            .expect("forward point must remain covered");
         assert!(
-            prefetch_depth < qt.max_depth,
-            "look-ahead may guide normal error selection but must not masquerade as a camera"
+            forward_depth < qt.max_depth,
+            "forward direction must not create a separate finest-detail island"
         );
     }
 
