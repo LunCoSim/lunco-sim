@@ -336,11 +336,11 @@ pub struct SetEnvironmentLight {
     pub bloom_intensity: Option<f32>,
 }
 
-/// Marks the **earthshine** fill light — a second, *shadowless*, cool-blue
-/// `DirectionalLight` standing in for Earth's reflected light. It is summed by
-/// Bevy's normal light loop, so
-/// it lifts sun-shadowed regolith into faint blue relief without washing the
-/// shadow cores grey the way a flat `GlobalAmbientLight` would.
+/// Marks the optional earthshine `DirectionalLight`.
+///
+/// The entity starts at zero illuminance: a scene must provide a physically
+/// meaningful Earth direction and phase before it contributes. This avoids an
+/// implicit, unshadowed fill source changing the appearance of Sun shadows.
 ///
 /// Its own marker (not `FallbackSceneLight`) keeps it **persistent** — the real
 /// Moon always has earthshine, so it survives the USD light-import that
@@ -486,10 +486,10 @@ register_commands!(on_set_environment_light);
 /// 2. [`EnvironmentSet::Apply`] — applies gravity forces to Avian RigidBodies
 pub struct EnvironmentPlugin;
 
-/// Spawns the persistent [`Earthshine`] fill light once at startup (skipped if
-/// one already exists). Direction is roughly opposite the default sun azimuth,
-/// just above the horizon — fixed for v1 (ephemeris-correct Earth direction is
-/// a later refinement); live-tunable level/color via `SetEnvironmentLight`.
+/// Spawns the optional [`Earthshine`] light at zero intensity once at startup
+/// (skipped if one already exists). A scene may configure it through
+/// [`SetEnvironmentLight`] once it has a physically meaningful Earth direction
+/// and phase.
 ///
 /// Native only: the web build renders on WebGL2, which supports a single
 /// `DirectionalLight`. A second light there culls the sun, so earthshine is not
@@ -499,8 +499,8 @@ fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>
     if !existing.is_empty() {
         return;
     }
-    // Illuminance + colour from the canonical params (see `lighting` module);
-    // direction is the render-side placeholder (roughly opposite the sun).
+    // The zero-intensity default is inert; the transform is only a placeholder
+    // until a scene/ephemeris authors Earthshine deliberately.
     let es = EarthshineParams::default();
     commands.spawn((
         Earthshine,
@@ -619,9 +619,8 @@ impl Plugin for EnvironmentPlugin {
         // hierarchy reads as no-data rather than as a missing resource.
         app.init_resource::<EarthDirectionWorld>();
 
-        // The cool-blue earthshine fill (persistent, shadowless). Skipped
-        // on web: WebGL2 supports only ONE `DirectionalLight`, and a second
-        // one culls the sun — keep the sun, drop the fill.
+        // Optional earthshine starts at zero. Skipped on web: WebGL2 supports
+        // only ONE `DirectionalLight`, and a second one culls the sun.
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Startup, spawn_earthshine);
 

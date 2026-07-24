@@ -78,17 +78,18 @@ impl Default for LunarSun {
     }
 }
 
-/// Earthshine — Earth's reflected sunlight, the Moon's only other natural light.
-/// A faint, cool-blue, **shadowless** fill that lifts sun-shadowed regolith into
-/// readable relief without washing the shadow cores grey (which a flat ambient
-/// would). The runtime fill light is spawned from these values by
-/// [`spawn_earthshine`](crate::spawn_earthshine).
+/// Earthshine — Earth's reflected sunlight.
+///
+/// It is deliberately disabled by default. A scene must explicitly author or
+/// configure this secondary light with its real phase and direction; injecting
+/// a fixed, shadowless fill into every lunar scene makes shadowed PBR objects
+/// disagree with the terrain's Sun-only shadowing.
 ///
 /// Named `EarthshineParams` (not `Earthshine`) to stay distinct from the
 /// [`Earthshine`](crate::Earthshine) *marker component* on the spawned light.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EarthshineParams {
-    /// Fill illuminance, **lux** (~10–15 lx, ≈ 1/10 000 of the Sun).
+    /// Fill illuminance, **lux**. Zero means no authored earthshine.
     pub illuminance_lux: f32,
     /// Fill colour, **linear RGB** — cool blue (Earth's albedo skews blue).
     pub color: [f32; 3],
@@ -97,7 +98,7 @@ pub struct EarthshineParams {
 impl Default for EarthshineParams {
     fn default() -> Self {
         Self {
-            illuminance_lux: 12.0,
+            illuminance_lux: 0.0,
             color: [0.6, 0.75, 1.0],
         }
     }

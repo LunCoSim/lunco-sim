@@ -3123,7 +3123,11 @@ fn on_release_command(
         vp.active_camera = None;
     }
     info!(
-        "Released possession → camera at current position (surface={})",
+        "Released possession → camera unchanged at local {:?} (surface={})",
+        q_avatar
+            .get(avatar_ent)
+            .map(|(tf, _, _)| tf.translation)
+            .ok(),
         is_surface
     );
 }

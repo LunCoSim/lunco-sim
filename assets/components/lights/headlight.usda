@@ -28,9 +28,10 @@ def Xform "Headlight"
         prepend apiSchemas = ["ShapingAPI", "ShadowAPI", "LunCoLightAPI"]
     )
     {
-        # Photometric power for a daylight-capable rover work beam.  `normalize`
-        # keeps it independent of the physically authored emitter size below.
-        float inputs:intensity = 1000000.0
+        # Photometric power for a rover work beam. `normalize` keeps it
+        # independent of the physically authored emitter size below. At 5 klm
+        # it is useful after sunset without competing with 128 klx lunar Sun.
+        float inputs:intensity = 5000.0
         float inputs:exposure = 0.0
         # Match the 9 cm visible lens: the UsdLux schema default is 0.5 m, which
         # made this a one-metre emitter with an implausibly soft, wheel-filling
