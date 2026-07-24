@@ -1381,41 +1381,41 @@ fn spawn_tile(
     // keeps the tile in the SAME big_space cell as the content standing on it, and its
     // rebased geometry local to that origin. On flat terrain this is ≈0 (unchanged).
     origin_y: f64,
+    native_shadow_casters: bool,
 ) -> Entity {
     let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the quadtree's morph ratio).
     let (ms, me, _bucket) = snap_band(morph_end);
-    commands
-        .spawn((
-            Mesh3d(mesh),
-            tile_look(
-                mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
-            ),
-            cell,
-            Transform::from_translation(local),
-            // The render binder reacts to `ShaderLook` after this deferred spawn.
-            // Keep the tile hidden for one complete ECS turn; the streamer promotes
-            // it on the next update, after its material exists.
-            Visibility::Hidden,
-            LodTileOf(terrain),
-            Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
-            // Streamed runtime detail, not scene content — hidden from the Entity
-            // list unless the user opts in.
-            lunco_core::SystemManaged,
-            ChildOf(grid_entity),
-            // Terrain tiles RECEIVE shadows (rovers/objects cast onto them) but must
-            // NOT be shadow casters: the ~150-400 live tiles would otherwise be
-            // re-rendered into all 4 sun cascades every frame (the dominant terrain
-            // frame cost — ~16ms; the flat scene has no such geometry). Crater-rim
-            // self-shadowing rides the sun horizon ray-march, not the cascade pass.
-            // (`bevy::light` is render-FREE — this is not a `bevy_pbr` name.)
-            bevy::light::NotShadowCaster,
-            #[cfg(target_arch = "wasm32")]
-            bevy::light::NotShadowReceiver,
-        ))
-        .id()
+    let mut tile = commands.spawn((
+        Mesh3d(mesh),
+        tile_look(
+            mode, depth, tile_res, ms, me, maps, authored, shadow, overlay,
+        ),
+        cell,
+        Transform::from_translation(local),
+        // The render binder reacts to `ShaderLook` after this deferred spawn.
+        // Keep the tile hidden for one complete ECS turn; the streamer promotes
+        // it on the next update, after its material exists.
+        Visibility::Hidden,
+        LodTileOf(terrain),
+        Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
+        // Streamed runtime detail, not scene content — hidden from the Entity
+        // list unless the user opts in.
+        lunco_core::SystemManaged,
+        ChildOf(grid_entity),
+        #[cfg(target_arch = "wasm32")]
+        bevy::light::NotShadowReceiver,
+    ));
+    // The native Bevy shadow pass is the authoritative way for terrain to
+    // occlude dynamic PBR objects (wheels, hulls, instruments). The terrain
+    // shader's horizon march remains its far-field self-shadow detail; it is
+    // not a substitute for a caster in the light's shadow map.
+    if !native_shadow_casters {
+        tile.insert(bevy::light::NotShadowCaster);
+    }
+    tile.id()
 }
 
 /// Cross-terrain tile-streaming progress, derived fresh each frame by
@@ -1687,6 +1687,10 @@ pub fn update_lod_tiles(
         focus_metric,
     } = &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
+    let native_shadow_casters = settings
+        .as_ref()
+        .map(|s| s.native_shadow_casters)
+        .unwrap_or(true);
     if demands.visual.is_empty() {
         return;
     }
@@ -2218,6 +2222,7 @@ pub fn update_lod_tiles(
                 shadow,
                 overlay,
                 oy,
+                native_shadow_casters,
             );
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -2310,6 +2315,7 @@ pub fn update_lod_tiles(
                     shadow,
                     overlay,
                     *oy,
+                    native_shadow_casters,
                 );
                 if let Some(old) = tiles.tiles.insert(
                     s.coord,

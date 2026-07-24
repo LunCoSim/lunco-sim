@@ -36,8 +36,6 @@
 //!@default bus_width   0.004
 //!@ui      border      0 0.2 "Frame border (UV)"
 //!@default border      0.04
-//!@engine  sun_vis
-//!@default sun_vis     1
 //!@ui      seamless_u  0 1 "Seamless U"
 //!@default seamless_u  0
 //!@ui      v_scale     0.1 10 "V scale / aspect ratio"
@@ -51,7 +49,6 @@ struct Material {
     cell_gap:    f32,
     bus_width:   f32,
     border:      f32,
-    sun_vis:     f32,  // engine-filled: horizon-shadow sun visibility
     seamless_u:  f32,
     v_scale:     f32,
 }

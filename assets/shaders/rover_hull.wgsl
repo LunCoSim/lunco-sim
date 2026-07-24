@@ -16,7 +16,7 @@
 //!
 //! Prop-safe by construction: own `Material` struct, `lunco::pbr_lit` for full
 //! scene lighting, and only prop-fillable engine inputs (`display_color`,
-//! `sun_vis`) — so it appears in the prop shader picker and works on any mesh
+//! material inputs — so it appears in the prop shader picker and works on any mesh
 //! with zero Rust.
 
 #import bevy_pbr::{
@@ -25,8 +25,6 @@
 }
 #import lunco::pbr_lit::lit
 #import lunco::noise::fbm
-
-const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 
 //!@engine  display_color
 //!@default display_color 0.25,0.26,0.28
@@ -46,8 +44,6 @@ const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 //!@default dust_height   0.35
 //!@ui      dust_amount   0 1 "Dust coverage"
 //!@default dust_amount   0.15
-//!@engine  sun_vis
-//!@default sun_vis       1
 struct Material {
     // engine-filled: the prim's `primvars:displayColor` (element 0)
     display_color: vec3<f32>,
@@ -59,7 +55,6 @@ struct Material {
     wear:          f32,
     dust_height:   f32,
     dust_amount:   f32,
-    sun_vis:       f32,  // engine-filled: horizon-shadow sun visibility
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)

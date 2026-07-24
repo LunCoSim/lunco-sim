@@ -15,7 +15,7 @@ description = "Per-entity environmental state (gravity, atmosphere, radiation, l
 # heightfield-shadow bakes all build and run without wgpu.
 #
 # The two things that used to force `bevy_pbr` here have MOVED to the binder crate:
-#   1. `wire_terrain_materials` / `shade_dynamic_entities` → `lunco-render-bevy::horizon_shade`
+#   1. `wire_terrain_materials` → `lunco-render-bevy::horizon_shade`
 #   2. the `Bloom` arm of `SetEnvironmentLight`           → `lunco-render-bevy::env_light`
 # DO NOT add `bevy_pbr` / `bevy_post_process` back — see
 # docs/architecture/render-decoupling.md.

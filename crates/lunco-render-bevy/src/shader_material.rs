@@ -35,8 +35,7 @@
 //! ```wgsl
 //! //!@ui      albedo  color "Albedo"
 //! //!@default albedo  0.5,0.5,0.5
-//! //!@engine  sun_vis              // Rust-filled each frame
-//! struct Material { albedo: vec3<f32>, sun_vis: f32 }
+//! struct Material { albedo: vec3<f32>, opacity: f32 }
 //! @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> mat: Material;
 //! ```
 //! Terrain shaders additionally declare the heightfield (non-filterable,
@@ -668,15 +667,15 @@ mod tests {
         // Reflect a schema from a shader's `Material` struct and apply params by name.
         let schema = ParamSchema::parse(
             "//!@ui albedo color \"Albedo\"\n\
-             struct Material { albedo: vec3<f32>, sun_vis: f32 }\n\
+             struct Material { albedo: vec3<f32>, opacity: f32 }\n\
              @group(2) @binding(0) var<uniform> mat: Material;",
         )
         .expect("Material struct reflects");
         let mut m = ShaderMaterial::default();
         m.set_schema(Arc::new(schema));
         m.set("albedo", ParamValue::Vec3([0.4, 0.5, 0.6]));
-        m.set_scalar("sun_vis", 1.0);
-        // albedo vec3 @ byte 0 → lane 0 .xyz; sun_vis f32 @ byte 12 → lane 0 .w.
+        m.set_scalar("opacity", 1.0);
+        // albedo vec3 @ byte 0 → lane 0 .xyz; opacity f32 @ byte 12 → lane 0 .w.
         assert_eq!(m.raw[0].x, 0.4);
         assert_eq!(m.raw[0].y, 0.5);
         assert_eq!(m.raw[0].z, 0.6);

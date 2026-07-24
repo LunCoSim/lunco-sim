@@ -40,8 +40,6 @@ const PI:  f32 = 3.14159265359;
 //!@default band_count    6
 //!@ui      marker_wedges 0 8   "Lead marker wedges"
 //!@default marker_wedges 0
-//!@engine  sun_vis
-//!@default sun_vis       1
 struct Material {
     cell_a:        vec3<f32>,
     wedge_count:   f32,
@@ -49,7 +47,6 @@ struct Material {
     band_count:    f32,
     marker_color:  vec3<f32>,
     marker_wedges: f32,
-    sun_vis:       f32,  // engine-filled: horizon-shadow sun visibility
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)

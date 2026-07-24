@@ -21,7 +21,6 @@
 
 use crate::shader_material::ShaderMaterial;
 use bevy::camera::visibility::RenderLayers;
-use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
 use lunco_environment::horizon::{
@@ -37,11 +36,7 @@ pub(crate) fn build(app: &mut App) {
     app.init_resource::<HorizonShadowCacheConfig>();
     app.add_systems(
         Update,
-        (
-            wire_terrain_materials,
-            wire_sun_for_non_terrain_materials,
-            shade_dynamic_entities,
-        )
+        (wire_terrain_materials, wire_sun_for_non_terrain_materials)
             .chain()
             .after(finish_shadow_cache_bake)
             // The bake half is gated on the asset stores existing; the material
@@ -49,28 +44,6 @@ pub(crate) fn build(app: &mut App) {
             // below so an app without `ShaderMaterialPlugin` degrades quietly).
             .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
     );
-}
-
-/// Marker: the horizon system inserted [`NotShadowCaster`] on this entity
-/// (it sits in terrain shadow, so it cannot block sunlight). Only what we
-/// inserted is ever removed — authored `NotShadowCaster`s are left alone.
-#[derive(Component)]
-pub struct HorizonShadowed;
-
-/// Engine-applied darkening of a `StandardMaterial` entity inside terrain
-/// shadow. Records the authored base colour (restored as visibility returns
-/// to 1) and the last visibility written, to avoid re-uploading the asset
-/// every frame.
-#[derive(Component)]
-pub struct HorizonShade {
-    original: Color,
-    last_vis: f32,
-    /// The authored shared `StandardMaterial` handle (held strongly here while
-    /// the entity is darkened). Restored when the entity returns to full
-    /// sunlight, at which point the entity's only strong handle to the unique
-    /// darkened clone drops and the clone is freed — so a shadowed prop never
-    /// keeps a permanent extra material (CPU-4).
-    shared: Handle<StandardMaterial>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -336,153 +309,11 @@ pub fn wire_sun_for_non_terrain_materials(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Dynamic objects — darken by CPU-marched visibility
-// ─────────────────────────────────────────────────────────────────────────
-
-/// Minimum sun movement (cosine of angle) before objects are re-evaluated
-/// — ~0.1°.
-const SUN_EPSILON_COS: f32 = 0.999_998_5;
-
 /// Minimum change in a stored sun DIRECTION before the material carrying it is
 /// repacked. On a unit vector this is ~0.006° — three orders of magnitude finer
-/// than [`SUN_EPSILON_COS`]'s visibility re-evaluation, because this one only
-/// has to be below "a shadow direction anyone can see", not below "the horizon
-/// answer changed". Its job is to keep a *continuously* moving sun from
-/// repacking every terrain material every frame.
+/// than a visible shadow-direction change. Its job is to keep a *continuously*
+/// moving sun from repacking every terrain material every frame.
 const SUN_DIR_EPSILON: f32 = 1e-4;
-
-/// Scales a colour's linear RGB by `q`, keeping alpha.
-fn scale_color(c: Color, q: f32) -> Color {
-    let l = c.to_linear();
-    Color::LinearRgba(LinearRgba::new(l.red * q, l.green * q, l.blue * q, l.alpha))
-}
-
-/// Fill floor for a horizon-shadowed body's albedo scale. `sun_vis` gates the
-/// SUN, but the shadowless earthshine/ambient fill is ALWAYS present, so a body
-/// in horizon shadow is dim — never a pure-black hole. Without it, a grazing sun
-/// drives an occluded chassis's albedo to 0 (`scale_color(_, 0)`), so the whole
-/// body reads black even though the terrain around it is fill-lit. Mirrors
-/// `wheel.wgsl`'s `HORIZON_AMBIENT_FLOOR` for the ShaderMaterial (wheels) path.
-const HORIZON_FILL_FLOOR: f32 = 0.22;
-
-/// Runs every mesh entity's position through the same heightfield march the
-/// terrain shader uses and darkens the entity by its sun visibility (see
-/// `lunco_environment::horizon` §3). Change-driven: a full pass only when the
-/// sun moved; otherwise only entities whose `GlobalTransform` changed.
-#[allow(clippy::type_complexity)]
-pub fn shade_dynamic_entities(
-    mut commands: Commands,
-    mut last_sun: Local<Option<Vec3>>,
-    mut sweep_timer: Local<Option<Timer>>,
-    time: Res<Time>,
-    sun: SunQuery,
-    terrains: Query<(&GlobalTransform, &HorizonMap), Without<RenderLayers>>,
-    mut shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
-    _std_mats: ResMut<Assets<StandardMaterial>>,
-    mut entities: Query<
-        (
-            Entity,
-            Ref<GlobalTransform>,
-            Has<RenderLayers>,
-            Has<HorizonShadowed>,
-            Has<NotShadowCaster>,
-            Option<&MeshMaterial3d<ShaderMaterial>>,
-            Option<&MeshMaterial3d<StandardMaterial>>,
-            Option<&mut HorizonShade>,
-            Option<&Name>,
-        ),
-        (With<Mesh3d>, Without<HorizonMap>, Without<DirectionalLight>),
-    >,
-) {
-    if terrains.is_empty() {
-        return;
-    }
-    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else {
-        return;
-    };
-    let to_sun_world: Vec3 = sun_gt.back().into();
-
-    // Throttle the expensive full sweep — O(entities × terrains × ≤48-step
-    // CPU ray-march) — to ~30 Hz so it no longer fires at uncapped render FPS
-    // (120–175) every frame the sun animates (day cycle, `SetEnvironmentLight`
-    // slider drag). Moving entities still update every frame via the
-    // `gt.is_changed()` fast path below; only the sun-moved full pass is gated.
-    let timer =
-        sweep_timer.get_or_insert_with(|| Timer::from_seconds(1.0 / 30.0, TimerMode::Repeating));
-    timer.tick(time.delta());
-
-    let sun_moved = match *last_sun {
-        Some(prev) => prev.dot(to_sun_world) <= SUN_EPSILON_COS,
-        None => true,
-    };
-    // Commit to a full sweep only when the throttle fires (or on first run).
-    // Until then `last_sun` is NOT advanced, so a sun change arriving between
-    // ticks is still picked up at the next tick (≤33 ms later — imperceptible
-    // given the 1/32 visibility quantization).
-    let do_full = sun_moved && (timer.just_finished() || last_sun.is_none());
-    if do_full {
-        *last_sun = Some(to_sun_world);
-    }
-
-    // Per-terrain loop-invariants — the affine inverse and sun-in-terrain-local
-    // depend only on the terrain transform + sun, not the shaded entity — so
-    // compute them once here instead of N×M times inside the entity loop (CPU-2;
-    // `transform_point3(entity_pos)` stays inside since it is entity-dependent).
-    let terrain_cache: Vec<_> = terrains
-        .iter()
-        .map(|(terrain_gt, map)| {
-            let inv = terrain_gt.affine().inverse();
-            let sun_local = inv.transform_vector3(to_sun_world).normalize_or_zero();
-            (inv, sun_local, map)
-        })
-        .collect();
-
-    for (entity, gt, has_layers, shadowed, has_nsc, shader_mat, std_mat, shade, name) in
-        &mut entities
-    {
-        if !do_full && !gt.is_changed() {
-            continue;
-        }
-        // Entities scoped to other render layers (preview viewports, viz
-        // overlays) live outside the main scene's lighting — leave alone.
-        if has_layers {
-            continue;
-        }
-
-        // Min visibility across all horizon terrains containing the point —
-        // the SAME march the terrain pixels run.
-        let mut vis: f32 = 1.0;
-        for (inv, sun_local, map) in &terrain_cache {
-            let local = inv.transform_point3(gt.translation());
-            if let Some(v) =
-                map.field
-                    .sun_visibility(Vec2::new(local.x, local.z), *sun_local, tan_r)
-            {
-                vis = vis.min(v);
-            }
-        }
-        // Quantized so a slowly drifting sun doesn't re-upload materials
-        // every frame.
-        let q = (vis * 32.0).round() / 32.0;
-
-        // Prop ShaderMaterials (wheels, panels, balls): the engine channel
-        // is multiplied into the shader's lit output.
-        if let (Some(handle), Some(mats)) = (shader_mat, shader_mats.as_mut()) {
-            let needs = mats
-                .get(&handle.0)
-                .is_some_and(|m| m.get_scalar("sun_vis").is_none_or(|s| (s - q).abs() > 1e-3));
-            if needs {
-                if let Some(mut m) = mats.get_mut(&handle.0) {
-                    m.set_scalar("sun_vis", q);
-                }
-            }
-        } else if let Some(_handle) = std_mat {
-            // StandardMaterials (chassis, props): retain authored base_color so
-            // textures are not crushed or darkened when horizon maps initialize.
-            // Directional sun light and CSM shadows handle real-time GPU lighting.
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -22,13 +22,11 @@
 //!   a synthesized `*_visual` child. A live `SetAttribute` edit re-projects the
 //!   prim and re-authors the look, so the rendered colour follows the edit.
 //!
-//! * [`EngineSource::Runtime`] — **written each frame by the engine system that
-//!   owns the computation.** `sun_vis` comes from the horizon ray-march
-//!   (`lunco_render_bevy::horizon_shade`), the terrain family from the terrain
-//!   heightfield binder. There is no useful way to compute these from a prim
-//!   alone, so the registry records their name/type/availability (for
-//!   validation and for [`EngineParams::prop_fillable`]) and the owning system
-//!   does the writing.
+//! * [`EngineSource::Runtime`] — **written by the engine system that owns the
+//!   computation.** The terrain family comes from the terrain heightfield
+//!   binder. There is no useful way to compute these from a prim alone, so the
+//!   registry records their name/type/availability (for validation and for
+//!   [`EngineParams::prop_fillable`]) and the owning system does the writing.
 //!
 //! ## Precedence: an authored `inputs:` always wins
 //!
@@ -125,14 +123,6 @@ impl EngineParams {
                           or through a shader that consumes this input.",
                 },
                 // ---- runtime, written by the system that computes them ----
-                EngineParam {
-                    name: "sun_vis",
-                    ty: ParamType::F32,
-                    source: Runtime,
-                    prop_fillable: true,
-                    doc: "Horizon-shadow sun visibility (0..1) from the heightfield \
-                          ray-march; written per entity by the horizon system.",
-                },
                 EngineParam {
                     name: "sun_dir",
                     ty: ParamType::Vec3,
@@ -292,8 +282,8 @@ mod tests {
     fn prop_shaders_accept_prop_fillable_engine_inputs_only() {
         let r = engine_params();
         let prop = ParamSchema::parse(
-            "//!@engine sun_vis\n//!@engine display_color\n\
-             struct Material { display_color: vec3<f32>, sun_vis: f32 }",
+            "//!@engine display_color\n\
+             struct Material { display_color: vec3<f32> }",
         )
         .unwrap();
         assert!(r.prop_fillable(&prop));

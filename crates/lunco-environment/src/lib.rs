@@ -338,7 +338,7 @@ pub struct SetEnvironmentLight {
 
 /// Marks the **earthshine** fill light — a second, *shadowless*, cool-blue
 /// `DirectionalLight` standing in for Earth's reflected light. It is summed by
-/// Bevy's normal light loop (outside the sun's `sun_vis` heightfield gate), so
+/// Bevy's normal light loop, so
 /// it lifts sun-shadowed regolith into faint blue relief without washing the
 /// shadow cores grey the way a flat `GlobalAmbientLight` would.
 ///

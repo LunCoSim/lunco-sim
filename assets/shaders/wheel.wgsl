@@ -23,14 +23,13 @@
     pbr_types,
     pbr_functions,
     mesh_bindings::mesh,
+    mesh_types,
     mesh_view_bindings::view,
     mesh_functions,
 }
 #import lunco::noise::fbm
 
 const TAU: f32 = 6.28318530718;
-// Ambient/earthshine floor so a horizon-occluded wheel is dim, never pure black.
-const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 
 //!@ui      rim_color   color "Rim / spoke colour"
 //!@default rim_color   0.12,0.13,0.14
@@ -50,15 +49,12 @@ const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 //!@default wear        0.15
 //!@ui      dust_amount 0 1 "Dust coverage"
 //!@default dust_amount 0.35
-//!@engine  sun_vis
-//!@default sun_vis     1
 struct Material {
     rim_color:   vec3<f32>,
     spoke_count: f32,
     tire_color:  vec3<f32>,
     tread_lugs:  f32,
     spoke_width: f32,
-    sun_vis:     f32,  // engine-filled: horizon-shadow sun visibility
     dust_color:  vec3<f32>,
     lug_depth:   f32,
     wear:        f32,
@@ -142,11 +138,11 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
         is_metal = mix(is_metal, 0.0, dust_m);
     }
 
-    // Full scene lighting (real sun direction, shadow maps, ambient) over
-    // the procedural albedo — so wheels go dark on the night side and when
-    // the horizon system pulls the entity out of the sun's render layer.
+    // Delegate illumination and shadowing to Bevy's native PBR path. Custom
+    // materials are still ordinary shadow receivers; enforce that bit because
+    // this shader owns the PbrInput rather than Bevy's stock fragment entry.
     var pbr_input = pbr_types::pbr_input_new();
-    pbr_input.flags = mesh[input.instance_index].flags; // keep SHADOW_RECEIVER
+    pbr_input.flags = mesh[input.instance_index].flags | mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT;
     pbr_input.frag_coord = input.position;
     pbr_input.world_position = input.world_position;
     pbr_input.world_normal = pbr_functions::prepare_world_normal(

@@ -28,11 +28,20 @@ def Xform "Headlight"
         prepend apiSchemas = ["ShapingAPI", "ShadowAPI", "LunCoLightAPI"]
     )
     {
-        float inputs:intensity = 1000000.0  # 1M lumens for daylight exposure visibility
+        # Photometric power for a daylight-capable rover work beam.  `normalize`
+        # keeps it independent of the physically authored emitter size below.
+        float inputs:intensity = 1000000.0
         float inputs:exposure = 0.0
+        # Match the 9 cm visible lens: the UsdLux schema default is 0.5 m, which
+        # made this a one-metre emitter with an implausibly soft, wheel-filling
+        # penumbra.
+        float inputs:radius = 0.09
+        bool inputs:normalize = true
         color3f inputs:color = (1.0, 0.95, 0.85) # Warm white halogen light
         bool inputs:shadow:enable = true
-        float inputs:shaping:cone:angle = 45.0
+        # UsdLux defines this as the angle *off* the primary axis. A 20° value
+        # is therefore a 40° full beam: it lights the path, not the wheel wells.
+        float inputs:shaping:cone:angle = 20.0
         float inputs:shaping:cone:softness = 0.3
         float lunco:light:range = 60.0
     }

@@ -27,13 +27,12 @@
 //! headless.
 //!
 //! The half that writes those textures and uniforms INTO a concrete material —
-//! `wire_terrain_materials` (terrain `ShaderMaterial`) and
-//! `shade_dynamic_entities` (prop `ShaderMaterial` / `StandardMaterial`
-//! darkening) — lives in **`lunco-render-bevy::horizon_shade`**. It is a
-//! per-frame *uniform feed*, not appearance intent, so `PbrLook`/`ShaderLook`
-//! cannot express it; the binder crate (the only one allowed to name a
-//! material) hosts it instead — the same move `terrain_maps.rs` made for
-//! `lunco-terrain-surface`. See `docs/architecture/render-decoupling.md`.
+//! `wire_terrain_materials` — lives in
+//! **`lunco-render-bevy::horizon_shade`**. It is a per-frame *uniform feed*,
+//! not appearance intent, so `PbrLook`/`ShaderLook` cannot express it; the
+//! binder crate (the only one allowed to name a material) hosts it instead —
+//! the same move `terrain_maps.rs` made for `lunco-terrain-surface`. See
+//! `docs/architecture/render-decoupling.md`.
 //!
 //! ## Pipeline
 //!
@@ -69,15 +68,10 @@
 //!     cost to near zero. Defaults off on wasm (the streamed-tile path
 //!     bypasses the march there, and an inline bake would hitch under a fast
 //!     day cycle). See [`start_shadow_cache_bake`].
-//! 3. **Dynamic shading** (RENDER-SIDE): every mesh entity's position is run
-//!    through the SAME march on the CPU ([`HeightField::sun_visibility`]) —
-//!    object and ground can never disagree. The visibility darkens the
-//!    entity's material (`sun_vis` for prop `ShaderMaterial`s; `base_color`
-//!    scale for `StandardMaterial`s, cloned to a unique handle first so
-//!    shared glb materials don't darken together), and a fully shadowed
-//!    entity gets `NotShadowCaster`. (A `RenderLayers` swap does NOT work for
-//!    darkening: a light's layers gate per-mesh *shadow casting*, but
-//!    main-pass illumination is applied per view.)
+//! 3. **Object shadows**: Bevy's native directional-light shadow pass handles
+//!    all dynamic PBR objects. Streamed terrain tiles are CSM casters by
+//!    default, so the same Sun shadow map that shades terrain occludes wheels,
+//!    hulls, and instruments.
 //!
 //! ## Limits (v1)
 //!
@@ -924,8 +918,8 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)
 /// wiring; terrains opt in via the [`HorizonShadowTerrain`] marker (stamped by
 /// the USD loader).
 ///
-/// The material half (`wire_terrain_materials` / `shade_dynamic_entities`) is
-/// added by `lunco_render_bevy::LuncoRenderPlugin`, and ordered after these
+/// The material half (`wire_terrain_materials`) is added by
+/// `lunco_render_bevy::LuncoRenderPlugin`, and ordered after these
 /// systems. Headless simply never adds it: the heightfields and caches are still
 /// baked (they are simulation-visible data — a shadow query, a solar-power
 /// model), they just never reach a GPU material.

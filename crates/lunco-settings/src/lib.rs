@@ -398,6 +398,11 @@ pub struct TerrainSettings {
     /// If false, custom terrain shaders (such as procedural regolith FBM)
     /// are disabled and fall back to the simple flat-lit/unlit geomorph shader.
     pub enable_shaders: bool,
+    /// Whether streamed terrain tiles participate in Bevy's native directional
+    /// shadow maps. Disable only when the scene explicitly trades terrain-to-
+    /// object shadows for shadow-pass performance.
+    #[serde(default = "TerrainSettings::default_native_shadow_casters")]
+    pub native_shadow_casters: bool,
     /// Radius around a visual-detail camera that the terrain streamer refines
     /// aggressively. A camera marker can override this for a specific view.
     #[serde(default = "TerrainSettings::default_visual_detail_radius_m")]
@@ -420,12 +425,17 @@ impl TerrainSettings {
     fn default_visual_detail_hysteresis_m() -> f64 {
         Self::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M
     }
+
+    fn default_native_shadow_casters() -> bool {
+        true
+    }
 }
 
 impl Default for TerrainSettings {
     fn default() -> Self {
         Self {
             enable_shaders: true,
+            native_shadow_casters: Self::default_native_shadow_casters(),
             visual_detail_radius_m: Self::DEFAULT_VISUAL_DETAIL_RADIUS_M,
             visual_detail_hysteresis_m: Self::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M,
         }
@@ -470,6 +480,7 @@ mod disk_guard_tests {
             settings.visual_detail_hysteresis_m,
             TerrainSettings::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M
         );
+        assert!(settings.native_shadow_casters);
     }
 
     /// Self-verifying: this assertion runs INSIDE a cargo-test binary, so if the detector

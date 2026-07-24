@@ -458,10 +458,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         clamp(mix(0.6 + rough_mix * 0.4, map_s.r, 0.35 * mat.weight_ao), 0.05, 1.0);
     var color = lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
 
-    // Far-field terrain self-shadow: beyond the sun cascades (tiles are
-    // NotShadowCaster — CSM only carries object shadows onto them) sample the
-    // pre-baked sun-visibility cache. This is what stops distant crater relief
-    // reading as flat unshaded mounds.
+    // Far-field terrain self-shadow: beyond the Sun cascades, sample the
+    // pre-baked sun-visibility cache. This keeps distant crater relief from
+    // reading as flat unshaded mounds while native CSM handles the near field.
 #ifdef VERTEX_UVS_A
     if (mat.shadow_cache_on > 0.5) {
         let dist = distance(view.world_position, p);
