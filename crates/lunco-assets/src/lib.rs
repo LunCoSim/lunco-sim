@@ -466,7 +466,8 @@ pub fn msl_source_root_path() -> Option<PathBuf> {
 // Assets Directory (development source)
 // ============================================================================
 
-/// Returns the `assets/` directory relative to the current working directory.
+/// Returns the development `assets/` directory relative to the current working
+/// directory.
 ///
 /// This is the development source directory for USD scenes, Modelica models,
 /// mission JSONs, and shaders. At runtime, the working directory is typically
@@ -478,13 +479,28 @@ pub fn assets_dir() -> PathBuf {
     PathBuf::from(lunco_source::ASSETS_DIR_NAME)
 }
 
-/// [`assets_dir`] resolved against the process CWD — the ABSOLUTE shipped-library
-/// root, and the exact path Bevy's `AssetPlugin.file_path` is configured with.
+/// Resolves the shipped-library root used by Bevy's `AssetPlugin`.
+///
+/// Packaged native binaries carry `assets/` beside the executable. Use that
+/// location when present so launching a Windows `.exe` from Explorer or a
+/// shortcut does not make asset lookup depend on the process working directory.
+/// Development/test binaries do not have a sibling `assets/` directory, so they
+/// retain the workspace-CWD behaviour.
 ///
 /// Anything reaching library bytes off the `AssetServer` must anchor here rather
 /// than joining `"assets"` itself: a bare relative join silently follows the CWD
 /// of whoever calls it, which is how the same reference resolved two ways.
 pub fn assets_dir_abs() -> PathBuf {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let packaged = parent.join(assets_dir());
+            if packaged.is_dir() {
+                return packaged;
+            }
+        }
+    }
+
     std::env::current_dir()
         .unwrap_or_default()
         .join(assets_dir())
