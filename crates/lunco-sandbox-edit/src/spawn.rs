@@ -2,7 +2,7 @@
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use big_space::prelude::Grid;
+use lunco_core::{on_command, register_commands, Command};
 use lunco_usd_bevy::UsdStageAsset;
 use std::collections::HashMap;
 
@@ -12,6 +12,65 @@ use crate::SpawnState;
 /// Ghost entity shown at the spawn placement point.
 #[derive(Component)]
 pub struct SpawnGhost;
+
+/// Opt-in cursor-to-spawn trace. Enable with the typed command
+/// `cmd("SetSpawnDiagnostics", #{enabled: true})` in the LunCo REPL (or the
+/// equivalent API command). It logs each material cursor move and every click
+/// decision, including render ray, chosen surface, canonical-world conversion,
+/// grid cell/local placement, and the final [`crate::commands::SpawnEntity`].
+///
+/// The trace deliberately has no production fallback or parallel coordinate
+/// calculation: it observes the exact path that creates the ghost and command.
+#[derive(Resource)]
+pub struct SpawnDiagnostics {
+    /// Whether production placement systems emit their pipeline trace.
+    pub enabled: bool,
+    last_cursor: Option<Vec2>,
+}
+
+impl Default for SpawnDiagnostics {
+    fn default() -> Self {
+        Self {
+            // Useful for automated/runtime diagnosis before the REPL is ready.
+            // The typed command remains the normal live control surface.
+            enabled: std::env::var_os("LUNCO_SPAWN_TRACE").is_some_and(|value| value == "1"),
+            last_cursor: None,
+        }
+    }
+}
+
+impl SpawnDiagnostics {
+    fn cursor_moved(&mut self, cursor: Vec2) -> bool {
+        let moved = self
+            .last_cursor
+            .is_none_or(|previous| previous.distance_squared(cursor) > 0.25);
+        if moved {
+            self.last_cursor = Some(cursor);
+        }
+        moved
+    }
+}
+
+/// Enable or disable the Spawn Ghost pipeline trace.
+#[Command(default)]
+pub struct SetSpawnDiagnostics {
+    pub enabled: bool,
+}
+
+#[on_command(SetSpawnDiagnostics)]
+fn on_set_spawn_diagnostics(
+    trigger: On<SetSpawnDiagnostics>,
+    mut diagnostics: ResMut<SpawnDiagnostics>,
+) {
+    diagnostics.enabled = trigger.event().enabled;
+    diagnostics.last_cursor = None;
+    info!(
+        enabled = diagnostics.enabled,
+        "[spawn-trace] diagnostics updated"
+    );
+}
+
+register_commands!(on_set_spawn_diagnostics,);
 
 use lunco_usd_bevy::SPAWN_GROUND_CLEARANCE;
 
@@ -196,6 +255,81 @@ pub(crate) fn terrain_ray_hit(
     best
 }
 
+/// The single cursor-surface query used by both the preview and committed
+/// placement. Terrain is authoritative where it exists; physics supplies props
+/// and is also the complete fallback for scenes without a loaded DEM.
+///
+/// The previous spelling accidentally put the physics ray behind
+/// `terrain_ray_hit(...).and_then(...)`. That made terrain availability a
+/// prerequisite for *all* placement, so a perfectly pickable slab or rover in a
+/// non-DEM scene produced neither a Spawn Ghost nor a committed spawn.
+#[derive(Clone, Copy, Debug)]
+struct CursorSurfaceHit {
+    point: DVec3,
+    terrain_primary: bool,
+    terrain: Option<(f64, DVec3)>,
+    physics_distance: Option<f64>,
+}
+
+fn cursor_surface_hit(
+    terrains: &TerrainOracles,
+    raycaster: &lunco_physics::GridSpatialQuery<'_, '_>,
+    origin: DVec3,
+    direction: Dir3,
+) -> Option<CursorSurfaceHit> {
+    let terrain = terrain_ray_hit(terrains, origin, direction.as_dvec3(), f64::INFINITY);
+    // Terrain is a useful near bound when it exists, but it must never be a
+    // prerequisite: a physical scene can have no DEM, or its terrain can still
+    // be streaming when a user begins placing assets.
+    let physics_limit = terrain
+        .map(|(distance, _)| distance)
+        .unwrap_or(f64::INFINITY);
+    let physics_distance = raycaster
+        .cast_ray_render(
+            origin,
+            direction,
+            physics_limit,
+            false,
+            &avian3d::prelude::SpatialQueryFilter::default(),
+        )
+        .map(|hit| hit.distance);
+
+    resolve_cursor_surface(origin, direction.as_dvec3(), terrain, physics_distance)
+}
+
+fn resolve_cursor_surface(
+    origin: DVec3,
+    direction: DVec3,
+    terrain: Option<(f64, DVec3)>,
+    physics_distance: Option<f64>,
+) -> Option<CursorSurfaceHit> {
+    match (physics_distance, terrain) {
+        (Some(physics_distance), Some((terrain_distance, terrain_point)))
+            if physics_distance < terrain_distance =>
+        {
+            Some(CursorSurfaceHit {
+                point: origin + direction * physics_distance,
+                terrain_primary: false,
+                terrain: Some((terrain_distance, terrain_point)),
+                physics_distance: Some(physics_distance),
+            })
+        }
+        (_, Some((terrain_distance, terrain_point))) => Some(CursorSurfaceHit {
+            point: terrain_point,
+            terrain_primary: true,
+            terrain: Some((terrain_distance, terrain_point)),
+            physics_distance,
+        }),
+        (Some(physics_distance), None) => Some(CursorSurfaceHit {
+            point: origin + direction * physics_distance,
+            terrain_primary: false,
+            terrain: None,
+            physics_distance: Some(physics_distance),
+        }),
+        (None, None) => None,
+    }
+}
+
 /// Terrain-surface height (world Y) under a world `(x, z)`, from the oracle of
 /// whichever DEM terrain contains the point. Used for footprint corner probes —
 /// exact where the collider ring is band-limited or absent.
@@ -230,7 +364,8 @@ pub fn update_spawn_ghost(
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
-    grids: Query<(Entity, &Grid)>,
+    mut diagnostics: ResMut<SpawnDiagnostics>,
+    world_frame: lunco_core::coords::WorldFrame,
     // `GridSpatialQuery`, not raw `SpatialQuery`: the cursor ray + corner probes
     // originate in the render frame (the camera is the FloatingOrigin), so they must
     // be shifted into avian's grid-absolute frame or they miss every collider at an
@@ -266,50 +401,41 @@ pub fn update_spawn_ghost(
         .map(|(cam, tf, _)| (cam, tf))
     {
         Some(c) => c,
-        None => return,
+        None => {
+            if diagnostics.enabled {
+                info!("[spawn-trace] ghost rejected: no active window Camera3d");
+            }
+            return;
+        }
     };
     let window = match windows.iter().next() {
         Some(w) => w,
-        None => return,
+        None => {
+            if diagnostics.enabled {
+                info!("[spawn-trace] ghost rejected: no window");
+            }
+            return;
+        }
     };
     let Some(cursor) = window.cursor_position() else {
+        if diagnostics.enabled {
+            info!("[spawn-trace] ghost rejected: window has no cursor position");
+        }
         return;
     };
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else {
+        if diagnostics.enabled {
+            info!(cursor = ?cursor, "[spawn-trace] ghost rejected: viewport_to_world failed");
+        }
         return;
     };
+    let trace_cursor = diagnostics.enabled && diagnostics.cursor_moved(cursor);
 
-    // Physics colliders (props, structures, rocks) AND the analytic terrain
-    // surface, nearest wins. The terrain must come from the oracle, not the
-    // collider ring — see `terrain_ray_hit`.
-    // The analytic terrain is finite, so it safely bounds an otherwise
-    // unbounded cursor ray to the full authored DEM footprint. The old fixed
-    // 1 km cap made the ghost work only around the rover/collider ring on
-    // large sites or elevated camera views.
-    let terr = terrain_ray_hit(&terrains, origin, direction.as_dvec3(), f64::INFINITY);
-    let phys = terr.as_ref().and_then(|(terrain_distance, _)| {
-        raycaster
-            .cast_ray_render(
-                origin,
-                direction,
-                *terrain_distance,
-                false,
-                &avian3d::prelude::SpatialQueryFilter::default(),
-            )
-            .map(|h| h.distance)
-    });
-    let (hit, terrain_primary) = match (phys, terr) {
-        (Some(pt), Some((tt, tp))) => {
-            if tt <= pt {
-                (Some(tp), true)
-            } else {
-                (Some(origin + direction.as_dvec3() * pt), false)
-            }
-        }
-        (Some(pt), None) => (Some(origin + direction.as_dvec3() * pt), false),
-        (None, Some((_, tp))) => (Some(tp), true),
-        (None, None) => (None, false),
-    };
+    let surface = cursor_surface_hit(&terrains, &raycaster, origin, direction);
+    let terrain_trace = surface.and_then(|hit| hit.terrain);
+    let phys = surface.and_then(|hit| hit.physics_distance);
+    let hit = surface.map(|hit| hit.point);
+    let terrain_primary = surface.is_some_and(|hit| hit.terrain_primary);
 
     if let Some(point) = hit {
         // --- Terrain-conforming placement (footprint derived in real time) ---
@@ -421,19 +547,39 @@ pub fn update_spawn_ghost(
         // (0,0,0), so on an elevated site (origin at cell.y≠0) it rendered ~one
         // whole cell (~2 km) underground — "the ghost never appears on the
         // ground". This lands it on the real surface at any origin cell.
-        let Some((grid_ent, grid)) = grids.iter().next() else {
+        let Some(ghost_abs) = world_frame.render_to_world(ghost_pos) else {
+            if diagnostics.enabled {
+                info!(cursor = ?cursor, render_hit = ?point, "[spawn-trace] ghost rejected: WorldGrid unavailable");
+            }
             return;
         };
-        // Render→grid-absolute via the physics frame shift (recovered from a live
-        // body), NOT `grid_position_double(cam_cell, …)`. The ray camera is not
-        // guaranteed to be the `FloatingOrigin` holder after a possession/takeover —
-        // using its absolute position then displaces the ghost by the camera→origin
-        // vector, dropping it into a stray cell ("the ghost never appears on the
-        // ground"). The frame shift is camera-independent: the same one the wheels
-        // and altimeter cast through. See `lunco_physics::spatial`.
-        let ghost_abs = raycaster.to_physics(ghost_pos);
-        let (ghost_cell, ghost_local) = grid.translation_to_grid(ghost_abs);
-
+        let Some((grid_ent, ghost_cell, ghost_local)) =
+            world_frame.render_to_world_grid_local(ghost_pos)
+        else {
+            return;
+        };
+        if trace_cursor {
+            info!(
+                cursor = ?cursor,
+                camera_render = ?cam_tf.translation(),
+                ray_origin = ?origin,
+                ray_direction = ?direction,
+                terrain_hit = ?terrain_trace,
+                physics_distance = ?phys,
+                chosen_render_hit = ?point,
+                terrain_primary,
+                ghost_render = ?ghost_pos,
+                ghost_world = ?ghost_abs,
+                world_grid = ?grid_ent,
+                ghost_cell = ?ghost_cell,
+                ghost_local = ?ghost_local,
+                "[spawn-trace] cursor pipeline"
+            );
+        }
+        // Invert the target grid's own floating-origin transform. `ghost_pos`
+        // came from the camera/terrain in render space; it must not be lifted
+        // through an unrelated Avian body's frame before being made a child of
+        // this grid.
         if let Some((ghost, _)) = q_ghost.iter().next() {
             commands.entity(ghost).try_insert((
                 ghost_cell,
@@ -469,6 +615,15 @@ pub fn update_spawn_ghost(
                 ViewVisibility::default(),
             ));
         }
+    } else if trace_cursor {
+        info!(
+            cursor = ?cursor,
+            ray_origin = ?origin,
+            ray_direction = ?direction,
+            terrain_hit = ?terrain_trace,
+            physics_distance = ?phys,
+            "[spawn-trace] ghost has no surface hit"
+        );
     }
 }
 
@@ -512,7 +667,8 @@ pub fn on_scene_click_spawn(
     mut spawn_state: ResMut<SpawnState>,
     footprint_cache: Res<FootprintCache>,
     keys: Res<ButtonInput<KeyCode>>,
-    q_grids: Query<(Entity, &Grid)>,
+    diagnostics: Res<SpawnDiagnostics>,
+    world_frame: lunco_core::coords::WorldFrame,
     q_ghost: Query<Entity, With<SpawnGhost>>,
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     egui_focus: Res<lunco_core::EguiFocus>,
@@ -528,6 +684,9 @@ pub fn on_scene_click_spawn(
         return;
     }
     let SpawnState::Selecting { entry_id } = spawn_state.as_ref() else {
+        if diagnostics.enabled {
+            info!(entity = ?click.entity, "[spawn-trace] click ignored: SpawnState is Idle");
+        }
         return;
     };
     // Stop the click bubbling to ancestors (global observer re-fires up the tree).
@@ -541,6 +700,9 @@ pub fn on_scene_click_spawn(
     let Some((camera, cam_gtf, _)) = cameras.iter().find(|(camera, _, target)| {
         camera.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
     }) else {
+        if diagnostics.enabled {
+            info!("[spawn-trace] click rejected: no active window Camera3d");
+        }
         return;
     };
     let Some(ray) = lunco_core::scene_click_ray(
@@ -549,46 +711,36 @@ pub fn on_scene_click_spawn(
         cam_gtf,
         click.pointer_location.position,
     ) else {
+        if diagnostics.enabled {
+            info!(
+                pointer = ?click.pointer_location.position,
+                egui_wants_pointer = egui_focus.wants_pointer,
+                "[spawn-trace] click rejected: no scene ray"
+            );
+        }
         return;
     };
-    // Terrain-as-source-of-truth placement: ray-march the terrain ORACLE and the
-    // physics colliders (props / structures / rocks); the NEARER hit wins. Over
-    // open ground the oracle is the truth — the band-limited collider ring rounds
-    // crater bowls shallower, so preferring the collider perched the rover above
-    // the crater ("floating over craters"). Mirrors `update_spawn_ghost` so the
-    // placed rover lands exactly where the ghost previewed it. `terrain_primary`
-    // then orders the per-corner slope-fit probes below.
+    // The preview and commit call the same terrain-or-physics resolver, so an
+    // asset always lands where its ghost was shown.
     let origin = ray.origin.as_dvec3();
-    let dir = ray.direction.as_dvec3();
-    let terr = terrain_ray_hit(&terrains, origin, dir, f64::INFINITY);
-    // A terrain hit is the full-map bound for the physics query too, so props
-    // sitting on that terrain still win when nearer without retaining a magic
-    // million-metre placement range.
-    let phys = terr.as_ref().and_then(|(terrain_distance, _)| {
-        raycaster
-            .cast_ray_render(
-                origin,
-                ray.direction,
-                *terrain_distance,
-                false,
-                &avian3d::prelude::SpatialQueryFilter::default(),
-            )
-            .map(|h| h.distance)
-    });
-    let (point_d, terrain_primary) = match (phys, terr) {
-        (Some(pd), Some((td, tp))) => {
-            if td <= pd {
-                (tp, true)
-            } else {
-                (origin + dir * pd, false)
-            }
+    let Some(surface) = cursor_surface_hit(&terrains, &raycaster, origin, ray.direction) else {
+        if diagnostics.enabled {
+            info!(
+                pointer = ?click.pointer_location.position,
+                ray_origin = ?origin,
+                ray_direction = ?ray.direction,
+                "[spawn-trace] click rejected: no terrain or physics hit"
+            );
         }
-        (Some(pd), None) => (origin + dir * pd, false),
-        (None, Some((_, tp))) => (tp, true),
-        (None, None) => return,
+        return;
     };
+    let point_d = surface.point;
+    let terrain_primary = surface.terrain_primary;
 
-    let Some((grid, _grid_comp)) = q_grids.iter().next() else {
+    let Some((grid, _)) = world_frame.grid() else {
+        if diagnostics.enabled {
+            info!("[spawn-trace] click rejected: canonical WorldGrid unavailable");
+        }
         return;
     };
 
@@ -708,17 +860,16 @@ pub fn on_scene_click_spawn(
     // a slight embed is the stable init (solver gently resolves it). Raycast
     // drivetrains absorb this via suspension, so it's safe for both.
     let spawn_pos = DVec3::new(point_d.x, avg_y, point_d.z) + normal * (fp.lift - 0.01);
-    // The whole placement solve above ran in the render (origin-relative) frame
-    // (camera ray + terrain-oracle round-trips). The spawn command plants its
-    // position as a GRID-ABSOLUTE `Transform` (cell 0 + avian recenter), so lift it
-    // into grid-absolute via the physics frame shift — the SAME camera-independent
-    // shift the ghost preview uses (recovered from a live body, not the ray camera's
-    // absolute position: that camera is not guaranteed to be the `FloatingOrigin`
-    // holder after a possession/takeover, which displaced the spawn by the
-    // camera→origin vector — "the rover spawns behind me"). Without any lift, at an
-    // elevated site the render-frame Y (~-45 m) was planted as grid-absolute and the
-    // spawned body dropped ~2 km below the surface.
-    let spawn_abs = raycaster.to_physics(spawn_pos);
+    // The whole placement solve above ran in the render (origin-relative)
+    // frame. Convert it through the selected grid's own floating-origin affine
+    // transform, matching the preview exactly; an Avian-body-derived shift is
+    // not a valid inverse for nested/rotated big_space grids.
+    let Some(spawn_abs) = world_frame.render_to_world(spawn_pos) else {
+        if diagnostics.enabled {
+            info!(spawn_render = ?spawn_pos, "[spawn-trace] click rejected: render-to-world conversion unavailable");
+        }
+        return;
+    };
     let point3 = spawn_abs.as_vec3();
 
     commands.trigger(crate::commands::SpawnEntity {
@@ -728,8 +879,18 @@ pub fn on_scene_click_spawn(
         rotation: Some(rotation),
     });
     info!(
-        "Spawn request: {} at {:?} with rot {:?}",
-        entry_id, point3, rotation
+        entry_id,
+        pointer = ?click.pointer_location.position,
+        ray_origin = ?origin,
+        ray_direction = ?ray.direction,
+        terrain_hit = ?surface.terrain,
+        physics_distance = ?surface.physics_distance,
+        chosen_render_hit = ?point_d,
+        terrain_primary,
+        spawn_render = ?spawn_pos,
+        spawn_world = ?spawn_abs,
+        world_grid = ?grid,
+        "[spawn-trace] SpawnEntity triggered"
     );
 
     let sticky = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
@@ -763,5 +924,28 @@ mod tests {
     fn test_cursor_ray_returns_none_for_invalid_cursor() {
         // Basic sanity check for the function signature
         assert!(true);
+    }
+
+    #[test]
+    fn physics_surface_is_valid_when_no_dem_is_loaded() {
+        let origin = DVec3::new(10.0, 20.0, 30.0);
+        let hit = resolve_cursor_surface(origin, DVec3::NEG_Y, None, Some(7.5))
+            .expect("a collider hit must place without terrain");
+
+        assert_eq!(hit.point, DVec3::new(10.0, 12.5, 30.0));
+        assert!(!hit.terrain_primary);
+        assert_eq!(hit.physics_distance, Some(7.5));
+    }
+
+    #[test]
+    fn nearer_physics_surface_beats_terrain() {
+        let origin = DVec3::ZERO;
+        let terrain_point = DVec3::new(0.0, -12.0, 0.0);
+        let hit =
+            resolve_cursor_surface(origin, DVec3::NEG_Y, Some((12.0, terrain_point)), Some(3.0))
+                .expect("one of the surfaces must win");
+
+        assert_eq!(hit.point, DVec3::new(0.0, -3.0, 0.0));
+        assert!(!hit.terrain_primary);
     }
 }

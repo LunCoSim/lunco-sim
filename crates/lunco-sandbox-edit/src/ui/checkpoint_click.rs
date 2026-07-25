@@ -260,7 +260,7 @@ fn pick_ground_world(
         (None, Some((_, tp))) => tp,
         (None, None) => return None,
     };
-    Some(raycaster.to_physics(hit_render))
+    raycaster.to_physics(hit_render)
 }
 
 /// Global `Pointer<Click>` observer: Alt+LMB drops a waypoint prim for the selected

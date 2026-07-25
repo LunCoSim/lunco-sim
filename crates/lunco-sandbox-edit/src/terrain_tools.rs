@@ -21,8 +21,9 @@
 //! | Esc                       | disarm the tool                                 |
 
 use bevy::input::mouse::MouseWheel;
+use bevy::math::DVec3;
 use bevy::prelude::*;
-use big_space::prelude::Grid;
+use big_space::prelude::CellCoord;
 use lunco_terrain_surface::{BrushTerrain, FlattenTerrain, PlaceCrater, PlaceRock};
 
 /// Which terrain brush is armed. `None` = the tool is off and clicks pass
@@ -170,15 +171,20 @@ pub fn update_terrain_brush_ghost(
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
     mut q_ghost: Query<
-        (Entity, &mut Transform, &mut lunco_render::PbrLook),
+        (
+            Entity,
+            &mut CellCoord,
+            &mut Transform,
+            &mut lunco_render::PbrLook,
+        ),
         With<TerrainBrushGhost>,
     >,
-    grids: Query<Entity, With<Grid>>,
-    raycaster: avian3d::prelude::SpatialQuery,
+    world_frame: lunco_core::coords::WorldFrame,
+    raycaster: lunco_physics::GridSpatialQuery,
     terrains: crate::spawn::TerrainOracles,
 ) {
     if !state.armed() {
-        for (ghost, _, _) in q_ghost.iter() {
+        for (ghost, _, _, _) in q_ghost.iter() {
             commands.entity(ghost).try_despawn();
         }
         return;
@@ -212,7 +218,7 @@ pub fn update_terrain_brush_ghost(
         .map(|(_, p)| p)
         .or_else(|| {
             raycaster
-                .cast_ray(
+                .cast_ray_render(
                     origin,
                     dir,
                     10_000.0,
@@ -221,7 +227,6 @@ pub fn update_terrain_brush_ghost(
                 )
                 .map(|h| origin + dir.as_dvec3() * h.distance)
         })
-        .map(|p| p.as_vec3())
     else {
         return;
     };
@@ -230,18 +235,26 @@ pub fn update_terrain_brush_ghost(
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let color = action_color(state.tool, alt, ctrl);
 
-    // Lift the disc a hair off the surface so it doesn't z-fight the terrain.
-    let transform = Transform::from_translation(point + Vec3::Y * 0.05).with_scale(Vec3::new(
+    // Lift the disc a hair off the surface so it doesn't z-fight the terrain,
+    // then split it through the canonical world grid. The cursor hit is in the
+    // floating-origin render frame; its `Transform` must remain grid-local.
+    let Some((world_grid, brush_cell, brush_local)) =
+        world_frame.render_to_world_grid_local(point + DVec3::Y * 0.05)
+    else {
+        return;
+    };
+    let transform = Transform::from_translation(brush_local).with_scale(Vec3::new(
         state.radius,
         1.0,
         state.radius,
     ));
 
-    if let Some((_, mut tf, mut look)) = q_ghost.iter_mut().next() {
+    if let Some((_, mut cell, mut tf, mut look)) = q_ghost.iter_mut().next() {
         // `set_if_neq`, NOT `*tf = transform`: the latter goes through `DerefMut`, so
         // it marks `Changed<Transform>` EVERY frame the brush is armed — whether or
         // not the cursor moved (and every downstream propagation with it). Compare
         // first, write only on a real move.
+        cell.set_if_neq(brush_cell);
         tf.set_if_neq(transform);
         // Same discipline for the tint: `DerefMut` on `PbrLook` marks it `Changed`,
         // and the render binder re-materialises on `Changed<PbrLook>` — so an
@@ -251,9 +264,6 @@ pub fn update_terrain_brush_ghost(
             look.base_color = color.to_linear();
         }
     } else {
-        let Some(grid) = grids.iter().next() else {
-            return;
-        };
         // Unit-radius flat disc; scaled by `radius` each frame via the transform.
         let mesh = meshes.add(Cylinder::new(1.0, 0.02).mesh().resolution(48).build());
         // `Visibility` pulls in `InheritedVisibility` + `ViewVisibility` as required
@@ -261,6 +271,7 @@ pub fn update_terrain_brush_ghost(
         commands.spawn((
             Name::new("TerrainBrushGhost"),
             TerrainBrushGhost,
+            brush_cell,
             transform,
             Mesh3d(mesh),
             // Appearance INTENT — the render binder makes the material. Only a
@@ -274,7 +285,7 @@ pub fn update_terrain_brush_ghost(
                 perceptual_roughness: 0.5,
                 ..default()
             },
-            ChildOf(grid),
+            ChildOf(world_grid),
             Visibility::Visible,
         ));
     }

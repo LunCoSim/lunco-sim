@@ -1048,10 +1048,18 @@ fn migrate_avatar_to_target_grid(
     if let Some(tg) = target_grid {
         if tg != Entity::PLACEHOLDER {
             if let Ok(target_grid_ref) = q_grids.get(tg) {
+                // A target grid can itself be nested below a rotating/displaced
+                // celestial frame. Its own stored transform and cell are part of
+                // the world pose; substituting an identity pose here makes a
+                // wheel click migrate the avatar relative to the coordinate
+                // origin instead of the clicked rover's grid.
+                let Ok((target_grid_cell, target_grid_tf)) = q_spatial.get(tg) else {
+                    return;
+                };
                 let target_grid_abs = lunco_core::coords::world_position_seeded(
                     tg,
-                    &CellCoord::default(),
-                    &Transform::default(),
+                    &target_grid_cell.copied().unwrap_or_default(),
+                    target_grid_tf,
                     q_parents,
                     q_grids,
                     q_spatial,

@@ -661,14 +661,34 @@ generate_bindings() {
     # was prototyped and backed out (2026-07-18) to avoid growing the shared
     # manifest schema; see `docs/architecture/56-asset-resolution-and-cache.md`.
 
-    # luncosim renders Earth/Moon as celestial bodies whose imagery is a declared
-    # dataset (`crates/lunco-celestial/Assets.toml`), loaded as
+    # luncosim and sandbox render Earth/Moon as celestial bodies whose imagery is
+    # a declared dataset (`crates/lunco-celestial/Assets.toml`), loaded as
     # `lunco://textures/<tex>`. On wasm every root of that scheme is an HTTP root,
     # so staging into `assets/.cache/textures/` — the PACKED cache, exactly where
     # `build_native.sh` puts it — serves them same-origin with no web-only path.
-    # Populate the cache first with:
-    #   cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process
-    if [ "$binary" = "luncosim" ]; then
+    if [ "$binary" = "luncosim" ] || [ "$binary" = "sandbox" ]; then
+        local missing_celestial=0
+        for tex in earth.png moon.png; do
+            local tex_found=0
+            for candidate in \
+                "$PROJECT_DIR/../.cache/textures/$tex" \
+                "$PROJECT_DIR/.cache/textures/$tex"; do
+                if [ -f "$candidate" ]; then tex_found=1; break; fi
+            done
+            if [ "$tex_found" -eq 0 ]; then
+                missing_celestial=1
+                break
+            fi
+        done
+
+        if [ "$missing_celestial" -eq 1 ]; then
+            info "Celestial textures (earth.png / moon.png) not found. Attempting to download and process automatically..."
+            if LUNCOSIM_CACHE="$PROJECT_DIR/.cache" cargo run -p lunco-assets -- download -g celestial && \
+               LUNCOSIM_CACHE="$PROJECT_DIR/.cache" cargo run -p lunco-assets -- process -g celestial; then
+                success "Celestial textures downloaded and processed"
+            fi
+        fi
+
         for tex in earth.png moon.png; do
             local tex_src=""
             for candidate in \
@@ -682,7 +702,7 @@ generate_bindings() {
                 info "Copied $tex → $dist_dir/assets/.cache/textures/"
             else
                 warn "celestial texture $tex not found — that body renders untextured in \
-the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-assets -- process"
+the browser. Run: cargo run -p lunco-assets -- download -g celestial && cargo run -p lunco-assets -- process -g celestial"
             fi
         done
     fi

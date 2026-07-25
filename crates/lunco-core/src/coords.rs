@@ -6,12 +6,52 @@
 //! `grid.grid_position_double(...)` — works only inside one Grid and
 //! breaks across Grid boundaries; these helpers cover both cases.
 
-use bevy::ecs::query::QueryFilter;
+use bevy::ecs::{query::QueryFilter, system::SystemParam};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::*;
 
 use crate::markers::GridAnchor;
+use crate::world::WorldGrid;
+
+/// The canonical conversion boundary between rendered points (which are
+/// floating-origin relative) and the simulation's world frame.
+///
+/// Screen-space tools must depend on this parameter rather than selecting a
+/// `Grid` or reconstructing a render-to-physics shift themselves. The world
+/// shell owns exactly one [`WorldGrid`]; celestial/body grids are local frames
+/// and are never valid substitutes for document/runtime placement.
+#[derive(SystemParam)]
+pub struct WorldFrame<'w, 's> {
+    world_grid: Query<'w, 's, (Entity, &'static Grid), With<WorldGrid>>,
+}
+
+impl<'w, 's> WorldFrame<'w, 's> {
+    /// The one canonical grid that scenes mount under.
+    pub fn grid(&self) -> Option<(Entity, &Grid)> {
+        self.world_grid.single().ok()
+    }
+
+    /// Convert a floating-origin-relative render point to world-grid absolute
+    /// coordinates.
+    pub fn render_to_world(&self, render_point: DVec3) -> Option<DVec3> {
+        self.grid()
+            .map(|(_, grid)| render_to_grid_absolute(grid, render_point))
+    }
+
+    /// Split a render point into the canonical grid parent plus its cell/local
+    /// transform pair, ready for an entity that will be a direct world-grid
+    /// child.
+    pub fn render_to_world_grid_local(
+        &self,
+        render_point: DVec3,
+    ) -> Option<(Entity, CellCoord, Vec3)> {
+        let (entity, grid) = self.grid()?;
+        let world = render_to_grid_absolute(grid, render_point);
+        let (cell, local) = grid.translation_to_grid(world);
+        Some((entity, cell, local))
+    }
+}
 
 /// Walks ancestors of `entity` and returns the nearest one tagged
 /// `GridAnchor`. Returns `entity` itself if it is already a `GridAnchor`.
@@ -225,6 +265,24 @@ pub fn world_to_grid_local(
     target_grid: &Grid,
 ) -> (CellCoord, Vec3) {
     target_grid.translation_to_grid(world_pos - target_grid_world)
+}
+
+/// Convert a `GlobalTransform`-space point (the floating-origin-relative
+/// render frame) into `grid`'s absolute coordinate frame.
+///
+/// This is the inverse of [`Grid::global_transform`]. It reverses the computed
+/// [`big_space::prelude::LocalFloatingOrigin`] affine transform, then restores
+/// the grid's origin cell. Use it whenever a camera ray / rendered terrain hit
+/// needs to become a `CellCoord` + `Transform` or a physics-frame position.
+/// Do not estimate this through an arbitrary body's `Position - GlobalTransform`:
+/// that loses the target grid's nesting and rotation.
+pub fn render_to_grid_absolute(grid: &Grid, render_point: DVec3) -> DVec3 {
+    let local_origin = grid.local_floating_origin();
+    let grid_relative = local_origin
+        .grid_transform()
+        .inverse()
+        .transform_point3(render_point);
+    grid_relative + grid.cell_to_float(&local_origin.cell())
 }
 
 /// Absolute world position of `entity`, seeded with an explicit
@@ -449,6 +507,24 @@ mod tests {
             "a non-grid-direct entity must not be given a cell"
         );
         assert_eq!(same, Vec3::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn render_point_round_trips_through_grid_global_transform() {
+        let grid = Grid::new(2_000.0, 100.0);
+        let cell = CellCoord::new(4, -3, 2);
+        let local = Transform::from_translation(Vec3::new(12.5, -4.0, 99.0));
+        let rendered = grid
+            .global_transform(&cell, &local)
+            .translation()
+            .as_dvec3();
+        let expected = grid.grid_position_double(&cell, &local);
+
+        assert_eq!(
+            render_to_grid_absolute(&grid, rendered),
+            expected,
+            "the render-to-grid inverse must recover a cursor hit's cell-absolute position"
+        );
     }
 
     /// The `target_grid_world` offset is honoured: decompose against a grid that

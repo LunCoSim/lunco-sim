@@ -3,6 +3,7 @@
 //! Visualizes simulator inputs for video generation or AI agent observation.
 //! Persisted via `lunco-settings` under the `"input_overlay"` key.
 
+use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_core::{on_command, register_commands, Command};
@@ -34,6 +35,33 @@ pub struct ToggleInputOverlay {
 pub struct SimulateInput {
     pub key: String,
     pub pressed: bool,
+}
+
+/// Drive the existing window/picking cursor path from a typed command.
+///
+/// This writes the same complete input message fan-out that the native backend
+/// emits. Consequently every normal consumer sees it: egui palette buttons,
+/// hover/picking, Spawn Ghost, Spawn placement, waypoint placement, selection,
+/// and any future cursor-driven tool. It is not a parallel "spawn at
+/// coordinates" API.
+#[Command(default)]
+pub struct SimulatePointer {
+    /// Logical-pixel position in the primary window.
+    pub x: f32,
+    /// Logical-pixel position in the primary window.
+    pub y: f32,
+    /// Emit a primary-button press and release after moving to `(x, y)`.
+    pub click: bool,
+}
+
+/// Internal source event for command-driven pointer input. Keeping this as one
+/// message lets every command/API surface share the exact same fan-out as a
+/// native pointer, instead of each caller knowing which downstream consumers
+/// read aggregate versus typed Bevy window messages.
+#[derive(Message)]
+struct InjectedPointer {
+    position: Vec2,
+    click: bool,
 }
 
 #[on_command(ToggleInputOverlay)]
@@ -83,6 +111,62 @@ fn on_simulate_input(trigger: On<SimulateInput>, mut simulated: ResMut<Simulated
         } else {
             simulated.keys.remove(&c);
         }
+    }
+}
+
+#[on_command(SimulatePointer)]
+fn on_simulate_pointer(trigger: On<SimulatePointer>, mut injected: MessageWriter<InjectedPointer>) {
+    let cmd = trigger.event();
+    injected.write(InjectedPointer {
+        position: Vec2::new(cmd.x, cmd.y),
+        click: cmd.click,
+    });
+}
+
+/// Emits the canonical Bevy pointer message fan-out once for every injected
+/// pointer action. This mirrors `bevy_winit`'s native delivery boundary: scene
+/// tools consume [`bevy::window::WindowEvent`], while egui consumes the typed
+/// `CursorMoved` / `MouseButtonInput` streams.
+fn emit_injected_pointer(
+    mut injected: MessageReader<InjectedPointer>,
+    mut windows: Query<(Entity, &mut Window), With<bevy::window::PrimaryWindow>>,
+    mut window_events: MessageWriter<bevy::window::WindowEvent>,
+    mut cursor_moved: MessageWriter<bevy::window::CursorMoved>,
+    mut mouse_button_input: MessageWriter<bevy::input::mouse::MouseButtonInput>,
+) {
+    let Ok((window, mut window_state)) = windows.single_mut() else {
+        warn!("[input-overlay] SimulatePointer: primary window unavailable");
+        return;
+    };
+    for action in injected.read() {
+        // Keep `Window::cursor_position()` coherent with the injected event.
+        // Spawn Ghost reads that resource every frame, while picking reads the
+        // aggregate message and egui reads the typed stream.
+        window_state.set_cursor_position(Some(action.position));
+        let moved = bevy::window::CursorMoved {
+            window,
+            position: action.position,
+            delta: None,
+        };
+        window_events.write(bevy::window::WindowEvent::CursorMoved(moved.clone()));
+        cursor_moved.write(moved);
+        if action.click {
+            for state in [ButtonState::Pressed, ButtonState::Released] {
+                let input = bevy::input::mouse::MouseButtonInput {
+                    button: MouseButton::Left,
+                    state,
+                    window,
+                };
+                window_events.write(bevy::window::WindowEvent::MouseButtonInput(input.clone()));
+                mouse_button_input.write(input);
+            }
+        }
+        info!(
+            x = action.position.x,
+            y = action.position.y,
+            click = action.click,
+            "[input-overlay] simulated pointer"
+        );
     }
 }
 
@@ -259,15 +343,21 @@ pub fn draw_input_overlay(
         });
 }
 
-register_commands!(on_toggle_input_overlay, on_simulate_input);
+register_commands!(
+    on_simulate_input,
+    on_simulate_pointer,
+    on_toggle_input_overlay,
+);
 
 /// Registers the input overlay resources, settings, commands, and systems.
 pub fn build_input_overlay(app: &mut App) {
     app.init_resource::<InputOverlaySettings>();
     app.init_resource::<SimulatedInputs>();
+    app.add_message::<InjectedPointer>();
     // Who is flying — written by possess/release, read by the AUTO/MANUAL badge.
     app.init_resource::<lunco_core::markers::FlightAuthority>();
     app.add_systems(bevy_egui::EguiPrimaryContextPass, draw_input_overlay);
+    app.add_systems(PreUpdate, emit_injected_pointer);
 
     register_all_commands(app);
 }

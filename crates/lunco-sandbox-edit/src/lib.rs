@@ -75,6 +75,7 @@ impl Plugin for SandboxEditPlugin {
             .init_resource::<InspectorTarget>()
             .init_resource::<catalog::SpawnCatalog>()
             .init_resource::<spawn::FootprintCache>()
+            .init_resource::<spawn::SpawnDiagnostics>()
             .insert_resource(lunco_core::DragModeActive { active: false })
             .init_resource::<lunco_core::SpawnToolActive>()
             .init_resource::<lunco_core::TerrainToolActive>()
@@ -116,6 +117,8 @@ impl Plugin for SandboxEditPlugin {
         app.add_observer(selection::on_scene_click_select);
         app.add_observer(spawn::on_scene_click_spawn);
         app.add_observer(terrain_tools::on_scene_click_terrain);
+
+        spawn::register_all_commands(app);
 
         // Editor-only `SelectEntity` API command (Inspector highlight + gizmo) —
         // registered here, not in the headless `SpawnCommandPlugin`.
