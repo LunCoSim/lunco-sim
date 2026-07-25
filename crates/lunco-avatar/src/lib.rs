@@ -1048,26 +1048,25 @@ fn migrate_avatar_to_target_grid(
     if let Some(tg) = target_grid {
         if tg != Entity::PLACEHOLDER {
             if let Ok(target_grid_ref) = q_grids.get(tg) {
-                // A target grid can itself be nested below a rotating/displaced
-                // celestial frame. Its own stored transform and cell are part of
-                // the world pose; substituting an identity pose here makes a
-                // wheel click migrate the avatar relative to the coordinate
-                // origin instead of the clicked rover's grid.
-                let Ok((target_grid_cell, target_grid_tf)) = q_spatial.get(tg) else {
-                    return;
-                };
-                let target_grid_abs = lunco_core::coords::world_position_seeded(
+                let Some((new_cell, local_tf)) = lunco_core::coords::world_pose_to_live_grid_local(
+                    final_abs_pos,
+                    final_rot.as_dquat(),
                     tg,
-                    &target_grid_cell.copied().unwrap_or_default(),
-                    target_grid_tf,
+                    target_grid_ref,
                     q_parents,
                     q_grids,
                     q_spatial,
+                ) else {
+                    return;
+                };
+                info!(
+                    avatar = ?avatar_ent,
+                    target_grid = ?tg,
+                    final_world = ?final_abs_pos,
+                    cell = ?new_cell,
+                    local = ?local_tf.translation,
+                    "[possess] migrated avatar into target grid"
                 );
-                let (new_cell, new_translation) =
-                    target_grid_ref.translation_to_grid(final_abs_pos - target_grid_abs);
-                let local_tf =
-                    Transform::from_translation(new_translation).with_rotation(final_rot);
                 migrate_to_grid(commands, avatar_ent, tg, new_cell, local_tf);
             }
         }
@@ -1203,6 +1202,7 @@ fn update_spring_arm_impl(
     >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     q_children: Query<&Children>,
     defaults: &CameraDefaults,
@@ -1223,16 +1223,31 @@ fn update_spring_arm_impl(
             continue;
         }
 
-        let Ok((t_cell, t_tf)) = q_spatial.get(arm.target) else {
+        let Some((target_world, target_world_rotation)) =
+            lunco_core::coords::world_pose(arm.target, &q_parents, &q_grids, &q_spatial)
+        else {
             continue;
         };
-        let t_cell = t_cell.copied().unwrap_or_default();
         let Ok(grid) = q_grids.get(child_of.0) else {
             continue;
         };
+        let Some((target_cell, target_tf)) = lunco_core::coords::world_pose_to_live_grid_local(
+            target_world,
+            target_world_rotation,
+            child_of.0,
+            grid,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            continue;
+        };
 
-        // Target position in grid-local coordinates.
-        let target_pos = grid.grid_position_double(&t_cell, t_tf);
+        // Keep the target and camera in the avatar's live Grid frame. This is
+        // the same root-frame → grid-local conversion used when possession
+        // migrates the avatar; raw target `CellCoord + Transform` only has this
+        // meaning when both entities already share one direct Grid parent.
+        let target_pos = grid.grid_position_double(&target_cell, &target_tf);
 
         // Multiplicative zoom using exponential scaling — same formula as
         // ChaseCamera/OrbitCamera so raw pixel scroll deltas stay well-scaled.
@@ -1263,7 +1278,7 @@ fn update_spring_arm_impl(
             // Cockpit frame: full body orientation × user yaw/pitch offset. The
             // camera rolls with the craft (was the separate `ChaseCamera`).
             FollowAttitude::FullAttitude => {
-                t_tf.rotation * Quat::from_euler(EulerRot::YXZ, arm.yaw, arm.pitch, 0.0)
+                target_tf.rotation * Quat::from_euler(EulerRot::YXZ, arm.yaw, arm.pitch, 0.0)
             }
             // Stable external frame: ignore the body's attitude entirely, so a
             // 6-DOF flyer tumbles inside a steady view. World-up, user yaw/pitch
@@ -1273,7 +1288,7 @@ fn update_spring_arm_impl(
             // up = surface normal or world-Y.
             FollowAttitude::Heading => {
                 let target_heading_d = if arm.track_heading {
-                    let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
+                    let target_fwd_d = target_tf.rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
                     if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
                         -target_fwd_d.x.atan2(-target_fwd_d.z)
                     } else {
@@ -1401,6 +1416,7 @@ fn spring_arm_system(
     >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     q_children: Query<&Children>,
     defaults: Res<CameraDefaults>,
@@ -1413,6 +1429,7 @@ fn spring_arm_system(
         q_avatar,
         q_spatial,
         q_grids,
+        q_parents,
         q_dragging,
         q_children,
         &defaults,
@@ -1446,6 +1463,7 @@ fn spring_arm_paused_system(
     >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     q_children: Query<&Children>,
     defaults: Res<CameraDefaults>,
@@ -1458,6 +1476,7 @@ fn spring_arm_paused_system(
         q_avatar,
         q_spatial,
         q_grids,
+        q_parents,
         q_dragging,
         q_children,
         &defaults,
@@ -2752,6 +2771,42 @@ fn find_clickable_from_hit(
     None
 }
 
+/// Resolves a picked vehicle part to the vehicle's command root.
+///
+/// `SelectableRoot` deliberately cannot answer this: every independently
+/// simulated wheel is selectable for editor gizmos. A rover's one command root
+/// is instead established by its authored control surface (`ControlBinding`)
+/// and, for wheeled vehicles, its hardware actuator index (`ActuatorPorts`).
+/// Walking to that root makes a click on any wheel, suspension member, or body
+/// take control of the rover rather than following an individual part.
+fn find_vehicle_root_from_hit(
+    mut entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_vehicle_roots: &Query<
+        Entity,
+        Or<(
+            With<lunco_core::ActuatorPorts>,
+            With<lunco_core::ControlBinding>,
+        )>,
+    >,
+    q_ground: &Query<Entity, With<lunco_core::Ground>>,
+) -> Option<Entity> {
+    for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
+        if q_ground.get(entity).is_ok() {
+            return None;
+        }
+        if q_vehicle_roots.get(entity).is_ok() {
+            return Some(entity);
+        }
+        if let Ok(parent) = q_parents.get(entity) {
+            entity = parent.parent();
+        } else {
+            break;
+        }
+    }
+    None
+}
+
 /// Raycasts possession against actual collider geometry.
 ///
 /// Uses Avian3D SpatialQuery to hit real mesh colliders, not invisible spheres.
@@ -2787,6 +2842,13 @@ pub fn avatar_raycast_possession(
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
     q_vessel: Query<Entity, Controllable>,
+    q_vehicle_roots: Query<
+        Entity,
+        Or<(
+            With<lunco_core::ActuatorPorts>,
+            With<lunco_core::ControlBinding>,
+        )>,
+    >,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: Query<&ChildOf>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
@@ -2879,6 +2941,8 @@ pub fn avatar_raycast_possession(
     {
         nearest_clickable = Some(root);
     }
+    let vehicle_target =
+        find_vehicle_root_from_hit(click.entity, &q_parents, &q_vehicle_roots, &q_ground);
 
     // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.
     let mut spacecraft_hit: Option<Entity> = None;
@@ -2921,6 +2985,12 @@ pub fn avatar_raycast_possession(
             target,
         });
     } else if let Some(target) = spacecraft_hit {
+        commands.trigger(PossessVessel {
+            avatar: Some(avatar_entity),
+            target,
+            bind_camera: true,
+        });
+    } else if let Some(target) = vehicle_target {
         commands.trigger(PossessVessel {
             avatar: Some(avatar_entity),
             target,
@@ -3324,6 +3394,15 @@ fn on_possess_command(
     let final_rot = Quat::from_euler(EulerRot::YXZ, init_yaw, init_pitch, 0.0);
     let final_offset = final_rot.mul_vec3(Vec3::Z).as_dvec3() * end_distance;
     let final_abs_pos = target_abs + final_offset + Vec3::Y.as_dvec3() * end_vert_off as f64;
+
+    info!(
+        avatar = ?avatar_ent,
+        target = ?cmd.target,
+        target_world = ?target_abs,
+        target_grid = ?target_grid,
+        camera_world = ?final_abs_pos,
+        "[possess] resolved click target"
+    );
 
     // Migrate to target grid immediately
     migrate_avatar_to_target_grid(
@@ -4286,6 +4365,46 @@ fn sync_profile(
         });
         *last_sent = Some(session);
         *last_name = Some(current_name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn wheel_click_resolves_to_owning_vehicle_command_root() {
+        let mut world = World::new();
+        let rover = world
+            .spawn((lunco_core::ActuatorPorts::default(), Name::new("Rover")))
+            .id();
+        let wheel = world
+            .spawn((
+                lunco_core::SelectableRoot,
+                Name::new("Wheel"),
+                ChildOf(rover),
+            ))
+            .id();
+        let wheel_mesh = world.spawn((Name::new("WheelMesh"), ChildOf(wheel))).id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<
+                Entity,
+                Or<(
+                    With<lunco_core::ActuatorPorts>,
+                    With<lunco_core::ControlBinding>,
+                )>,
+            >,
+            Query<Entity, With<lunco_core::Ground>>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_vehicle_roots, q_ground) = state.get(&world).unwrap();
+
+        assert_eq!(
+            find_vehicle_root_from_hit(wheel_mesh, &q_parents, &q_vehicle_roots, &q_ground),
+            Some(rover)
+        );
     }
 }
 
