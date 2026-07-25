@@ -195,7 +195,7 @@ jobs:
         with:
           name: sandbox-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/sandbox-${{ matrix.platform }}-${{ matrix.arch }}.*
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
       # ── Upload artifacts (cross-compile arch, macOS x86_64) ────────────
@@ -208,7 +208,7 @@ jobs:
         with:
           name: sandbox-macos-x86_64
           path: dist/sandbox-macos-x86_64.*
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
   # ── Optional: create a GitHub Release with all artifacts ────────────────
@@ -229,9 +229,18 @@ jobs:
       # → artifacts/<file> so the release can list them simply.
       - name: Flatten artifacts
         run: |
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} artifacts/ \;
+          # download-artifact does not create the destination when no
+          # upstream artifact was published. Keep the diagnostic below
+          # readable even if this job is run against an older workflow run.
+          mkdir -p artifacts
+          find artifacts -mindepth 2 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv -t artifacts -- {} +
           # Remove the now-empty subdirectories
           find artifacts -mindepth 1 -type d -empty -delete || true
+          archive_count=$(find artifacts -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)
+          if [ "$archive_count" -eq 0 ]; then
+            echo "No packaged archives were downloaded from the build jobs." >&2
+            exit 1
+          fi
           echo "## Artifact listing" >> "$GITHUB_STEP_SUMMARY"
           ls -lh artifacts/ | tee -a "$GITHUB_STEP_SUMMARY"
 
