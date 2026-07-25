@@ -751,6 +751,34 @@ impl UsdDocument {
         }
     }
 
+    /// Replace the authored base and generated runtime layers from the file
+    /// source. This is only reached through the document registry's explicit
+    /// user-confirmed full-reset operation; ordinary reloads preserve runtime
+    /// state and never overwrite dirty authoring work.
+    pub(crate) fn reset_to_source(&mut self, source: &str) -> bool {
+        let Ok(base) = usda_to_data(source) else {
+            warn!(
+                "[usd] document {} full reset source did not parse as USDA; keeping the resident document",
+                self.id.raw()
+            );
+            return false;
+        };
+        self.base = base;
+        self.runtime = usda_to_data(EMPTY_USDA).unwrap_or_default();
+        self.generation += 1;
+        if self.changes.len() == CHANGE_HISTORY_CAPACITY {
+            self.changes.pop_front();
+        }
+        self.changes.push_back((self.generation, UsdChange::FullReload));
+        self.record_op(UsdOp::ReplaceSource {
+            edit_target: LayerId::root(),
+            text: String::new(),
+        });
+        self.parse_error = None;
+        self.last_saved_generation = Some(self.generation);
+        true
+    }
+
     /// Where this document came from (drives save behaviour, tab
     /// title, read-only badge).
     pub fn origin(&self) -> &DocumentOrigin {
@@ -1049,6 +1077,10 @@ impl lunco_doc::FileBacked for UsdDocument {
 
     fn reload_base(&mut self, source: &str) -> bool {
         UsdDocument::reload_base(self, source)
+    }
+
+    fn reset_to_source(&mut self, source: &str) -> bool {
+        UsdDocument::reset_to_source(self, source)
     }
 }
 

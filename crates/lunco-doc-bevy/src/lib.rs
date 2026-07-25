@@ -1240,6 +1240,32 @@ where
         (id, OpenOutcome::Refreshed)
     }
 
+    /// Explicitly discard the resident document's unsaved and transient state
+    /// and restore the file source. This is intentionally separate from
+    /// [`open_file`](Self::open_file): ordinary opens preserve dirty work,
+    /// while callers of this method have already obtained the user's consent.
+    pub fn reset_file(
+        &mut self,
+        path: impl Into<std::path::PathBuf>,
+        source: String,
+    ) -> (DocumentId, lunco_doc::OpenOutcome) {
+        use lunco_doc::OpenOutcome;
+        let path = path.into();
+        let Some(id) = self.doc_for_file(&path) else {
+            return self.open_file(path, source);
+        };
+        let Some(host) = self.hosts.get_mut(&id) else {
+            unreachable!("doc_for_file returned an id with no host");
+        };
+        if !host.document_mut().reset_to_source(&source) {
+            return (id, OpenOutcome::KeptUnparsable);
+        }
+        host.discard_history();
+        self.watch_files(id, []);
+        self.pending_changes.push(id);
+        (id, OpenOutcome::Refreshed)
+    }
+
     /// Watch `id`'s **dependency closure** in addition to its own file: the
     /// layers a USD scene references, a DEM it points at, anything whose change
     /// makes the document stale.

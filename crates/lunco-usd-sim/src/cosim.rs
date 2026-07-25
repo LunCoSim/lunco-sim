@@ -1534,11 +1534,18 @@ pub struct LoadScene {
 /// scene. `RestartScene` always clears the current scene's entities, force-reloads
 /// its stage asset from disk (busting the asset cache), and respawns a single
 /// fresh root — so editing a `.usda` then `restart_scene()` shows the change with
-/// no duplicate instances. Takes no args: it targets whatever scene is loaded.
+/// no duplicate instances. `reset_document` is interpreted by the document layer:
+/// it is false for the normal preserve-edits restart and true only after the UI
+/// has confirmed a full reset. The lifecycle mechanic still targets whichever
+/// scene is loaded.
 /// Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
 /// wanted (`restart_scene(); pause();`).
 #[Command(default)]
-pub struct RestartScene {}
+pub struct RestartScene {
+    /// Discard the active file document's authored and runtime layers before
+    /// remounting. Callers must obtain explicit user consent first.
+    pub reset_document: bool,
+}
 
 #[on_command(RestartScene)]
 fn on_restart_scene(
@@ -1575,17 +1582,15 @@ fn on_restart_scene(
     // stale window camera survives into the fresh scene.
     clear_scene_entities(&mut commands, &scene);
 
-    // Force a fresh disk read so on-disk edits actually apply (the whole point).
-    // Reloading by the full path (scheme intact) targets the SAME asset id the
-    // handle holds, so it fires exactly one fresh `LoadedWithDependencies` → a
-    // single re-instantiation pass, no duplicate scene or camera.
-    if let Some(ap) = asset_path {
-        asset_server.reload(ap);
-    }
-
-    // Respawn from the SAME handle (defaultPrim resolution), deferred so the
-    // despawns flush first.
+    // Defer the asset reload itself as well as the respawn. Higher layers may
+    // refresh a doc-backed Twin's composed overlay while handling this same
+    // command; doing the read in this queued phase makes that refreshed source
+    // the one this stage reload consumes, without making this sim-layer module
+    // depend on the document registry.
     commands.queue(move |world: &mut World| {
+        if let Some(ap) = asset_path {
+            world.resource::<AssetServer>().reload(ap);
+        }
         spawn_scene_root_with_stage(world, &label, "", handle);
     });
 }
@@ -2206,11 +2211,11 @@ mod tests {
     /// declared inputs, no variables.
     fn dispatched_but_unsolved() -> ModelicaModel {
         let mut m = ModelicaModel {
-            model_name: "SolarRoverPower".into(),
+            model_name: "GeneratedElectrical".into(),
             ..default()
         };
-        m.inputs.insert("vehicle_throttle".into(), 0.0);
-        m.inputs.insert("sun_azimuth".into(), 0.0);
+        m.inputs.insert("drive_left".into(), 0.0);
+        m.inputs.insert("drive_right".into(), 0.0);
         m
     }
 
@@ -2229,7 +2234,7 @@ mod tests {
             .get::<SimComponent>(e)
             .expect("the interface must be published at bind, not at compile-complete");
         assert!(
-            comp.inputs.contains_key("vehicle_throttle") && comp.inputs.contains_key("sun_azimuth"),
+            comp.inputs.contains_key("drive_left") && comp.inputs.contains_key("drive_right"),
             "a wire into a declared input must resolve while the model still compiles; \
              got inputs {:?}",
             comp.inputs.keys().collect::<Vec<_>>()

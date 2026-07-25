@@ -14,9 +14,9 @@ fn at_wp(n, r) {
 }
 
 fn soc() {
-    let r = find("/SolarRoverTest/SolarRover/PowerSubsystem");
+    let r = find("/SolarRoverTest/SolarRover/Electrical");
     if r < 0 { return (); }
-    get(r, "soc_out")
+    get(r, "soc")
 }
 
 fn task(me) {

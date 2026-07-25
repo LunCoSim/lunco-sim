@@ -51,7 +51,7 @@ use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_sim::cosim::{
     clear_scene_entities, normalize_scene_asset_path, resolve_root_prim, spawn_scene_root_world,
-    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
+    ClearScene, LoadScene, RestartScene, SceneEntities, SceneLoadInFlight,
 };
 
 /// Stable id for the USD document kind in
@@ -611,6 +611,7 @@ fn doc_backed_source_for_abs(
 
 register_commands!(
     on_load_scene,
+    on_restart_scene_refresh_active_document,
     on_apply_usd_op,
     // The USD half of the generic `UndoDocument`/`RedoDocument` verbs. Registering the
     // observers here (not in the editor) is what lets a headless binary undo.
@@ -623,6 +624,101 @@ register_commands!(
     on_open_file_for_usd,
     on_save_document,
 );
+
+/// Refresh the active doc-backed Twin from its source file before the shared
+/// [`RestartScene`] lifecycle handler reloads its asset. The lower simulation
+/// layer deliberately does not know documents; it queues its asset reload, which
+/// gives this observer one synchronous place to update the composed Twin overlay.
+///
+/// A normal restart retains dirty documents; a full reset is a separately
+/// confirmed intent which discards both their authored and runtime layers. The
+/// document registry owns both policies so every file-backed domain keeps the
+/// same identity and history invariants.
+#[on_command(RestartScene)]
+fn on_restart_scene_refresh_active_document(
+    trigger: On<RestartScene>,
+    asset_server: Option<Res<AssetServer>>,
+    q_usd: Query<(&UsdPrimPath, Has<lunco_usd_sim::cosim::UsdSceneRoot>)>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
+    twins: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    role: Option<Res<lunco_core::NetworkRole>>,
+) {
+    // The authoritative host/standalone process owns the source file. Clients
+    // restart the currently replicated asset and must not invent a local base.
+    if role.as_deref().is_some_and(|role| !role.is_authoritative()) {
+        return;
+    }
+    let (Some(asset_server), Some(backed), Some(twins)) = (asset_server, backed.as_deref(), twins)
+    else {
+        return;
+    };
+    let Some(stage_path) = q_usd
+        .iter()
+        .find(|(_, is_root)| *is_root)
+        .and_then(|(prim, _)| asset_server.get_path(prim.stage_handle.id()))
+        .map(|path| path.to_string())
+    else {
+        return;
+    };
+
+    let active = registry.ids().find_map(|doc| {
+        let (name, rel) = backed.coords_of(doc)?;
+        (lunco_assets::twin_uri(&name, &rel) == stage_path).then_some((doc, name, rel))
+    });
+    let Some((doc, name, rel)) = active else {
+        return;
+    };
+    let Some(path) = registry
+        .host(doc)
+        .and_then(|host| host.document().origin().canonical_path())
+        .map(std::path::Path::to_owned)
+    else {
+        return;
+    };
+    let Ok(bytes) = lunco_storage::read_file_sync(&path) else {
+        warn!(
+            "[restart-scene] cannot reread `{}`; keeping the mounted source",
+            path.display()
+        );
+        return;
+    };
+    let Ok(source) = String::from_utf8(bytes) else {
+        warn!(
+            "[restart-scene] `{}` is not UTF-8 USDA; keeping the mounted source",
+            path.display()
+        );
+        return;
+    };
+    let (_, outcome) = if trigger.event().reset_document {
+        registry.reset_file(path, source)
+    } else {
+        registry.open_file(path, source)
+    };
+    match outcome {
+        OpenOutcome::Refreshed => {
+            if trigger.event().reset_document {
+                info!("[restart-scene] fully reset active Twin from disk before remount")
+            } else {
+                info!("[restart-scene] refreshed active Twin source before remount")
+            }
+        }
+        OpenOutcome::KeptDirty => {
+            warn!("[restart-scene] active Twin has unsaved edits; retaining them instead of overwriting from disk")
+        }
+        OpenOutcome::KeptUnparsable => {
+            warn!("[restart-scene] source did not parse as USDA; retaining the mounted document")
+        }
+        OpenOutcome::Allocated => {}
+    }
+    let Some(composed) = registry
+        .host(doc)
+        .map(|host| host.document().composed_source())
+    else {
+        return;
+    };
+    twins.set_overlay(&name, &rel, std::sync::Arc::new(composed.into_bytes()));
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // OpenFile — gated on USD extensions

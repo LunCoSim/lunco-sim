@@ -97,14 +97,20 @@ def Xform "Rucheyok" (
         float inputs:drive_left.connect = </Rucheyok.outputs:drive_left>
         float inputs:drive_right.connect = </Rucheyok.outputs:drive_right>
         float outputs:soc.connect = </Rucheyok/Battery.outputs:soc_out>
+        float outputs:solar_power.connect = </Rucheyok/SolarPanel.outputs:power_out>
         uniform token collection:components:expansionRule = "explicitOnly"
         prepend rel collection:components:includes = [
             </Rucheyok/Battery>,
+            </Rucheyok/SolarPanel>,
             </Rucheyok/Motor_FL>,
             </Rucheyok/Motor_FR>,
             </Rucheyok/Motor_RL>,
             </Rucheyok/Motor_RR>,
         ]
+    }
+    over "SolarPanel"
+    {
+        custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
     }
 
     # --- Wheels (from component) ---

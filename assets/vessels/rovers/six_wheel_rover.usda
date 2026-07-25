@@ -36,9 +36,10 @@ def Xform "SixWheelRover" (
     # difficulty variants (`variants/rover_*.usda`) inherit it through this base
     # and need nothing of their own. See `skid_rover.usda` for the rationale.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
-    prepend variantSets = ["power", "thermal"]
+    prepend variantSets = ["power", "generation", "thermal"]
     variants = {
         string power = "infinite"
+        string generation = "none"
         string thermal = "none"
     }
 )
@@ -380,6 +381,31 @@ def Xform "SixWheelRover" (
             }
             over "Motor_RR" {
                 float inputs:demand.connect = </SixWheelRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
+            }
+        }
+    }
+
+    variantSet "generation" = {
+        "none" {
+        }
+
+        "solar" {
+            def Xform "SolarPanel" (
+                prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
+            )
+            {
+                double3 xformOp:translate = (0, 0.45, 0)
+                double3 xformOp:scale = (0.42, 0.2, 0.42)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            }
+            over "Electrical"
+            {
+                float outputs:solar_power.connect = </SixWheelRover/SolarPanel.outputs:power_out>
+                prepend rel collection:components:includes = [</SixWheelRover/SolarPanel>]
+            }
+            over "SolarPanel"
+            {
                 custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
             }
         }

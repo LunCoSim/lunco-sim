@@ -612,6 +612,17 @@ pub trait FileBacked: Document + Sized {
     /// [`is_dirty`](Self::is_dirty) first — this silently discards unsaved edits
     /// and undo cannot bring them back.
     fn reload_base(&mut self, source: &str) -> bool;
+
+    /// Deliberately discard local state and restore `source` as the complete
+    /// document state. This is the explicit, user-confirmed counterpart to
+    /// [`reload_base`](Self::reload_base): implementations with transient
+    /// layers must clear those too.
+    ///
+    /// The default is appropriate for single-layer documents. Multi-layer
+    /// documents override it so “full reset” has one unambiguous meaning.
+    fn reset_to_source(&mut self, source: &str) -> bool {
+        self.reload_base(source)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -861,6 +872,15 @@ impl<D: Document> DocumentHost<D> {
     /// Number of ops on the redo stack.
     pub fn redo_depth(&self) -> usize {
         self.redo_stack.len()
+    }
+
+    /// Forget undo/redo and replay ids after an explicitly destructive reset.
+    /// Keeping inverses across a “discard changes” operation would let a later
+    /// undo resurrect state the user asked to remove.
+    pub fn discard_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.seen_ops.clear();
     }
 
     /// Consume the host and return the underlying document.

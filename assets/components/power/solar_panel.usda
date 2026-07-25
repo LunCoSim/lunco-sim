@@ -17,16 +17,33 @@
 # `nested-body-no-joint`). A panel that must articulate — a tracker, a deployable — is a
 # body AND a joint, authored together.
 #
-# What the panel GENERATES is not here: a source's output is an equation
-# (`LunCo.Electrical.SolarPanel`), and it is one component of a circuit. The vessel that
-# mounts this panel adds the corresponding Modelica component to its electrical
-# Scope and sets area and efficiency there. USD assembles; Modelica is the maths.
+# The panel's electrical facet is declared on the part itself. It is only an
+# independent source pin (`connectors:p`): a mounting assembly decides whether
+# that pin is wired to a battery/bus. Thus the same component is valid on a
+# battery-equipped rover (where it charges the bus) and on a passive structure
+# (where it has no electrical consumer) without inventing a second panel model.
+# USD owns membership and connections; `LunCo.Electrical.SolarPanel` owns the
+# photovoltaic equation once a connected island is assembled at runtime.
 def Xform "SolarPanel" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI"]
 )
 {
     uniform bool lunco:spawnable = true
+    uniform token info:implementationSource = "sourceAsset"
+    uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
+
+    # Nameplate values belong to the physical part; enclosing electrical scopes
+    # collect this prim and emit them as Modelica instance parameters.
+    float inputs:area = 18.0
+    float inputs:efficiency = 0.30
+    float inputs:irradiance = 1361.0
+    # A fixed panel's incidence is authored by its mounting assembly or a tracker.
+    # No battery dependency belongs in this component.
+    float inputs:cos_incidence = 1.0
+    float outputs:power_out
+    custom token connectors:p
+
     float physics:mass = 15.0
     float lunco:spawnLift = 2.0
 

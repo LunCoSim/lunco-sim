@@ -9,9 +9,9 @@
 #
 # Composes a custom scene with:
 #   1. A SkidRover base referenced from assets/vessels
-#   2. A custom-constructed rotating solar panel mounted on the rover
+#   2. A reusable rotating solar panel mounted on the rover
 #   3. A SunTracker.mo Modelica controller to yaw the panel to the sun
-#   4. A SolarRoverPower.mo Modelica program to simulate battery charging/discharging
+#   4. A generated electrical Modelica model assembled from the panel, battery and motors
 #   5. An autopilot Rhai script directing the navigation
 #   6. A cinematic director script executing the cuts and solar-tracking showcase
 #
@@ -46,29 +46,6 @@ def Xform "SolarRoverTest" (
         }
     }
     uniform bool lunco:spawnable = false
-
-    def Scope "Looks"
-    {
-        def Material "SolarPanel"
-        {
-            token outputs:surface.connect = </SolarRoverTest/Looks/SolarPanel/Shader.outputs:surface>
-
-            def Shader "Shader"
-            {
-                uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
-                color3f inputs:cell_color = (0.05, 0.05, 0.35)
-                color3f inputs:bus_color = (0.85, 0.85, 0.90)
-                color3f inputs:frame_color = (0.35, 0.35, 0.38)
-                float inputs:cell_rows = 6.0
-                float inputs:cell_cols = 10.0
-                float inputs:cell_gap = 0.02
-                float inputs:bus_width = 0.004
-                float inputs:border = 0.04
-                token outputs:surface
-            }
-        }
-    }
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
@@ -128,6 +105,9 @@ def Xform "SolarRoverTest" (
     # ── The Solar Powered Rover ──────────────────────────────────────────────
     def Xform "SolarRover" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = {
+            string power = "battery"
+        }
     )
     {
         double3 xformOp:translate = (0.0, 0.5, 0.0)
@@ -160,16 +140,16 @@ def Xform "SolarRoverTest" (
             color3f[] primvars:displayColor = [(0.4, 0.4, 0.42)]
             float physics:mass = 2.0
 
-            # The actual Solar Panel mesh - attached to the YawHead
-            def Cube "Panel"
+            # The complete reusable panel: visual, collision, mass, and its
+            # independent electrical source facet. The assembly below decides
+            # whether that pin is wired to the battery bus.
+            def Xform "SolarPanel" (
+                prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
+            )
             {
-                double size = 1.0
                 double3 xformOp:translate = (0, 0.4, 0)
-                double3 xformOp:scale = (1.8, 0.8, 0.04)
+                double3 xformOp:scale = (0.3, 0.2, 0.25)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-                color3f[] primvars:displayColor = [(0.05, 0.05, 0.35)]
-                bool physics:collisionEnabled = false
-                rel material:binding = </SolarRoverTest/Looks/SolarPanel>
             }
         }
 
@@ -200,20 +180,21 @@ def Xform "SolarRoverTest" (
             float inputs:tau = 0.2
         }
 
-        # ── Power Subsystem Model (Modelica) ──
-        def Xform "PowerSubsystem" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
-        )
+        # ── Electrical domain (runtime-generated Modelica) ───────────────
+        # The inherited battery variant contributes Battery, motors and this
+        # Scope. This scene contributes the panel member and its one explicit
+        # bus connection. No hand-written rover-level `.mo` duplicates topology.
+        over "Electrical"
         {
-            uniform asset info:sourceAsset = @lunco://models/SolarRoverPower.mo@
-            # The panel model receives the tracker’s mount-frame yaw, not a
-            # second world-frame bearing with a hidden convention.
-            float inputs:sun_yaw.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
-            # Connect actual panel yaw from SunTracker's yaw output.
-            float inputs:panel_yaw.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
-            # Wire throttle from the rover's OBC so the battery drains based on
-            # actual drive commands — no script intermediary.
-            float inputs:vehicle_throttle.connect = </SolarRoverTest/SolarRover/Avionics.outputs:throttle>
+            float outputs:solar_power.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:power_out>
+            prepend rel collection:components:includes = [</SolarRoverTest/SolarRover/YawHead/SolarPanel>]
+        }
+        over "YawHead"
+        {
+            over "SolarPanel"
+            {
+                custom token connectors:p.connect = </SolarRoverTest/SolarRover/Battery.connectors:p>
+            }
         }
 
         # ── Autopilot Script (Rhai) ──

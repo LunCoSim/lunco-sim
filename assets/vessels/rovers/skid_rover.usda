@@ -57,10 +57,11 @@ def Xform "SkidRover" (
     # rover without one has wheels, motors and power and sits there, unable to be
     # driven by human, autopilot, script or API.
     prepend references = @lunco://components/avionics/obc.usda@</OBC>
-    prepend variantSets = ["drivetrain", "power", "thermal"]
+    prepend variantSets = ["drivetrain", "power", "generation", "thermal"]
     variants = {
         string drivetrain = "raycast"
         string power = "infinite"
+        string generation = "none"
         string thermal = "none"
     }
 )
@@ -434,6 +435,38 @@ def Xform "SkidRover" (
             }
             over "Motor_RR" {
                 float inputs:demand.connect = </SkidRover/Electrical.inputs:drive_right>
+                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
+            }
+        }
+    }
+
+    # Generation is independent of storage: a panel owns one electrical source
+    # pin, while this assembly supplies the optional battery-bus connection.
+    # Selecting solar without `power=battery` leaves a physical panel with no
+    # generated DAE; selecting both composes one connected electrical island.
+    variantSet "generation" = {
+        "none" {
+        }
+
+        "solar" {
+            def Xform "SolarPanel" (
+                prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
+            )
+            {
+                double3 xformOp:translate = (0, 0.45, 0)
+                double3 xformOp:scale = (0.42, 0.2, 0.42)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            }
+            # `Electrical` and `Battery` are contributed only by the battery
+            # power variant. These overs therefore express a connection when
+            # both assembly layers are present, never a panel-side dependency.
+            over "Electrical"
+            {
+                float outputs:solar_power.connect = </SkidRover/SolarPanel.outputs:power_out>
+                prepend rel collection:components:includes = [</SkidRover/SolarPanel>]
+            }
+            over "SolarPanel"
+            {
                 custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
         }

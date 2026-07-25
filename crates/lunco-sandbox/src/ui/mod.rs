@@ -748,7 +748,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 // `LoadScene` deliberately no-ops for the active `(stage, root)`.
                 // RestartScene is the lifecycle verb that clears the current world,
                 // invalidates the stage asset, and mounts a newly read source.
-                world.trigger(lunco_usd::RestartScene {});
+                world.trigger(lunco_usd::RestartScene::default());
                 ui.close();
             }
         });

@@ -548,11 +548,15 @@ fn read_network(
     if !extraction_errors.is_empty() {
         return Err(extraction_errors);
     }
+    // A component with an acausal port but no authored edge is a legitimate
+    // installed-but-unwired part (for example, a solar panel before a battery
+    // is selected). It has no well-posed DAE by itself, so omit it from this
+    // generated island rather than rejecting unrelated connected equipment.
+    // Causal-only components remain: they may be complete models without an
+    // acausal connector at all.
+    retain_connected_acausal_components(&mut components);
     if components.is_empty() {
-        return Err(vec![DomainProjectionError {
-            path: root_string,
-            message: "component collection contains no Modelica program facets".into(),
-        }]);
+        return Ok(None);
     }
 
     let attrs = view.attr_names(root);
@@ -765,19 +769,34 @@ pub fn validate_network(network: &DomainNetwork) -> Vec<DomainProjectionError> {
         }
     }
 
-    let acausal: Vec<_> = network
-        .components
-        .iter()
-        .filter(|component| !component.declared_connectors.is_empty())
-        .cloned()
-        .collect();
-    if partition_islands(acausal).len() > 1 {
-        errors.push(DomainProjectionError {
-            path: network.root.clone(),
-            message: "component collection contains multiple disconnected acausal networks; author one Scope and CollectionAPI:components per independently solved network".into(),
-        });
-    }
     errors
+}
+
+/// Drop only electrically unconnected component facets before emitting a DAE.
+///
+/// USD connections are directional authoring opinions whereas Modelica
+/// `connect()` is symmetric, so retaining only the source side would be wrong:
+/// every endpoint of an authored edge belongs to the generated island. A part
+/// with an acausal connector and no edge at all has no solvable electrical
+/// context; it remains a perfectly valid physical component, just not a member
+/// of this runtime Modelica model.
+fn retain_connected_acausal_components(components: &mut Vec<DomainComponent>) {
+    let connected: BTreeSet<String> = components
+        .iter()
+        .flat_map(|component| {
+            component.connectors.values().flat_map(move |targets| {
+                targets.iter().filter_map(move |target| {
+                    target
+                        .split_once(".connectors:")
+                        .map(|(path, _)| [component.path.clone(), path.to_string()])
+                })
+            })
+        })
+        .flatten()
+        .collect();
+    components.retain(|component| {
+        component.declared_connectors.is_empty() || connected.contains(&component.path)
+    });
 }
 
 fn model_class_from_asset(asset: &str, sub_identifier: Option<&str>) -> Option<String> {
@@ -1006,7 +1025,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_disconnected_acausal_islands_and_external_targets() {
+    fn rejects_external_connector_targets_without_rejecting_independent_islands() {
         let mut external = component("/Electrical/Load/Model", None);
         external
             .connectors
@@ -1024,7 +1043,25 @@ mod tests {
             .any(|error| error.message.contains("outside collection")));
         assert!(errors
             .iter()
-            .any(|error| error.message.contains("multiple disconnected")));
+            .all(|error| !error.message.contains("multiple disconnected")));
+    }
+
+    #[test]
+    fn unconnected_acausal_component_is_omitted_from_generated_network() {
+        let panel = component("/Electrical/SolarPanel", None);
+        let mut battery = component("/Electrical/Battery", None);
+        battery.connectors.insert(
+            "p".into(),
+            vec!["/Electrical/Motor.connectors:p".into()],
+        );
+        let motor = component("/Electrical/Motor", None);
+        let mut components = vec![panel, battery, motor];
+        retain_connected_acausal_components(&mut components);
+        assert_eq!(
+            components.iter().map(|component| component.path.as_str()).collect::<Vec<_>>(),
+            ["/Electrical/Battery", "/Electrical/Motor"],
+            "only explicitly wired program facets enter a generated acausal island"
+        );
     }
 
     #[test]
