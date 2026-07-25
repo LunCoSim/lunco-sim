@@ -377,10 +377,12 @@ create_archive() {
     local parent
     parent="$(dirname "$dir")"
     # UTC makes archive names unambiguous and consistent between local and
-    # GitHub Actions builds. Seconds prevent repeat package runs overwriting
-    # one another while preserving the stable platform/architecture prefix.
+    # GitHub Actions builds. CI supplies one timestamp to all matrix jobs so
+    # the archive names match the nightly release tag exactly. Seconds prevent
+    # repeat package runs overwriting one another while preserving the stable
+    # platform/architecture prefix.
     local timestamp
-    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    timestamp="${LUNCO_BUILD_TIMESTAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
     local archive
     if is_windows "$platform"; then
         archive="${dir}-${timestamp}.zip"
