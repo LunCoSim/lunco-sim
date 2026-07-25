@@ -80,6 +80,14 @@ fn on_tick(me) {
 fn verdict(s) {
     let f = [];
     f.push(t_bounded(s.pos, 200.0, "rover"));
+    // The chassis starts at y = 1.6.  A linkage can swing under gravity while
+    // its root is still incorrectly held kinematic, which used to let this
+    // scenario pass with the whole rover visibly hovering above the ground.
+    // A physical rover must be released and settle through its tyres before we
+    // interpret any rocker/differential angles.
+    f.push(t_true(s.pos[1] < 1.45,
+        "rover chassis is still at spawn height y=" + r4(s.pos[1]) +
+        " — physical bodies were not released onto terrain"));
     f.push(t_present(s.l, "HingeL angle port"));
     f.push(t_present(s.r, "HingeR angle port"));
 
@@ -158,6 +166,7 @@ fn verdict(s) {
     print("[rb]   L+R       " + r4(s.l + s.r) + " rad");
     print("[rb]   peak |L|  " + r4(s.peak_l) + " rad");
     print("[rb]   tilt      " + r2(s.tilt) + " deg");
+    print("[rb]   chassis y " + r4(s.pos[1]) + " m");
 
     report_verdict(f, "ROCKER BOGIE", "ROCKER_BOGIE");
 }

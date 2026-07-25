@@ -69,9 +69,16 @@ def Xform "CommsAntenna" (
         bool physics:collisionEnabled = false
     }
 
-    # The rotating bodies belong to the antenna, never to a rover composition.
-    # The host supplies only the yaw attachment point (or the free-standing
-    # mount variant below does); the antenna owns its elevation hinge.
+    # The rotating bodies are articulation links, not decorative transforms.
+    # They deliberately have no collider: the mechanism must not change a
+    # vehicle's contact shape.  A collider-less dynamic body cannot derive an
+    # inertia tensor, though, so both its mass and its principal body-frame
+    # inertia are authored here.  Omitting that tensor leaves an invalid link in
+    # the host vehicle's articulation and lets its constraint impulses corrupt
+    # the chassis solve.
+    #
+    # The host supplies only the yaw attachment point; the antenna owns its
+    # elevation hinge.
     def Xform "YawHead" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
@@ -79,6 +86,9 @@ def Xform "CommsAntenna" (
         double3 xformOp:translate = (0, 0.8, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 0.8
+        # Compact azimuth drive housing (about 0.18 × 0.10 × 0.18 m), expressed
+        # in this body's local axes.
+        float3 physics:diagonalInertia = (0.003, 0.0048, 0.003)
         bool physics:collisionEnabled = false
 
         def Xform "DishGimbal" (
@@ -86,6 +96,9 @@ def Xform "CommsAntenna" (
         )
         {
             float physics:mass = 0.6
+            # Dish, feed and elevation frame.  The X-axis value is the pitch
+            # axis; the transverse values retain the reflector's larger radius.
+            float3 physics:diagonalInertia = (0.036, 0.018, 0.036)
             bool physics:collisionEnabled = false
 
             # The head: everything that must stay in proportion with the dish.
