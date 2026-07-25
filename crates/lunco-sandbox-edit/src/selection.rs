@@ -450,10 +450,16 @@ pub fn handle_deselect_keys(
 ///    and program-driven beam markers (`ProgramDriverId`).
 /// 2. `q_skip_tree` prevents `queue` from stepping into child grids, trajectory paths, or
 ///    program drivers during hierarchy traversal.
-/// Computes the global axis-aligned bounding box (min, max) for a selected entity tree,
+/// Computes the body-frame bounding box (min, max) for an editable entity tree,
 /// excluding non-body subtrees (link beams, trajectory lines, sub-grids, program drivers).
+///
+/// The returned points are in `body_transform`'s local frame.  This matters for
+/// a rotated rover: a world-axis AABB is visually misleading and grows/shrinks
+/// as the body turns.  Gizmos instead receive the body's orientation and this
+/// stable, body-frame extent.
 pub fn compute_selection_aabb(
     selected_ent: Entity,
+    body_transform: &GlobalTransform,
     q_aabb: &Query<
         (&GlobalTransform, &Aabb),
         (
@@ -479,6 +485,7 @@ pub fn compute_selection_aabb(
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
     let mut has_aabb = false;
+    let body_from_world = body_transform.affine().inverse();
 
     queue.clear();
     queue.push(selected_ent);
@@ -490,9 +497,10 @@ pub fn compute_selection_aabb(
                 for y in [-ext.y, ext.y] {
                     for z in [-ext.z, ext.z] {
                         let local_p = center + Vec3::new(x, y, z);
-                        let global_p = gtf.transform_point(local_p);
-                        min = min.min(global_p);
-                        max = max.max(global_p);
+                        let world_p = gtf.transform_point(local_p);
+                        let body_p = body_from_world.transform_point3(world_p);
+                        min = min.min(body_p);
+                        max = max.max(body_p);
                     }
                 }
             }
@@ -514,9 +522,13 @@ pub fn compute_selection_aabb(
     }
 }
 
-/// Draws an AABB highlight for selected objects using Bevy Gizmos.
+/// Draws body-frame bounds for objects explicitly selected for gizmo editing.
+///
+/// Control focus (`Selected`) is deliberately not sufficient: possession keeps
+/// the controlled vessel visible in the Inspector without turning control into
+/// an editor operation or drawing an AABB.
 pub fn draw_selection_bounds(
-    q_selected: Query<Entity, With<Selected>>,
+    q_selected: Query<(Entity, &GlobalTransform), With<crate::gizmo::GizmoSelected>>,
     q_aabb: Query<
         (&GlobalTransform, &Aabb),
         (
@@ -550,17 +562,23 @@ pub fn draw_selection_bounds(
         a as f32 / 255.0,
     );
 
-    for selected_ent in q_selected.iter() {
-        if let Some((min, max)) =
-            compute_selection_aabb(selected_ent, &q_aabb, &q_children, &q_skip_tree, &mut queue)
-        {
-            let center = (min + max) * 0.5;
+    for (selected_ent, body_transform) in q_selected.iter() {
+        if let Some((min, max)) = compute_selection_aabb(
+            selected_ent,
+            body_transform,
+            &q_aabb,
+            &q_children,
+            &q_skip_tree,
+            &mut queue,
+        ) {
+            let center = body_transform.affine().transform_point3((min + max) * 0.5);
             let size = max - min;
+            let (_, rotation, _) = body_transform.to_scale_rotation_translation();
             gizmos.primitive_3d(
                 &Cuboid {
                     half_size: size * 0.5,
                 },
-                Isometry3d::from_translation(center),
+                Isometry3d::new(center, rotation),
                 color,
             );
         }
@@ -724,6 +742,7 @@ mod tests {
         let mut queue = Vec::new();
         let (min, max) = compute_selection_aabb(
             rover,
+            &GlobalTransform::IDENTITY,
             &state_aabb.query(app.world()),
             &state_children.query(app.world()),
             &state_skip.query(app.world()),
@@ -739,5 +758,64 @@ mod tests {
             size.max_element() < 5.0,
             "Selection AABB must be tight (< 5m), got {size}"
         );
+    }
+
+    #[test]
+    fn selection_bounds_stay_in_the_rotated_body_frame() {
+        let mut app = App::new();
+        let body_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let body_global = GlobalTransform::from(Transform::from_rotation(body_rotation));
+        let rover = app.world_mut().spawn((Selected, body_global)).id();
+
+        // The mesh is two metres along the body's local +X.  Its render-world
+        // position is therefore along -Z after the body rotation.
+        let chassis = app
+            .world_mut()
+            .spawn((
+                Mesh3d(Handle::default()),
+                Aabb {
+                    center: Vec3A::ZERO,
+                    half_extents: Vec3A::new(1.0, 0.5, 1.5),
+                },
+                GlobalTransform::from(
+                    Transform::from_translation(Vec3::new(0.0, 0.0, -2.0))
+                        .with_rotation(body_rotation),
+                ),
+                ChildOf(rover),
+            ))
+            .id();
+        app.world_mut().entity_mut(rover).add_child(chassis);
+
+        let mut state_aabb = app
+            .world_mut()
+            .query_filtered::<(&GlobalTransform, &Aabb), (
+                With<Mesh3d>,
+                Without<lunco_celestial::TrajectoryMeshMarker>,
+                Without<lunco_core::programs::ProgramDriverId>,
+                Without<lunco_core::NoSelectionBounds>,
+            )>();
+        let mut state_children = app.world_mut().query::<&Children>();
+        let mut state_skip = app.world_mut().query_filtered::<(), Or<(
+            With<big_space::prelude::Grid>,
+            With<big_space::prelude::CellCoord>,
+            With<lunco_celestial::TrajectoryMeshMarker>,
+            With<lunco_core::programs::ProgramDriverId>,
+            With<lunco_core::NoSelectionBounds>,
+        )>>();
+
+        let mut queue = Vec::new();
+        let (min, max) = compute_selection_aabb(
+            rover,
+            &body_global,
+            &state_aabb.query(app.world()),
+            &state_children.query(app.world()),
+            &state_skip.query(app.world()),
+            &mut queue,
+        )
+        .expect("Selection AABB should exist for rover chassis");
+
+        assert!((min.x - 1.0).abs() < 1e-4, "min={min}");
+        assert!((max.x - 3.0).abs() < 1e-4, "max={max}");
+        assert!(((max - min).z - 3.0).abs() < 1e-4);
     }
 }
