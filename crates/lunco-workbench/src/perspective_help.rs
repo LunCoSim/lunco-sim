@@ -33,6 +33,35 @@ pub struct HelpMouse {
     pub description: &'static str,
 }
 
+/// A runtime-produced group of help rows. Domains publish these into the
+/// workbench rather than adding a bespoke help panel; for example, control
+/// surfaces can show the ports of the entity currently held by this session.
+#[derive(Debug, Clone, Default)]
+pub struct LiveHelpSection {
+    /// Heading shown above this group of rows.
+    pub title: String,
+    /// `(shortcut-or-port, explanation)` rows in display order.
+    pub rows: Vec<(String, String)>,
+}
+
+/// Runtime help supplements keyed by perspective.
+#[derive(Resource, Default)]
+pub struct LiveHelpSections {
+    entries: HashMap<PerspectiveId, Vec<LiveHelpSection>>,
+}
+
+impl LiveHelpSections {
+    /// Replace the live help groups published for one perspective.
+    pub fn set(&mut self, id: PerspectiveId, sections: Vec<LiveHelpSection>) {
+        self.entries.insert(id, sections);
+    }
+
+    /// Read the currently published groups for one perspective.
+    pub fn get(&self, id: PerspectiveId) -> &[LiveHelpSection] {
+        self.entries.get(&id).map(Vec::as_slice).unwrap_or_default()
+    }
+}
+
 /// Human-authored help content for a Perspective.
 #[derive(Debug, Clone, Default)]
 pub struct PerspectiveHelp {
@@ -88,6 +117,7 @@ impl Plugin for PerspectiveHelpPlugin {
         app.init_resource::<PerspectiveHelpRegistry>();
         app.init_resource::<HelpPopup>();
         app.init_resource::<HelpTourRequest>();
+        app.init_resource::<LiveHelpSections>();
         app.add_systems(
             EguiPrimaryContextPass,
             render_help_popup.after(crate::WorkbenchRenderSet),
@@ -137,6 +167,7 @@ fn render_help_popup(
     mut popup: ResMut<HelpPopup>,
     mut tour_req: ResMut<HelpTourRequest>,
     registry: Res<PerspectiveHelpRegistry>,
+    live_sections: Res<LiveHelpSections>,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
     let Some(id) = popup.0 else {
@@ -234,6 +265,20 @@ fn render_help_popup(
                                         ui,
                                         egui::RichText::new(m.interaction).italics(),
                                         m.description,
+                                        text,
+                                    );
+                                }
+                            }
+
+                            for section in live_sections.get(id) {
+                                ui.add_space(12.0);
+                                ui.strong(&section.title);
+                                ui.add_space(6.0);
+                                for (left, right) in &section.rows {
+                                    help_row(
+                                        ui,
+                                        egui::RichText::new(left).code().strong(),
+                                        right,
                                         text,
                                     );
                                 }

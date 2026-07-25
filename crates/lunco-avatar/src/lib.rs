@@ -34,9 +34,8 @@ use lunco_core::{
 /// (`SessionRegistry::may_possess` / `PossessionPolicy`, checked in
 /// `on_possess_command`), and what a possessed thing can DO is decided by whether it
 /// accepts commands at all. This alias answers only that second question, and is used
-/// for two presentation decisions: whether a plain click should POSSESS the target or
-/// merely FOLLOW it, and whether a heading-follow camera should track the target's
-/// yaw (a thing that steers has a meaningful heading; a prop tumbles).
+/// for one presentation decision: whether a heading-follow camera should track the
+/// target's yaw (a thing that steers has a meaningful heading; a prop tumbles).
 type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim::SimComponent>,
@@ -451,6 +450,7 @@ fn record_possession_authority(
     local: Res<lunco_core::LocalSession>,
     rbac: Res<lunco_core::session::SessionRbac>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_command_surfaces: Query<&lunco_core::CommandInputs>,
     mut registry: ResMut<lunco_core::SessionRegistry>,
 ) {
     // Record ownership on the authoritative peer: Host, and also single-player
@@ -460,6 +460,13 @@ fn record_possession_authority(
         return;
     }
     let cmd = trigger.event();
+    if !q_command_surfaces
+        .get(cmd.target)
+        .is_ok_and(|surface| !surface.values.is_empty())
+    {
+        warn!(target = ?cmd.target, "[auth] possession refused: target exposes no command ports");
+        return;
+    }
     let origin = guard.0.unwrap_or(local.0);
     if let Ok(gid) = q_gid.get(cmd.target) {
         // Control-authority takeover (spec 034): if the vessel is currently owned by
@@ -2746,56 +2753,27 @@ fn avatar_global_hotkeys(
 
 // ─── Raycasting ──────────────────────────────────────────────────────────────
 
-/// Walks up the parent chain from a raycast hit to find the nearest
-/// click-target — anything tagged `SelectableRoot` (which includes
-/// vessels, balloons, props, panels). Ground/terrain hits return `None`.
-fn find_clickable_from_hit(
-    mut entity: Entity,
-    q_parents: &Query<&ChildOf>,
-    q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
-    q_ground: &Query<Entity, With<lunco_core::Ground>>,
-) -> Option<Entity> {
-    for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-        if q_ground.get(entity).is_ok() {
-            return None;
-        }
-        if q_selectable.get(entity).is_ok() {
-            return Some(entity);
-        }
-        if let Ok(parent) = q_parents.get(entity) {
-            entity = parent.parent();
-        } else {
-            break;
-        }
-    }
-    None
-}
-
-/// Resolves a picked vehicle part to the vehicle's command root.
+/// Resolves a picked vehicle part to its nearest public command surface.
 ///
-/// `SelectableRoot` deliberately cannot answer this: every independently
-/// simulated wheel is selectable for editor gizmos. A rover's one command root
-/// is instead established by its authored control surface (`ControlBinding`)
-/// and, for wheeled vehicles, its hardware actuator index (`ActuatorPorts`).
-/// Walking to that root makes a click on any wheel, suspension member, or body
-/// take control of the rover rather than following an individual part.
-fn find_vehicle_root_from_hit(
+/// `SelectableRoot` is an editor boundary, and every independently simulated
+/// wheel may carry it. [`lunco_core::CommandInputs`] is the public interface:
+/// its nonempty vocabulary is the command surface a session may own. A
+/// [`lunco_core::ControlBinding`] is merely one optional avatar-input adapter.
+/// Walking to this owner makes a click on any vehicle part possess its vehicle.
+fn find_control_owner_from_hit(
     mut entity: Entity,
     q_parents: &Query<&ChildOf>,
-    q_vehicle_roots: &Query<
-        Entity,
-        Or<(
-            With<lunco_core::ActuatorPorts>,
-            With<lunco_core::ControlBinding>,
-        )>,
-    >,
+    q_command_surfaces: &Query<&lunco_core::CommandInputs>,
     q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
     for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
         if q_ground.get(entity).is_ok() {
             return None;
         }
-        if q_vehicle_roots.get(entity).is_ok() {
+        if q_command_surfaces
+            .get(entity)
+            .is_ok_and(|surface| !surface.values.is_empty())
+        {
             return Some(entity);
         }
         if let Ok(parent) = q_parents.get(entity) {
@@ -2813,13 +2791,13 @@ fn find_vehicle_root_from_hit(
 /// Walks up parent chain to find the root Vessel entity for possession.
 /// Celestial bodies still use sphere intersection (they have no colliders).
 /// Plain-click dispatcher: routes a left-click on a world entity to one of
-/// three typed commands.
+/// two typed commands.
 ///
 /// | Hit                         | Command          |
 /// |-----------------------------|------------------|
-/// | `Vessel` (rover, spacecraft)| `PossessVessel`  |
-/// | other `SelectableRoot`      | `FollowTarget`   |
-/// | `CelestialBody` (no marker) | `FocusTarget`    |
+/// | opened command surface      | `PossessVessel`  |
+/// | `CelestialBody`             | `FocusTarget`    |
+/// | everything else             | no action        |
 ///
 /// Idempotency lives in each observer (no-op if state already matches).
 /// `DragModeActive` blocks clicks while a transform gizmo is up so the user
@@ -2841,15 +2819,7 @@ pub fn avatar_raycast_possession(
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_vessel: Query<Entity, Controllable>,
-    q_vehicle_roots: Query<
-        Entity,
-        Or<(
-            With<lunco_core::ActuatorPorts>,
-            With<lunco_core::ControlBinding>,
-        )>,
-    >,
-    q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
+    q_command_surfaces: Query<&lunco_core::CommandInputs>,
     q_parents: Query<&ChildOf>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
@@ -2919,9 +2889,8 @@ pub fn avatar_raycast_possession(
         return;
     };
 
-    // The mesh the pick resolved to (rover, prop, ground, …); resolve to its
-    // clickable root. `hit.depth` is the along-ray distance to compare against
-    // the analytic spheres below.
+    // The mesh the pick resolved to (rover, prop, ground, …). `hit.depth` is
+    // the along-ray distance to compare against the analytic spheres below.
     // Depth is recorded for ANY real mesh hit, clickable or not. Occlusion is a
     // geometric fact, not a property of being click-targetable: the terrain has no
     // `SelectableRoot`, but it is still solid, and a click on it must still shadow
@@ -2930,19 +2899,14 @@ pub fn avatar_raycast_possession(
     // hit-sphere — which a camera standing on the surface ALWAYS intersects —
     // passed `t < min_t` and the click "leaked" through the ground into a
     // `FocusTarget` on the planet.
-    let mut nearest_clickable: Option<Entity> = None;
     let mut min_t = if click.hit.position.is_some() {
         click.hit.depth
     } else {
         f32::INFINITY
     };
 
-    if let Some(root) = find_clickable_from_hit(click.entity, &q_parents, &q_selectable, &q_ground)
-    {
-        nearest_clickable = Some(root);
-    }
-    let vehicle_target =
-        find_vehicle_root_from_hit(click.entity, &q_parents, &q_vehicle_roots, &q_ground);
+    let control_target =
+        find_control_owner_from_hit(click.entity, &q_parents, &q_command_surfaces, &q_ground);
 
     // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.
     let mut spacecraft_hit: Option<Entity> = None;
@@ -2955,7 +2919,6 @@ pub fn avatar_raycast_possession(
             let t = -b - discr.sqrt();
             if t > 0.0 && t < min_t {
                 min_t = t;
-                nearest_clickable = None;
                 spacecraft_hit = Some(entity);
             }
         }
@@ -2972,7 +2935,6 @@ pub fn avatar_raycast_possession(
             let t = -b - discr.sqrt();
             if t > 0.0 && t < min_t {
                 min_t = t;
-                nearest_clickable = None;
                 spacecraft_hit = None;
                 body_hit = Some(entity);
             }
@@ -2990,25 +2952,12 @@ pub fn avatar_raycast_possession(
             target,
             bind_camera: true,
         });
-    } else if let Some(target) = vehicle_target {
+    } else if let Some(target) = control_target {
         commands.trigger(PossessVessel {
             avatar: Some(avatar_entity),
             target,
             bind_camera: true,
         });
-    } else if let Some(target) = nearest_clickable {
-        if q_vessel.get(target).is_ok() {
-            commands.trigger(PossessVessel {
-                avatar: Some(avatar_entity),
-                target,
-                bind_camera: true,
-            });
-        } else {
-            commands.trigger(FollowTarget {
-                avatar: Some(avatar_entity),
-                target,
-            });
-        }
     }
 }
 
@@ -3260,12 +3209,12 @@ fn on_possess_command(
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    // Used ONLY for the heading-follow camera decision below — this is not, and never
-    // was, a possession gate: `on_possess_command` has no "not a vessel" refusal. The
-    // only refusal here is the authority check (`may_control`) a few lines down.
+    // Used ONLY for the heading-follow camera decision below. Possession is
+    // gated by the target's public `CommandInputs` surface, then authority.
     q_vessel: Query<Entity, Controllable>,
     q_vessel_gravity: Query<&GravityBody>,
     q_follow: Query<&lunco_core::CameraFollow>,
+    q_command_surfaces: Query<&lunco_core::CommandInputs>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
     rbac: Res<lunco_core::session::SessionRbac>,
@@ -3274,6 +3223,13 @@ fn on_possess_command(
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
 ) {
     let cmd = trigger.event();
+    if !q_command_surfaces
+        .get(cmd.target)
+        .is_ok_and(|surface| !surface.values.is_empty())
+    {
+        warn!(target = ?cmd.target, "[possess] refused: target exposes no command ports");
+        return;
+    }
     // A *remote* possession applied from the wire (host attributing a client's
     // claim) must NOT bind a local camera — the host has no camera for that
     // player. Authority is recorded separately by `record_possession_authority`;
@@ -4377,7 +4333,10 @@ mod tests {
     fn wheel_click_resolves_to_owning_vehicle_command_root() {
         let mut world = World::new();
         let rover = world
-            .spawn((lunco_core::ActuatorPorts::default(), Name::new("Rover")))
+            .spawn((
+                lunco_core::CommandInputs::new(&["drive"]),
+                Name::new("Rover"),
+            ))
             .id();
         let wheel = world
             .spawn((
@@ -4390,19 +4349,13 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<
-                Entity,
-                Or<(
-                    With<lunco_core::ActuatorPorts>,
-                    With<lunco_core::ControlBinding>,
-                )>,
-            >,
+            Query<&lunco_core::CommandInputs>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_vehicle_roots, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_command_surfaces, q_ground) = state.get(&world).unwrap();
 
         assert_eq!(
-            find_vehicle_root_from_hit(wheel_mesh, &q_parents, &q_vehicle_roots, &q_ground),
+            find_control_owner_from_hit(wheel_mesh, &q_parents, &q_command_surfaces, &q_ground),
             Some(rover)
         );
     }

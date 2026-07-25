@@ -5,9 +5,11 @@
 //! UI-local state like SpawnState and SelectedEntity).
 
 use bevy::prelude::*;
+use lunco_controller::ControllerLink;
+use lunco_core::{Avatar, CommandInputs, ControlBinding};
 use lunco_workbench::{
-    HelpMouse, HelpShortcut, PanelId, Perspective, PerspectiveId, ViewportPanel, WorkbenchAppExt,
-    WorkbenchLayout, VIEWPORT_PANEL_ID,
+    HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
+    PerspectiveId, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
 };
 
 pub mod asset_visibility;
@@ -44,6 +46,83 @@ pub mod usd_variants;
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ViewModelSet;
 
+/// Publish the data-driven input convention plus the current command endpoint's
+/// binding into the existing View Help popup. This is presentation only: it
+/// reads the public command surface and never changes control state.
+fn refresh_view_help_controls(
+    q_avatar: Query<&ControllerLink, With<Avatar>>,
+    q_names: Query<Ref<Name>>,
+    q_bindings: Query<Ref<ControlBinding>>,
+    q_inputs: Query<Ref<CommandInputs>>,
+    mut help: ResMut<LiveHelpSections>,
+    mut global_rows: Local<Option<Vec<(String, String)>>>,
+    mut last_target: Local<Option<Entity>>,
+    mut published: Local<bool>,
+) {
+    let target = q_avatar.iter().next().map(|link| link.vessel_entity);
+    let target_changed = *last_target != target;
+    let endpoint_changed = target.is_some_and(|entity| {
+        q_names.get(entity).is_ok_and(|name| name.is_changed())
+            || q_bindings
+                .get(entity)
+                .is_ok_and(|binding| binding.is_changed())
+            || q_inputs.get(entity).is_ok_and(|inputs| inputs.is_changed())
+    });
+    if *published && !target_changed && !endpoint_changed {
+        return;
+    }
+
+    let global_rows = global_rows.get_or_insert_with(|| {
+        lunco_controller::default_key_bindings()
+            .into_iter()
+            .map(|(intent, keys)| (lunco_controller::key_label(&keys), format!("{intent:?}")))
+            .collect()
+    });
+    let mut sections = vec![LiveHelpSection {
+        title: "Global key → intent bindings".into(),
+        rows: global_rows.clone(),
+    }];
+
+    if let Some(target) = target {
+        let name = q_names
+            .get(target)
+            .map(|name| name.as_str().to_owned())
+            .unwrap_or_else(|_| "controlled endpoint".into());
+        let mut rows = q_bindings
+            .get(target)
+            .map(|binding| {
+                binding
+                    .binds
+                    .iter()
+                    .map(|(intent, port, scale)| {
+                        (
+                            lunco_controller::default_key_label(*intent),
+                            format!("{port}  ({scale:+})"),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if rows.is_empty() {
+            if let Ok(inputs) = q_inputs.get(target) {
+                rows = inputs
+                    .values
+                    .keys()
+                    .map(|port| ("—".into(), format!("{port}  (no local intent binding)")))
+                    .collect();
+            }
+        }
+        sections.push(LiveHelpSection {
+            title: format!("Controlled: {name}"),
+            rows,
+        });
+    }
+
+    help.set(PerspectiveId("sandbox_view"), sections);
+    *last_target = target;
+    *published = true;
+}
+
 /// Plugin that registers all sandbox editing UI panels, the workbench
 /// 3D viewport placeholder, and two workspace presets:
 ///
@@ -63,11 +142,13 @@ impl Plugin for SandboxEditUiPlugin {
         // tracker that tells the panel's transport which path clock to drive.
         app.init_resource::<cinematic::CinematicViz>();
         app.init_resource::<cinematic::CinematicTarget>();
+        app.init_resource::<LiveHelpSections>();
         app.add_systems(
             Update,
             (
                 cinematic::track_active_camera_path,
                 cinematic::draw_camera_paths,
+                refresh_view_help_controls.in_set(ViewModelSet),
             ),
         );
         app.register_panel(spawn_palette::SpawnPalette)
@@ -88,21 +169,16 @@ impl Plugin for SandboxEditUiPlugin {
                 lunco_workbench::PerspectiveHelp {
                     title: "🎬 View",
                     description: "Full-screen 3D observation & control mode. Fly the \
-                                  camera around the scene, take control of a vessel \
-                                  and drive it, or follow one as it moves.",
+                                  camera around the scene and claim an endpoint's \
+                                  public command ports. The live sections below show \
+                                  the global key map and the controlled endpoint's map.",
                     shortcuts: vec![
-                        HelpShortcut { keys: "W / A / S / D", description: "Drive the controlled vessel · fly the camera" },
-                        HelpShortcut { keys: "Q / E", description: "Move camera down / up" },
                         HelpShortcut { keys: "Shift", description: "Camera speed boost" },
-                        HelpShortcut { keys: "Space", description: "Brake the controlled vessel" },
-                        HelpShortcut { keys: "Backspace", description: "Release control — back to free-flight camera" },
-                        HelpShortcut { keys: "Esc", description: "Drop the transform gizmo / deselect" },
                         HelpShortcut { keys: "+ / −", description: "Zoom in / out" },
                     ],
                     mouse: vec![
-                        HelpMouse { interaction: "Left-Click vessel", description: "Take control (possess) and drive it" },
-                        HelpMouse { interaction: "Left-Click object", description: "Follow it with the camera" },
-                        HelpMouse { interaction: "Alt+Left-Click", description: "Grab the transform gizmo to move an object" },
+                        HelpMouse { interaction: "Left-Click command endpoint", description: "Claim control; static objects do nothing" },
+                        HelpMouse { interaction: "Shift+Left-Click", description: "Select for inspection/gizmo in Build mode" },
                         HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
                         HelpMouse { interaction: "Scroll", description: "Zoom in / out" },
                     ],

@@ -568,6 +568,51 @@ fn record_control_input(
 /// to its ports via its USD `Controls` profile.
 const KEYBINDINGS_JSON: &str = include_str!("../../../assets/config/keybindings.json");
 
+/// The bundled default key → intent convention, as data suitable for help and
+/// accessibility surfaces. Port bindings remain per controlled entity.
+pub fn default_key_bindings() -> Vec<(UserIntent, Vec<KeyCode>)> {
+    parse_key_bindings(KEYBINDINGS_JSON)
+}
+
+/// Parse a key → intent convention from the same JSON shape as the bundled
+/// configuration. Keeping this one parser behind both the runtime input map and
+/// the Help surface prevents the two views of the convention from drifting.
+fn parse_key_bindings(json: &str) -> Vec<(UserIntent, Vec<KeyCode>)> {
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str(json) else {
+        return Vec::new();
+    };
+    obj.iter()
+        .filter(|(name, _)| !name.starts_with('_'))
+        .filter_map(|(name, value)| {
+            Some((
+                lunco_core::parse_user_intent(name)?,
+                serde_json::from_value::<Vec<KeyCode>>(value.clone()).ok()?,
+            ))
+        })
+        .collect()
+}
+
+/// Compact user-facing spelling for a default key list.
+pub fn default_key_label(intent: UserIntent) -> String {
+    default_key_bindings()
+        .into_iter()
+        .find_map(|(candidate, keys)| (candidate == intent).then_some(keys))
+        .map_or_else(String::new, |keys| key_label(&keys))
+}
+
+/// Compact user-facing spelling for a key list from a data-driven convention.
+/// Help and accessibility consumers use this instead of reformatting Bevy's
+/// `KeyCode` names independently.
+pub fn key_label(keys: &[KeyCode]) -> String {
+    keys.iter()
+        .map(|key| {
+            let name = format!("{key:?}");
+            name.strip_prefix("Key").unwrap_or(&name).to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
 /// Build an avatar `InputMap<UserIntent>` from a key→intent JSON object
 /// (`{"MoveForward":["KeyW"], "Action":["KeyF","Space"], …}`; keys are bevy
 /// `KeyCode` variant names, intents `UserIntent` variants via
@@ -581,27 +626,10 @@ pub fn build_avatar_input_map(
     use lunco_core::UserIntent::{Look, Zoom};
 
     let mut input_map = InputMap::default();
-    match serde_json::from_str::<serde_json::Value>(json) {
-        Ok(serde_json::Value::Object(obj)) => {
-            for (name, val) in &obj {
-                if name.starts_with('_') {
-                    continue;
-                }
-                let Some(intent) = lunco_core::parse_user_intent(name) else {
-                    warn!("[keybindings] unknown intent '{name}' (skipped)");
-                    continue;
-                };
-                match serde_json::from_value::<Vec<KeyCode>>(val.clone()) {
-                    Ok(keys) => {
-                        for k in keys {
-                            input_map.insert(intent, k);
-                        }
-                    }
-                    Err(e) => warn!("[keybindings] '{name}' keys unparseable ({e}); skipped"),
-                }
-            }
+    for (intent, keys) in parse_key_bindings(json) {
+        for key in keys {
+            input_map.insert(intent, key);
         }
-        _ => error!("[keybindings] keybindings.json is not a JSON object; no key bindings loaded"),
     }
     // Mouse axes — not key-bindable, always present.
     input_map.insert_dual_axis(Look, MouseMove::default());

@@ -96,8 +96,8 @@ pub mod window_placement;
 pub mod workspace_state;
 
 pub use perspective_help::{
-    HelpMouse, HelpPopup, HelpShortcut, HelpTourRequest, PerspectiveHelp, PerspectiveHelpPlugin,
-    PerspectiveHelpRegistry,
+    HelpMouse, HelpPopup, HelpShortcut, HelpTourRequest, LiveHelpSection, LiveHelpSections,
+    PerspectiveHelp, PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
 pub use render_robustness::preferred_wgpu_settings;
 pub use window_command::{

@@ -196,13 +196,17 @@ pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
 /// USD as a `Controls` child scope (intent-named `def` prims with
 /// `lunco:port`+`lunco:scale`, built via
 /// [`from_intent_entries`](ControlBinding::from_intent_entries)) — there is NO
-/// hardcoded Rust default: a vessel is controllable iff it carries a `Controls`
-/// scope. It is delivered as a child `references` arc to a shared profile in
-/// `control_profiles.usda` (the same arc kind wheels use), so it composes through
-/// a spawn/reference; a runtime-built entity becomes drivable by authoring that
-/// one child prim. The consuming system (`lunco_controller::drive_from_bindings`)
-/// reads it off the vessel via the controller link; a vessel without one is
-/// simply not driven.
+/// hardcoded Rust default. It is delivered as a child `references` arc to a
+/// shared profile in `control_profiles.usda` (the same arc kind wheels use), so
+/// it composes through a spawn/reference. The consuming system
+/// (`lunco_controller::drive_from_bindings`) reads it off the controlled endpoint
+/// via the controller link.
+///
+/// This is an **adapter**, not the command surface or authority predicate. An
+/// endpoint exposes and accepts commands through [`CommandInputs`]; it can be
+/// remotely controlled with `SetPorts` without an avatar-keyboard binding.
+/// Adding a `Controls` scope only makes shared `UserIntent`s (keyboard, gamepad,
+/// simulated intent) translate into those exposed ports.
 #[derive(Component, Debug, Clone)]
 pub struct ControlBinding {
     /// `(intent, port_name, scale)` — each active intent adds its scale to the
@@ -289,8 +293,10 @@ pub struct Port {
 /// undeclared name is rejected → still reported as a dangling wire). A rover seeds
 /// `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up`, a lander
 /// `throttle`/`pitch`/`roll`/`yaw`. The keys are seeded from the vessel's
-/// [`ControlBinding`] (i.e. from its authored `Controls` scope), never from a Rust
-/// literal.
+/// [`ControlBinding`] (i.e. from its authored `Controls` scope) for USD vessels;
+/// runtime-built endpoints may declare the same surface directly with
+/// [`CommandInputs::new`]. The surface, not the optional binding, is the authority
+/// and possession boundary.
 ///
 /// Written through the shared port substrate (`SetPorts` → the command backend)
 /// and consumed by the vehicle's actuator (`apply_drive_mix`, `apply_fly`, a
