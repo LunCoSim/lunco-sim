@@ -103,33 +103,40 @@ separate concerns:
    motor only while that port is wired.
 
 ```usda
-# Host owns the attachment because only it knows its own body path.
-def PhysicsRevoluteJoint "AntennaYawJoint"
+# This joint is INSIDE the reusable assembly. Referencing CommsAntenna onto a
+# host root path-translates </CommsAntenna> to that host body.
+def PhysicsRevoluteJoint "YawJoint"
 {
-    rel physics:body0 = </Rover>
-    rel physics:body1 = </Rover/Antenna/YawHead>
+    rel physics:body0 = </CommsAntenna>
+    rel physics:body1 = </CommsAntenna/CommsAssembly/YawHead>
     uniform token physics:axis = "Y"
     point3f physics:localPos0 = (0, 0.95, -0.5)
     point3f physics:localPos1 = (0, 0, 0)
-    float inputs:angle.connect = </Rover/Antenna/EarthTrackerController.outputs:az>
+    float inputs:angle.connect = </CommsAntenna/CommsAssembly/EarthTrackerController.outputs:az>
 }
 
 # The reusable antenna owns only relationships between its own bodies.
 def PhysicsRevoluteJoint "ElevationJoint"
 {
-    rel physics:body0 = </CommsAntenna/YawHead>
-    rel physics:body1 = </CommsAntenna/YawHead/DishGimbal>
+    rel physics:body0 = </CommsAntenna/CommsAssembly/YawHead>
+    rel physics:body1 = </CommsAntenna/CommsAssembly/YawHead/DishGimbal>
     uniform token physics:axis = "X"
-    float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:el>
+    float inputs:angle.connect = </CommsAntenna/CommsAssembly/EarthTrackerController.outputs:el>
 }
 ```
 
-The host-to-head yaw joint is the attachment; a separate fixed joint is neither
-needed nor desirable when that same hinge is the intended degree of freedom.
-The component must never name `Rover`, `Lander`, or a particular chassis. For a
-catalogue-spawnable assembly, use a USD `mount` variant: `freeStanding` supplies
-its own kinematic anchor; `hostMounted` omits that anchor and requires exactly
-the host-owned hinge above.
+**The assembly owns its own hinges.** Compose the assembly's root directly onto
+the host body (the same overlay pattern as `physical_drivetrain.usda`), and USD
+reference-path translation turns its root-relative `body0` into that body. The
+host supplies no duplicate yaw or fixed joint; it only chooses to compose the
+assembly. Keep the visible mechanism under a uniquely named child such as
+`CommsAssembly` so root-overlay composition cannot collide with unrelated host
+children.
+
+This is the direction of dependency: a higher-level rover, lander, tower, or
+ground station knows it installs an antenna; the antenna knows only its own
+frames, joints, ports, and Modelica controller. The lower-level assembly never
+names `Rover`, `Lander`, or any other concrete host.
 
 **Never drive a tracking mechanism by `xformOp:rotateXYZ`.** An authored rest
 orientation is allowed where it belongs in the joint frames; continuous yaw or

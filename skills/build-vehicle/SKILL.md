@@ -306,7 +306,9 @@ design.
   component — that joint is the raycast/physical discriminator; keep wheel
   hinges in the variant arc. Generic revolute mechanisms (antenna, solar
   tracker, arm) are allowed: their `body1` is not a `PhysxVehicleWheelAPI`, so
-  they must not alter drivetrain admission or articulation classification.
+  they must not alter drivetrain admission or articulation classification. A
+  generic mechanism owns its own hinges and is composed as a root overlay onto
+  the vehicle body; do not re-author its hinge in the rover file.
 - ❌ Expecting plain Shift+click to drill into a wheel — it is the multi-select
   toggle and clears the drill target. Alt+Shift+click drills.
 - ❌ Adding a second name for a quantity that already exists (the

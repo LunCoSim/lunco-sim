@@ -271,8 +271,10 @@ carry `PhysicsCollisionAPI` only and get **no** independent body.
 > green. An internal part is **mass + geometry** (`PhysicsMassAPI`,
 > `PhysicsCollisionAPI` on its gprims) — `gearbox.usda` is the model to copy. A
 > part that must MOVE relative to its host gets a body **and** a joint, authored
-> together. A reusable moving assembly owns joints between its own bodies; its
-> host owns the one attachment joint because only the host knows its body path.
+> together. A reusable moving assembly owns every joint in its mechanism,
+> including its host-facing hinge: compose its root directly onto the host body
+> and USD path translation maps the assembly root to that body. The host must
+> not duplicate an attachment joint or be named by the lower-level assembly.
 > `sandbox --validate`
 > reports the mistake as `[usd/nested-body-no-joint]`; see
 > [`author-usd-physics`](../author-usd-physics/SKILL.md#6-a-part-is-not-a-body).

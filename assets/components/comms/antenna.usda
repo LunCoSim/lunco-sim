@@ -40,9 +40,9 @@
 #           the authored feed-arm control points, so a rim change wants the arm
 #           re-authored; scale does not.
 #
-#   MOUNT → Select `mount = "hostMounted"` when the antenna is referenced by a
-#           vessel or tower, then author ONE `PhysicsRevoluteJoint` from that
-#           host body to `Antenna/YawHead`. The antenna never names its host.
+#   MOUNT → Author ONE `PhysicsRevoluteJoint` from the host body to
+#           `Antenna/YawHead`. The antenna never names its host, so the same
+#           component mounts on a rover, lander, tower, or ground station.
 #
 # Examples in the tree: `structures/comms_mast.usda` (s = 3.4, mast hidden — the
 # tower is the mast), `vessels/landers/descent_lander.usda` (s = 2.6, mast as the
@@ -50,14 +50,13 @@
 def Xform "CommsAntenna" (
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoLinkAPI"]
     kind = "component"
-    doc = "Parabolic Earth-tracking antenna — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. The catalogue's only dish."
+    doc = "Parabolic Earth-tracking antenna mechanism — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. Mount it by a host-owned yaw joint."
 )
 {
-    uniform bool lunco:spawnable = true
+    # This is a mechanism overlay, not a free-standing object: its yaw joint must
+    # name the body it mounts to. `comms_mast.usda` is the spawnable tower host.
+    uniform bool lunco:spawnable = false
     bool lunco:linkNode = true
-    variants = {
-        string mount = "freeStanding"
-    }
 
     def Cylinder "Mast"
     {
@@ -172,29 +171,4 @@ def Xform "CommsAntenna" (
         float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:el>
     }
 
-    # A catalogue-spawned antenna needs an anchor. A referenced one selects
-    # `hostMounted` and receives the equivalent yaw joint from its host instead.
-    variantSet "mount" = {
-        "freeStanding" {
-            over "Mast" (
-                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-            )
-            {
-                float physics:mass = 20.0
-                bool physics:kinematicEnabled = true
-            }
-
-            def PhysicsRevoluteJoint "YawJoint"
-            {
-                rel physics:body0 = </CommsAntenna/Mast>
-                rel physics:body1 = </CommsAntenna/YawHead>
-                uniform token physics:axis = "Y"
-                point3f physics:localPos0 = (0, 0.4, 0)
-                point3f physics:localPos1 = (0, 0, 0)
-                float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:az>
-            }
-        }
-        "hostMounted" {
-        }
-    }
 }

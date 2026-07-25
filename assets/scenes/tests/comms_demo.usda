@@ -142,12 +142,41 @@ def Xform "CommsDemoScene" (
 
     # Base comms mast — a scene-local antenna, like the moonbase one.
     def Xform "BaseMast" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
         double3 xformOp:translate = (-8, 0, -4)
-        double3 xformOp:scale = (4, 4, 4)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 200.0
+        bool physics:kinematicEnabled = true
+
+        over "Mast"
+        {
+            double height = 3.2
+            double3 xformOp:translate = (0, 1.6, 0)
+        }
+        over "YawHead"
+        {
+            double3 xformOp:translate = (0, 3.2, 0)
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (4, 4, 4)
+                }
+            }
+        }
+    }
+
+    def PhysicsRevoluteJoint "BaseMastYawJoint"
+    {
+        rel physics:body0 = </CommsDemoScene/BaseMast>
+        rel physics:body1 = </CommsDemoScene/BaseMast/YawHead>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0, 3.2, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        float inputs:angle.connect = </CommsDemoScene/BaseMast/EarthTrackerController.outputs:az>
     }
 
     # Lunar relay on its default ELFO (elements on the asset; override here to

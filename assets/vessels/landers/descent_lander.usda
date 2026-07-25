@@ -465,7 +465,6 @@ def Xform "DescentLander" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
-        variants = { string mount = "hostMounted" }
         # Straight on the upper deck (deck top is y≈1.63); the component's own
         # mast is the mounting boom.
         double3 xformOp:translate = (0.0, 1.63, 0.0)

@@ -34,7 +34,6 @@ def Xform "CommsMast" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
-        variants = { string mount = "hostMounted" }
         bool lunco:linkNode = true
         string lunco:link:class = "base"
         double3 xformOp:translate = (0, 10.6, 0)

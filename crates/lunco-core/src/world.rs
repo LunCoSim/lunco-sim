@@ -221,9 +221,7 @@ impl Plugin for WorldShellPlugin {
             .add_systems(
                 PostUpdate,
                 anchor_owns_origin_by_default.before(BigSpaceSystems::RecenterLargeTransforms),
-            )
-            .add_systems(bevy::prelude::First, dbg_origin_bracket_first)
-            .add_systems(bevy::prelude::Last, dbg_origin_bracket_last);
+            );
 
         // Named companion to big_space's validator: that one dumps component
         // lists but no `Name`s, which makes chasing a violation a guessing
@@ -284,44 +282,6 @@ fn setup_world(world: &mut World) {
 /// vanish. This hands it back to the persistent anchor (exactly where a headless
 /// server keeps it), so the cleared scene correctly stays camera-less while the
 /// coordinate frame survives. No-op on every frame a camera holds the origin.
-fn dbg_origin_bracket_first(
-    mut printed: Local<u32>,
-    q: Query<(&CellCoord, &Transform), With<FloatingOrigin>>,
-) {
-    if *printed > 120 {
-        return;
-    }
-    if let Ok((c, tf)) = q.single() {
-        if c.y.saturating_abs() > 3 {
-            *printed += 1;
-            bevy::log::warn!(
-                "[BRACKET-First] cell.y={} tf.y={:.1}",
-                c.y,
-                tf.translation.y
-            );
-        }
-    }
-}
-
-fn dbg_origin_bracket_last(
-    mut printed: Local<u32>,
-    q: Query<(&CellCoord, &Transform), With<FloatingOrigin>>,
-) {
-    if *printed > 120 {
-        return;
-    }
-    if let Ok((c, tf)) = q.single() {
-        if c.y.saturating_abs() > 3 {
-            *printed += 1;
-            bevy::log::warn!(
-                "[BRACKET-Last ] cell.y={} tf.y={:.1}",
-                c.y,
-                tf.translation.y
-            );
-        }
-    }
-}
-
 fn anchor_owns_origin_by_default(
     mut commands: Commands,
     q_origins: Query<(), With<FloatingOrigin>>,

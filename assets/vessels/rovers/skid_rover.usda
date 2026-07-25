@@ -324,7 +324,6 @@ def Xform "SkidRover" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
-        variants = { string mount = "hostMounted" }
         double3 xformOp:translate = (0, 0.15, -0.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

@@ -94,6 +94,34 @@ pub(crate) fn apply_selection(
     }
 }
 
+/// Replaces the Inspector/command focus without enabling edit manipulation.
+///
+/// `SelectedEntities` and `Selected` are the established focus source for the
+/// Inspector, Explorer, and Command Deck. `GizmoSelected` is deliberately not
+/// part of that contract: only an explicit editor selection may enable a
+/// transform handle. Possession uses this path.
+fn apply_focus(
+    commands: &mut Commands,
+    selected: &mut SelectedEntities,
+    old_selected: impl IntoIterator<Item = Entity>,
+    target: Entity,
+) {
+    for entity in old_selected {
+        if entity != target {
+            commands
+                .entity(entity)
+                .remove::<Selected>()
+                .remove::<crate::gizmo::GizmoSelected>();
+        }
+    }
+    selected.entities.clear();
+    commands
+        .entity(target)
+        .try_insert(Selected)
+        .remove::<crate::gizmo::GizmoSelected>();
+    selected.entities.push(target);
+}
+
 /// Clears the whole selection (highlight + gizmo + resource). Shared by the
 /// id-0 `SelectEntity` and the Escape/Backspace path.
 pub(crate) fn clear_selection(
@@ -110,14 +138,14 @@ pub(crate) fn clear_selection(
     selected.entities.clear();
 }
 
-/// Makes the controlled vessel the existing Inspector/gizmo selection.
+/// Makes the controlled vessel the existing Inspector/command focus.
 ///
 /// Possession is the user's active vehicle context, so leaving the Inspector on
 /// a previously Shift-selected object is surprising. This deliberately calls
-/// [`apply_selection`] instead of maintaining a possession-specific inspector
-/// target: selection remains the sole source used by the Inspector, Explorer,
-/// Command Deck, and gizmo. Releasing control leaves the last vessel selected,
-/// just as it leaves the camera at its current view.
+/// focus state remains the sole source used by the Inspector, Explorer, and
+/// Command Deck. It intentionally does not activate the separate editor gizmo.
+/// Releasing control leaves the last vessel focused, just as it leaves the
+/// camera at its current view.
 pub fn select_possessed_vessel(
     q_avatar: Query<Ref<ControllerLink>, With<Avatar>>,
     q_old: Query<Entity, With<Selected>>,
@@ -129,13 +157,11 @@ pub fn select_possessed_vessel(
         if !link.is_changed() || selected.primary() == Some(link.vessel_entity) {
             continue;
         }
-        apply_selection(
+        apply_focus(
             &mut commands,
             &mut selected,
             q_old.iter(),
             link.vessel_entity,
-            false,
-            false,
         );
         inspector_target.part = None;
     }
@@ -571,6 +597,12 @@ mod tests {
         let selected = app.world().resource::<SelectedEntities>();
         assert_eq!(selected.primary(), Some(vessel));
         assert!(app.world().get::<Selected>(vessel).is_some());
+        assert!(
+            app.world()
+                .get::<crate::gizmo::GizmoSelected>(vessel)
+                .is_none(),
+            "possession focus must not activate an edit gizmo"
+        );
         assert!(app.world().get::<Selected>(previously_selected).is_none());
     }
 
