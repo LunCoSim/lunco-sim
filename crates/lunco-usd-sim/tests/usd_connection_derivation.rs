@@ -215,9 +215,9 @@ fn sun_tracker_asset_wiring_migrated() {
             &app,
             id,
             "/SunTrackerTest/SolarTower/Controller",
-            "inputs:sun_azimuth"
+            "inputs:sun_mount_x"
         ),
-        ["/SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth"]
+        ["/SunTrackerTest/SolarTower/Controller.outputs:sun_mount_x"]
     );
     assert_eq!(
         conns(&app, id, "/SunTrackerTest/SolarTower/Hinge", "inputs:angle"),

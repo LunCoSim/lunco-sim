@@ -6,7 +6,7 @@
 // follow the sun, and the chain is authored entirely in USD — no actuator hack,
 // no Rust in the loop:
 //
-//   solar bridge --(sun_azimuth)--> SunTracker.mo --(yaw)--> Hinge angle --> panel
+//   solar bridge --(sun_mount_x/y/z)--> SunTracker.mo --(yaw)--> Hinge angle --> panel
 //
 // Every joint of that chain fails QUIETLY. A wire that did not resolve leaves the
 // port reading zero; a Modelica model that failed to compile leaves its outputs
@@ -16,9 +16,9 @@
 //
 // ── WHY A STEP, NOT A SNAPSHOT ──────────────────────────────────────────────
 //
-// Reading "yaw ≈ sun_azimuth" once proves almost nothing: at the scene's start
-// both are near zero, so a dead controller with a dead wire and an unmoved joint
-// agrees with the sun perfectly. So the sun is MOVED — `SetEnvironmentLight` with
+// Reading a yaw once proves almost nothing: at the scene's start it can be near
+// zero, so a dead controller with a dead wire and an unmoved joint appears right.
+// So the sun is MOVED — `SetEnvironmentLight` with
 // a new `sun_yaw` — and the whole chain has to follow it. A step the controller
 // did not track is a step nothing else can fake.
 //
@@ -34,7 +34,7 @@ fn on_start(me) {
     this.t = 0.0;
     // WAIT FOR THE PORTS, do not assume a settle time. `SunTracker.mo` compiles
     // asynchronously and publishes nothing until it does — on the first run of
-    // this file a fixed 4 s settle sampled `sun_azimuth` while it was still ()
+    // this file a fixed 4 s settle sampled `sun_mount_x` while it was still ()
     // and the "did the sun actually move" guard below skipped itself in silence.
     // That is the exact failure this test exists to catch, committed by the test.
     this.phase = "await_ports";
@@ -66,21 +66,21 @@ fn on_tick(me) {
     let leg = this.t - this.phase_start;
 
     if this.phase == "await_ports" {
-        if get(this.ctrl, "sun_azimuth") != () && get(this.ctrl, "yaw") != () {
+        if get(this.ctrl, "sun_mount_x") != () && get(this.ctrl, "yaw") != () {
             print("[sun] ports live at t=" + r2(this.t) + "s");
             this.phase = "settle";
             this.phase_start = this.t;
         } else if this.t > PORT_WAIT_S {
-            fail_fast("Controller published no sun_azimuth/yaw within " +
+            fail_fast("Controller published no sun_mount_x/yaw within " +
                       PORT_WAIT_S + "s — SunTracker.mo never compiled, or its " +
                       "outputs are not exposed as ports", "SUN TRACKER", "SUN_TRACKER");
             this.phase = "done";
         }
     } else if this.phase == "settle" {
         if leg >= this.settle_s {
-            this.az_before = get(this.ctrl, "sun_azimuth");
+            this.az_before = get(this.ctrl, "sun_mount_x");
             this.yaw_before = get(this.ctrl, "yaw");
-            print("[sun] before the step: sun_azimuth=" + r4(this.az_before) +
+            print("[sun] before the step: sun_mount_x=" + r4(this.az_before) +
                   " yaw=" + r4(this.yaw_before) + " angle=" + r4(get(this.hinge, "angle")));
             // MOVE THE SUN. Everything after this is the chain's response.
             cmd("SetEnvironmentLight", #{ sun_yaw: STEP_YAW });
@@ -94,12 +94,12 @@ fn on_tick(me) {
             verdict(#{
                 az_before: this.az_before,
                 yaw_before: this.yaw_before,
-                az: get(this.ctrl, "sun_azimuth"),
+                az: get(this.ctrl, "sun_mount_x"),
                 yaw: get(this.ctrl, "yaw"),
                 angle: get(this.hinge, "angle"),
             });
         } else if leg % 4.0 < dt() {
-            print("[sun] t=" + r2(this.t) + "s  az=" + r4(get(this.ctrl, "sun_azimuth")) +
+            print("[sun] t=" + r2(this.t) + "s  sun_mount_x=" + r4(get(this.ctrl, "sun_mount_x")) +
                   " yaw=" + r4(get(this.ctrl, "yaw")) + " angle=" + r4(get(this.hinge, "angle")));
         }
     }
@@ -120,20 +120,20 @@ fn on_tick(me) {
 //                    The controller can be perfect and the panel still not move.
 fn verdict(s) {
     let f = [];
-    f.push(t_present(s.az, "Controller sun_azimuth port"));
+    f.push(t_present(s.az, "Controller sun_mount_x port"));
     f.push(t_present(s.yaw, "Controller yaw port"));
     f.push(t_present(s.angle, "Hinge angle port"));
 
     // Two halves of one guard, and the SECOND is the load-bearing one. The
-    // commanded `sun_yaw` is not the azimuth the bridge publishes (different
-    // convention), so how far `sun_azimuth` moves for a given step is not
-    // something this file gets to predict — measured, it was 0.30 rad against a
+    // commanded `sun_yaw` is not a mount-frame vector component, so how far
+    // `sun_mount_x` moves for a given step is not something this file gets to
+    // predict — measured, it was 0.30 against a
     // 0.3 threshold, which is a test one epoch away from failing for no reason.
     // The bar is therefore "it moved at all, well clear of noise", and the real
     // evidence is that the CHAIN moved: yaw slewed 0.6 rad to follow it.
     if s.az != () && s.az_before != () {
         f.push(t_true((s.az - s.az_before).abs() > 0.1,
-            "the solar bridge did not see the sun move: sun_azimuth went from " +
+            "the solar bridge did not see the sun move: sun_mount_x went from " +
             r4(s.az_before) + " to " + r4(s.az) + " after a " + STEP_YAW +
             " rad step. Everything below compares two numbers that never changed."));
     }
@@ -142,13 +142,6 @@ fn verdict(s) {
             "the panel never slewed: yaw went from " + r4(s.yaw_before) + " to " +
             r4(s.yaw) + " rad across the step. A controller already sitting where " +
             "the sun ended up agrees with it for free."));
-    }
-
-    if s.az != () && s.yaw != () {
-        f.push(t_true((s.yaw - s.az).abs() < TOL_RAD,
-            "the controller did not track the sun: yaw=" + r4(s.yaw) +
-            " against sun_azimuth=" + r4(s.az) + " rad. Either SunTracker.mo is " +
-            "not running or its `sun_azimuth` input is not wired to the bridge."));
     }
 
     if s.angle != () && s.yaw != () {
@@ -160,7 +153,7 @@ fn verdict(s) {
     }
 
     print("[sun] ── results ───────────────────────────────────────────");
-    print("[sun]   sun_azimuth  " + r4(s.az_before) + " -> " + r4(s.az) + " rad");
+    print("[sun]   sun_mount_x  " + r4(s.az_before) + " -> " + r4(s.az));
     print("[sun]   yaw          " + r4(s.yaw_before) + " -> " + r4(s.yaw) + " rad");
     print("[sun]   hinge angle  " + r4(s.angle) + " rad");
 

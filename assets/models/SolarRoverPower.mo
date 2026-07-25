@@ -7,8 +7,8 @@ within;
 // `info:sourceAsset` and importing the seated `LunCo` library: components in the
 // library, with the assembly projected from each vehicle's USD electrical Scope.
 //
-// Boundary (where cosim crosses): `sun_azimuth` from the solar bridge, `panel_yaw` from
-// the SunTracker, `vehicle_throttle` from the autopilot. The demo wires no wheel speed, so
+// Boundary (where cosim crosses): `sun_yaw` and `panel_yaw` from the SunTracker,
+// `vehicle_throttle` from the autopilot. The demo wires no wheel speed, so
 // the motor runs at a nominal cruise `omega` (a full rover wires real per-wheel `omega`).
 model SolarRoverPower "Solar charging vs. motor draw on one battery bus, from LunCo.Electrical."
   import LunCo.Electrical.*;
@@ -30,7 +30,7 @@ model SolarRoverPower "Solar charging vs. motor draw on one battery bus, from Lu
   DCMotor motor(rated_power = motor_rated_power);
 
   // Boundary — wired by cosim / set by the autopilot.
-  input Real sun_azimuth "Sun azimuth, rad (from the solar bridge)";
+  input Real sun_yaw "Sun yaw in the panel mount frame, rad (from the SunTracker)";
   input Real panel_yaw "Actual panel yaw, rad (from the SunTracker)";
   input Real vehicle_throttle "Throttle command, -1..1 (from the autopilot)";
 
@@ -46,7 +46,7 @@ equation
   // Panel alignment → cosine of incidence, clamped to the lit hemisphere. The panel's
   // own equation turns this into power and pushes it onto the bus as current.
   panel.irradiance = irradiance;
-  panel.cos_incidence = max(cos(sun_azimuth - panel_yaw), 0.0);
+  panel.cos_incidence = max(cos(sun_yaw - panel_yaw), 0.0);
 
   // Throttle → shaft torque; the motor draws what it needs to hold it at cruise speed.
   // No draw at rest: torque is zero, so `mech_power = torque*omega` is zero.

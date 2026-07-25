@@ -192,8 +192,10 @@ def Xform "SolarRoverTest" (
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
-            # Self-wire sun azimuth from environment solar bridge
-            float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_azimuth>
+            # Self-wire the environment's explicit mount-frame Sun direction.
+            float inputs:sun_mount_x.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_mount_x>
+            float inputs:sun_mount_y.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_mount_y>
+            float inputs:sun_mount_z.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_mount_z>
             # Fast tracking speed so panel rotation is crisp and visible
             float inputs:tau = 0.2
         }
@@ -204,9 +206,10 @@ def Xform "SolarRoverTest" (
         )
         {
             uniform asset info:sourceAsset = @lunco://models/SolarRoverPower.mo@
-            # Self-wire sun azimuth from environment solar bridge
-            float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/PowerSubsystem.outputs:sun_azimuth>
-            # Connect actual panel yaw from SunTracker's yaw output
+            # The panel model receives the tracker’s mount-frame yaw, not a
+            # second world-frame bearing with a hidden convention.
+            float inputs:sun_yaw.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
+            # Connect actual panel yaw from SunTracker's yaw output.
             float inputs:panel_yaw.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
             # Wire throttle from the rover's OBC so the battery drains based on
             # actual drive commands — no script intermediary.

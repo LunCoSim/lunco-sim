@@ -51,7 +51,7 @@ pub use lunco_usd_avian::{BigSpacePhysicsBridgePlugin, UsdAvianPlugin, UsdCollis
 pub use lunco_usd_bevy::{
     usd_data::UsdDataExt, FallbackSceneLight, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
 };
-pub use lunco_usd_sim::cosim::{ClearScene, LoadScene};
+pub use lunco_usd_sim::cosim::{ClearScene, LoadScene, RestartScene};
 pub use lunco_usd_sim::UsdSimPlugin;
 pub use lunco_usd_sim::{GroundColliderPending, NoRenderVisuals};
 

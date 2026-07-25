@@ -175,7 +175,6 @@ def Xform "RockerBogie" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
-        string lunco:link:class = "rover"
         double3 xformOp:translate = (-0.35, 0.22, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
@@ -194,6 +193,10 @@ def Xform "RockerBogie" (
                 over "DishHead"
                 {
                     double3 xformOp:scale = (0.45, 0.45, 0.45)
+                    over "LinkAperture"
+                    {
+                        string lunco:link:class = "rover"
+                    }
                 }
             }
         }

@@ -147,7 +147,9 @@ def Xform "CommsWallTest" (
 
         over "Antenna"
         {
-            string lunco:link:class = "base_clear"
+            over "YawHead" { over "DishGimbal" { over "DishHead" { over "LinkAperture" {
+                string lunco:link:class = "base_clear"
+            } } } }
         }
     }
 
@@ -163,7 +165,9 @@ def Xform "CommsWallTest" (
 
         over "Comms"
         {
-            string lunco:link:class = "rover"
+            over "YawHead" { over "DishGimbal" { over "DishHead" { over "LinkAperture" {
+                string lunco:link:class = "rover"
+            } } } }
         }
     }
 

@@ -741,18 +741,14 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("Scenarios", |ui, world| {
-        let current_path = world
-            .get_resource::<CurrentScenePath>()
-            .map(|c| c.0.clone());
+        let has_scene = world.get_resource::<CurrentScenePath>().is_some();
 
-        ui.add_enabled_ui(current_path.is_some(), |ui| {
+        ui.add_enabled_ui(has_scene, |ui| {
             if ui.button("🔄 Restart Scenario").clicked() {
-                if let Some(path) = current_path {
-                    world.trigger(lunco_usd::LoadScene {
-                        path,
-                        root_prim: String::new(),
-                    });
-                }
+                // `LoadScene` deliberately no-ops for the active `(stage, root)`.
+                // RestartScene is the lifecycle verb that clears the current world,
+                // invalidates the stage asset, and mounts a newly read source.
+                world.trigger(lunco_usd::RestartScene {});
                 ui.close();
             }
         });

@@ -69,6 +69,7 @@ pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
 /// the [`earth::EarthDirectionWorld`] resource, written by `lunco-celestial`
 /// from the ephemeris. See the module docs for why the dependency runs that way.
 pub mod earth;
+mod mount_frame;
 pub use earth::{
     compute_local_earth, inject_local_earth_into_cosim, EarthDirectionWorld, LocalEarth,
 };

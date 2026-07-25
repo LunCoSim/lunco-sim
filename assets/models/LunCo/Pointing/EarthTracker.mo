@@ -6,17 +6,13 @@ model EarthTracker "Two-axis high-gain antenna: hold the dish on Earth."
   // point of a component library.
   //
   // ── Where the inputs come from ──────────────────────────────────────────
-  // The direction to Earth in the VESSEL's frame, published by the engine's
-  // celestial bridge exactly as `sun_azimuth` is published for the solar
-  // tracker: the scene declares Earth as a celestial body
-  // (`LunCoCelestialBodyAPI`, `lunco:body = 399`), the ephemeris places it, and
-  // the bridge writes the local-frame direction each tick. Self-wired by name.
-  //
-  // Vessel attitude is therefore already accounted for: as the ship yaws — and
-  // this episode spins it under the exposition beats — the local-frame
-  // direction to Earth changes and the dish counter-rotates to hold the link.
-  input Real earth_azimuth "direction to Earth, vessel frame (rad)";
-  input Real earth_elevation "elevation of Earth above the vessel's horizon (rad)";
+  // Unit direction to Earth in the ANTENNA MOUNT frame, published by the
+  // celestial bridge.  The frame is explicit: +X right, +Y up, -Z forward.
+  // It is the full inverse mount attitude, so yaw, pitch and roll are all
+  // accounted for before this model ever chooses a pair of joint angles.
+  input Real earth_mount_x "Earth direction, mount-right";
+  input Real earth_mount_y "Earth direction, mount-up";
+  input Real earth_mount_z "Earth direction, mount-forward";
 
   parameter Real tau = 1.5 "gimbal time constant (s)";
   parameter Real diameter = 3.0 "reflector diameter (m) — must match the USD dish";
@@ -26,8 +22,7 @@ model EarthTracker "Two-axis high-gain antenna: hold the dish on Earth."
   LunCo.Pointing.ServoAxis elevation(tau = tau);
   LunCo.Pointing.DishPattern beam(diameter = diameter, frequency = frequency);
 
-  // Gimbal angles for the actuator (`scenarios/dish_tracker.rhai`), which
-  // applies them to the USD dish geometry.
+  // Gimbal angles for the two standard USD revolute-joint drives.
   output Real az "dish azimuth setpoint (rad)";
   output Real el "dish elevation setpoint (rad)";
   // Link telemetry for the HUD's COMMS panel.
@@ -35,17 +30,21 @@ model EarthTracker "Two-axis high-gain antenna: hold the dish on Earth."
   output Real gain_frac "fraction of peak gain on the link, 0..1";
   output Real locked "1 while Earth is inside the half-power beam";
 equation
-  azimuth.cmd = earth_azimuth;
-  elevation.cmd = earth_elevation;
+  // Standard right-handed USD/Avian axes: positive yaw about +Y sends -Z
+  // toward -X, hence the minus on the mount-right component.  Positive pitch
+  // about +X sends -Z toward +Y.  This is the one vector→joint convention for
+  // every composed antenna; hosts never duplicate a sign or axis conversion.
+  azimuth.cmd = atan2(-earth_mount_x, -earth_mount_z);
+  elevation.cmd = asin(max(-1.0, min(1.0, earth_mount_y)));
   az = azimuth.angle;
   el = elevation.angle;
 
-  // Great-circle separation between boresight and target. The cos(el) factor is
-  // the convergence of azimuth lines toward the zenith — an azimuth error means
+  // Tangent-plane separation between boresight and target. The cos(el) factor is
+  // the convergence of azimuth lines toward the zenith — a yaw error means
   // less on the sky the higher you point. Stays differentiable at zero, which an
   // acos() formulation does not.
-  point_error = sqrt((earth_azimuth - az)^2
-                     + (cos(el) * (earth_elevation - el))^2);
+  point_error = sqrt(atan2(sin(azimuth.cmd - az), cos(azimuth.cmd - az))^2
+                     + (cos(el) * (elevation.cmd - el))^2);
   beam.point_error = point_error;
   gain_frac = beam.gain_frac;
   locked = beam.locked;

@@ -52,37 +52,24 @@ const KNOWN_GRAVITY_INPUTS: &[&str] = &["g", "gravity", "grav_accel"];
 /// any other signal — correct on the Moon, Earth, or any body.
 pub const GRAVITY_SOURCE_CONNECTOR: &str = "gravity_accel";
 
-/// SimComponent **output** connector carrying the sun's azimuth (rad) at an
-/// entity's location.
-///
-/// Same contract as [`GRAVITY_SOURCE_CONNECTOR`]: cosim stays domain-agnostic,
-/// and a domain system (lunco-environment's solar bridge) writes the real value
-/// from the scene sun each tick, so a sun-tracking model receives it through an
-/// ordinary output→input [`crate::SimConnection`] — the doc's
-/// `RadiationProvider → LocalRadiation → solar models` pipeline.
-pub const SOLAR_AZIMUTH_CONNECTOR: &str = "sun_azimuth";
-/// SimComponent **output** connector carrying the sun's elevation (rad) at an
-/// entity's location. Companion to [`SOLAR_AZIMUTH_CONNECTOR`].
-pub const SOLAR_ELEVATION_CONNECTOR: &str = "sun_elevation";
+/// SimComponent output connectors carrying the unit direction **toward the
+/// Sun** in the consumer's authored mount frame.  The convention is shared with
+/// Earth tracking: `+X` right, `+Y` up, `-Z` forward.  Environment systems
+/// publish vectors; models alone convert them to their joint coordinates.
+pub const SUN_MOUNT_X_CONNECTOR: &str = "sun_mount_x";
+pub const SUN_MOUNT_Y_CONNECTOR: &str = "sun_mount_y";
+pub const SUN_MOUNT_Z_CONNECTOR: &str = "sun_mount_z";
 
-/// SimComponent **output** connector carrying **Earth's** azimuth (rad) at an
-/// entity's location. Written by lunco-environment's Earth bridge, which takes
-/// the direction from the ephemeris rather than from a scene light — Earth casts
-/// no key light, so there is nothing in the render world to read.
-///
-/// Unlike [`SOLAR_AZIMUTH_CONNECTOR`] this is referenced to the MOUNT, not to the
-/// site: the consumer is a joint, and a joint angle is measured against its
-/// parent body. See `lunco_environment::LocalEarth` for the full argument.
-///
-/// This is what an antenna points at. A dish tracks EARTH; a panel tracks the
-/// SUN; the two are different bodies in different parts of the sky, and giving
-/// them one shared "target" port would have made that indistinguishable.
-pub const EARTH_AZIMUTH_CONNECTOR: &str = "earth_azimuth";
-/// SimComponent **output** connector carrying Earth's elevation (rad) at an
-/// entity's location. Companion to [`EARTH_AZIMUTH_CONNECTOR`]; negative means
-/// Earth is below the local horizon — a real state on the lunar far side, and
-/// the one an authored link budget must be free to call a blackout.
-pub const EARTH_ELEVATION_CONNECTOR: &str = "earth_elevation";
+/// SimComponent output connectors carrying the unit direction **toward Earth**
+/// in the consumer's authored mount frame.  `+X` is mount-right, `+Y` mount-up,
+/// and `-Z` mount-forward.  The bridge performs one complete inverse mount
+/// rotation; a pointing model then performs the one documented vector→joint
+/// conversion.  Passing site azimuth/elevation to a mount-frame joint is
+/// intentionally not supported because it is ambiguous for pitched or rolled
+/// vehicles.
+pub const EARTH_MOUNT_X_CONNECTOR: &str = "earth_mount_x";
+pub const EARTH_MOUNT_Y_CONNECTOR: &str = "earth_mount_y";
+pub const EARTH_MOUNT_Z_CONNECTOR: &str = "earth_mount_z";
 
 /// Prefix of the SimComponent **output** connectors `lunco-celestial`'s link bridge
 /// writes on every link node, one set per authored peer `class`:
@@ -93,7 +80,7 @@ pub const EARTH_ELEVATION_CONNECTOR: &str = "earth_elevation";
 /// link_<class>_elevation_deg  that peer's elevation above the local horizon
 /// ```
 ///
-/// Same contract as [`SOLAR_AZIMUTH_CONNECTOR`]: cosim stays domain-agnostic and a domain
+/// Same contract as [`SUN_MOUNT_X_CONNECTOR`]: cosim stays domain-agnostic and a domain
 /// system writes the real value each solve, so an RF model (`CommsLink.mo`) receives it
 /// through an ordinary output→input [`crate::SimConnection`].
 ///

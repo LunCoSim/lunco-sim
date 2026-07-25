@@ -9,8 +9,8 @@
 # (Phase 5). No actuator hack — the chain is entirely the unified wiring
 # fabric:
 #
-#   solar bridge  ──(out sun_azimuth)──┐
-#                                      │  self-wire  sun_azimuth -> sun_azimuth
+#   solar bridge  ──(out sun_mount_x/y/z)──┐
+#                                      │  self-wire  sun_mount_* -> sun_mount_*
 #   Controller (SunTracker.mo) ◄───────┘
 #        │  output `yaw` (first-order servo onto sun_az)
 #        │  cross-prim wire  yaw -> angle
@@ -18,7 +18,7 @@
 #   Hinge (PhysicsRevoluteJoint) ── angular motor yaws ──► YawHead + Panel
 #
 # Verify (HTTP API, sandbox running):
-#   - `CosimStatus`  → Controller outputs `sun_azimuth` ≈ `yaw` at steady state.
+#   - `CosimStatus`  → Controller outputs a mount-frame Sun vector and `yaw`.
 #   - `GetPort {api_id:<Hinge>, name:"angle"}` → measured angle tracks `yaw`.
 #   - `SetEnvironmentLight {"sun_yaw":<rad>}` → the panel re-aims to face it.
 #
@@ -200,15 +200,16 @@ def Xform "SunTrackerTest" (
             float inputs:angle.connect = </SunTrackerTest/SolarTower/Controller.outputs:yaw>
         }
 
-        # Controller — the SunTracker.mo co-sim model. Self-loop connection feeds
-        # the solar bridge's `sun_azimuth` output into the model's `sun_azimuth`
-        # input (same name on both sides — one signal).
+        # Controller — the SunTracker.mo co-sim model. Self-loop connections feed
+        # the solar bridge's explicit mount-frame direction into the model.
         def Xform "Controller" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
-            float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
+            float inputs:sun_mount_x.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_x>
+            float inputs:sun_mount_y.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_y>
+            float inputs:sun_mount_z.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_mount_z>
         }
     }
 

@@ -7,11 +7,12 @@
 
 # Comms antenna — the ONE dish in the catalogue (doc 43).
 #
-# `lunco:linkNode` makes this a connectivity endpoint: the generic link kernel
-# pairs it with every other node, applies the `link.connected` verdict (range,
-# elevation, body + terrain occlusion), and publishes link state. Pose tracking
-# follows automatically. Author `lunco:link:class` / `maxRangeM` / `minElevationDeg`
-# per instance in the scene (a rover vs a relay vs a ground station).
+# The feed aperture is this assembly's connectivity endpoint. The generic link
+# kernel pairs it with every other node, applies the `link.connected` verdict
+# (range, elevation, body + terrain occlusion), and publishes link state there.
+# Keeping the endpoint on the rotating feed makes link geometry, RF state and the
+# visible beam share the exact same physical origin. Author `lunco:link:class` /
+# `maxRangeM` / `minElevationDeg` on `DishHead/LinkAperture` per instance.
 #
 # ── The reflector is PARAMETRIC, and it is a real paraboloid ──────────────────
 #
@@ -48,7 +49,7 @@
 # tower is the mast), `vessels/landers/descent_lander.usda` (s = 2.6, mast as the
 # deck boom), `vessels/rovers/rocker_bogie.usda` (s = 0.35, stock mast).
 def Xform "CommsAntenna" (
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoLinkAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
     doc = "Parabolic Earth-tracking antenna mechanism — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. Mount it by a host-owned yaw joint."
 )
@@ -56,7 +57,6 @@ def Xform "CommsAntenna" (
     # This is a mechanism overlay, not a free-standing object: its yaw joint must
     # name the body it mounts to. `comms_mast.usda` is the spawnable tower host.
     uniform bool lunco:spawnable = false
-    bool lunco:linkNode = true
 
     def Cylinder "Mast"
     {
@@ -101,14 +101,34 @@ def Xform "CommsAntenna" (
             float3 physics:diagonalInertia = (0.036, 0.018, 0.036)
             bool physics:collisionEnabled = false
 
+            # The elevation pivot is the pole's top, not the reflector surface.
+            # This short yoke terminates at the reflector's rear apex, so the pole
+            # visibly supports the dish instead of passing through it. It is part of
+            # this articulated link; the authored link mass/inertia above includes
+            # the yoke, dish and feed as one rigid mechanism.
+            def Cylinder "DishYoke"
+            {
+                uniform token axis = "Y"
+                double radius = 0.07
+                double height = 0.10
+                double3 xformOp:translate = (0, 0.05, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                color3f[] primvars:displayColor = [(0.24, 0.25, 0.27)]
+                bool physics:collisionEnabled = false
+            }
+
             # The head: everything that must stay in proportion with the dish.
             # Scale THIS, not the reflector, so the feed horn stays at the focus.
     #
             # Default s = 0.6 ⇒ a 0.70 m dish, the rover/lander whip class.
             def Xform "DishHead"
             {
+                # The yoke ends at the reflector's apex. This is a visual/mount
+                # offset within the gimbal body, not an Euler-written pose; the
+                # revolute joint remains the only source of its rotation.
+                double3 xformOp:translate = (0, 0.10, 0)
                 double3 xformOp:scale = (0.6, 0.6, 0.6)
-                uniform token[] xformOpOrder = ["xformOp:scale"]
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
 
         # A dish is a THIN SHELL — a real reflector is paint on a skin, not a solid
         # — so it must draw from behind as well as in front. `doubleSided` is stock
@@ -144,31 +164,54 @@ def Xform "CommsAntenna" (
             bool physics:collisionEnabled = false
                 }
 
-        # The feed horn at the focus, looking back into the reflector.
-                def Cylinder "FeedHorn"
+        # RF has a phase centre just ahead of the feed horn. It is the only link
+        # node in this assembly: a beam, range/elevation verdict and CommsLink
+        # model therefore move with the dish instead of using the mast/root as an
+        # approximate endpoint. Nest the horn under it so the visual and the
+        # physical endpoint have one transform, one spelling.
+                def Xform "LinkAperture" (
+                    prepend apiSchemas = ["LunCoLinkAPI"]
+                    doc = "Dish feed phase centre: connectivity endpoint and link-beam origin."
+                )
                 {
-            uniform token axis = "Y"
-            double radius = 0.045
-            double height = 0.09
+            bool lunco:linkNode = true
             double3 xformOp:translate = (0.0, 0.36, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.3, 0.3, 0.34)]
-            bool physics:collisionEnabled = false
+
+            # The feed horn at the focus, looking back into the reflector.
+                    def Cylinder "FeedHorn"
+                    {
+                uniform token axis = "Y"
+                double radius = 0.045
+                double height = 0.09
+                color3f[] primvars:displayColor = [(0.3, 0.3, 0.34)]
+                bool physics:collisionEnabled = false
+                    }
+
+            # The beam is a child of the physical endpoint, so its generic driver
+            # resolves this LinkState rather than the antenna mount.
+                    def "LinkBeam" (
+                        prepend references = @lunco://components/comms/link_beam.usda@</LinkBeam>
+                    )
+                    {
+                    }
                 }
             }
         }
     }
 
     # Pointing mathematics is Modelica, not a scenario script. The environment
-    # bridge supplies the self-looped Earth direction in the mount frame; rover
-    # joints consume `az`/`el` when the host opts into physical actuation.
+    # bridge supplies the self-looped unit direction in THIS root's mount frame:
+    # +X right, +Y up, -Z forward. EarthTracker is the sole vector→joint-angle
+    # conversion; hosts never copy an axis or sign convention.
     def Xform "EarthTrackerController" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
-        float inputs:earth_azimuth.connect = </CommsAntenna/EarthTrackerController.outputs:earth_azimuth>
-        float inputs:earth_elevation.connect = </CommsAntenna/EarthTrackerController.outputs:earth_elevation>
+        float inputs:earth_mount_x.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_x>
+        float inputs:earth_mount_y.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_y>
+        float inputs:earth_mount_z.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_z>
     }
 
     # `body0` is the yaw head and `body1` the elevation frame. The Modelica

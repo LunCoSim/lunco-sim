@@ -540,6 +540,10 @@ fn main() -> std::process::ExitCode {
 
                 if let Some(e) = target_ent {
                     app.world_mut().entity_mut(e).insert(Selected);
+                    let Some(body_transform) = app.world().get::<GlobalTransform>(e).copied() else {
+                        warn!("[selection-aabb] Prim '{target_prim}' ({e:?}) has no body transform");
+                        continue;
+                    };
                     let mut state_aabb =
                         app.world_mut()
                             .query_filtered::<(&GlobalTransform, &bevy::camera::primitives::Aabb), (
@@ -559,6 +563,7 @@ fn main() -> std::process::ExitCode {
                     let mut queue = Vec::new();
                     if let Some((min, max)) = compute_selection_aabb(
                         e,
+                        &body_transform,
                         &state_aabb.query(app.world()),
                         &state_children.query(app.world()),
                         &state_skip.query(app.world()),

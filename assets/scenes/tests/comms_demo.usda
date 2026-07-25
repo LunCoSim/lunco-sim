@@ -116,27 +116,16 @@ def Xform "CommsDemoScene" (
             prepend references = @lunco://components/comms/radio.usda@</CommsRadio>
         )
         {
-            # Declare the link node in the SCENE layer (strongest opinion). It should
-            # compose from the antenna reference, but wrapping in radio.usda dropped it —
-            # authoring it here is both the fix and the more honest statement: THIS prim
-            # is the rover's connectivity endpoint.
-            bool lunco:linkNode = true
-            string lunco:link:class = "rover"
-            # Antenna pointing limit — NOT a horizon proxy. A surface rover can talk to
-            # a nearby station slightly downhill (the base mast is 26 m away at −1.9°, in
-            # plain line of sight), so the mask must allow negative angles. Whether a
-            # DISTANT peer below the horizon (Earth, a set relay) links is decided by
-            # OCCLUSION — the ray through the Moon — not by this angle.
-            double lunco:link:minElevationDeg = -10.0
-            # REACH. A rover's antenna is a rover's antenna: it talks to things in
-            # the lunar neighbourhood — the base mast 26 m away, a relay in lunar
-            # orbit — and it does not close a 384,000 km link to a DSN dish on its
-            # own. Left unbounded (the schema default is effectively infinite) it
-            # did exactly that, and the relay satellite this scene is built around
-            # became decorative: `link_path(rover, earth)` was one hop straight to
-            # Madrid. 100,000 km keeps every lunar peer in reach and Earth out of
-            # it, which is what makes the relay load-bearing and the routing real.
-            double lunco:link:maxRangeM = 100000000
+            over "YawHead" { over "DishGimbal" { over "DishHead" { over "LinkAperture" {
+                string lunco:link:class = "rover"
+                # Antenna pointing limit — NOT a horizon proxy. A surface rover can talk to
+                # to a nearby station slightly downhill; distant below-horizon peers are
+                # rejected by body/terrain occlusion, not this local pointing limit.
+                double lunco:link:minElevationDeg = -10.0
+                # The feed reaches lunar peers but not an Earth DSN directly, keeping the
+                # relay load-bearing in this scenario.
+                double lunco:link:maxRangeM = 100000000
+            } } } }
         }
     }
 
@@ -164,6 +153,10 @@ def Xform "CommsDemoScene" (
                 over "DishHead"
                 {
                     double3 xformOp:scale = (4, 4, 4)
+                    over "LinkAperture"
+                    {
+                        string lunco:link:class = "base"
+                    }
                 }
             }
         }
