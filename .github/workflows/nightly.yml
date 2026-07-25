@@ -1,7 +1,7 @@
 # ============================================================================
 # LunCoSim — nightly desktop builds (manual trigger)
 # ============================================================================
-# Builds lunica and sandbox as native desktop binaries for
+# Builds the sandbox as a native desktop binary for
 # Linux (x86_64), macOS (arm64 + x86_64 cross-compiled on Apple Silicon),
 # and Windows (x86_64), packages each with assets + docs + skills + cache,
 # and uploads the archives as GitHub Actions artifacts. A GitHub Release is
@@ -10,9 +10,10 @@
 # Trigger: workflow_dispatch ONLY (manual, from the Actions tab).
 #   https://github.com/LunCoSim/luncosim-workspace/actions/workflows/nightly.yml
 #
-# Each OS job downloads the cache assets its binaries need, builds both
-# binaries, and packages them via scripts/build_native.sh. Compilation is
-# shared across the two binaries (same cargo workspace, shared deps).
+# Each OS job downloads the cache assets the sandbox needs, builds it, and
+# packages it via scripts/build_native.sh.
+# TODO(lunica-separate-repo): move Lunica's GitHub build/release pipeline to
+# the future standalone Lunica repository.
 # ============================================================================
 
 name: Nightly Builds
@@ -57,7 +58,7 @@ jobs:
             echo "tag=nightly" >> "$GITHUB_OUTPUT"
           fi
 
-  # ── Build both binaries per OS ───────────────────────────────────────────
+  # ── Build the sandbox per OS ─────────────────────────────────────────────
   build:
     needs: meta
     name: ${{ matrix.label }}
@@ -159,16 +160,12 @@ jobs:
         with:
           key: ${{ matrix.platform }}-${{ matrix.arch }}
 
-      # ── Build + package each binary (native arch) ───────────────────────
-      # The two builds share compiled deps (incremental cargo), so the
-      # 2nd is much faster than the 1st. --package creates a
+      # ── Build + package the sandbox (native arch) ───────────────────────
+      # --package creates a
       # .tar.gz (unix) or .zip (windows) archive in dist/.
       # docs/ + AGENTS.md are bundled by build_native.sh (not --no-assets).
       # Cache download runs automatically before staging (unless
       # --skip-download), so the .cache/ subdirs are populated in-place.
-      - name: Build lunica (desktop)
-        run: ./scripts/build_native.sh lunica --release --package
-
       - name: Build sandbox (desktop)
         run: ./scripts/build_native.sh sandbox --release --package
 
@@ -183,23 +180,11 @@ jobs:
         if: matrix.cross_target != ''
         run: rustup target add ${{ matrix.cross_target }}
 
-      - name: Build lunica (cross ${{ matrix.cross_target }})
-        if: matrix.cross_target != ''
-        run: ./scripts/build_native.sh lunica --release --package --target ${{ matrix.cross_target }} --skip-download
-
       - name: Build sandbox (cross ${{ matrix.cross_target }})
         if: matrix.cross_target != ''
         run: ./scripts/build_native.sh sandbox --release --package --target ${{ matrix.cross_target }} --skip-download
 
       # ── Upload artifacts (native arch) ──────────────────────────────────
-      - name: Upload lunica artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lunica-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/lunica-${{ matrix.platform }}-${{ matrix.arch }}.*
-          if-no-files-found: warn
-          retention-days: 30
-
       - name: Upload sandbox artifact
         uses: actions/upload-artifact@v4
         with:
@@ -212,15 +197,6 @@ jobs:
       # `platform_short` in build_native.sh maps *darwin* → "macos", so the
       # cross-compiled dist dir is dist/<bin>-macos-x86_64/ regardless of
       # which arch ran the build.
-      - name: Upload lunica (cross) artifact
-        if: matrix.cross_target != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: lunica-macos-x86_64
-          path: dist/lunica-macos-x86_64.*
-          if-no-files-found: warn
-          retention-days: 30
-
       - name: Upload sandbox (cross) artifact
         if: matrix.cross_target != ''
         uses: actions/upload-artifact@v4
@@ -276,13 +252,6 @@ jobs:
             *   **OpenUSD Scene Integration:** Load, compose, and inspect 3D scenes dynamically using the industry-standard Universal Scene Description format.
             *   **Collaborative Design:** Networked multiplayer support (via WebTransport) allows multiple users to join, edit, and run simulations in the same environment.
 
-            #### 2. **Lunica: Modelica Engineering Workbench**
-            **Lunica** is a stripped-down version of the sandbox focusing exclusively on Modelica features (multi-domain behavioral simulation like thermal control, power grids, life support, mechanics). It removes the 3D physics engine and rover viewport to provide a lightweight, dedicated system design workspace.
-            *   **Visual Schematic Editor:** Drag, drop, and connect component blocks to design complex subsystems.
-            *   **Integrated Solver:** Compile models into differential-algebraic equations (DAEs) using the `rumoca` compiler and run advanced solvers to generate telemetry.
-            *   **Real-time Plotting:** View telemetry graphs and analyze system states instantly.
-            *   **Pre-packaged Libraries:** Includes a copy of the Modelica Standard Library (MSL) in the cache for offline modeling.
-
             ---
 
             ### 📦 Downloads & Platform Support
@@ -292,7 +261,6 @@ jobs:
             | Application | Linux (x86_64) | macOS (Apple Silicon) | macOS (Intel) | Windows (x86_64) |
             | :--- | :---: | :---: | :---: | :---: |
             | **Sandbox** | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.zip` |
-            | **Lunica** | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.zip` |
 
             ---
 
