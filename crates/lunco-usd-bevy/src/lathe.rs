@@ -530,6 +530,55 @@ mod tests {
         }
     }
 
+    /// The reflector must be lit on its intended concave face. This checks the
+    /// actual tessellation contract rather than a screenshot: every
+    /// non-degenerate triangle points along the sampled NURBS normal. Reversing
+    /// either the index order or the normal convention makes this fail before a
+    /// double-sided material can turn the dish black at runtime.
+    #[test]
+    fn paraboloid_mesh_winding_agrees_with_its_normals() {
+        let surface = UsdLathe {
+            profile: LatheProfile::Paraboloid {
+                apex_radius: 0.02,
+                rim_radius: 0.58,
+                focal_length: 0.35,
+            },
+            rings: 4,
+            v_order: 3,
+            left_handed: false,
+        }
+        .surface();
+        let mesh = surface.mesh().expect("valid reflector mesh");
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|attribute| attribute.as_float3())
+            .expect("reflector positions");
+        let normals = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .and_then(|attribute| attribute.as_float3())
+            .expect("reflector normals");
+        let Some(bevy_mesh::Indices::U32(indices)) = mesh.indices() else {
+            panic!("reflector must use u32 indices");
+        };
+
+        let mut checked = 0;
+        for triangle in indices.chunks_exact(3) {
+            let [a, b, c] = triangle.map(|index| index as usize);
+            let geometric = (Vec3::from(positions[b]) - Vec3::from(positions[a]))
+                .cross(Vec3::from(positions[c]) - Vec3::from(positions[a]));
+            if geometric.length_squared() < 1e-10 {
+                continue;
+            }
+            let sampled = Vec3::from(normals[a]) + Vec3::from(normals[b]) + Vec3::from(normals[c]);
+            assert!(
+                geometric.dot(sampled) > 0.0,
+                "triangle {triangle:?} is wound against its sampled normal"
+            );
+            checked += 1;
+        }
+        assert!(checked > 100, "expected the full reflector tessellation");
+    }
+
     /// The bell's control net must be exactly what `BellNozzle.mo` says it is.
     /// `r_station_1` / `r_station_2` are defined at s = 1/3 and 2/3, so with the
     /// default 4 rings they ARE control points 1 and 2 — the model and the drawn

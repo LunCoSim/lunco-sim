@@ -284,7 +284,7 @@ pub struct Spacecraft {
 
 // NOTE: there is intentionally NO `Vessel` / `RoverVessel` / `LanderVessel`
 // marker. "Possessable / controllable" is derived from TOPOLOGY: an entity is
-// controllable iff it exposes writable control ports — a `CommandInputs`
+// controllable iff it exposes writable control ports — an `InputPorts`
 // command surface, declared by its authored `Controls` scope (→ `ControlBinding`),
 // or a Modelica `SimComponent`. The components a body already carries ARE its
 // definition; possession, control routing, prediction membership, and UI

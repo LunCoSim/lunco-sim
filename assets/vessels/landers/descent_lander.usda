@@ -465,6 +465,7 @@ def Xform "DescentLander" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
+        variants = { string mount = "hostMounted" }
         # Straight on the upper deck (deck top is y≈1.63); the component's own
         # mast is the mounting boom.
         double3 xformOp:translate = (0.0, 1.63, 0.0)
@@ -477,12 +478,27 @@ def Xform "DescentLander" (
             double3 xformOp:translate = (0.0, 0.35, 0.0)
             color3f[] primvars:displayColor = [(0.55, 0.55, 0.58)]
         }
-        over "DishHead"
+        over "YawHead"
         {
             double3 xformOp:translate = (0.0, 0.7, 0.0)
-            double3 xformOp:rotateXYZ = (0.0, 0.0, -35.0)
-            double3 xformOp:scale = (2.6, 2.6, 2.6)
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (2.6, 2.6, 2.6)
+                }
+            }
         }
+    }
+
+    def PhysicsRevoluteJoint "HighGainYawJoint"
+    {
+        rel physics:body0 = </DescentLander>
+        rel physics:body1 = </DescentLander/HighGainDish/YawHead>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0, 2.33, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        float inputs:angle.connect = </DescentLander/HighGainDish/EarthTrackerController.outputs:az>
     }
 
     # ── Engine bell ─────────────────────────────────────────────────────────

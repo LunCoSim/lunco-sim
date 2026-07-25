@@ -13,7 +13,8 @@ use bevy::math::primitives::Cuboid;
 use bevy::math::Isometry3d;
 
 use crate::{SelectedEntities, SpawnState};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_controller::ControllerLink;
+use lunco_core::{on_command, register_commands, Avatar, Command};
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -107,6 +108,37 @@ pub(crate) fn clear_selection(
             .remove::<crate::gizmo::GizmoSelected>();
     }
     selected.entities.clear();
+}
+
+/// Makes the controlled vessel the existing Inspector/gizmo selection.
+///
+/// Possession is the user's active vehicle context, so leaving the Inspector on
+/// a previously Shift-selected object is surprising. This deliberately calls
+/// [`apply_selection`] instead of maintaining a possession-specific inspector
+/// target: selection remains the sole source used by the Inspector, Explorer,
+/// Command Deck, and gizmo. Releasing control leaves the last vessel selected,
+/// just as it leaves the camera at its current view.
+pub fn select_possessed_vessel(
+    q_avatar: Query<Ref<ControllerLink>, With<Avatar>>,
+    q_old: Query<Entity, With<Selected>>,
+    mut selected: ResMut<SelectedEntities>,
+    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut commands: Commands,
+) {
+    for link in q_avatar.iter() {
+        if !link.is_changed() || selected.primary() == Some(link.vessel_entity) {
+            continue;
+        }
+        apply_selection(
+            &mut commands,
+            &mut selected,
+            q_old.iter(),
+            link.vessel_entity,
+            false,
+            false,
+        );
+        inspector_target.part = None;
+    }
 }
 
 // Resolves the api_id and routes through the shared `apply_selection` (or
@@ -513,6 +545,34 @@ pub fn draw_selection_bounds(
 mod tests {
     use super::*;
     use bevy::camera::primitives::Aabb;
+
+    #[test]
+    fn possession_selects_the_controlled_vessel_for_the_inspector() {
+        let mut app = App::new();
+        app.init_resource::<SelectedEntities>()
+            .init_resource::<crate::InspectorTarget>()
+            .add_systems(Update, select_possessed_vessel);
+
+        let previously_selected = app.world_mut().spawn(Selected).id();
+        app.world_mut()
+            .resource_mut::<SelectedEntities>()
+            .entities
+            .push(previously_selected);
+        let vessel = app.world_mut().spawn_empty().id();
+        app.world_mut().spawn((
+            Avatar,
+            ControllerLink {
+                vessel_entity: vessel,
+            },
+        ));
+
+        app.update();
+
+        let selected = app.world().resource::<SelectedEntities>();
+        assert_eq!(selected.primary(), Some(vessel));
+        assert!(app.world().get::<Selected>(vessel).is_some());
+        assert!(app.world().get::<Selected>(previously_selected).is_none());
+    }
 
     #[test]
     fn test_selected_entities_default() {

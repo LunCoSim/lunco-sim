@@ -316,19 +316,27 @@ def Xform "SkidRover" (
     }
 
     # --- Comms ---------------------------------------------------------
-    # Rover-mounted antenna (doc 49): makes this rover a connectivity endpoint
-    # (`lunco:linkNode`). The kernel publishes a `LinkState` component here and
-    # emits `link.aos` / `link.los`; the live graph is `query("Links")`, and
-    # routing (relay via satellite/base mast) is authored in
-    # `assets/scripting/prelude/links.rhai` — e.g. `can_reach("rover", "earth")`.
-    # There are NO `comms:*` ports: comms is not a subsystem (doc 49 §1), so the
-    # core publishes generic link state, not comms vocabulary.
+    # Shared Earth-tracking antenna. The component owns its moving elevation
+    # mechanism; this host contributes its one yaw hinge, exactly as the solar
+    # tracker does. A generic hinge is not a wheel and cannot classify this rover
+    # as an articulated drivetrain.
     def Xform "Comms" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
+        variants = { string mount = "hostMounted" }
         double3 xformOp:translate = (0, 0.15, -0.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def PhysicsRevoluteJoint "CommsYawJoint"
+    {
+        rel physics:body0 = </SkidRover>
+        rel physics:body1 = </SkidRover/Comms/YawHead>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0, 0.95, -0.5)
+        point3f physics:localPos1 = (0, 0, 0)
+        float inputs:angle.connect = </SkidRover/Comms/EarthTrackerController.outputs:az>
     }
 
     # --- Drivetrain variant set ---------------------------------------

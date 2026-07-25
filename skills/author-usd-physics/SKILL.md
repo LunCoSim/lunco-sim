@@ -91,6 +91,56 @@ where all three rotational DOF are locked (fixed, prismatic); a revolute or
 spherical joint leaves rotation free by design, so it is reported and left to
 the solver.
 
+## 1b. A rotating assembly is joints plus a controller — never Euler animation
+
+An antenna, solar panel, camera gimbal, arm, or other tracking head has two
+separate concerns:
+
+1. **Mechanism:** each moving frame applies `PhysicsRigidBodyAPI` and is joined
+   to its immediate predecessor with a standard `PhysicsRevoluteJoint`.
+2. **Setpoint law:** a Modelica program computes radians and wires them to the
+   joint's native `inputs:angle` port. The cosim joint backend owns the position
+   motor only while that port is wired.
+
+```usda
+# Host owns the attachment because only it knows its own body path.
+def PhysicsRevoluteJoint "AntennaYawJoint"
+{
+    rel physics:body0 = </Rover>
+    rel physics:body1 = </Rover/Antenna/YawHead>
+    uniform token physics:axis = "Y"
+    point3f physics:localPos0 = (0, 0.95, -0.5)
+    point3f physics:localPos1 = (0, 0, 0)
+    float inputs:angle.connect = </Rover/Antenna/EarthTrackerController.outputs:az>
+}
+
+# The reusable antenna owns only relationships between its own bodies.
+def PhysicsRevoluteJoint "ElevationJoint"
+{
+    rel physics:body0 = </CommsAntenna/YawHead>
+    rel physics:body1 = </CommsAntenna/YawHead/DishGimbal>
+    uniform token physics:axis = "X"
+    float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:el>
+}
+```
+
+The host-to-head yaw joint is the attachment; a separate fixed joint is neither
+needed nor desirable when that same hinge is the intended degree of freedom.
+The component must never name `Rover`, `Lander`, or a particular chassis. For a
+catalogue-spawnable assembly, use a USD `mount` variant: `freeStanding` supplies
+its own kinematic anchor; `hostMounted` omits that anchor and requires exactly
+the host-owned hinge above.
+
+**Never drive a tracking mechanism by `xformOp:rotateXYZ`.** An authored rest
+orientation is allowed where it belongs in the joint frames; continuous yaw or
+pitch is a joint state. Euler writes bypass contacts, limits, solver state, and
+the measurable `angle` output, then race the physics bridge.
+
+`PhysicsRevoluteJoint` is a generic mechanism, not a wheel marker. A vehicle is
+articulated only through explicit `PhysicsArticulationRootAPI` or revolute joints
+whose `body1` actually applies `PhysxVehicleWheelAPI`. Do not infer vehicle
+topology from an antenna, solar tracker, or robotic arm hinge.
+
 ## 2. A prismatic joint CARRIES MOMENT
 
 A `PhysicsPrismaticJoint` locks all three rotational DOF. It is a slider, not a

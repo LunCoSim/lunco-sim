@@ -29,8 +29,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use kernels::{ControlKernelRegistry, DriveMix};
 use lunco_core::architecture::Port;
-use lunco_core::ports::{PortBackend, PortDirection, PortRef};
-use lunco_core::{ActuatorPorts, CommandInputs};
+use lunco_core::{ActuatorPorts, InputPorts};
 
 /// they live here rather than in core (see the nothing-into-core rule).
 pub mod kernels;
@@ -151,17 +150,6 @@ impl Plugin for LunCoMobilityPlugin {
                     ),
             );
 
-        // Expose every FSW's logical command ports (a rover's throttle/steer/brake,
-        // etc.) through the shared port substrate, so the ONE generic `SetPorts`
-        // command (and wires/API/scripts) can drive any controllable by name.
-        app.init_resource::<lunco_core::ports::PortRegistry>();
-        {
-            let mut reg = app
-                .world_mut()
-                .resource_mut::<lunco_core::ports::PortRegistry>();
-            reg.register(COMMAND_INPUT_BACKEND);
-        }
-
         // Own the control-allocation kernel registry here (the plugin that runs
         // `apply_drive_mix`), seeded with the built-in `skid`/`linear` kernels —
         // so any app running the drive systems has it, without depending on the
@@ -170,16 +158,16 @@ impl Plugin for LunCoMobilityPlugin {
             app.insert_resource(ControlKernelRegistry::with_defaults());
         }
 
-        // Mix the FSW's logical command inputs (written via the port backend) into
+        // Mix the FSW's logical input ports (written via the shared port backend) into
         // the actuator command `Port`s BEFORE propagation carries them across the
         // wires (and before the wheel systems, which run
         // `.after(ControlDacSet)`). The
-        // command surface is derived from USD `Controls` bindings (never a Rust
-        // literal) by `sync_command_surface`, ordered before the mix so a
+        // input surface is derived from USD `Controls` bindings (never a Rust
+        // literal) by `sync_input_ports`, ordered before the mix so a
         // freshly-loaded vessel is drivable the same tick its binding lands.
         app.add_systems(
             FixedUpdate,
-            (sync_command_surface, apply_drive_mix)
+            (sync_input_ports, apply_drive_mix)
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
@@ -204,7 +192,7 @@ impl Plugin for LunCoMobilityPlugin {
         // it must run regardless of the pause/speed state of the virtual clock.
         app.add_systems(
             lunco_core::RollbackReplay,
-            (sync_command_surface, apply_drive_mix)
+            (sync_input_ports, apply_drive_mix)
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
@@ -775,7 +763,7 @@ fn apply_wheel_drive(
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
     mut q_chassis: Query<
-        (Forces, &RigidBody, Option<&CommandInputs>),
+        (Forces, &RigidBody, Option<&InputPorts>),
         (With<DriveMix>, lunco_physics::Integrable),
     >,
 ) {
@@ -1217,46 +1205,9 @@ fn suspension_system(
 
 // ── Drive command ports ─────────────────────────────────────────────────────────
 
-/// per-class `DriveCommand` component — command state has one home, this component.
-const COMMAND_INPUT_BACKEND: PortBackend = PortBackend {
-    list: |w, e, out| {
-        if let Some(inputs) = w.get::<CommandInputs>(e) {
-            for (name, value) in &inputs.values {
-                out.push(PortRef {
-                    name: name.clone(),
-                    direction: PortDirection::In,
-                    value: *value,
-                });
-            }
-        }
-    },
-    read_output: |_w, _e, _n| None,
-    read_input: |w, e, n| {
-        w.get::<CommandInputs>(e)
-            .and_then(|c| c.values.get(n).copied())
-    },
-    write_input: |w, e, n, v| {
-        if let Some(mut c) = w.get_mut::<CommandInputs>(e) {
-            if let Some(slot) = c.values.get_mut(n) {
-                *slot = v;
-                return true;
-            }
-        }
-        false
-    },
-    // Map-backed: name-based write is one `get::<CommandInputs>` + a map lookup.
-    // A resolve→slot fast path here would need a name interner (the slot can't
-    // carry the string) — a documented follow-up if the drive-command write fold
-    // shows up in profiling, not needed for correctness.
-    resolve_output: None,
-    resolve_input: None,
-    read_slot: None,
-    write_slot: None,
-};
-
-/// Derive each controllable's command surface from USD: for any entity that has
-/// both a [`CommandInputs`] and a [`lunco_core::ControlBinding`], ensure every port
-/// the binding targets exists in `CommandInputs.values` (seeded `0.0`).
+/// Derive each endpoint's input surface from its intent binding: for any entity
+/// that has both [`InputPorts`] and a [`lunco_core::ControlBinding`], ensure every
+/// bound port exists in `InputPorts.values` (seeded `0.0`).
 ///
 /// This is what lets the command vocabulary be **data, not a Rust literal**: a
 /// vessel's `Controls` profile (→ its `ControlBinding`) declares exactly which
@@ -1264,9 +1215,9 @@ const COMMAND_INPUT_BACKEND: PortBackend = PortBackend {
 /// those and no others. Additive (never removes keys) and idempotent, so it's safe to
 /// run on `Changed<ControlBinding>` regardless of which reader stamped the binding or
 /// the surface, and regardless of spawn order.
-fn sync_command_surface(
+fn sync_input_ports(
     mut q: Query<
-        (&lunco_core::ControlBinding, &mut CommandInputs),
+        (&lunco_core::ControlBinding, &mut InputPorts),
         Changed<lunco_core::ControlBinding>,
     >,
 ) {
@@ -1281,15 +1232,15 @@ fn sync_command_surface(
 
 // ── Drive mix ─────────────────────────────────────────────────────────────────
 
-/// System allocating each rover's command inputs (`throttle`/`steer`/`brake`, read
-/// from [`CommandInputs::values`]) to its actuator [`Port`]s (indexed by
+/// System allocating each rover's input ports (`throttle`/`steer`/`brake`, read
+/// from [`InputPorts::values`]) to its actuator [`Port`]s (indexed by
 /// [`ActuatorPorts`]), via the
 /// vessel's data-selected [`DriveMix`] kernel (`skid`/`linear`/…, looked up in the
 /// [`ControlKernelRegistry`]). No per-architecture branch: the kernel is chosen by
 /// USD, and its outputs are saturated to `[-1, 1]` — ±100% actuator authority —
 /// before being written to the port. Runs every fixed tick before wire propagation.
 fn apply_drive_mix(
-    mut q: Query<(Entity, &mut CommandInputs, &ActuatorPorts, &DriveMix)>,
+    mut q: Query<(Entity, &mut InputPorts, &ActuatorPorts, &DriveMix)>,
     registry: Res<ControlKernelRegistry>,
     mut q_ports: Query<&mut Port>,
     mut unknown: Local<std::collections::HashSet<String>>,
@@ -1365,7 +1316,7 @@ fn apply_drive_mix(
 }
 
 /// Invoke a **scripted (rhai) drive kernel** by hook id. Hands the hook the vessel's
-/// **actual command surface** — its declared [`CommandInputs::values`] map, keyed by
+/// **actual input surface** — its declared [`InputPorts::values`] map, keyed by
 /// whatever ports that vehicle accepts (a rover's `throttle`/`steer`/`brake`, a
 /// lander's `throttle`/`pitch`/`roll`/`yaw`, …) — NOT a fixed Rust key set. The
 /// command vocabulary is data, so a scripted kernel reads exactly the ports the

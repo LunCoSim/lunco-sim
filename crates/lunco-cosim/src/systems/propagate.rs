@@ -329,7 +329,7 @@ pub fn propagate_connections(
         //
         // * `demand` on a `Motor_*` and `torque` on a `Gearbox_*` are STRUCTURAL
         //   endpoints. Those prims' data is folded into `WheelParams` at parse
-        //   time and the runtime path is CommandInputs → DriveMix → wheel port;
+        //   time and the runtime path is InputPorts → DriveMix → wheel port;
         //   nothing registers a backend for those names, by design. The USD wires
         //   document the mechanical chain, and they should stay.
         // * `throttle`, `drive_left`, `drive_right` DO belong to real backends —

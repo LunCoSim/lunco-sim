@@ -39,6 +39,8 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+use crate::InputPorts;
+
 /// Direction (causality) of a port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 pub enum PortDirection {
@@ -150,10 +152,55 @@ pub struct ResolvedPort {
 /// plugin; the four query methods fold over them. Registration order is
 /// resolution precedence (first match wins). `Clone` is cheap (a `Vec` of `Copy`
 /// `fn` pointers) so a `&mut World` caller clones it out before writing.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Clone)]
 pub struct PortRegistry {
     backends: Vec<PortBackend>,
 }
+
+impl Default for PortRegistry {
+    fn default() -> Self {
+        // Every entity's declared `inputs:*` values use this substrate backend.
+        // It is installed with the registry rather than by mobility, Modelica, or
+        // a UI plugin, so physical, scripted and future participants share one
+        // command/value spelling.
+        Self {
+            backends: vec![INPUT_PORTS_BACKEND],
+        }
+    }
+}
+
+/// The runtime storage behind a participant's declared `inputs:*` ports.
+///
+/// This is deliberately generic: it contains neither vehicle vocabulary nor
+/// control/authority policy. A controller, wire, script, or network peer writes
+/// these inputs through [`PortRegistry`] exactly as it writes a Modelica input.
+const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
+    list: |world, entity, out| {
+        if let Some(inputs) = world.get::<InputPorts>(entity) {
+            push_map(out, &inputs.values, PortDirection::In);
+        }
+    },
+    read_output: |_world, _entity, _name| None,
+    read_input: |world, entity, name| {
+        world
+            .get::<InputPorts>(entity)
+            .and_then(|inputs| inputs.values.get(name).copied())
+    },
+    write_input: |world, entity, name, value| {
+        let Some(mut inputs) = world.get_mut::<InputPorts>(entity) else {
+            return false;
+        };
+        let Some(slot) = inputs.values.get_mut(name) else {
+            return false;
+        };
+        *slot = value;
+        true
+    },
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
+};
 
 impl PortRegistry {
     /// Register a backend. Later registrations have lower precedence on name
@@ -295,5 +342,35 @@ impl PortRegistry {
             Some(write) => write(world, entity, r.slot, value),
             None => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PortRegistry;
+    use crate::InputPorts;
+    use bevy::prelude::*;
+
+    #[test]
+    fn generic_input_ports_are_listed_and_written_through_the_registry() {
+        let mut world = World::new();
+        let entity = world.spawn(InputPorts::new(&["throttle", "arm"])).id();
+        let registry = PortRegistry::default();
+
+        assert_eq!(
+            registry.read_input_port(&world, entity, "throttle"),
+            Some(0.0)
+        );
+        assert!(registry.write_port(&mut world, entity, "throttle", 0.75));
+        assert!(!registry.write_port(&mut world, entity, "undeclared", 1.0));
+        assert_eq!(
+            registry.read_input_port(&world, entity, "throttle"),
+            Some(0.75)
+        );
+
+        let ports = registry.entity_ports(&world, entity);
+        assert!(ports
+            .iter()
+            .any(|port| port.name == "arm" && port.direction == super::PortDirection::In));
     }
 }

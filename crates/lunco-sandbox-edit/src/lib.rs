@@ -98,6 +98,10 @@ impl Plugin for SandboxEditPlugin {
         // Non-UI systems
         app.add_systems(Update, spawn::update_spawn_ghost);
         app.add_systems(Update, spawn::spawn_tool_state_system);
+        // Possession is the user's active vehicle context. Mirror it through
+        // the one selection mutation so the Inspector follows the controlled
+        // rover without inventing a second inspector-target mechanism.
+        app.add_systems(Update, selection::select_possessed_vessel);
         app.add_systems(Update, selection::handle_deselect_keys);
 
         // Terrain-sculpt tools — arm/disarm gate, brush sizing, cursor ghost.

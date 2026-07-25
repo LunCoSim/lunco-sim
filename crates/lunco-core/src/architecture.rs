@@ -202,8 +202,8 @@ pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
 /// (`lunco_controller::drive_from_bindings`) reads it off the controlled endpoint
 /// via the controller link.
 ///
-/// This is an **adapter**, not the command surface or authority predicate. An
-/// endpoint exposes and accepts commands through [`CommandInputs`]; it can be
+/// This is an **adapter**, not the input surface or authority predicate. An
+/// endpoint exposes and accepts commands through [`InputPorts`]; it can be
 /// remotely controlled with `SetPorts` without an avatar-keyboard binding.
 /// Adding a `Controls` scope only makes shared `UserIntent`s (keyboard, gamepad,
 /// simulated intent) translate into those exposed ports.
@@ -232,7 +232,7 @@ impl ControlBinding {
     }
 
     /// The distinct port names this binding targets — i.e. the vessel's declared
-    /// command surface (from USD). A controllable seeds exactly these into its FSW
+    /// input surface (from USD). An endpoint seeds exactly these into its FSW
     /// `inputs` so the strict command backend accepts writes to them and no others.
     pub fn ports(&self) -> impl Iterator<Item = &str> {
         // `binds` is small (a handful of intents); a linear "seen" scan beats a
@@ -285,20 +285,21 @@ pub struct Port {
 
 // ── Control surface ───────────────────────────────────────────────────────────
 
-/// A controllable's **command surface**: the logical input ports it accepts, with
-/// their current commanded values.
+/// An entity's declared **`inputs:*` port surface**, with current values.
 ///
-/// The command *vocabulary is data* — the keys present here declare exactly which
-/// command ports this vehicle accepts, so the port backend stays strict (an
-/// undeclared name is rejected → still reported as a dangling wire). A rover seeds
-/// `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up`, a lander
-/// `throttle`/`pitch`/`roll`/`yaw`. The keys are seeded from the vessel's
+/// The input *vocabulary is data* — the keys present here declare exactly which
+/// input ports this entity accepts, so the port backend stays strict (an
+/// undeclared name is rejected → still reported as a dangling wire). A rover may
+/// expose `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up`, and a
+/// factory `start_cycle`/`target_rate`. Inputs are scalar `f64`s: an intent such
+/// as `Action` normally produces a binary `0.0`/`1.0` input, while analog control
+/// can supply any normalized or physical value. The keys are seeded from the vessel's
 /// [`ControlBinding`] (i.e. from its authored `Controls` scope) for USD vessels;
 /// runtime-built endpoints may declare the same surface directly with
-/// [`CommandInputs::new`]. The surface, not the optional binding, is the authority
+/// [`InputPorts::new`]. The surface, not the optional binding, is the authority
 /// and possession boundary.
 ///
-/// Written through the shared port substrate (`SetPorts` → the command backend)
+/// Written through the shared port substrate (`SetPorts` → `PortRegistry`)
 /// and consumed by the vehicle's actuator (`apply_drive_mix`, `apply_fly`, a
 /// Modelica bridge, …).
 ///
@@ -307,18 +308,18 @@ pub struct Port {
 /// in `[-1,1]` here, a discretized `1.0`/`0.0` gate there — and are deliberately
 /// kept in two components so the two `"brake"`s can never be conflated.
 #[derive(Component, Debug, Clone, Default)]
-pub struct CommandInputs {
-    /// Commanded value per accepted command-port name. Only seeded keys are
-    /// writable; see the type docs.
+pub struct InputPorts {
+    /// Current value per accepted input-port name. Only seeded keys are writable;
+    /// see the type docs.
     pub values: std::collections::HashMap<String, f64>,
     /// Derived brake state, cached from `values["brake"] > 0.5` by the actuator so
     /// the per-tick physics systems read a bool without a map lookup.
     pub brake_active: bool,
 }
 
-impl CommandInputs {
+impl InputPorts {
     /// Build with a seeded command vocabulary: the input-port names this vehicle
-    /// accepts, each initialised to `0.0`. The seeded keys ARE the command surface.
+    /// accepts, each initialised to `0.0`. The seeded keys ARE the input surface.
     pub fn new(command_ports: &[&str]) -> Self {
         Self {
             values: command_ports.iter().map(|n| (n.to_string(), 0.0)).collect(),
@@ -327,7 +328,7 @@ impl CommandInputs {
     }
 
     /// Current value of command input `name` (`0.0` if this vehicle doesn't accept
-    /// it). The read side of the command surface for actuators.
+    /// it). The read side of the input surface for actuators.
     #[inline]
     pub fn cmd(&self, name: &str) -> f64 {
         self.values.get(name).copied().unwrap_or(0.0)
@@ -338,7 +339,7 @@ impl CommandInputs {
 /// actuator's setpoint.
 ///
 /// This is the hardware/output half of a vessel's control surface, and is a
-/// different thing from [`CommandInputs`]: those are the logical commands a human
+/// different thing from [`InputPorts`]: those are the logical input values a human
 /// or script issues, these are the per-actuator registers a drive kernel allocates
 /// them onto (`drive_left`, `drive_right`, `steering`, `brake`, plus whatever the
 /// vessel declares as `outputs:` attributes).

@@ -450,7 +450,7 @@ fn record_possession_authority(
     local: Res<lunco_core::LocalSession>,
     rbac: Res<lunco_core::session::SessionRbac>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
-    q_command_surfaces: Query<&lunco_core::CommandInputs>,
+    q_input_ports: Query<&lunco_core::InputPorts>,
     mut registry: ResMut<lunco_core::SessionRegistry>,
 ) {
     // Record ownership on the authoritative peer: Host, and also single-player
@@ -460,11 +460,11 @@ fn record_possession_authority(
         return;
     }
     let cmd = trigger.event();
-    if !q_command_surfaces
+    if !q_input_ports
         .get(cmd.target)
         .is_ok_and(|surface| !surface.values.is_empty())
     {
-        warn!(target = ?cmd.target, "[auth] possession refused: target exposes no command ports");
+        warn!(target = ?cmd.target, "[auth] possession refused: target exposes no writable input ports");
         return;
     }
     let origin = guard.0.unwrap_or(local.0);
@@ -905,7 +905,7 @@ pub fn spawn_avatar_camera(
 }
 
 /// The local avatar is a **controllable described like a rover**: it carries a
-/// `CommandInputs` command surface (`forward`/`side`/`up` input ports) + a
+/// `InputPorts` surface (`forward`/`side`/`up` input ports) + a
 /// `ControlBinding` mapping move intents to those ports. The SAME
 /// `lunco_controller::drive_from_bindings`
 /// path then drives it — its *self-drive* branch fires for an entity that holds its
@@ -915,7 +915,7 @@ pub fn spawn_avatar_camera(
 /// `apply_fly` reads the resulting `forward`/`side`/`up` ports back.
 ///
 /// The command *vocabulary* is seeded from the binding by
-/// `lunco_mobility::sync_command_surface`, exactly like a rover. Authored in
+/// `lunco_mobility::sync_input_ports`, exactly like a rover. Authored in
 /// code for now; P3 will move it to an `_AvatarControl` USD profile so the avatar
 /// is spawned identically via code or USD.
 fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) {
@@ -932,7 +932,7 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
     // inputs directly) and no `DriveMix` (an avatar is not a wheeled chassis; it is
     // not a drive-allocation target and must stay out of the chassis queries). The
     // `forward`/`side`/`up` surface is seeded empty and filled from the binding.
-    ec.try_insert(lunco_core::CommandInputs::default());
+    ec.try_insert(lunco_core::InputPorts::default());
     if let Some(b) = binding {
         ec.try_insert(b);
     }
@@ -2454,7 +2454,7 @@ fn surface_camera_system(
 // ─── Locomotion ──────────────────────────────────────────────────────────────
 
 /// Kinematic actuator for the avatar — the port-driven analog of a rover's
-/// `apply_drive_mix`. Reads the avatar's FSW command surface (`forward`/`side`/`up`,
+/// `apply_drive_mix`. Reads the avatar's FSW input ports (`forward`/`side`/`up`,
 /// written through the shared `SetPorts` path by `drive_from_bindings`) and
 /// translates the avatar entity in absolute coordinates. No forces (a free-fly
 /// observer has no physics) — this is the whole "mechanism" for the avatar.
@@ -2471,7 +2471,7 @@ fn apply_fly(
             &mut Transform,
             &mut CellCoord,
             &ChildOf,
-            &lunco_core::CommandInputs,
+            &lunco_core::InputPorts,
             Has<FreeFlightCamera>,
             Has<SurfaceCamera>,
             Option<&SurfaceRelativeMode>,
@@ -2518,7 +2518,7 @@ fn apply_fly(
             continue;
         }
 
-        // Command inputs off the command surface (each −1..=1 from the
+        // Input values (each −1..=1 from the
         // `ControlBinding`), then boosted. When free (no ControllerLink)
         // `drive_from_bindings` writes these; while possessing they stay 0 (control is
         // redirected to the vessel).
@@ -2753,24 +2753,24 @@ fn avatar_global_hotkeys(
 
 // ─── Raycasting ──────────────────────────────────────────────────────────────
 
-/// Resolves a picked vehicle part to its nearest public command surface.
+/// Resolves a picked vehicle part to its nearest public input-port surface.
 ///
 /// `SelectableRoot` is an editor boundary, and every independently simulated
-/// wheel may carry it. [`lunco_core::CommandInputs`] is the public interface:
-/// its nonempty vocabulary is the command surface a session may own. A
+/// wheel may carry it. [`lunco_core::InputPorts`] is the public interface:
+/// its nonempty vocabulary is the input surface a session may own. A
 /// [`lunco_core::ControlBinding`] is merely one optional avatar-input adapter.
 /// Walking to this owner makes a click on any vehicle part possess its vehicle.
 fn find_control_owner_from_hit(
     mut entity: Entity,
     q_parents: &Query<&ChildOf>,
-    q_command_surfaces: &Query<&lunco_core::CommandInputs>,
+    q_input_ports: &Query<&lunco_core::InputPorts>,
     q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
     for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
         if q_ground.get(entity).is_ok() {
             return None;
         }
-        if q_command_surfaces
+        if q_input_ports
             .get(entity)
             .is_ok_and(|surface| !surface.values.is_empty())
         {
@@ -2795,7 +2795,7 @@ fn find_control_owner_from_hit(
 ///
 /// | Hit                         | Command          |
 /// |-----------------------------|------------------|
-/// | opened command surface      | `PossessVessel`  |
+/// | opened input-port surface   | `PossessVessel`  |
 /// | `CelestialBody`             | `FocusTarget`    |
 /// | everything else             | no action        |
 ///
@@ -2819,7 +2819,7 @@ pub fn avatar_raycast_possession(
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_command_surfaces: Query<&lunco_core::CommandInputs>,
+    q_input_ports: Query<&lunco_core::InputPorts>,
     q_parents: Query<&ChildOf>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
@@ -2906,7 +2906,7 @@ pub fn avatar_raycast_possession(
     };
 
     let control_target =
-        find_control_owner_from_hit(click.entity, &q_parents, &q_command_surfaces, &q_ground);
+        find_control_owner_from_hit(click.entity, &q_parents, &q_input_ports, &q_ground);
 
     // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.
     let mut spacecraft_hit: Option<Entity> = None;
@@ -3210,11 +3210,11 @@ fn on_possess_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     // Used ONLY for the heading-follow camera decision below. Possession is
-    // gated by the target's public `CommandInputs` surface, then authority.
+    // gated by the target's public input ports, then authority.
     q_vessel: Query<Entity, Controllable>,
     q_vessel_gravity: Query<&GravityBody>,
     q_follow: Query<&lunco_core::CameraFollow>,
-    q_command_surfaces: Query<&lunco_core::CommandInputs>,
+    q_input_ports: Query<&lunco_core::InputPorts>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
     rbac: Res<lunco_core::session::SessionRbac>,
@@ -3223,11 +3223,11 @@ fn on_possess_command(
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
 ) {
     let cmd = trigger.event();
-    if !q_command_surfaces
+    if !q_input_ports
         .get(cmd.target)
         .is_ok_and(|surface| !surface.values.is_empty())
     {
-        warn!(target = ?cmd.target, "[possess] refused: target exposes no command ports");
+        warn!(target = ?cmd.target, "[possess] refused: target exposes no writable input ports");
         return;
     }
     // A *remote* possession applied from the wire (host attributing a client's
@@ -4333,10 +4333,7 @@ mod tests {
     fn wheel_click_resolves_to_owning_vehicle_command_root() {
         let mut world = World::new();
         let rover = world
-            .spawn((
-                lunco_core::CommandInputs::new(&["drive"]),
-                Name::new("Rover"),
-            ))
+            .spawn((lunco_core::InputPorts::new(&["drive"]), Name::new("Rover")))
             .id();
         let wheel = world
             .spawn((
@@ -4349,13 +4346,13 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::CommandInputs>,
+            Query<&lunco_core::InputPorts>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_command_surfaces, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_ground) = state.get(&world).unwrap();
 
         assert_eq!(
-            find_control_owner_from_hit(wheel_mesh, &q_parents, &q_command_surfaces, &q_ground),
+            find_control_owner_from_hit(wheel_mesh, &q_parents, &q_input_ports, &q_ground),
             Some(rover)
         );
     }
@@ -4389,7 +4386,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
                 .map(|n| n.as_str().to_string())
                 .unwrap_or_default();
             let gid = world.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get());
-            let has_cmd = world.get::<lunco_core::CommandInputs>(e).is_some();
+            let has_cmd = world.get::<lunco_core::InputPorts>(e).is_some();
             let has_sim = world.get::<lunco_cosim::SimComponent>(e).is_some();
             let has_sel = world.get::<lunco_core::SelectableRoot>(e).is_some();
             let binding = world.get::<lunco_core::ControlBinding>(e).map(|b| {

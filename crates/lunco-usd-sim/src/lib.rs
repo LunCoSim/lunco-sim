@@ -441,12 +441,13 @@ fn process_usd_sim_prims(
     // setup can read `drive:angular:physics:maxForce` (the motor stall
     // torque, authored via `UsdPhysicsDriveAPI:angular`) from it.
     let mut joint_targets: HashMap<(Handle<UsdStageAsset>, String), String> = HashMap::new();
-    // Articulated ROOTS, derived from the SAME joint scan: a `PhysicsRevoluteJoint`'s
-    // `physics:body0` is the chassis the wheel hinges to. Keyed identically to
-    // `joint_targets` so a prim's own `(stage, path)` looks up in both. This (plus
-    // any `PhysicsArticulationRootAPI` prim) is the declarative source of truth for
-    // `ArticulatedVehicle`, replacing the old `setup_physical_wheel` side-effect +
-    // runtime `ChildOf` walk. See `crates/lunco-networking/USD_REPLICATION_POLICY.md`.
+    // Articulated ROOTS, derived only from *wheel* hinges in the same scan: a
+    // `PhysicsRevoluteJoint` whose `body1` applies `PhysxVehicleWheelAPI` names
+    // the chassis at `physics:body0`. A revolute joint is a generic USD mechanism
+    // (antenna, solar tracker, arm, …), not evidence that its parent is a vehicle.
+    // This (plus an explicit `PhysicsArticulationRootAPI`) is the declarative source
+    // of truth for `ArticulatedVehicle`; it replaces the old runtime `ChildOf` walk.
+    // See `crates/lunco-networking/USD_REPLICATION_POLICY.md`.
     let mut articulation_roots: std::collections::HashSet<(Handle<UsdStageAsset>, String)> =
         Default::default();
     // WheelAttachment → (wheel, suspension) target pairs, scanned in the same
@@ -574,9 +575,10 @@ fn process_usd_sim_prims(
 }
 
 /// Per-stage joint scan (Pass 1), generic over the read source ([`UsdRead`]):
-/// collects `PhysicsRevoluteJoint` `body1` targets (wheel dispatch) and `body0`
-/// targets (articulation roots) off either the live canonical `StageView` or the
-/// flattened `sdf::Data`, identically. Also collects the canonical
+/// collects `PhysicsRevoluteJoint` `body1` targets (wheel dispatch) and the matching
+/// `body0` targets (articulation roots) only when `body1` is a declared vehicle wheel.
+/// Generic revolute mechanisms must not change a host's vehicle classification.
+/// Also collects the canonical
 /// `PhysxVehicleWheelAttachmentAPI` wheel→suspension bindings (doc 53 §3.2).
 fn collect_joint_scan_read(
     reader: &lunco_usd_bevy::StageView<'_>,
@@ -589,10 +591,15 @@ fn collect_joint_scan_read(
         if reader.type_name(&path).as_deref() == Some("PhysicsRevoluteJoint") {
             if let Some(body1) = reader.rel_target(&path, "physics:body1") {
                 debug!("USD joint dispatch: {} → wheel {}", path.as_str(), body1);
-                joint_targets.insert((stage_handle.clone(), body1), path.as_str().to_string());
-            }
-            if let Some(body0) = reader.rel_target(&path, "physics:body0") {
-                articulation_roots.insert((stage_handle.clone(), body0));
+                let is_vehicle_wheel = SdfPath::new(&body1)
+                    .ok()
+                    .is_some_and(|wheel| reader.has_api_schema(&wheel, "PhysxVehicleWheelAPI"));
+                if is_vehicle_wheel {
+                    joint_targets.insert((stage_handle.clone(), body1), path.as_str().to_string());
+                    if let Some(body0) = reader.rel_target(&path, "physics:body0") {
+                        articulation_roots.insert((stage_handle.clone(), body0));
+                    }
+                }
             }
         }
         // Canonical wheel-attachment binding: an attachment prim names its wheel
@@ -1233,25 +1240,25 @@ fn process_usd_sim_prim_read(
             lunco_core::KeepUpright,
         ));
 
-        // The command surface is AUTHORED, in the vessel's `Controls` scope: the
+        // The input surface is AUTHORED, in the vessel's `Controls` scope: the
         // intents it binds name exactly the ports this vessel accepts.
-        // `sync_command_surface` seeds them from the `ControlBinding`, so the
+        // `sync_input_ports` seeds them from the `ControlBinding`, so the
         // vocabulary is never decided here — it used to be the literal
         // `&["throttle", "steer", "brake"]`, which meant the engine decided what
         // could command a vehicle by knowing what kind of vehicle it was.
         //
-        // `CommandInputs` is seeded EMPTY: the command backend is strict, so a
+        // `InputPorts` is seeded EMPTY: the shared input backend is strict, so a
         // vessel whose `Controls` scope is absent accepts nothing and every write is
         // refused. That is how you author a wreck or an un-crewed chassis — by
         // composition, not a check.
         //
-        // Only `ActuatorPorts` is stamped here. The `CommandInputs` surface is
+        // Only `ActuatorPorts` is stamped here. The `InputPorts` surface is
         // stamped beside the `ControlBinding` (lunco-usd-bevy, the `Controls`
         // branch) — ONE site, because `try_insert` OVERWRITES: stamping a fresh
         // empty surface from two different systems would let a live re-run of
-        // either one wipe the keys `sync_command_surface` had already seeded.
+        // either one wipe the keys `sync_input_ports` had already seeded.
         //
-        // `ActuatorPorts` is a different thing and is NOT the command surface: it
+        // `ActuatorPorts` is a different thing and is NOT the input surface: it
         // maps ACTUATOR names to their `Port` entities, built above from the
         // canonical set plus the vessel prim's authored `outputs:` attributes. The
         // two stay separate components on purpose — both carry a `"brake"`, and

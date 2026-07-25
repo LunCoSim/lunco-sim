@@ -1165,8 +1165,8 @@ fn instantiate_usd_prim_read(
                 })
                 .collect();
             if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
-                // `CommandInputs` rides along with the binding: the binding is what
-                // DECLARES the accepted command ports, and `sync_command_surface`
+                // `InputPorts` rides along with the binding: the binding is what
+                // DECLARES the accepted input ports, and `sync_input_ports`
                 // seeds the surface from it, so the component that holds those values
                 // belongs exactly where the declaration is. Seeded empty here — the
                 // vocabulary is never a Rust literal. (A rover also gets one at its
@@ -1174,7 +1174,7 @@ fn instantiate_usd_prim_read(
                 // because the seeding is additive and idempotent.)
                 commands
                     .entity(entity)
-                    .try_insert((binding, lunco_core::CommandInputs::default()));
+                    .try_insert((binding, lunco_core::InputPorts::default()));
             }
 
             // Camera-follow mode is a property of how the vehicle moves, so it is

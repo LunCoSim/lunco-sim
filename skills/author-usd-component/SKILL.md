@@ -261,7 +261,8 @@ Backend is **Avian3D**. One prim with `PhysicsRigidBodyAPI` becomes **one**
 rigid body aggregating all descendant colliders into a compound; descendants
 carry `PhysicsCollisionAPI` only and get **no** independent body.
 
-> **A component that gets MOUNTED must not apply `PhysicsRigidBodyAPI`.** The
+> **A component that gets MOUNTED must not apply `PhysicsRigidBodyAPI` merely as
+> a static child.** The
 > loader honours the schema wherever it appears — ancestry is never consulted,
 > because nesting-plus-joint is how a wheel is mounted — so a part inside a
 > vehicle that no joint names is a free body and falls out of it. That shipped:
@@ -270,7 +271,9 @@ carry `PhysicsCollisionAPI` only and get **no** independent body.
 > green. An internal part is **mass + geometry** (`PhysicsMassAPI`,
 > `PhysicsCollisionAPI` on its gprims) — `gearbox.usda` is the model to copy. A
 > part that must MOVE relative to its host gets a body **and** a joint, authored
-> together, which is what a mount (`AttachSpec`) writes. `sandbox --validate`
+> together. A reusable moving assembly owns joints between its own bodies; its
+> host owns the one attachment joint because only the host knows its body path.
+> `sandbox --validate`
 > reports the mistake as `[usd/nested-body-no-joint]`; see
 > [`author-usd-physics`](../author-usd-physics/SKILL.md#6-a-part-is-not-a-body).
 

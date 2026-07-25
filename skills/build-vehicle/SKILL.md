@@ -302,8 +302,11 @@ design.
 - ❌ A variant that inlines prims instead of referencing a component.
 - ❌ Editing wheel components in ECS/Rust for "live tuning" — the document is
   the only writer; use the Inspector sliders or `ApplyUsdOp`.
-- ❌ Hand-writing a `PhysicsRevoluteJoint` outside a drivetrain component —
-  the joint is the raycast/physical discriminator; keep it in the variant arc.
+- ❌ Hand-writing a **wheel** `PhysicsRevoluteJoint` outside a drivetrain
+  component — that joint is the raycast/physical discriminator; keep wheel
+  hinges in the variant arc. Generic revolute mechanisms (antenna, solar
+  tracker, arm) are allowed: their `body1` is not a `PhysxVehicleWheelAPI`, so
+  they must not alter drivetrain admission or articulation classification.
 - ❌ Expecting plain Shift+click to drill into a wheel — it is the multi-select
   toggle and clears the drill target. Alt+Shift+click drills.
 - ❌ Adding a second name for a quantity that already exists (the

@@ -381,7 +381,7 @@ fn process_usd_cosim_prim_read(
     // NOTE: there is no possessable/vessel tag to stamp — possession is not gated by
     // a marker at all (an avatar may possess anything; WHO may hold it is the
     // authority layer's call). A prim's command CAPABILITY comes from its `Controls`
-    // scope → `ControlBinding` + `CommandInputs`, stamped in the general USD
+    // scope → `ControlBinding` + `InputPorts`, stamped in the general USD
     // translator (`lunco-usd-bevy`), which runs for every prim — not here, which only
     // sees model-bound cosim prims. A lander's actuation backend is its
     // `SimComponent` manual-override ports (written by `SetPorts`), read

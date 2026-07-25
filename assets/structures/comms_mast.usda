@@ -34,6 +34,7 @@ def Xform "CommsMast" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
+        variants = { string mount = "hostMounted" }
         bool lunco:linkNode = true
         string lunco:link:class = "base"
         double3 xformOp:translate = (0, 10.6, 0)
@@ -43,14 +44,29 @@ def Xform "CommsMast" (
         {
             token visibility = "invisible"
         }
-        over "DishHead"
+        over "YawHead"
         {
-            # 2 · 0.58 · 3.4 ≈ 3.9 m aperture. Sits at the head, tilted back 35° —
-            # a relay dish parked toward Earth.
             double3 xformOp:translate = (0, 0.3, 0.4)
-            double3 xformOp:rotateXYZ = (-35, 0, 0)
-            double3 xformOp:scale = (3.4, 3.4, 3.4)
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (3.4, 3.4, 3.4)
+                }
+            }
         }
+    }
+
+    # The tower's static collider is the physical anchor; the antenna component
+    # supplies the rotating body and elevation hinge.
+    def PhysicsRevoluteJoint "AntennaYawJoint"
+    {
+        rel physics:body0 = </CommsMast/Tower>
+        rel physics:body1 = </CommsMast/Antenna/YawHead>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0, 5.9, 0.4)
+        point3f physics:localPos1 = (0, 0, 0)
+        float inputs:angle.connect = </CommsMast/Antenna/EarthTrackerController.outputs:az>
     }
 
     def Cube "FootPad" (

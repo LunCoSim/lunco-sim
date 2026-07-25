@@ -447,7 +447,7 @@ pub fn populate_mission_control_view(
     // `ControlBinding` — "accepts commands" — is the roster filter, `descent_lander`
     // included. Filtering on it is also what keeps the roster stable: it is written
     // once at projection, so `Changed<ControlBinding>` fires on insert and then stops.
-    // Per-tick command state lives on `CommandInputs`, which is written every tick.
+    // Per-tick input values live on `InputPorts`, which are written every tick.
     rovers: Query<
         (Entity, &Name, Option<&lunco_core::GlobalEntityId>),
         (With<ControlBinding>, Without<Avatar>),

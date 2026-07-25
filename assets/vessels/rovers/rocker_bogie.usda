@@ -160,18 +160,12 @@ def Xform "RockerBogie" (
         bool physics:collisionEnabled = false
     }
 
-    # High-gain antenna — the catalogue dish, referenced. It used to be a bare
-    # cylinder-on-a-stick here; the project has exactly one antenna now and this is
-    # it. `lunco:linkNode` rides in with the component, so a rocker-bogie is a
-    # connectivity endpoint out of the box — author `lunco:link:class` /
-    # `minElevationDeg` on this prim per scene.
+    # Shared Earth-tracking antenna. The component owns elevation; this chassis
+    # owns the single yaw hinge that attaches it, as for the solar tracker.
     #
     # ⚠ THIS IS THE ROVER'S ONLY ANTENNA. A scene that wants a link node on a
     # rocker-bogie authors an `over "Antenna"` here — it does NOT add a second
-    # `radio.usda`/`antenna.usda` child. `radio.usda` REFERENCES this same dish, so
-    # a scene-side comms prim draws a whole second reflector beside this one (which
-    # is exactly what the space-school traverse scene used to do, back when this
-    # chassis was `six_wheel_rover` and genuinely had none).
+    # antenna child.
     #
     # MOUNTED ON THE REAR DECK, on the centreline-left, clear of the forward
     # science mast at z = -0.6 (forward is -Z: that is where the headlights point).
@@ -181,6 +175,7 @@ def Xform "RockerBogie" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
+        variants = { string mount = "hostMounted" }
         string lunco:link:class = "rover"
         double3 xformOp:translate = (-0.35, 0.22, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -192,18 +187,27 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, 0.25, 0.0)
             color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
         }
-        over "DishHead"
+        over "YawHead"
         {
             double3 xformOp:translate = (0.0, 0.5, 0.0)
-            # Parked high-gain: 25 deg off the zenith, tipped REARWARD (+X rotation
-            # swings the boresight toward +Z) and canted outboard away from the
-            # science mast. Rearward matters: the chase camera sits behind and above
-            # a driven rover, so a forward-leaning dish shows that camera nothing but
-            # the back of the reflector — which is what -40 did, and why the antenna
-            # read as a white sliver rather than as a dish.
-            double3 xformOp:rotateXYZ = (25.0, -20.0, 0.0)
-            double3 xformOp:scale = (0.45, 0.45, 0.45)
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (0.45, 0.45, 0.45)
+                }
+            }
         }
+    }
+
+    def PhysicsRevoluteJoint "AntennaYawJoint"
+    {
+        rel physics:body0 = </RockerBogie>
+        rel physics:body1 = </RockerBogie/Antenna/YawHead>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (-0.35, 0.72, 0.6)
+        point3f physics:localPos1 = (0, 0, 0)
+        float inputs:angle.connect = </RockerBogie/Antenna/EarthTrackerController.outputs:az>
     }
 
     # Instrument platform / science mast

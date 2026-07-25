@@ -8,7 +8,7 @@
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_core::CommandInputs;
+use lunco_core::InputPorts;
 
 use crate::wheel_kinematics::{wheel_hub_pose, wheel_hub_velocity};
 use crate::WheelRaycast;
@@ -61,7 +61,7 @@ pub(crate) fn update_wheel_spin(
             &AngularVelocity,
             &Position,
             &Rotation,
-            Option<&CommandInputs>,
+            Option<&InputPorts>,
             &RigidBody,
             // Client proxies are Kinematic with avian velocity zeroed; their real
             // ground speed arrives via this delivered hint (set by `interpolate_proxies`).

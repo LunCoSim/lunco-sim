@@ -30,19 +30,19 @@
 #
 # ── The two knobs, and which one to turn ──────────────────────────────────────
 #
-#   SIZE  → `over "DishHead" { double3 xformOp:scale = (s, s, s) }`
+#   SIZE  → `over "YawHead" { over "DishGimbal" { over "DishHead" { double3 xformOp:scale = (s, s, s) } } }`
 #           The whole head — reflector, feed arm, horn — scales together, so the
 #           feed stays at the focus. This is the knob you almost always want.
 #           Dish diameter = 2 · rimRadius · s = 1.16 · s metres.
 #
-#   SHAPE → `over "DishHead" { over "Reflector" { float lunco:lathe:focalLength = … } }`
+#   SHAPE → `over "YawHead" { over "DishGimbal" { over "DishHead" { over "Reflector" { float lunco:lathe:focalLength = … } } } }`
 #           f/D — how deep the bowl is. Changing `rimRadius` alone does NOT move
 #           the authored feed-arm control points, so a rim change wants the arm
 #           re-authored; scale does not.
 #
-#   MOUNT → `over "Mast" { double height = … }` for a taller stalk, or
-#           `over "Mast" { token visibility = "invisible" }` when the host already
-#           has a boom or tower to carry the dish.
+#   MOUNT → Select `mount = "hostMounted"` when the antenna is referenced by a
+#           vessel or tower, then author ONE `PhysicsRevoluteJoint` from that
+#           host body to `Antenna/YawHead`. The antenna never names its host.
 #
 # Examples in the tree: `structures/comms_mast.usda` (s = 3.4, mast hidden — the
 # tower is the mast), `vessels/landers/descent_lander.usda` (s = 2.6, mast as the
@@ -50,11 +50,14 @@
 def Xform "CommsAntenna" (
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoLinkAPI"]
     kind = "component"
-    doc = "Parabolic comms antenna — lathed reflector, feed arm and horn on a short mast. The catalogue's only dish; scale `DishHead` for size, override `Reflector`'s lathe params for f/D."
+    doc = "Parabolic Earth-tracking antenna — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. The catalogue's only dish."
 )
 {
     uniform bool lunco:spawnable = true
     bool lunco:linkNode = true
+    variants = {
+        string mount = "freeStanding"
+    }
 
     def Cylinder "Mast"
     {
@@ -63,22 +66,37 @@ def Xform "CommsAntenna" (
         double height = 0.8
         double3 xformOp:translate = (0, 0.4, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.35, 0.35, 0.37)]
+        color3f[] primvars:displayColor = [(0.7, 0.7, 0.72)]
         bool physics:collisionEnabled = false
     }
 
-    # The head: everything that must stay in proportion with the dish. Scale THIS,
-    # not the reflector, so the feed horn stays at the focus.
-    #
-    # Default s = 0.6 ⇒ a 0.70 m dish, the rover/lander whip class. Tilted 30° back
-    # from the zenith, the parked attitude of a high-gain waiting for a pass; a
-    # scene that actually points its antennas overrides `xformOp:rotateXYZ`.
-    def Xform "DishHead"
+    # The rotating bodies belong to the antenna, never to a rover composition.
+    # The host supplies only the yaw attachment point (or the free-standing
+    # mount variant below does); the antenna owns its elevation hinge.
+    def Xform "YawHead" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
     {
         double3 xformOp:translate = (0, 0.8, 0)
-        double3 xformOp:rotateXYZ = (-30, 0, 0)
-        double3 xformOp:scale = (0.6, 0.6, 0.6)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 0.8
+        bool physics:collisionEnabled = false
+
+        def Xform "DishGimbal" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            float physics:mass = 0.6
+            bool physics:collisionEnabled = false
+
+            # The head: everything that must stay in proportion with the dish.
+            # Scale THIS, not the reflector, so the feed horn stays at the focus.
+    #
+            # Default s = 0.6 ⇒ a 0.70 m dish, the rover/lander whip class.
+            def Xform "DishHead"
+            {
+                double3 xformOp:scale = (0.6, 0.6, 0.6)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
 
         # A dish is a THIN SHELL — a real reflector is paint on a skin, not a solid
         # — so it must draw from behind as well as in front. `doubleSided` is stock
@@ -88,8 +106,8 @@ def Xform "CommsAntenna" (
         # `apexRadius` is deliberately non-zero: a ring collapsed exactly onto the
         # axis is a degenerate row whose normal is a zero cross product, and a NaN
         # normal renders as a black hole at the vertex of the dish.
-        def NurbsPatch "Reflector"
-        {
+                def NurbsPatch "Reflector"
+                {
             uniform bool doubleSided = true
             uniform token lunco:lathe:profile = "paraboloid"
             float lunco:lathe:apexRadius = 0.02
@@ -97,26 +115,26 @@ def Xform "CommsAntenna" (
             float lunco:lathe:focalLength = 0.35
             # White thermal-control paint — what a high-gain reflector is actually
             # finished in.
-            color3f[] primvars:displayColor = [(0.35, 0.36, 0.38)]
+            color3f[] primvars:displayColor = [(0.95, 0.95, 0.93)]
             bool physics:collisionEnabled = false
-        }
+                }
 
         # Feed arm: a NURBS curve swept into a TUBE by its authored `widths` — rim
         # to focus (f = 0.35 above the apex) in one smooth cubic.
-        def NurbsCurves "FeedArm"
-        {
+                def NurbsCurves "FeedArm"
+                {
             int[] curveVertexCounts = [4]
             int[] order = [4]
             double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
             point3f[] points = [(0.56, 0.25, 0), (0.44, 0.44, 0), (0.16, 0.47, 0), (0.0, 0.38, 0)]
             float[] widths = [0.03]
-            color3f[] primvars:displayColor = [(0.35, 0.35, 0.37)]
+            color3f[] primvars:displayColor = [(0.75, 0.75, 0.78)]
             bool physics:collisionEnabled = false
-        }
+                }
 
         # The feed horn at the focus, looking back into the reflector.
-        def Cylinder "FeedHorn"
-        {
+                def Cylinder "FeedHorn"
+                {
             uniform token axis = "Y"
             double radius = 0.045
             double height = 0.09
@@ -124,6 +142,59 @@ def Xform "CommsAntenna" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.3, 0.3, 0.34)]
             bool physics:collisionEnabled = false
+                }
+            }
+        }
+    }
+
+    # Pointing mathematics is Modelica, not a scenario script. The environment
+    # bridge supplies the self-looped Earth direction in the mount frame; rover
+    # joints consume `az`/`el` when the host opts into physical actuation.
+    def Xform "EarthTrackerController" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
+        float inputs:earth_azimuth.connect = </CommsAntenna/EarthTrackerController.outputs:earth_azimuth>
+        float inputs:earth_elevation.connect = </CommsAntenna/EarthTrackerController.outputs:earth_elevation>
+    }
+
+    # `body0` is the yaw head and `body1` the elevation frame. The Modelica
+    # controller provides radians directly to the standard joint port; it never
+    # writes an Euler transform. The host-facing yaw joint follows the same rule.
+    def PhysicsRevoluteJoint "ElevationJoint"
+    {
+        rel physics:body0 = </CommsAntenna/YawHead>
+        rel physics:body1 = </CommsAntenna/YawHead/DishGimbal>
+        uniform token physics:axis = "X"
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:el>
+    }
+
+    # A catalogue-spawned antenna needs an anchor. A referenced one selects
+    # `hostMounted` and receives the equivalent yaw joint from its host instead.
+    variantSet "mount" = {
+        "freeStanding" {
+            over "Mast" (
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            )
+            {
+                float physics:mass = 20.0
+                bool physics:kinematicEnabled = true
+            }
+
+            def PhysicsRevoluteJoint "YawJoint"
+            {
+                rel physics:body0 = </CommsAntenna/Mast>
+                rel physics:body1 = </CommsAntenna/YawHead>
+                uniform token physics:axis = "Y"
+                point3f physics:localPos0 = (0, 0.4, 0)
+                point3f physics:localPos1 = (0, 0, 0)
+                float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:az>
+            }
+        }
+        "hostMounted" {
         }
     }
 }

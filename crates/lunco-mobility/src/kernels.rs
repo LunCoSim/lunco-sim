@@ -1,7 +1,7 @@
 //! # Control-allocation kernels
 //!
 //! A **kernel** is the per-tick, deterministic map from a vessel's logical command
-//! inputs (its `CommandInputs` command surface) to its **actuator-port setpoints**.
+//! inputs (its [`lunco_core::InputPorts`] surface) to its actuator-port setpoints.
 //! Rover skid/ackermann mixing is the first case; flight attitude/RCS allocation is
 //! the same shape (see the TODO on [`ControlKernelRegistry`]).
 //!
@@ -27,7 +27,7 @@ use std::collections::HashMap;
 // engineering-backlog doc in docs/architecture (core purity / mobility).
 /// Normalized command inputs a kernel consumes: `throttle`/`steer` in `[-1,1]`,
 /// `brake` in `0..1`. The vessel-agnostic command vector, read from the vessel's
-/// `CommandInputs` command surface by the driving system.
+/// [`lunco_core::InputPorts`] surface by the driving system.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DriveInputs {
     pub throttle: f64,

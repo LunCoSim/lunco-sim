@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, CommandInputs, ControlBinding};
+use lunco_core::{Avatar, ControlBinding, InputPorts};
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
     PerspectiveId, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
@@ -46,14 +46,14 @@ pub mod usd_variants;
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ViewModelSet;
 
-/// Publish the data-driven input convention plus the current command endpoint's
+/// Publish the data-driven input convention plus the current controlled endpoint's
 /// binding into the existing View Help popup. This is presentation only: it
-/// reads the public command surface and never changes control state.
+/// reads the public input-port surface and never changes control state.
 fn refresh_view_help_controls(
     q_avatar: Query<&ControllerLink, With<Avatar>>,
     q_names: Query<Ref<Name>>,
     q_bindings: Query<Ref<ControlBinding>>,
-    q_inputs: Query<Ref<CommandInputs>>,
+    q_inputs: Query<Ref<InputPorts>>,
     mut help: ResMut<LiveHelpSections>,
     mut global_rows: Local<Option<Vec<(String, String)>>>,
     mut last_target: Local<Option<Entity>>,
@@ -170,14 +170,14 @@ impl Plugin for SandboxEditUiPlugin {
                     title: "🎬 View",
                     description: "Full-screen 3D observation & control mode. Fly the \
                                   camera around the scene and claim an endpoint's \
-                                  public command ports. The live sections below show \
+                                  public input ports. The live sections below show \
                                   the global key map and the controlled endpoint's map.",
                     shortcuts: vec![
                         HelpShortcut { keys: "Shift", description: "Camera speed boost" },
                         HelpShortcut { keys: "+ / −", description: "Zoom in / out" },
                     ],
                     mouse: vec![
-                        HelpMouse { interaction: "Left-Click command endpoint", description: "Claim control; static objects do nothing" },
+                        HelpMouse { interaction: "Left-Click input endpoint", description: "Claim control; static objects do nothing" },
                         HelpMouse { interaction: "Shift+Left-Click", description: "Select for inspection/gizmo in Build mode" },
                         HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
                         HelpMouse { interaction: "Scroll", description: "Zoom in / out" },
