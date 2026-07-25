@@ -194,7 +194,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sandbox-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/sandbox-${{ matrix.platform }}-${{ matrix.arch }}.*
+          path: dist/sandbox-${{ matrix.platform }}-${{ matrix.arch }}-*.*
           if-no-files-found: error
           retention-days: 30
 
@@ -207,7 +207,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sandbox-macos-x86_64
-          path: dist/sandbox-macos-x86_64.*
+          path: dist/sandbox-macos-x86_64-*.*
           if-no-files-found: error
           retention-days: 30
 
