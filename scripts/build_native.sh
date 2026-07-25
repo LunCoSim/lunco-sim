@@ -134,11 +134,11 @@ is_windows() { [[ "$1" == *windows* ]]; }
 # ── Per-binary cache subdirs ──────────────────────────────────────────────
 # Each binary needs a different subset of the .cache/ tree at runtime.
 #   lunica:   fonts (UI fallback) + msl (Modelica Standard Library) + thermofluidstream
-#   sandbox:  fonts (UI rendering)
+#   sandbox:  fonts (UI rendering) + Earth/Moon imagery
 cache_subdirs_for() {
     case "$1" in
         lunica)   echo "fonts msl thermofluidstream" ;;
-        sandbox)  echo "fonts" ;;
+        sandbox)  echo "fonts textures" ;;
     esac
 }
 
@@ -216,7 +216,8 @@ download_cache_for() {
     fi
     info "Downloading cache assets for $binary → $cache_dir"
 
-    # Every binary needs the UI font; lunica also needs MSL.
+    # Every binary needs the UI font; lunica also needs MSL, while sandbox
+    # ships its declared Earth/Moon imagery for an offline launch.
     local groups_to_download=""
     local groups_to_process=""
     case "$binary" in
@@ -224,7 +225,8 @@ download_cache_for() {
             groups_to_download="fonts modelica"
             ;;
         sandbox)
-            groups_to_download="fonts"
+            groups_to_download="fonts celestial"
+            groups_to_process="celestial"
             ;;
     esac
 
@@ -247,6 +249,30 @@ download_cache_for() {
             warn "  process for $group failed — continuing (the raw asset may be missing or npx unavailable)"
         fi
     done
+}
+
+# A release package must be self-contained.  These files are intentionally
+# checked by their runtime cache paths: the manifest remains the source of
+# URLs, hashes, and processing settings, while this script verifies that the
+# payload it promises to ship was actually materialised.
+required_cache_files_for() {
+    case "$1" in
+        sandbox) echo "fonts/DejaVuSans.ttf textures/earth.png textures/moon.png" ;;
+    esac
+}
+
+verify_required_cache_files() {
+    local binary="$1" cache_dir="$2" missing=0 rel
+    for rel in $(required_cache_files_for "$binary"); do
+        if [ ! -f "$cache_dir/$rel" ]; then
+            error "Required packaged asset is missing: $cache_dir/$rel"
+            missing=1
+        fi
+    done
+    if [ "$missing" -ne 0 ]; then
+        error "Refusing to create an incomplete $binary package. Re-run without --skip-download, or populate the cache with the indicated asset groups."
+        return 1
+    fi
 }
 
 # ── Write the launcher script ─────────────────────────────────────────────
@@ -350,20 +376,25 @@ create_archive() {
     base="$(basename "$dir")"
     local parent
     parent="$(dirname "$dir")"
+    # UTC makes archive names unambiguous and consistent between local and
+    # GitHub Actions builds. Seconds prevent repeat package runs overwriting
+    # one another while preserving the stable platform/architecture prefix.
+    local timestamp
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     local archive
     if is_windows "$platform"; then
-        archive="${dir}.zip"
+        archive="${dir}-${timestamp}.zip"
         info "Creating .zip archive: $archive"
         if command -v 7z &>/dev/null; then
-            (cd "$parent" && 7z a -tzip "$base.zip" "$base")
+            (cd "$parent" && 7z a -tzip "$base-$timestamp.zip" "$base")
         elif command -v zip &>/dev/null; then
-            (cd "$parent" && zip -r "$base.zip" "$base")
+            (cd "$parent" && zip -r "$base-$timestamp.zip" "$base")
         else
             (cd "$parent" && powershell -NoProfile -Command \
-                "Compress-Archive -Force -Path '$base' -DestinationPath '$base.zip'")
+                "Compress-Archive -Force -Path '$base' -DestinationPath '$base-$timestamp.zip'")
         fi
     else
-        archive="${dir}.tar.gz"
+        archive="${dir}-${timestamp}.tar.gz"
         info "Creating .tar.gz archive: $archive"
         tar -czf "$archive" -C "$parent" "$base"
     fi
@@ -485,6 +516,14 @@ if [ "$NO_CACHE" -eq 0 ] && [ "$SKIP_DOWNLOAD" -eq 0 ]; then
     download_cache_for "$BINARY"
 elif [ "$SKIP_DOWNLOAD" -eq 1 ]; then
     info "Skipping cache download (--skip-download)"
+fi
+
+# `download_cache_for` can continue after an individual download failure to
+# preserve useful diagnostics. Packaging cannot: it must contain every
+# runtime-required file, including sandbox's processed Earth/Moon textures.
+if [ "$NO_CACHE" -eq 0 ] && [ "$BINARY" = "sandbox" ]; then
+    CACHE_SRC="$(resolve_cache_dir)"
+    verify_required_cache_files "$BINARY" "$CACHE_SRC"
 fi
 
 # ── Stage the package ─────────────────────────────────────────────────────
