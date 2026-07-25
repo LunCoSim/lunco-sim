@@ -1,8 +1,8 @@
 //! OS window commands — Minimize / Maximize / Close — and the
 //! `merged_titlebar_window()` helper that configures a `Window` so the
 //! egui menu bar in [`crate::WorkbenchPlugin`] doubles as the OS title
-//! bar (decorations off on Linux/Windows, transparent fullsize titlebar
-//! on macOS).
+//! bar (decorations off on Linux/Windows, transparent fullsize titlebar on
+//! macOS).
 //!
 //! Buttons in the merged title bar fire these commands rather than
 //! mutating the `Window` component directly, so anything that drives
@@ -33,6 +33,16 @@ pub struct MaximizeWindow {
 #[Command(default)]
 pub struct CloseWindow {}
 
+/// Whether the native maximize request needs a monitor-size fallback.
+///
+/// Windows and macOS perform `Window::set_maximized` themselves. A second,
+/// manual `WindowResolution` update races that native resize and can make DX12
+/// reconfigure its swapchain while a backbuffer is still in use. A few Linux
+/// tiling compositors ignore the native request, so only they need the fallback.
+fn needs_manual_maximize_fallback() -> bool {
+    cfg!(target_os = "linux")
+}
+
 #[on_command(MinimizeWindow)]
 fn on_minimize(_trigger: On<MinimizeWindow>, mut q: Query<&mut Window, With<PrimaryWindow>>) {
     if let Ok(mut w) = q.single_mut() {
@@ -54,12 +64,10 @@ fn on_maximize(
         return;
     };
     window.set_maximized(target);
-    // Some Linux compositors (sway/i3, several tilers) ignore the
-    // `set_maximized` request. When asking to maximize, fall back to
-    // resizing to the primary monitor — same end-result without
-    // hardcoding WM behaviour. Only do this on the maximize path; on
+    // Some Linux compositors (sway/i3, several tilers) ignore the native
+    // request, so only they resize to the primary monitor as a fallback. On
     // restore we leave winit to size things back.
-    if target {
+    if target && needs_manual_maximize_fallback() {
         let monitor = primary_monitor
             .single()
             .ok()
@@ -85,6 +93,16 @@ fn on_close(
 
 register_commands!(on_minimize, on_maximize, on_close,);
 
+#[cfg(test)]
+mod tests {
+    use super::needs_manual_maximize_fallback;
+
+    #[test]
+    fn only_linux_uses_the_manual_maximize_fallback() {
+        assert_eq!(needs_manual_maximize_fallback(), cfg!(target_os = "linux"));
+    }
+}
+
 /// Plugin registering the window-control commands ([`MinimizeWindow`],
 /// [`MaximizeWindow`], [`CloseWindow`]) and the [`WindowMaximized`] resource.
 pub struct WindowCommandPlugin;
@@ -96,10 +114,9 @@ impl Plugin for WindowCommandPlugin {
     }
 }
 
-/// Configure a `Window` so the workbench's egui menu bar replaces the
-/// OS title bar — decorations off on Linux/Windows; transparent
-/// fullsize titlebar on macOS so the menu can sit under the native
-/// traffic lights. Spread it into your `WindowPlugin`:
+/// Configure a `Window` so the workbench's egui menu bar replaces the OS title
+/// bar on Linux/Windows; macOS uses a transparent fullsize titlebar. Spread it
+/// into your `WindowPlugin`:
 ///
 /// ```ignore
 /// WindowPlugin {

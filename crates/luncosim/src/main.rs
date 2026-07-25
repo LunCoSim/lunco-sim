@@ -60,8 +60,8 @@ fn main() {
                     ..default()
                 })
                 .set(bevy::render::RenderPlugin {
-                    // DX12 on Windows avoids the Vulkan window-resize panics (depth/color
-                    // size mismatch + SurfaceAcquireSemaphores); other platforms (incl.
+                    // Vulkan on Windows avoids DX12's permanently-invalid swapchain after
+                    // a failed ResizeBuffers call; other platforms (incl.
                     // wasm/WebGL2) keep wgpu defaults. See lunco_workbench::render_robustness.
                     render_creation: lunco_workbench::preferred_wgpu_settings().into(),
                     ..default()

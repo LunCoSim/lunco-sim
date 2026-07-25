@@ -359,8 +359,8 @@ create_archive() {
         elif command -v zip &>/dev/null; then
             (cd "$parent" && zip -r "$base.zip" "$base")
         else
-            powershell -NoProfile -Command \
-                "Compress-Archive -Path '$dir' -DestinationPath '$archive'"
+            (cd "$parent" && powershell -NoProfile -Command \
+                "Compress-Archive -Force -Path '$base' -DestinationPath '$base.zip'")
         fi
     else
         archive="${dir}.tar.gz"
