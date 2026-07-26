@@ -382,14 +382,22 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
 #[cfg(feature = "ui")]
 fn on_skip_tutorial(
     _t: On<SkipTutorial>,
-    mut hud: ResMut<TutorialHud>,
+    // OPTIONAL, because `ui` compiled in does not mean the workbench HUD is
+    // installed: `TutorialHud` belongs to `lunco_workbench`'s overlay plugin, and
+    // a host can run lessons without it (a `ui`-featured build driving the sim
+    // headlessly, and every test of this crate's own execution core). Required,
+    // this observer fails parameter validation and stopping a lesson PANICS —
+    // taking down an app whose only sin was not drawing a HUD.
+    hud: Option<ResMut<TutorialHud>>,
     mut progress: ResMut<TutorialProgress>,
     mut pending: ResMut<PendingAdvance>,
 ) {
-    hud.hint.clear();
-    hud.objectives.clear();
-    hud.spotlight = None;
-    hud.tour = None;
+    if let Some(mut hud) = hud {
+        hud.hint.clear();
+        hud.objectives.clear();
+        hud.spotlight = None;
+        hud.tour = None;
+    }
     progress.current = None;
     pending.0 = None;
 }
