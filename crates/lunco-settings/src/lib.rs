@@ -292,6 +292,38 @@ fn is_test_binary() -> bool {
     false
 }
 
+/// Environment variable that forces the settings plane in-memory for this process.
+///
+/// See [`use_ephemeral_settings`] — set through that function, never by hand.
+pub const EPHEMERAL_SETTINGS_VAR: &str = "LUNCOSIM_EPHEMERAL_SETTINGS";
+
+/// Declare that this process must never write the user's settings file.
+///
+/// [`is_test_binary`] catches `cargo test` harnesses because they live in
+/// `target/<profile>/deps/`. It does **not** catch a harness shipped as a
+/// `[[bin]]` — `scene_test` sits at `target/<profile>/scene_test`, shaped
+/// exactly like the real app, and so inherited full read-write access to the
+/// developer's real `settings.json`.
+///
+/// That is not hypothetical. `scene_test` inserts
+/// `CelestialCadenceSettings::EXACT` (tolerance 0°) for determinism;
+/// [`persist_section`] wrote that 0 to disk, and every subsequent run of the
+/// *sandbox* loaded it back. The celestial cadence gate — whose entire purpose
+/// is to skip a ~10 ms/frame ephemeris solve — then compared `delta >= 0.0`,
+/// which is a tautology, and solved every frame forever. It read as a broken
+/// run condition; it was a poisoned settings file, and it travelled through the
+/// filesystem across processes and across days.
+///
+/// Call this **before** building the `App` (before any
+/// [`AppSettingsExt::register_settings_section`], which is what auto-adds
+/// [`SettingsPlugin`] and performs the initial load). It gates the whole plane,
+/// so a harness declares it once regardless of how many sections it registers.
+pub fn use_ephemeral_settings() {
+    // SAFETY-adjacent: must be called before the App is built, i.e. before any
+    // settings system spawns a thread that could read the environment.
+    unsafe { std::env::set_var(EPHEMERAL_SETTINGS_VAR, "1") };
+}
+
 /// Whether the settings plane may touch the filesystem at all.
 ///
 /// **This is a safety gate, and it defaults to SAFE in tests.**
@@ -312,6 +344,12 @@ fn is_test_binary() -> bool {
 ///
 /// Nine crates register settings sections. Gating here means none of them has to remember.
 fn disk_backed() -> bool {
+    // Checked FIRST, ahead of `LUNCOSIM_CONFIG`: this is the safety direction. A
+    // harness that declared itself ephemeral must stay ephemeral even if the
+    // ambient environment also names a config dir.
+    if std::env::var_os(EPHEMERAL_SETTINGS_VAR).is_some() {
+        return false;
+    }
     // An explicit config dir is an explicit choice — honour it. Tests that want to test
     // persistence set it to a throwaway path.
     if std::env::var_os("LUNCOSIM_CONFIG").is_some() {
@@ -509,6 +547,43 @@ mod disk_guard_tests {
                 !disk_backed(),
                 "a test binary must never read or write the real settings"
             );
+        }
+    }
+
+    /// The opt-out must beat the opt-in. A harness that declared itself ephemeral is
+    /// making a safety claim; an ambient `LUNCOSIM_CONFIG` in the surrounding shell
+    /// must not quietly re-open the developer's real settings file underneath it.
+    ///
+    /// Serial by construction: it mutates process environment, so it restores both
+    /// variables before returning.
+    #[test]
+    fn ephemeral_beats_an_explicit_config_dir() {
+        let prev_cfg = std::env::var_os("LUNCOSIM_CONFIG");
+        let prev_eph = std::env::var_os(EPHEMERAL_SETTINGS_VAR);
+
+        unsafe { std::env::set_var("LUNCOSIM_CONFIG", "/nonexistent/should-not-be-read") };
+        assert!(
+            disk_backed(),
+            "an explicit config dir must still opt a test process back in"
+        );
+
+        use_ephemeral_settings();
+        assert!(
+            !disk_backed(),
+            "`use_ephemeral_settings` must win over LUNCOSIM_CONFIG — this is the guard \
+             that keeps `scene_test` from persisting CelestialCadenceSettings::EXACT into \
+             the developer's real settings.json"
+        );
+
+        unsafe {
+            match prev_cfg {
+                Some(v) => std::env::set_var("LUNCOSIM_CONFIG", v),
+                None => std::env::remove_var("LUNCOSIM_CONFIG"),
+            }
+            match prev_eph {
+                Some(v) => std::env::set_var(EPHEMERAL_SETTINGS_VAR, v),
+                None => std::env::remove_var(EPHEMERAL_SETTINGS_VAR),
+            }
         }
     }
 
