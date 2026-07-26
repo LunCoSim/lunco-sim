@@ -131,6 +131,24 @@ def Xform "SolarDomainNestedRef" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
+    # ── BASELINE: the same electrical island WITHOUT the panel ───────────────
+    # `power = "battery"`, `generation = "none"`: battery and six motors, no
+    # photovoltaic source. It separates two failures that look identical from a
+    # scenario — "generated electrical islands never produce ports" from "the
+    # solar source is what the solver cannot handle". Nothing else in the repo
+    # runs a battery rover, so without this rover that distinction has no witness.
+    def Xform "BatteryOnly" (
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+        variants = {
+            string power = "battery"
+            string generation = "none"
+        }
+    )
+    {
+        double3 xformOp:translate = (0, 1.6, -8)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
     def Scope "Scenario"
     {
         custom string lunco:scenario = "solar-domain-nested-ref"

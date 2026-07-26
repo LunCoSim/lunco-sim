@@ -1,161 +1,149 @@
-// ── The solar variant, one arc deeper ───────────────────────────────────────
+// ── The solar electrical island, at one arc and at two ──────────────────────
 //
-// Runs against `scenes/tests/solar_domain_nested_ref.usda`, which stands two
-// rovers side by side with the SAME two variants selected:
+// Runs against `scenes/tests/solar_domain_nested_ref.usda`, which stands three
+// rovers side by side:
 //
-//   /SolarDomainNestedRef/Direct   scene → base                 (one arc)
-//   /SolarDomainNestedRef/Nested   scene → profile → base       (two arcs)
+//   /SolarDomainNestedRef/BatteryOnly  battery bus, NO panel        (baseline)
+//   /SolarDomainNestedRef/Direct       + solar, scene → base        (one arc)
+//   /SolarDomainNestedRef/Nested       + solar, scene → profile → base (two arcs)
 //
-// `Direct` is the CONTROL. It is the arrangement that ships today and works;
-// `Nested` is how a purchasable rover configuration is actually authored. The
-// arc count is the only difference between them.
+// WHAT IS READ. The generated island's ports, off the `Electrical` scope. They
+// are named by INSTANCE, not by the network's authored `outputs:` — a member's
+// variable surfaces as `<mangled-network-root>_<member>.<var>`, e.g.
 //
-// WHAT IS READ. The electrical island's own ports, off the `Electrical` scope.
-// `project_domain_islands` rejecting a network leaves NO `SimComponent` behind,
-// so the symptom of the reported bug is not an exception, a missing prim or a
-// stopped rover — it is `get(elec, "solar_power") == ()` on a rover that looks
-// entirely healthy. That is exactly why it went unnoticed long enough to be
-// discovered by a workshop build instead of by us.
+//     SolarDomainNestedRef_x2f_BatteryOnly_x2f_Battery.soc_out
 //
-// THE ANTI-TRIVIAL GATE. If the CONTROL has no island either, this rig cannot
-// say anything about nesting — the solar variant would be broken at every depth.
-// The scenario reports that as its own distinct failure rather than as a red on
-// `Nested`, because the two demand different fixes and a report that confuses
-// them sends the next person to the wrong file.
+// (`get(elec, "soc")` reads nothing, whatever `outputs:soc` says on the prim.)
+// An island that never steps publishes no port at all, so absence is the signal.
+//
+// WHAT THIS RIG HAS ESTABLISHED, in the order the layers came off:
+//
+//   1. The domain projection rejected every solar rover with `SolarPanel is
+//      outside collection Electrical`. Cause: a sibling `over "SolarPanel"`
+//      erased the `def` that referenced the component, so the panel composed
+//      with no `LunCoProgramAPI` and `read_network` skipped it. Assets fixed;
+//      both islands now project from 8 components and compile.
+//   2. The reference-arc count was never the problem. `Direct` and `Nested`
+//      have behaved identically at every stage. The workshop report's
+//      "nested profile-reference composition defect" does not exist.
+//   3. What remains is the SOLVER: adding the panel to the battery bus makes
+//      the DAE unsolvable by the rk45 backend —
+//
+//        rk45 backend only supports a narrow explicit ODE subset: algebraic
+//        refresh row 2 cannot be solved for `…Battery.p.i`: the residual does
+//        not depend on it
+//
+//      The baseline rover, same bus without the panel, steps and publishes.
+//      That is why the baseline is in the scene: it is the difference between
+//      "generated islands never work" and "the solar source is what breaks it".
 //
 // Verdict: emit("SOLAR_DOMAIN_NESTED_REF", "PASS"|"FAIL").
 
-/// Whether an electrical island actually exists on `elec`.
+/// A member variable's port name on the island that owns it.
 ///
-/// A rejected projection never wraps a `SimComponent`, so the port is absent
-/// rather than zero. `()` is the answer this test is looking for; 0.0 would be a
-/// panel in the dark, which is a different statement entirely.
-fn island_live(elec) {
+/// `rover` is the rover prim's name; the network root is always its `Electrical`
+/// child, and the mangling replaces each `/` with `_x2f_`.
+fn port_name(rover, member, var) {
+    "SolarDomainNestedRef_x2f_" + rover + "_x2f_" + member + "." + var
+}
+
+/// Whether an island is stepping — i.e. publishing the member port at all.
+fn island_live(elec, rover, member, var) {
     if elec < 0 { return false; }
-    get(elec, "solar_power") != ()
+    get(elec, port_name(rover, member, var)) != ()
 }
 
 fn on_start(me) {
     this.t = 0.0;
 
-    // Modelica for a generated island is compiled asynchronously, so the ports
-    // appear some time after the scene composes. Long enough that a slow cold
-    // compile is not read as a rejected island; the test finishes as soon as
-    // BOTH sides are live, so the deadline only costs time on a real failure.
+    // Modelica compiles asynchronously, so ports appear after the scene
+    // composes. The test decides as soon as every island is up, so the deadline
+    // only costs wall clock on a real failure.
     this.deadline_s = 30.0;
     this.done = false;
 
-    this.d_root = find("/SolarDomainNestedRef/Direct");
-    this.n_root = find("/SolarDomainNestedRef/Nested");
+    this.b_elec = find("/SolarDomainNestedRef/BatteryOnly/Electrical");
     this.d_elec = find("/SolarDomainNestedRef/Direct/Electrical");
     this.n_elec = find("/SolarDomainNestedRef/Nested/Electrical");
     this.d_panel = find("/SolarDomainNestedRef/Direct/SolarPanel");
     this.n_panel = find("/SolarDomainNestedRef/Nested/SolarPanel");
 
-    print("[solar-nested] ── the solar variant, one arc deeper ──────────");
-    print("[solar-nested] direct  root=" + this.d_root + " elec=" + this.d_elec +
-          " panel=" + this.d_panel);
-    print("[solar-nested] nested  root=" + this.n_root + " elec=" + this.n_elec +
-          " panel=" + this.n_panel);
+    print("[solar-nested] ── the solar electrical island, at one arc and at two ──");
+    print("[solar-nested] elec  battery=" + this.b_elec + " direct=" + this.d_elec +
+          " nested=" + this.n_elec);
 }
 
 fn on_tick(me) {
     if this.done { return; }
     this.t += dt();
 
-    // ── Structural guards ────────────────────────────────────────────────────
-    // These are about PRIMS, not ports, so they are decidable immediately and
-    // must not wait out the compile deadline. They also separate the two ways
-    // this can go wrong: a variant that contributed no panel at all is a
-    // different defect from a panel that composed but fell out of the
-    // collection, and only the second one is what the workshop build reported.
-    if this.d_root < 0 || this.n_root < 0 {
-        this.done = true;
-        fail_fast("a rover prim is missing (direct=" + this.d_root + " nested=" +
-                  this.n_root + ") — the scene did not compose, so nothing about " +
-                  "the solar domain was tested",
-                  "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
-        return;
-    }
+    // Structural guard, decidable immediately: the panel prim must compose, and
+    // must arrive as the referenced COMPONENT rather than as the husk a sibling
+    // `over` leaves behind. This is the regression that produced the original
+    // `outside collection` error, and it is a different fix from anything below.
     if this.d_panel < 0 || this.n_panel < 0 {
         this.done = true;
         fail_fast("the generation=\"solar\" variant contributed no SolarPanel prim " +
-                  "(direct=" + this.d_panel + " nested=" + this.n_panel + ") — the " +
-                  "variant selection itself did not compose through the reference, " +
-                  "which is a stronger failure than the collection membership this " +
-                  "rig was written for",
+                  "(direct=" + this.d_panel + " nested=" + this.n_panel + ")",
                   "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
         return;
     }
 
-    let d_live = island_live(this.d_elec);
-    let n_live = island_live(this.n_elec);
+    let b_live = island_live(this.b_elec, "BatteryOnly", "Battery", "soc_out");
+    let d_live = island_live(this.d_elec, "Direct", "SolarPanel", "power_out");
+    let n_live = island_live(this.n_elec, "Nested", "SolarPanel", "power_out");
 
-    // Both up: decide now rather than burning the deadline.
-    if !d_live || !n_live {
+    if !b_live || !d_live || !n_live {
         if this.t < this.deadline_s { return; }
     }
 
     this.done = true;
 
-    print("[solar-nested] direct  solar_power=" + get(this.d_elec, "solar_power") +
-          " soc=" + get(this.d_elec, "soc"));
-    print("[solar-nested] nested  solar_power=" + get(this.n_elec, "solar_power") +
-          " soc=" + get(this.n_elec, "soc"));
-
-    let d_word = if d_live { "yes" } else { "no" };
-    let n_word = if n_live { "yes" } else { "no" };
-    print("[solar-nested] t=" + r2(this.t) + "  direct_island=" + d_word +
-          "  nested_island=" + n_word);
+    let words = if b_live { "battery=up" } else { "battery=DOWN" };
+    words += if d_live { " direct=up" } else { " direct=DOWN" };
+    words += if n_live { " nested=up" } else { " nested=DOWN" };
+    print("[solar-nested] t=" + r2(this.t) + "  " + words);
 
     // ── The anti-trivial gate ────────────────────────────────────────────────
-    if !d_live {
-        let why = "the CONTROL rover has no electrical island either, so the ";
-        why += "profile's second reference arc is NOT the cause. A `prepend` on ";
-        why += "`collection:components:includes` from a stronger layer is not ";
-        why += "reaching the composed collection at ANY depth — the same failure ";
-        why += "the shipped scenes/sandbox/solar_rover_demo.usda has, where the ";
-        why += "membership is authored in the scene itself. Fix the relationship ";
-        why += "list-op composition behind StageView::rel_targets (the ";
-        why += "`explicitOnly` path of collection_members); re-authoring assets ";
-        why += "cannot fix it, and this rig stays red until it is";
+    // The baseline carries no panel, so it is unaffected by everything this rig
+    // is about. If IT is down, generated electrical islands are broken outright
+    // and neither solar result means anything.
+    if !b_live {
+        let why = "the BASELINE battery island (no panel) publishes no ports " +
+                  "either, so generated electrical islands are not working at " +
+                  "all and nothing here is a statement about solar. Fix that " +
+                  "first — the two solar rovers cannot be read until it is up";
         fail_fast(why, "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
         return;
     }
 
     let f = [];
 
-    // ── The claim under test ─────────────────────────────────────────────────
-    let msg = "the NESTED rover (scene → profile → base) has no electrical ";
-    msg += "island while the identically-configured DIRECT rover (scene → base) ";
-    msg += "does. The extra reference arc is the only difference: the solar ";
-    msg += "variant's absolute-path `collection:components:includes` did not ";
-    msg += "survive it, so project_domain_islands rejected the network";
-    f.push(t_true(n_live, msg));
+    // ── The claims under test ────────────────────────────────────────────────
+    let m_solar = "the solar island does not step: adding the panel to a bus " +
+                  "that works without it makes the DAE unsolvable by the rk45 " +
+                  "backend (`algebraic refresh row 2 cannot be solved for " +
+                  "Battery.p.i`). The baseline proves the island machinery is " +
+                  "fine; the photovoltaic source is what it cannot handle";
+    f.push(t_true(d_live, "direct (one reference arc): " + m_solar));
+    f.push(t_true(n_live, "nested (two reference arcs): " + m_solar));
 
-    // A live island must also carry a plausible number. `solar_power` is
-    // authored nameplate × a fixed unit incidence, so it is large and positive
-    // on both rovers; a live port reading 0.0 would mean the panel joined the
-    // collection but contributes nothing, which is not a pass.
-    let d_p = get(this.d_elec, "solar_power");
-    f.push(t_true(d_p > 0.0,
-        "direct solar_power = " + r2(d_p) + ", expected > 0 — the panel is in the " +
-        "island but generating nothing"));
+    // Arc count is a SEPARATE claim from whether solar works at all. Asserted on
+    // its own so a future regression that breaks only the profile path is not
+    // hidden behind the solver failure both rovers currently share.
+    f.push(t_true(d_live == n_live,
+        "the two rovers disagree (direct=" + d_live + " nested=" + n_live + ") — " +
+        "identical variant selection, so the reference-arc count has started to " +
+        "matter, which it never has at any earlier stage of this rig"));
 
-    if n_live {
-        let n_p = get(this.n_elec, "solar_power");
-        f.push(t_true(n_p > 0.0,
-            "nested solar_power = " + r2(n_p) + ", expected > 0"));
+    if d_live && n_live {
+        let d_p = get(this.d_elec, port_name("Direct", "SolarPanel", "power_out"));
+        let n_p = get(this.n_elec, port_name("Nested", "SolarPanel", "power_out"));
+        f.push(t_true(d_p > 0.0,
+            "direct panel power_out = " + r2(d_p) + ", expected > 0"));
         f.push(t_rel(n_p, d_p, 1.0,
-            "nested solar_power (" + r2(n_p) + ") and direct (" + r2(d_p) + ") " +
-            "disagree — same panel, same nameplate, so the profile changed " +
-            "something it was written not to change"));
-
-        // `soc` comes from the power variant, not the generation variant. It is
-        // read so a pass says the whole island composed rather than just the one
-        // member this bug is about.
-        f.push(t_present(get(this.n_elec, "soc"),
-            "nested soc is absent — the battery half of the island is missing too"));
+            "nested panel power_out (" + r2(n_p) + ") and direct (" + r2(d_p) +
+            ") disagree — same component, same nameplate"));
     }
 
     report_verdict(f, "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
