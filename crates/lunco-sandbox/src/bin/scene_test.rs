@@ -434,6 +434,17 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
 }
 
 fn main() -> std::process::ExitCode {
+    // BEFORE the `App` exists, because building it registers settings sections and
+    // that is what loads (and installs the flush for) `settings.json`.
+    //
+    // A harness must not write the developer's real settings. `is_test_binary()`
+    // cannot see this one — a `[[bin]]` lands next to the real app, not in
+    // `deps/` — so it says so out loud. This is not defensive tidiness: the
+    // `CelestialCadenceSettings::EXACT` inserted below used to persist, and every
+    // later run of the *sandbox* then loaded tolerance 0° and solved the whole
+    // celestial tree every frame.
+    lunco_settings::use_ephemeral_settings();
+
     let cli = match parse_args() {
         Ok(c) => c,
         Err(msg) => {
