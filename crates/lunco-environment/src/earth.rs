@@ -83,14 +83,45 @@ pub fn compute_local_earth(
         (Entity, Option<&LocalEarth>, Option<&GlobalTransform>),
         With<lunco_cosim::SimComponent>,
     >,
+    // One-shot latch for the no-data diagnostic below. Latched rather than
+    // rate-limited: "nobody has said where Earth is" is a structural fact about
+    // the scene, so it would otherwise repeat every frame for the scene's life.
+    mut warned: Local<bool>,
 ) {
     if q_targets.is_empty() {
         return;
     }
     // Absent OR degenerate is the same fact: nobody has told us where Earth is.
+    //
+    // SAY SO. Refusing to publish is correct — a zero direction through the angle
+    // math is `atan2(0,0) = 0`, due north on the horizon, which a dish would swing
+    // to and hold (see the test below). But returning in silence is how an
+    // Earth-tracking antenna comes to sit perfectly still on a vehicle that is
+    // otherwise working, on every host in the scene at once, with the model
+    // compiled, the program bound and every wire landed. There is no other
+    // symptom, and nothing downstream can tell "Earth is dead ahead" from "no
+    // ephemeris".
+    let present = dir.is_some();
     let Some(dir) = dir.filter(|d| d.0.is_finite() && d.0.length_squared() > 1.0e-12) else {
+        if !*warned {
+            *warned = true;
+            warn!(
+                "[environment] {} co-sim model(s) want a local Earth direction, but \
+                 `EarthDirectionWorld` is {} — no Earth-relative port will be published and \
+                 every Earth-tracking mechanism will hold its authored pose. This is written \
+                 by `lunco-celestial` from the ephemeris: the scene needs celestial content \
+                 (a `celestial/solar_system.usda` reference) AND a solar frame it could \
+                 actually anchor.",
+                q_targets.iter().count(),
+                if present { "degenerate" } else { "absent" },
+            );
+        }
         return;
     };
+    if *warned {
+        *warned = false;
+        info!("[environment] local Earth direction is available again");
+    }
     for (entity, existing, gt) in &q_targets {
         // A joint's target is measured in its parent/mount frame.  Subtracting
         // only a compass heading is not a frame transform: once a rover pitches

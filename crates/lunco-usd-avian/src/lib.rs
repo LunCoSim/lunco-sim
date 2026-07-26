@@ -2471,16 +2471,44 @@ pub struct PendingJoint<J: Component + Clone> {
 /// (`lunco_physics`'s readiness freeze holds a vehicle whose model is still
 /// compiling). Both cases panic in `merge_islands`.
 ///
+/// **A STATIC body is admitted by construction.** Islands exist to manage
+/// simulation and sleep for bodies the solver integrates, so avian never gives a
+/// `RigidBody::Static` a `BodyIslandNode` — and demanding one of both endpoints
+/// meant a joint anchored to static geometry waited for a component that would
+/// never arrive. Forever, and silently: there is no terminal state and nothing
+/// logs.
+///
+/// That is not a corner case, it is how every mounted mechanism attaches to
+/// fixed infrastructure. A comms mast's dish, a dish on a tower, a hinge on a
+/// habitat — all of them are a dynamic link jointed to something that does not
+/// move. It is the real reason `components/comms/antenna.usda` never tracked
+/// Earth on `structures/comms_mast.usda`: that mount's `body0` was the tower, a
+/// standalone static collider. The namespace the joint was authored in, which is
+/// where that bug was first hunted, had nothing to do with it.
+///
+/// At least one endpoint must still be a genuine island member: avian's
+/// `merge_islands` asserts on a pair where *neither* body has one
+/// (`islands/mod.rs`, "Neither body … is in an island"), and a joint welding two
+/// pieces of static geometry constrains nothing the solver would ever integrate.
+///
 /// Registered per joint type by [`UsdAvianPlugin`]. A pending joint whose bodies
 /// never arrive simply never installs — the same disposition as an unresolved
 /// [`PendingUsdJoint`], and it dies with its scene.
 pub fn admit_pending_joints<J: Component + Clone>(
     pending: Query<(Entity, &PendingJoint<J>)>,
     admitted: Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
+    bodies: Query<&RigidBody>,
     mut commands: Commands,
 ) {
     for (entity, p) in pending.iter() {
-        if !admitted.contains(p.body0) || !admitted.contains(p.body1) {
+        let ready = |e: Entity| {
+            admitted.contains(e) || bodies.get(e).map(RigidBody::is_static).unwrap_or(false)
+        };
+        if !ready(p.body0) || !ready(p.body1) {
+            continue;
+        }
+        // Both static ⇒ nothing to solve, and avian panics on the pair.
+        if !admitted.contains(p.body0) && !admitted.contains(p.body1) {
             continue;
         }
         commands
@@ -3249,6 +3277,23 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             "the anchor must be derived in the RESOLVED body's frame: {:?}",
             j.local_pos0
         );
+    }
+
+    /// A STATIC host is still a body to mount on. A comms mast does not move, and
+    /// its dish still has to yaw against it.
+    #[test]
+    fn a_mechanism_mounts_on_a_static_host_body() {
+        let stage = write_and_compose(
+            "mount_static.usda",
+            &MOUNT_FIXTURE.replace(
+                "def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n",
+                "def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
+                 bool physics:rigidBodyEnabled = false\n",
+            ),
+        );
+        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Host/Mount/YawJoint").unwrap())
+            .expect("a joint mounted on a static body still reads");
+        assert_eq!(j.body0_path, "/Host");
     }
 
     #[test]

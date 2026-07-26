@@ -51,10 +51,25 @@ def Xform "AntennaMountTest" (
 {
     uniform bool lunco:spawnable = false
 
-    # Same site as the other comms scenes, so the tracker has a real Earth
-    # direction to point at rather than a degenerate one.
+    # Celestial content is OPT-IN per scene, and this scene needs it: the whole
+    # point of the mount is that the dish TRACKS something, and `EarthTracker`
+    # has nothing to point at until a scene declares where Earth is. Without
+    # this every mount below attaches correctly and sits perfectly still, which
+    # is the failure the `slewed` assertion exists to catch.
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
+    # A high-latitude site like the other comms scenes, but deliberately OFF the
+    # prime meridian. The sub-Earth point is lat 0 lon 0, so from lon 0 Earth sits
+    # due north and the correct yaw azimuth is genuinely ~0 — a site where a dish
+    # that tracks perfectly and a dish welded shut produce the same reading, and
+    # the `slewed` assertion below cannot tell them apart. At lon 60 the answer is
+    # tens of degrees off north, so zero means broken.
     double lunco:anchor:lat = -85.0
-    double lunco:anchor:lon = 0.0
+    double lunco:anchor:lon = 60.0
     double lunco:anchor:height = 0.0
     int lunco:anchor:body = 301
 
@@ -66,13 +81,12 @@ def Xform "AntennaMountTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Xform "Lander" (
-        prepend references = @lunco://vessels/landers/descent_lander.usda@</DescentLander>
-    )
-    {
-        double3 xformOp:translate = (0, 0.5, -14.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
+    # (No lander. It mounts the same antenna the same way — a direct child of a
+    # dynamic body, which `Rover` already covers — and it drags in the plume,
+    # landing-leg and light wires, which target shader parameters no build can
+    # claim: `ShaderLook::driven` is populated nowhere outside its own unit test,
+    # so those wires never land and the harness fails the scene on a dead
+    # subsystem this test is not about. Put the lander back when that is fixed.)
 
     def Xform "Mast" (
         prepend references = @lunco://structures/comms_mast.usda@</CommsMast>
@@ -122,12 +136,22 @@ def Xform "AntennaMountTest" (
             double3 xformOp:translate = (0, 0.5, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
 
-            # Stock UsdPhysics. Declared `bool`, NOT `uniform bool` — spelling it
-            # uniform is a variability mismatch and the override is ignored, which
-            # would quietly turn this control into a fifth positive case.
-            over "YawJoint"
+            # `active = false` takes the joint off the composed stage entirely —
+            # the prim AND the `inputs:angle.connect` it carries. This is the
+            # idiom `components/comms/ground_station.usda` uses to park its dish,
+            # and it is the right one for a mount you do not want at all.
+            #
+            # NOT `physics:jointEnabled = false`, which keeps the prim and only
+            # stops it being simulated: the component's wire then targets an
+            # `angle` port that will never exist, and the harness's never-landed
+            # gate flags it — correctly. Both spellings are supported (the
+            # `jointEnabled` path is covered by `joint_disabled_by_physics_joint_\
+            # enabled_is_not_built` in `lunco-usd-avian`); they differ in whether
+            # the wire survives, and only one of them leaves the scene clean.
+            over "YawJoint" (
+                active = false
+            )
             {
-                bool physics:jointEnabled = false
             }
         }
     }

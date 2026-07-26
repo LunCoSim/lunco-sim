@@ -153,15 +153,10 @@ def Xform "CommsDemoScene" (
         }
     }
 
-    def PhysicsRevoluteJoint "BaseMastYawJoint"
-    {
-        rel physics:body0 = </CommsDemoScene/BaseMast>
-        rel physics:body1 = </CommsDemoScene/BaseMast/YawHead>
-        uniform token physics:axis = "Y"
-        point3f physics:localPos0 = (0, 3.2, 0)
-        point3f physics:localPos1 = (0, 0, 0)
-        float inputs:angle.connect = </CommsDemoScene/BaseMast/EarthTrackerController.outputs:az>
-    }
+    # (No yaw joint here. The antenna component owns it and mounts by ancestry —
+    # this prim IS the component's root and carries the body, so the mount
+    # resolves to itself. A second joint across the same pair would double the
+    # constraint.)
 
     # Lunar relay on its default ELFO (elements on the asset; override here to
     # reposition). Placed on the Moon's grid by the celestial systems when the
