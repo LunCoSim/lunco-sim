@@ -26,9 +26,7 @@
 //! `def Camera "ChaseCam"` under a rover Xform) rides it via normal `ChildOf`
 //! transform propagation — that's "camera on a rover" for free.
 
-use bevy::camera::Exposure;
 use bevy::prelude::*;
-use lunco_render::SceneCamera;
 use openusd::sdf::Path as SdfPath;
 
 use crate::read::UsdRead;

@@ -764,10 +764,37 @@ fn on_set_mission_epoch(
     trigger: On<SetMissionEpoch>,
     tick: Res<crate::SimTick>,
     mut clock: ResMut<crate::MissionClock>,
+    clocks: Option<Res<Clocks>>,
+    resolved: Res<ResolvedDomains>,
+    mut q: Query<&mut TimeDomain>,
 ) {
     let jd = trigger.event().epoch_jd;
     *clock = crate::MissionClock::anchored(jd, tick.0);
-    bevy::log::info!("[time] mission epoch re-anchored to JD {jd:.4}");
+
+    // The epoch is TWO terms — `mission_epoch0_jd + celestial_t / 86400` (see
+    // `write_epoch_from_celestial_clock`) — so re-anchoring alone does not set
+    // the date. It moves the first term and leaves the second holding whatever
+    // the celestial clock had accumulated, or an `offset` a previous seek solved
+    // against the PREVIOUS anchor. That residue lands on the sky as a jump: a
+    // twin whose stage authors JD 2461007.66944 rendered at 2460926.74 — 81 days
+    // early, so the wrong sun, the wrong shadows and the wrong Earth — and at
+    // 100 000× the same residue reappeared multiplied, moving the epoch 80 694
+    // days in one step.
+    //
+    // Zeroing the clock's local time here is what makes the command mean what it
+    // says: with `celestial_t == 0`, `epoch_jd == jd` exactly, this frame.
+    // `offset -= local_t` works for a derived clock and a detached (root) one
+    // alike — it cancels the resolved local time without needing to know which
+    // source feeds it.
+    if let Some(clocks) = clocks {
+        if let Ok(mut domain) = q.get_mut(clocks.celestial) {
+            let local_t = resolved.get(clocks.celestial).unwrap_or(0.0);
+            if local_t != 0.0 {
+                domain.offset -= local_t;
+            }
+        }
+    }
+    bevy::log::info!("[time] mission epoch re-anchored to JD {jd:.4} (celestial clock zeroed)");
 }
 
 /// Which well-known clock a [`SetClock`] targets.
@@ -823,15 +850,60 @@ pub struct SetClock {
     pub epoch_jd: Option<f64>,
 }
 
+/// The time a clock's affine maps FROM — its parent's time if it is derived, its
+/// root's source if it is a root.
+///
+/// Every continuity solve is `offset = want_local − scale · source_t`, so this is
+/// the one question all three [`SetClock`] branches must ask. They used to guess
+/// it instead, each differently: the rate branch fell back to the clock's own
+/// `local_t` and the seek branch to `0.0`, both of which are wrong for a ROOT
+/// clock — and the celestial clock (the one users actually scale) is a root.
+///
+/// The cost was measured, not theoretical. With the fallback, the first rate
+/// click happens to be continuous (while `scale == 1, offset == 0` a root's
+/// `local_t` equals its source), and every later click jumps by
+/// `scale · (scale_prev − 1) · Δt`: the sky moved −17 d at 1000×, +169 637 d at
+/// 10 000×, and at 100 000× the epoch went NEGATIVE (JD −1.7e10). That is the
+/// "sun jumps when I click a rate" bug.
+fn clock_source_time(
+    domain: &TimeDomain,
+    root: Option<&ClockRoot>,
+    resolved: &ResolvedDomains,
+    roots: RootTimes,
+) -> f64 {
+    // `parent` first: a re-parent in this same command has already written it,
+    // and a derived clock ignores any `ClockRoot` it still carries.
+    if let Some(parent) = domain.parent {
+        return resolved.get(parent).unwrap_or(0.0);
+    }
+    match root {
+        Some(ClockRoot::Tick) => roots.sim_secs,
+        Some(ClockRoot::Wall) => roots.wall_secs,
+        Some(ClockRoot::Epoch) => roots.epoch_secs,
+        // Neither parent nor root: `resolve_clocks` treats this as sim-rooted.
+        None => roots.sim_secs,
+    }
+}
+
 #[on_command(SetClock)]
 fn on_set_clock(
     trigger: On<SetClock>,
     clocks: Option<Res<Clocks>>,
     mission: Res<crate::MissionClock>,
     resolved: Res<ResolvedDomains>,
+    world: Res<WorldTime>,
+    real: Res<Time<Real>>,
+    q_root: Query<&ClockRoot>,
     mut q: Query<&mut TimeDomain>,
     mut commands: Commands,
 ) {
+    // The same raw inputs `resolve_clocks` will use this frame, so a solve here
+    // and the resolve that follows agree on where the clock's time comes from.
+    let roots = RootTimes {
+        sim_secs: world.sim_secs,
+        wall_secs: real.elapsed_secs_f64(),
+        epoch_secs: world.met_secs,
+    };
     let Some(clocks) = clocks else { return };
     let cmd = trigger.event();
     let target = match cmd.clock {
@@ -839,6 +911,9 @@ fn on_set_clock(
         ClockId::Interaction => clocks.interaction,
         ClockId::Sim => clocks.sim,
     };
+    // Read the root BEFORE borrowing the domain mutably: which source feeds this
+    // clock is what every solve below is relative to.
+    let root = q_root.get(target).ok();
     let Ok(mut domain) = q.get_mut(target) else {
         return;
     };
@@ -857,19 +932,16 @@ fn on_set_clock(
         // unchanged this frame. Without this, detaching the sky would jump it by
         // the difference between wall-elapsed and sim-elapsed seconds.
         let local_t = resolved.get(target).unwrap_or(0.0);
-        let parent_t = resolved.get(domain.parent.unwrap()).unwrap_or(0.0);
-        domain.offset = local_t - domain.scale * parent_t;
+        let source_t = clock_source_time(&domain, root, &resolved, roots);
+        domain.offset = local_t - domain.scale * source_t;
     }
     if let Some(scale) = cmd.scale {
         // Same continuity rule for a rate change: re-solve the offset so the clock
-        // changes SPEED without jumping.
+        // changes SPEED without jumping — against its SOURCE, whatever that is.
         let local_t = resolved.get(target).unwrap_or(0.0);
-        let parent_t = domain
-            .parent
-            .and_then(|p| resolved.get(p))
-            .unwrap_or(local_t);
+        let source_t = clock_source_time(&domain, root, &resolved, roots);
         domain.scale = scale;
-        domain.offset = local_t - scale * parent_t;
+        domain.offset = local_t - scale * source_t;
     }
     if let Some(offset) = cmd.offset {
         domain.offset = offset;
@@ -879,8 +951,8 @@ fn on_set_clock(
     if let Some(epoch_jd) = cmd.epoch_jd {
         if matches!(cmd.clock, ClockId::Celestial) {
             let want_t = (epoch_jd - mission.mission_epoch0_jd) * crate::SECS_PER_DAY;
-            let parent_t = domain.parent.and_then(|p| resolved.get(p)).unwrap_or(0.0);
-            domain.offset = want_t - domain.scale * parent_t;
+            let source_t = clock_source_time(&domain, root, &resolved, roots);
+            domain.offset = want_t - domain.scale * source_t;
             bevy::log::info!("[time] celestial clock seeked to JD {epoch_jd:.4}");
         }
     }
@@ -1017,12 +1089,36 @@ pub fn write_epoch_from_celestial_clock(
     resolved: Res<ResolvedDomains>,
     mission: Res<crate::MissionClock>,
     mut world: ResMut<WorldTime>,
+    q_domain: Query<&TimeDomain>,
+    mut last_epoch: Local<f64>,
 ) {
     let Some(clocks) = clocks else { return };
     let Some(celestial_t) = resolved.get(clocks.celestial) else {
         return;
     };
-    world.epoch_jd = mission.mission_epoch0_jd + celestial_t / crate::SECS_PER_DAY;
+    let next = mission.mission_epoch0_jd + celestial_t / crate::SECS_PER_DAY;
+
+    // The sky is supposed to move CONTINUOUSLY unless something seeks it. A
+    // discontinuity here is visible as the sun teleporting across the sky, and
+    // it silently invalidates everything derived from the epoch — a scene
+    // rendered at the wrong date has the wrong sun, the wrong shadows and the
+    // wrong Earth. Measured: a rate change moved the epoch by 80 694 days, and a
+    // twin load left it 81 days BELOW the epoch the scene authors.
+    //
+    // A day per frame is far above any legitimate rate the tree can produce in
+    // one step at ≤100 000× (100 000 × a 0.1 s frame ≈ 0.12 d), so this reports
+    // discontinuities, not fast-forward.
+    let jump = next - *last_epoch;
+    if last_epoch.is_finite() && *last_epoch != 0.0 && jump.abs() > 1.0 {
+        let d = q_domain.get(clocks.celestial).ok();
+        warn!(
+            "[time] celestial epoch DISCONTINUITY: {:.5} → {next:.5} JD ({jump:+.3} d) — \
+             celestial_t {celestial_t:.3}s, mission_epoch0 {:.5} JD, domain {:?}",
+            *last_epoch, mission.mission_epoch0_jd, d,
+        );
+    }
+    *last_epoch = next;
+    world.epoch_jd = next;
 }
 
 #[cfg(test)]
