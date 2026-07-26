@@ -1149,6 +1149,22 @@ pub fn rewire_usd_connections(
             let Some(sink_conn) = attr.strip_prefix("inputs:") else {
                 continue;
             };
+            // `Gearbox.inputs:torque ← Motor.outputs:torque` is a real USD
+            // connection, but — exactly like the `LunCoEvent.inputs:trigger` skip
+            // above — its consumer is NOT the scalar `SimConnection` fabric. It is a
+            // STRUCTURAL/topology binding: `powertrain::find_for_wheel` reads it at
+            // PARSE to discover which motor feeds this gearbox, then folds
+            // `stallTorque × ratio × efficiency` into a static `WheelParams`. The
+            // live axle torque is written every tick by `MotorActuator`, never
+            // through this port — nothing ever registers a `torque` backend on a
+            // gearbox. Materialising it as a live wire leaves a target no backend
+            // claims, which (because every gearbox carries a `piloted` marker port,
+            // so `has_port_surface` is true) propagation reports as a genuine
+            // dangling wire on every tick, forever. The coupling is already
+            // resolved; do not build a phantom wire for it.
+            if sink_conn == "torque" && view.has_api_schema(&sink_sdf, "LunCoGearboxAPI") {
+                continue;
+            }
             // SSP `LinearTransformation`: the propagated value is `src * factor +
             // offset`. Authored on the sink prim, keyed by the consuming port
             // (`lunco:factor:<port>` / `:offset:<port>`), so each input carries its
