@@ -98,10 +98,18 @@ impl From<ApiRequestUnified> for ApiRequest {
                 id: env.id.unwrap_or(0),
             },
             None if env.command.is_some() => {
-                // Legacy format: {"command": "...", "params": {...}}
+                // Legacy format: {"command": "...", "params": {...}}. Promote any
+                // leftover top-level fields into `params` too — exactly as the
+                // typed shape below does — so `{"command":"SetCamera","eye":[...]}`
+                // delivers `eye` instead of silently dropping it and firing the
+                // command with `Default::default()`. (The two forms drifting here
+                // was the "malformed args silently discarded" trap.)
+                let params = env
+                    .params
+                    .unwrap_or_else(|| serde_json::Value::Object(env.extra.into_iter().collect()));
                 ApiRequest::ExecuteCommand {
                     command: env.command.unwrap_or_default(),
-                    params: env.params.unwrap_or_default(),
+                    params,
                 }
             }
             _ => {
@@ -164,6 +172,33 @@ mod tests {
             .is_err(),
             "string ids should be rejected; ids are numbers"
         );
+    }
+
+    /// Legacy `{"command":"X", <top-level args>}` (params put at the top level
+    /// instead of under a `params` envelope) must deliver those args, not drop
+    /// them. This is the exact silent-default trap: before, `eye` landed in
+    /// `extra` and the command fired with empty params.
+    #[test]
+    fn legacy_command_form_promotes_top_level_fields_into_params() {
+        match parse(r#"{"command":"SetCamera","eye":[1.0,2.0,3.0]}"#) {
+            ApiRequest::ExecuteCommand { command, params } => {
+                assert_eq!(command, "SetCamera");
+                assert_eq!(params["eye"], serde_json::json!([1.0, 2.0, 3.0]));
+            }
+            other => panic!("expected ExecuteCommand, got {other:?}"),
+        }
+    }
+
+    /// An explicit `params` envelope still wins verbatim in the legacy form.
+    #[test]
+    fn legacy_command_form_keeps_explicit_params() {
+        match parse(r#"{"command":"SetCamera","params":{"eye":[4.0,5.0,6.0]}}"#) {
+            ApiRequest::ExecuteCommand { command, params } => {
+                assert_eq!(command, "SetCamera");
+                assert_eq!(params["eye"], serde_json::json!([4.0, 5.0, 6.0]));
+            }
+            other => panic!("expected ExecuteCommand, got {other:?}"),
+        }
     }
 
     #[test]

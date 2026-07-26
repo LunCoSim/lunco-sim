@@ -736,11 +736,30 @@ const OVERTURN_SETTLE_SECS: f32 = 3.0;
 const OVERTURN_UP_DOT: f64 = 0.2;
 /// Resting speed gates (m/s, rad/s) for the settle timer.
 const OVERTURN_REST_SPEED: f64 = 0.5;
+/// After this many consecutive righting attempts that fail to stick, stop
+/// intervening and emit ONE structured failure instead of re-firing forever. A
+/// pose that reverts to overturned every time — a body re-authored by USD
+/// projection each step, or a static structure wrongly given `KeepUpright` — is a
+/// scene bug the runtime cannot fix by repeating the rotation, and the old code
+/// logged a fresh "auto-righted" success on every cycle (~once/min, indefinitely).
+const MAX_RESCUE_ATTEMPTS: u32 = 3;
 
-/// Seconds a `KeepUpright` body has spent resting overturned (see
-/// [`rescue_overturned_vessels`]). Inserted/removed by that system.
+/// Rescue progress for a `KeepUpright` root resting overturned (see
+/// [`rescue_overturned_vessels`]). Inserted when the body first settles
+/// overturned, removed the moment it is upright or moving again. `secs` is the
+/// settle timer; `attempts` counts righting interventions so an ineffective loop
+/// can be capped at [`MAX_RESCUE_ATTEMPTS`].
 #[derive(Component, Default)]
-pub struct OverturnedTimer(f32);
+pub struct OverturnedTimer {
+    secs: f32,
+    attempts: u32,
+}
+
+/// Marks a vessel whose righting kept reverting: [`rescue_overturned_vessels`]
+/// gives up on it (one failure diagnostic, then silence) until it is upright or
+/// moving again, at which point the marker and its [`OverturnedTimer`] are cleared.
+#[derive(Component)]
+pub struct RescueFailed;
 
 /// Auto-right overturned vessels: a [`lunco_core::KeepUpright`] Dynamic root that
 /// rests near-motionless with its up-axis at or below the horizon for
@@ -764,6 +783,7 @@ pub fn rescue_overturned_vessels(
     // that later writes them) — reading them here too would be a B0001 conflict.
     roots: Query<Entity, With<lunco_core::KeepUpright>>,
     mut timers: Query<&mut OverturnedTimer>,
+    failed: Query<(), With<RescueFailed>>,
     mut bodies: Query<(
         &RigidBody,
         &mut avian3d::prelude::Position,
@@ -788,9 +808,19 @@ pub fn rescue_overturned_vessels(
             && ang.is_none_or(|w| w.0.length() < OVERTURN_REST_SPEED);
         let pivot = pos.0;
         if up.y > OVERTURN_UP_DOT || !resting {
+            // Upright or moving: healthy. Clear both the settle timer and any
+            // prior give-up marker so a legitimate one-shot rescue resets to a
+            // zero attempt count and a re-tip starts fresh.
             if timers.contains(root) {
                 commands.entity(root).try_remove::<OverturnedTimer>();
             }
+            if failed.contains(root) {
+                commands.entity(root).try_remove::<RescueFailed>();
+            }
+            continue;
+        }
+        // Still overturned after we already gave up on it: stay silent.
+        if failed.contains(root) {
             continue;
         }
         // Overturned and at rest: run the settle timer before intervening.
@@ -798,11 +828,16 @@ pub fn rescue_overturned_vessels(
             commands.entity(root).try_insert(OverturnedTimer::default());
             continue;
         };
-        timer.0 += time.delta_secs();
-        if timer.0 < OVERTURN_SETTLE_SECS {
+        timer.secs += time.delta_secs();
+        if timer.secs < OVERTURN_SETTLE_SECS {
             continue;
         }
-        commands.entity(root).try_remove::<OverturnedTimer>();
+        // Consume the settle window and record the attempt. The timer persists
+        // (not removed) so consecutive ineffective righting attempts accumulate
+        // toward the cap instead of each looking like a first-time success.
+        timer.secs = 0.0;
+        timer.attempts += 1;
+        let attempt = timer.attempts;
         // Rigid righting transform about the root's own position: shortest arc
         // from the current up to world up (an exact 180° flip picks an arbitrary
         // axis — any righting is fine there).
@@ -857,11 +892,28 @@ pub fn rescue_overturned_vessels(
             }
         }
         warn!(
-            "[collider-ring] auto-righted overturned vessel {root:?} ({} bodies): \
-             up·Y was {:.2}, lifted {lift:.1} m, velocities zeroed",
+            "[collider-ring] auto-right attempt {attempt}/{MAX_RESCUE_ATTEMPTS} on \
+             overturned vessel {root:?} ({} bodies): up·Y was {:.2}, lifted {lift:.1} m, \
+             velocities zeroed",
             members.len(),
             up.y,
         );
+        // If the pose keeps reverting to overturned across the cap, the rotation
+        // is not the fix (the pose is re-authored elsewhere, or this entity should
+        // not be `KeepUpright`). Give up with one structured diagnostic; the marker
+        // clears itself once the vessel is upright or moving again.
+        if attempt >= MAX_RESCUE_ATTEMPTS {
+            commands.entity(root).try_insert(RescueFailed);
+            error!(
+                "[collider-ring] auto-right FAILED for vessel {root:?} ({} bodies): \
+                 still overturned (up·Y {:.2}) after {MAX_RESCUE_ATTEMPTS} attempts, \
+                 lift {lift:.1} m — pose reverts every cycle; check that this entity \
+                 should carry KeepUpright and is not being re-authored each step. \
+                 No further attempts until it is upright again.",
+                members.len(),
+                up.y,
+            );
+        }
     }
 }
 
