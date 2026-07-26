@@ -26,9 +26,7 @@
 //! `def Camera "ChaseCam"` under a rover Xform) rides it via normal `ChildOf`
 //! transform propagation — that's "camera on a rover" for free.
 
-use bevy::camera::Exposure;
 use bevy::prelude::*;
-use lunco_render::SceneCamera;
 use openusd::sdf::Path as SdfPath;
 
 use crate::read::UsdRead;
@@ -138,12 +136,8 @@ pub(crate) fn instantiate_camera_prim(
         // into `Camera3d` + `Tonemapping::AgX` + MSAA in render builds; headless
         // it stays pure scene data. Every "which entity is the scene camera?"
         // query filters `With<SceneCamera>`.
-        SceneCamera::agx(),
+        lunco_render::scene_camera_look(read_camera_exposure_ev100(reader, sdf_path)),
         projection,
-        Exposure {
-            ev100: read_camera_exposure_ev100(reader, sdf_path)
-                .unwrap_or(lunco_render::LUNAR_SUN_EXPOSURE_EV100),
-        },
     ));
 
     info!(

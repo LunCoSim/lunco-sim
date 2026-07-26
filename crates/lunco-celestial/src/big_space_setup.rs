@@ -783,12 +783,11 @@ pub fn setup_big_space_hierarchy(
                 // Tonemapping uses AgX (`ToneMap::default()`). SMAA was already
                 // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
                 // fix on main).
-                SceneCamera::default(),
-                // Physical exposure paired with the canonical sun illuminance
-                // (single source of truth — lunco_environment::LunarSun).
-                bevy::camera::Exposure {
-                    ev100: ls.exposure_ev100,
-                },
+                // Grade + physical exposure from the ONE constructor every scene
+                // camera uses (`lunco_render::scene_camera_look`), paired with the
+                // canonical sun illuminance (single source of truth —
+                // lunco_environment::LunarSun).
+                lunco_render::scene_camera_look(Some(ls.exposure_ev100)),
                 Projection::Perspective(PerspectiveProjection {
                     near: 1.0,
                     far: 1.0e15,

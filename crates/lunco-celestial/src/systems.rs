@@ -1,3 +1,4 @@
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
 
@@ -42,7 +43,7 @@ pub fn ephemeris_update_system(
     // `Local<f64>` comparing against 1e-9 JD — i.e. "did the epoch change at
     // all" — which meant a running clock re-projected the whole body/frame
     // hierarchy every single frame. It is now the shared
-    // `cadence::celestial_epoch_advanced` run condition, on an angular error
+    // `cadence::celestial_needs_solve` run condition, on an angular error
     // budget, applied at registration alongside the other four celestial
     // systems.
     //
@@ -279,8 +280,8 @@ pub fn update_sun_light_system(
         (&mut Transform, &mut DirectionalLight),
         Without<lunco_environment::Earthshine>,
     >,
-    // The site-ENU alignment now lives on the Site Align Grid (the Solar
-    // Grid's rotation is IDENTITY — see `anchor_solar_frame_to_site`).
+    // The site-ENU alignment lives on the Site Align Grid (the Solar Grid's
+    // rotation is IDENTITY — see `anchor_solar_frame_to_site`).
     q_solar: Query<
         (&Transform, Option<&crate::big_space_setup::SiteAligned>),
         (
@@ -292,18 +293,32 @@ pub fn update_sun_light_system(
     // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
     q_site: Query<&crate::geo::GeodeticAnchor, With<crate::geo::SiteAnchor>>,
     orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
+    // The bodies as big_space placed them — used ONLY as a cross-check against
+    // the aim below, never as its source. See the disagreement note there.
+    q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody), Without<DirectionalLight>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<DirectionalLight>>,
+    // Last reported sun elevation, so the aim is logged on material change only.
+    mut last_logged_elevation: Local<f32>,
 ) {
     let Some((align_grid_tf, site_aligned)) = q_solar.iter().next() else {
         return;
     };
-    let align_rot = if site_aligned.is_some() {
-        align_grid_tf.rotation
-    } else {
-        Quat::IDENTITY
-    };
     let Some(ephemeris) = ephemeris else {
         return;
     };
+    // No site frame yet ⇒ nothing valid to compute. RETURN rather than aim with
+    // an identity alignment: without the site rotation the ecliptic direction is
+    // not a world direction, and writing it overwrites the USD-authored
+    // `xformOp:rotateXYZ` — a correct, measured opinion (`lunco://lighting/sun.usda`
+    // states this contract) — with a guess that lands tens of degrees off, usually
+    // below the horizon. That overwrite is what rendered every site-anchored scene
+    // black. An unaimed sun keeps the scene lit as authored.
+    if site_aligned.is_none() {
+        return;
+    }
+    let align_rot = align_grid_tf.rotation;
 
     let observer_body = q_site
         .iter()
@@ -320,14 +335,53 @@ pub fn update_sun_light_system(
     ) else {
         return;
     };
-    let Some(dir) = sun_emit_direction(p_sun, p_observer) else {
+    let Some(ecliptic_dir) = sun_emit_direction(p_sun, p_observer) else {
         // NoOp / degenerate ephemeris — leave the light to manual control.
         return;
     };
-    // `dir` is in ECLIPTIC (solar-frame) axes. `align_rot` on `SiteAlignGrid`
-    // is R_site_to_solar, so transforming from solar to site-ENU world frame
-    // requires align_rot.inverse().
-    let dir = (align_rot.inverse() * dir).normalize();
+
+    // `ecliptic_dir` is in ECLIPTIC (solar-frame) axes. `align` on `SiteAlignGrid`
+    // is built from rows east/up/−north, i.e. it maps SOLAR → SITE, so the site-ENU
+    // world direction is `align * dir`.
+    //
+    // It used to be `align.inverse() * dir`, under a comment asserting `align` was
+    // `R_site_to_solar`. That single inversion aimed the sun 64° the wrong way —
+    // elevation −56° at a site whose scene authors +8.1° — so the light came from
+    // under the ground and every site-anchored scene rendered black while the sun
+    // disc hung in the sky. Verified against the two values `traverse.usda` authors
+    // as the measured consequence of its epoch (`lunco:sun:elevationDeg` 8.1,
+    // `lunco:sun:azimuthDeg` 95.7): this expression yields 8.14° / 95.7°.
+    let dir = (align_rot * ecliptic_dir).normalize();
+
+    // Report each material change once, with a CROSS-CHECK against the Sun body's
+    // placed position. The two must agree: the light has to come from the sun that
+    // is drawn. They currently do NOT (body ≈ −55° while the aim is +8°), which
+    // means the disc is placed by a different frame than the aim — a real defect,
+    // but in the PLACEMENT, not here. The aim above is the one verified against the
+    // scene, so it stays authoritative and this line makes the disagreement visible
+    // instead of leaving it to be discovered as "the sun is in the wrong place".
+    let elevation_deg = (-dir.y).asin().to_degrees();
+    if (elevation_deg - *last_logged_elevation).abs() > 0.5 {
+        *last_logged_elevation = elevation_deg;
+        // World axes are East=+X, Up=+Y, North=−Z; the reported azimuth is the
+        // SUN's (the direction to it), not the emit direction's.
+        let to_sun = -dir;
+        let azimuth_deg = to_sun.x.atan2(-to_sun.z).to_degrees().rem_euclid(360.0);
+        let body_elevation = q_bodies
+            .iter()
+            .find(|(_, _, _, b)| b.ephemeris_id == 10)
+            .map(|(e, cell, tf, _)| {
+                let p = lunco_core::coords::world_position_seeded(
+                    e, cell, tf, &q_parents, &q_grids, &q_spatial,
+                );
+                (p.normalize_or_zero().y as f32).asin().to_degrees()
+            });
+        debug!(
+            "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}° \
+             @ JD {:.5} (observer {observer_body}, sun BODY elevation {:?} — must match)",
+            world.epoch_jd, body_elevation,
+        );
+    }
     let up = if dir.dot(Vec3::Y).abs() > 0.99 {
         Vec3::X
     } else {
@@ -337,10 +391,10 @@ pub fn update_sun_light_system(
         sun_dir_out.0 = dir;
     }
 
-    // …and Earth, the OTHER thing on this body points at. Same gate, same
-    // rotation, same frame — an antenna bridge that recomputed the align rotation
-    // for itself could disagree with the light by a frame, and a dish that lags
-    // the world by a frame is a dish that hunts.
+    // …and Earth, the OTHER thing on this body points at. Same rotation, same
+    // frame — an antenna bridge that recomputed the align rotation for itself
+    // could disagree with the light by a frame, and a dish that lags the world by
+    // a frame is a dish that hunts.
     //
     // The direction is TOWARD Earth (a look-at vector), not an emit direction:
     // Earth is a target here, not a light source, so it never gets the sun's sign
@@ -357,7 +411,9 @@ pub fn update_sun_light_system(
         // stays ZERO — the resource's documented "not known", which the bridge
         // refuses to publish rather than reporting Earth due north on the horizon.
         let next = if to_earth.length_squared() > 0.5 {
-            (align_rot.inverse() * to_earth).normalize()
+            // `align_rot`, NOT its inverse — this path carried the identical
+            // error, so the dish pointed at an Earth 64° from the one in the sky.
+            (align_rot * to_earth).normalize()
         } else {
             Vec3::ZERO
         };

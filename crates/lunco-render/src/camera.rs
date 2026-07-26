@@ -34,6 +34,7 @@
 //!    downsample/upsample chain bolted on. Here bloom is `Option`, and the binder
 //!    **refuses to attach it without `hdr`** rather than silently wasting the passes.
 
+use bevy::camera::Exposure;
 use bevy::prelude::*;
 
 /// A world-space text label — stated as data, so a domain crate can say "this thing
@@ -154,4 +155,32 @@ impl SceneCamera {
         self.bloom = Some(bloom);
         self
     }
+}
+
+/// **The one photometric setup every scene camera gets** — grade + exposure, as a
+/// single pair no spawn path may split.
+///
+/// Exposure is not a per-camera preference: it is calibrated against the physical
+/// sun the celestial system drives (`LUNAR_SUN_EXPOSURE_EV100`, the same number
+/// `lunco_environment::LunarSun` defaults to). A camera that picks its own is
+/// simply wrong by a measurable number of stops.
+///
+/// It exists because there were two spawn paths and only one of them was
+/// calibrated: the USD camera projection paired `agx()` with the calibrated
+/// exposure, while `lunco-avatar`'s "Avatar Camera" spawned `SceneCamera::default()`
+/// and NO `Exposure` at all — so it rendered at Bevy's default EV 9.7 against a
+/// ~131 klx sun, about five stops open, and every surface blew out to white. It
+/// could not be repaired downstream either: `project_env_settings` writes exposure
+/// only to cameras that already carry the component, so the avatar camera was
+/// unreachable by the very system meant to keep exposure consistent.
+///
+/// `authored_ev100` is the scene's opinion (a `UsdGeomCamera`'s exposure attribute)
+/// and wins when present — engine calibration is the fallback, never an override.
+pub fn scene_camera_look(authored_ev100: Option<f32>) -> (SceneCamera, Exposure) {
+    (
+        SceneCamera::agx(),
+        Exposure {
+            ev100: authored_ev100.unwrap_or(crate::LUNAR_SUN_EXPOSURE_EV100),
+        },
+    )
 }

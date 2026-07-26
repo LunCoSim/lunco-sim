@@ -43,7 +43,7 @@ const COLLIDER_DEPTH: u8 = 7;
 /// passes features ≥ ~1.5 m at this spacing (anything smaller is ankle-deep).
 /// At the original 3.9 m spacing the gate faded out everything below ~12 m, so
 /// rovers drove flat across visually deep bowls.
-const COLLIDER_RES: usize = 129;
+const COLLIDER_RES: usize = 65;
 /// Determinism lattice (metres) collider heights snap to — peers build
 /// byte-identical heightfields from the same oracle.
 const COLLIDER_QUANT_STEP: f64 = 1e-3;

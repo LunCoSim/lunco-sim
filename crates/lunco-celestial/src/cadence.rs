@@ -60,7 +60,7 @@ impl CelestialCadenceSettings {
 
     /// The epoch step (in Julian days) this tolerance permits. `0.0` for the
     /// exact setting, which makes the comparison in
-    /// [`celestial_epoch_advanced`] always true.
+    /// [`celestial_needs_solve`] always true.
     pub fn max_epoch_step_jd(&self) -> f64 {
         self.tolerance_deg.max(0.0) / MAX_BODY_DEG_PER_DAY
     }
@@ -89,25 +89,79 @@ pub struct CelestialSolvedEpoch {
     /// Julian date of the last solve. `f64::NEG_INFINITY` until the first one,
     /// so the first frame always solves whatever the tolerance is.
     pub jd: f64,
+    /// [`CelestialInputsRevision`] at that solve — a structural change moves this
+    /// and forces one re-solve regardless of the epoch.
+    pub revision: u64,
 }
 
 impl Default for CelestialSolvedEpoch {
     fn default() -> Self {
         Self {
             jd: f64::NEG_INFINITY,
+            revision: 0,
         }
     }
 }
 
-/// Run condition: has the epoch moved far enough to be worth re-solving?
+/// Structural changes the celestial cluster must re-solve for even when the epoch
+/// has not moved: a site anchor appearing (scene load), the site being edited, or
+/// the body hierarchy being (re)built.
+///
+/// The epoch is not the only input. Gating the cluster on epoch movement ALONE
+/// starves it whenever the inputs change at a standing epoch — a scene loaded
+/// while the sky is paused never gets its site frame, so `SiteAligned` is never
+/// inserted, the sun is never aimed, and the scene renders black with a bright
+/// light pointing under the ground.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CelestialInputsRevision(pub u64);
+
+/// Bump [`CelestialInputsRevision`] on the edges that invalidate a solved tree.
+///
+/// Runs in `First`, before every gated consumer, so a change is visible to the
+/// whole cluster in the SAME frame it happens.
+pub fn bump_celestial_inputs_revision(
+    mut rev: ResMut<CelestialInputsRevision>,
+    site_added: Query<(), Added<crate::geo::SiteAnchor>>,
+    site_moved: Query<(), Changed<crate::geo::GeodeticAnchor>>,
+    decl_added: Query<(), Added<crate::CelestialBodyDecl>>,
+    grid_added: Query<(), Added<crate::big_space_setup::SolarSystemRoot>>,
+    mut decl_removed: RemovedComponents<crate::CelestialBodyDecl>,
+) {
+    // `removed.read()` must be drained unconditionally — an unread reader keeps
+    // redelivering, so `||` short-circuiting past it would leave the revision
+    // bumping for frames after the fact.
+    let any_removed = decl_removed.read().next().is_some();
+    if any_removed
+        || !site_added.is_empty()
+        || !site_moved.is_empty()
+        || !decl_added.is_empty()
+        || !grid_added.is_empty()
+    {
+        rev.0 = rev.0.wrapping_add(1);
+    }
+}
+
+/// Run condition for the WHOLE celestial cluster: has the epoch moved far enough
+/// to be worth re-solving, **or** have the structural inputs changed?
 ///
 /// Also true whenever the clock has *rewound* (`abs`), which a scrub or a
 /// scenario reset does.
-pub fn celestial_epoch_advanced(
+///
+/// One condition, applied to every member, because the cluster must advance
+/// ATOMICALLY. Gating the expensive value-producers (ephemeris, poses,
+/// trajectories) while leaving the site pin ungated puts the pin at the current
+/// epoch and the bodies at the last solved one — the sun disc and the light then
+/// disagree, and the world visibly snaps each time the gate finally fires ("I
+/// move and it jumps back").
+pub fn celestial_needs_solve(
     world: Option<Res<WorldTime>>,
     solved: Res<CelestialSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
+    revision: Res<CelestialInputsRevision>,
 ) -> bool {
+    if revision.0 != solved.revision {
+        return true;
+    }
     // No clock yet (bare test app) — never gate; the old behaviour was to run.
     let Some(world) = world else {
         return true;
@@ -120,16 +174,20 @@ pub fn celestial_epoch_advanced(
     (world.epoch_jd - solved.jd).abs() >= step
 }
 
-/// Record the epoch the cluster just solved for.
+/// Record the epoch AND the input revision the cluster just solved for.
 ///
 /// Runs in `Last`, after every gated consumer in both `PreUpdate` and `Update`,
 /// under the same condition — so within one frame every gated system sees the
-/// same `solved.jd` and either all of them run or none do.
+/// same `solved` state and either all of them run or none do. Committing the
+/// revision here is what makes one structural change cost exactly one extra
+/// solve instead of re-solving forever.
 pub fn commit_celestial_epoch(
     world: Option<Res<WorldTime>>,
+    revision: Res<CelestialInputsRevision>,
     mut solved: ResMut<CelestialSolvedEpoch>,
 ) {
     if let Some(world) = world {
         solved.jd = world.epoch_jd;
     }
+    solved.revision = revision.0;
 }

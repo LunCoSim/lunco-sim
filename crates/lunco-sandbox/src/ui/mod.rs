@@ -463,7 +463,11 @@ fn spawn_fallback_avatar(
         // uniform global lift that reads as "brightness jumps after load" even
         // with EV and sun lux flat. `agx()` keeps the grade identical across a
         // switch.
-        lunco_render::SceneCamera::agx(),
+        // One constructor for grade + exposure, shared with the USD camera
+        // projection and the avatar camera — see `lunco_render::scene_camera_look`.
+        // The live `LunarSun` exposure is passed as the authored opinion so this
+        // stand-in matches whatever the active scene is calibrated to.
+        lunco_render::scene_camera_look(Some(active_sun.exposure_ev100)),
         Camera3d::default(),
         // NO SMAA on this (workbench) camera: SMAA's post-process resolve does
         // not survive the full-window-3D + egui-overlay compositing, so it
@@ -471,12 +475,6 @@ fn spawn_fallback_avatar(
         // `smaa_luts` feature). MSAA (the `Camera3d` default) covers geometry
         // edges. See the matching note on the USD avatar camera in lunco-usd-sim.
         //
-        // Exposure read from the active-scene `LunarSun` resource — the SAME
-        // source as the sun illuminance, so they stay matched. Tunable live via
-        // SetEnvironmentLight / the Inspector.
-        bevy::camera::Exposure {
-            ev100: active_sun.exposure_ev100,
-        },
         FreeFlightCamera {
             yaw: -2.245559,
             pitch: -0.303039,
