@@ -7,18 +7,22 @@
 
 # Kalyazin (Калязин), Tver oblast — RT-64, a 64 m dish.
 #
-# Primarily a RADIO ASTRONOMY instrument (VLBI), not a routine command station:
-# it backs the deep-space network up rather than carrying the daily traffic. It
-# is here because a scene that wants to show the Russian ground segment honestly
-# includes it, and because it makes a good third endpoint when a lesson needs one
-# station to be unavailable.
+# Primarily a RADIO ASTRONOMY instrument (VLBI). It backs the deep-space network
+# up rather than carrying the daily traffic, so it is NOT one of the operational
+# command stations and scenes modelling the working Russian ground segment
+# should reference `bear_lakes.usda` and `ussuriysk.usda` and stop there.
+#
+# It is in the catalogue anyway, because a station that exists is worth having
+# authored once: it makes a good third endpoint when a lesson deliberately needs
+# one station to be unavailable, and it is the right answer for a scene about
+# VLBI or about the ground segment as a whole. Reference it when you can say why.
 #
 # See `structures/ground_stations/README.md` — the height here is approximate,
 # and the 5° elevation mask is inherited rather than measured for this dish.
 def Xform "Kalyazin" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     kind = "component"
-    doc = "Kalyazin, Tver oblast — RT-64, 64 m. Radio-astronomy dish used as a deep-space and VLBI backup."
+    doc = "Kalyazin, Tver oblast — RT-64, 64 m. Radio-astronomy dish used as a deep-space and VLBI backup, not an operational command station."
 )
 {
     custom string lunco:label = "Kalyazin · RT-64"

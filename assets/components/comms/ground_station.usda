@@ -93,9 +93,11 @@ def Xform "GroundStation" (
     # The alidade — the rotating structure a big dish actually stands on. Sized
     # for the 70 m class (~26 m to the elevation axis; DSS-14's is ~24 m). A 64 m
     # station reuses it: the 9% it is out by is invisible next to a 35 m rim.
-    def Cylinder "Pedestal" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
-    )
+    # No collider, deliberately: nothing in a lunar scene can touch a structure on
+    # Earth, and the original station had none. `comms_mast` gives its tower one
+    # because a revolute joint attaches to it; this dish does not slew, so there
+    # is no joint and a collider would be pure cost.
+    def Cylinder "Pedestal"
     {
         uniform token axis = "Y"
         double radius = 9.0

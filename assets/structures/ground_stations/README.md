@@ -28,6 +28,35 @@ Bear Lakes + Ussuriysk are the pair that flew **Luna-25** (2023), the most recen
 Russian lunar mission. They sit ~93° of longitude apart, which is what buys most
 of a day's lunar coverage from two sites instead of the DSN's three.
 
+**Being in this folder is not a recommendation to use it.** The catalogue holds
+every station worth having authored; a scene picks the subset that is true for
+what it is modelling.
+
+Of the three Russian entries, only **Bear Lakes and Ussuriysk are operational
+deep-space command stations**. Kalyazin's RT-64 is a radio-astronomy instrument
+that supports VLBI and stands in as a backup — not a dish a mission talks to day
+to day. Referencing it beside the other two misrepresents the working network, so
+a scene should reference it only when it can say why (a lesson that needs a third
+endpoint, or one station deliberately unavailable). The Space School twin
+references the operational pair and not Kalyazin, for exactly that reason.
+
+## Coverage is a property of the SET you reference
+
+A scene picks its ground segment by which of these files it references, and that
+choice decides whether a link exists at all.
+
+Three DSN longitudes see the Moon essentially continuously. **Two Russian
+longitudes do not** — Bear Lakes and Ussuriysk are ~93° apart, which leaves
+hours per day when the Moon is below the horizon at both. For a scene pinned to
+a fixed `lunco:time:epochJd` (as the Space School traverse scenes are), that is
+not a risk, it is a fixed fact about that date: either the pair can see the Moon
+at that instant or the whole lesson runs in blackout.
+
+So: **run the scene and check the link before shipping an epoch.** The Space
+School twin references the Russian pair only, on purpose — a Russian lunar
+exercise whose rover phones Goldstone teaches the wrong thing — and inherits
+exactly this constraint.
+
 Longitude is **east-positive**, matching `lunco:anchor:lon` everywhere else in
 the tree (`wrap_lon_deg` keeps the antimeridian honest).
 
