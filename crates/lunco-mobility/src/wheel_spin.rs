@@ -71,6 +71,7 @@ pub(crate) fn update_wheel_spin(
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     time: Res<Time>,
+    gravity: Res<Gravity>,
 ) {
     use std::f64::consts::TAU;
 
@@ -78,6 +79,10 @@ pub(crate) fn update_wheel_spin(
     if dt <= 0.0 {
         return;
     }
+    // Turns a contact normal force back into the mass that wheel is carrying —
+    // the lateral stick bound below is `m·v/dt` and `m = N/g`. Read from the
+    // scene's own gravity so the same wheel behaves correctly on any body.
+    let g = gravity.0.length();
 
     for (mut wheel, local_tf, global_tf, hits, parent) in q_wheels.iter_mut() {
         // All dynamics coefficients are USD-derived (stored on the component).
@@ -110,13 +115,45 @@ pub(crate) fn update_wheel_spin(
         // Signed and clamped at 0 like the force-side rolloff: commanding reverse
         // while still spinning forwards gives full authority, never a wheel that
         // cannot be stopped because it is fast.
-        let rolloff = if wheel.max_rotation_speed > 0.0 {
-            (1.0 - (wheel.spin_velocity * throttle.signum()) / wheel.max_rotation_speed)
-                .clamp(0.0, 1.0)
+        //
+        // ── THROTTLE SETS A SPEED, NOT ONLY A TORQUE ──────────────────────────
+        //
+        // The ceiling below is the torque–speed curve; the TARGET is `u·ω_max`,
+        // because that is what a wheel-hub servo does and what the joint-wheel
+        // realization of this same motor does (`lunco_hardware::MotorActuator`
+        // writes `target_velocity = u·max_omega` with this curve as its
+        // `max_torque`). Treating `u` as a pure torque scale instead let a
+        // part-throttled wheel free-run all the way to the FULL no-load speed:
+        // at `u = 0.4` the raycast wheel accelerated toward 12 rad/s while its
+        // joint twin was held to 4.8 and braked back to it.
+        //
+        // Straight-line driving never saw it — there `u = 1` on every wheel and
+        // the two laws coincide exactly. It only appears under STEER, which is
+        // the one regime where the sides carry different throttles, and it is
+        // half of why `drivetrain_parity`'s heading check was the only one
+        // failing: the raycast rover's inner wheels kept pushing where the
+        // physical rover's were regenerating, so the two got different yaw
+        // moments from the same command.
+        //
+        // Freewheel at zero demand — not a brake — matching the joint motor,
+        // which disables itself rather than commanding a stop.
+        let tau_drive = if throttle.abs() <= f64::EPSILON {
+            0.0
+        } else if wheel.max_rotation_speed > 0.0 {
+            let rolloff = (1.0 - (wheel.spin_velocity * throttle.signum())
+                / wheel.max_rotation_speed)
+                .clamp(0.0, 1.0);
+            let ceiling = wheel.drive_torque_max * throttle.abs() * rolloff;
+            // Torque that would reach the commanded axle speed in one step, held
+            // inside the curve — a torque-limited velocity source, which is the
+            // joint motor stated in the raycast wheel's own terms.
+            let w_target = throttle * wheel.max_rotation_speed;
+            (inertia * (w_target - wheel.spin_velocity) / dt).clamp(-ceiling, ceiling)
         } else {
-            1.0
+            // No authored no-load speed: nothing defines a target, so the motor
+            // is the plain torque source its stall figure describes.
+            throttle * wheel.drive_torque_max
         };
-        let tau_drive = throttle * wheel.drive_torque_max * rolloff;
 
         // Ground speed at the contact patch, split on the wheel's own axes in the
         // ACTUAL contact plane. Both components are needed here now, not just the
@@ -246,8 +283,47 @@ pub(crate) fn update_wheel_spin(
         //     goes where it physically goes: into ω, as visible spin.
         // Nothing is calibrated against anything else, so μ means μ and a tire
         // swapped at runtime behaves like the tire it is.
+        //
+        // ── THE LATERAL HALF, SOLVED THE SAME WAY ─────────────────────────────
+        //
+        // Cornering force builds with lateral slip at the tire's authored
+        // cornering stiffness, but a tire cannot push harder sideways than it
+        // takes to STOP sliding sideways. `f_stick` is that bound: the force
+        // which removes exactly `v_lat` from the mass this wheel carries in one
+        // step, `m·v/dt`, with `m = N/g` — the wheel's own share of the vehicle
+        // as the contact reports it, so load transfer in a turn is already in the
+        // number. Taking the smaller of the two is what makes the lateral half
+        // STICK at low slip and SLIDE at high slip, which is what a tire does and
+        // what avian's contact solver does to the joint-wheel rover.
+        //
+        // WHY THIS BOUND AND NOT A SOFTER STIFFNESS. Without it the term is a
+        // pure viscous damper, and a stiff damper integrated explicitly
+        // oscillates — so the stiffness had to be detuned until it was stable,
+        // which left it at a few percent of the friction cone: the raycast rover
+        // was permanently sliding sideways on a force far below what its own μ
+        // allowed, i.e. on ice. It read as parity only while the joint rover's
+        // motor was a 6× velocity source that saturated BOTH cones and hid the
+        // linear regime; when the joint motor was put back on its authored torque
+        // curve the two realizations parted company in exactly this term
+        // (`drivetrain_parity` swept 52° raycast against 9° physical).
+        //
+        // The bound is unconditionally stable: `f_stick` cancels `v_lat` and
+        // cannot overshoot it, and above the cone the force is Coulomb anyway.
+        // So the stiffness is free to be a real cornering stiffness again.
         let f_lat = if on_ground {
-            -wheel.lateral_grip_stiffness * v_lat
+            let f_slip_lat = -wheel.lateral_grip_stiffness * v_lat;
+            let f_stick = if g > 0.0 {
+                -(wheel.last_normal_force / g) * v_lat / dt
+            } else {
+                f_slip_lat
+            };
+            // Both are opposed to `v_lat`, so the smaller magnitude is the
+            // physical one — grip below the stick bound, arrest at it.
+            if f_slip_lat.abs() < f_stick.abs() {
+                f_slip_lat
+            } else {
+                f_stick
+            }
         } else {
             0.0
         };

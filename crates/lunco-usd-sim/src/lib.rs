@@ -2205,6 +2205,7 @@ fn setup_physical_wheel(
             port_entity: p_drive,
             max_omega: params.max_rotation_speed,
             peak_torque: params.peak_torque,
+            brake_torque: params.brake_torque_max,
             drive_sign: -1.0,
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),

@@ -81,6 +81,11 @@ pub struct MotorActuator {
     /// Stall torque at the axle (N m), after the gearbox ratio, efficiency, and
     /// output limit. This is the physical wheel's sole torque authority.
     pub peak_torque: f64,
+    /// Peak braking torque at the axle (N m) — `physxVehicleWheel:maxBrakeTorque`,
+    /// the SAME authored number `lunco_mobility::WheelRaycast::brake_torque_max`
+    /// obeys. A brake is a property of the wheel, not of the drivetrain that
+    /// realises it, so both kinds stop with the same authority.
+    pub brake_torque: f64,
     /// Sign mapping throttle to spin so a positive (forward) command rolls the
     /// rover along its chassis -Z. Depends on the joint's `hinge_axis`
     /// orientation; `-1` for the canonical `axle = rotation * Y` hinge.
@@ -93,6 +98,7 @@ impl Default for MotorActuator {
             port_entity: Entity::PLACEHOLDER,
             max_omega: 0.0,
             peak_torque: 0.0,
+            brake_torque: 0.0,
             drive_sign: -1.0,
         }
     }
@@ -106,12 +112,37 @@ impl Default for MotorActuator {
 fn motor_actuator_system(
     q_ports: Query<&Port>,
     q_bodies: Query<(&AngularVelocity, &Rotation)>,
+    q_inputs: Query<&lunco_core::InputPorts>,
     mut q_joints: Query<(&MotorActuator, &mut RevoluteJoint)>,
 ) {
     for (motor, mut joint) in q_joints.iter_mut() {
         let Ok(port) = q_ports.get(motor.port_entity) else {
             continue;
         };
+        // THE BRAKE, which this realization did not have at all. The wheel
+        // authors `physxVehicleWheel:maxBrakeTorque` and the raycast wheel has
+        // always applied it; here the motor simply switched off at zero throttle,
+        // so a joint rover had no way to stop and coasted on a frictionless
+        // hinge. `ackermann_parity`'s pivot phase brakes to rest before asserting
+        // that a steered rover does not rotate without drive — the raycast rover
+        // stopped and the joint rover was still rolling through the measurement,
+        // turning on its steered wheels, and the test read that as a steering
+        // term leaking onto the drive ports.
+        //
+        // A velocity motor expresses a brake exactly: target zero, capped at the
+        // authored brake torque. It overrides drive rather than summing with it —
+        // a wheel cannot both be driven and held, and brake authority winning is
+        // the behaviour every other surface assumes.
+        let braking = q_inputs
+            .get(joint.body1)
+            .map(|c| c.brake_active)
+            .unwrap_or(false);
+        if braking && motor.brake_torque > 0.0 {
+            joint.motor.enabled = true;
+            joint.motor.target_velocity = 0.0;
+            joint.motor.max_torque = motor.brake_torque;
+            continue;
+        }
         // Saturate to full scale before scaling by `max_omega`. The raycast path
         // clamps its throttle identically (`update_wheel_spin`), and it is that
         // agreement `drivetrain_parity` measures: unclamped, an over-range command
