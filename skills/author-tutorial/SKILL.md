@@ -185,9 +185,12 @@ first. lunica ids include `modelica_experiments`, `modelica_inspector`,
   `let rover = "…"` in `mission` and `find()` it each tick.
 - **Objectives never advance on a timer** — use `requires_event`/`done`. A
   timed step teaches nothing and desyncs from the user.
-- **A tutorial can have BOTH a `mission` tracker and a `task` behaviour** — e.g. a
-  DEBUG autopilot (`if is_debug()`) that auto-plays the lesson for CI while a human
-  plays it in release. Keep the conditional in the scenario (`is_debug()`), not Rust.
+- **A tutorial can have BOTH a `mission` tracker and a `task` behaviour** — e.g. an
+  autopilot (`if !is_unattended() { return; }`) that auto-plays the lesson for CI
+  while a student plays it by hand. Keep the conditional in the scenario, not Rust.
+  Gate it on `is_unattended()` (no window ⇒ nobody can click) and never on the
+  build profile: every `cargo run` is a debug build, so a `cfg!(debug_assertions)`
+  gate makes the lesson play itself in front of the student.
 - **Native edits are live** — `tutorial_source` reads from disk, so edit the
   `.rhai` and re-`StartTutorial` to see changes; no rebuild.
 - **3D lesson needs a world** → ship an env-only `.usda` next to it and
@@ -196,6 +199,7 @@ first. lunica ids include `modelica_experiments`, `modelica_inspector`,
 ## Verify
 
 Launch the app with `--api` (per [`test-via-api`](../test-via-api/SKILL.md)),
-`StartTutorial {id}`, then drive the objective's real action (or rely on the
-`is_debug()` autopilot) and confirm the HUD ticks + `MISSION_COMPLETE` fires. Read
+`StartTutorial {id}`, then drive the objective's real action (or set
+`LUNCO_SCENARIO_UNATTENDED=1` and let the autopilot play it, even with a window
+open) and confirm the HUD ticks + `MISSION_COMPLETE` fires. Read
 live objective state via [`inspect-simulation`](../inspect-simulation/SKILL.md).

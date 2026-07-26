@@ -102,14 +102,14 @@ fn on_event(me, evt) {
     }
 }
 
-// DEBUG self-completion — runs alongside the mission for CI/regression (the "if
-// DEBUG, autopilot" pattern; see first_drive.rhai). In a debug build (or with
-// LUNCO_SCENARIO_DEBUG=1) it waits for the rover to deploy, then possesses it,
-// satisfying `takeover` WITHOUT a keypress. Possession makes the rover's autopilot
-// stand down, so the debug run drives the rest of the course itself. In release it
-// returns () and a human plays.
+// UNATTENDED self-completion — runs alongside the mission for CI/regression (the
+// "if unattended, autopilot" pattern; see first_drive.rhai). With no window it
+// waits for the rover to deploy, then possesses it, satisfying `takeover` WITHOUT
+// a keypress. Possession makes the rover's autopilot stand down, so the automated
+// run drives the rest of the course itself. With a window open it returns () and
+// a human plays.
 fn task(me) {
-    if !is_debug() { return; }
+    if !is_unattended() { return; }
     seq([
         wait_for("rover_deployed"),
         wait(0.5),

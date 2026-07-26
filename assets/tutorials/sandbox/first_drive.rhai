@@ -53,12 +53,12 @@ fn on_event(me, evt) {
     }
 }
 
-// DEBUG autopilot — runs ALONGSIDE the mission (a scenario may have both a `task`
-// behaviour and a `mission` tracker). Gated on the scenario environment: in a
-// debug build (or LUNCO_SCENARIO_DEBUG=1) it possesses the rover and drives to the
-// flag hands-free, auto-passing the lesson (great for CI/regression); in release
-// it returns () so a human plays. This is the "if DEBUG, autopilot" pattern —
-// conditional behaviour lives in the scenario, keyed off is_debug().
+// UNATTENDED autopilot — runs ALONGSIDE the mission (a scenario may have both a
+// `task` behaviour and a `mission` tracker). Gated on the AUDIENCE: with no
+// window (CI, `scene_test`, a headless smoke) it possesses the rover and drives
+// to the flag hands-free, auto-passing the lesson; with a window open it returns
+// () so the student plays. This is the "if unattended, autopilot" pattern — the
+// conditional lives in the scenario, keyed off is_unattended().
 // A world point `standoff` metres SHORT of the flag along the rover→flag line.
 // We aim the final creep here, not at the flag itself: the rover's reported pose is
 // its chassis CENTRE and the body is a couple of metres long, so driving the centre
@@ -74,7 +74,7 @@ fn aim_short_of(rover, flag, standoff) {
 }
 
 fn task(me) {
-    if !is_debug() { return; }        // release: no autopilot
+    if !is_unattended() { return; }   // a human is watching: they drive
     seq([
         wait(1.0),                     // let the scene settle / rover spawn
         once(|m| { cmd("PossessVessel", #{ target: find("/FirstDrive/Rover") });

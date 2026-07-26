@@ -260,26 +260,6 @@ fn apply_dynamic_fields(
 
 // ── Engine construction ────────────────────────────────────────────────────
 
-/// Whether scenarios run in DEBUG mode (autopilots on, verbose narration, …).
-/// Defaults to the build profile; `LUNCO_SCENARIO_DEBUG=1|0` (or true/false)
-/// overrides at runtime with no rebuild. Backs the rhai `is_debug()`/`env()` verbs.
-///
-/// Resolved ONCE and cached in a `OnceLock`: the cfg check + env-var read happen
-/// on the first call only, so a scenario polling `is_debug()` every tick pays just
-/// an atomic load, not an allocation/env lookup per frame. (The environment is
-/// fixed at launch, so caching is correct — "dynamic" means no rebuild, not
-/// per-frame mutation.)
-fn scenario_debug() -> bool {
-    static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DEBUG.get_or_init(
-        || match std::env::var("LUNCO_SCENARIO_DEBUG").ok().as_deref() {
-            Some("1") | Some("true") => true,
-            Some("0") | Some("false") => false,
-            _ => cfg!(debug_assertions),
-        },
-    )
-}
-
 /// Compile the split prelude into one AST (per-file compile + `AST::merge`).
 ///
 /// The prelude is the ergonomic policy layer (drive/distance/arrived/nav/HUD/…)
@@ -1069,21 +1049,17 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // `twin_root() + "/shots"`. See `bridge_core::twin_root`.
     engine.register_fn("twin_root", || -> String { bridge_core::twin_root() });
 
-    // is_debug() -> bool / env(key) -> bool — the SCENARIO ENVIRONMENT, so a
-    // script can branch on it: `if is_debug() { autopilot() }` runs an autopilot in
-    // debug and lets a human play in release. Defaults to the BUILD PROFILE
-    // (`cfg!(debug_assertions)` — true under `cargo run`, false under `--release`),
-    // overridable AT RUNTIME with no rebuild via `LUNCO_SCENARIO_DEBUG=1|0`, so a
-    // release build can force-enable a debug scenario and vice-versa. Callable from
-    // any function (verbs are global, unlike the `params`/`env` scope constants).
-    engine.register_fn("is_debug", || -> bool { scenario_debug() });
-    engine.register_fn("env", |key: &str| -> bool {
-        match key {
-            "debug" => scenario_debug(),
-            "release" => !scenario_debug(),
-            _ => false,
-        }
-    });
+    // is_unattended() -> bool — is there NOBODY at the controls? A scenario
+    // branches on it to decide whether to drive ITSELF:
+    // `if !is_unattended() { return; }` at the top of an autopilot leaves the
+    // lesson to the student and plays it automatically in CI.
+    //
+    // The fact behind it is a window (see `ScenarioAudience`), NOT the build
+    // profile. It used to be `is_debug()`/`cfg!(debug_assertions)`, which is a
+    // different question: every `cargo run` is a debug build, so every tutorial
+    // auto-played itself and chained to its successor while the student watched.
+    // Callable from any function (verbs are global, unlike the `params` constant).
+    engine.register_fn("is_unattended", || -> bool { bridge_core::is_unattended() });
 
     // rand() -> f64 in [0,1) — DETERMINISTIC: seeded per hook from (entity, tick,
     // hook), so it's identical on every networked peer and every re-run/replay.

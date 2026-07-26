@@ -76,13 +76,11 @@ pub struct TutorialMeta {
     /// (`MISSION_COMPLETE`). Data, not code. `None` = the chain ends here.
     #[serde(default)]
     pub next: Option<String>,
-    /// Which twin contributed this lesson, if any. `None` = bundled with the app.
-    ///
-    /// Provenance, set at registration — never authored, hence `skip`. It is what
-    /// lets [`TutorialRegistry::retain_bundled`] unload the previous twin's
-    /// curriculum without knowing (or caring) what track it called itself.
+    /// Which root contributed this lesson. Provenance, stamped at registration —
+    /// never authored, hence `skip`. It is what [`script`](Self::script) resolves
+    /// against, so a twin's lesson and a bundled one load by the same rule.
     #[serde(skip)]
-    pub from_twin: Option<lunco_workspace::TwinId>,
+    pub source: CurriculumSource,
 }
 
 /// One TRACK's catalog entry — `assets/tutorials/<track>/track.json`.
@@ -130,17 +128,186 @@ fn parse_track_meta(source: &str, src: &str) -> Option<TrackMeta> {
     }
 }
 
-/// The `track.json` of a track shipped in `assets/tutorials/`.
-fn track_meta(track: &str) -> Option<TrackMeta> {
-    let path = format!("{track}/track.json");
-    let Some(src) = lunco_assets::tutorials::tutorial_source(&path) else {
+// ── Curriculum roots: the one extension point ───────────────────────────────
+
+/// Who provided a curriculum. Carried on every registered lesson so its script
+/// resolves against the root that declared it, and so dropping a provider drops
+/// exactly its lessons.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CurriculumSource {
+    /// Shipped in `assets/tutorials/` (embedded on wasm).
+    #[default]
+    Bundled,
+    /// Contributed by an open twin — arrives when it opens, leaves when it closes.
+    Twin(lunco_workspace::TwinId),
+}
+
+/// A place lessons come from.
+///
+/// **This engine ships no lessons.** Every lesson arrives through a root that
+/// somebody registered: the app registers [`Bundled`](CurriculumSource::Bundled)
+/// at startup, and an open twin registers its own. A future provider — a
+/// downloaded pack, a classroom server — is one more entry in
+/// [`CurriculumRoots`] and needs no code here, which is what makes the
+/// curriculum an extension rather than a subsystem.
+///
+/// There used to be two loaders: the bundled walk in the plugin's `build`, and a
+/// separate twin path with its own manifest constant, its own parse, its own
+/// provenance field and its own unload rule. Two loaders meant two sets of rules
+/// for what a track is, and they had already drifted — the bundled one keyed the
+/// track table by DIRECTORY NAME while the twin one keyed it by the lessons'
+/// declared `app`, so a track whose directory did not happen to match its `app`
+/// lost its menu heading. One loader over N roots removes the class of bug, not
+/// just that instance.
+#[derive(Clone, Debug)]
+pub struct CurriculumRoot {
+    /// Provenance — what gets dropped when this provider goes away.
+    pub source: CurriculumSource,
+    /// Base every path in this root resolves against: `assets/tutorials/` for
+    /// bundled (implicit — that root reads through [`lunco_assets`], which owns
+    /// the disk-vs-embedded policy), the twin's directory for a twin. A lesson's
+    /// `script` is base-relative, which is already true of both today.
+    pub base: Option<std::path::PathBuf>,
+}
+
+/// Where a twin publishes its curriculum, relative to the twin root. A twin may
+/// put one track here (a `track.json` beside its lessons) or several (a
+/// subdirectory per track) — the same rule the bundled root already follows.
+const TWIN_CURRICULUM_DIR: &str = "sim/tutorials";
+
+impl CurriculumRoot {
+    /// The bundled root — `assets/tutorials/`.
+    pub fn bundled() -> Self {
+        Self {
+            source: CurriculumSource::Bundled,
+            base: None,
+        }
+    }
+
+    /// A twin's root, based at the twin directory.
+    pub fn twin(id: lunco_workspace::TwinId, root: std::path::PathBuf) -> Self {
+        Self {
+            source: CurriculumSource::Twin(id),
+            base: Some(root),
+        }
+    }
+
+    /// Read a file by its path relative to this root's base.
+    ///
+    /// The bundled root goes through [`lunco_assets::tutorials::tutorial_source`]
+    /// — on-disk first (so a lesson edit replays with no rebuild), embedded
+    /// fallback (a packaged binary, wasm). A twin is on disk by definition.
+    pub fn read(&self, rel: &str) -> Option<String> {
+        match &self.base {
+            None => lunco_assets::tutorials::tutorial_source(rel),
+            Some(base) => std::fs::read_to_string(base.join(rel)).ok(),
+        }
+    }
+
+    /// Directories in this root that declare a track, base-relative. A track IS
+    /// a directory holding a `track.json` — discovery, not a list, so adding one
+    /// is dropping in a directory.
+    fn track_dirs(&self) -> Vec<String> {
+        let Some(base) = &self.base else {
+            return lunco_assets::tutorials::tutorial_tracks();
+        };
+        let dir = base.join(TWIN_CURRICULUM_DIR);
+        if dir.join("track.json").is_file() {
+            return vec![TWIN_CURRICULUM_DIR.to_string()];
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new(); // a twin with no curriculum is normal, not an error
+        };
+        let mut out: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.path().join("track.json").is_file())
+            .filter_map(|e| e.file_name().to_str().map(|n| format!("{TWIN_CURRICULUM_DIR}/{n}")))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Load every track this root declares that `host` shows, into `registry`.
+    fn load_into(&self, host: &str, registry: &mut TutorialRegistry) -> usize {
+        let mut loaded = 0;
+        for dir in self.track_dirs() {
+            let track_path = format!("{dir}/track.json");
+            let Some(track_src) = self.read(&track_path) else {
+                warn!(
+                    "[tutorial] '{dir}' has no readable track.json — its lessons are \
+                     not loaded. Declare `label`, `order` and `hosts`."
+                );
+                continue;
+            };
+            let Some(track) = parse_track_meta(&track_path, &track_src) else {
+                continue;
+            };
+            if !track.hosted_by(host) {
+                continue; // this track is for a different app
+            }
+            let manifest_path = format!("{dir}/tutorials.json");
+            let Some(src) = self.read(&manifest_path) else {
+                warn!("[tutorial] no lesson manifest at '{manifest_path}'");
+                continue;
+            };
+            let metas = match serde_json::from_str::<Vec<TutorialMeta>>(&src) {
+                Ok(m) => m,
+                // Say so. A malformed manifest used to fail silently, and its
+                // lessons simply never appeared with nothing anywhere saying why.
+                Err(e) => {
+                    warn!("[tutorial] '{manifest_path}' is invalid: {e}");
+                    continue;
+                }
+            };
+            // Keyed by the `app` its lessons declare — the same key the menu
+            // groups by, so the heading always lands on its own group.
+            if let Some(key) = metas.first().map(|m| m.app.clone()) {
+                registry.tracks.insert(key, track);
+            }
+            for mut meta in metas {
+                meta.source = self.source;
+                registry.register_tutorial(meta);
+            }
+            loaded += 1;
+        }
+        loaded
+    }
+}
+
+/// Every curriculum provider, in registration order. Push one to contribute
+/// lessons; drop one to withdraw them. [`rebuild_curriculum`] republishes the
+/// catalog whenever this changes.
+#[derive(Resource, Default)]
+pub struct CurriculumRoots(pub Vec<CurriculumRoot>);
+
+/// Republish the whole catalog from the registered roots.
+///
+/// A full rebuild rather than an incremental add/remove: the catalog is a few
+/// small manifests, and rebuilding makes "what is registered" a pure function of
+/// "which roots exist". That is what deleted the old `retain_bundled` — an
+/// unload rule that had to be kept in step with the load rule by hand, and once
+/// wasn't (it matched on the literal app name `"school"`, making a twin's chosen
+/// label a reserved word in the engine).
+fn rebuild_curriculum(roots: &CurriculumRoots, host: &str, registry: &mut TutorialRegistry) {
+    *registry = TutorialRegistry::default();
+    let mut tracks = 0;
+    for root in &roots.0 {
+        tracks += root.load_into(host, registry);
+    }
+    if tracks == 0 {
         warn!(
-            "[tutorial] track '{track}' has no track.json — not loaded. Declare \
-             `label`, `order` and `hosts` in assets/tutorials/{path}."
+            "[tutorial] app '{host}' shows no tutorial track — nothing will appear in \
+             the 🎓 menu. A track is a directory with a `tutorials.json` and a \
+             `track.json`; it is shown here when that `track.json` lists this app in \
+             `hosts`."
         );
-        return None;
-    };
-    parse_track_meta(&path, &src)
+    } else {
+        info!(
+            "[tutorial] curriculum: {tracks} track(s), {} lesson(s), from {} root(s)",
+            registry.tutorials.len(),
+            roots.0.len()
+        );
+    }
 }
 
 /// The catalog of registered tutorials. Filled by [`TutorialCorePlugin`] from the
@@ -161,26 +328,6 @@ impl TutorialRegistry {
         if !self.tutorials.iter().any(|t| t.id == meta.id) {
             self.tutorials.push(meta);
         }
-    }
-
-    /// Drop every lesson a twin contributed, leaving the bundled catalog intact.
-    ///
-    /// Keyed on PROVENANCE, not on an app name. The previous version did
-    /// `retain(|t| t.app != "school")` — a magic string that made "school" a
-    /// reserved word in Rust: it deleted a bundled track that happened to share the
-    /// name, and left behind any twin whose lessons declared a different app. What
-    /// actually needs clearing is "whatever the last twin added", which is a fact
-    /// the registry can hold rather than a name it has to recognise.
-    pub fn retain_bundled(&mut self) {
-        self.tutorials.retain(|t| t.from_twin.is_none());
-        // A track's heading goes with its lessons — otherwise the departed twin's
-        // label sits in the map and re-decorates any later group that happens to
-        // reuse the key.
-        let live: std::collections::HashSet<&str> =
-            self.tutorials.iter().map(|t| t.app.as_str()).collect();
-        let live: std::collections::HashSet<String> =
-            live.into_iter().map(str::to_string).collect();
-        self.tracks.retain(|key, _| live.contains(key));
     }
 
     fn get(&self, id: &str) -> Option<TutorialMeta> {
@@ -344,23 +491,22 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             warn!("[tutorial] StartTutorial: unknown id '{id}'");
             return;
         };
-        // Try loading from the active twin first (dynamic twin tutorials)
-        let mut source = None;
-        if let Some(ws) = world.get_resource::<lunco_workspace::WorkspaceResource>() {
-            if let Some(active_id) = ws.0.active_twin {
-                if let Some(twin) = ws.0.twin(active_id) {
-                    let twin_script_path = twin.root.join(&meta.script);
-                    if let Ok(src) = std::fs::read_to_string(&twin_script_path) {
-                        source = Some(src);
-                    }
-                }
-            }
-        }
-
-        // Fall back to general assets
-        let source = source.or_else(|| lunco_assets::tutorials::tutorial_source(&meta.script));
-
-        let Some(source) = source else {
+        // A lesson's script resolves against the root that CONTRIBUTED it —
+        // provenance, not a search. The previous version tried the active twin's
+        // directory and fell back to `assets/`, so a twin lesson and a bundled
+        // one with the same relative path shadowed each other depending on which
+        // twin happened to be open.
+        let Some(root) = world
+            .resource::<CurriculumRoots>()
+            .0
+            .iter()
+            .find(|r| r.source == meta.source)
+            .cloned()
+        else {
+            warn!("[tutorial] '{id}' came from a root that is no longer mounted");
+            return;
+        };
+        let Some(source) = root.read(&meta.script) else {
             warn!("[tutorial] no source for '{id}' ({})", meta.script);
             return;
         };
@@ -762,88 +908,42 @@ fn boot_seam(world: &mut World, mut done: Local<bool>) {
 
 // ── Twin-provided curriculum ────────────────────────────────────────────────
 
-/// The twin whose curriculum is currently loaded, so a change can unload it.
-#[derive(Resource, Default)]
-struct LoadedTwinCurriculum(Option<lunco_workspace::TwinId>);
-
-/// The manifest a twin publishes its lessons in, relative to the twin root.
-const TWIN_TUTORIALS_MANIFEST: &str = "sim/tutorials/tutorials.json";
-
-/// **A twin brings its own lessons.** On the active twin changing, drop the previous
-/// twin's curriculum and load the new one's `sim/tutorials/tutorials.json`.
+/// **A twin brings its own lessons.** Keep the twin's [`CurriculumRoot`] in step
+/// with the active twin, and republish the catalog when it changes.
 ///
-/// This is a load-time concern, so it runs as a system. It used to live inside the
-/// 🎓 menu's DRAW closure — meaning a twin's lessons only appeared once someone
-/// opened the menu, and the file was re-read on a draw callback.
+/// All this system does is add and remove a root — it holds no opinion about
+/// what a track is, where a manifest lives, or which lessons belong to whom.
+/// That is the point: a twin's curriculum is not a second kind of curriculum, so
+/// it does not get a second set of rules (it previously had its own manifest
+/// constant, parse, provenance stamp and unload rule, and they had drifted from
+/// the bundled ones).
 ///
-/// **No track is named here.** The previous version force-wrote `m.app = "school"`
-/// over every twin's manifest and cleared with `retain(|t| t.app != "school")`,
-/// which made "school" a reserved word in the engine: the Summer Space School twin
-/// already declares `"app": "school"` itself, so Rust was overwriting data with the
-/// same data — while any OTHER twin's lessons were silently relabelled school. The
-/// manifest says which track it belongs to; the engine's job is to load it, not to
-/// have an opinion about who wrote it.
-fn sync_twin_tutorials(
+/// It runs as a system because it is a load-time concern. It used to live inside
+/// the 🎓 menu's DRAW closure, so a twin's lessons appeared only once somebody
+/// opened the menu, and the manifest was re-read on a draw callback.
+fn sync_twin_curriculum_root(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    mut loaded: ResMut<LoadedTwinCurriculum>,
+    mut roots: ResMut<CurriculumRoots>,
     mut registry: ResMut<TutorialRegistry>,
     host: Res<TutorialHostApp>,
 ) {
     let active = workspace.as_ref().and_then(|ws| ws.0.active_twin);
-    if loaded.0 == active {
+    let mounted = roots.0.iter().find_map(|r| match r.source {
+        CurriculumSource::Twin(id) => Some(id),
+        CurriculumSource::Bundled => None,
+    });
+    if mounted == active {
         return;
     }
-    // The previous twin's lessons go with it — identified by provenance, not name.
-    registry.retain_bundled();
-    loaded.0 = active;
-
-    let Some((ws, id)) = workspace.as_ref().zip(active) else {
-        return;
-    };
-    let Some(twin) = ws.0.twin(id) else { return };
-    let manifest = twin.root.join(TWIN_TUTORIALS_MANIFEST);
-    let Ok(text) = std::fs::read_to_string(&manifest) else {
-        return; // a twin with no curriculum is the normal case, not an error
-    };
-    // A twin declares its track exactly as a bundled one does — same file, same
-    // required fields, same `hosts` rule, same parse. A twin curriculum is not a
-    // second kind of curriculum, so it does not get a second set of rules.
-    let track_json = manifest.with_file_name("track.json");
-    let Ok(track_src) = std::fs::read_to_string(&track_json) else {
-        warn!(
-            "[tutorial] twin at {} publishes {TWIN_TUTORIALS_MANIFEST} but no track.json \
-             beside it — its lessons are not loaded. Declare `label`, `order` and `hosts`.",
-            twin.root.display()
-        );
-        return;
-    };
-    let Some(track) = parse_track_meta(&track_json.display().to_string(), &track_src) else {
-        return;
-    };
-    if !track.hosted_by(&host.0) {
-        return; // this twin's curriculum is for a different app
-    }
-    match serde_json::from_str::<Vec<TutorialMeta>>(&text) {
-        Ok(metas) => {
-            let n = metas.len();
-            // Keyed by the `app` its lessons declare — the same key the menu
-            // groups by, so the heading lands on this twin's group.
-            if let Some(key) = metas.first().map(|m| m.app.clone()) {
-                registry.tracks.insert(key, track);
-            }
-            for mut m in metas {
-                m.from_twin = Some(id);
-                registry.register_tutorial(m);
-            }
-            info!(
-                "[tutorial] loaded {n} lesson(s) from twin at {}",
-                twin.root.display()
-            );
+    roots
+        .0
+        .retain(|r| !matches!(r.source, CurriculumSource::Twin(_)));
+    if let Some((ws, id)) = workspace.as_ref().zip(active) {
+        if let Some(twin) = ws.0.twin(id) {
+            roots.0.push(CurriculumRoot::twin(id, twin.root.clone()));
         }
-        // Say so. A malformed manifest previously failed silently, and the lessons
-        // simply never appeared — with nothing anywhere to say why.
-        Err(e) => warn!("[tutorial] {} is invalid: {e}", manifest.display()),
     }
+    rebuild_curriculum(&roots, &host.0, &mut registry);
 }
 
 // ── Menu + launcher panel ───────────────────────────────────────────────────
@@ -1064,43 +1164,17 @@ impl Plugin for TutorialCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialRegistry>();
         app.insert_resource(TutorialHostApp(self.app.clone()));
-        // Every track in the asset tree, filtered by who hosts it — both facts
-        // are data (`tutorial_tracks()` walks the tree, `track.json` names the
-        // hosts). No app names a track in Rust, so a new track is a directory.
-        let mut hosted = 0;
-        for track in lunco_assets::tutorials::tutorial_tracks() {
-            let Some(meta) = track_meta(&track) else {
-                continue;
-            };
-            if !meta.hosted_by(&self.app) {
-                continue;
-            }
-            let manifest_path = format!("{track}/tutorials.json");
-            let Some(src) = lunco_assets::tutorials::tutorial_source(&manifest_path) else {
-                warn!("no tutorials manifest found at 'assets/tutorials/{manifest_path}'");
-                continue;
-            };
-            match serde_json::from_str::<Vec<TutorialMeta>>(&src) {
-                Ok(metas) => {
-                    let mut reg = app.world_mut().resource_mut::<TutorialRegistry>();
-                    for meta in metas {
-                        reg.register_tutorial(meta);
-                    }
-                    reg.tracks.insert(track.clone(), meta);
-                    hosted += 1;
-                }
-                Err(e) => warn!("tutorials manifest '{manifest_path}' failed to parse: {e}"),
-            }
-        }
-        if hosted == 0 {
-            warn!(
-                "[tutorial] app '{}' hosts no tutorial track — nothing will appear in the \
-                 🎓 menu. A track is a directory under `assets/tutorials/` with a \
-                 `tutorials.json`; it is shown here when its `track.json` lists this app \
-                 in `hosts` (or when the directory is named after it).",
-                self.app
-            );
-        }
+        // The app contributes the bundled root; a twin adds its own when it opens
+        // (`sync_twin_curriculum_root`). Both go through the SAME loader, so the
+        // engine names no track and knows no lesson.
+        let mut roots = CurriculumRoots(vec![CurriculumRoot::bundled()]);
+        let mut registry = TutorialRegistry::default();
+        rebuild_curriculum(&roots, &self.app, &mut registry);
+        // `roots` is moved in whole so a provider added later (a pack, a
+        // classroom server) is a push here and needs no code in this crate.
+        roots.0.shrink_to_fit();
+        app.insert_resource(roots);
+        app.insert_resource(registry);
         app.init_resource::<TutorialHost>();
         app.init_resource::<PendingAdvance>();
         app.register_settings_section::<TutorialProgress>();
@@ -1110,8 +1184,7 @@ impl Plugin for TutorialCorePlugin {
         app.add_observer(on_mission_complete);
         app.add_observer(on_scene_load_failed);
         app.add_observer(resolve_show_tutorial_intent);
-        app.init_resource::<LoadedTwinCurriculum>();
-        app.add_systems(Update, sync_twin_tutorials);
+        app.add_systems(Update, sync_twin_curriculum_root);
         app.add_systems(Update, boot_seam);
     }
 }

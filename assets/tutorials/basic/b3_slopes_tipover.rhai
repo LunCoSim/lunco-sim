@@ -62,11 +62,11 @@ fn on_event(me, evt) {
     }
 }
 
-// DEBUG autopilot — possess and climb straight to the marker. Logs tilt via the
-// prelude's is_tipped/tilt_deg (which read world_rotation) so the accessor is
-// exercised in CI. Release build → a human drives.
+// UNATTENDED autopilot — possess and climb straight to the marker. Logs tilt via
+// the prelude's is_tipped/tilt_deg (which read world_rotation) so the accessor is
+// exercised in CI. With a window open, a human drives.
 fn task(me) {
-    if !is_debug() { return; }
+    if !is_unattended() { return; }
     let rover  = "/SlopeTest/Rover";
     let marker = "/SlopeTest/Marker";
     seq([

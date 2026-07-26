@@ -48,6 +48,60 @@ use crate::ScriptRegistry;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ScriptAuthority(pub Option<SessionId>);
 
+/// Whether a HUMAN is at the controls of this run.
+///
+/// A scenario branches on this to decide whether to drive ITSELF: a tutorial
+/// ships an autopilot so an automated run (CI, the `scene_test` runner, a
+/// headless smoke) can exercise the whole lesson end to end, while a student
+/// plays it by hand. That is a question about the *audience*, and the only fact
+/// that answers it is whether anything can receive input.
+///
+/// It replaced a build-profile gate (`cfg!(debug_assertions)`), which answered a
+/// different question and answered it wrongly for the common case: every
+/// `cargo run` is a debug build, so every tutorial auto-played itself, emitted
+/// `MISSION_COMPLETE` seconds after starting and chained on to its successor —
+/// the student never got to touch anything.
+///
+/// Resolved once at startup by [`resolve_scenario_audience`] from the presence
+/// of a window (see there); `LUNCO_SCENARIO_UNATTENDED=1|0` overrides.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScenarioAudience {
+    /// No window — nothing can click "Next", so a lesson must drive itself.
+    /// The default, because an app that never resolves this (a `World` in a unit
+    /// test) has no user by construction.
+    #[default]
+    Unattended,
+    /// A window exists: a person is watching, and a lesson must wait for them.
+    Attended,
+}
+
+impl ScenarioAudience {
+    /// Backs the rhai `is_unattended()` verb.
+    pub fn is_unattended(self) -> bool {
+        self == ScenarioAudience::Unattended
+    }
+}
+
+/// Startup: decide whether this run is [`Attended`](ScenarioAudience::Attended).
+///
+/// The fact consulted is a window, not a flag or a feature: a run that can show
+/// a coach card and take a click has a user, and one that cannot does not. That
+/// makes the default correct for every headless caller (test, CI, server,
+/// `--no-ui`) with nothing to remember to set.
+///
+/// `LUNCO_SCENARIO_UNATTENDED=1|0` forces it either way, so a windowed session
+/// can watch an autopilot play (`1`), and a headless capture can hold a lesson
+/// still for a scripted driver (`0`), with no rebuild.
+pub fn resolve_scenario_audience(windows: Query<(), With<Window>>, mut audience: ResMut<ScenarioAudience>) {
+    *audience = match std::env::var("LUNCO_SCENARIO_UNATTENDED").ok().as_deref() {
+        Some("1") | Some("true") => ScenarioAudience::Unattended,
+        Some("0") | Some("false") => ScenarioAudience::Attended,
+        _ if windows.is_empty() => ScenarioAudience::Unattended,
+        _ => ScenarioAudience::Attended,
+    };
+    info!("[scenario] audience: {:?}", *audience);
+}
+
 /// Where a scenario's lifecycle hooks execute. Default [`Host`](ScriptScope::Host):
 /// a predicting client must not run sim-mutating scripts (they would double-apply
 /// or fight replication — the same reason cosim/physics only step on the host).

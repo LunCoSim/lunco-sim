@@ -86,18 +86,18 @@ fn on_event(me, evt) {
     }
 }
 
-// DEBUG self-completion — runs alongside the mission for CI/regression (the "if
-// DEBUG, autopilot" pattern; see lander_mission.rhai). In a debug build (or with
-// LUNCO_SCENARIO_DEBUG=1) it spawns the whole base itself, in a sensible layout
-// that obeys the siting rules the lesson teaches, satisfying every objective
-// WITHOUT a click. In release it returns () and a human builds the base.
+// UNATTENDED self-completion — runs alongside the mission for CI/regression (the
+// "if unattended, autopilot" pattern; see lander_mission.rhai). With no window it
+// spawns the whole base itself, in a sensible layout that obeys the siting rules
+// the lesson teaches, satisfying every objective WITHOUT a click. With a window
+// open it returns () and a human builds the base.
 fn spawn_part(id, x, y, z) {
     cmd("SpawnEntity", #{ entry_id: id, position: [x, y, z] });
     notify_kind(`[debug] placed ${id}`, "info");
 }
 
 fn task(me) {
-    if !is_debug() { return; }
+    if !is_unattended() { return; }
     seq([
         // Power (open ground, near the habitat) + the crew module (central).
         once(|m| spawn_part("solar_tower", 20.0, 0.0, 0.0)),

@@ -237,6 +237,15 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.init_resource::<ScriptRegistry>();
+        // Attended (a person is watching) or not — read by the `is_unattended()`
+        // verb so a lesson knows whether to drive itself. Resolved in Startup,
+        // once windows exist; the `Default` until then is `Unattended`, which is
+        // what a scenario ticked before Startup (there is none) would want.
+        #[cfg(any(feature = "rhai", feature = "python"))]
+        {
+            app.init_resource::<scenario::ScenarioAudience>();
+            app.add_systems(Startup, scenario::resolve_scenario_audience);
+        }
         app.add_observer(on_close_script_document);
         // A3 auto-bridge: when the Twin journal appears, fit a recorder onto every
         // ScriptDocument host so live script edits (rover behaviour changes) record

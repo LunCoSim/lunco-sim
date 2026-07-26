@@ -1156,6 +1156,26 @@ pub fn twin_root() -> String {
     .unwrap_or_default()
 }
 
+/// `is_unattended()` — whether NOTHING can take user input this run, so a
+/// scenario carrying an autopilot should drive itself. See
+/// [`ScenarioAudience`](crate::scenario::ScenarioAudience) for how it's resolved
+/// and why it is not the build profile.
+///
+/// Unresolvable (no such resource — a bare `World`) ⇒ `true`: a world with no
+/// scripting plugin has no window either, and an autopilot that runs when it
+/// should not is visible, whereas a lesson that silently refuses to run in CI is
+/// a green test that tested nothing.
+#[cfg(any(feature = "rhai", feature = "python"))]
+pub fn is_unattended() -> bool {
+    with_world(|w| {
+        w.get_resource::<crate::scenario::ScenarioAudience>()
+            .copied()
+    })
+    .flatten()
+    .unwrap_or_default()
+    .is_unattended()
+}
+
 // ── Deterministic RNG ───────────────────────────────────────────────────────
 //
 // Scripts WILL want randomness (scatter, jitter, exploration, retry backoff). A
