@@ -59,6 +59,11 @@ impl Plugin for TerrainSurfacePlugin {
         // `Assets<ShaderMaterial>` — so the headless server needs no render assets
         // and no `#[cfg]`; it simply never adds `LuncoRenderPlugin`, and the looks
         // sit in the world as inspectable data. See docs/architecture/render-decoupling.md.
+        // Contact tuning is reachable at RUNTIME, not only at compile time: both
+        // types are reflected + registered, so the Inspector derives an editor for
+        // them and the reflection API can set them live.
+        app.register_type::<crate::collider_ring::TerrainColliderRing>();
+        app.register_type::<avian3d::prelude::NarrowPhaseConfig>();
         app.add_systems(
             Update,
             (
@@ -109,6 +114,12 @@ impl Plugin for TerrainSurfacePlugin {
                 // region visible the same frame.
                 crate::collider_ring::update_collider_ring
                     .after(crate::terrain::finish_dem_restamp),
+                // Live retune (Inspector / reflection / a scene authoring the
+                // fields): marks resident tiles stale so the new lattice reaches
+                // the ground already under the wheels. Change-driven — the query
+                // is empty on every frame nobody edits the ring.
+                crate::collider_ring::invalidate_ring_on_retune
+                    .before(crate::collider_ring::update_collider_ring),
                 // Change-driven: early-outs unless a `TerrainColliderRing`
                 // removal event fired this frame.
                 crate::collider_ring::despawn_orphaned_collider_tiles,

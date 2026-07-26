@@ -35,15 +35,24 @@ use crate::quadtree::{QuadCoord, Quadtree, Square};
 use crate::stream_viz::DemHeightField;
 
 /// Canonical quadtree depth the collider tiles are realized at. Fixed → the ring
-/// is identical across peers. At a ±4 km DEM, depth 7 → 62.5 m tiles.
-const COLLIDER_DEPTH: u8 = 7;
-/// Heightfield samples per tile side (independent of visual LOD). 129 over a
-/// 62.5 m tile ≈ 0.49 m spacing — fine enough that the crater bowls and synthetic
-/// craterlets the rover SEES also exist in what it TOUCHES: the Nyquist gate
-/// passes features ≥ ~1.5 m at this spacing (anything smaller is ankle-deep).
-/// At the original 3.9 m spacing the gate faded out everything below ~12 m, so
-/// rovers drove flat across visually deep bowls.
-const COLLIDER_RES: usize = 65;
+/// is identical across peers. At a ±4 km DEM, depth 9 → 15.6 m tiles.
+///
+/// Depth, not resolution, is what makes the ring cheap. Contact FIDELITY is set by
+/// the sample SPACING (`tile_side / (COLLIDER_RES − 1)`); COST is set by the
+/// triangle count (`2·(COLLIDER_RES − 1)²` per tile) and by the tile's AABB, which
+/// pairs with every collider it overlaps. A 39 m tile spans the whole vehicle, so
+/// each resident tile paired with all ~116 rover colliders — 2786 contact pairs of
+/// which only 43 ever touched — and carried 32 768 triangles to feel a 3 m
+/// footprint. Going deeper shrinks both while holding the spacing fixed.
+const COLLIDER_DEPTH: u8 = 9;
+/// Heightfield samples per tile side (independent of visual LOD). 33 over a
+/// 15.6 m tile ≈ 0.49 m spacing — the SAME spacing 129-over-62.5 m gave, at a
+/// sixteenth of the triangles, because the tile shrank with it. Fine enough that
+/// the crater bowls and synthetic craterlets the rover SEES also exist in what it
+/// TOUCHES: the Nyquist gate passes features ≥ ~1.5 m at this spacing (anything
+/// smaller is ankle-deep). At the original 3.9 m spacing the gate faded out
+/// everything below ~12 m, so rovers drove flat across visually deep bowls.
+const COLLIDER_RES: usize = 33;
 /// Determinism lattice (metres) collider heights snap to — peers build
 /// byte-identical heightfields from the same oracle.
 const COLLIDER_QUANT_STEP: f64 = 1e-3;
@@ -51,7 +60,15 @@ const COLLIDER_QUANT_STEP: f64 = 1e-3;
 /// Marker + params: this terrain streams a per-rover collider ring instead of one
 /// static heightfield. Inserted by the DEM build when the request set
 /// `collider_ring`. Needs the retained [`DemHeightField`] to sample tiles from.
-#[derive(Component)]
+///
+/// **Live-tunable.** The consts above only SEED this; the ring systems read these
+/// fields, so editing them (Inspector, reflection API, or a scene authoring them)
+/// re-shapes contact at runtime — `invalidate_ring_on_retune` re-bakes the resident
+/// tiles so the change applies to the ground already under the wheels, not only to
+/// tiles baked later. Contact fidelity is a property of the TERRAIN, which is why
+/// it lives here per-entity rather than in a global.
+#[derive(Component, Reflect, Debug, Clone, PartialEq)]
+#[reflect(Component)]
 pub struct TerrainColliderRing {
     /// Canonical depth the ring tiles are realized at.
     pub depth: u8,
@@ -203,6 +220,27 @@ fn heightfield_collider(heights: Vec<Vec<f64>>, side: f64) -> Collider {
         HeightFieldFlags::FIX_INTERNAL_EDGES,
     )
     .into()
+}
+
+/// Re-bake the resident ring when its shape is retuned.
+///
+/// `depth`/`res` are read when a tile is BAKED, so a runtime edit would otherwise
+/// apply only to tiles baked afterwards — the ground already under the wheels would
+/// keep the old lattice, and the two would disagree about where the surface is.
+///
+/// Marks every resident tile stale rather than despawning: the existing swap path
+/// then replaces each collider in place once its replacement bake lands, so the
+/// rover is never left standing over a hole (that despawn-then-async-respawn gap is
+/// what made recomposes feel like "hitting an invisible wall").
+pub fn invalidate_ring_on_retune(
+    mut q: Query<(&TerrainColliderRing, &mut ColliderTiles), Changed<TerrainColliderRing>>,
+) {
+    for (_ring, mut tiles) in &mut q {
+        let resident: Vec<QuadCoord> = tiles.map.keys().copied().collect();
+        for coord in resident {
+            tiles.stale.insert(coord);
+        }
+    }
 }
 
 /// Per-frame: maintain the collider ring around dynamic bodies for each terrain.
