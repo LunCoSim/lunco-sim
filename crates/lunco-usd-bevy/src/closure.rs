@@ -58,6 +58,28 @@ pub fn is_usd_layer(path: &Path) -> bool {
 /// - Unreadable / unparseable layers drop out of the recursion. This is
 ///   best-effort by design: a caller that must be fail-closed about a missing
 ///   file checks for it separately (the manifest builder does).
+///
+/// TODO(openusd): **DELETE this function.** The recursion below — open a layer,
+/// ask it for its dependencies, anchor them, repeat — is
+/// `UsdUtils.ComputeAllDependencies`, and belongs in the library rather than
+/// here. Half of it already moved: the per-layer question is answered by the
+/// fork's `Data::composition_asset_dependencies()` +
+/// `Data::asset_dependencies()` (openusd `a198b40`), which is what deleted the
+/// old hand-rolled `discover_arcs`/`ArcFilter`.
+///
+/// What is still missing upstream is the *walk*: a recursive,
+/// resolver-anchored `compute_all_dependencies` that opens layers through
+/// `LayerRegistry` + `ar::Resolver` instead of `usda::parse` on a file path.
+/// Doing it there fixes three things this cannot:
+///
+/// - **Confinement** — a resolver context has a root, so relative arcs cannot
+///   walk out of the twin (see the `TODO(multiplayer)` below, which is the same
+///   defect seen from the other end).
+/// - **Binary layers** — `usda::parse` cannot read `.usdc`/`.usdz`, so a
+///   crate-side walk silently treats a binary layer as a leaf and misses
+///   everything it references.
+/// - **Schemes** — `lunco://`/`twin://` arcs are skipped here because this
+///   function has no resolver; a resolver would resolve them.
 pub fn reference_closure(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     let mut queue: Vec<PathBuf> = roots.iter().map(|p| normalize(p)).collect();

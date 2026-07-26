@@ -468,6 +468,39 @@ pub struct SetSubsystemEnabled {
     pub on: bool,
 }
 
+/// Drop everything the previous lesson put on screen.
+///
+/// The ONE place presentation is reset, shared by starting a lesson and stopping
+/// one — two callers that must agree on what "the overlay" is, and previously
+/// didn't.
+///
+/// `TutorialHud` is OPTIONAL for the same reason `on_skip_tutorial` takes it
+/// optionally: it belongs to `lunco_workbench`'s overlay plugin, and a host can
+/// run lessons without one (a headless sim driver, and every test of this
+/// crate's execution core). Required, this would panic an app whose only sin was
+/// not drawing a HUD.
+#[cfg(feature = "ui")]
+fn clear_tutorial_hud(world: &mut World) {
+    reset_hud(world.get_resource_mut::<TutorialHud>());
+}
+
+/// WHAT "the overlay" is — the single field list, so the two callers cannot
+/// drift. Generic over the smart pointer because one caller holds a `ResMut`
+/// (an observer) and the other a `Mut` (an exclusive world closure); both deref
+/// to the HUD.
+#[cfg(feature = "ui")]
+fn reset_hud<H: std::ops::DerefMut<Target = TutorialHud>>(hud: Option<H>) {
+    let Some(mut hud) = hud else { return };
+    hud.hint.clear();
+    hud.objectives.clear();
+    hud.spotlight = None;
+    hud.tour = None;
+}
+
+/// Headless hosts have no presentation to reset.
+#[cfg(not(feature = "ui"))]
+fn clear_tutorial_hud(_world: &mut World) {}
+
 /// Spawn (once) and return the host entity that tutorial scenarios attach to.
 fn ensure_host(world: &mut World) -> Entity {
     if let Some(e) = world.resource::<TutorialHost>().0 {
@@ -484,8 +517,21 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
     // `ensure_host` + `RunScenario` need `&mut World`; an observer only has
     // `Commands`, so defer to an exclusive closure.
     commands.queue(move |world: &mut World| {
-        // Starting a lesson dismisses any leftover "continue to next?" prompt from a
-        // previously completed one (it would otherwise overlay this lesson's HUD).
+        // Starting a lesson OWNS the presentation reset: the outgoing lesson's
+        // hint, objectives, spotlight, coach card and "continue to next?" prompt
+        // all go, before this one publishes anything.
+        //
+        // It must happen HERE and not be left to the incoming lesson, because a
+        // lesson only overwrites the parts it happens to set. One that shows a
+        // coach card but no objectives inherited the previous lesson's
+        // checklist, and a UI tour with no `load_scene` at all (every lunica
+        // lesson) inherited the whole overlay — the scene-change observer in the
+        // app was the only thing that ever cleared it, which made the bug look
+        // like it was about scenes rather than about switching lessons.
+        //
+        // Stopping a lesson already did exactly this (`on_skip_tutorial`);
+        // starting one did not. That asymmetry WAS the bug.
+        clear_tutorial_hud(world);
         world.resource_mut::<PendingAdvance>().0 = None;
         let Some(meta) = world.resource::<TutorialRegistry>().get(&id) else {
             warn!("[tutorial] StartTutorial: unknown id '{id}'");
@@ -538,12 +584,8 @@ fn on_skip_tutorial(
     mut progress: ResMut<TutorialProgress>,
     mut pending: ResMut<PendingAdvance>,
 ) {
-    if let Some(mut hud) = hud {
-        hud.hint.clear();
-        hud.objectives.clear();
-        hud.spotlight = None;
-        hud.tour = None;
-    }
+    // The same reset starting a lesson performs.
+    reset_hud(hud);
     progress.current = None;
     pending.0 = None;
 }

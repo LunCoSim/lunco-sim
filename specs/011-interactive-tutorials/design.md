@@ -294,15 +294,87 @@ was outside the closure.
 
 ### Current state vs. target
 
-As-built today is the interim: the catalog is `assets/tutorials/<track>/tutorials.json`
-plus a `track.json` (`label`, `order`, `hosts` — all required, no defaults),
-discovered by walking `assets/tutorials/`, and the environment is still
-`load_scene` inside `on_start`. That fixed the live defect and made tracks
-data-driven rather than a `["basic"]` list in Rust, but it is **superseded** by
-the layer above: `tutorials.json` + `track.json` become the curriculum layer,
-and `hosts` disappears into composition.
+As-built is the JSON catalog: `assets/tutorials/<track>/tutorials.json` plus a
+`track.json` (`label`, `order`, `hosts` — all required, no defaults), and the
+environment is still `load_scene` inside `on_start`.
 
-Migration order: closure prerequisite → curriculum layer + codeless schema
-(registered in `plugInfo.json`, or it does not exist outside this engine) →
-launcher mounts the payload before running the scenario → `load_scene` leaves
-the lesson scripts → twin path deleted in favour of session-layer composition.
+## 9. Curriculum ROOTS — the composition idea, at the current cost (2026-07-26)
+
+§8's `hosts`-disappears-into-composition argument is right about the *shape* and
+was wrong about the *price*. Composing curricula as USD layers needs a codeless
+schema registered in `plugInfo.json`, payload-mounting in the launcher, and a
+migration of every manifest — to deliver one property: **a provider contributes
+lessons by being composed in, and withdraws them by being composed out.**
+
+That property does not need USD. It is now spelled with the infrastructure that
+already exists:
+
+```rust
+pub struct CurriculumRoot { pub source: CurriculumSource, pub base: Option<PathBuf> }
+pub struct CurriculumRoots(pub Vec<CurriculumRoot>);   // Resource
+```
+
+- The engine **ships no lessons**. The app pushes `CurriculumRoot::bundled()`;
+  an open twin pushes `CurriculumRoot::twin(id, root)`; a downloaded pack or a
+  classroom server is one more push and needs no code in `lunco-tutorial`.
+- **One loader** (`CurriculumRoot::load_into`) serves every root, so there is one
+  answer to "what is a track": a directory holding a `track.json`. A twin may
+  now ship several tracks, which the bespoke twin path could not.
+- **Rebuild, don't unload.** The catalog is a pure function of the mounted
+  roots, which is what let the hand-maintained unload rule be deleted outright.
+
+What this replaced, and why the replacement is not cosmetic — the two paths had
+already drifted into two different sets of rules:
+
+- The bundled path keyed the track table by **directory name**, the twin path by
+  the lessons' declared **`app`** — so a track whose directory did not match its
+  `app` silently lost its menu heading.
+- `StartTutorial` **searched** (active twin's directory, then `assets/`), so a
+  twin lesson and a bundled one sharing a relative path shadowed each other
+  depending on which twin happened to be open. A lesson now resolves against the
+  root that contributed it, by provenance.
+- Deleted: `TWIN_TUTORIALS_MANIFEST`, `TutorialMeta::from_twin`,
+  `TutorialRegistry::retain_bundled`, `LoadedTwinCurriculum`, and the second
+  parse.
+
+### Where USD still wins, and what it would take
+
+§8 is **deferred, not withdrawn**. Two of its properties are genuinely absent
+here and only USD gives them:
+
+1. **The environment stays imperative.** A lesson's world is still a `load_scene`
+   call inside `on_start`, so a lesson that forgets one is still unrepresentable
+   as an error rather than a lint finding — the original defect's root, treated
+   but not cured.
+2. **Roots are a flat list, not a composition.** There is no stronger-vs-weaker
+   opinion, so two roots contributing the same track id is first-wins rather
+   than a resolved override. Nothing needs that yet.
+
+Adopt §8 when a lesson must be authored *in a scene* rather than beside one, or
+when a twin needs to override a bundled lesson rather than add to it. Its
+prerequisite is unchanged and is now written at the call site: the recursive,
+resolver-anchored `compute_all_dependencies` in the openusd fork
+(`TODO(openusd)` on `lunco_usd_bevy::closure::reference_closure`).
+
+### Why the tutorial crate is not deleted
+
+The recurring question is whether tutorials can leave Rust entirely, given the
+lessons are already 100% rhai. The residue after §9 is ~1250 lines, and it does
+not move:
+
+| Part | Why it stays |
+|---|---|
+| Menu, launcher panel, advance popup (~300) | egui rendering — same category as `tutorial_overlay.rs` |
+| Curriculum roots + discovery (~180) | directory walk + file reads; rhai has no fs verbs, and adding them hands every script arbitrary disk access |
+| `StartTutorial` / `SkipTutorial` / `SetSubsystemEnabled` (~120) | `#[Command]` is a proc-macro over Rust types — that is what puts them on HTTP/MCP/keymap |
+| `TutorialProgress` / `TutorialSeen` (~40) | `SettingsSection` is a typed Rust trait |
+| Boot seam (~100) | already delegates to `boot.rhai` |
+
+Deleting the crate means inventing fs verbs, dynamic command registration,
+script-owned settings and menu registration from rhai — four general-purpose
+engine features, built to remove one crate.
+
+The accurate statement is subtler: **nothing left in the crate is about
+tutorials.** It discovers content packs, lists them, runs a rhai program on a
+host entity, and remembers progress. The word "tutorial" is the only
+tutorial-specific thing in it — the engine names no track and knows no lesson.
