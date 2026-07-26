@@ -270,10 +270,8 @@ pub(crate) fn update_wheel_spin(
         // was: two fudges calibrated to cancel.
         //
         // They cancelled ONLY at the parameters they were fitted at. Change μ, or
-        // the tire, or the mass, and the cancellation drifts — which is why the
-        // model could not survive a stiffer lateral term (the fake drag was eating
-        // the friction cone at cruise, leaving nothing for cornering) and why every
-        // knob interacted with every other.
+        // the tire, or the mass, and the cancellation drifts, and every knob
+        // interacted with every other.
         //
         // Now both halves read the SAME `f_long` the ω solve just produced, and the
         // cone is spent on real forces:
