@@ -685,11 +685,34 @@ pub fn fonts_dir() -> PathBuf {
 /// covers arrows + math operators + misc technical (U+2190-2311)
 /// contiguously in one file. Matches the Godot/Blender choice.
 ///
-/// Resolves to `<cache_dir>/fonts/DejaVuSans.ttf`. Populated by
-/// `cargo run -p lunco-assets -- download` via the
+/// Resolved through the SAME canonical search as every other shipped asset —
+/// [`engine_asset_local_path`] / [`cache_roots`]: authored `assets/fonts/` →
+/// packed `assets/.cache/fonts/` → shared machine cache `<cache_dir>/fonts/`.
+/// There is no font-specific path logic: the font is just an engine asset named
+/// `fonts/DejaVuSans.ttf`, so it finds a PACKAGED build's bundled copy (which
+/// ships in `assets/.cache/`) as readily as a `download`-populated shared cache.
+///
+/// Previously this returned `fonts_dir()` (the shared cache) alone, so a fresh
+/// packaged install reported the font missing until the machine-global cache was
+/// populated — even though the bundle carried it. `engine_asset_local_path`
+/// yields the last authored candidate when nothing exists, so a genuinely absent
+/// font still returns a sensible path for the "not found" warning.
+///
+/// Populated by `cargo run -p lunco-assets -- download` via the
 /// `crates/lunco-theme/Assets.toml` entry.
 pub fn dejavu_sans_path() -> PathBuf {
-    fonts_dir().join("DejaVuSans.ttf")
+    // The multi-root search probes the filesystem (`Path::exists`), which panics
+    // on wasm's no-filesystem target; there the font arrives via `fetch`, not this
+    // path, so keep the nominal shared-cache path for wasm callers.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        engine_asset_local_path("fonts/DejaVuSans.ttf")
+            .unwrap_or_else(|| fonts_dir().join("DejaVuSans.ttf"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        fonts_dir().join("DejaVuSans.ttf")
+    }
 }
 
 /// Constructs a Modelica compilation output path for a given entity.
