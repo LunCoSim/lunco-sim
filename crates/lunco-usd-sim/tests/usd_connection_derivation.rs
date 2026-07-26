@@ -188,20 +188,25 @@ fn python_balloon_asset_wiring_migrated() {
 #[test]
 fn modelica_balloon_asset_wiring_migrated() {
     let (app, id) = build_from_source(&asset_src("vessels/balloons/modelica_balloon.usda"));
+    // The Modelica program lives on a child `Plant` scope, not on the body
+    // (asset restructured in d08b027e): the parent exposes only Avian facts and
+    // force sinks, `Plant` declares only Modelica inputs. So the body's force
+    // sink is fed BY the child, and the child's inputs are fed by the body —
+    // the wire crosses the parent/child boundary in both directions.
     assert_eq!(
         conns(&app, id, "/ModelicaBalloon", "inputs:force_y"),
-        ["/ModelicaBalloon.outputs:netForce"]
+        ["/ModelicaBalloon/Plant.outputs:netForce"]
     );
     assert!(
         conns(&app, id, "/ModelicaBalloon", "inputs:collider").is_empty(),
         "the collider synchronizer consumes `outputs:volume` directly; `collider` is not a port"
     );
     assert_eq!(
-        conns(&app, id, "/ModelicaBalloon", "inputs:height"),
+        conns(&app, id, "/ModelicaBalloon/Plant", "inputs:height"),
         ["/ModelicaBalloon.outputs:height"]
     );
     assert_eq!(
-        conns(&app, id, "/ModelicaBalloon", "inputs:velocity"),
+        conns(&app, id, "/ModelicaBalloon/Plant", "inputs:velocity"),
         ["/ModelicaBalloon.outputs:velocity_y"]
     );
 }
