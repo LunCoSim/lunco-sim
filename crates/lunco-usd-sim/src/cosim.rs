@@ -66,6 +66,33 @@ struct UsdModelicaPortContract {
     outputs: BTreeSet<String>,
 }
 
+/// A prim's USD-declared co-sim interface — its `inputs:`/`outputs:` scalar
+/// attributes — as value maps seeded at zero.
+///
+/// USD is the public contract, so this is what every wire resolves against. It is
+/// read at BIND time and published into [`SimComponent`] immediately — before the
+/// async source load or compile — for EVERY participant kind (Modelica and Python
+/// alike). Publishing at bind removes the window in which a wire into a declared
+/// port would transiently read as an unknown input; the one shared extraction
+/// keeps the two participant paths from drifting (Python used to ship an empty
+/// interface, so every wire into it false-warned until — or unless — the port
+/// happened to be claimed by another backend).
+fn declared_interface(
+    reader: &lunco_usd_bevy::StageView<'_>,
+    sdf_path: &SdfPath,
+) -> (HashMap<String, f64>, HashMap<String, f64>) {
+    let mut inputs = HashMap::new();
+    let mut outputs = HashMap::new();
+    for attr in reader.attr_names(sdf_path) {
+        if let Some(name) = attr.strip_prefix("inputs:") {
+            inputs.insert(name.to_owned(), 0.0);
+        } else if let Some(name) = attr.strip_prefix("outputs:") {
+            outputs.insert(name.to_owned(), 0.0);
+        }
+    }
+    (inputs, outputs)
+}
+
 /// A compile-specific port-contract verdict already reported to the console.
 ///
 /// Keeping the session id makes validation reactive to a later recompile while
@@ -417,15 +444,7 @@ fn process_usd_cosim_prim_read(
         // USD is the public contract: publish its scalar interface immediately,
         // before the asset fetch and asynchronous Modelica compile.  Writes then
         // latch in SimComponent instead of being misdiagnosed as unknown ports.
-        let mut inputs = HashMap::new();
-        let mut outputs = HashMap::new();
-        for attr in reader.attr_names(sdf_path) {
-            if let Some(name) = attr.strip_prefix("inputs:") {
-                inputs.insert(name.to_owned(), 0.0);
-            } else if let Some(name) = attr.strip_prefix("outputs:") {
-                outputs.insert(name.to_owned(), 0.0);
-            }
-        }
+        let (inputs, outputs) = declared_interface(reader, sdf_path);
         commands.entity(entity).try_insert(UsdModelicaPortContract {
             inputs: inputs.keys().cloned().collect(),
             outputs: outputs.keys().cloned().collect(),
@@ -444,6 +463,24 @@ fn process_usd_cosim_prim_read(
         });
     }
     if let Some(asset_path) = python_path {
+        // Symmetric with Modelica: publish the USD-declared interface at BIND so
+        // wires into this Python model's declared ports resolve from the first
+        // propagation tick. `dispatch_loaded_python_sources` flips the status to
+        // `Running` once the `.py` asset has loaded — it no longer re-creates the
+        // component with an empty interface (the bug that false-warned every wire
+        // into a Python model, e.g. `signal` on an amplifier).
+        let (inputs, outputs) = declared_interface(reader, sdf_path);
+        commands.entity(entity).try_insert(SimComponent {
+            model_name: format!("Python:{asset_path}"),
+            parameters: Default::default(),
+            inputs,
+            outputs,
+            // Interface declared, script not yet loaded: `can_step()` refuses to
+            // step a `Compiling` component, exactly as it holds a Modelica model
+            // mid-compile.
+            status: SimStatus::Compiling,
+            is_stepping: false,
+        });
         commands.entity(entity).try_insert(PendingPythonSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
@@ -678,6 +715,9 @@ pub fn dispatch_loaded_python_sources(
     sources: Res<Assets<PythonSource>>,
     asset_server: Res<AssetServer>,
     mut registry: ResMut<ScriptRegistry>,
+    // The `SimComponent` was published at BIND with the USD-declared interface;
+    // dispatch reads it to seed the editor document and flips it live.
+    mut sims: Query<&mut SimComponent>,
 ) {
     for (entity, pending) in q.iter() {
         if asset_server.load_state(&pending.handle).is_failed() {
@@ -692,6 +732,21 @@ pub fn dispatch_loaded_python_sources(
             continue;
         };
 
+        // The editor document's declared I/O is the SAME contract already
+        // published into `SimComponent` at bind — derive it from there rather than
+        // hardcoding one model's ports (was `height`/`velocity`/`netForce`, wrong
+        // for every other Python model).
+        let (doc_inputs, doc_outputs) = sims
+            .get(entity)
+            .map(|sim| {
+                let mut inputs: Vec<String> = sim.inputs.keys().cloned().collect();
+                let mut outputs: Vec<String> = sim.outputs.keys().cloned().collect();
+                inputs.sort();
+                outputs.sort();
+                (inputs, outputs)
+            })
+            .unwrap_or_default();
+
         // Offset doc id away from any Modelica-allocated ids on the same
         // entity (legacy catalog Python balloon does the same).
         let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
@@ -705,8 +760,8 @@ pub fn dispatch_loaded_python_sources(
                 language: ScriptLanguage::Python,
                 source: src.text.clone(),
                 origin: DocumentOrigin::untitled(format!("Python-{}", doc_id.raw())),
-                inputs: vec!["height".to_string(), "velocity".to_string()],
-                outputs: vec!["netForce".to_string()],
+                inputs: doc_inputs,
+                outputs: doc_outputs,
                 params: String::new(),
                 // No asset id: this source is SYNTHESIZED from a USD prim's inline
                 // script, so it has no location for a relative `import` to anchor
@@ -726,17 +781,14 @@ pub fn dispatch_loaded_python_sources(
             outputs: Default::default(),
         });
 
-        // Python execution doesn't compile on a separate worker; the
-        // SimComponent can be created right away (no need to wait for
-        // variables to populate the way Modelica does).
-        commands.entity(entity).try_insert(SimComponent {
-            model_name: format!("Python:{}", pending.asset_path),
-            parameters: Default::default(),
-            inputs: Default::default(),
-            outputs: Default::default(),
-            status: SimStatus::Running,
-            is_stepping: false,
-        });
+        // Script loaded: flip the bind-published `SimComponent` live. It was
+        // created `Compiling` at bind carrying the USD-declared interface — do NOT
+        // re-create it here (that discarded the interface and made every wire into
+        // this model false-warn as an unknown input). Python has no separate
+        // compile step, so loaded ⇒ `Running`.
+        if let Ok(mut sim) = sims.get_mut(entity) {
+            sim.status = SimStatus::Running;
+        }
 
         commands.entity(entity).remove::<PendingPythonSource>();
     }
