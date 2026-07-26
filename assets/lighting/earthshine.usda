@@ -43,10 +43,12 @@
 #
 # ── Intensity is DERIVED, not authored ────────────────────────────────────
 # `inputs:intensity` starts at 0 deliberately: earthshine depends on the body's
-# phase and distance, which only the ephemeris knows. `lunco-celestial`
-# publishes the body direction and `lunco-environment` drives illuminance from
-# it. An authored non-zero value here would be an unshadowed fill that changes
-# the look of every scene before the ephemeris has said anything.
+# phase, which only the ephemeris knows. `lunco-celestial` publishes the body
+# direction and `lunco-environment`'s `drive_earthshine_from_phase` computes the
+# illuminance from the Sun-body-site geometry each frame — 0 at new Earth,
+# ~12 lx at full. It is the only writer, so this value is a starting state and
+# not an opinion: authoring a non-zero number here would be an unshadowed fill
+# lighting every scene until the ephemeris resolves, and then be overwritten.
 def DistantLight "Earthshine" (
     prepend apiSchemas = ["ShadowAPI"]
 )

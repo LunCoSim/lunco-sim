@@ -6,7 +6,7 @@ physics, co-simulation, and UI.
 
 **Currently implements:** gravity (`LocalGravity`), solar direction
 (`LocalSolar` + sun→cosim bridge), lunar-sky lighting parameters (`LunarSun`,
-`EarthshineParams`, the `SetEnvironmentLight` tuner command), and baked horizon
+`FULL_EARTH_EARTHSHINE_LUX`, the `SetEnvironmentLight` tuner command), and baked horizon
 terrain self-shadowing (`HorizonShadowPlugin`). The gravity and solar values are
 already wired into the co-sim graph each tick.
 **Designed to grow into:** atmosphere, solar *radiation* (irradiance/eclipse),
@@ -115,7 +115,7 @@ co-sim graph as `SimComponent` **outputs** (`SOLAR_AZIMUTH_CONNECTOR` /
 normal output→input wire. The scene `DirectionalLight` *is* the provider — a
 richer `SolarProvider` (irradiance, eclipse) can attach later.
 
-### Lighting parameters: `LunarSun`, `EarthshineParams` (`render` feature)
+### Lighting parameters: `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX` (`render` feature)
 
 Physical lighting state of the lunar sky — the lighting analog of gravity. The
 `SetEnvironmentLight` command live-tunes the sun, the earthshine fill light
@@ -286,7 +286,7 @@ injected — opt-in by name.
 
 - [x] **Gravity** — `LocalGravity`, `compute_local_gravity`, `apply_gravity_to_rigid_bodies`, `inject_local_gravity_into_cosim`
 - [x] **Solar direction** — `LocalSolar`, `compute_local_solar`, `inject_local_solar_into_cosim` (sun direction as a cosim output)
-- [x] **Lunar lighting** — `LunarSun`, `EarthshineParams`, `SetEnvironmentLight` tuner, earthshine fill
+- [x] **Lunar lighting** — `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`, `SetEnvironmentLight` tuner, earthshine fill
 - [x] **Horizon self-shadowing** — `HorizonShadowPlugin`, `HorizonMap`
 - [ ] **Atmosphere** — `LocalAtmosphere`, `AtmosphereProvider`, `StandardAtmosphere` model
 - [ ] **Solar radiation** — `LocalRadiation` irradiance + eclipse occlusion (distinct from the direction bridge above)

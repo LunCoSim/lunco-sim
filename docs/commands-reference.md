@@ -2277,7 +2277,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `shadow_max_distance` | `Option < f32 >` |  Total shadow-casting range, metres. Smaller ⇒ denser shadow-map  texels ⇒ crisper shadows. `None` keeps current. |
 | `ambient_brightness` | `Option < f32 >` |  Global ambient brightness (cd/m²-scaled). `None` keeps current. |
 | `exposure_ev100` | `Option < f32 >` |  Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).  Moves with `illuminance`: brighter sun ⇒ higher EV. `None` keeps current. |
-| `earthshine_illuminance` | `Option < f32 >` |  [`Earthshine`] fill illuminance, lux (~10–15 typical). `None` keeps current. |
 | `earthshine_color` | `Option < [f32 ; 3] >` |  [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).  `None` keeps current. |
 | `bloom_intensity` | `Option < f32 >` |  Bloom intensity on the scene cameras (airless ⇒ low, ~0.15). `None`  keeps current.   **Applied render-side** (`lunco_render_bevy::env_light`) — bloom is  `bevy_post_process`, and this crate must not name it. That observer  writes `lunco_render::SceneCamera::bloom`, whose binder REFUSES bloom on  a non-HDR camera (review `R4`) — and `hdr` is deliberately still off  everywhere, so this knob renders nothing today, exactly as before. |
 

@@ -1192,15 +1192,15 @@ fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                 }
             }
 
-            if let Some(es0) = earthshine {
-                let mut lux = es0;
-                if ui
-                    .add(egui::Slider::new(&mut lux, 0.0..=60.0).text("Earthshine (lx)"))
-                    .changed()
-                {
-                    cmd.earthshine_illuminance = Some(lux);
-                    any_change = true;
-                }
+            // READOUT, not a knob. Earthshine brightness is derived from
+            // Earth's phase (`lunco_environment::drive_earthshine_from_phase`),
+            // which is its only writer — a slider here would be overwritten in
+            // the same frame it was dragged. What moves it is the sim clock.
+            if let Some(lux) = earthshine {
+                ui.label(format!(
+                    "Earthshine: {lux:.1} lx ({:.0}% of full Earth)",
+                    100.0 * lux / lunco_environment::FULL_EARTH_EARTHSHINE_LUX
+                ));
             }
         });
 

@@ -43,7 +43,7 @@ Consumers read `Local*` — they don't recompute from position.
 ## Lighting — the environmental analog of gravity
 
 `lunco-environment` also owns the **physical lighting parameters of the sky**
-(`lighting.rs`: `LunarSun`, `EarthshineParams`). Same reasoning as gravity: brightness is
+(`lighting.rs`: `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`). Same reasoning as gravity: brightness is
 environmental state that varies by body and location, not a render setting. The airless
 Moon's surface is lit by exactly two things — the Sun (hard key) and earthshine (faint
 cool-blue, shadowless fill).
@@ -112,13 +112,19 @@ The scene-level `LunCoEnvironment` prim (a singleton under the default prim, e.g
 `lunco:env:exposureEv100`, `lunco:env:bloomIntensity`. **Ambient and earthshine are
 deliberately not among them** — both are lights, and USD already spells lights. The
 ambient slider persists onto a `DomeLight` child of that prim
-(`<Environment>/AmbientFill`); earthshine persists as `inputs:intensity` /
-`inputs:color` on the authored `DistantLight` nested under the body it reflects from.
+(`<Environment>/AmbientFill`); earthshine's **tint** persists as `inputs:color` on the
+authored `DistantLight` nested under the body it reflects from.
 
-> These are **static almanac values** for the Shackleton region. The intended end state is
-> ephemeris-driven (Sun direction/distance ⇒ illuminance and angular size; Earth phase ⇒
-> earthshine), at which point the constants become the fallback and live values flow from a
-> runtime `Sun`/`Earth` entity.
+Its **brightness** persists nowhere, because it is not an opinion. `drive_earthshine_from_phase`
+recomputes it every frame from the Sun–Earth–site geometry as
+`FULL_EARTH_EARTHSHINE_LUX × (1 + cos α) / 2`, so an authored value would be overwritten by
+its own driver on the next frame. There is correspondingly no slider — the inspector shows
+a readout, and what moves it is the sim clock.
+
+> The Sun's own values remain **static almanac numbers** for the Shackleton region. The
+> intended end state is ephemeris-driven there too (Sun direction/distance ⇒ illuminance and
+> angular size), at which point the constants become the fallback and live values flow from a
+> runtime `Sun` entity — which is what earthshine already does.
 
 ## Invariants
 

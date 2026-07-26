@@ -26,9 +26,11 @@ use lunco_core::{on_command, register_commands, Command};
 /// `lunco:env:bloomIntensity`.
 ///
 /// **Ambient and earthshine are not among them.** Earthshine is an authored
-/// `DistantLight` nested under the body it reflects from, so its brightness and
-/// tint are `inputs:intensity` / `inputs:color` on that prim — standard UsdLux,
-/// read back by the standard light loader. Uniform environment illumination is standard
+/// `DistantLight` nested under the body it reflects from, so its tint is
+/// `inputs:color` on that prim — standard UsdLux, read back by the standard
+/// light loader. Its brightness is not persisted anywhere: it is derived from
+/// Earth's phase by [`drive_earthshine_from_phase`] every frame.
+/// Uniform environment illumination is standard
 /// UsdLux — an untextured `DomeLight` — and `GlobalAmbientLight` is composed as
 /// the sum over those domes. The ambient slider therefore persists onto a
 /// `DomeLight` child of this prim (`<Environment>/AmbientFill`), not onto a
@@ -49,10 +51,10 @@ pub use gravity_types::{
     MOON_SURFACE_GRAVITY,
 };
 
-/// Physical lighting parameters of the lunar sky (`LunarSun`, `EarthshineParams`)
+/// Physical lighting parameters of the lunar sky (`LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`)
 /// — environmental state, the lighting analog of gravity. See the module docs.
 pub mod lighting;
-pub use lighting::{EarthshineParams, LunarSun};
+pub use lighting::{drive_earthshine_from_phase, LunarSun, FULL_EARTH_EARTHSHINE_LUX};
 
 /// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
 /// bridge). The lighting-direction analog of the gravity bridge.
@@ -321,8 +323,10 @@ pub struct SetEnvironmentLight {
     /// Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).
     /// Moves with `illuminance`: brighter sun ⇒ higher EV. `None` keeps current.
     pub exposure_ev100: Option<f32>,
-    /// [`Earthshine`] fill illuminance, lux (~10–15 typical). `None` keeps current.
-    pub earthshine_illuminance: Option<f32>,
+    // Earthshine ILLUMINANCE is deliberately absent: it is derived from Earth's
+    // phase by `drive_earthshine_from_phase`, which is its one writer. A knob
+    // beside a driver is two writers on one field — the shape of the
+    // `ambientBrightness` bug — and it would be overwritten within the frame.
     /// [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).
     /// `None` keeps current.
     pub earthshine_color: Option<[f32; 3]>,
@@ -454,7 +458,7 @@ fn on_set_environment_light(
         }
     }
 
-    // Earthshine fill light.
+    // Earthshine fill light — TINT only; brightness is phase-derived.
     //
     // The fill exists only in a scene that DECLARES the body it reflects from
     // (`lunco://lighting/earthshine.usda`, nested under that body's prim), so
@@ -463,9 +467,7 @@ fn on_set_environment_light(
     // which body it belongs to — and therefore its direction and phase — is
     // exactly what the scene did not say. Spawning a stand-in would be an
     // unshadowed fill nobody authored, aimed nowhere in particular.
-    if (cmd.earthshine_illuminance.is_some() || cmd.earthshine_color.is_some())
-        && q_earthshine.is_empty()
-    {
+    if cmd.earthshine_color.is_some() && q_earthshine.is_empty() {
         warn_once!(
             "[environment] earthshine requested, but this scene declares no body to \
              reflect it — nothing to apply. Reference a celestial body that carries \
@@ -474,9 +476,6 @@ fn on_set_environment_light(
         );
     }
     for mut fill in &mut q_earthshine {
-        if let Some(lux) = cmd.earthshine_illuminance {
-            fill.illuminance = lux;
-        }
         if let Some([r, g, b]) = cmd.earthshine_color {
             fill.color = Color::linear_rgb(r, g, b);
         }
@@ -612,6 +611,12 @@ impl Plugin for EnvironmentPlugin {
         // left at ZERO — the "not known" state — so a scene with no celestial
         // hierarchy reads as no-data rather than as a missing resource.
         app.init_resource::<EarthDirectionWorld>();
+
+        // Earthshine follows Earth's phase — the ONE writer of the fill's
+        // illuminance. In `Update` rather than `FixedUpdate`: it is a render
+        // quantity read by the extract, not something a physics step consumes,
+        // and the phase moves ~0.5°/day so it is nowhere near rate-sensitive.
+        app.add_systems(Update, lighting::drive_earthshine_from_phase);
 
         // Solar source: mirror gravity. Compute the per-entity sun
         // direction, then publish it as cosim outputs before propagation

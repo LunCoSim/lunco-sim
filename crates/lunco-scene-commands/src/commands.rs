@@ -1426,20 +1426,21 @@ pub fn persist_environment_light_to_runtime_layer(
         }
     }
 
-    // ── Earthshine → its own `DistantLight` prim, standard UsdLux ────────────
+    // ── Earthshine TINT → its own `DistantLight` prim, standard UsdLux ───────
     //
     // Same treatment as the sun above, because it is the same kind of thing: a
-    // light with an authored prim, whose brightness and tint are
-    // `inputs:intensity` / `inputs:color`. The loader reads those back, so the
-    // round trip needs no second spelling.
+    // light with an authored prim, whose tint is `inputs:color`. The loader
+    // reads it back, so the round trip needs no second spelling.
+    //
+    // Its `inputs:intensity` is NOT persisted. That value is derived from
+    // Earth's phase every frame by `drive_earthshine_from_phase`, so authoring
+    // it would journal a number the next frame overwrites — a persisted
+    // opinion that never survives contact with its own driver.
     //
     // Empty when the scene declares no body to reflect from — a scene gets the
     // fill by declaring the body, so there is nothing to write and nothing to
     // invent. `on_set_environment_light` is where that is reported.
     let mut fill_attrs: Vec<(&str, &str, String)> = Vec::new();
-    if let Some(lux) = cmd.earthshine_illuminance {
-        fill_attrs.push(("inputs:intensity", "float", lux.to_string()));
-    }
     if let Some([r, g, b]) = cmd.earthshine_color {
         fill_attrs.push(("inputs:color", "color3f", format!("({r}, {g}, {b})")));
     }

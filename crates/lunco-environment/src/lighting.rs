@@ -20,15 +20,20 @@
 //! ## Two real light sources
 //! The airless Moon's surface is lit by exactly two things: the **Sun** (the
 //! hard key light) and **earthshine** (Earth's faint blue reflected fill).
-//! Both are defined here so they read as one coherent picture.
+//! Both are described here so they read as one coherent picture — though only
+//! the Sun keeps a resource, because only the Sun's values are still static.
 //!
-//! ## TODO — make this realtime
-//! These are **static almanac values** for the Shackleton-region surface. The
-//! intended end state is ephemeris-driven: Sun direction + distance (hence
-//! illuminance and angular size) and Earth phase (hence earthshine) computed
-//! from sim time / orbital position by a runtime `Sun`/`Earth` entity. When
-//! that lands, the constants here become the **fallback/default** and the live
-//! values flow from that entity.
+//! ## Earthshine is already realtime; the Sun is not
+//! [`drive_earthshine_from_phase`] computes the fill from the live Sun–Earth–site
+//! geometry each frame, so [`FULL_EARTH_EARTHSHINE_LUX`] is a calibration
+//! (the value at full Earth) rather than the value in use.
+//!
+//! [`LunarSun`] is still **static almanac values** for the Shackleton-region
+//! surface. The intended end state is the same one earthshine reached: Sun
+//! direction + distance (hence illuminance and angular size) from sim time and
+//! orbital position, at which point the constants here become the fallback.
+//! `lunco-celestial`'s `update_sun_light_system` already does the 1/r² part for
+//! an anchored scene.
 
 use bevy::prelude::*;
 
@@ -81,28 +86,82 @@ impl Default for LunarSun {
     }
 }
 
-/// Earthshine — Earth's reflected sunlight.
+/// Earthshine at **full Earth** — the peak of the fill, in lux.
 ///
-/// It is deliberately disabled by default. A scene must explicitly author or
-/// configure this secondary light with its real phase and direction; injecting
-/// a fixed, shadowless fill into every lunar scene makes shadowed PBR objects
-/// disagree with the terrain's Sun-only shadowing.
+/// A full Earth seen from the Moon is roughly 50× brighter than a full Moon
+/// seen from Earth (≈0.25 lx), which puts the peak in the low tens of lux. This
+/// is the calibration; the value the light actually carries is this scaled by
+/// Earth's illuminated fraction, which is what [`drive_earthshine_from_phase`]
+/// computes.
 ///
-/// Named `EarthshineParams` (not `Earthshine`) to stay distinct from the
-/// [`Earthshine`](crate::Earthshine) *marker component* on the spawned light.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EarthshineParams {
-    /// Fill illuminance, **lux**. Zero means no authored earthshine.
-    pub illuminance_lux: f32,
-    /// Fill colour, **linear RGB** — cool blue (Earth's albedo skews blue).
-    pub color: [f32; 3],
-}
+/// The tint is NOT here: it is `inputs:color` on the authored fill prim
+/// (`lunco://lighting/earthshine.usda`), because a colour is a fact about the
+/// light and USD already spells it.
+pub const FULL_EARTH_EARTHSHINE_LUX: f32 = 12.0;
 
-impl Default for EarthshineParams {
-    fn default() -> Self {
-        Self {
-            illuminance_lux: 0.0,
-            color: [0.6, 0.75, 1.0],
+/// Drives the earthshine fill's illuminance from **Earth's phase**.
+///
+/// ## Why this is derived and not authored
+///
+/// Earthshine is sunlight that hit Earth and bounced. How much arrives
+/// therefore depends on how much of Earth's lit face the site can see, which
+/// swings from nothing to the full ~12 lx over a lunar month — and it is
+/// ANTI-correlated with local daylight, since a full Earth stands opposite the
+/// Sun. A single authored number cannot express that; it would be right on one
+/// day of the month and wrong on the rest, and wrong in the direction that
+/// matters (a fill that stays lit through lunar noon, washing out the shadows
+/// the sun is casting).
+///
+/// It is also why there is no slider. The quantity has one writer, this system,
+/// because a knob and a driver on the same field is the two-writer bug that
+/// `lunco:env:ambientBrightness` already paid for once.
+///
+/// ## The geometry
+///
+/// With `s` the unit direction to the Sun and `e` the unit direction to Earth,
+/// both from the site, the Sun–Earth–site angle `α` has `cos α = −(s · e)`, and
+/// the illuminated fraction of the disc the site sees is `(1 + cos α) / 2`.
+/// Sun and Earth in the same part of the sky ⇒ new Earth ⇒ 0; opposite ⇒ full
+/// ⇒ 1. The far-source approximation (Earth→Sun ∥ site→Sun) is exact to well
+/// under a degree at 1 AU.
+///
+/// No-data is a real state and is respected: [`EarthDirectionWorld`] holds a
+/// zero vector until an ephemeris resolves, and a scene with no celestial
+/// hierarchy never writes it at all. Both leave the fill at whatever the USD
+/// authored — 0 — rather than at a guess.
+pub fn drive_earthshine_from_phase(
+    earth_dir: Option<Res<crate::EarthDirectionWorld>>,
+    sun: crate::horizon::SunQuery,
+    mut q_fill: Query<&mut DirectionalLight, With<crate::Earthshine>>,
+) {
+    if q_fill.is_empty() {
+        return;
+    }
+    let Some(earth_dir) = earth_dir else { return };
+    let e = earth_dir.0;
+    if !e.is_finite() || e.length_squared() < 1e-12 {
+        return;
+    }
+    let Some((sun_gt, _, _)) = crate::horizon::pick_sun(&sun) else {
+        return;
+    };
+    // `back()` is the direction the light points *from* → toward the sun, the
+    // same convention `compute_local_solar` reads.
+    let s: Vec3 = *sun_gt.back();
+    if !s.is_finite() || s.length_squared() < 1e-12 {
+        return;
+    }
+
+    let cos_alpha = -(s.normalize().dot(e.normalize()));
+    let lit_fraction = ((1.0 + cos_alpha) * 0.5).clamp(0.0, 1.0);
+    let lux = FULL_EARTH_EARTHSHINE_LUX * lit_fraction;
+
+    for mut fill in &mut q_fill {
+        // Change-driven: `DirectionalLight` is in the render extract, and the
+        // phase moves by ~0.5°/day, so an unconditional write would dirty the
+        // component every frame to restate the same number.
+        if (fill.illuminance - lux).abs() > f32::EPSILON {
+            fill.illuminance = lux;
         }
     }
 }
