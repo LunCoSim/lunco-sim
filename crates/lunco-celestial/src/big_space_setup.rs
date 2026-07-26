@@ -90,7 +90,7 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_environment::GravityProvider;
 use lunco_materials::{ParamValue, ShaderLook};
-use lunco_render::{PbrLook, SceneCamera};
+use lunco_render::PbrLook;
 
 /// Earth with no imagery: ocean blue. This is the DEFAULT appearance, not a
 /// degraded one — see the note where the globes are built.
