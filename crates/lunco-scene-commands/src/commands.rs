@@ -3264,6 +3264,19 @@ impl Plugin for SpawnCommandPlugin {
         app.init_resource::<crate::catalog::CatalogScan>();
         app.init_resource::<crate::catalog::AssetMetaStore>();
         app.init_resource::<crate::SelectedEntities>();
+        // A selection names entities of the scene that made it. Those ids die
+        // with that scene, and Bevy reuses generations — so a selection carried
+        // across a reload is at best an inspector showing nothing and at worst a
+        // panel editing whatever now holds the recycled id. Scene state, so it
+        // unloads with the scene.
+        app.add_systems(
+            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            |mut selected: ResMut<crate::SelectedEntities>| {
+                if !selected.entities.is_empty() {
+                    selected.entities.clear();
+                }
+            },
+        );
         app.init_resource::<lunco_materials::ShaderCatalog>();
         // Client: instantiate host-replicated spawns. The rest of the old netcode
         // chain (interp / kinematic-pin / predict / reconcile / rollback) moved to

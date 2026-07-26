@@ -62,6 +62,39 @@ pub struct PendingFilteredPairs {
 #[derive(Component, Debug, Clone, Default)]
 pub struct FilteredPairs(pub EntityHashSet);
 
+/// Declare that `a` and `b` must never collide, from this command flush onward.
+///
+/// The programmatic counterpart of an authored `physics:filteredPairs`, writing
+/// the same component on both ends so the hook below needs no second code path.
+///
+/// Used by [`attach_joint`](crate::attach_joint) for every jointed pair, and
+/// that is not an optimisation — it is what makes deferring a joint SAFE. A
+/// jointed pair does not collide (`JointCollisionDisabled`), but that marker only
+/// prevents a contact that does not exist yet: avian's
+/// `on_disable_joint_collision` deletes ALREADY-formed contacts without telling
+/// the island manager, leaving a freed `ContactId` in an island's list that a
+/// later op unwraps and dies on ("Contact has no island", `islands/mod.rs:861`).
+/// A joint waiting for its bodies to be admitted is exactly a window in which
+/// that contact can form — wheel and fender overlap on the frame they spawn — so
+/// the pair is filtered at ATTACH time, before any narrow phase can see it,
+/// rather than at insert time.
+pub fn filter_pair(commands: &mut Commands, a: Entity, b: Entity) {
+    for (from, to) in [(a, b), (b, a)] {
+        commands
+            .entity(from)
+            .entry::<FilteredPairs>()
+            .or_default()
+            .and_modify(move |mut pairs| {
+                pairs.0.insert(to);
+            });
+        // `FILTER_PAIRS` is what raises the broad phase's `CUSTOM_FILTER` flag;
+        // the hook is not consulted for a collider that lacks it.
+        commands
+            .entity(from)
+            .try_insert(ActiveCollisionHooks::FILTER_PAIRS);
+    }
+}
+
 /// Physics ticks a pending pair may scan at full rate before it is reported.
 ///
 /// A typo'd rel target never spawns, and a silent forever-scan is exactly the

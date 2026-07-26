@@ -17,6 +17,11 @@ use lunco_sandbox_edit::catalog::{BalloonModelMarker, PythonBalloonMarker};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Which model the user has selected to attach next.
+///
+/// Scene state: an armed attachment is a click the NEXT click in this scene will
+/// consume. It is disarmed on scene teardown (see the registration in
+/// `SandboxUiPlugin`) so a reload does not leave the first click on the new scene
+/// silently attaching a model the user picked for the old one.
 #[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AttachState {
     /// No attachment pending — clicks in the 3D scene behave normally.

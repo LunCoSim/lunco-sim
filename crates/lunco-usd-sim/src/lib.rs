@@ -2170,17 +2170,6 @@ fn setup_physical_wheel(
     // Joint construction lives in `lunco-usd-avian` (the single home for all
     // Avian joint-building); we add the mobility/hardware actuators on top.
     let mut joint_cmd = commands.spawn((
-        // `joint_bundle` carries the `JointCollisionDisabled` policy — the marker
-        // MUST share the joint's bundle so the `JointGraphEdge` is born
-        // collision-disabled and the pair never reaches the narrow phase. Never
-        // insert the marker separately here; see `lunco_usd_avian::joint_bundle`.
-        lunco_usd_avian::joint_bundle(lunco_usd_avian::wheel_revolute_joint(
-            chassis,
-            entity,
-            mount_local,
-            axle,
-            drive_motor,
-        )),
         // GENERAL LIFECYCLE CONTRACT — every entity the USD build *synthesizes* to back a
         // scene (avian joints, actuator ports, cosim wires) is parented into the grid
         // subtree via `ChildOf`, so the ONE hierarchy-recursive `clear_scene_entities`
@@ -2210,6 +2199,7 @@ fn setup_physical_wheel(
         },
         Name::new(format!("PhysicalWheelJoint_{}", prim_path.path)),
     ));
+    let joint_entity = joint_cmd.id();
     // Front wheels of an Ackermann rover also steer (frame rotation about Y).
     if let Some(steer_port) = steer {
         joint_cmd.try_insert(SteeringActuator {
@@ -2225,6 +2215,21 @@ fn setup_physical_wheel(
             output_angle: 0.0,
         });
     }
+
+    // The constraint itself goes through the ONE door every joint in the
+    // workspace uses. `attach_joint` takes the two BODIES, so it — not this call
+    // site — decides WHEN the joint may enter avian's graph (both bodies admitted
+    // to the island graph) and WHAT rides its bundle (`JointCollisionDisabled`).
+    // Inserting a joint component here directly is what "Neither body … is in an
+    // island" was: the wheel and its chassis are spawned by this very pass, so on
+    // a scene swap they are routinely not yet admitted at this exact moment.
+    lunco_usd_avian::attach_joint(
+        commands,
+        joint_entity,
+        chassis,
+        entity,
+        lunco_usd_avian::wheel_revolute_joint(chassis, entity, mount_local, axle, drive_motor),
+    );
 
     // The wheel↔chassis link is the wheel's `ChildOf(chassis)` — set by USD projection
     // and read back here as `chassis = child_of.parent()`. It is the ONE canonical link:

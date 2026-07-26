@@ -94,58 +94,53 @@ pub struct TutorialMeta {
 /// asset tree answers "which tracks exist" ([`lunco_assets::tutorials::tutorial_tracks`])
 /// and this file answers "who shows it, under what heading, in what order".
 ///
-/// Every field is optional: a track with no `track.json` is hosted by the app
-/// whose name matches its directory, labelled with that directory name, and
-/// sorted last. So a curriculum that never heard of this file still works.
+/// ONE form, every field required. A track without a readable `track.json` is
+/// not loaded at all and says so — no defaulted label, no inferred host, no
+/// "works anyway" path to keep a second shape alive. A curriculum that wants to
+/// be shown declares how.
 #[derive(Clone, Debug, Deserialize)]
 pub struct TrackMeta {
-    /// Heading shown for this track in the 🎓 menu. Defaults to the track name.
-    #[serde(default)]
-    pub label: Option<String>,
-    /// Sort key among tracks in the menu (ascending). Untagged tracks sort last.
-    #[serde(default)]
-    pub order: Option<i32>,
+    /// Heading shown for this track in the 🎓 menu.
+    pub label: String,
+    /// Sort key among tracks in the menu, ascending.
+    pub order: i32,
     /// App ids that load this track. `basic` names `sandbox` here — that is the
-    /// whole reason the field exists: a track is not required to be owned by the
-    /// app it is named after. Absent = hosted by the app of the same name.
-    #[serde(default)]
-    pub hosts: Option<Vec<String>>,
+    /// whole reason the field exists: a track is not owned by the app it happens
+    /// to be named after.
+    pub hosts: Vec<String>,
 }
 
 impl TrackMeta {
-    /// The heading for `track`, falling back to the track's own name.
-    fn label_for(&self, track: &str) -> String {
-        self.label.clone().unwrap_or_else(|| track.to_string())
+    /// Does `app` load this track?
+    fn hosted_by(&self, app: &str) -> bool {
+        self.hosts.iter().any(|h| h == app)
     }
+}
 
-    /// Does `app` load this track? Absent `hosts` = only the app of the same name.
-    fn hosted_by(&self, track: &str, app: &str) -> bool {
-        match &self.hosts {
-            Some(hosts) => hosts.iter().any(|h| h == app),
-            None => track == app,
+/// Parse one `track.json`. `None` (with a reason) if it is unreadable — the
+/// single parse used by both the bundled tracks and a twin's, so the two cannot
+/// drift into different rules about what a track declaration is.
+fn parse_track_meta(source: &str, src: &str) -> Option<TrackMeta> {
+    match serde_json::from_str::<TrackMeta>(src) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            warn!("[tutorial] {source} is invalid: {e} (needs label, order, hosts)");
+            None
         }
     }
 }
 
-/// Load `<track>/track.json`, or the all-defaults metadata when there is none.
-fn track_meta(track: &str) -> TrackMeta {
-    let default = TrackMeta {
-        label: None,
-        order: None,
-        hosts: None,
+/// The `track.json` of a track shipped in `assets/tutorials/`.
+fn track_meta(track: &str) -> Option<TrackMeta> {
+    let path = format!("{track}/track.json");
+    let Some(src) = lunco_assets::tutorials::tutorial_source(&path) else {
+        warn!(
+            "[tutorial] track '{track}' has no track.json — not loaded. Declare \
+             `label`, `order` and `hosts` in assets/tutorials/{path}."
+        );
+        return None;
     };
-    let Some(src) = lunco_assets::tutorials::tutorial_source(&format!("{track}/track.json")) else {
-        return default;
-    };
-    match serde_json::from_str::<TrackMeta>(&src) {
-        Ok(m) => m,
-        // Say so: a typo'd track.json is invisible otherwise — the track keeps
-        // working, just under its bare directory name and hosted nowhere useful.
-        Err(e) => {
-            warn!("[tutorial] {track}/track.json is invalid: {e}");
-            default
-        }
-    }
+    parse_track_meta(&path, &src)
 }
 
 /// The catalog of registered tutorials. Filled by [`TutorialCorePlugin`] from the
@@ -279,6 +274,15 @@ pub struct TutorialSeen {
 impl lunco_settings::SettingsSection for TutorialSeen {
     const KEY: &'static str = "tour_seen";
 }
+
+/// The app id this host runs as (`"sandbox"`, `"lunica"`, …) — the value
+/// [`TutorialCorePlugin::app`] was built with.
+///
+/// A resource because the rule "which tracks does this app load" is enforced in
+/// two places that must agree: plugin build (bundled tracks) and
+/// [`sync_twin_tutorials`] (a twin's). One value, read by both.
+#[derive(Resource, Clone, Debug)]
+pub struct TutorialHostApp(pub String);
 
 /// The persistent entity every tutorial scenario attaches to. Spawned lazily on
 /// the first launch; re-launching hot-reloads the scenario on it.
@@ -732,6 +736,7 @@ fn sync_twin_tutorials(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut loaded: ResMut<LoadedTwinCurriculum>,
     mut registry: ResMut<TutorialRegistry>,
+    host: Res<TutorialHostApp>,
 ) {
     let active = workspace.as_ref().and_then(|ws| ws.0.active_twin);
     if loaded.0 == active {
@@ -749,25 +754,31 @@ fn sync_twin_tutorials(
     let Ok(text) = std::fs::read_to_string(&manifest) else {
         return; // a twin with no curriculum is the normal case, not an error
     };
+    // A twin declares its track exactly as a bundled one does — same file, same
+    // required fields, same `hosts` rule, same parse. A twin curriculum is not a
+    // second kind of curriculum, so it does not get a second set of rules.
+    let track_json = manifest.with_file_name("track.json");
+    let Ok(track_src) = std::fs::read_to_string(&track_json) else {
+        warn!(
+            "[tutorial] twin at {} publishes {TWIN_TUTORIALS_MANIFEST} but no track.json \
+             beside it — its lessons are not loaded. Declare `label`, `order` and `hosts`.",
+            twin.root.display()
+        );
+        return;
+    };
+    let Some(track) = parse_track_meta(&track_json.display().to_string(), &track_src) else {
+        return;
+    };
+    if !track.hosted_by(&host.0) {
+        return; // this twin's curriculum is for a different app
+    }
     match serde_json::from_str::<Vec<TutorialMeta>>(&text) {
         Ok(metas) => {
             let n = metas.len();
-            // A twin's track gets its heading from the same `track.json` a
-            // bundled one uses — next to its manifest, keyed by the `app` its
-            // lessons declare. Absent, the menu falls back to that bare key.
-            let track_key = metas.first().map(|m| m.app.clone()).unwrap_or_default();
-            if let Some(dir) = manifest.parent() {
-                if let Ok(src) = std::fs::read_to_string(dir.join("track.json")) {
-                    match serde_json::from_str::<TrackMeta>(&src) {
-                        Ok(t) => {
-                            registry.tracks.insert(track_key, t);
-                        }
-                        Err(e) => warn!(
-                            "[tutorial] {}/track.json is invalid: {e}",
-                            dir.display()
-                        ),
-                    }
-                }
+            // Keyed by the `app` its lessons declare — the same key the menu
+            // groups by, so the heading lands on this twin's group.
+            if let Some(key) = metas.first().map(|m| m.app.clone()) {
+                registry.tracks.insert(key, track);
             }
             for mut m in metas {
                 m.from_twin = Some(id);
@@ -834,7 +845,7 @@ fn register_tutorials_menu(world: &mut World) {
                 registry
                     .tracks
                     .get(app_key.as_str())
-                    .and_then(|t| t.order)
+                    .map(|t| t.order)
                     .unwrap_or(i32::MAX),
                 (*app_key).clone(),
             )
@@ -844,7 +855,7 @@ fn register_tutorials_menu(world: &mut World) {
             let label = registry
                 .tracks
                 .get(app_key.as_str())
-                .map(|t| t.label_for(app_key))
+                .map(|t| t.label.clone())
                 .unwrap_or_else(|| app_key.clone());
             ui.menu_button(label, |ui| {
                 for meta in metas {
@@ -1001,13 +1012,16 @@ pub struct TutorialCorePlugin {
 impl Plugin for TutorialCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialRegistry>();
+        app.insert_resource(TutorialHostApp(self.app.clone()));
         // Every track in the asset tree, filtered by who hosts it — both facts
         // are data (`tutorial_tracks()` walks the tree, `track.json` names the
         // hosts). No app names a track in Rust, so a new track is a directory.
         let mut hosted = 0;
         for track in lunco_assets::tutorials::tutorial_tracks() {
-            let meta = track_meta(&track);
-            if !meta.hosted_by(&track, &self.app) {
+            let Some(meta) = track_meta(&track) else {
+                continue;
+            };
+            if !meta.hosted_by(&self.app) {
                 continue;
             }
             let manifest_path = format!("{track}/tutorials.json");

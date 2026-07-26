@@ -140,6 +140,19 @@ impl Plugin for UsdReadinessPlugin {
         // so a wait that closed this frame is not re-declared before the state
         // that closes it is visible.
         app.add_systems(PostUpdate, (track_scene_load, track_model_compiles));
+        // Every wait belongs to the scene that declared it. The registry already
+        // drops waits whose subject entity was despawned, but a WORLD-scoped one
+        // has no entity to die with — the outgoing scene's load wait would be
+        // inherited by the incoming scene and go on holding physics against it.
+        // Both producers above re-declare from live state on the next frame, so
+        // clearing here costs nothing that is still true.
+        app.add_systems(
+            lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+            |mut registry: ResMut<ReadinessRegistry>, mut commands: Commands| {
+                registry.clear();
+                commands.remove_resource::<SceneLoadWait>();
+            },
+        );
     }
 }
 

@@ -430,6 +430,22 @@ impl Plugin for SandboxEditUiPlugin {
         // inspecting it are then the ordinary prim paths. See `checkpoint_click`.
         app.init_resource::<checkpoint_click::WaypointContextMenuState>()
             .init_resource::<checkpoint_click::WaypointPlacement>()
+            // An armed placement names the vessel whose route it edits, and a
+            // context menu names the waypoint it opened on. Both are entities of
+            // the scene being unloaded — carried across a reload they leave the
+            // next scene's first ground click captured by a tool aimed at a
+            // vessel that no longer exists, with the possession and selection
+            // observers standing down for it (`WaypointToolActive`).
+            .add_systems(
+                lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+                |mut placement: ResMut<checkpoint_click::WaypointPlacement>,
+                 mut menu: ResMut<checkpoint_click::WaypointContextMenuState>| {
+                    if placement.0.is_some() {
+                        placement.0 = None;
+                    }
+                    *menu = checkpoint_click::WaypointContextMenuState::default();
+                },
+            )
             .add_observer(checkpoint_click::on_scene_click_checkpoint)
             .add_observer(checkpoint_click::on_scene_right_click_waypoint)
             // Consumes the ground click that follows a Move / Insert-after.

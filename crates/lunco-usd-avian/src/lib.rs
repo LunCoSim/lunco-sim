@@ -186,6 +186,25 @@ impl Plugin for UsdAvianPlugin {
                 avian3d::schedule::PhysicsSchedule,
                 (
                     build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
+                    // The second half of `attach_joint`: install each parked
+                    // joint on the first tick where avian has admitted both of
+                    // its bodies. One registration per joint type, because the
+                    // ticket is generic over the constraint it carries — adding a
+                    // joint kind means adding it here, and nothing else.
+                    //
+                    // Same window as the builder above and for the same reason:
+                    // ahead of the broad/narrow phase, so the pair is filtered
+                    // before it can form a contact.
+                    admit_pending_joints::<RevoluteJoint>
+                        .run_if(any_with_component::<PendingJoint<RevoluteJoint>>),
+                    admit_pending_joints::<PrismaticJoint>
+                        .run_if(any_with_component::<PendingJoint<PrismaticJoint>>),
+                    admit_pending_joints::<FixedJoint>
+                        .run_if(any_with_component::<PendingJoint<FixedJoint>>),
+                    admit_pending_joints::<SphericalJoint>
+                        .run_if(any_with_component::<PendingJoint<SphericalJoint>>),
+                    admit_pending_joints::<DistanceJoint>
+                        .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
                     // Same window, same reason: avian's broad phase never
                     // re-filters a pair already in the contact graph, so a filter
                     // armed after the first narrow phase does not apply to the
@@ -1839,7 +1858,19 @@ fn build_usd_physics_joints(
     // spawns, so this filter says nothing about the pose being real — that is
     // what `q_shadow` below is for. Conflating the two is the bug that made
     // joint seating measure `localPos0 - localPos1` for its whole life.
-    q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
+    //
+    // `Without<RigidBodyDisabled>` is part of ADMISSION for the same reason
+    // `With<Position>` is. A disabled body is out of the island graph, and
+    // avian's joint-add observer merges the islands of both bodies with no
+    // regard for whether either has one — `merge_islands` panics outright
+    // (`islands/mod.rs:820`, "Neither body … is in an island"). Bodies are
+    // disabled while a scene is mounting, by `lunco_physics`'s readiness freeze
+    // (a lander whose Modelica model has not compiled yet), so a jointed vehicle
+    // arriving in that window used to take the whole app down — reproducibly, by
+    // switching scene while a tutorial's scene was still spawning. The joint
+    // stays `PendingUsdJoint` until the freeze lifts, exactly as it already does
+    // for a body avian has not admitted.
+    q_bodies: Query<(Entity, &UsdPrimPath), (With<Position>, Without<RigidBodyDisabled>)>,
     // **Pose readiness gate**: has the physics-transform bridge written a real
     // world pose into `Position` yet? See `BridgeShadow::is_seeded`.
     q_shadow: Query<&big_space_bridge::BridgeShadow>,
@@ -2096,9 +2127,7 @@ fn build_usd_physics_joints(
                         motor_model: d.motor_model(),
                     };
                 }
-                commands
-                    .entity(joint_entity)
-                    .try_insert(joint_bundle(joint));
+                attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
             }
             "PhysicsRevoluteJoint" => {
                 let mut joint = RevoluteJoint::new(b0, b1)
@@ -2117,18 +2146,22 @@ fn build_usd_physics_joints(
                         motor_model: d.motor_model(),
                     };
                 }
-                commands
-                    .entity(joint_entity)
-                    .try_insert(joint_bundle(joint));
+                attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
             }
             "PhysicsFixedJoint" => {
-                commands.entity(joint_entity).try_insert(joint_bundle(
-                    FixedJoint::new(b0, b1)
+                attach_joint(
+                    &mut commands,
+                    joint_entity,
+                    b0,
+                    b1,
+                    JointSpec::new(
+                        FixedJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1)
                         .with_local_basis1(pending.local_rot0)
                         .with_local_basis2(pending.local_rot1),
-                ));
+                    ),
+                );
             }
             "PhysicsSphericalJoint" => {
                 // Ball joint: 3 rotational DOF about the anchor. `physics:axis`
@@ -2150,9 +2183,7 @@ fn build_usd_physics_joints(
                 if pending.limit_lower.is_finite() && pending.limit_upper.is_finite() {
                     joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
                 }
-                commands
-                    .entity(joint_entity)
-                    .try_insert(joint_bundle(joint));
+                attach_joint(&mut commands, joint_entity, b0, b1, JointSpec::new(joint));
             }
             "PhysicsDistanceJoint" => {
                 // Tether/strut: keeps the two anchors within [min, max] distance.
@@ -2174,12 +2205,18 @@ fn build_usd_physics_joints(
                         pending.body1_path
                     );
                 }
-                commands.entity(joint_entity).try_insert(joint_bundle(
-                    DistanceJoint::new(b0, b1)
+                attach_joint(
+                    &mut commands,
+                    joint_entity,
+                    b0,
+                    b1,
+                    JointSpec::new(
+                        DistanceJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1)
                         .with_limits(min, max),
-                ));
+                    ),
+                );
             }
             // UsdPhysics generic D6 joint has no avian primitive (avian offers
             // fixed/revolute/prismatic/spherical/distance, not a configurable
@@ -2210,12 +2247,29 @@ fn build_usd_physics_joints(
 /// supplies the drive [`AngularMotor`] and adds its mobility/hardware actuators
 /// on top. `mount_local` is the hub anchor in chassis-local space, `axle` the
 /// hinge axis (chassis-local).
-/// THE ONLY sanctioned way to hand an Avian joint to the world. Every joint in
-/// this workspace — authored USD joints here, the synthesized wheel joint in
-/// `lunco-usd-sim` — goes through this.
+/// THE ONLY way to hand an Avian joint to the world. Every joint in this
+/// workspace — authored USD joints here, the synthesized wheel joint in
+/// `lunco-usd-sim` — goes through this, and nothing else may insert a joint
+/// component. It takes the two BODIES as arguments precisely so it can enforce
+/// what a bare bundle could not.
 ///
-/// It exists to make ONE avian rule un-forgettable: **`JointCollisionDisabled`
-/// must ride the same bundle as the joint component, never a later insert.**
+/// It makes TWO avian rules un-forgettable, because a caller can no longer state
+/// either one:
+///
+/// 1. **A jointed pair never reaches the narrow phase.** `JointCollisionDisabled`
+///    rides the same bundle as the joint component (never a later insert), and
+///    the pair is entered into [`filtered_pairs::filter_pair`] the moment it is
+///    attached — so no contact can form even while the joint is still parked.
+/// 2. **A joint may only enter the graph once BOTH bodies are in avian's island
+///    graph.** The joint is parked as a [`PendingJoint`] and installed by
+///    [`admit_pending_joints`] on the first tick where that holds.
+///
+/// Rule 2 was the one that used to be a comment. Authored joints honoured it
+/// through their own resolve gate; the synthesized wheel joint inserted straight
+/// into the world and took the whole app down whenever a scene was swapped while
+/// a rover was still spawning ("Neither body … is in an island"). One entry
+/// point means a second call site cannot re-open that door — there is no
+/// argument shape in which it can ask for the joint *now*.
 ///
 /// Why the bundle, specifically. Bevy writes a whole bundle before firing any
 /// hook or observer, so `add_joint_to_graph` (`joint_graph/plugin.rs:135-143`)
@@ -2238,8 +2292,95 @@ fn build_usd_physics_joints(
 /// `crates/lunco-usd-avian/tests/gizmo_body_swap_islands.rs`, where
 /// `joint_and_collision_disabled_inserted_as_one_bundle` panics for exactly that
 /// reason: correct bundle, too late.
-pub fn joint_bundle<J: Component>(joint: J) -> (J, JointCollisionDisabled) {
-    (joint, JointCollisionDisabled)
+pub fn attach_joint<J: Component + Clone>(
+    commands: &mut Commands,
+    joint_entity: Entity,
+    body0: Entity,
+    body1: Entity,
+    joint: JointSpec<J>,
+) {
+    let JointSpec(joint) = joint;
+    // Rule 1, and it lands NOW rather than with the joint: a jointed pair must
+    // never reach the narrow phase, and a contact formed during the wait cannot
+    // be cleaned up afterwards without corrupting avian's island bookkeeping.
+    // See `filtered_pairs::filter_pair`.
+    filtered_pairs::filter_pair(commands, body0, body1);
+    commands.entity(joint_entity).try_insert(PendingJoint {
+        body0,
+        body1,
+        joint,
+    });
+}
+
+/// A constructed constraint that is not yet a component — the only currency
+/// [`attach_joint`] accepts, and the only thing a joint builder hands back.
+///
+/// This is the compile-time half of the contract. The inner value is private, so
+/// outside this module a `JointSpec` cannot be unwrapped, and `JointSpec` itself
+/// is not a `Component`, so it cannot be handed to `insert`/`spawn`. A caller in
+/// another crate therefore has no expressible way to put a joint into the world
+/// except through [`attach_joint`] — the ordering rules are not documentation it
+/// must remember, they are the only path the type system leaves open.
+///
+/// Within this module the wrapper is transparent, because this is where joints
+/// are built; the guard is against a SECOND attachment site appearing elsewhere,
+/// which is exactly how the wheel joint came to bypass the admission gate.
+pub struct JointSpec<J: Component + Clone>(J);
+
+impl<J: Component + Clone> JointSpec<J> {
+    /// Wrap a constructed constraint. Private to this crate: a joint is built by
+    /// one of the builders here, never assembled by a caller.
+    pub(crate) fn new(joint: J) -> Self {
+        Self(joint)
+    }
+}
+
+/// A joint that has been handed to [`attach_joint`] and is waiting for avian to
+/// admit both of its bodies. Insert only through that function.
+///
+/// This type is what makes the two rules structural instead of remembered: the
+/// bundle is assembled in ONE place ([`admit_pending_joints`]) and it is
+/// assembled only once both bodies are in the island graph. A caller cannot get
+/// the ordering wrong because a caller no longer expresses the ordering.
+#[derive(Component, Clone, Debug)]
+pub struct PendingJoint<J: Component + Clone> {
+    /// First jointed body.
+    pub body0: Entity,
+    /// Second jointed body.
+    pub body1: Entity,
+    /// The constraint to install once both bodies are admitted.
+    pub joint: J,
+}
+
+/// Install every [`PendingJoint<J>`] whose two bodies avian has admitted into
+/// its island graph, as one bundle with [`JointCollisionDisabled`].
+///
+/// `BodyIslandNode` is the precondition stated exactly: it is avian's own record
+/// that a body is in the island graph, and it is what the joint-add path asserts
+/// when it merges the two bodies' islands. Asking anything else — "does it have
+/// `RigidBody`", "does it have `Position`" — approximates it and gets a body
+/// that exists but is not admitted: freshly spawned (avian initialises bodies in
+/// its own schedule, several frames after the USD build queues them) or disabled
+/// (`lunco_physics`'s readiness freeze holds a vehicle whose model is still
+/// compiling). Both cases panic in `merge_islands`.
+///
+/// Registered per joint type by [`UsdAvianPlugin`]. A pending joint whose bodies
+/// never arrive simply never installs — the same disposition as an unresolved
+/// [`PendingUsdJoint`], and it dies with its scene.
+pub fn admit_pending_joints<J: Component + Clone>(
+    pending: Query<(Entity, &PendingJoint<J>)>,
+    admitted: Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
+    mut commands: Commands,
+) {
+    for (entity, p) in pending.iter() {
+        if !admitted.contains(p.body0) || !admitted.contains(p.body1) {
+            continue;
+        }
+        commands
+            .entity(entity)
+            .try_insert((p.joint.clone(), JointCollisionDisabled))
+            .try_remove::<PendingJoint<J>>();
+    }
 }
 
 pub fn wheel_revolute_joint(
@@ -2248,12 +2389,14 @@ pub fn wheel_revolute_joint(
     mount_local: DVec3,
     axle: DVec3,
     drive_motor: avian3d::prelude::AngularMotor,
-) -> RevoluteJoint {
-    RevoluteJoint::new(chassis, wheel)
-        .with_local_anchor1(mount_local)
-        .with_local_anchor2(DVec3::ZERO)
-        .with_hinge_axis(axle)
-        .with_motor(drive_motor)
+) -> JointSpec<RevoluteJoint> {
+    JointSpec::new(
+        RevoluteJoint::new(chassis, wheel)
+            .with_local_anchor1(mount_local)
+            .with_local_anchor2(DVec3::ZERO)
+            .with_hinge_axis(axle)
+            .with_motor(drive_motor),
+    )
 }
 
 /// Reads a `DVec3` attribute (e.g., `double3 xformOp:translate`) at full

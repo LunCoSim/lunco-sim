@@ -133,6 +133,15 @@ impl Plugin for SandboxUiPlugin {
                 #[cfg(any(target_arch = "wasm32", feature = "transport-http"))]
                 app.register_panel(rhai_repl_panel::RhaiReplPanel::default());
                 app.init_resource::<models_palette::AttachState>();
+                // Disarm on scene teardown — see `AttachState`.
+                app.add_systems(
+                    lunco_usd_bevy::scene_lifecycle::SceneTeardown,
+                    |mut attach: ResMut<models_palette::AttachState>| {
+                        if *attach != models_palette::AttachState::Idle {
+                            *attach = models_palette::AttachState::Idle;
+                        }
+                    },
+                );
                 // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
                 // as selection; egui occlusion handled by the framework).
                 app.add_observer(models_palette::on_scene_click_attach);
