@@ -17,12 +17,22 @@
 //!    `MoveForward→throttle`; a cosim-flown lander maps `MoveForward→manual_pitch`.
 //!    Same intent vocabulary, different actuation — no vessel-kind branch.
 //!
-//! [`drive_from_bindings`] composes the two every fixed tick (the controller's
-//! [`ActionState<UserIntent>`](leafwing_input_manager::prelude::ActionState) →
-//! summed port writes → `SetPorts`). Because control is keyed by *intent*,
-//! anything internal (rhai, mission logic, AI) can drive a vessel by naming
-//! intents — the same consistent vocabulary. All writes land through the same
-//! [`lunco_core::ports::PortRegistry`].
+//! Two systems compose the stages, split by WHAT they drive — the cadence follows
+//! from that, it is not a policy knob:
+//!
+//! * [`drive_from_bindings`] — **vessels**, in `FixedUpdate`. One `SetPorts` per
+//!   fixed tick per controller, seq-stamped for prediction/rollback. Pauses with the
+//!   sim, because a paused rover must not move.
+//! * [`drive_self_drivers`] — the **free avatar**, in
+//!   [`lunco_time::InteractionSchedule`]. Kinematic, client-local, never predicted, so
+//!   it belongs on the unpausable presentation step: pausing the simulation must not
+//!   paralyse the user. Possessing a vessel adds a [`ControllerLink`], which moves that
+//!   entity to the first system by query, not by a flag.
+//!
+//! Both share stage 1 ([`intent_held`]) and stage 2 ([`ControlBinding::resolve`]).
+//! Because control is keyed by *intent*, anything internal (rhai, mission logic, AI)
+//! can drive a vessel by naming intents — the same consistent vocabulary. All writes
+//! land through the same [`lunco_core::ports::PortRegistry`].
 
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
@@ -211,6 +221,24 @@ impl Plugin for LunCoControllerPlugin {
                 .run_if(lunco_core::not_rolling_back)
                 .before(lunco_core::ControlDacSet),
         );
+        // The SELF-DRIVER half runs on the INTERACTION cadence, not the sim tick.
+        //
+        // A self-driver is the free avatar: kinematic, client-local, not part of the
+        // simulation and not predicted. Riding `FixedUpdate` gave it the sim's pause
+        // for free — `Time<Virtual>` pauses ⇒ `FixedUpdate` stops ⇒ the avatar's
+        // `InputPorts` froze at their last value, so a paused world could not be
+        // flown or walked around even though every camera system already ran on the
+        // wall clock. That is cadence standing in for clock again (see
+        // `lunco_time::interaction`): the fix is the cadence that is unpausable *by
+        // construction*, not a `run_if(paused)` twin or a raw `Time<Real>` bypass.
+        //
+        // Pause still means what it says for the SIMULATION: a possessed vessel gets
+        // a `ControllerLink`, which excludes it from `q_self`, so its input keeps
+        // riding `FixedUpdate` and a paused rover stays put.
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
+        app.add_systems(lunco_time::InteractionSchedule, drive_self_drivers);
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
         // API, or wire-replayed — flows through this observer, so the client
         // prediction log and the host reconcile-ack no longer depend on how the
@@ -272,10 +300,6 @@ fn drive_from_bindings(
     q_ctrl: Query<(&ControllerLink, &ActionState<UserIntent>)>,
     q_binding: Query<&ControlBinding>,
     q_vessel: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
-    // Self-drivers: an entity that holds its OWN input + its own binding under no
-    // external controller (the free avatar). Disjoint from `q_ctrl` (which requires
-    // a `ControllerLink`), so no query conflict.
-    q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControllerLink>>,
     // egui keyboard capture (published by `lunco-workbench`). While a text field
     // is focused we treat every intent as released so a keypress typed into the UI
     // doesn't also drive the vessel — see the `held` closure below. `Option` so a
@@ -295,16 +319,8 @@ fn drive_from_bindings(
     // command (as it would if we simply skipped the system).
     let egui_keyboard = egui_focus.is_some_and(|f| f.wants_keyboard);
     let sim_intents = sim_intents.as_deref();
-    // A simulated intent counts as held regardless of the egui gate (it is not a
-    // physical key that a focused text field could be swallowing).
-    //
-    // Scoped to `vessel`: a simulated intent drives ONLY the vessel it was addressed
-    // to. The keyboard half stays per-vessel too — it always was, via that vessel's
-    // own `ActionState`. Before, the sim half was a global set consulted inside this
-    // same loop, so one `SimulateIntent` pressed the key on EVERY controlled vessel.
     let held = |vessel: Entity, intent, intents: &ActionState<UserIntent>| {
-        sim_intents.is_some_and(|s| s.0.get(&vessel).is_some_and(|set| set.contains(&intent)))
-            || (!egui_keyboard && intents.pressed(&intent))
+        intent_held(vessel, intent, intents, sim_intents, egui_keyboard)
     };
 
     for (link, intents) in q_ctrl.iter() {
@@ -431,15 +447,55 @@ fn drive_from_bindings(
             tick: tick.0,
         });
     }
+}
 
-    // Self-drive (the free avatar): drive the entity's OWN command surface from its
-    // OWN input via its OWN binding — the identical `SetPorts` path, no bespoke
-    // avatar movement code. Local & kinematic (`apply_fly`), so no seq/tick
-    // prediction bookkeeping. `resolve` writes every bound port (0 when idle), so a
-    // released key zeroes the port and motion stops.
+/// Stage 1 of the mapping, shared by both cadences: is `intent` held *for this
+/// vessel* right now?
+///
+/// A simulated intent counts as held regardless of the egui gate (it is not a
+/// physical key that a focused text field could be swallowing).
+///
+/// Scoped to `vessel`: a simulated intent drives ONLY the vessel it was addressed
+/// to. The keyboard half is per-vessel too, via that vessel's own `ActionState`.
+/// (The sim half used to be a global set consulted inside the drive loop, so one
+/// `SimulateIntent` pressed the key on EVERY controlled vessel.)
+fn intent_held(
+    vessel: Entity,
+    intent: UserIntent,
+    intents: &ActionState<UserIntent>,
+    sim_intents: Option<&SimulatedIntents>,
+    egui_keyboard: bool,
+) -> bool {
+    sim_intents.is_some_and(|s| s.0.get(&vessel).is_some_and(|set| set.contains(&intent)))
+        || (!egui_keyboard && intents.pressed(&intent))
+}
+
+/// Self-drive (the free avatar): drive the entity's OWN command surface from its
+/// OWN input via its OWN binding — the identical `SetPorts` path, no bespoke avatar
+/// movement code. Local & kinematic (`apply_fly` integrates the ports), so no
+/// seq/tick prediction bookkeeping. `resolve` writes every bound port (0 when idle),
+/// so a released key zeroes the port and motion stops.
+///
+/// Runs in [`lunco_time::InteractionSchedule`] — the constant-rate, never-paused
+/// presentation step — so pausing the SIMULATION does not paralyse the user. Nothing
+/// here reads a `dt`: the binding maps held intents to setpoints, and the consumer
+/// (`apply_fly`) integrates them on the interaction clock.
+///
+/// Disjoint from [`drive_from_bindings`]'s query by `Without<ControllerLink>`: an
+/// avatar that possesses a vessel is no longer a self-driver, so its input goes back
+/// on the sim tick and freezes with the sim, as pause is meant to.
+fn drive_self_drivers(
+    q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControllerLink>>,
+    egui_focus: Option<Res<lunco_core::EguiFocus>>,
+    sim_intents: Option<Res<SimulatedIntents>>,
+    mut commands: Commands,
+) {
+    let egui_keyboard = egui_focus.is_some_and(|f| f.wants_keyboard);
+    let sim_intents = sim_intents.as_deref();
     for (entity, intents, binding) in q_self.iter() {
         // A self-driver IS its own vessel, so it is its own intent subject.
-        let writes = binding.resolve(|intent| held(entity, intent, intents));
+        let writes = binding
+            .resolve(|intent| intent_held(entity, intent, intents, sim_intents, egui_keyboard));
         commands.trigger(lunco_cosim::SetPorts {
             target: entity,
             writes,
@@ -845,5 +901,78 @@ mod tests {
         // Builder runs end-to-end (also adds the mouse axes) without panicking.
         let _ = get_avatar_input_map();
         let _ = UserIntent::MoveForward;
+    }
+
+    /// Pausing the SIM must not paralyse the USER: the free avatar's self-drive rides
+    /// the interaction cadence, so its `SetPorts` keep flowing with `Time<Virtual>`
+    /// paused — while `FixedUpdate` (the sim tick, and `drive_from_bindings` with it)
+    /// is genuinely frozen. Both halves are asserted: without the frozen-tick control
+    /// this test would pass on an app that simply never paused.
+    #[test]
+    fn a_paused_sim_still_drives_the_free_avatar() {
+        use lunco_time::{InteractionSchedule, InteractionStep, TimeTransport, TransportMode};
+
+        let mut app = App::new();
+        // Bevy's time plugin drives `Time<Real>` from the wall clock (and the fixed
+        // loop from `Time<Virtual>`); ours adds the transport + the interaction cadence.
+        app.add_plugins((bevy::time::TimePlugin, lunco_time::TimePlugin));
+        app.add_systems(InteractionSchedule, drive_self_drivers);
+
+        // Pause through the REAL path: the transport, which `advance_world_clock`
+        // projects onto `Time<Virtual>`'s paused flag.
+        app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Paused;
+
+        // Control: did the sim tick really stop this update?
+        #[derive(Resource, Default)]
+        struct Ticks(u32);
+        app.init_resource::<Ticks>();
+        app.add_systems(FixedUpdate, |mut t: ResMut<Ticks>| t.0 += 1);
+
+        // Collect the port writes the self-drive emits.
+        #[derive(Resource, Default)]
+        struct Writes(Vec<(String, f64)>);
+        app.init_resource::<Writes>();
+        app.add_observer(
+            |trigger: On<lunco_cosim::SetPorts>, mut w: ResMut<Writes>| {
+                w.0.extend(trigger.event().writes.iter().cloned());
+            },
+        );
+
+        // A free avatar: its own input + its own binding, no `ControllerLink`.
+        let mut state = ActionState::<UserIntent>::default();
+        state.press(&UserIntent::MoveForward);
+        app.world_mut().spawn((
+            state,
+            ControlBinding {
+                binds: vec![(UserIntent::MoveForward, "forward".into(), 1.0)],
+            },
+        ));
+
+        // Frame 1 seeds the clocks (and runs Startup); only frame 2 is measured.
+        app.update();
+        app.world_mut().resource_mut::<Ticks>().0 = 0;
+        app.world_mut().resource_mut::<Writes>().0.clear();
+
+        // Let real time pass — the interaction step drains the WALL clock, so this is
+        // the only thing that must move for the avatar to keep driving.
+        let step = app.world().resource::<InteractionStep>().step_secs;
+        std::thread::sleep(std::time::Duration::from_secs_f64(step * 1.5));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Ticks>().0,
+            0,
+            "control: a paused sim must not run FixedUpdate — otherwise this test \
+             proves nothing about the interaction cadence"
+        );
+        let writes = &app.world().resource::<Writes>().0;
+        assert!(
+            !writes.is_empty(),
+            "the free avatar's setpoints must keep flowing while the sim is paused"
+        );
+        assert!(
+            writes.iter().all(|w| w == &("forward".to_string(), 1.0)),
+            "every emitted write is the bound setpoint (got {writes:?})"
+        );
     }
 }

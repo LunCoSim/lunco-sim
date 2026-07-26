@@ -11,6 +11,10 @@ lunco-core = { path = "../lunco-core" }
 # The ONE generic vessel-control command `SetPorts` (a batch of named input-port
 # writes) lives in `lunco-cosim`; `drive_from_bindings` triggers it from held keys.
 lunco-cosim = { path = "../lunco-cosim" }
+# The interaction cadence (`InteractionSchedule`): the constant-rate, never-paused
+# step the free avatar's self-drive runs on, so pausing the sim doesn't freeze the
+# user's own movement.
+lunco-time = { path = "../lunco-time" }
 # Key→intent bindings are DATA (`assets/config/keybindings.json`), parsed into the
 # leafwing `InputMap` — no keys hardcoded in Rust.
 serde_json = { workspace = true }

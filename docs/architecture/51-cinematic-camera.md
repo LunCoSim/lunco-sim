@@ -509,15 +509,18 @@ USD and renders itself.
 Requested, and the repo already does exactly this for the follow camera, so the path driver
 copies it rather than inventing a cadence:
 
-- `spring_arm_system` runs in **`FixedPostUpdate`** ("so its slerp/lerp uses the fixed cadence",
-  `lunco-avatar/src/lib.rs:1169`), reading the body's fixed-step time domain.
-- `spring_arm_paused_system` is the **render-rate twin** — because "`FixedPostUpdate` stops when
-  the sim pauses" (:1211), which is the same freeze that bit the animation clock (§8a-bis).
-- The Transform is **eased between** fixed writes for render (:2840).
+- `spring_arm_system` runs in **`lunco_time::InteractionSchedule`** — a constant 60 Hz step
+  drained from the wall clock, so its slerp/lerp gets a constant `dt` without borrowing the sim's
+  pause. (It used to sit in `FixedPostUpdate` for that `dt`, which is exactly the cadence-as-clock
+  mistake doc 19 §11e-bis names.)
+- There is **no paused twin any more**. `InteractionSchedule` has no path from `TimeTransport`, so
+  the camera is unpausable by construction rather than by a `run_if(paused)` duplicate.
+- The Transform is **eased to render rate** by `lunco_time::InteractionEased` (`prev`/`curr`
+  snapshots lerped by the step's `overstep_fraction`), not by avian's fixed-step interpolation.
 
-So: evaluate the curve at the path clock's time in `FixedPostUpdate`; ease the camera Transform
-toward it at render rate. Note the paused-twin problem disappears if the path clock hangs on a
-wall-rooted parent — but the *cadence* still wants to be fixed, because cadence ≠ clock.
+So: evaluate the curve at the path clock's time on the interaction step; let `InteractionEased`
+ease the camera Transform to display rate. The cadence is stepped and the clock is whatever the
+path hangs on — cadence ≠ clock, chosen independently.
 
 ## 8e. OUTSTANDING — next session, in dependency order
 

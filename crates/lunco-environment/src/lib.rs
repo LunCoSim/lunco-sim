@@ -98,6 +98,11 @@ pub use horizon::{
     HorizonShadowCacheConfig, HorizonShadowPlugin, SunQuery,
 };
 
+/// The sun's angles as ports (`sun_azimuth` / `sun_elevation`) — a `PortBackend`
+/// registered from the crate that owns the light, not from the cosim engine. See
+/// the module docs for why it moved.
+mod sun_ports;
+
 /// System sets for environment computation and consumption.
 ///
 /// Ordered chain in [`FixedUpdate`]:
@@ -518,6 +523,12 @@ impl Plugin for EnvironmentPlugin {
         // lunar default unless a scene `insert_resource`d its own studio
         // values first (`init_resource` is a no-op when already present).
         app.init_resource::<LunarSun>();
+
+        // The sun's angles as ports. Registered from here — the crate that owns the
+        // light and declares `bevy_light` — rather than from the cosim engine's
+        // avian table, where a `DirectionalLight` gate compiled only by feature
+        // unification. See `sun_ports`.
+        sun_ports::build(app);
 
         app.configure_sets(
             FixedUpdate,
