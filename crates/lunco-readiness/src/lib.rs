@@ -412,16 +412,18 @@ pub fn apply_readiness_marks(
     marked: Query<Entity, With<HeldForReadiness>>,
     mut commands: Commands,
 ) {
+    // `try_*` rather than the panicking forms: the subject is live when
+    // `evaluate_readiness` builds `held_entities`, but a scene load despawns
+    // whole subtrees between this queue and its apply. That window is inherent
+    // to deferred commands, so the reaper above cannot close it.
     for entity in &state.held_entities {
         if !marked.contains(*entity) {
-            if let Ok(mut e) = commands.get_entity(*entity) {
-                e.insert(HeldForReadiness);
-            }
+            commands.entity(*entity).try_insert(HeldForReadiness);
         }
     }
     for entity in &marked {
         if !state.held_entities.contains(&entity) {
-            commands.entity(entity).remove::<HeldForReadiness>();
+            commands.entity(entity).try_remove::<HeldForReadiness>();
         }
     }
 }
