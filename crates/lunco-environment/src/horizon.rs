@@ -873,8 +873,18 @@ fn install_shadow_cache(
 /// re-implementing the pick — two implementations disagreeing on which light is
 /// "the sun" is precisely what shows up as flickering half-shaded objects.
 ///
-/// All four components are render-FREE: `DirectionalLight` /
-/// `CascadeShadowConfig` are `bevy_light`, `RenderLayers` is `bevy_camera`.
+/// The filters are STRUCTURAL, not a guess about brightness:
+///
+/// * `Without<Earthshine>` — the earthshine fill is the one other
+///   `DirectionalLight` the engine ever makes, and it is spawned by
+///   [`crate::spawn_earthshine`], never authored. The sun is the light that came
+///   from a `UsdLuxDistantLight` prim; earthshine is engine furniture. That is a
+///   fact about where each entity came from, so the query states it.
+/// * `Without<RenderLayers>` — preview-viewport suns are scoped to their own
+///   layer and are not the scene's sun.
+///
+/// All components are render-FREE: `DirectionalLight` / `CascadeShadowConfig`
+/// are `bevy_light`, `RenderLayers` is `bevy_camera`.
 pub type SunQuery<'w, 's> = Query<
     'w,
     's,
@@ -884,19 +894,41 @@ pub type SunQuery<'w, 's> = Query<
         Option<&'static SunAngularDiameter>,
         Option<&'static CascadeShadowConfig>,
     ),
-    Without<RenderLayers>,
+    (Without<RenderLayers>, Without<crate::Earthshine>),
 >;
 
-/// The single sun all horizon systems agree on: the brightest
-/// `DirectionalLight` not scoped to another render layer (preview-viewport
-/// suns carry `RenderLayers`). Deterministic — query iteration order is
-/// not. Returns the transform, tan(angular radius), and the CSM far bound in
-/// metres (0 when the sun casts no cascade shadows — the march then covers the
-/// whole range).
+/// The single sun all horizon systems agree on.
+///
+/// ## No brightness heuristic
+///
+/// This used to take the BRIGHTEST `DirectionalLight`, which is a guess dressed
+/// as a rule: it silently picks when a scene has two suns, and with equal
+/// illuminance it picks by archetype iteration order — i.e. not deterministically
+/// at all. That guess is what let a duplicate engine-spawned sun steal the
+/// ephemeris aim while the scene's own sun stayed frozen.
+///
+/// The sun is now identified structurally by [`SunQuery`]'s filters, so a
+/// correctly-authored scene has exactly one candidate and there is nothing to
+/// choose between. More than one means the SCENE is ambiguous — two authored
+/// `DistantLight`s — and that is reported rather than papered over, because no
+/// tiebreak here can know which one the author meant.
+///
+/// Returns the transform, tan(angular radius), and the CSM far bound in metres
+/// (0 when the sun casts no cascade shadows — the march then covers the whole
+/// range).
 pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)> {
-    sun.iter()
-        .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
-        .map(|(gt, light, ang, csm)| {
+    let mut it = sun.iter();
+    let first = it.next()?;
+    if it.next().is_some() {
+        warn_once!(
+            "[environment] {} scene suns: more than one authored `DistantLight` is lit and \
+             unscoped, so which one lights the scene is ambiguous. Author ONE sun \
+             (see `lunco://lighting/sun.usda`); the others should be scoped to a \
+             `RenderLayers` preview or removed.",
+            sun.iter().count()
+        );
+    }
+    Some(first).map(|(gt, light, ang, csm)| {
             let csm_far = if light.shadow_maps_enabled {
                 csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
             } else {

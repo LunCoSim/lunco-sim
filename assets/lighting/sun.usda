@@ -1,0 +1,52 @@
+#usda 1.0
+(
+    defaultPrim = "Sun"
+)
+
+# The engine's sun: a composable `UsdLuxDistantLight`.
+#
+# Scenes reference this prim instead of declaring a sun of their own, so the
+# engine defaults and a scene's opinions are two layers on ONE prim. Composition
+# resolves them before anything reaches the renderer, which makes "one scene,
+# one sun" structural rather than something the engine polices at runtime. A
+# scene that references no sun is unlit.
+#
+#     def DistantLight "Sun" (
+#         prepend references = @lunco://lighting/sun.usda@</Sun>
+#     )
+#     {
+#         # refinements only — omit anything inherited unchanged
+#         float inputs:shadow:distance = 1400
+#         double3 xformOp:rotateXYZ = (-8.14, 95.72, 0.0)
+#     }
+#
+# Authored here is the light's physical identity at 1 AU. In a scene with a site
+# anchor and a real ephemeris, `lunco-celestial` refines `xformOp:rotateXYZ` (the
+# true Sun direction at the scene epoch) and `inputs:intensity` (1/r² for the
+# site's real distance) in a stronger layer. These values therefore remain the
+# answer for a composition without a sky — a QGIS shadow pass, or this file
+# opened on its own — and which opinion wins is inspectable through the property
+# stack rather than being a runtime convention.
+def DistantLight "Sun" (
+    prepend apiSchemas = ["ShadowAPI"]
+)
+{
+    # The calibrated lunar sun, paired with EV100 16 on the camera
+    # (`lunco_render::LUNAR_SUN_EXPOSURE_EV100`). The pair must agree on one
+    # number or a scene opens ~5 stops off.
+    float inputs:intensity = 128000
+
+    # Sol's angular diameter, driving physically-scaled penumbra width in the
+    # horizon-shadow march. Not a look knob: it is how big the sun is.
+    float inputs:angle = 0.53
+
+    # Standard `UsdLuxShadowAPI`. UsdLux defines -1 as "no limit"; a cascade
+    # shadow map has no such mode, so the loader reads any non-positive value as
+    # the engine default. Shadow texel density scales inversely with this.
+    float inputs:shadow:distance = 1500
+
+    # The standing direction: what lights the scene before an ephemeris steers,
+    # and in scenes that mount none.
+    double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
+    uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+}

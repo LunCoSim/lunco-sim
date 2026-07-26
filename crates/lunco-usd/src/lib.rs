@@ -49,7 +49,7 @@ pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
 // Registry: use `lunco_doc_bevy::DocumentRegistry<UsdDocument>` — no USD-specific type.
 pub use lunco_usd_avian::{BigSpacePhysicsBridgePlugin, UsdAvianPlugin, UsdCollisionFilter};
 pub use lunco_usd_bevy::{
-    usd_data::UsdDataExt, FallbackSceneLight, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
+    usd_data::UsdDataExt, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
 };
 pub use lunco_usd_sim::cosim::{ClearScene, LoadScene, RestartScene};
 pub use lunco_usd_sim::UsdSimPlugin;

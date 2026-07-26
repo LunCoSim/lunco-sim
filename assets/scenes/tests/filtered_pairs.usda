@@ -21,16 +21,12 @@
 # Loaded by `sandbox --scene scenes/tests/filtered_pairs.usda`.
 
 def Xform "SandboxScene" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "A pad bolted to an arm bolted to a hull, with the pad deliberately overlapping the hull. Checks that an authored never-collide pair really does stop the two touching."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
 
     uniform bool lunco:spawnable = false
 

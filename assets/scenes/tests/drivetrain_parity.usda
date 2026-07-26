@@ -33,37 +33,19 @@
 # headlights sit at z = -1.75), so their paths never intersect.
 
 def Xform "DrivetrainParity" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Two instances of the same skid rover — one raycast drivetrain, one joint drivetrain — on identical flat ground, for the drivetrain parity regression test."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. The MOON — every vehicle in
-    # this scene is sized for 1.62, so the scene states it rather than inherit it.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
     # A test rig, not a spawnable part.
     uniform bool lunco:spawnable = false
 
-    # ONE friction material, bound by BOTH rovers' shared ground. Parity is only
-    # meaningful if the surface is bit-identical under each rover, so there is a
-    # single ground prim rather than two pads.
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
+    # Parity is only meaningful if the surface is bit-identical under each rover,
+    # so there is a single ground prim rather than two pads, bound to the one
+    # inherited `Friction_1_0`.
 
     # Flat, level, 500 x 500 m. Level matters: a slope would load the two
     # drivetrains differently (the raycast body force and the joint motor torque
@@ -82,10 +64,8 @@ def Xform "DrivetrainParity" (
         rel material:binding:physics = </DrivetrainParity/PhysicsMaterials/Friction_1_0>
     }
 
-    def DistantLight "Sun"
+    over "Sun"
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

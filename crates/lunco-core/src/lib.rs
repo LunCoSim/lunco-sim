@@ -73,7 +73,7 @@ pub use invariants::BigSpaceInvariantsPlugin;
 pub use log::*;
 pub use markers::{
     ActuatorDrivenJoint, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource,
-    FallbackSceneLight, GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene,
+    GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene,
     ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
     CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, TRIGGER_COLLISION_LAYER,
 };

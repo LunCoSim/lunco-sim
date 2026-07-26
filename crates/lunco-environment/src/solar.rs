@@ -58,7 +58,13 @@ pub struct LocalSolar {
 /// will publish it.
 pub fn compute_local_solar(
     mut commands: Commands,
-    q_sun: Query<(&GlobalTransform, &DirectionalLight), Without<RenderLayers>>,
+    // Structural, not a brightness guess: the scene's sun is the top-level
+    // `DistantLight`; a body's reflected fill hangs under that body's prim and
+    // carries `Earthshine`. See `lunco_environment::horizon::SunQuery`.
+    q_sun: Query<
+        (&GlobalTransform, &DirectionalLight),
+        (Without<RenderLayers>, Without<crate::Earthshine>),
+    >,
     q_targets: Query<
         (Entity, Option<&LocalSolar>, Option<&GlobalTransform>),
         With<lunco_cosim::SimComponent>,
@@ -67,10 +73,7 @@ pub fn compute_local_solar(
     if q_targets.is_empty() {
         return;
     }
-    let Some((sun_gt, _)) = q_sun
-        .iter()
-        .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
-    else {
+    let Some((sun_gt, _)) = q_sun.iter().next() else {
         return;
     };
 

@@ -63,6 +63,48 @@ pub fn insert_celestial_comms_components(
         }
     }
 
+    // --- A body's reflected fill (earthshine and its analogues) ---
+    //
+    // A `DistantLight` nested UNDER a celestial body prim is that body's
+    // reflected light — earthshine at the Moon, Jupiter-shine at Europa. The
+    // namespace is the whole declaration: the parent already says which body it
+    // is (`lunco:body`), so the light needs no attribute to state what it
+    // belongs to, and the rule generalises to any body without a second schema.
+    //
+    // This is what makes "which light is the sun?" answerable STRUCTURALLY. The
+    // scene's key light is a top-level `DistantLight`; a body's fill hangs under
+    // that body. The sun-pickers filter on this marker instead of taking
+    // whichever `DirectionalLight` is brightest — a guess that silently picked
+    // the wrong light whenever a scene had two, and picked by archetype
+    // iteration order whenever two were equally bright.
+    //
+    // The fill used to be spawned from Rust at startup, which is why it had no
+    // USD identity to filter on in the first place.
+    if reader.prim_type_name(sdf_path).as_deref() == Some("DistantLight") {
+        let parent_is_body = sdf_path
+            .parent()
+            .map(|p| reader.scalar::<i32>(&p, "lunco:body").is_some_and(|n| n != 0))
+            .unwrap_or(false);
+        if parent_is_body {
+            // WEB: WebGL2 supports ONE `DirectionalLight`, and a second culls
+            // the sun — so on wasm the fill is dropped rather than composed. The
+            // scene still AUTHORS it; the platform declines to realise it, which
+            // keeps the asset identical across targets.
+            #[cfg(target_arch = "wasm32")]
+            {
+                commands.entity(entity).try_despawn();
+                info!("[usd-celestial] {prim_path_str}: body fill dropped (WebGL2 single-light)");
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_environment::Earthshine);
+                info!("[usd-celestial] {prim_path_str} is a body fill light (not the scene sun)");
+            }
+        }
+    }
+
     // --- Body imagery authored on the body prim ---
     //
     // `asset lunco:body:albedoMap = @lunco://textures/earth.png@` — which map a

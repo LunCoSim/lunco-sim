@@ -10,35 +10,13 @@
 # Verify (ListPorts): HingeR.angle ≈ −HingeL.angle (rocker B mirrors A).
 
 def Xform "DiffRigTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "A test stand for the balancing linkage a rover uses between its left and right sides. With it switched on, the two sides move as mirror images of each other."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
-    # tuning are authored against — stated here rather than left to a default.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
-
-    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
-    # bound with the purpose-specific `material:binding:physics`, which is
-    # how UsdPhysics (and Omniverse) actually spell a surface.
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
     uniform bool lunco:spawnable = false
 
     def Cube "Ground" (prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"])
@@ -51,9 +29,8 @@ def Xform "DiffRigTest" (
         bool physics:collisionEnabled = true
         rel material:binding:physics = </DiffRigTest/PhysicsMaterials/Friction_1_0>
     }
-    def DistantLight "Sun"
+    over "Sun"
     {
-        float inputs:intensity = 128000
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

@@ -1,0 +1,63 @@
+#usda 1.0
+(
+    defaultPrim = "Earthshine"
+    doc = "Reflected fill from a nearby body — the light a planet throws onto its moon's night side."
+)
+
+# A body's REFLECTED illumination, as a composable `UsdLuxDistantLight`.
+#
+# This is the counterpart to `lunco://lighting/sun.usda`: the sun is the direct
+# source, this is what a lit body bounces back. On the Moon it is earthshine —
+# the ~1/400 000 of daylight that makes the lunar night side faintly visible and
+# gives shadowed regolith its cold cast.
+#
+# ── It belongs to a BODY, by namespace ─────────────────────────────────────
+# Reference this as a CHILD of the celestial body it comes from:
+#
+#     def Xform "Earth" ( prepend apiSchemas = ["LunCoCelestialBodyAPI"] )
+#     {
+#         uniform int lunco:body = 399
+#         def DistantLight "Earthshine" (
+#             prepend references = @lunco://lighting/earthshine.usda@</Earthshine>
+#         ) { }
+#     }
+#
+# The parent already says which body this is (`lunco:body`), so the light needs
+# no attribute of its own to declare what it belongs to — USD namespace nesting
+# IS the statement. That also makes the rule general rather than Earth-specific:
+# a scene at Europa nests the same asset under Jupiter and gets Jupiter-shine,
+# with no engine change and no second schema.
+#
+# The engine reads that structure directly: a `DistantLight` nested under a
+# celestial body prim is that body's fill, and is therefore NOT a candidate for
+# the scene's key light. That replaces the old rule, which was to spawn this
+# light from Rust and then tell the sun-pickers to take whichever
+# `DirectionalLight` happened to be brightest — a guess that silently picked the
+# wrong light whenever a scene had two.
+#
+# ── Intensity is DERIVED, not authored ────────────────────────────────────
+# `inputs:intensity` starts at 0 deliberately: earthshine depends on the body's
+# phase and distance, which only the ephemeris knows. `lunco-celestial`
+# publishes the body direction and `lunco-environment` drives illuminance from
+# it. An authored non-zero value here would be an unshadowed fill that changes
+# the look of every scene before the ephemeris has said anything.
+def DistantLight "Earthshine" (
+    prepend apiSchemas = ["ShadowAPI"]
+)
+{
+    # Derived at runtime from the body's phase; inert until then.
+    float inputs:intensity = 0
+
+    # Cool blue: sunlight twice-filtered through Earth's atmosphere, which is
+    # why the lunar night side reads cold against the neutral direct sun.
+    color3f inputs:color = (0.6, 0.75, 1.0)
+
+    # Earth subtends ~1.9° from the Moon — nearly four times the sun's disc, so
+    # its terminator is correspondingly softer.
+    float inputs:angle = 1.9
+
+    # A fill casts NO shadows. Standard `UsdLuxShadowAPI`. Two shadow-casting
+    # lights means two shadow passes over the whole scene for a contribution
+    # measured in single lux, and it double-darkens every contact shadow.
+    bool inputs:shadow:enable = false
+}
