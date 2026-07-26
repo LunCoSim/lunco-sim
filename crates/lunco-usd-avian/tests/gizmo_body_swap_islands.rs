@@ -39,7 +39,7 @@
 //! == true` and the `JointGraphEdge` is BORN `collision_disabled`; the broad
 //! phase then never creates the pair at all (`bvh_broad_phase.rs:275-283`) and no
 //! contact edge ever exists to be mis-deleted. That is
-//! `joint_bundle_attached_before_contact_never_forms_a_pair`, green.
+//! `attach_joint_before_contact_never_forms_a_pair`, green.
 //!
 //! Born-disabled prevents a pair from FORMING; it does not clean up one that
 //! already exists. So the rule is: **the joint must be attached before the first
@@ -59,7 +59,7 @@
 //! race earlier and was fixed by attaching synchronously; the authored path kept
 //! the bug until now.
 //!
-//! The policy itself lives in ONE place, `lunco_usd_avian::joint_bundle` — the
+//! The policy itself lives in ONE place, `lunco_usd_avian::attach_joint` — the
 //! only sanctioned way to attach a joint, so the marker cannot drift away from
 //! its joint per call site or per joint type.
 //!
@@ -95,6 +95,7 @@
 //!       --features lunco-physics/avian-validate --test gizmo_body_swap_islands
 
 use avian3d::prelude::*;
+use bevy::ecs::system::RunSystemOnce;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
@@ -477,7 +478,7 @@ fn corrupted_island_then_a_new_contact_is_added() {
     }
 }
 
-/// THE COMPLIANT PATTERN, and the contract `lunco_usd_avian::joint_bundle` +
+/// THE COMPLIANT PATTERN, and the contract `lunco_usd_avian::attach_joint` +
 /// the `PhysicsSystems::Prepare` placement exist to guarantee.
 ///
 /// Attach the joint (marker in the SAME bundle) BEFORE the two bodies have ever
@@ -492,7 +493,7 @@ fn corrupted_island_then_a_new_contact_is_added() {
 /// identical bundle but attaches it once the bodies are already touching, and
 /// panics. Bundle alone is not enough — the ordering is half the contract.
 #[test]
-fn joint_bundle_attached_before_contact_never_forms_a_pair() {
+fn attach_joint_before_contact_never_forms_a_pair() {
     let mut app = support::headless_physics_app();
     app.add_plugins(TransformPlugin);
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
@@ -523,16 +524,33 @@ fn joint_bundle_attached_before_contact_never_forms_a_pair() {
             .id();
         (a, b)
     };
+    // `attach_joint` parks the joint; this is what installs it. A plain-avian
+    // harness gets it as a plugin rather than restating the per-joint-kind
+    // registration, which is exactly the drift this crate owns.
+    app.add_plugins(lunco_usd_avian::JointAttachPlugin);
     app.finish();
     app.cleanup();
 
-    // Admit the bodies to the island graph (this is what the `With<Position>`
-    // gate waits for) — while they are still far apart.
+    // Admit the bodies to the island graph (what `attach_joint` waits for) —
+    // while they are still far apart.
     app.update();
 
-    // Attach through the production choke point.
+    // Attach through the production choke point. `attach_joint` parks the joint
+    // and installs it on the first tick where both bodies are admitted, which
+    // they already are here; the `app.update()` below is what applies it.
+    let joint_entity = app.world_mut().spawn_empty().id();
     app.world_mut()
-        .spawn(lunco_usd_avian::joint_bundle(FixedJoint::new(a, b)));
+        .run_system_once(move |mut commands: Commands| {
+            lunco_usd_avian::attach_joint(
+                &mut commands,
+                joint_entity,
+                a,
+                b,
+                lunco_usd_avian::fixed_joint(a, b),
+            );
+        })
+        .expect("attach_joint runs");
+    app.update();
 
     // Gravity would slam `b` onto `a` here. Born-disabled means the pair is never
     // even created.
@@ -745,7 +763,8 @@ fn probe_island_shape_before_despawn() {
     );
 }
 
-/// Local mirror of `lunco_usd_avian::joint_bundle` so this stays PURE AVIAN — the
+/// Local mirror of what `lunco_usd_avian::attach_joint` installs, so this stays
+/// PURE AVIAN — the
 /// point is to model the live teardown shape, not to test our helper.
 fn joint_bundle_local<J: Component>(joint: J) -> (J, JointCollisionDisabled) {
     (joint, JointCollisionDisabled)

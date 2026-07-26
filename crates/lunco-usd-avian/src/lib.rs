@@ -86,6 +86,9 @@ pub struct UsdAvianPlugin;
 
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
+        // Installs joints parked by `attach_joint` — the USD path attaches
+        // authored joints, so this app must be able to land them.
+        app.add_plugins(JointAttachPlugin);
         // `on_add_usd_prim`: eager observer for joint pending-state.
         // `process_usd_avian_prims`: observer on UsdVisualSynced — fires
         //   right after `sync_usd_visuals` translates each prim, so the
@@ -186,25 +189,6 @@ impl Plugin for UsdAvianPlugin {
                 avian3d::schedule::PhysicsSchedule,
                 (
                     build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
-                    // The second half of `attach_joint`: install each parked
-                    // joint on the first tick where avian has admitted both of
-                    // its bodies. One registration per joint type, because the
-                    // ticket is generic over the constraint it carries — adding a
-                    // joint kind means adding it here, and nothing else.
-                    //
-                    // Same window as the builder above and for the same reason:
-                    // ahead of the broad/narrow phase, so the pair is filtered
-                    // before it can form a contact.
-                    admit_pending_joints::<RevoluteJoint>
-                        .run_if(any_with_component::<PendingJoint<RevoluteJoint>>),
-                    admit_pending_joints::<PrismaticJoint>
-                        .run_if(any_with_component::<PendingJoint<PrismaticJoint>>),
-                    admit_pending_joints::<FixedJoint>
-                        .run_if(any_with_component::<PendingJoint<FixedJoint>>),
-                    admit_pending_joints::<SphericalJoint>
-                        .run_if(any_with_component::<PendingJoint<SphericalJoint>>),
-                    admit_pending_joints::<DistanceJoint>
-                        .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
                     // Same window, same reason: avian's broad phase never
                     // re-filters a pair already in the contact graph, so a filter
                     // armed after the first narrow phase does not apply to the
@@ -2312,6 +2296,48 @@ pub fn attach_joint<J: Component + Clone>(
     });
 }
 
+/// The other half of [`attach_joint`]: installs parked joints once their bodies
+/// are admitted. **An app that attaches joints must add this**, or they park
+/// forever.
+///
+/// A plugin rather than five `add_systems` lines at the call site, because the
+/// set of joint kinds is this crate's knowledge and nobody else should have to
+/// restate it — including the tests, which is where a restated list silently
+/// drifts (a test app missing one kind proves nothing about that kind).
+/// [`UsdAvianPlugin`] adds it; a plain-avian harness adds it directly.
+pub struct JointAttachPlugin;
+
+impl Plugin for JointAttachPlugin {
+    fn build(&self, app: &mut App) {
+        // One registration per joint type: the ticket is generic over the
+        // constraint it carries, so a new joint kind is one line HERE and
+        // nothing else anywhere.
+        //
+        // `PhysicsSystems::Prepare`, the same window `build_usd_physics_joints`
+        // uses and for the same reason: after avian has admitted the frame's new
+        // bodies, and ahead of the broad/narrow phase, so the joint is in the
+        // graph before anything could put its bodies in contact.
+        app.add_systems(
+            avian3d::schedule::PhysicsSchedule,
+            (
+                admit_pending_joints::<RevoluteJoint>
+                    .run_if(any_with_component::<PendingJoint<RevoluteJoint>>),
+                admit_pending_joints::<PrismaticJoint>
+                    .run_if(any_with_component::<PendingJoint<PrismaticJoint>>),
+                admit_pending_joints::<FixedJoint>
+                    .run_if(any_with_component::<PendingJoint<FixedJoint>>),
+                admit_pending_joints::<SphericalJoint>
+                    .run_if(any_with_component::<PendingJoint<SphericalJoint>>),
+                admit_pending_joints::<DistanceJoint>
+                    .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
+            )
+                .in_set(avian3d::prelude::PhysicsSystems::Prepare)
+                .after(avian3d::prelude::PhysicsSystems::First)
+                .before(avian3d::schedule::PhysicsStepSystems::First),
+        );
+    }
+}
+
 /// A constructed constraint that is not yet a component — the only currency
 /// [`attach_joint`] accepts, and the only thing a joint builder hands back.
 ///
@@ -2381,6 +2407,16 @@ pub fn admit_pending_joints<J: Component + Clone>(
             .try_insert((p.joint.clone(), JointCollisionDisabled))
             .try_remove::<PendingJoint<J>>();
     }
+}
+
+/// A plain weld between two bodies, anchored at their own origins.
+///
+/// A builder, because [`JointSpec`]'s contents are private: constructing a joint
+/// is this crate's job, and every kind a caller can attach has a function here
+/// that returns the spec. The USD path builds its welds with authored anchors
+/// inside [`build_usd_physics_joints`]; this is the anchor-free form.
+pub fn fixed_joint(body0: Entity, body1: Entity) -> JointSpec<FixedJoint> {
+    JointSpec::new(FixedJoint::new(body0, body1))
 }
 
 pub fn wheel_revolute_joint(
