@@ -701,13 +701,6 @@ impl Plugin for LunCoCorePlugin {
         subsystems::build_subsystems(app);
         app.add_systems(FixedUpdate, advance_sim_tick)
             .add_systems(PostUpdate, assign_global_entity_ids);
-        // Names the spawners still on the Ph1 fallback. After the minting pass,
-        // so it sees the markers that pass just left. Debug builds only.
-        #[cfg(debug_assertions)]
-        app.add_systems(
-            PostUpdate,
-            report_untagged_identity.after(assign_global_entity_ids),
-        );
         // Host: keep the per-gid input-ack watermarks keyed to their CURRENT owner.
         // A re-possessed vessel must not keep acking the previous owner's `seq`
         // stream — see `AppliedInputSeq`. Change-detected on the registry, so it
@@ -817,66 +810,26 @@ fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>
 /// Content/Derived → deterministic hash (same on every peer); Authoritative →
 /// server-allocated (clients receive it via replication); Local → no id at all.
 ///
-/// **Migration (safe/incremental):** entities not yet tagged with a `Provenance`
-/// keep the pre-Ph1 behavior — an auto-allocated id — and we `warn!` once. This
-/// lands the machinery with zero day-one breakage; spawners get migrated to
-/// attach `Provenance` over time, after which the fallback arm can flip to a
-/// hard skip.
-/// Debug-only breadcrumb left by the `None` arm of [`assign_global_entity_ids`]
-/// on an entity that took the Ph1 auto-allocate fallback.
+/// **Identity is opt-in: `With<Provenance>`.** An entity that does not declare
+/// where it came from does not get a network identity, full stop.
 ///
-/// Exists to make the fallback's users **enumerable**. It is not a feature and
-/// it goes away with the fallback.
-#[cfg(debug_assertions)]
-#[derive(Component)]
-pub struct UntaggedIdentity;
-
-/// Name every spawner still relying on the Ph1 `Provenance` fallback, one line
-/// per distinct component signature.
+/// This replaces a Ph1 migration fallback that auto-allocated an id for any
+/// untagged entity and `warn!`ed once. The fallback was not harmless:
 ///
-/// A `warn!`-once that says only *that* something is untagged is unactionable —
-/// it named no entity, so nobody could migrate anything, so the fallback stayed.
-/// This prints the component set, which identifies the spawner, and then clears
-/// the marker so a signature is reported once rather than every frame.
+/// - It made "I forgot to declare `Provenance`" **invisible**, which is how
+///   `rewire_usd_connections` came to re-trigger its own `Added<GlobalEntityId>`
+///   gate every frame and rebuild the entire co-sim wiring graph forever.
+/// - Because the filter was `Without<GlobalEntityId>` alone, and Bevy 0.19
+///   stores resources AS ENTITIES, it was minting network identities for **688
+///   resource entities** — `AppTypeRegistry`, `AccumulatedMouseScroll`, every
+///   `Assets<T>`. Identity for a resource is meaningless.
 ///
-/// Debug builds only, and deleted together with the fallback arm once the
-/// migration is complete.
-#[cfg(debug_assertions)]
-fn report_untagged_identity(
-    world: &mut World,
-    mut seen: Local<std::collections::HashSet<String>>,
-) {
-    let mut q = world.query_filtered::<Entity, With<UntaggedIdentity>>();
-    let entities: Vec<Entity> = q.iter(world).collect();
-    if entities.is_empty() {
-        return;
-    }
-    for e in entities {
-        let Ok(info) = world.inspect_entity(e) else {
-            continue;
-        };
-        let mut names: Vec<String> = info
-            .map(|c| {
-                let n = c.name().to_string();
-                // `foo::bar::Baz<Qux>` → `Baz<Qux>`: the leaf is what identifies
-                // the spawner; the full paths make the line unreadable.
-                n.rsplit("::").next().unwrap_or(&n).to_string()
-            })
-            .filter(|n| n != "UntaggedIdentity" && n != "GlobalEntityId")
-            .collect();
-        names.sort_unstable();
-        let signature = names.join(", ");
-        if seen.insert(signature.clone()) {
-            warn!("[identity] untagged spawn — no `Provenance` on: [{signature}]");
-        }
-        world.entity_mut(e).remove::<UntaggedIdentity>();
-    }
-}
-
+/// A missing `Provenance` now fails the honest way: no id, and whatever needed
+/// one says so. See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
 fn assign_global_entity_ids(
     mut commands: Commands,
     q_new: Query<
-        (Entity, Option<&Provenance>, Has<session::SkipContentStamp>),
+        (Entity, &Provenance, Has<session::SkipContentStamp>),
         Without<GlobalEntityId>,
     >,
     // Authority is derived from the role, not a separate `IsServer` flag — the two
@@ -884,7 +837,6 @@ fn assign_global_entity_ids(
     // for runtime spawns). `Host` and `Standalone` mint; a pure `Client` never
     // reaches the minting arms because it pins host-allocated ids via replication.
     role: Res<session::NetworkRole>,
-    mut warned: Local<bool>,
 ) {
     let is_authoritative = role.is_authoritative();
     for (entity, prov, runtime_instance) in q_new.iter() {
@@ -903,45 +855,21 @@ fn assign_global_entity_ids(
             continue;
         }
         match prov {
-            Some(Provenance::Local) => { /* never networked, no id */ }
-            Some(p @ (Provenance::Content { .. } | Provenance::Derived { .. })) => {
+            Provenance::Local => { /* never networked, no id */ }
+            p @ (Provenance::Content { .. } | Provenance::Derived { .. }) => {
                 if let Some(id) = identity::derive_id(p) {
                     commands
                         .entity(entity)
                         .try_insert(GlobalEntityId::from_raw(id));
                 }
             }
-            Some(Provenance::Authoritative) => {
+            Provenance::Authoritative => {
                 // Only an authoritative peer mints; clients receive the id via replication.
                 if is_authoritative {
                     commands
                         .entity(entity)
                         .try_insert(GlobalEntityId::allocate_authoritative());
                 }
-            }
-            None => {
-                // Untagged entity — preserve pre-Ph1 behavior (auto-allocate),
-                // warn once. Migrate spawners to attach `Provenance` to opt into
-                // deterministic identity / Local opt-out.
-                if !*warned {
-                    warn!(
-                        "entity without `Provenance` got an auto-allocated \
-                         GlobalEntityId (Ph1 migration fallback). Tag spawners \
-                         with a Provenance to opt into deterministic identity."
-                    );
-                    *warned = true;
-                }
-                // The warn above says "somebody" without saying WHO, which is why
-                // this fallback survived long enough to cost a per-frame wiring
-                // rebuild (see docs/reviews/2026-07-26-fps-regression-analysis.md).
-                // Tag the entity so `report_untagged_identity` can name it by its
-                // component set — the migration needs the list, and the list is
-                // only knowable at runtime.
-                #[cfg(debug_assertions)]
-                commands.entity(entity).try_insert(UntaggedIdentity);
-                commands
-                    .entity(entity)
-                    .try_insert(GlobalEntityId::allocate_authoritative());
             }
         }
     }

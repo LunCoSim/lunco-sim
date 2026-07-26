@@ -61,7 +61,7 @@ pub trait ViewModelAppExt {
     /// Add `producer` to [`ViewModelSet`] in `Update`, gated on `gate`.
     fn add_view_model<M, C, CM>(
         &mut self,
-        producer: impl IntoScheduleConfigs<ScheduleSystem, M>,
+        producer: impl IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
         gate: C,
     ) -> &mut Self
     where
@@ -71,7 +71,7 @@ pub trait ViewModelAppExt {
 impl ViewModelAppExt for App {
     fn add_view_model<M, C, CM>(
         &mut self,
-        producer: impl IntoScheduleConfigs<ScheduleSystem, M>,
+        producer: impl IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
         gate: C,
     ) -> &mut Self
     where
@@ -87,7 +87,7 @@ impl ViewModelAppExt for App {
 /// Deliberately not a default: an ungated producer is a decision, and a decision
 /// belongs in the diff. Reserve it for O(1) live readouts (the shape
 /// `populate_command_deck_view` documents), never for anything that scans.
-pub fn every_frame() -> impl SystemCondition<()> {
+pub fn every_frame() -> fn() -> bool {
     || true
 }
 
