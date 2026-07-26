@@ -40,7 +40,6 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
 lunco-time = { path = "../lunco-time" }
 lunco-settings = { path = "../lunco-settings" }
-lunco-assets = { workspace = true }
 serde = { workspace = true }
 
 [features]

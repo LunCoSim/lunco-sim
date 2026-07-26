@@ -342,9 +342,35 @@ pub fn extract_inputs_with_defaults_from_ast(ast: &StoredDefinition) -> HashMap<
 ///
 /// This is a drop-in replacement for the regex-based `strip_input_defaults`.
 pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
+    let (modified, defaults, _unresolved) = strip_input_defaults_with_report(source);
+    (modified, defaults)
+}
+
+/// A bound `input` whose binding [`strip_input_defaults`] blanks but whose
+/// default it cannot capture — the binding is an expression
+/// (`input Real w = 2*3.14/T`), not a numeric literal. The strip keeps the
+/// input a runtime slot, but with no captured default the slot starts at 0.0.
+/// Callers must surface these (the worker turns them into compile-result
+/// diagnostics) — a model silently running at 0.0 is the expensive failure.
+#[derive(Debug, Clone)]
+pub struct UnresolvedInputDefault {
+    /// Component name of the `input`.
+    pub name: String,
+    /// Verbatim binding expression text from the original source.
+    pub binding: String,
+    /// Byte offset of the binding expression in the original source
+    /// (length-preserving blanking keeps it valid for the stripped text too).
+    pub byte_offset: usize,
+}
+
+/// [`strip_input_defaults`] plus a report of every blanked binding whose
+/// default could NOT be captured as a numeric literal.
+pub fn strip_input_defaults_with_report(
+    source: &str,
+) -> (String, HashMap<String, f64>, Vec<UnresolvedInputDefault>) {
     let ast = match parse(source) {
         Some(a) => a,
-        None => return (source.to_string(), HashMap::new()),
+        None => return (source.to_string(), HashMap::new(), Vec::new()),
     };
 
     let mut defaults = HashMap::new();
@@ -374,10 +400,12 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
     // Deleting would shift every downstream offset. (Was a no-op from
     // the rumoca bump until 2026-06-14, silently breaking defaulted
     // inputs — see [[project_rumoca_input_default_strip]].)
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut ranges: Vec<InputBindingRange> = Vec::new();
     collect_input_binding_ranges(&ast.classes, source, &mut ranges);
+    let mut unresolved = Vec::new();
     let mut bytes = source.as_bytes().to_vec();
-    for (start, end) in ranges {
+    for range in ranges {
+        let (start, end) = (range.blank_start, range.expr_end);
         // Only blank ASCII ranges so we never split a multi-byte UTF-8
         // char (a string default like `= "café"`); such a binding is
         // left intact (degraded but safe — String isn't a numeric slot).
@@ -387,11 +415,36 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
                     *b = b' ';
                 }
             }
+            // The binding is gone but no numeric default was captured for
+            // it: without a report the runtime slot would start at 0.0
+            // with no trace of the authored expression.
+            if !range.numeric {
+                unresolved.push(UnresolvedInputDefault {
+                    name: range.name,
+                    binding: source[range.expr_start..range.expr_end].trim().to_string(),
+                    byte_offset: range.expr_start,
+                });
+            }
         }
     }
     let modified = String::from_utf8(bytes).unwrap_or_else(|_| source.to_string());
 
-    (modified, defaults)
+    (modified, defaults, unresolved)
+}
+
+/// One `input` declaration binding located in the source — see
+/// [`collect_input_binding_ranges`].
+struct InputBindingRange {
+    /// Component name of the `input`.
+    name: String,
+    /// Start of the range to blank (the introducing `=`).
+    blank_start: usize,
+    /// Byte range of the binding expression itself.
+    expr_start: usize,
+    expr_end: usize,
+    /// Whether the binding is a numeric literal (i.e. its default lands in
+    /// the captured defaults map).
+    numeric: bool,
 }
 
 /// Collect the byte range covering `= <binding>` for every `input`
@@ -407,7 +460,7 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
 fn collect_input_binding_ranges(
     classes: &AstIndexMap<String, ClassDef>,
     source: &str,
-    out: &mut Vec<(usize, usize)>,
+    out: &mut Vec<InputBindingRange>,
 ) {
     let bytes = source.as_bytes();
     for class in classes.values() {
@@ -429,7 +482,13 @@ fn collect_input_binding_ranges(
                 i -= 1;
             }
             if i > 0 && bytes[i - 1] == b'=' {
-                out.push((i - 1, expr_end));
+                out.push(InputBindingRange {
+                    name: component.name.clone(),
+                    blank_start: i - 1,
+                    expr_start,
+                    expr_end,
+                    numeric: extract_numeric_binding(&component.binding).is_some(),
+                });
             }
         }
         collect_input_binding_ranges(&class.classes, source, out);
@@ -919,6 +978,35 @@ mod tests {
             parse(&modified).is_some(),
             "blanked source must still parse"
         );
+    }
+
+    #[test]
+    fn strip_input_defaults_reports_non_literal_binding() {
+        // `2*3.14/T` is not a numeric literal: the strip still blanks it
+        // (so `w` stays a runtime slot) but can't capture a default. That
+        // MUST come back as an unresolved report — the slot starts at 0.0
+        // and silence here is silent wrong numbers.
+        let source =
+            "model M\n  parameter Real T = 2.0;\n  input Real w = 2*3.14/T;\nend M;\n";
+        let (modified, defaults, unresolved) = strip_input_defaults_with_report(source);
+        assert_eq!(modified.len(), source.len(), "strip must preserve length");
+        assert!(!modified.contains("2*3.14/T"), "binding must be blanked");
+        assert!(
+            !defaults.contains_key("w"),
+            "an expression binding has no capturable numeric default"
+        );
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].name, "w");
+        assert_eq!(unresolved[0].binding, "2*3.14/T");
+        assert_eq!(&source[unresolved[0].byte_offset..][..1], "2");
+    }
+
+    #[test]
+    fn strip_input_defaults_literal_binding_is_not_reported() {
+        let source = "model M\n  input Real g = 9.81;\nend M;\n";
+        let (_, defaults, unresolved) = strip_input_defaults_with_report(source);
+        assert_eq!(defaults.get("g"), Some(&9.81));
+        assert!(unresolved.is_empty());
     }
 
     #[test]

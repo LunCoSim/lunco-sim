@@ -84,6 +84,7 @@ impl Plugin for LunCoMobilityPlugin {
             // vehicle-domain type and core carries no domain.
             .register_type::<DriveMix>()
             .register_type::<DifferentialCoupling>()
+            .register_type::<SteerBaseRotation>()
             .register_type::<SuspensionPiston>()
             .register_type::<SuspensionSpring>()
             .register_type::<ProxyWheelMassFolded>()
@@ -639,33 +640,25 @@ fn apply_wheel_suspension(
                     current_distance = distance;
                     // Suspension is compressed: apply spring-damper force.
                     let compression = susp.rest_length - distance;
-                    // Damping calculation based on relative normal velocity.
+                    // Damping is measured along the CONTACT NORMAL — the same
+                    // axis the spring force is applied on below. Projecting on
+                    // chassis-frame down instead put damper and spring on
+                    // different axes on any slope, under-damping exactly the
+                    // tilted contacts that ring hardest.
                     // Positive relative_vel = wheel moving toward ground (compressing).
                     // Negative relative_vel = wheel moving away from ground (extending).
-                    let ray_dir_world = forces.rotation().0 * Vec3::NEG_Y.as_dvec3();
                     let lin_vel = forces.linear_velocity();
                     let ang_vel = forces.angular_velocity();
                     let velocity_at_wheel =
                         wheel_hub_velocity(lin_vel, ang_vel, world_pos, forces.position().0);
-                    let relative_vel = velocity_at_wheel.dot(ray_dir_world);
+                    let relative_vel = -velocity_at_wheel.dot(hit.normal);
 
-                    // Clamped to `MAX_SUSPENSION_FORCE_N`, which this path was
-                    // silently missing — the constant existed and was applied only
-                    // by the JOINT suspension (`differential_coupling_system`), so
-                    // the raycast strut, the one every rover actually uses, had no
-                    // ceiling at all. The clamp is what its own doc says it is: a
-                    // bound on a deeply-compressed strut or a numerical velocity
-                    // spike, so neither can inject an explosive impulse. It is a
-                    // backstop, not the fix for the frozen-shot accumulation — that
-                    // is `physics_is_live` on the system — but an unbounded force
-                    // law is worth closing on its own.
                     let total_force_mag = suspension_force_mag(
                         compression,
                         susp.spring_k,
                         relative_vel,
                         susp.damping_c,
-                    )
-                    .clamp(0.0, MAX_SUSPENSION_FORCE_N);
+                    );
 
                     let force_vec = hit.normal * total_force_mag;
                     if apply_force {
@@ -822,23 +815,36 @@ fn apply_wheel_drive(
     }
 }
 
+/// A steered wheel's base (authored mount) local rotation, captured before the
+/// first steer write. `apply_wheel_steering` composes the steer quat on top of
+/// this instead of assigning `Transform::rotation` wholesale — the wholesale
+/// write erased any authored camber/toe/rake every tick, so a mount authored
+/// with a lean snapped upright the moment steering ran.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct SteerBaseRotation(pub Quat);
+
 /// Applies the steered angle to a raycast front wheel's transform. The angle
 /// itself (rate-limited servo slew + Ackermann inner/outer geometry) is computed
 /// by the SHARED [`lunco_hardware::SteeringActuator`] system — the exact same
 /// model the physical joint wheel uses — so steering is identical across wheel
 /// kinds and the logic lives in one place (DRY). This system only reads the
-/// computed `output_angle` and rotates the wheel about local Y; the visual mesh
-/// rotation (steer + roll spin) is composed in `update_wheel_spin`.
+/// computed `output_angle` and rotates the wheel about its steer axis, composed
+/// onto the captured [`SteerBaseRotation`]; the visual mesh rotation
+/// (steer + roll spin) is composed in `update_wheel_spin`.
 fn apply_wheel_steering(
+    mut commands: Commands,
     mut q_wheels: Query<(
+        Entity,
         &mut Transform,
         &ChildOf,
         &lunco_hardware::SteeringActuator,
         &WheelRaycast,
+        Option<&SteerBaseRotation>,
     )>,
     q_chassis: Query<&RigidBody, With<DriveMix>>,
 ) {
-    for (mut transform, parent, steer, wheel) in q_wheels.iter_mut() {
+    for (entity, mut transform, parent, steer, wheel, base) in q_wheels.iter_mut() {
         // Predict-own: this chain runs on a client too. Skip wheels of a
         // `Kinematic` chassis (replicated rovers this peer does NOT own), whose
         // local steer ports are stale and would point the wheels wrong.
@@ -847,16 +853,26 @@ fn apply_wheel_steering(
                 continue;
             }
         }
-        // Steer about the wheel's steer axis. Default `+Y` reproduces the flat
-        // yaw steer; a raked motorcycle fork tilts the axis so the front wheel
-        // turns about the steering head, not vertical.
+        // The mount's authored rotation, captured on first run — before this
+        // system has ever written the transform, so it IS the authored value.
+        let base_rotation = match base {
+            Some(b) => b.0,
+            None => {
+                let b = transform.rotation;
+                commands.entity(entity).insert(SteerBaseRotation(b));
+                b
+            }
+        };
+        // Steer about the wheel's steer axis, in the MOUNT frame — so a raked
+        // motorcycle fork tilts the axis with the mount. Default `+Y` reproduces
+        // the flat yaw steer.
         let raw = wheel.steer_axis.as_vec3();
         let axis = if raw.length_squared() > 1e-12 {
             raw.normalize()
         } else {
             Vec3::Y
         };
-        transform.rotation = Quat::from_axis_angle(axis, -steer.output_angle as f32);
+        transform.rotation = base_rotation * Quat::from_axis_angle(axis, -steer.output_angle as f32);
     }
 }
 
@@ -1148,10 +1164,12 @@ impl Default for Suspension {
 
 /// Solves linear suspension equations for entities linked by joints.
 ///
-/// **Model**: Spring-damper using Hooke's law applied along the prismatic
-/// joint's slider axis. Damping is bidirectional — it resists both compression
-/// and extension to prevent oscillation. The force is applied as an equal and
-/// opposite pair on the two connected bodies.
+/// **Model**: the ONE suspension force law, [`suspension_force_mag`], applied
+/// along the prismatic joint's slider axis — the same bounded-damping law the
+/// raycast strut uses. This path used to clamp the TOTAL `(spring + damping)`
+/// to `[0, MAX]`, which dropped all damping on the rebound half-cycle — the
+/// exact `.max(0)` cliff the shared law was written to remove. The force is
+/// applied as an equal and opposite pair on the two connected bodies.
 fn suspension_system(
     q_joints: Query<(&PrismaticJoint, &Suspension)>,
     // Force must land only on a body the solver will integrate. A disabled body
@@ -1182,14 +1200,8 @@ fn suspension_system(
             let rel_vel: f64 = (vel2 - vel1).dot(world_axis);
 
             let compression: f64 = (susp.rest_length - current_length).max(0.0);
-            let spring_force_mag: f64 = compression * susp.spring_k;
-
-            // Damping opposes relative motion: positive when compressing (adds
-            // force), negative when extending (reduces force). Clamp total to
-            // zero minimum so we never pull bodies together.
-            let damping_force_mag: f64 = rel_vel * susp.damping_c;
             let total_force_mag: f64 =
-                (spring_force_mag + damping_force_mag).clamp(0.0, MAX_SUSPENSION_FORCE_N);
+                suspension_force_mag(compression, susp.spring_k, rel_vel, susp.damping_c);
 
             if !total_force_mag.is_finite() {
                 continue;

@@ -187,7 +187,7 @@ pub fn register(hook: RegisteredHook) -> String {
     let id = hook.id.clone();
     registry()
         .write()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(id.clone(), Arc::new(hook));
     generation_cell().fetch_add(1, Ordering::Relaxed);
     id
@@ -195,14 +195,23 @@ pub fn register(hook: RegisteredHook) -> String {
 
 /// Remove a hook, if present. Bumps the generation.
 pub fn unregister(id: &str) {
-    if registry().write().unwrap().remove(id).is_some() {
+    if registry()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(id)
+        .is_some()
+    {
         generation_cell().fetch_add(1, Ordering::Relaxed);
     }
 }
 
 /// The registered hook under `id`, if any (clones the `Arc`; cheap).
 pub fn get(id: &str) -> Option<Arc<RegisteredHook>> {
-    registry().read().unwrap().get(id).cloned()
+    registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(id)
+        .cloned()
 }
 
 /// Invoke the hook registered under `id`. `None` if no such hook is registered
@@ -223,7 +232,7 @@ pub fn generation() -> u64 {
 pub fn index() -> Vec<HookInfo> {
     let mut v: Vec<HookInfo> = registry()
         .read()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .values()
         .map(|h| HookInfo {
             id: h.id.clone(),

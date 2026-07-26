@@ -25,7 +25,7 @@
 use crate::{cache_dir, process::ProcessConfig};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// A single asset entry from `Assets.toml`.
@@ -373,14 +373,20 @@ pub fn download_asset_with_control(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let mut reader = response.into_body().into_reader();
-    let mut bytes: Vec<u8> = if total > 0 {
-        Vec::with_capacity(total as usize)
-    } else {
-        Vec::new()
-    };
+    // Stream to a temp file, hashing incrementally — never the whole payload
+    // in RAM. Content-Length is server-supplied, so it must not dictate an
+    // allocation; a multi-GB archive passes through the 64 KiB chunk buffer.
+    let download_path = std::env::temp_dir().join(format!("lunco_{key}.download"));
+    let mut out = std::fs::File::create(&download_path)
+        .map_err(|e| DownloadError::WriteFailed(download_path.clone(), e.to_string()))?;
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut downloaded: u64 = 0;
     let mut chunk = [0u8; 64 * 1024];
     loop {
         if cancelled() {
+            drop(out);
+            let _ = std::fs::remove_file(&download_path);
             return Err(DownloadError::Cancelled);
         }
         let n = reader
@@ -389,15 +395,18 @@ pub fn download_asset_with_control(
         if n == 0 {
             break;
         }
-        bytes.extend_from_slice(&chunk[..n]);
+        out.write_all(&chunk[..n])
+            .map_err(|e| DownloadError::WriteFailed(download_path.clone(), e.to_string()))?;
+        hasher.update(&chunk[..n]);
+        downloaded += n as u64;
         if let Some(cb) = control.progress.as_mut() {
-            cb(bytes.len() as u64, total);
+            cb(downloaded, total);
         }
     }
+    drop(out);
 
-    // Compute SHA-256
-    use sha2::{Digest, Sha256};
-    let hash: String = Sha256::digest(&bytes)
+    let hash: String = hasher
+        .finalize()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
@@ -405,6 +414,7 @@ pub fn download_asset_with_control(
     // Check against expected if provided and non-empty
     if let Some(ref expected) = entry.sha256 {
         if !expected.is_empty() && hash != *expected {
+            let _ = std::fs::remove_file(&download_path);
             return Err(DownloadError::HashMismatch(expected.clone(), hash));
         }
     }
@@ -426,7 +436,9 @@ pub fn download_asset_with_control(
 
         let ext = if is_tar_gz { "tar.gz" } else { "tar.bz2" };
         let tar_path = temp_dir.join(format!("asset.{ext}"));
-        std::fs::write(&tar_path, &bytes)
+        // Same filesystem (both under the system temp dir), so a rename moves
+        // the streamed download into place without touching the payload again.
+        std::fs::rename(&download_path, &tar_path)
             .map_err(|e| DownloadError::WriteFailed(tar_path.clone(), e.to_string()))?;
 
         let file =
@@ -520,8 +532,13 @@ pub fn download_asset_with_control(
             std::fs::create_dir_all(parent)
                 .map_err(|e| DownloadError::WriteFailed(parent.to_path_buf(), e.to_string()))?;
         }
-        std::fs::write(&dest, &bytes)
-            .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
+        // Rename first (free when temp and cache share a filesystem); fall
+        // back to copy + remove across mounts.
+        if std::fs::rename(&download_path, &dest).is_err() {
+            std::fs::copy(&download_path, &dest)
+                .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
+            let _ = std::fs::remove_file(&download_path);
+        }
     }
 
     // Write version file for future checks

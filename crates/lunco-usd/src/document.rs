@@ -829,7 +829,10 @@ impl UsdDocument {
             .filter(|(g, _)| *g > since_generation)
             .map(|(_, op)| op.clone())
             .collect();
-        (ops.len() as u64 >= expected).then_some(ops)
+        // Exact match: each generation records exactly one op, so a surplus
+        // means a double-recorded generation — surface it (full rebuild)
+        // rather than replay an op twice.
+        (ops.len() as u64 == expected).then_some(ops)
     }
 
     /// Record the typed op that produced the current generation, for

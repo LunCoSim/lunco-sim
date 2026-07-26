@@ -6930,7 +6930,6 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "leafwing-input-manager",
- "lunco-assets",
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
@@ -6980,7 +6979,6 @@ dependencies = [
  "lunco-obstacle-field",
  "lunco-render",
  "lunco-settings",
- "lunco-storage",
  "lunco-terrain-core",
  "lunco-terrain-globe",
  "lunco-terrain-surface",
@@ -7001,7 +6999,6 @@ dependencies = [
  "celestial-time",
  "lunco-assets",
  "lunco-celestial",
- "lunco-storage",
  "serde",
 ]
 

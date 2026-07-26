@@ -66,7 +66,6 @@ lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-assets = { workspace = true }
-lunco-storage = { path = "../lunco-storage" }
 avian3d = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 futures-lite = { workspace = true }

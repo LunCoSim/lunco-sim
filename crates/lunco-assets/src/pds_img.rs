@@ -299,8 +299,23 @@ impl PdsImage {
         };
 
         let bytes_per = bits / 8;
-        let n = lines * line_samples;
-        let need = data_offset + n * bands.max(1) * bytes_per;
+        // Label-controlled geometry — checked arithmetic so a hostile or
+        // corrupt label can't overflow `usize` and wrap past the bounds
+        // check below.
+        let geometry_overflow = || {
+            io_err(format!(
+                "PDS label geometry overflows: {lines} lines × {line_samples} samples × {} bands × {bits} bits at offset {data_offset}",
+                bands.max(1)
+            ))
+        };
+        let n = lines
+            .checked_mul(line_samples)
+            .ok_or_else(geometry_overflow)?;
+        let need = n
+            .checked_mul(bands.max(1))
+            .and_then(|v| v.checked_mul(bytes_per))
+            .and_then(|v| v.checked_add(data_offset))
+            .ok_or_else(geometry_overflow)?;
         if bytes.len() < need {
             return Err(io_err(format!(
                 "{}: file too short for label geometry ({} < {} bytes; {}×{}×{}b at offset {})",

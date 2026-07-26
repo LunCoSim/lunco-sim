@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 
-use bevy::math::{Vec3, Vec3A};
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
@@ -84,54 +84,39 @@ impl ApiQueryProvider for TerrainHeightProvider {
         };
         let eps_override = params.get("eps").and_then(serde_json::Value::as_f64);
 
-        // Snapshot the DEM terrains, releasing the world borrow before the registry
-        // read. `GlobalTransform` is Copy; the oracle is shared via `Arc`.
-        let mut q = world.query::<(Entity, &GlobalTransform, &DemHeightField)>();
-        let terrains: Vec<(Entity, GlobalTransform, Arc<SurfaceOracle>)> = q
+        // Snapshot the DEM terrains, releasing the world borrow before the
+        // registry read. The oracle is shared via `Arc`.
+        let mut q = world.query::<(Entity, &DemHeightField)>();
+        let terrains: Vec<(Entity, Arc<SurfaceOracle>)> = q
             .iter(world)
-            .map(|(e, gt, hf)| (e, *gt, hf.0.clone()))
+            .map(|(e, hf)| (e, hf.0.clone()))
             .collect();
 
-        // First terrain whose footprint covers the point wins. Coordinates follow
-        // the sibling providers' convention: the query `(x, z)` is in the same
-        // frame as `GlobalTransform` (DEM terrain anchors at the origin cell, so
-        // local ≈ world near the working area).
-        for (entity, gt, oracle) in terrains {
-            let inv = gt.affine().inverse();
-            let local = inv.transform_point3(Vec3::new(x as f32, 0.0, z as f32));
-            let half = oracle.half_extent();
-            if local.x.abs() > half || local.z.abs() > half {
+        // First terrain whose footprint covers the point wins. The DEM frame IS
+        // the grid frame: the terrain entity is a grid-direct child at
+        // `CellCoord::default()` (`terrain.rs`), so the query `(x, z)` — grid-
+        // absolute, the same currency as avian `Position` and every other port —
+        // samples the oracle DIRECTLY, in f64. No `GlobalTransform` belongs in
+        // between: a render GT is origin-relative, its cell offset is fully 3-D,
+        // and pushing grid-absolute coordinates through its f32 inverse silently
+        // shifted the footprint test after a floating-origin XZ move (the same
+        // frame bug the collider ring had — see the frame rule in
+        // `collider_ring.rs`). Height comes back AS THE ORACLE GIVES IT — already
+        // absolute body-datum metres (the DEM keeps the GeoTIFF's own values; see
+        // `lunco-terrain-bake::dem`) — matching `world_pos`, the entity's own
+        // `position_y`/`height` ports, and the sibling `GroundHeight` raycast.
+        for (entity, oracle) in terrains {
+            let half = oracle.half_extent() as f64;
+            if x.abs() > half || z.abs() > half {
                 continue;
             }
 
-            let (lx, lz) = (local.x as f64, local.z as f64);
             let eps = eps_override
                 .unwrap_or_else(|| oracle.spacing() as f64)
                 .max(1e-6);
-            let h = HeightSource::height_at(oracle.as_ref(), lx, lz);
-            let n = HeightSource::normal_at(oracle.as_ref(), lx, lz, eps);
-            let slope = HeightSource::slope_at(oracle.as_ref(), lx, lz, eps);
-
-            // Height is returned AS THE ORACLE GIVES IT — already absolute
-            // body-datum metres (the DEM keeps the GeoTIFF's own values; see
-            // `lunco-terrain-bake::dem`). Do NOT re-transform it through `gt`.
-            //
-            // `gt` is the RENDER transform: under big_space the terrain is binned
-            // to a cell, so its GlobalTransform carries a whole cell_edge of Y
-            // (here `/Traverse/Terrain` sits at y=+2000). Feeding an already-
-            // absolute height through it double-counted that offset and returned
-            // +81 for ground that every other consumer calls -1918 — `world_pos`,
-            // the entity's own `position_y`/`height` ports, and the sibling
-            // `GroundHeight` raycast all report absolute. A scripted `nav_to`
-            // built from this was aiming ~2 km overhead, so `arrived` could never
-            // fire. (This is the render-frame-vs-grid-absolute trap: never push a
-            // grid-absolute value through a GlobalTransform.)
-            //
-            // XZ is unaffected either way — the cell offset here is pure Y — so
-            // the footprint test above still uses `gt` correctly.
-            let world_y = h;
-            let wn = (gt.affine().matrix3 * Vec3A::new(n[0] as f32, n[1] as f32, n[2] as f32))
-                .normalize_or_zero();
+            let h = HeightSource::height_at(oracle.as_ref(), x, z);
+            let n = HeightSource::normal_at(oracle.as_ref(), x, z, eps);
+            let slope = HeightSource::slope_at(oracle.as_ref(), x, z, eps);
 
             let entity = world
                 .get_resource::<ApiEntityRegistry>()
@@ -140,8 +125,8 @@ impl ApiQueryProvider for TerrainHeightProvider {
 
             return ApiResponse::ok(serde_json::json!({
                 "found": true,
-                "height": world_y,
-                "normal": [wn.x, wn.y, wn.z],
+                "height": h,
+                "normal": [n[0], n[1], n[2]],
                 "slope": slope,
                 "entity": entity,
             }));
@@ -211,24 +196,20 @@ impl ApiQueryProvider for TerrainFieldProvider {
             .unwrap_or(64);
 
         // Snapshot DEM terrains, releasing the world borrow (see `TerrainHeight`).
-        let mut q = world.query::<(Entity, &GlobalTransform, &DemHeightField)>();
-        let terrains: Vec<(GlobalTransform, Arc<SurfaceOracle>)> = q
-            .iter(world)
-            .map(|(_, gt, hf)| (*gt, hf.0.clone()))
-            .collect();
+        let mut q = world.query::<(Entity, &DemHeightField)>();
+        let terrains: Vec<Arc<SurfaceOracle>> =
+            q.iter(world).map(|(_, hf)| hf.0.clone()).collect();
 
-        // First terrain whose footprint covers the region centre wins. The field is
-        // evaluated in the terrain's LOCAL XZ frame — an origin-anchored DEM makes
-        // local ≈ world, but the inverse transform keeps it correct under offset/rot.
-        for (gt, oracle) in terrains {
-            let inv = gt.affine().inverse();
-            let local = inv.transform_point3(Vec3::new(x as f32, 0.0, z as f32));
-            let hx = oracle.half_extent();
-            if local.x.abs() > hx || local.z.abs() > hx {
+        // First terrain whose footprint covers the region centre wins. The DEM
+        // frame IS the grid frame (see `TerrainHeight`), so the grid-absolute
+        // `(x, z)` addresses the oracle directly, in f64.
+        for oracle in terrains {
+            let hx = oracle.half_extent() as f64;
+            if x.abs() > hx || z.abs() > hx {
                 continue;
             }
             let region = Square {
-                center: [local.x as f64, local.z as f64],
+                center: [x, z],
                 half,
             };
             let data = field_map(field.as_ref(), oracle.as_ref(), &region, res);
@@ -253,28 +234,24 @@ impl ApiQueryProvider for TerrainFieldProvider {
     }
 }
 
-/// Read a `[x,y,z]` array or `{x,y,z}` map into a [`Vec3`]. `None` if malformed.
-fn parse_point(v: Option<&serde_json::Value>) -> Option<Vec3> {
+/// Read a `[x,y,z]` array or `{x,y,z}` map into a [`DVec3`]. `None` if malformed.
+fn parse_point(v: Option<&serde_json::Value>) -> Option<DVec3> {
     let v = v?;
     if let Some(arr) = v.as_array() {
         if arr.len() < 3 {
             return None;
         }
-        return Some(Vec3::new(
-            arr[0].as_f64()? as f32,
-            arr[1].as_f64()? as f32,
-            arr[2].as_f64()? as f32,
-        ));
+        return Some(DVec3::new(arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?));
     }
-    Some(Vec3::new(
-        v.get("x")?.as_f64()? as f32,
-        v.get("y")?.as_f64()? as f32,
-        v.get("z")?.as_f64()? as f32,
+    Some(DVec3::new(
+        v.get("x")?.as_f64()?,
+        v.get("y")?.as_f64()?,
+        v.get("z")?.as_f64()?,
     ))
 }
 
 /// `TerrainRaycast` — does terrain relief block a ray? Marches the DEM height
-/// oracle in the terrain's local frame; generic geometry, no physics, no domain.
+/// oracle in the grid-absolute frame; generic geometry, no physics, no domain.
 ///
 /// params: `{ origin:[x,y,z], target:[x,y,z] }` **or** `{ origin, dir:[x,y,z],
 /// max?:f64 }`. `origin`/`target`/`dir` also accept `{x,y,z}` maps. `max`
@@ -319,7 +296,7 @@ impl ApiQueryProvider for TerrainRaycastProvider {
             let max = params
                 .get("max")
                 .and_then(serde_json::Value::as_f64)
-                .unwrap_or(1.0e6) as f32;
+                .unwrap_or(1.0e6);
             (d, max)
         } else {
             return ApiResponse::error(
@@ -328,39 +305,32 @@ impl ApiQueryProvider for TerrainRaycastProvider {
             );
         };
 
-        let mut q = world.query::<(Entity, &GlobalTransform, &DemHeightField)>();
-        let terrains: Vec<(Entity, GlobalTransform, Arc<SurfaceOracle>)> = q
+        let mut q = world.query::<(Entity, &DemHeightField)>();
+        let terrains: Vec<(Entity, Arc<SurfaceOracle>)> = q
             .iter(world)
-            .map(|(e, gt, hf)| (e, *gt, hf.0.clone()))
+            .map(|(e, hf)| (e, hf.0.clone()))
             .collect();
 
         // Nearest intercept across all DEM footprints wins. The march is the pure
         // `lunco_terrain_core::los_hit` kernel (the single-ray sibling of
-        // `ao_map`); this provider only maps world↔terrain-local — exactly how
-        // `TerrainHeightProvider` wraps `HeightSource::height_at`. The DEM anchors
-        // at the origin cell (no scale), so a rigid local frame keeps `distance`
-        // in honest metres.
-        let mut best: Option<(f64, Vec3, Entity)> = None;
-        for (entity, gt, oracle) in terrains {
-            let inv = gt.affine().inverse();
-            let o_local = inv.transform_point3(origin);
-            let d_local = (inv.matrix3 * Vec3A::new(dir.x, dir.y, dir.z)).normalize_or_zero();
-            if d_local.length_squared() < 0.5 {
-                continue;
-            }
+        // `ao_map`); this provider only parses/reports — exactly how
+        // `TerrainHeightProvider` wraps `HeightSource::height_at`. The DEM frame
+        // IS the grid frame (see `TerrainHeight`), so the grid-absolute ray
+        // marches the oracle directly, in f64, and `distance` is honest metres.
+        let mut best: Option<(f64, DVec3, Entity)> = None;
+        for (entity, oracle) in terrains {
             let hit = lunco_terrain_core::los_hit(
                 oracle.as_ref(),
-                [o_local.x as f64, o_local.y as f64, o_local.z as f64],
-                [d_local.x as f64, d_local.y as f64, d_local.z as f64],
-                max as f64,
+                [origin.x, origin.y, origin.z],
+                [dir.x, dir.y, dir.z],
+                max,
                 oracle.half_extent() as f64,
                 oracle.spacing().max(0.5) as f64,
                 0.05, // don't let a surface-sitting endpoint self-occlude
             );
             if let Some(t) = hit {
                 if best.map_or(true, |(bt, _, _)| t < bt) {
-                    let p_world = gt.transform_point(o_local + Vec3::from(d_local) * (t as f32));
-                    best = Some((t, p_world, entity));
+                    best = Some((t, origin + dir * t, entity));
                 }
             }
         }
@@ -410,10 +380,9 @@ mod tests {
             heights,
         };
         world
-            .spawn((
-                GlobalTransform::IDENTITY,
-                DemHeightField(Arc::new(SurfaceOracle::bare(Arc::new(grid)))),
-            ))
+            .spawn(DemHeightField(Arc::new(SurfaceOracle::bare(Arc::new(
+                grid,
+            )))))
             .id()
     }
 
@@ -448,6 +417,33 @@ mod tests {
         // Up-normal tilts away from the climb (−x), still mostly +Y.
         let n = d["normal"].as_array().unwrap();
         assert!(n[0].as_f64().unwrap() < 0.0 && n[1].as_f64().unwrap() > 0.9);
+    }
+
+    /// **The query must answer in the grid frame, not the render frame.**
+    /// Regression for the collider-ring class of bug: the footprint test used to
+    /// go through `GlobalTransform.affine().inverse()`, so a floating-origin XZ
+    /// shift (the terrain's render GT picking up a cell offset) silently moved
+    /// the footprint and mis-answered. A grid-absolute read is untouched by
+    /// wherever the render origin sits — assert that an offset GT changes nothing.
+    #[test]
+    fn query_ignores_the_render_transform() {
+        let mut world = World::new();
+        let terrain = tilted_terrain(&mut world);
+        // The render origin lands a whole cell away in XZ (moonbase-scale).
+        world
+            .entity_mut(terrain)
+            .insert(GlobalTransform::from_translation(Vec3::new(
+                -2000.0, 1945.0, 2000.0,
+            )));
+
+        let d = ok_data(
+            TerrainHeightProvider.execute(&mut world, &json!({"x": 5.0, "z": 0.0, "eps": 1.0})),
+        );
+        assert_eq!(d["found"], json!(true), "{d}");
+        assert!(
+            (d["height"].as_f64().unwrap() - 0.5).abs() < 1e-4,
+            "height {d}"
+        );
     }
 
     #[test]

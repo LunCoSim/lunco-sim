@@ -309,8 +309,17 @@ fn drive_from_bindings(
     sim_intents: Option<Res<SimulatedIntents>>,
     // Per-vessel "keys were active last tick" memory for the idle-yield below.
     mut was_active: Local<std::collections::HashMap<Entity, bool>>,
+    // Despawned vessels leave `was_active` — pruned below so a recycled
+    // Entity id can't inherit a stale flag and mistime the all-zero batch.
+    mut removed_bindings: RemovedComponents<ControlBinding>,
     mut commands: Commands,
 ) {
+    // Prune despawned/unbound vessels before reading edges: a recycled Entity
+    // id must start from "idle", not the previous vessel's last state.
+    for vessel in removed_bindings.read() {
+        was_active.remove(&vessel);
+    }
+
     let client = matches!(*role, lunco_core::NetworkRole::Client);
 
     // When egui holds the keyboard, no local key counts as pressed. `drive_from_

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use lunco_assets::modelica_dir;
 
-use crate::ast_extract::strip_input_defaults;
+use crate::ast_extract::strip_input_defaults_with_report;
 use crate::sim_stream::{SimSnapshot, SimStream};
 use crate::ModelicaCompiler;
 
@@ -550,6 +550,111 @@ fn apply_input_defaults_validated(
     }
 }
 
+/// The complete source set one rumoca compile receives — primary plus any
+/// sibling docs — with the bound-`input` workaround applied to EVERY member.
+///
+/// All worker compile paths (Compile, Reset, Step auto-init, UpdateParameters;
+/// native and inline) assemble their sources through
+/// [`assemble_compile_unit`], so no path can hand rumoca an unstripped string:
+/// rumoca demotes a bound `input Real x = <default>` to an algebraic, which
+/// deletes the runtime slot and silently drops every wire into it (see
+/// `strip_input_defaults`). The compiler applies the same strip again at its
+/// own `seat_user_source` chokepoint; the strip is a length-preserving no-op
+/// on already-stripped text, so the two layers compose.
+struct CompileUnit {
+    /// Primary source with input bindings blanked (length-preserving, so
+    /// diagnostic byte offsets still index the editor's original buffer).
+    source: String,
+    /// Extra sibling docs, each stripped like the primary.
+    extras: Vec<(String, String)>,
+    /// Numeric input defaults captured from the primary source, re-seeded
+    /// into the fresh stepper via [`apply_input_defaults_validated`].
+    input_defaults: HashMap<String, f64>,
+    /// One warning per blanked binding whose default could NOT be captured
+    /// (a non-literal expression like `= 2*3.14/T`): that input starts at
+    /// 0.0 unless wired, which must never be silent. Attached to the compile
+    /// result's `compile_diagnostics`.
+    default_diagnostics: Vec<lunco_doc::Diagnostic>,
+}
+
+fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> CompileUnit {
+    let (stripped_source, input_defaults, unresolved) = strip_input_defaults_with_report(source);
+    let mut default_diagnostics: Vec<lunco_doc::Diagnostic> = unresolved
+        .iter()
+        .map(|u| {
+            let (line, col) =
+                crate::document::core::byte_offset_to_line_col(source, u.byte_offset);
+            lunco_doc::Diagnostic::warning(
+                unresolvable_default_message(&u.name, &u.binding),
+                Some(line),
+                Some(col),
+            )
+        })
+        .collect();
+    let extras = extra_sources
+        .into_iter()
+        .map(|(uri, text)| {
+            let (stripped, _defaults, unresolved) = strip_input_defaults_with_report(&text);
+            // Extras' numeric defaults are NOT seeded: their inputs flatten
+            // under instance-qualified names the leaf keys can't address.
+            // Their unresolvable bindings are still reported — message-only,
+            // since click-to-source targets the primary document.
+            for u in unresolved {
+                default_diagnostics.push(lunco_doc::Diagnostic::warning(
+                    format!(
+                        "{} (in {uri})",
+                        unresolvable_default_message(&u.name, &u.binding)
+                    ),
+                    None,
+                    None,
+                ));
+            }
+            (uri, stripped)
+        })
+        .collect();
+    CompileUnit {
+        source: stripped_source,
+        extras,
+        input_defaults,
+        default_diagnostics,
+    }
+}
+
+fn unresolvable_default_message(name: &str, binding: &str) -> String {
+    format!(
+        "input `{name} = {binding}`: the default is an expression, not a literal — the \
+         binding is stripped so `{name}` stays a runtime input slot, but its default \
+         cannot be captured and the slot starts at 0.0 unless wired. Precompute the \
+         value or move the expression to a `parameter`."
+    )
+}
+
+/// `set_input` with the dedup-warn the hot Step path uses: a rejected input
+/// means the compiled model exposes no such runtime slot, so the wired value
+/// is silently discarded forever — warn ONCE per (entity, name).
+#[cfg(not(target_arch = "wasm32"))]
+fn set_input_or_warn(
+    stepper: &mut SimulationSession,
+    rejected_inputs: &mut std::collections::HashSet<(Entity, String)>,
+    entity: Entity,
+    name: &str,
+    val: f64,
+) {
+    if stepper.set_input(name, val).is_err()
+        && rejected_inputs.insert((entity, name.to_string()))
+    {
+        warn!(
+            "[modelica] {entity:?} rejected input '{name}' — the \
+             compiled model exposes no such runtime slot, so the \
+             wired value is DISCARDED and the model keeps its \
+             declared default forever. Usual cause: the `.mo` \
+             declares `input Real {name} = <default>`, which \
+             rumoca demotes to an algebraic (see \
+             `strip_input_defaults`)."
+        );
+    }
+}
+
 /// The background worker that owns the !Send SimulationSessions and cached DAEs.
 ///
 /// **Native only.** It is spawned on a real `std::thread` (see
@@ -626,14 +731,13 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
                         if let Some(cached) = cached_models.get(&entity) {
                             // Strip input defaults from cached source and set them via set_input
-                            let (stripped_source, input_defaults) =
-                                strip_input_defaults(&cached.source);
+                            let unit = assemble_compile_unit(&cached.source, Vec::new());
 
                             // Recompile stripped source to get a fresh stepper with input slots
                             let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                             match compiler.compile_str(
                                 &cached.model_name,
-                                &stripped_source,
+                                &unit.source,
                                 &cached.doc_uri,
                             ) {
                                 Ok(comp_res) => {
@@ -641,7 +745,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         Ok(mut stepper) => {
                                             apply_input_defaults_validated(
                                                 &mut stepper,
-                                                &input_defaults,
+                                                &unit.input_defaults,
                                                 "Init",
                                             );
                                             let input_names: Vec<String> =
@@ -668,7 +772,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             r.compile_diagnostics =
                                                 crate::diagnostics_from_sim_error(
                                                     &e,
-                                                    &stripped_source,
+                                                    &unit.source,
                                                 );
                                             r.is_reset = true;
                                             let _ = tx_inner.send(r);
@@ -724,15 +828,15 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         // cache stores `source` directly. Pure blocking I/O.
 
                         // Strip input defaults so they become real runtime slots
-                        let (stripped_source, input_defaults) = strip_input_defaults(&source);
+                        let unit = assemble_compile_unit(&source, Vec::new());
 
                         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                        match compiler.compile_str(&model_name, &stripped_source, &doc_uri) {
+                        match compiler.compile_str(&model_name, &unit.source, &doc_uri) {
                             Ok(comp_res) => match build_stepper(&comp_res) {
                                 Ok(mut stepper) => {
                                     apply_input_defaults_validated(
                                         &mut stepper,
-                                        &input_defaults,
+                                        &unit.input_defaults,
                                         "Compile",
                                     );
                                     let input_names: Vec<String> = stepper.input_names().to_vec();
@@ -759,6 +863,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         is_parameter_update: true,
                                         is_reset: false,
                                         detected_input_names: input_names,
+                                        compile_diagnostics: unit.default_diagnostics,
                                         ..Default::default()
                                     });
                                 }
@@ -766,7 +871,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     let mut r = result_ok(entity, session_id);
                                     r.error = Some(format!("Stepper Init Error: {e}"));
                                     r.compile_diagnostics =
-                                        crate::diagnostics_from_sim_error(&e, &stripped_source);
+                                        crate::diagnostics_from_sim_error(&e, &unit.source);
                                     r.is_parameter_update = true;
                                     let _ = tx_inner.send(r);
                                 }
@@ -800,8 +905,9 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             sim_streams.insert(entity, stream);
                         }
 
-                        // Strip input defaults so they become real runtime slots
-                        let (stripped_source, input_defaults) = strip_input_defaults(&source);
+                        // Strip input defaults (primary AND extras) so they
+                        // become real runtime slots
+                        let unit = assemble_compile_unit(&source, extra_sources);
 
                         // Loud breadcrumbs around the two opaque-and-slow
                         // steps (MSL preload + rumoca compile). Without
@@ -827,17 +933,17 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         bevy::log::debug!(
                             "[worker] calling compile_str for `{}` ({} bytes)",
                             model_name,
-                            stripped_source.len(),
+                            unit.source.len(),
                         );
                         let t_compile = web_time::Instant::now();
-                        let _compile_outcome = if extra_sources.is_empty() {
-                            compiler.compile_str(&model_name, &stripped_source, &doc_uri)
+                        let _compile_outcome = if unit.extras.is_empty() {
+                            compiler.compile_str(&model_name, &unit.source, &doc_uri)
                         } else {
                             compiler.compile_str_multi(
                                 &model_name,
-                                &stripped_source,
+                                &unit.source,
                                 &doc_uri,
-                                &extra_sources,
+                                &unit.extras,
                             )
                         };
                         bevy::log::debug!(
@@ -857,7 +963,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         // Set input defaults via set_input so they're runtime-changeable
                                         apply_input_defaults_validated(
                                             &mut stepper,
-                                            &input_defaults,
+                                            &unit.input_defaults,
                                             "Compile",
                                         );
                                         let input_names: Vec<String> =
@@ -902,7 +1008,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                 detected_input_names: input_names,
                                                 compiled_model_name: Some(model_name.clone()),
                                                 loaded_source_root_id: None,
-                                                compile_diagnostics: Vec::new(),
+                                                // Unresolvable input defaults (non-literal
+                                                // bindings) surface even on a green compile —
+                                                // that is exactly when they'd otherwise run
+                                                // at 0.0 in silence.
+                                                compile_diagnostics: unit.default_diagnostics,
                                                 ..Default::default()
                                             }
                                             .with_experiment(&comp_res),
@@ -916,7 +1026,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         // (e.g. an un-lowerable equation) is
                                         // click-to-source like a compile error.
                                         r.compile_diagnostics =
-                                            crate::diagnostics_from_sim_error(&e, &stripped_source);
+                                            crate::diagnostics_from_sim_error(&e, &unit.source);
                                         // Stepper init failure during
                                         // Compile IS a compile-attempt
                                         // result — the UI classifies
@@ -962,50 +1072,109 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         };
 
                         if needs_init {
-                            // Try cached DAE first — recompile stripped source for input slots
+                            // Try cached DAE first — recompile stripped source for input
+                            // slots. Every failure here is sent as a result naming its
+                            // actual cause: the cached source compiled once already, so a
+                            // failure now is a real error, not something to fall through.
                             if let Some(cached) = cached_models.get(&entity) {
                                 if cached.model_name == model_name {
-                                    let (stripped_source, input_defaults) =
-                                        strip_input_defaults(&cached.source);
+                                    let unit = assemble_compile_unit(&cached.source, Vec::new());
                                     let compiler =
                                         compiler.get_or_insert_with(ModelicaCompiler::new);
-                                    if let Ok(comp_res) = compiler.compile_str(
+                                    match compiler.compile_str(
                                         &cached.model_name,
-                                        &stripped_source,
+                                        &unit.source,
                                         &cached.doc_uri,
                                     ) {
-                                        if let Ok(mut s) = build_stepper(&comp_res) {
-                                            apply_input_defaults_validated(
-                                                &mut s,
-                                                &input_defaults,
-                                                "Compile",
-                                            );
-                                            // Then apply any user-provided input overrides
-                                            for (name, val) in &inputs {
-                                                let _ = s.set_input(name, *val);
+                                        Ok(comp_res) => match build_stepper(&comp_res) {
+                                            Ok(mut s) => {
+                                                apply_input_defaults_validated(
+                                                    &mut s,
+                                                    &unit.input_defaults,
+                                                    "Init",
+                                                );
+                                                // Then apply any user-provided input overrides
+                                                for (name, val) in &inputs {
+                                                    set_input_or_warn(
+                                                        &mut s,
+                                                        &mut rejected_inputs,
+                                                        entity,
+                                                        name,
+                                                        *val,
+                                                    );
+                                                }
+                                                steppers.insert(
+                                                    entity,
+                                                    (session_id, model_name.clone(), s),
+                                                );
                                             }
-                                            steppers.insert(
-                                                entity,
-                                                (session_id, model_name.clone(), s),
+                                            Err(e) => {
+                                                let mut r = result_ok(entity, session_id);
+                                                r.error = Some(format!(
+                                                    "Initialization Failed: stepper init from \
+                                                     cached source of `{model_name}`: {e}"
+                                                ));
+                                                r.compile_diagnostics =
+                                                    crate::diagnostics_from_sim_error(
+                                                        &e,
+                                                        &unit.source,
+                                                    );
+                                                let _ = tx_inner.send(r);
+                                                return;
+                                            }
+                                        },
+                                        Err(e) => {
+                                            let mut r = result_ok(entity, session_id);
+                                            r.error = Some(format!(
+                                                "Initialization Failed: recompile of cached \
+                                                 source of `{model_name}`: {e}"
+                                            ));
+                                            r.compile_diagnostics = compiler.compile_diagnostics(
+                                                &cached.model_name,
+                                                &cached.doc_uri,
                                             );
+                                            let _ = tx_inner.send(r);
+                                            return;
                                         }
                                     }
                                 }
                             }
                             // Fallback: compile from file on disk
                             if !steppers.contains_key(&entity) {
-                                let source =
-                                    std::fs::read_to_string(&model_path).unwrap_or_default();
+                                let source = match std::fs::read_to_string(&model_path) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        let mut r = result_ok(entity, session_id);
+                                        r.error = Some(format!(
+                                            "Initialization Failed: cannot read `{}`: {e}",
+                                            model_path.display()
+                                        ));
+                                        let _ = tx_inner.send(r);
+                                        return;
+                                    }
+                                };
+                                let unit = assemble_compile_unit(&source, Vec::new());
                                 let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                                 match compiler.compile_str(
                                     &model_name,
-                                    &source,
+                                    &unit.source,
                                     &model_path.to_string_lossy(),
                                 ) {
-                                    Ok(comp_res) => {
-                                        if let Ok(mut s) = build_stepper(&comp_res) {
+                                    Ok(comp_res) => match build_stepper(&comp_res) {
+                                        Ok(mut s) => {
+                                            apply_input_defaults_validated(
+                                                &mut s,
+                                                &unit.input_defaults,
+                                                "Init",
+                                            );
                                             for (name, val) in &inputs {
-                                                let _ = s.set_input(name, *val);
+                                                set_input_or_warn(
+                                                    &mut s,
+                                                    &mut rejected_inputs,
+                                                    entity,
+                                                    name,
+                                                    *val,
+                                                );
                                             }
                                             cached_models.insert(
                                                 entity,
@@ -1027,7 +1196,19 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                 (session_id, model_name.clone(), s),
                                             );
                                         }
-                                    }
+                                        Err(e) => {
+                                            let mut r = result_ok(entity, session_id);
+                                            r.error = Some(format!(
+                                                "Initialization Failed: stepper init of \
+                                                 `{model_name}` from `{}`: {e}",
+                                                model_path.display()
+                                            ));
+                                            r.compile_diagnostics =
+                                                crate::diagnostics_from_sim_error(&e, &unit.source);
+                                            let _ = tx_inner.send(r);
+                                            return;
+                                        }
+                                    },
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
                                         // `e` is rumoca's formatted compile summary.
@@ -1042,19 +1223,13 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
                                 for (name, val) in inputs {
-                                    if stepper.set_input(&name, val).is_err()
-                                        && rejected_inputs.insert((entity, name.clone()))
-                                    {
-                                        warn!(
-                                            "[modelica] {entity:?} rejected input '{name}' — the \
-                                             compiled model exposes no such runtime slot, so the \
-                                             wired value is DISCARDED and the model keeps its \
-                                             declared default forever. Usual cause: the `.mo` \
-                                             declares `input Real {name} = <default>`, which \
-                                             rumoca demotes to an algebraic (see \
-                                             `strip_input_defaults`)."
-                                        );
-                                    }
+                                    set_input_or_warn(
+                                        stepper,
+                                        &mut rejected_inputs,
+                                        entity,
+                                        &name,
+                                        val,
+                                    );
                                 }
                                 // Macro step: integrate the requested `dt` — the
                                 // gap between the model's clock and the world's —
@@ -1423,16 +1598,19 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 // Try cached DAE first
                 if let Some(cached) = w.cached_models.get(&entity) {
                     if cached.model_name == model_name {
-                        let (stripped_source, input_defaults) =
-                            strip_input_defaults(&cached.source);
+                        let unit = assemble_compile_unit(&cached.source, Vec::new());
                         let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
                         if let Ok(comp_res) = compiler.compile_str(
                             &cached.model_name,
-                            &stripped_source,
+                            &unit.source,
                             &cached.doc_uri,
                         ) {
                             if let Ok(mut s) = build_stepper(&comp_res) {
-                                apply_input_defaults_validated(&mut s, &input_defaults, "Compile");
+                                apply_input_defaults_validated(
+                                    &mut s,
+                                    &unit.input_defaults,
+                                    "Compile",
+                                );
                                 for (name, val) in &inputs {
                                     let _ = s.set_input(name, *val);
                                 }
@@ -1532,18 +1710,18 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             // Phase A lands on desktop first; TODO(arch-phase-b) wire
             // the wasm path once the inline worker moves off-thread.
             w.current_sessions.insert(entity, session_id);
-            let (stripped_source, input_defaults) = strip_input_defaults(&source);
+            let unit = assemble_compile_unit(&source, extra_sources);
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-            let compile_outcome = if extra_sources.is_empty() {
-                compiler.compile_str(&model_name, &stripped_source, &doc_uri)
+            let compile_outcome = if unit.extras.is_empty() {
+                compiler.compile_str(&model_name, &unit.source, &doc_uri)
             } else {
-                compiler.compile_str_multi(&model_name, &stripped_source, &doc_uri, &extra_sources)
+                compiler.compile_str_multi(&model_name, &unit.source, &doc_uri, &unit.extras)
             };
             match compile_outcome {
                 Ok(comp_res) => match build_stepper(&comp_res) {
                     Ok(mut stepper) => {
-                        apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
+                        apply_input_defaults_validated(&mut stepper, &unit.input_defaults, "Compile");
                         let input_names: Vec<String> = stepper.input_names().to_vec();
                         let symbols = collect_stepper_observables(&stepper);
                         w.cached_models.insert(
@@ -1572,7 +1750,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 detected_input_names: input_names,
                                 compiled_model_name: Some(model_name.clone()),
                                 loaded_source_root_id: None,
-                                compile_diagnostics: Vec::new(),
+                                // Unresolvable input defaults (non-literal bindings)
+                                // surface even on a green compile — that is exactly
+                                // when they'd otherwise run at 0.0 in silence.
+                                compile_diagnostics: unit.default_diagnostics,
                                 ..Default::default()
                             }
                             .with_experiment(&comp_res),
@@ -1593,7 +1774,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             detected_input_names: Vec::new(),
                             compile_diagnostics: crate::diagnostics_from_sim_error(
                                 &e,
-                                &stripped_source,
+                                &unit.source,
                             ),
                             ..Default::default()
                         });
@@ -1625,14 +1806,14 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             w.current_sessions.insert(entity, session_id);
 
             if let Some(cached) = w.cached_models.get(&entity) {
-                let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
+                let unit = assemble_compile_unit(&cached.source, Vec::new());
                 let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-                match compiler.compile_str(&cached.model_name, &stripped_source, &cached.doc_uri) {
+                match compiler.compile_str(&cached.model_name, &unit.source, &cached.doc_uri) {
                     Ok(comp_res) => {
                         if let Ok(mut stepper) = build_stepper(&comp_res) {
                             apply_input_defaults_validated(
                                 &mut stepper,
-                                &input_defaults,
+                                &unit.input_defaults,
                                 "Compile",
                             );
                             let input_names: Vec<String> = stepper.input_names().to_vec();
@@ -1704,7 +1885,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 return;
             }
             w.current_sessions.insert(entity, session_id);
-            let (stripped_source, input_defaults) = strip_input_defaults(&source);
+            let unit = assemble_compile_unit(&source, Vec::new());
 
             // Re-seat under the model's original session URI (see the threaded
             // handler) so the reused session never holds it under two filenames.
@@ -1715,10 +1896,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                 .unwrap_or_else(|| model_name.clone());
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-            match compiler.compile_str(&model_name, &stripped_source, &doc_uri) {
+            match compiler.compile_str(&model_name, &unit.source, &doc_uri) {
                 Ok(comp_res) => match build_stepper(&comp_res) {
                     Ok(mut stepper) => {
-                        apply_input_defaults_validated(&mut stepper, &input_defaults, "Compile");
+                        apply_input_defaults_validated(&mut stepper, &unit.input_defaults, "Compile");
                         let input_names: Vec<String> = stepper.input_names().to_vec();
                         let symbols = collect_stepper_observables(&stepper);
                         w.cached_models.insert(
@@ -1744,6 +1925,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             is_parameter_update: true,
                             is_reset: false,
                             detected_input_names: input_names,
+                            compile_diagnostics: unit.default_diagnostics,
                             ..Default::default()
                         });
                     }
@@ -1762,7 +1944,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             detected_input_names: Vec::new(),
                             compile_diagnostics: crate::diagnostics_from_sim_error(
                                 &e,
-                                &stripped_source,
+                                &unit.source,
                             ),
                             ..Default::default()
                         });
