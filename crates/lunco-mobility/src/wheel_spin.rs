@@ -144,11 +144,20 @@ pub(crate) fn update_wheel_spin(
                 / wheel.max_rotation_speed)
                 .clamp(0.0, 1.0);
             let ceiling = wheel.drive_torque_max * throttle.abs() * rolloff;
-            // Torque that would reach the commanded axle speed in one step, held
-            // inside the curve — a torque-limited velocity source, which is the
-            // joint motor stated in the raycast wheel's own terms.
+            // Torque tracking the commanded axle speed at the wheel's authored
+            // servo gain, held inside the curve — the joint motor stated in the
+            // raycast wheel's own terms. avian is handed the same number as an
+            // `AccelerationBased` motor damping (`WheelParams::drive_motor`),
+            // where the torque is `I·d·(ω_target − ω)`; this is that expression.
+            //
+            // The GAIN matters, not only the target. Driving straight to the
+            // target in one step is an infinitely stiff servo: it saturates the
+            // torque ceiling on every tick, which is the behaviour the removed
+            // `stallTorqueGain` fudge used to produce, and it exaggerates how
+            // hard a part-throttled inner wheel is dragged back under steer.
             let w_target = throttle * wheel.max_rotation_speed;
-            (inertia * (w_target - wheel.spin_velocity) / dt).clamp(-ceiling, ceiling)
+            (inertia * wheel.drive_damping * (w_target - wheel.spin_velocity))
+                .clamp(-ceiling, ceiling)
         } else {
             // No authored no-load speed: nothing defines a target, so the motor
             // is the plain torque source its stall figure describes.
@@ -382,6 +391,9 @@ mod tests {
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs_f64(0.1));
         app.insert_resource(time);
+        // The lateral stick bound reads gravity to turn a contact normal force
+        // back into the mass the wheel carries.
+        app.insert_resource(Gravity(DVec3::NEG_Y * 1.62));
 
         // Entity with no `Port` → throttle reads 0 (free-rolling, so the spin
         // is driven purely by ground speed / the lever arm under test).
@@ -416,6 +428,7 @@ mod tests {
                 bearing_damping: 0.0,
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
+                drive_damping: 30.0,
                 lateral_grip_stiffness: 1000.0,
                 brake_torque_max: 0.0,
                 tire_force: DVec3::ZERO,
@@ -464,6 +477,7 @@ mod tests {
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs_f64(1.0 / 60.0));
         app.insert_resource(time);
+        app.insert_resource(Gravity(DVec3::NEG_Y * 1.62));
 
         let port = app
             .world_mut()
@@ -506,6 +520,7 @@ mod tests {
                     bearing_damping: 0.45,
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
+                    drive_damping: 30.0,
                     lateral_grip_stiffness: 800.0,
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,

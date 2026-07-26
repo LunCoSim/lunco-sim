@@ -468,6 +468,11 @@ pub struct WheelRaycast {
     pub bearing_damping: f64,
     /// (joint-motor) realization of the same wheel obeys.
     pub max_rotation_speed: f64,
+    /// Velocity-tracking gain of the hub motor, 1/s (`lunco:wheel:driveDamping`).
+    /// THE SAME number avian is given as the joint motor's `AccelerationBased`
+    /// damping, so both realizations chase `throttle · max_rotation_speed` at one
+    /// authored rate instead of one servo being infinitely stiff.
+    pub drive_damping: f64,
     /// Caps the traction torque at `μ·N`, above which the tire breaks loose.
     pub friction_mu: f64,
     /// hard the tire grips toward `v/r` before saturating at the friction limit.
@@ -515,6 +520,7 @@ impl Default for WheelRaycast {
             drive_torque_max: 0.0,
             bearing_damping: 0.0,
             max_rotation_speed: 0.0,
+            drive_damping: 0.0,
             friction_mu: 0.0,
             slip_stiffness: 0.0,
             lateral_grip_stiffness: 0.0,
