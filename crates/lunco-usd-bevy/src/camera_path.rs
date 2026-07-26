@@ -151,6 +151,25 @@ pub struct CameraPath {
     pub periodic: bool,
 }
 
+/// This prim's `typeName` is not `BasisCurves`, so it can never become a
+/// [`CameraPath`]. Inserted by [`resolve_camera_paths`] to retire the prim from
+/// its scan.
+///
+/// Keyed on `typeName` and NOTHING ELSE, deliberately. `resolve_camera_paths`
+/// re-examined every prim without a `CameraPath` on every frame — reading the
+/// canonical stage, building an `SdfPath`, and querying `typeName` for each. On
+/// the summer-space-school twin that measured **37.3 ms/s** (0.562 ms/frame over
+/// 2659 frames), spent almost entirely on prims that were never candidates.
+///
+/// A prim's `typeName` is fixed for the entity's life: changing it re-authors the
+/// prim, which respawns the entity, which arrives without this marker. The
+/// *other* early-out — a `BasisCurves` with no `lunco:path:camera` rel — is
+/// deliberately NOT marked, because that rel can be authored onto an existing
+/// curve by a live edit and must still resolve. Curves are a handful of prims per
+/// scene, so re-scanning them costs nothing.
+#[derive(Component)]
+pub struct NotACameraPath;
+
 /// The authored USD path behind one `Target` aim key — see [`CameraPath::aim_sources`].
 #[derive(Debug, Clone)]
 pub struct AimTargetSource {
@@ -388,10 +407,12 @@ pub fn camera_path_transport(
 /// Resolve `BasisCurves` prims carrying `lunco:path:camera` into [`CameraPath`]s,
 /// spawning each path's driven clock. Retries next frame while the camera prim
 /// has not spawned yet (async scene load).
+///
+/// Non-curve prims retire from the scan after one look — see [`NotACameraPath`].
 pub fn resolve_camera_paths(
     canonical: NonSend<crate::CanonicalStages>,
     clocks: Option<Res<Clocks>>,
-    q_new: Query<(Entity, &UsdPrimPath), Without<CameraPath>>,
+    q_new: Query<(Entity, &UsdPrimPath), (Without<CameraPath>, Without<NotACameraPath>)>,
     q_prims: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
     q_is_grid: Query<(), With<Grid>>,
@@ -408,6 +429,9 @@ pub fn resolve_camera_paths(
             continue;
         };
         if reader.type_name(&path).as_deref() != Some("BasisCurves") {
+            // Permanent verdict — retire this prim from the scan. See
+            // `NotACameraPath` for why `typeName` is the only safe key.
+            commands.entity(entity).try_insert(NotACameraPath);
             continue;
         }
         let Some(cam_path) = reader.rel_target(&path, "lunco:path:camera") else {
