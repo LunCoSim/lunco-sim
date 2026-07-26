@@ -269,7 +269,6 @@ impl WheelParams {
         wheel.slip_stiffness = self.slip_stiffness;
         wheel.lateral_grip_stiffness = self.lateral_stiffness;
         wheel.brake_torque_max = self.brake_torque_max;
-        wheel.drive_damping = self.drive_damping;
         wheel.steer_axis = self.steer_axis;
     }
 

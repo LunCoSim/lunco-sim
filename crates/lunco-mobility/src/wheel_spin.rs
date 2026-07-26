@@ -48,6 +48,7 @@ fn w_stop_torque(w: f64, i: f64, dt: f64) -> f64 {
 /// `R = steer · rollₓ(−θ) · cylinder_base`.
 pub(crate) fn update_wheel_spin(
     mut q_wheels: Query<(
+        Entity,
         &mut WheelRaycast,
         &Transform,
         &GlobalTransform,
@@ -70,8 +71,9 @@ pub(crate) fn update_wheel_spin(
         With<crate::kernels::DriveMix>,
     >,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
+    q_child_of: Query<&ChildOf>,
+    q_inputs: Query<&InputPorts>,
     time: Res<Time>,
-    gravity: Res<Gravity>,
 ) {
     use std::f64::consts::TAU;
 
@@ -79,12 +81,8 @@ pub(crate) fn update_wheel_spin(
     if dt <= 0.0 {
         return;
     }
-    // Turns a contact normal force back into the mass that wheel is carrying —
-    // the lateral stick bound below is `m·v/dt` and `m = N/g`. Read from the
-    // scene's own gravity so the same wheel behaves correctly on any body.
-    let g = gravity.0.length();
 
-    for (mut wheel, local_tf, global_tf, hits, parent) in q_wheels.iter_mut() {
+    for (entity, mut wheel, local_tf, global_tf, hits, parent) in q_wheels.iter_mut() {
         // All dynamics coefficients are USD-derived (stored on the component).
         let r = wheel.wheel_radius.max(1e-3);
         let inertia = wheel.axle_inertia();
@@ -144,19 +142,22 @@ pub(crate) fn update_wheel_spin(
                 / wheel.max_rotation_speed)
                 .clamp(0.0, 1.0);
             let ceiling = wheel.drive_torque_max * throttle.abs() * rolloff;
-            // Torque tracking the commanded axle speed at the wheel's authored
-            // servo gain, held inside the curve — the joint motor stated in the
-            // raycast wheel's own terms. avian is handed the same number as an
-            // `AccelerationBased` motor damping (`WheelParams::drive_motor`),
-            // where the torque is `I·d·(ω_target − ω)`; this is that expression.
+            // Servo to the commanded speed, held inside the curve — the SAME
+            // shape as the brake below, which servos to zero inside its own
+            // ceiling. One idiom, two ceilings.
             //
-            // The GAIN matters, not only the target. Driving straight to the
-            // target in one step is an infinitely stiff servo: it saturates the
-            // torque ceiling on every tick, which is the behaviour the removed
-            // `stallTorqueGain` fudge used to produce, and it exaggerates how
-            // hard a part-throttled inner wheel is dragged back under steer.
+            // WHAT THE TWO REALIZATIONS SHARE IS THE CURVE, NOT THE SERVO. The
+            // authored torque–speed law and `ω_max` are single-sourced through
+            // `PowertrainParams`, and both kinds clamp to them. How hard a servo
+            // pushes toward the target is the actuator's own business: avian
+            // drives its joint motor with `lunco:wheel:driveDamping`, this one
+            // closes in a step. Neither gain is observable, because the curve
+            // saturates first in every regime the vehicle actually uses — so
+            // reproducing avian's gain here would copy a solver's internals (and
+            // its `dt`-dependence) into this crate for no measurable difference,
+            // and would go stale the moment avian changed its motor model.
             let w_target = throttle * wheel.max_rotation_speed;
-            (inertia * wheel.drive_damping * (w_target - wheel.spin_velocity))
+            (-w_stop_torque(wheel.spin_velocity - w_target, inertia, dt))
                 .clamp(-ceiling, ceiling)
         } else {
             // No authored no-load speed: nothing defines a target, so the motor
@@ -171,9 +172,14 @@ pub(crate) fn update_wheel_spin(
         let mut v_lat = 0.0;
         // The contact basis, kept so the force can be rebuilt in world axes below.
         let mut basis = (DVec3::NEG_Z, DVec3::X);
-        let mut braking = false;
-        if let Ok((lin, ang, pos, rot, inputs, body, motion)) = q_chassis.get(parent.parent()) {
-            braking = inputs.map(|c| c.brake_active).unwrap_or(false);
+        // The brake is a VESSEL command, so it is resolved by walking to the
+        // vessel rather than read off whatever body this wheel hangs from — see
+        // `owning_input_ports`. The chassis fetch below stays the carrier's,
+        // because that IS the body whose motion sets the contact-patch velocity.
+        let braking = lunco_core::architecture::owning_input_ports(entity, &q_child_of, &q_inputs)
+            .map(|c| c.brake_active)
+            .unwrap_or(false);
+        if let Ok((lin, ang, pos, rot, _inputs, body, motion)) = q_chassis.get(parent.parent()) {
             // Source the chassis velocity from wherever this peer's chassis
             // actually gets its motion: live avian velocity on a Dynamic body
             // (host / the owned rover), or the delivered snapshot hint on a
@@ -226,6 +232,13 @@ pub(crate) fn update_wheel_spin(
         } else {
             0.0
         };
+
+        // ONE precedence for both realizations: a braked wheel is not also a
+        // driven wheel. The joint motor cannot express "drive plus brake" at all —
+        // a velocity motor holds one target — so summing them here would have made
+        // throttle-and-brake-together mean different things on the two drivetrains,
+        // which is the exact class of divergence the parity scenes exist to catch.
+        let tau_drive = if braking { 0.0 } else { tau_drive };
 
         let on_ground = wheel.last_normal_force >= 1.0 && hits.iter().next().is_some();
         let mut w = wheel.spin_velocity;
@@ -290,59 +303,25 @@ pub(crate) fn update_wheel_spin(
         //     goes where it physically goes: into ω, as visible spin.
         // Nothing is calibrated against anything else, so μ means μ and a tire
         // swapped at runtime behaves like the tire it is.
-        //
-        // ── THE LATERAL HALF, SOLVED THE SAME WAY ─────────────────────────────
-        //
-        // Cornering force builds with lateral slip at the tire's authored
-        // cornering stiffness, but a tire cannot push harder sideways than it
-        // takes to STOP sliding sideways. `f_stick` is that bound: the force
-        // which removes exactly `v_lat` from the mass this wheel carries in one
-        // step, `m·v/dt`, with `m = N/g` — the wheel's own share of the vehicle
-        // as the contact reports it, so load transfer in a turn is already in the
-        // number. Taking the smaller of the two is what makes the lateral half
-        // STICK at low slip and SLIDE at high slip, which is what a tire does and
-        // what avian's contact solver does to the joint-wheel rover.
-        //
-        // WHY THIS BOUND AND NOT A SOFTER STIFFNESS. Without it the term is a
-        // pure viscous damper, and a stiff damper integrated explicitly
-        // oscillates — so the stiffness had to be detuned until it was stable,
-        // which left it at a few percent of the friction cone: the raycast rover
-        // was permanently sliding sideways on a force far below what its own μ
-        // allowed, i.e. on ice. It read as parity only while the joint rover's
-        // motor was a 6× velocity source that saturated BOTH cones and hid the
-        // linear regime; when the joint motor was put back on its authored torque
-        // curve the two realizations parted company in exactly this term
-        // (`drivetrain_parity` swept 52° raycast against 9° physical).
-        //
-        // The bound is unconditionally stable: `f_stick` cancels `v_lat` and
-        // cannot overshoot it, and above the cone the force is Coulomb anyway.
-        // So the stiffness is free to be a real cornering stiffness again.
         let f_lat = if on_ground {
-            let f_slip_lat = -wheel.lateral_grip_stiffness * v_lat;
-            let f_stick = if g > 0.0 {
-                -(wheel.last_normal_force / g) * v_lat / dt
-            } else {
-                f_slip_lat
-            };
-            // Both are opposed to `v_lat`, so the smaller magnitude is the
-            // physical one — grip below the stick bound, arrest at it.
-            if f_slip_lat.abs() < f_stick.abs() {
-                f_slip_lat
-            } else {
-                f_stick
-            }
+            -wheel.lateral_grip_stiffness * v_lat
         } else {
             0.0
         };
-        // ONE friction cone for the pair: a tire at its lateral limit has no
-        // longitudinal grip left to give, which is what makes hard cornering cost
-        // acceleration. `f_long` is already individually bounded by the solve
-        // above; this bounds the RESULTANT.
         let (f_long, f_lat) = {
             let mag = (f_long * f_long + f_lat * f_lat).sqrt();
             if mag > mu_n && mag > 1.0e-9 {
-                let s = mu_n / mag;
-                (f_long * s, f_lat * s)
+                let s_long = w * r - v_long;
+                let s_lat = -v_lat;
+                let s_mag = (s_long * s_long + s_lat * s_lat).sqrt();
+                if s_mag > 1.0e-9 {
+                    (mu_n * s_long / s_mag, mu_n * s_lat / s_mag)
+                } else {
+                    // Nothing is sliding, so there is no slip direction to point
+                    // along: the cone was filled by the stick bound at rest.
+                    let s = mu_n / mag;
+                    (f_long * s, f_lat * s)
+                }
             } else {
                 (f_long, f_lat)
             }
@@ -391,9 +370,6 @@ mod tests {
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs_f64(0.1));
         app.insert_resource(time);
-        // The lateral stick bound reads gravity to turn a contact normal force
-        // back into the mass the wheel carries.
-        app.insert_resource(Gravity(DVec3::NEG_Y * 1.62));
 
         // Entity with no `Port` → throttle reads 0 (free-rolling, so the spin
         // is driven purely by ground speed / the lever arm under test).
@@ -428,7 +404,6 @@ mod tests {
                 bearing_damping: 0.0,
                 friction_mu: 1.0,
                 slip_stiffness: 1000.0,
-                drive_damping: 30.0,
                 lateral_grip_stiffness: 1000.0,
                 brake_torque_max: 0.0,
                 tire_force: DVec3::ZERO,
@@ -477,7 +452,6 @@ mod tests {
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs_f64(1.0 / 60.0));
         app.insert_resource(time);
-        app.insert_resource(Gravity(DVec3::NEG_Y * 1.62));
 
         let port = app
             .world_mut()
@@ -520,8 +494,7 @@ mod tests {
                     bearing_damping: 0.45,
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
-                    drive_damping: 30.0,
-                    lateral_grip_stiffness: 800.0,
+                        lateral_grip_stiffness: 800.0,
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,
                 },

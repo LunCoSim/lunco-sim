@@ -113,6 +113,7 @@ fn motor_actuator_system(
     q_ports: Query<&Port>,
     q_bodies: Query<(&AngularVelocity, &Rotation)>,
     q_inputs: Query<&lunco_core::InputPorts>,
+    q_child_of: Query<&ChildOf>,
     mut q_joints: Query<(&MotorActuator, &mut RevoluteJoint)>,
 ) {
     for (motor, mut joint) in q_joints.iter_mut() {
@@ -131,12 +132,20 @@ fn motor_actuator_system(
         //
         // A velocity motor expresses a brake exactly: target zero, capped at the
         // authored brake torque. It overrides drive rather than summing with it —
-        // a wheel cannot both be driven and held, and brake authority winning is
-        // the behaviour every other surface assumes.
-        let braking = q_inputs
-            .get(joint.body1)
-            .map(|c| c.brake_active)
-            .unwrap_or(false);
+        // a wheel cannot both be driven and held — and the raycast wheel resolves
+        // the same precedence from the same flag, so the two kinds stop alike.
+        //
+        // Resolved by walking to the VESSEL, not by reading `body1`. The joint's
+        // carrier is whatever the wheel hinges to, which on a rocker-bogie is a
+        // suspension link with no command surface: reading `body1` there answers
+        // "not braking" for a rover that is braking, and says nothing about it.
+        let braking = lunco_core::architecture::owning_input_ports(
+            joint.body2,
+            &q_child_of,
+            &q_inputs,
+        )
+        .map(|c| c.brake_active)
+        .unwrap_or(false);
         if braking && motor.brake_torque > 0.0 {
             joint.motor.enabled = true;
             joint.motor.target_velocity = 0.0;

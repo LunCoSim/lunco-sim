@@ -335,6 +335,31 @@ impl InputPorts {
     }
 }
 
+/// The [`InputPorts`] governing `entity` — its own, or the nearest ancestor's.
+///
+/// A command surface belongs to the VESSEL, and a part is not always a child of
+/// it. On an articulated rover a wheel hangs off a rocker link
+/// (`rocker_bogie.usda` hinges its wheels to `/RockerBogie/RockerL|R`), so the
+/// wheel's carrier body is a suspension member with no command surface of its
+/// own. Anything asking "is my vehicle braking?" by looking at its immediate
+/// parent gets `None` there and, if it treats that as "not braking", silently
+/// loses the brake on exactly the rovers with the most suspension.
+///
+/// Walking up terminates at the vessel because only vessels carry `InputPorts`.
+pub fn owning_input_ports<'w>(
+    entity: Entity,
+    q_child_of: &Query<&ChildOf>,
+    q_inputs: &'w Query<&InputPorts>,
+) -> Option<&'w InputPorts> {
+    let mut cur = entity;
+    loop {
+        if let Ok(inputs) = q_inputs.get(cur) {
+            return Some(inputs);
+        }
+        cur = q_child_of.get(cur).ok()?.parent();
+    }
+}
+
 /// A vessel's index from **actuator** name to the [`Port`] entity carrying that
 /// actuator's setpoint.
 ///
