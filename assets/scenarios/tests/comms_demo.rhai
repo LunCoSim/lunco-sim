@@ -45,13 +45,13 @@ fn on_tick(me) {
         return;
     }
 
+    // The rover is named as its ANTENNA, the prim the scene authors; the link node
+    // is the feed aperture inside it, and `neighbours`/`linked` resolve that
+    // containment so this file never restates the dish's internal path.
     let rover = find("/CommsDemoScene/Rover/Comms");
     let earths = link_ids(g, "earth");
     let peers = neighbours(g, rover);
-    let direct = false;
-    for id in earths {
-        if id in peers { direct = true; }
-    }
+    let direct = linked(g, rover, "earth");
 
     let path = link_path("rover", "earth");
     for n in g.nodes {

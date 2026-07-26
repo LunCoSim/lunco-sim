@@ -13,35 +13,82 @@
 // authors `class = "earth"`), and a name is unique only within its parent. So the
 // helpers below take either:
 //
-//   • a GID          → that one node
+//   • a GID          → that one node, or every node CONTAINED by it
 //   • a class string → the GROUP of nodes with that role ("any Earth station")
 //
 // which is why `can_reach(rover_gid, "earth")` still reads the way it always did,
 // while each complex is now separately addressable.
+//
+// ── Containment: the prim you name is rarely the prim that links ─────────────
+// A link node sits where the link geometry physically is — the dish's feed phase
+// centre — so the beam, the RF state and the range verdict share one transform.
+// That prim is several levels inside the mechanism:
+// `Comms/YawHead/DishGimbal/DishHead/LinkAperture`. What a scene NAMES is the
+// antenna: `find("/Scene/Rover/Comms")`. Both must denote the same node, or every
+// scenario has to spell out an articulation it does not own — and a change to the
+// dish's internals would silently break every script that addressed it.
+//
+// `query("Links").owners` maps each container GID to the nodes beneath it, so the
+// resolution below is the hierarchy the scene authored, not a name match.
 
 /// The live connectivity graph snapshot:
-/// `#{ nodes: [#{id, name, class}], adj: #{ "<gid>": [gid] }, edges: [...], groups: #{ class: [gid] } }`.
+/// `#{ nodes: [#{id, name, class}], adj: #{ "<gid>": [gid] }, edges: [...],
+///    groups: #{ class: [gid] }, owners: #{ "<gid>": [gid] } }`.
 /// `()` when the provider is absent.
 fn links() { query("Links", #{}) }
 
-/// The GIDs a selector denotes: a GID → itself; a class string → every node with
-/// that role. `[]` if it names nothing in the current graph.
+/// The GIDs a selector denotes: a class string → every node with that role; a GID →
+/// that node, or — when the GID names something CONTAINING nodes rather than a node
+/// itself — the nodes inside it. `[]` if it names nothing in the current graph.
 fn link_ids(g, sel) {
     if g == () { return []; }
+    // A `find()` that resolved nothing denotes nothing — never the whole graph,
+    // and never a stringified "()" key that would quietly miss.
+    if sel == () { return []; }
     if type_of(sel) == "string" {
         if sel in g.groups { return g.groups[sel]; }
         return [];
     }
-    // A bare GID — only meaningful if the graph actually carries that node.
-    if ("" + sel) in g.adj { return [sel]; }
+    let k = "" + sel;
+    // A node in its own right.
+    if k in g.adj { return [sel]; }
+    // Otherwise a container: the antenna, vessel or assembly a scene names.
+    if k in g.owners { return g.owners[k]; }
     []
 }
 
-/// The currently-connected peers of `id` (a GID). JSON object keys are strings, so
-/// the adjacency is keyed by the stringified GID — converted here, once.
-fn neighbours(g, id) {
-    let k = "" + id;
-    if k in g.adj { g.adj[k] } else { [] }
+/// The currently-connected peers of `sel` — a node GID, a GID containing nodes, or
+/// a class. Peers of every node the selector denotes, deduplicated: asking a rover
+/// for its peers must answer the same list whether you name the vehicle, its
+/// antenna, or the aperture. JSON object keys are strings, so the adjacency is
+/// keyed by the stringified GID — converted here, once.
+fn neighbours(g, sel) {
+    if g == () { return []; }
+    let out = [];
+    for id in link_ids(g, sel) {
+        let k = "" + id;
+        if !(k in g.adj) { continue; }
+        for p in g.adj[k] {
+            if !(p in out) { out.push(p); }
+        }
+    }
+    out
+}
+
+/// True when `a` and `b` have a DIRECT link up right now. Both ends take the same
+/// three forms as `link_ids`: a node GID, a GID containing nodes, or a class.
+///
+/// Use this instead of `b in neighbours(g, a)`. A peer list holds NODE gids, so
+/// testing a container gid — the antenna or vessel a scene actually names — against
+/// it answers "no" for a link that is up, and an assertion written that way passes
+/// for the wrong reason rather than failing loudly.
+fn linked(g, a, b) {
+    if g == () { return false; }
+    let peers = neighbours(g, a);
+    for id in link_ids(g, b) {
+        if id in peers { return true; }
+    }
+    false
 }
 
 /// True if `to` is reachable from `from` over currently-up links — directly or

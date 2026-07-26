@@ -15,20 +15,36 @@
 // So the assertions are ARITHMETIC, against distances nobody chose, and none of
 // them names an epoch:
 //
-//   every lunar<->Earth edge   330,000-410,000 km   the Moon's true orbital band
-//                                                   (perigee 356,500, apogee 406,700)
-//   every edge's light time    range / c            derived, not invented
+//   the geodetic node's radius   the body's surface        placement resolved
+//   the Kepler node's radius     its semi-major axis       placement resolved
+//   every lunar<->Earth edge     330,000-410,000 km        the Moon's true orbital
+//                                                          band (perigee 356,500,
+//                                                          apogee 406,700)
+//   every edge's light time      range / c                 derived, not invented
 //
-// A node stranded at the origin by an unresolved placement cannot land inside
-// that band, and a light time that is a constant cannot track the range across
-// eleven edges of wildly different length.
+// A node stranded at the origin by an unresolved placement sits ~1 AU from the
+// Moon, so it can satisfy neither radius; and a light time that is a constant
+// cannot track the range across edges of wildly different length.
 //
-// The ShortRangeSat is the RANGE control, and it is a control by CONTRAST rather
-// than in isolation: it shares the lunar neighbourhood with `Relay`, which links
-// to Earth freely, and differs only in declaring a 1000 km reach. `Relay` linked
-// and it did not — so `lunco:link:maxRangeM` is read. Asserting only "the short
-// one has no Earth link" would pass on a kernel that connects nothing at all,
-// which is why the long one's links are asserted in the same breath.
+// ── Why placement is asserted as a RADIUS and not as connectivity ────────────
+//
+// Because "this node has peers" is a claim about OTHER nodes' skies at one epoch,
+// and this scene cannot make it true: the DSN complexes gate at 5 deg from their
+// own end, Earth and L1 sit within ~±6.7 deg of an 85.4 deg S horizon depending
+// on libration, L2 is behind the Moon by construction, and an equatorial orbiter
+// at a = 6540 km can never clear that horizon at all (it needs a central angle
+// under arccos(1737/6540) = 74.6 deg against an actual 85.4). A geodetic
+// placement can resolve perfectly and still have no peers here. The radius says
+// only what the file set out to check.
+//
+// The ShortRangeSat is the RANGE control, and it is measured on its OWN edges:
+// its companion flies the same orbit 4 deg ahead (456 km, inside the 1000 km
+// reach) while everything else in the scene is tens of thousands of km outside
+// it. So the pair "links to the companion, never to Earth, no edge over 1000 km"
+// pins `lunco:link:maxRangeM` without asking whether some third node happens to
+// be visible. Asserting only "the short one has no Earth link" would pass on a
+// kernel that connects nothing at all, which is why the companion link is
+// asserted in the same breath.
 //
 // ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
 //
@@ -71,11 +87,28 @@ fn on_tick(me) {
     let base = find("/LinkTest/MalapertBase");
     let name_of = #{};
     for n in g.nodes { name_of["" + n.id] = n.name; }
-    let bp = [];
-    for id in neighbours(g, base) { bp.push(name_of["" + id]); }
-    print("[link]   base peers  " + bp);
     let short = find("/LinkTest/ShortRangeSat");
+    let companion = find("/LinkTest/ShortRangeCompanion");
     let earths = link_ids(g, "earth");
+
+    // Did each placement RESOLVE? Measured against the body it was placed on, not
+    // against who it can see: an unresolved placement leaves its node at the solar
+    // ORIGIN, which puts it ~1 AU from the Moon — an error no epoch can produce.
+    let moon = query("BodyPosition", #{ body: 301 });
+    let base_r = radius_from(base, moon);
+    let relay_r = radius_from(find("/LinkTest/Relay"), moon);
+
+    // Every edge the short-range node is on. Its reach is 1000 km; the companion
+    // flies 456 km away and everything else in the scene is tens of thousands of
+    // km off, so this list IS the range gate's output.
+    let short_edges = [];
+    for e in g.edges {
+        if e.a == short || e.b == short { short_edges.push(e.range_m); }
+    }
+    let short_max = 0.0;
+    for r in short_edges {
+        if r > short_max { short_max = r; }
+    }
 
     // Cross-body edges: one end an Earth complex, the other not. Their length IS
     // the Earth-Moon distance, whatever the epoch.
@@ -106,10 +139,31 @@ fn on_tick(me) {
         cross_lo: lo,
         cross_hi: hi,
         lt_err: lt_err,
-        base_peers: neighbours(g, base).len(),
-        relay_to_earth: any_edge(g, find("/LinkTest/Relay"), earths),
+        base_r: base_r,
+        relay_r: relay_r,
+        short_edges: short_edges.len(),
+        short_max: short_max,
+        short_to_companion: any_edge(g, short, [companion]),
         short_to_earth: any_edge(g, short, earths),
+        moon_r: if moon == () { () } else { moon.radius },
     });
+}
+
+/// Distance in metres from `body`'s centre to `gid`'s solar-frame position, or `()`
+/// when either is unresolvable. This is the arithmetic that separates a placement
+/// that ran from one that silently did not: a node the pose system never wrote sits
+/// at the solar origin, so its distance from the Moon is the Moon's own heliocentric
+/// distance rather than a body radius or an orbit.
+fn radius_from(gid, body) {
+    if body == () { return (); }
+    if !body.found { return (); }
+    let p = query("SolarPose", #{ entity: gid });
+    if p == () { return (); }
+    if !p.found { return (); }
+    let dx = p.pos[0] - body.pos[0];
+    let dy = p.pos[1] - body.pos[1];
+    let dz = p.pos[2] - body.pos[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
 /// The `range_m` of the edge between `a` and `b`, or `()` when they are not
@@ -138,36 +192,66 @@ fn any_edge(g, a, ids) {
 // ── The verdict ─────────────────────────────────────────────────────────────
 //
 //   nodes + edges     the graph is populated at all.
-//   an Earth link     at least one DSN complex sees the Moon, which is what the
-//                     Malapert site is famous for.
-//   Earth range       ~384,400 km. A node stranded at the origin cannot produce
-//                     this number, and neither can a scripted distance.
-//   L1 range          ~61,300 km — the CR3BP answer for this pair, so the
-//                     libration placement really solved rather than defaulting.
+//   geodetic radius   the Malapert node sits on the Moon's surface — the geodetic
+//                     placement resolved rather than leaving it at the origin.
+//   Kepler radius     the lunar relay sits at its authored 6540 km semi-major
+//                     axis, so the orbital placement resolved too.
+//   cross-body range  330,000-410,000 km, the Moon's true orbital band. A node
+//                     stranded at the origin cannot produce it, and neither can a
+//                     scripted distance.
 //   light time        range / c, to 1%. Cheap, and it catches a light time that
 //                     is a constant rather than a derivation.
-//   short-range sat   links to its neighbourhood and NEVER to Earth. The control:
-//                     without it the Earth links above are equally consistent
-//                     with `maxRangeM` being ignored.
+//   short-range sat   links to its 456 km companion, never to Earth, and holds no
+//                     edge over its authored 1000 km. Read on its own edges, so
+//                     the range gate is pinned without depending on any other
+//                     node being visible at this epoch.
 fn verdict(s) {
     let f = [];
-    f.push(t_true(s.n_nodes >= 8,
-        "the graph carries " + s.n_nodes + " node(s); this scene authors eight, " +
+    f.push(t_true(s.n_nodes >= 10,
+        "the graph carries " + s.n_nodes + " node(s); this scene authors ten, " +
         "and a placement that failed to resolve is one that never registered"));
     f.push(t_true(s.n_edges > 0, "the graph has no edges at all"));
     f.push(t_true(s.n_earth == 3,
         "expected the three DSN complexes in class `earth`, found " + s.n_earth));
 
-    // The SURFACE placement resolved and links. It does NOT necessarily reach a
-    // DSN complex, and that is not a defect: every complex here authors
-    // `minElevationDeg = 5`, and the elevation gate is applied at BOTH ends — so
-    // the Malapert link is decided by the Moon's elevation in the COMPLEX's sky,
-    // not by the base's own mask. When no complex has the Moon 5 deg up, the base
-    // is legitimately off the air. That is the handover this scene exists to show,
-    // and asserting "the base always sees Earth" would encode one epoch as law.
-    f.push(t_true(s.base_peers > 0,
-        "the Malapert surface node has no peers at all — a geodetic placement that " +
-        "resolves should at least reach the relays sharing its sky"));
+    // ── The SURFACE placement resolved ───────────────────────────────────────
+    //
+    // Asserted as a RADIUS, not as connectivity. Whether the base can see anything
+    // is a question about other nodes' skies at this epoch, and this scene answers
+    // it "no": the DSN complexes gate at 5 deg from THEIR end, Earth and L1 sit
+    // within ~±6.7 deg of an 85.4 deg S horizon depending on libration, L2 is
+    // behind the Moon by construction, and an equatorial orbiter at a = 6540 km
+    // needs a central angle under arccos(1737/6540) = 74.6 deg to clear that
+    // horizon against an actual 85.4 — so it is never visible, at any epoch.
+    //
+    // None of that is a placement failure, and a test that reads it as one is
+    // asserting an epoch. The failure this file names in its own header is "an
+    // unresolved placement leaves its node at the ORIGIN", so measure exactly
+    // that: a resolved geodetic node sits on the body's surface. The tolerance is
+    // wide enough for the ellipsoid at this latitude and still rejects the origin
+    // by eight orders of magnitude.
+    if s.base_r == () || s.moon_r == () {
+        f.push(t_true(false,
+            "the Malapert node has no solar-frame pose at all, so its geodetic " +
+            "placement never resolved"));
+    } else {
+        f.push(t_true((s.base_r - s.moon_r).abs() < 10000.0,
+            "the Malapert node sits " + km(s.base_r) + " km from the Moon's centre, " +
+            "not on its surface (" + km(s.moon_r) + " km) — its geodetic placement " +
+            "did not resolve"));
+    }
+
+    // The KEPLER placement, the same way: a circular orbit's radius IS its
+    // semi-major axis, at every epoch.
+    if s.relay_r == () {
+        f.push(t_true(false,
+            "the lunar relay has no solar-frame pose, so its Kepler placement " +
+            "never resolved"));
+    } else {
+        f.push(t_true((s.relay_r - 6540000.0).abs() < 1000.0,
+            "the lunar relay orbits at " + km(s.relay_r) + " km from the Moon's " +
+            "centre; its authored circular orbit is 6540.0 km"));
+    }
 
     f.push(t_true(s.n_cross > 0,
         "not one edge joins an Earth complex to a lunar node, so there is no " +
@@ -185,13 +269,23 @@ fn verdict(s) {
         "light time is off range/c by " + r4(s.lt_err * 100.0) + "% on the worst " +
         "edge — it must be DERIVED from the geometry, not carried as a constant"));
 
-    f.push(t_true(s.relay_to_earth,
-        "the long-range lunar relay has no Earth link, so 'the short-range one has " +
-        "none either' below is true of a kernel that connects nothing"));
+    // ── The RANGE gate ───────────────────────────────────────────────────────
+    //
+    // Read off ONE node's own edges, so no third node's visibility is smuggled in.
+    // The companion is 456 km away and inside the reach; everything else in the
+    // scene is tens of thousands of km outside it. Both halves are load-bearing:
+    // without the companion link, "no Earth link" is equally true of a node that
+    // never resolved, and without the ceiling it is equally true of a kernel that
+    // connects nothing.
+    f.push(t_true(s.short_to_companion,
+        "the 1000 km-reach satellite has no link to its companion 456 km away, so " +
+        "'it does not reach Earth' below is true of a node that links to nothing"));
     f.push(t_true(!s.short_to_earth,
         "the 1000 km-reach satellite has a direct link to a DSN complex ~384,000 " +
-        "km away, while sharing the lunar neighbourhood with a relay that legitimately " +
-        "does — `lunco:link:maxRangeM` is not being read"));
+        "km away — `lunco:link:maxRangeM` is not being read"));
+    f.push(t_true(s.short_max <= 1000000.0,
+        "the 1000 km-reach satellite holds an edge of " + km(s.short_max) +
+        " km, beyond its authored reach"));
 
     // Every number printed through `km()`: an ABSENT range is `()`, and dividing
     // `()` by 1000 THROWS — which kills the scenario between its last print and
@@ -202,9 +296,11 @@ fn verdict(s) {
     print("[link]   cross-body  " + s.n_cross + " edge(s), " + km(s.cross_lo) +
           " to " + km(s.cross_hi) + " km (band " + km(PERIGEE_M) + "-" + km(APOGEE_M) + ")");
     print("[link]   light time  worst error " + r4(s.lt_err * 100.0) + "%");
-    print("[link]   base peers  " + s.base_peers + " (Earth link is gated at the COMPLEX's end, 5 deg)");
-    print("[link]   range gate  relay->earth=" + s.relay_to_earth +
-          "  shortsat->earth=" + s.short_to_earth);
+    print("[link]   placement   base " + km(s.base_r) + " km from Moon centre (surface " +
+          km(s.moon_r) + ")  relay " + km(s.relay_r) + " km (orbit 6540.0)");
+    print("[link]   range gate  short-range sat: " + s.short_edges + " edge(s), longest " +
+          km(s.short_max) + " km (reach 1000.0)  ->companion=" + s.short_to_companion +
+          "  ->earth=" + s.short_to_earth);
 
     report_verdict(f, "LINK", "LINK");
 }

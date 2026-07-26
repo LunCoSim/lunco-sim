@@ -166,22 +166,44 @@ def Xform "LinkTest" (
     }
 
     # ── Verdict input: RANGE ─────────────────────────────────────────────────
-    # Same lunar orbit as `Relay`, but authored with a 1000 km reach — far short
-    # of the ~384,000 km to Earth. It must link to lunar-neighbourhood nodes and
-    # never to a DSN complex, with no occlusion involved. Range is a verdict
-    # input like any other; this is the node that proves it is read.
+    # A 1000 km reach — far short of the ~384,000 km to Earth. The pair below is
+    # what makes that reach MEASURABLE: this satellite and its companion fly the
+    # same orbit 4 deg apart (a 456 km chord, comfortably inside the reach), so
+    # the short-range node must link to the companion and to nothing else.
+    #
+    # Both halves are needed. "It has no Earth link" is equally true of a node
+    # whose placement never resolved, and "it has a peer" is equally true of a
+    # kernel that ignores range — only the pair pins `lunco:link:maxRangeM`, and
+    # it does so without asking whether any third node happens to be in its sky
+    # at this epoch.
     def Xform "ShortRangeSat" (
         prepend apiSchemas = ["LunCoLinkAPI"]
     )
     {
         bool lunco:linkNode = true
-        string lunco:link:class = "relay"
+        string lunco:link:class = "shortrange"
         double lunco:link:maxRangeM = 1000000
         int lunco:orbit:body = 301
         double lunco:orbit:semiMajorAxisM = 6540000
         double lunco:orbit:eccentricity = 0
         double lunco:orbit:inclinationDeg = 90
         double lunco:orbit:meanAnomalyDeg = 180
+    }
+
+    # The companion: identical orbit, 4 deg ahead. It authors no reach of its own,
+    # so the only limit on this pair is the short-range node's — which is the
+    # asymmetry the verdict reads.
+    def Xform "ShortRangeCompanion" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "relay"
+        int lunco:orbit:body = 301
+        double lunco:orbit:semiMajorAxisM = 6540000
+        double lunco:orbit:eccentricity = 0
+        double lunco:orbit:inclinationDeg = 90
+        double lunco:orbit:meanAnomalyDeg = 184
     }
 
     def Scope "Scenario"

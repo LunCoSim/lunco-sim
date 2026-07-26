@@ -57,13 +57,16 @@ fn on_tick(me) {
     print("[wall] mast ant   gid=" + ma + " pos=" + world_pos(ma));
 
     let g = links();
+    // Every endpoint here is named as the ANTENNA the scene authors, never as the
+    // feed aperture inside it — `linked()` resolves containment, so this file does
+    // not restate the dish's articulation and does not break when it changes.
     let peers = if g == () { [] } else { neighbours(g, ra) };
     verdict(#{
         graph: g,
         n_nodes: if g == () { -1 } else { g.nodes.len() },
         n_peers: peers.len(),
-        blocked: ma in peers,
-        clear: find("/CommsWallTest/MastClear/Antenna") in peers,
+        blocked: linked(g, ra, ma),
+        clear: linked(g, ra, find("/CommsWallTest/MastClear/Antenna")),
     });
 }
 
