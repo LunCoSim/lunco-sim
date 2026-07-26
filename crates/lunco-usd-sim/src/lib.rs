@@ -130,6 +130,7 @@ pub struct UsdSimPlugin;
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
+        crate::shader_ports::build(app);
         app.register_type::<PhysicalWheel>()
             // Client-only: reconstruct a remote rover's wheels from its chassis
             // (kinematic followers — wheels are no longer replicated), then re-derive
@@ -212,6 +213,10 @@ pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 /// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,
 /// deterministically ordered so it can never race a downstream consumer.
 pub mod shader;
+
+/// Shader parameters as connection targets — the port backend for what
+/// [`shader`] authors.
+pub mod shader_ports;
 
 /// A joint-based wheel: a full rigid body that interacts with terrain through
 /// collision, not raycast suspension. It gets `RigidBody`, `Collider`, and a

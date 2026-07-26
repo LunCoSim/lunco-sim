@@ -109,6 +109,19 @@ fn t_moved(distance_m, min_m, what) {
            " m — nothing drove, so a match here would be meaningless";
 }
 
+/// Declare that `port` is EXPECTED to dangle in this scene.
+///
+/// A fixture scene may be deliberately malformed — `lint_selftest` authors wires
+/// into ports no program declares, because that malformation is what the lint
+/// policy is tested against. `scene_test`'s never-landed gate cannot otherwise
+/// tell a fixture from a broken vehicle.
+///
+/// This ASSERTS, it does not mute: a declared port that never dangles fails the
+/// scene, so a fixture that quietly stops reproducing its defect is caught.
+fn expect_fault(port) {
+    emit("EXPECT_FAULT", port);
+}
+
 /// Print the failures, print the greppable verdict line, emit it on `channel`,
 /// and raise a toast. Call ONCE, last. Returns true on pass.
 ///

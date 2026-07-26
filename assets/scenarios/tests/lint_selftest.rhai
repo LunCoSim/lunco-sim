@@ -56,6 +56,15 @@ fn on_start(me) {
     this.phase = "wait";
 
     print("[lint-selftest] ── the linter, linted ─────────────────────────");
+
+    // `/LintSelftest/MultiSourceNetwork` wires `inputs:left`/`inputs:right` into a
+    // network whose only member declares neither — a REAL dangling wire, authored
+    // on purpose so the lint rule has something to find. Declare it, so
+    // `scene_test`'s never-landed gate reads the fixture as a fixture. Declaring
+    // it also asserts it: if the malformation is ever tidied away, this scene
+    // fails rather than silently testing nothing.
+    expect_fault("left");
+    expect_fault("right");
 }
 
 fn on_tick(me) {

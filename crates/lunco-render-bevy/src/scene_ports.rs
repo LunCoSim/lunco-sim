@@ -18,7 +18,7 @@
 //! ```
 //!
 //! **This module adds no resolver and no per-frame system**, exactly like
-//! [`shader_ports`](crate::shader_ports): `rewire_usd_connections` already turns
+//! `lunco-usd-sim`'s `shader_ports`: `rewire_usd_connections` already turns
 //! any `inputs:foo.connect` into a `SimConnection` with no check on what kind of
 //! thing the target is, and `propagate_connections` already routes every write
 //! through [`PortRegistry::write_port`]. Making a scene property drivable is one

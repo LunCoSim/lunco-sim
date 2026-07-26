@@ -410,6 +410,31 @@ fn pinned_compute_pool(threads: usize) -> TaskPoolPlugin {
 /// `TelemetryEvent` with a `TelemetryValue::String` payload. Anything else on
 /// the bus (zone enters, `lander_touchdown`, sampled parameters) is ignored —
 /// only a literal `PASS`/`FAIL` string is a verdict.
+/// Ports the scenario declared it EXPECTS to dangle, via `expect_fault(port)`.
+///
+/// A fixture scene can be deliberately malformed — `lint_selftest` authors wires that
+/// target ports no program declares, because that malformation is the thing the lint
+/// policy is being tested against. Without a way to say so, the never-landed gate reads a
+/// fixture exactly like a broken rover.
+///
+/// This is a two-way assertion, not a mute: an expected fault that never occurs fails the
+/// scene too. A fixture that quietly stops being malformed is a broken fixture, and that
+/// is precisely the failure a mute would hide.
+#[derive(Resource, Default)]
+struct ExpectedFaults(std::collections::BTreeSet<String>);
+
+/// `expect_fault(port)` in rhai lands here.
+fn catch_expected_fault(trigger: On<TelemetryEvent>, mut expected: ResMut<ExpectedFaults>) {
+    let evt = trigger.event();
+    if evt.name != "EXPECT_FAULT" {
+        return;
+    }
+    let TelemetryValue::String(port) = &evt.data else {
+        return;
+    };
+    expected.0.insert(port.clone());
+}
+
 fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
     if verdict.result.is_some() {
         return; // First verdict wins — the early-abort FAIL is a real verdict.
@@ -519,6 +544,8 @@ fn main() -> std::process::ExitCode {
         want_channel: cli.verdict_channel.clone(),
     });
     app.add_observer(catch_verdict);
+    app.init_resource::<ExpectedFaults>();
+    app.add_observer(catch_expected_fault);
 
     app.finish();
     app.cleanup();
@@ -643,20 +670,47 @@ fn main() -> std::process::ExitCode {
     // vessel is simply never actuated. Both emit one `warn!` into a log no
     // test reads. A wire that does not land is an authoring error, and an
     // authoring error must fail the gate that is supposed to be watching.
-    let broken: Vec<String> = app
+    let expected = app.world().resource::<ExpectedFaults>().0.clone();
+    let faults: Vec<(String, String)> = app
         .world()
         .get_resource::<lunco_cosim::diagnostics::CosimDiagnostics>()
         .map(|d| {
-            let mut v: Vec<String> = d
+            let mut v: Vec<(String, String)> = d
                 .faults
                 .values()
-                .map(|b| format!("`{}` on {:?}", b.port, b.entity))
+                .map(|b| (b.port.clone(), format!("`{}` on {:?}", b.port, b.entity)))
                 .collect();
             // A HashMap has no order and the gate's output is compared between runs.
             v.sort();
             v
         })
         .unwrap_or_default();
+
+    // Undeclared faults fail the scene. Declared ones are the fixture working.
+    let broken: Vec<String> = faults
+        .iter()
+        .filter(|(port, _)| !expected.contains(port))
+        .map(|(_, label)| label.clone())
+        .collect();
+    // …and a declared fault that never happened fails it too: the fixture stopped
+    // reproducing the defect it exists to reproduce.
+    let missing: Vec<String> = expected
+        .iter()
+        .filter(|port| !faults.iter().any(|(p, _)| &p == port))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        println!(
+            "scene_test FAIL  scene={}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+            cli.scene
+        );
+        println!(
+            "  the scenario declared expect_fault({}) but no such connection ever \
+             dangled — the fixture is no longer reproducing what it asserts",
+            missing.join(", ")
+        );
+        return std::process::ExitCode::from(1);
+    }
 
     match app.world().resource::<Verdict>().result.clone() {
         Some((channel, true)) if !broken.is_empty() => {

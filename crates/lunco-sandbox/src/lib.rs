@@ -199,6 +199,38 @@ fn print_help_if_requested() -> bool {
 /// Composition root. Builds the shared core, then conditionally layers on the UI
 /// or the headless runner. Nothing UI-specific lives here beyond selecting the
 /// windowing backend in [`default_plugins`].
+/// The first line of every run: which build is this?
+///
+/// A tester's log is only useful if it names the binary that produced it. Without this,
+/// five Windows runs in the 2026-07-26 report could be distinguished only by install
+/// path and asset counts — so the report groups them by inference instead of by fact,
+/// and two of its findings could not be attributed to a build at all.
+///
+/// Printed with `println!` rather than `info!` because it must survive `RUST_LOG`
+/// filtering and precede `LogPlugin` — a build identity that a log level can suppress is
+/// exactly as useless as none.
+fn log_build_identity(headless: bool, offscreen: bool) {
+    let mode = if headless {
+        "headless"
+    } else if offscreen {
+        "offscreen"
+    } else {
+        "windowed"
+    };
+    println!(
+        "[lunco] sandbox {ver} ({sha}) {profile} {mode} {os}/{arch}",
+        ver = env!("CARGO_PKG_VERSION"),
+        sha = env!("LUNCO_GIT_SHA"),
+        profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+    );
+}
+
 fn run_with_mode(headless: bool) -> AppExit {
     // `--offscreen`: GPU-FULL windowless recording mode. Real render stack and
     // visuals, no window/winit/egui — the scene renders into an offscreen target
@@ -208,6 +240,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     let offscreen = cfg!(all(feature = "ui", feature = "lunco-api"))
         && !headless
         && std::env::args().any(|a| a == "--offscreen");
+    log_build_identity(headless, offscreen);
     // Answer `--help` without building an app (see `print_help_if_requested`).
     // Placed in the composition root, not in one bin's `main`, so EVERY entry
     // point that runs the sandbox — GUI `sandbox`, headless `sandbox-server` —
