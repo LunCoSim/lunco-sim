@@ -10,85 +10,26 @@
 //!
 //! so "the files this scene needs" is a graph walk, not a folder listing.
 //!
-//! Three consumers wanted that walk and it existed twice, because there was no
-//! shared home: the composition pre-fetch ([`crate::compose`]) had one, and the
-//! scenario-manifest builder in `lunco-networking` had a near-identical copy
-//! whose own comment admitted it "mirrors" the first — which is also why that
-//! crate talked to `openusd` directly. They differed on exactly **one** axis, so
-//! that axis is now a parameter ([`ArcFilter`]) rather than a fork:
+//! **What a layer depends on is openusd's answer, not ours.**
+//! `Data::composition_asset_dependencies` (`SdfLayer::GetCompositionAssetDependencies`)
+//! and `Data::asset_dependencies` report the arcs and the asset-valued
+//! attributes; this module only walks the graph they describe. Matching raw spec
+//! fields here is what previously left every asset-attribute dependency — a
+//! texture, a `.glb`, a program's `info:sourceAsset` — outside the closure.
 //!
-//! - **Composition pre-fetch** wants layers only — a `.glb` is not a layer to
-//!   fetch, the resolver stubs it.
-//! - **Manifests and staleness** want everything — a client must receive the
-//!   `.glb`, and swapping a DEM must invalidate the scene that points at it.
-//!
-//! The BFS *drivers* legitimately differ (async-`AssetServer` vs synchronous
-//! filesystem) and stay separate; only the per-layer arc extraction is shared.
+//! Two consumers, one walk: the scenario-manifest builder (what a client must be
+//! sent) and document staleness (what, changed on disk, makes a document stale).
+//! The composition PRE-FETCH does not use this walk — it cannot, since on web a
+//! stage's layers must be fetched before a stage exists — and asks openusd for
+//! one layer's arcs directly (see `compose`, and its `TODO(web)`).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use openusd::sdf::{self, Path as SdfPath, Value};
 use openusd::usda;
 
 use lunco_assets::asset_path::normalize;
 
-use crate::resolver::is_binary_asset;
-
-/// Which arcs [`discover_arcs`] returns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArcFilter {
-    /// USD layers only — binary assets (glTF/OBJ/STL) are dropped. For callers
-    /// that will *parse* what they get back.
-    LayersOnly,
-    /// Every arc, binary leaves included. For callers that must *ship* or
-    /// *watch* the file rather than parse it.
-    All,
-}
-
-/// Collect the `subLayers` + `references` + `payload` asset-path arcs authored
-/// in a parsed layer.
-///
-/// Iterating ALL specs (not just the live prim tree) is deliberate: it catches
-/// references authored inside variant blocks, which live at decorated paths.
-///
-/// `subLayers` are layers by definition and are never filtered; [`ArcFilter`]
-/// applies to references and payloads, the arcs that can point at a binary.
-pub fn discover_arcs(data: &sdf::Data, filter: ArcFilter) -> Vec<String> {
-    let mut out = Vec::new();
-
-    if let Some(root) = data.spec(&SdfPath::abs_root()) {
-        if let Some(Value::StringVec(subs)) = root.get("subLayers") {
-            out.extend(subs.iter().filter(|s| !s.is_empty()).cloned());
-        }
-    }
-
-    for (_path, spec) in data.iter() {
-        let mut arcs: Vec<String> = Vec::new();
-        if let Some(Value::ReferenceListOp(op)) = spec.get("references") {
-            arcs.extend(
-                op.iter()
-                    .filter(|r| !r.asset_path.is_empty())
-                    .map(|r| r.asset_path.clone()),
-            );
-        }
-        match spec.get("payload") {
-            Some(Value::Payload(p)) if !p.asset_path.is_empty() => arcs.push(p.asset_path.clone()),
-            Some(Value::PayloadListOp(op)) => arcs.extend(
-                op.iter()
-                    .filter(|p| !p.asset_path.is_empty())
-                    .map(|p| p.asset_path.clone()),
-            ),
-            _ => {}
-        }
-        match filter {
-            ArcFilter::All => out.extend(arcs),
-            ArcFilter::LayersOnly => out.extend(arcs.into_iter().filter(|a| !is_binary_asset(a))),
-        }
-    }
-
-    out
-}
 
 /// True if `path` is a USD layer to parse-and-recurse into, as opposed to a leaf
 /// asset (a `.glb`) that is shipped or watched but never followed.
@@ -134,11 +75,22 @@ pub fn reference_closure(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
             continue;
         };
         let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        // BOTH dependency kinds, both from openusd: composition arcs
+        // (`SdfLayer::GetCompositionAssetDependencies`) and asset-valued
+        // attributes. The second was missing entirely — a texture, a `.glb` a
+        // schema binds by attribute, a program's `info:sourceAsset` — so any
+        // such file outside the caller's own folder walk was never shipped.
+        //
         // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
         // for ease of debugging. Relative arcs are followed out of the twin root
-        // with no confinement. Revisit before multiplayer hardening
-        // (REVIEW-2026-07-19.md finding #5).
-        for arc in discover_arcs(&data, ArcFilter::All) {
+        // with no confinement, because anchoring still happens here rather than
+        // through a resolver context that has a root. Moves to openusd's
+        // recursive `compute_all_dependencies` (REVIEW-2026-07-19.md finding #5).
+        let arcs = data
+            .composition_asset_dependencies()
+            .into_iter()
+            .chain(data.asset_dependencies());
+        for arc in arcs {
             if lunco_assets::asset_path::is_anchored(&arc) {
                 continue;
             }
@@ -186,19 +138,49 @@ mod tests {
         assert!(closure.contains(&normalize(&wheel)), "transitive reference");
     }
 
-    /// The one axis the two former copies disagreed on. A `.glb` must survive
-    /// `All` (a client needs the bytes; swapping it must invalidate the scene)
-    /// and be dropped by `LayersOnly` (it is not a layer to parse).
+    /// A binary leaf must be REACHED (a client needs the bytes, and swapping it
+    /// must invalidate the scene) but never recursed into. The pre-fetch drops
+    /// binaries itself, at its own call site, because only it will parse what it
+    /// gets back — that axis is no longer a parameter of the walk.
     #[test]
-    fn arc_filter_decides_whether_binaries_survive() {
-        let data =
-            usda::parse("#usda 1.0\ndef Xform \"M\" (prepend references = @rover.glb@) {}\n")
-                .unwrap();
+    fn closure_carries_binary_leaves_without_parsing_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let scene = dir.path().join("scene.usda");
+        let mesh = dir.path().join("rover.glb");
+        std::fs::write(
+            &scene,
+            "#usda 1.0\ndef Xform \"M\" (prepend references = @rover.glb@) {}\n",
+        )
+        .unwrap();
+        std::fs::write(&mesh, b"\x67\x6c\x54\x46").unwrap();
 
-        assert_eq!(
-            discover_arcs(&data, ArcFilter::All),
-            vec!["rover.glb".to_string()]
+        let closure = reference_closure(&[scene]);
+        assert!(closure.contains(&normalize(&mesh)), "binary leaf ships");
+    }
+
+    /// The gap that motivated moving this to openusd: a dependency bound by an
+    /// ASSET ATTRIBUTE — a program's `info:sourceAsset`, a texture — is not a
+    /// composition arc, so a walk that only followed references/payloads left it
+    /// out of the manifest and the client never received it.
+    #[test]
+    fn closure_follows_asset_valued_attributes() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+
+        let scene = dir.path().join("scene.usda");
+        let script = shared.join("policy.rhai");
+        std::fs::write(
+            &scene,
+            "#usda 1.0\ndef Xform \"R\" { asset info:sourceAsset = @shared/policy.rhai@ }\n",
+        )
+        .unwrap();
+        std::fs::write(&script, "fn on_start(me) {}\n").unwrap();
+
+        let closure = reference_closure(&[scene]);
+        assert!(
+            closure.contains(&normalize(&script)),
+            "an asset-valued attribute is a dependency: {closure:?}"
         );
-        assert!(discover_arcs(&data, ArcFilter::LayersOnly).is_empty());
     }
 }

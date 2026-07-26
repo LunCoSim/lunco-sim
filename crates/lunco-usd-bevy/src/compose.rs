@@ -107,12 +107,21 @@ fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     })?;
     let data = Data::from_specs(specs);
     let anchor = ResolvedPath::new(id);
-    Ok(
-        crate::closure::discover_arcs(&data, crate::closure::ArcFilter::LayersOnly)
-            .iter()
-            .map(|child| canonicalize_at(child, Some(&anchor)))
-            .collect(),
-    )
+    // Composition arcs come from openusd (`SdfLayer::GetCompositionAssetDependencies`),
+    // not from matching raw spec fields here. Binary leaves are dropped because
+    // this is the PRE-FETCH: everything it returns will be parsed as a layer,
+    // and a `.glb` is stubbed by the resolver instead.
+    //
+    // TODO(web): this exists because a stage cannot be opened until its layers'
+    // bytes are local — on wasm they arrive over HTTP. The native path asks the
+    // library for the dependency set instead (see `closure::reference_closure`);
+    // fold this into that once the resolver can drive an async fetch.
+    Ok(data
+        .composition_asset_dependencies()
+        .into_iter()
+        .filter(|arc| !is_binary_asset(arc))
+        .map(|child| canonicalize_at(&child, Some(&anchor)))
+        .collect())
 }
 
 /// Test-only convenience: the composed [`Stage`] alone, discarding the resolver
