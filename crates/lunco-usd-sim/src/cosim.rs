@@ -440,47 +440,46 @@ fn process_usd_cosim_prim_read(
     // happens later, in `dispatch_loaded_modelica_sources` /
     // `dispatch_loaded_python_sources`, once the asset is ready.
     // See `docs/architecture/40-asset-io.md`.
+    // USD is the public contract: publish the declared scalar interface into a
+    // `SimComponent` at BIND — before the async source load — so a wire into a
+    // declared port never transiently reads as unknown, WHATEVER the solver
+    // language. This is the ONE publication path shared by every cosim solver
+    // (Modelica, Python); they differ only in the loader they attach and, for
+    // Modelica, the `UsdModelicaPortContract` the compiler later checks its DAE
+    // interface against. Python used to skip this and ship an EMPTY interface,
+    // so every wire into it (e.g. `signal` on an amplifier) false-warned — the
+    // shared path is what keeps the languages from drifting again.
+    // `dispatch_loaded_{modelica,python}_sources` flips the status live once the
+    // source has loaded/compiled; until then `can_step()` holds a `Compiling`
+    // component.
+    let (inputs, outputs) = declared_interface(reader, sdf_path);
+    let model_name = match (&modelica_path, &python_path) {
+        (Some(path), _) => {
+            commands.entity(entity).try_insert(UsdModelicaPortContract {
+                inputs: inputs.keys().cloned().collect(),
+                outputs: outputs.keys().cloned().collect(),
+            });
+            path.clone()
+        }
+        (_, Some(path)) => format!("Python:{path}"),
+        // Unreachable: `solver_language` above returned early for anything that is
+        // neither. Kept total so a new language can't silently skip publication.
+        (None, None) => return,
+    };
+    commands.entity(entity).try_insert(SimComponent {
+        model_name,
+        parameters: Default::default(),
+        inputs,
+        outputs,
+        status: SimStatus::Compiling,
+        is_stepping: false,
+    });
     if let Some(asset_path) = modelica_path {
-        // USD is the public contract: publish its scalar interface immediately,
-        // before the asset fetch and asynchronous Modelica compile.  Writes then
-        // latch in SimComponent instead of being misdiagnosed as unknown ports.
-        let (inputs, outputs) = declared_interface(reader, sdf_path);
-        commands.entity(entity).try_insert(UsdModelicaPortContract {
-            inputs: inputs.keys().cloned().collect(),
-            outputs: outputs.keys().cloned().collect(),
-        });
-        commands.entity(entity).try_insert(SimComponent {
-            model_name: asset_path.clone(),
-            parameters: Default::default(),
-            inputs,
-            outputs,
-            status: SimStatus::Compiling,
-            is_stepping: false,
-        });
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
         });
-    }
-    if let Some(asset_path) = python_path {
-        // Symmetric with Modelica: publish the USD-declared interface at BIND so
-        // wires into this Python model's declared ports resolve from the first
-        // propagation tick. `dispatch_loaded_python_sources` flips the status to
-        // `Running` once the `.py` asset has loaded — it no longer re-creates the
-        // component with an empty interface (the bug that false-warned every wire
-        // into a Python model, e.g. `signal` on an amplifier).
-        let (inputs, outputs) = declared_interface(reader, sdf_path);
-        commands.entity(entity).try_insert(SimComponent {
-            model_name: format!("Python:{asset_path}"),
-            parameters: Default::default(),
-            inputs,
-            outputs,
-            // Interface declared, script not yet loaded: `can_step()` refuses to
-            // step a `Compiling` component, exactly as it holds a Modelica model
-            // mid-compile.
-            status: SimStatus::Compiling,
-            is_stepping: false,
-        });
+    } else if let Some(asset_path) = python_path {
         commands.entity(entity).try_insert(PendingPythonSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
