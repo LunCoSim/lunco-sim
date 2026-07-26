@@ -39,11 +39,27 @@ const DEF_NEAR_M: f64 = 50_000.0;
 const DEF_STUB: f64 = 20.0;
 
 /// Tags a spawned beam with its peer and the state it currently shows, so the reconciler
-/// can re-aim it, recolour it on a flip, or despawn it when the peer drops out.
+/// can recolour it on a flip or despawn it when the peer drops out — and so
+/// [`aim_link_beams`] can re-point it every frame without consulting anything else.
+///
+/// `peer_entity` is the whole reason the two systems can be separated. A beam's peer is
+/// authored as a `GlobalEntityId`, and resolving a GID to an `Entity` means a map over
+/// *every* GID-bearing entity in the world. Doing that per frame — which is what a single
+/// fused system had to do — is O(entities) of pure lookup to re-aim a handful of beams.
+/// Resolving once at reconcile time and caching it here makes aiming O(beams).
+///
+/// The cached `Entity` is only as good as the reconcile that produced it, so aiming treats
+/// a stale one as "skip this frame" (see [`aim_link_beams`]) rather than trusting it.
 #[derive(Component)]
 pub struct LinkBeamInstance {
     pub peer: u64,
     pub up: bool,
+    /// Resolved at reconcile time from `peer`. See the type docs.
+    pub peer_entity: Entity,
+    /// Per-node tuning, copied so aiming needs no template lookup.
+    pub near_m: f64,
+    pub stub: f32,
+    pub width: f32,
 }
 
 type Look = (Mesh3d, MeshMaterial3d<StandardMaterial>);
@@ -61,7 +77,83 @@ struct NodeBeams {
 }
 
 pub(crate) fn build(app: &mut App) {
-    app.register_program_driver(DRIVER_ID, drive_link_beams);
+    // TWO cadences, because the driver does two jobs that do not change together.
+    //
+    // Which beams should exist changes only when a link connects, drops, or is
+    // re-tuned — a `LinkState`/template edit. Where each beam POINTS changes
+    // whenever either endpoint moves, which is every frame.
+    //
+    // Fused into one system these shared the slower job's cadence: a full rebuild
+    // of the GID→`Entity` map over every GID-bearing entity in the world, plus a
+    // per-node template gather with a `Look` clone each, every frame — to almost
+    // always conclude nothing had changed. Splitting lets each run at its own rate.
+    //
+    // `register_program_driver` takes `IntoScheduleConfigs`, so a driver may carry
+    // run conditions and register as a tuple; the id is the registry key, not a
+    // one-system limit.
+    app.register_program_driver(
+        DRIVER_ID,
+        (
+            reconcile_link_beams.run_if(link_topology_changed),
+            aim_link_beams,
+        ),
+    );
+}
+
+/// Does the SET of beams possibly need to change this frame?
+///
+/// Deliberately structural only — this must not consult motion. A rover driving
+/// changes where a beam points, not whether it exists, and gating aiming on this
+/// would freeze beams mid-air.
+///
+/// `Local` forces one initial pass: a freshly-added system does not observe
+/// pre-existing entities as `Changed`.
+fn link_topology_changed(
+    mut first: Local<bool>,
+    q_state: Query<(), Changed<LinkState>>,
+    q_templates: Query<(), Or<(Changed<ProgramDriverId>, Changed<ScriptParams>)>>,
+    mut rm_state: RemovedComponents<LinkState>,
+) -> bool {
+    // Drain unconditionally — `fold`, not `any`, which would short-circuit and
+    // leave the buffer to accumulate.
+    let removed = rm_state.read().fold(false, |acc, _| acc | true);
+    let run = !*first || removed || !q_state.is_empty() || !q_templates.is_empty();
+    *first = true;
+    run
+}
+
+/// Re-point every existing beam. Runs every frame — endpoints move constantly.
+///
+/// O(beams), and touches nothing else: the peer `Entity` and the tuning were
+/// resolved by the reconciler and cached on [`LinkBeamInstance`].
+fn aim_link_beams(
+    mut q_beams: Query<(&ChildOf, &LinkBeamInstance, &mut Transform)>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<LinkBeamInstance>>,
+) {
+    for (co, inst, mut tf) in &mut q_beams {
+        // A cached peer can outlive its entity between reconciles. Skip rather
+        // than guess — the next reconcile either refreshes it or despawns us.
+        let (Some((npos, nrot)), Some((ppos, _))) = (
+            world_pose(co.parent(), &q_parents, &q_grids, &q_spatial),
+            world_pose(inst.peer_entity, &q_parents, &q_grids, &q_spatial),
+        ) else {
+            continue;
+        };
+        let world_dir = ppos - npos;
+        let dist = world_dir.length();
+        if dist < 1.0 {
+            continue;
+        }
+        let dir_local = (nrot.inverse() * (world_dir / dist)).as_vec3();
+        let len = if dist <= inst.near_m {
+            dist as f32
+        } else {
+            inst.stub
+        };
+        *tf = beam_transform(dir_local, len, inst.width);
+    }
 }
 
 /// A unit +Y cylinder (Bevy `Cylinder` is centred on the origin) → a beam from the node
@@ -91,7 +183,7 @@ fn node_of(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn drive_link_beams(
+fn reconcile_link_beams(
     mut commands: Commands,
     // Each template IS a `ProgramDriverId` prim (an authored `Cylinder`): mesh + bound
     // material + params. There are two per node — `Up` and `Down`.
@@ -206,7 +298,20 @@ fn drive_link_beams(
 
             match existing.get(&peer_gid) {
                 Some(&(beam, was_up)) => {
-                    commands.entity(beam).try_insert(tf);
+                    // Refresh the cached peer + tuning on EVERY reconcile, not just on a
+                    // flip: that cache is what `aim_link_beams` trusts, and a peer that
+                    // was despawned and respawned keeps its GID but not its `Entity`.
+                    commands.entity(beam).try_insert((
+                        tf,
+                        LinkBeamInstance {
+                            peer: peer_gid,
+                            up: is_up,
+                            peer_entity: pe,
+                            near_m: nb.near_m,
+                            stub: nb.stub,
+                            width: nb.width,
+                        },
+                    ));
                     if was_up != is_up {
                         // State flipped — swap to the other authored material.
                         commands.entity(beam).try_insert((
@@ -215,6 +320,10 @@ fn drive_link_beams(
                             LinkBeamInstance {
                                 peer: peer_gid,
                                 up: is_up,
+                                peer_entity: pe,
+                                near_m: nb.near_m,
+                                stub: nb.stub,
+                                width: nb.width,
                             },
                         ));
                     }
@@ -240,6 +349,10 @@ fn drive_link_beams(
                         LinkBeamInstance {
                             peer: peer_gid,
                             up: is_up,
+                            peer_entity: pe,
+                            near_m: nb.near_m,
+                            stub: nb.stub,
+                            width: nb.width,
                         },
                         lunco_core::NoSelectionBounds,
                         // A beam is owned and churned by THIS reconciler — spawned when a
