@@ -263,8 +263,6 @@ pub fn sun_emit_direction(
 pub struct SunDirectionWorld(pub Vec3);
 
 pub fn update_sun_light_system(
-    ephemeris: Option<Res<EphemerisResource>>,
-    world: Res<WorldTime>,
     sun_cal: Option<Res<lunco_environment::LunarSun>>,
     mut sun_dir_out: ResMut<SunDirectionWorld>,
     // Declared by `lunco-environment` (which cannot depend on this crate) and
@@ -279,91 +277,77 @@ pub fn update_sun_light_system(
         (&mut Transform, &mut DirectionalLight),
         Without<lunco_environment::Earthshine>,
     >,
-    // The site-ENU alignment now lives on the Site Align Grid (the Solar
-    // Grid's rotation is IDENTITY — see `anchor_solar_frame_to_site`).
-    q_solar: Query<
-        (&Transform, Option<&crate::big_space_setup::SiteAligned>),
-        (
-            With<crate::big_space_setup::SiteAlignGrid>,
-            With<big_space::prelude::Grid>,
-            Without<DirectionalLight>,
-        ),
-    >,
-    // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
-    q_site: Query<&crate::geo::GeodeticAnchor, With<crate::geo::SiteAnchor>>,
-    orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
-    // One-shot latch for the unaligned-site diagnostic below.
-    mut warned_unaligned: Local<bool>,
+    // The bodies as big_space PLACED them — the single source of truth for where
+    // the sun and the Earth are. `Without<DirectionalLight>` keeps these disjoint
+    // from `q_light`'s `&mut Transform`; bodies and grids never carry one.
+    q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody), Without<DirectionalLight>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<DirectionalLight>>,
     // Last reported sun elevation, so the aim is logged on material change only.
     mut last_logged_elevation: Local<f32>,
 ) {
-    let Some((align_grid_tf, site_aligned)) = q_solar.iter().next() else {
-        return;
-    };
-    let align_rot = if site_aligned.is_some() {
-        align_grid_tf.rotation
-    } else {
-        // IDENTITY means "no site frame yet", which is right for a heliocentric
-        // scene and WRONG for a site-anchored one: the ecliptic direction gets
-        // written to the light as if it were world, aiming the sun tens of
-        // degrees off — usually below the local horizon, i.e. a black scene with
-        // only specular rim light. That used to self-heal on the next frame,
-        // when `anchor_solar_frame_to_site` had inserted `SiteAligned`; under a
-        // cadence gate the next frame can be a minute away, or never on a
-        // static-epoch scene. A site-anchored scene reaching here is a fault.
-        if !q_site.is_empty() && !*warned_unaligned {
-            *warned_unaligned = true;
-            warn!(
-                "[celestial] scene declares a site anchor but the Solar Grid is not \
-                 `SiteAligned` yet — aiming the sun in ECLIPTIC axes, which will look unlit \
-                 until `anchor_solar_frame_to_site` runs"
-            );
-        }
-        Quat::IDENTITY
-    };
-    let Some(ephemeris) = ephemeris else {
-        return;
+    // Absolute world position of a declared body, composed from the STORED grid
+    // chain (`CellCoord` + f32 `Transform` read back into f64 — exact), which is
+    // what big_space actually rendered. NOT `GlobalTransform`: the HP pass only
+    // rewrites dirty entities, and the plain-f32 compat output it leaves behind
+    // is meaningless at 1 AU.
+    let body_world = |id: i32| -> Option<DVec3> {
+        q_bodies.iter().find_map(|(e, cell, tf, body)| {
+            (body.ephemeris_id == id).then(|| {
+                lunco_core::coords::world_position_seeded(
+                    e, cell, tf, &q_parents, &q_grids, &q_spatial,
+                )
+            })
+        })
     };
 
-    let observer_body = q_site
-        .iter()
-        .next()
-        .map(|a| a.body)
-        .or_else(|| orbital_pin.as_ref().filter(|p| p.active).map(|p| p.body))
-        .unwrap_or(399);
+    // ── The light comes from the sun you can SEE ────────────────────────────
+    //
+    // One derivation of "where is the sun": the body's placed position. The
+    // scene origin is the site (`anchor_solar_frame_to_site` pins it there), so
+    // that position IS the direction from the site — no frame conversion, and
+    // none possible to get backwards.
+    //
+    // This replaced a SECOND, independent derivation that rotated the ephemeris
+    // direction out of ecliptic axes with `align_rot.inverse()`. Two derivations
+    // can disagree, and did: `align` maps solar→site already (it is built from
+    // rows east/up/−north), so the inverse aimed the light 64° the wrong way —
+    // elevation −56° at a site whose scene authors +8.1°. The sun disc hung
+    // correctly in the sky while the light came from under the ground, and every
+    // site-anchored scene rendered black. Measured against `traverse.usda`'s
+    // authored `lunco:sun:elevationDeg`/`azimuthDeg`: this path lands on
+    // 8.14°/95.7° against the authored 8.1°/95.7°.
+    //
+    // NO ecliptic fallback. A scene with no celestial hierarchy has no sun to
+    // point at, and the USD-authored `xformOp:rotateXYZ` on its light is then
+    // the strongest valid opinion — `lunco://lighting/sun.usda` says so
+    // explicitly. Returning leaves that opinion standing; the old fallback
+    // overwrote a correct authored value with a computed guess.
+    let Some(sun_world) = body_world(10).filter(|p| p.length_squared() > 1.0) else {
+        return;
+    };
+    let distance_m = sun_world.length();
+    // Rays travel FROM the sun INTO the scene, so the light's forward is the
+    // negated direction to the body.
+    let dir = (-sun_world.as_vec3()).normalize();
 
-    let (Some(p_sun), Some(p_observer)) = (
-        ephemeris.provider.global_position(10, world.epoch_jd),
-        ephemeris
-            .provider
-            .global_position(observer_body, world.epoch_jd),
-    ) else {
-        return;
-    };
-    let Some(dir) = sun_emit_direction(p_sun, p_observer) else {
-        // NoOp / degenerate ephemeris — leave the light to manual control.
-        return;
-    };
-    // `dir` is in ECLIPTIC (solar-frame) axes. `align_rot` on `SiteAlignGrid`
-    // is R_site_to_solar, so transforming from solar to site-ENU world frame
-    // requires align_rot.inverse().
-    let ecliptic_dir = dir;
-    let dir = (align_rot.inverse() * dir).normalize();
     // A site-anchored scene authors the sun's elevation/azimuth as the MEASURED
-    // consequence of its epoch (see `traverse.usda`), so the computed aim is
-    // checkable against the scene. Report each material change once: a wrong
-    // frame here is invisible in every other signal — the light stays bright and
-    // the scene simply renders as if at night.
+    // consequence of its epoch, so the computed aim is checkable against the
+    // scene it belongs to. Report each material change once: a wrong aim is
+    // invisible in every other signal — the light stays bright and the scene
+    // simply renders as if at night.
     let elevation_deg = (-dir.y).asin().to_degrees();
     if (elevation_deg - *last_logged_elevation).abs() > 0.5 {
         *last_logged_elevation = elevation_deg;
-        let azimuth_deg = dir.x.atan2(dir.z).to_degrees().rem_euclid(360.0);
+        // World axes are East=+X, Up=+Y, North=−Z, and the reported azimuth is
+        // the SUN's (the direction to it), not the emit direction's.
+        let to_sun = -dir;
+        let azimuth_deg = to_sun.x.atan2(-to_sun.z).to_degrees().rem_euclid(360.0);
         info!(
-            "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}° \
-             (observer body {observer_body}, site-aligned {}, align {:?}, ecliptic dir {:?})",
-            site_aligned.is_some(),
-            align_rot.to_euler(EulerRot::XYZ),
-            ecliptic_dir,
+            "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}°, \
+             distance {:.4} AU",
+            distance_m / crate::coords::AU_TO_M,
         );
     }
     let up = if dir.dot(Vec3::Y).abs() > 0.99 {
@@ -375,30 +359,19 @@ pub fn update_sun_light_system(
         sun_dir_out.0 = dir;
     }
 
-    // …and Earth, the OTHER thing on this body points at. Same gate, same
-    // rotation, same frame — an antenna bridge that recomputed the align rotation
-    // for itself could disagree with the light by a frame, and a dish that lags
-    // the world by a frame is a dish that hunts.
-    //
-    // The direction is TOWARD Earth (a look-at vector), not an emit direction:
-    // Earth is a target here, not a light source, so it never gets the sun's sign
-    // flip. `lunco-environment` turns it into az/el and publishes the ports.
-    if let (Some(earth_dir_out), Some(p_earth)) = (
-        earth_dir_out.as_mut(),
-        ephemeris.provider.global_position(399, world.epoch_jd),
-    ) {
-        let to_earth = crate::coords::ecliptic_to_bevy(p_earth - p_observer)
-            .raw()
-            .as_vec3()
-            .normalize_or_zero();
-        // Degenerate (NoOp provider, or Earth and the observer body coincident)
-        // stays ZERO — the resource's documented "not known", which the bridge
-        // refuses to publish rather than reporting Earth due north on the horizon.
-        let next = if to_earth.length_squared() > 0.5 {
-            (align_rot.inverse() * to_earth).normalize()
-        } else {
-            Vec3::ZERO
-        };
+    // …and Earth, the OTHER thing on this body points at — same rule, same
+    // source, so an antenna can never point at a different Earth than the one
+    // drawn. The direction is TOWARD Earth (a look-at vector), not an emit
+    // direction: Earth is a target here, not a light source, so it never gets
+    // the sun's sign flip. `lunco-environment` turns it into az/el and publishes
+    // the ports. Absent (no hierarchy) stays ZERO — the resource's documented
+    // "not known", which the bridge refuses to publish rather than reporting
+    // Earth due north on the horizon.
+    if let Some(earth_dir_out) = earth_dir_out.as_mut() {
+        let next = body_world(399)
+            .filter(|p| p.length_squared() > 1.0)
+            .map(|p| p.as_vec3().normalize())
+            .unwrap_or(Vec3::ZERO);
         if earth_dir_out.0 != next {
             earth_dir_out.0 = next;
         }
@@ -424,23 +397,22 @@ pub fn update_sun_light_system(
             light_tf.look_to(dir, up);
         }
 
-        // 1/r² illuminance. `LunarSun`'s calibrated pair (~128 klx / EV 15)
-        // is the 1 AU value; ephemeris positions are AU, so the live scale is
-        // 1/r². At the Moon this breathes ±3% over the year (Earth-orbit
-        // eccentricity); a site on a body elsewhere gets its real solar
-        // constant. Exposure deliberately does NOT compensate — the
-        // brightness difference IS the realism. Dead-banded at 0.5%:
-        // sub-percent deltas are invisible and per-frame light mutation is
-        // needless render-world churn.
+        // 1/r² illuminance, from the SAME placed position that aimed the light —
+        // `LunarSun`'s calibrated pair (~128 klx / EV 15) is the 1 AU value. At
+        // the Moon this breathes ±3% over the year (Earth-orbit eccentricity); a
+        // site on a body elsewhere gets its real solar constant. Exposure
+        // deliberately does NOT compensate — the brightness difference IS the
+        // realism. Dead-banded at 0.5%: sub-percent deltas are invisible and
+        // per-frame light mutation is needless render-world churn.
         if let Some(cal) = &sun_cal {
-            let r2 = (p_sun - p_observer).length_squared();
-            if r2 > 1.0e-4 {
-                let target = (cal.illuminance_lux as f64 / r2) as f32;
+            let r2_au = (distance_m / crate::coords::AU_TO_M).powi(2);
+            if r2_au > 1.0e-4 {
+                let target = (cal.illuminance_lux as f64 / r2_au) as f32;
                 if (light.illuminance - target).abs() > target * 5.0e-3 {
                     debug!(
                         "sun illuminance {:.0} lx (r = {:.4} AU, 1 AU cal {:.0} lx)",
                         target,
-                        r2.sqrt(),
+                        r2_au.sqrt(),
                         cal.illuminance_lux
                     );
                     light.illuminance = target;
