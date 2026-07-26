@@ -17,7 +17,6 @@ pub mod horizon_shade;
 pub mod link_beams;
 pub mod look_cache;
 mod scene_camera;
-mod scene_ports;
 mod sensor_beams;
 mod shader_look;
 pub mod shader_material;
@@ -111,7 +110,6 @@ impl Plugin for LuncoRenderPlugin {
         // Lights and transforms become connection targets, so a value the
         // simulation publishes reaches them through the ordinary port graph rather
         // than through a script that samples a port every tick.
-        scene_ports::build(app);
         // `shader_look::build` first: it registers the `ShaderMaterial` + `Shader`
         // asset stores (idempotently), which `ShaderMaterialPlugin` needs in place
         // before it loads the shared WGSL modules through the `AssetServer`.
