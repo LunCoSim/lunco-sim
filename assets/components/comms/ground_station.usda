@@ -5,62 +5,165 @@
     metersPerUnit = 1
 )
 
-# Deep-space ground station (doc 43) — big dish on a pedestal, pinned to a
-# geodetic point on a body via `lunco:anchor:*` (override per instance):
+# Deep-space ground station (doc 43) — alidade pedestal + the catalogue dish,
+# pinned to a geodetic point on a body via `lunco:anchor:*`.
 #
-#   over "Station" { double lunco:anchor:lat = 40.4314   # DSN Madrid
-#                    double lunco:anchor:lon = -4.2481
-#                    double lunco:anchor:height = 837
-#                    int    lunco:anchor:body = 399 }
+# This is the GENERIC host. It is not a place: it has no name, no coordinates and
+# no aperture size worth quoting. Real facilities live one level up as thin
+# instances that reference this prim and override exactly those things —
+# `structures/ground_stations/*.usda`. Author a scene against THOSE, not this:
 #
-# The comms layer places it on the (rotating) body from the ephemeris — its
-# scene transform is ignored. Elevation mask defaults to a realistic 5°.
+#     def "BearLakes" ( prepend references = @lunco://structures/ground_stations/bear_lakes.usda@ ) {}
+#
+# ── One dish, one spelling ────────────────────────────────────────────────────
+#
+# The reflector is `components/comms/antenna.usda` — the same lathed paraboloid
+# the lander, the comms mast and the rovers draw. It used to be a FLATTENED
+# SPHERE authored inline here, which is precisely the duplication `antenna.usda`
+# was extracted to end (its own header already claimed "the lander, the base
+# mast, the rovers and the Earth stations all reference this prim now"; this file
+# is what makes that true).
+#
+# SIZE is the one knob: `DishHead`'s uniform scale. Aperture = 1.16 · s metres,
+# so a 70 m dish is s = 60.34 and a 64 m dish is s = 55.17. Scaling the head
+# keeps the feed horn at the focus; scaling the reflector alone does not.
+#
+# ── The dish does NOT slew, on purpose ────────────────────────────────────────
+#
+# `antenna.usda` is an articulated mechanism: two rigid links, an elevation
+# hinge, and a Modelica `EarthTracker` that converts a direction into joint
+# angles. All three are DEACTIVATED here.
+#
+#   - The tracker points at EARTH. These dishes are ON Earth and would need to
+#     point at the Moon — the same controller with a different target, which is
+#     real work and not free.
+#   - A station is scenery for a link the kernel computes from GEOMETRY. The
+#     verdict does not read the dish's pose, so a slewing reflector changes
+#     nothing a student or a script can observe from 384,000 km away.
+#   - Six stations × (2 rigid bodies + 1 Modelica solver) is a real per-frame
+#     cost for a prop nobody can see move.
+#
+# `active = false` removes a prim from the composed stage entirely (the
+# projection walks active/defined/non-abstract prims only), so the joint and the
+# controller cost nothing rather than running and being ignored. The two link
+# bodies additionally carry `physics:rigidBodyEnabled = false`: without their
+# joints they would otherwise be FREE dynamic bodies, and a dish in free fall is
+# a worse bug than a dish that does not track.
+#
+# To make a station track after all: drop the two `active = false` overrides, add
+# a `PhysicsRevoluteJoint` from `Pedestal` to `Antenna/YawHead` on the Y axis
+# (copy `structures/comms_mast.usda`), and give the tracker a lunar target.
 def Xform "GroundStation" (
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoLinkAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
+    doc = "Deep-space ground station — alidade pedestal and a 70 m-class dish, anchored to a geodetic point on a body. Reference a named station from structures/ground_stations/ rather than this generic host."
 )
 {
     uniform bool lunco:spawnable = true
-    # Connectivity endpoint on Earth. Anchored (lunco:anchor:*) so the pose
-    # system tracks it automatically. `class = "earth"` marks it a route root; a
-    # 5° elevation mask is realistic for a DSN dish.
-    bool lunco:linkNode = true
-    string lunco:link:class = "earth"
-    double lunco:link:minElevationDeg = 5
+
+    # Geodetic pin. The comms layer places the station on the (rotating) body
+    # from the ephemeris — this prim's scene transform is IGNORED, so a station
+    # is positioned by these four numbers and nothing else. Body 399 is Earth.
+    # Every value here is a placeholder: the named instances override all four.
     double lunco:anchor:lat = 0
     double lunco:anchor:lon = 0
     double lunco:anchor:height = 0
     int lunco:anchor:body = 399
 
+    # ── Screen label ──────────────────────────────────────────────────────────
+    #
+    # `{label}` resolves to `lunco:label` (authored per station) and falls back to
+    # the prim's leaf name, so a station that forgets its label still reads as
+    # something rather than blank.
+    #
+    # `fadeEnd` is the interesting number. A 70 m dish on a true-scale Earth
+    # (6371 km radius) is ~1/91,000 of the body — sub-pixel from any camera that
+    # can see the whole globe, so the LABEL is the only thing that marks the site
+    # at that range. 50,000 km covers every sane globe-view camera distance
+    # (Earth auto-focus sits near 3× radius ≈ 19,000 km) while staying well under
+    # the 384,400 km lunar distance, so six Earth stations do NOT stack their
+    # labels onto the Earth disc in the lunar sky, where they would be unreadable
+    # clutter rather than information. Raise it per instance if a scene wants
+    # exactly that.
+    custom bool lunco:billboard = true
+    custom string lunco:billboard:text = "{label}\n{lat:.4}, {lon:.4}"
+    custom float lunco:billboard:offsetY = 45.0
+    custom float lunco:billboard:fadeEnd = 50000000.0
+
+    # The alidade — the rotating structure a big dish actually stands on. Sized
+    # for the 70 m class (~26 m to the elevation axis; DSS-14's is ~24 m). A 64 m
+    # station reuses it: the 9% it is out by is invisible next to a 35 m rim.
+    # No collider, deliberately: nothing in a lunar scene can touch a structure on
+    # Earth, and the original station had none. `comms_mast` gives its tower one
+    # because a revolute joint attaches to it; this dish does not slew, so there
+    # is no joint and a collider would be pure cost.
     def Cylinder "Pedestal"
     {
         uniform token axis = "Y"
-        double radius = 3.0
-        double height = 8.0
-        double3 xformOp:translate = (0, 4.0, 0)
+        double radius = 9.0
+        double height = 26.0
+        double3 xformOp:translate = (0, 13.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.8, 0.8, 0.82)]
+        color3f[] primvars:displayColor = [(0.80, 0.80, 0.82)]
     }
 
-    # Dish — flattened sphere paraboloid, tipped toward the sky.
-    def Sphere "Dish"
+    def "Antenna" (
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    )
     {
-        double radius = 17.0
-        double3 xformOp:translate = (0, 12.0, 0)
-        double3 xformOp:rotateXYZ = (45, 0, 0)
-        double3 xformOp:scale = (1.0, 0.3, 1.0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.92, 0.92, 0.95)]
-    }
+        double3 xformOp:translate = (0, 26.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
 
-    def Cylinder "Feed"
-    {
-        uniform token axis = "Y"
-        double radius = 0.5
-        double height = 9.0
-        double3 xformOp:translate = (0, 15.0, 3.5)
-        double3 xformOp:rotateXYZ = (45, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.6, 0.6, 0.65)]
+        # The pedestal below IS the mast. The component's own 0.8 m stalk would
+        # otherwise draw a second, tiny one buried inside it.
+        over "Mast"
+        {
+            token visibility = "invisible"
+        }
+
+        over "YawHead"
+        {
+            # Static structure, not a link in an articulation: see the header.
+            bool physics:rigidBodyEnabled = false
+
+            over "DishGimbal"
+            {
+                bool physics:rigidBodyEnabled = false
+
+                over "DishHead"
+                {
+                    # 70 m aperture (1.16 · 60.34). Named stations override this
+                    # single line; nothing else about a station's size is
+                    # authored anywhere.
+                    double3 xformOp:scale = (60.34, 60.34, 60.34)
+
+                    over "LinkAperture"
+                    {
+                        # The connectivity endpoint is the FEED, not this root —
+                        # the same rule the comms mast follows, so link geometry,
+                        # RF state and the drawn beam share one origin.
+                        # `class = "earth"` marks it a route root; a 5° elevation
+                        # mask is realistic for a big dish with terrain and
+                        # atmosphere at the horizon.
+                        string lunco:link:class = "earth"
+                        double lunco:link:minElevationDeg = 5
+                    }
+                }
+            }
+        }
+
+        # Pointing is off — the mechanism is scenery. See the header for why, and
+        # for what to change to turn it back on.
+        over "EarthTrackerController" (
+            active = false
+        )
+        {
+        }
+
+        over "ElevationJoint" (
+            active = false
+        )
+        {
+        }
     }
 }

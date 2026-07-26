@@ -1,0 +1,39 @@
+#usda 1.0
+(
+    defaultPrim = "DSSGoldstone"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# DSS-14 "Mars" — Goldstone Deep Space Communications Complex, Mojave Desert,
+# California. 70 m aperture; the DSN's original big dish.
+#
+# See `structures/ground_stations/README.md`.
+def Xform "DSSGoldstone" (
+    prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    kind = "component"
+    doc = "DSN Goldstone (DSS-14 'Mars'), Mojave — 70 m deep-space dish."
+)
+{
+    custom string lunco:label = "DSN Goldstone · DSS-14"
+
+    double lunco:anchor:lat = 35.4267
+    double lunco:anchor:lon = -116.89
+    double lunco:anchor:height = 1001
+    int lunco:anchor:body = 399
+
+    # 70 m aperture = 1.16 · 60.34.
+    over "Antenna"
+    {
+        over "YawHead"
+        {
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (60.34, 60.34, 60.34)
+                }
+            }
+        }
+    }
+}

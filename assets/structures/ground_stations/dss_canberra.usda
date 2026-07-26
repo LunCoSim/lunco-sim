@@ -1,0 +1,40 @@
+#usda 1.0
+(
+    defaultPrim = "DSSCanberra"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# DSS-43 — Canberra Deep Space Communication Complex, Tidbinbilla, Australia.
+# 70 m aperture; the DSN's southern-hemisphere longitude, and for deep-southern
+# declinations often the only one that can see a target at all.
+#
+# See `structures/ground_stations/README.md`.
+def Xform "DSSCanberra" (
+    prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    kind = "component"
+    doc = "DSN Canberra (DSS-43), Tidbinbilla — 70 m deep-space dish."
+)
+{
+    custom string lunco:label = "DSN Canberra · DSS-43"
+
+    double lunco:anchor:lat = -35.4014
+    double lunco:anchor:lon = 148.9817
+    double lunco:anchor:height = 688
+    int lunco:anchor:body = 399
+
+    # 70 m aperture = 1.16 · 60.34.
+    over "Antenna"
+    {
+        over "YawHead"
+        {
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (60.34, 60.34, 60.34)
+                }
+            }
+        }
+    }
+}

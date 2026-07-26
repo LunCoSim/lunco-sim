@@ -1,0 +1,44 @@
+#usda 1.0
+(
+    defaultPrim = "BearLakes"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Bear Lakes (Медвежьи Озёра), Moscow oblast — TNA-1500, a 64 m dish operated by
+# OKB MEI. The WESTERN half of the Russian deep-space pair: together with
+# Ussuriysk in the Far East it gives near-continuous lunar coverage across
+# Russian longitudes, which is the same two-longitude trick the DSN plays with
+# three.
+#
+# Flown on Luna-25 (2023), the most recent Russian lunar mission.
+#
+# See `structures/ground_stations/README.md` — the height here is approximate.
+def Xform "BearLakes" (
+    prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    kind = "component"
+    doc = "Bear Lakes (Медвежьи Озёра), Moscow oblast — TNA-1500, 64 m. Western half of the Russian deep-space pair."
+)
+{
+    custom string lunco:label = "Bear Lakes · RT-64"
+
+    double lunco:anchor:lat = 55.87
+    double lunco:anchor:lon = 38.23
+    double lunco:anchor:height = 150
+    int lunco:anchor:body = 399
+
+    # 64 m aperture = 1.16 · 55.17.
+    over "Antenna"
+    {
+        over "YawHead"
+        {
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (55.17, 55.17, 55.17)
+                }
+            }
+        }
+    }
+}

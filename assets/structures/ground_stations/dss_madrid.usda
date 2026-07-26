@@ -1,0 +1,40 @@
+#usda 1.0
+(
+    defaultPrim = "DSSMadrid"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# DSS-63 — Madrid Deep Space Communications Complex, Robledo de Chavela, Spain.
+# 70 m aperture; one of NASA's three DSN longitudes.
+#
+# See `structures/ground_stations/README.md` for what a station file is allowed
+# to contain and where the numbers come from.
+def Xform "DSSMadrid" (
+    prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    kind = "component"
+    doc = "DSN Madrid (DSS-63), Robledo de Chavela — 70 m deep-space dish."
+)
+{
+    custom string lunco:label = "DSN Madrid · DSS-63"
+
+    double lunco:anchor:lat = 40.4314
+    double lunco:anchor:lon = -4.2481
+    double lunco:anchor:height = 837
+    int lunco:anchor:body = 399
+
+    # 70 m aperture = 1.16 · 60.34.
+    over "Antenna"
+    {
+        over "YawHead"
+        {
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (60.34, 60.34, 60.34)
+                }
+            }
+        }
+    }
+}
