@@ -14,13 +14,22 @@ use lunco_time::WorldTime;
 pub fn ephemeris_update_system(
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
-    mut q_entities: Query<(
-        Entity,
-        &mut CellCoord,
-        &mut Transform,
-        Option<&CelestialBody>,
-        Option<&CelestialReferenceFrame>,
-    )>,
+    // The `Option`s pick the branch; the FILTER is what keeps this off every
+    // other entity in the world. Without it the query matched anything with
+    // `CellCoord + Transform` — every rover wheel, every terrain tile, ~2373
+    // entities on `sandbox_scene.usda` — and `continue`d on all but a handful of
+    // bodies, for 3-5 ms a frame. An `Option<&T>` is a projection, never a
+    // predicate: if a system only wants `T`-ish entities, say so in the filter.
+    mut q_entities: Query<
+        (
+            Entity,
+            &mut CellCoord,
+            &mut Transform,
+            Option<&CelestialBody>,
+            Option<&CelestialReferenceFrame>,
+        ),
+        Or<(With<CelestialBody>, With<CelestialReferenceFrame>)>,
+    >,
     _q_all_parents: Query<&ChildOf>,
     _q_frames: Query<&CelestialReferenceFrame>,
     q_grids: Query<&Grid>,

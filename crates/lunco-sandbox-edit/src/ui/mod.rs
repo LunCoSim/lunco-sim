@@ -46,6 +46,51 @@ pub mod usd_variants;
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ViewModelSet;
 
+/// Register a view-model producer, **gate required**.
+///
+/// `ViewModelSet` used to be a label plus the doc line above ("gate each with its
+/// own `run_if`"), which is advice a registration can silently ignore — and two
+/// did, for 12 ms a frame. Here the gate is an argument: you cannot register a
+/// producer without stating when it runs.
+///
+/// A producer that genuinely must run every frame passes [`every_frame`], which
+/// puts the claim at the call site where review can see it, next to the reason.
+///
+/// See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
+pub trait ViewModelAppExt {
+    /// Add `producer` to [`ViewModelSet`] in `Update`, gated on `gate`.
+    fn add_view_model<M, C, CM>(
+        &mut self,
+        producer: impl IntoScheduleConfigs<ScheduleSystem, M>,
+        gate: C,
+    ) -> &mut Self
+    where
+        C: SystemCondition<CM> + Send + 'static;
+}
+
+impl ViewModelAppExt for App {
+    fn add_view_model<M, C, CM>(
+        &mut self,
+        producer: impl IntoScheduleConfigs<ScheduleSystem, M>,
+        gate: C,
+    ) -> &mut Self
+    where
+        C: SystemCondition<CM> + Send + 'static,
+    {
+        self.add_systems(Update, producer.in_set(ViewModelSet).run_if(gate))
+    }
+}
+
+/// The explicit "this one really does run every frame" gate for
+/// [`ViewModelAppExt::add_view_model`].
+///
+/// Deliberately not a default: an ungated producer is a decision, and a decision
+/// belongs in the diff. Reserve it for O(1) live readouts (the shape
+/// `populate_command_deck_view` documents), never for anything that scans.
+pub fn every_frame() -> impl SystemCondition<()> {
+    || true
+}
+
 /// Publish the data-driven input convention plus the current controlled endpoint's
 /// binding into the existing View Help popup. This is presentation only: it
 /// reads the public input-port surface and never changes control state.

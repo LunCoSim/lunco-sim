@@ -701,6 +701,13 @@ impl Plugin for LunCoCorePlugin {
         subsystems::build_subsystems(app);
         app.add_systems(FixedUpdate, advance_sim_tick)
             .add_systems(PostUpdate, assign_global_entity_ids);
+        // Names the spawners still on the Ph1 fallback. After the minting pass,
+        // so it sees the markers that pass just left. Debug builds only.
+        #[cfg(debug_assertions)]
+        app.add_systems(
+            PostUpdate,
+            report_untagged_identity.after(assign_global_entity_ids),
+        );
         // Host: keep the per-gid input-ack watermarks keyed to their CURRENT owner.
         // A re-possessed vessel must not keep acking the previous owner's `seq`
         // stream — see `AppliedInputSeq`. Change-detected on the registry, so it
@@ -815,6 +822,57 @@ fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>
 /// lands the machinery with zero day-one breakage; spawners get migrated to
 /// attach `Provenance` over time, after which the fallback arm can flip to a
 /// hard skip.
+/// Debug-only breadcrumb left by the `None` arm of [`assign_global_entity_ids`]
+/// on an entity that took the Ph1 auto-allocate fallback.
+///
+/// Exists to make the fallback's users **enumerable**. It is not a feature and
+/// it goes away with the fallback.
+#[cfg(debug_assertions)]
+#[derive(Component)]
+pub struct UntaggedIdentity;
+
+/// Name every spawner still relying on the Ph1 `Provenance` fallback, one line
+/// per distinct component signature.
+///
+/// A `warn!`-once that says only *that* something is untagged is unactionable —
+/// it named no entity, so nobody could migrate anything, so the fallback stayed.
+/// This prints the component set, which identifies the spawner, and then clears
+/// the marker so a signature is reported once rather than every frame.
+///
+/// Debug builds only, and deleted together with the fallback arm once the
+/// migration is complete.
+#[cfg(debug_assertions)]
+fn report_untagged_identity(
+    world: &mut World,
+    mut seen: Local<std::collections::HashSet<String>>,
+) {
+    let mut q = world.query_filtered::<Entity, With<UntaggedIdentity>>();
+    let entities: Vec<Entity> = q.iter(world).collect();
+    if entities.is_empty() {
+        return;
+    }
+    for e in entities {
+        let Ok(info) = world.inspect_entity(e) else {
+            continue;
+        };
+        let mut names: Vec<&str> = info
+            .map(|c| {
+                let n = c.name();
+                // `foo::bar::Baz<Qux>` → `Baz<Qux>`: the leaf is what identifies
+                // the spawner; the paths make the line unreadable.
+                n.rsplit("::").next().unwrap_or(n)
+            })
+            .filter(|n| *n != "UntaggedIdentity" && *n != "GlobalEntityId")
+            .collect();
+        names.sort_unstable();
+        let signature = names.join(", ");
+        if seen.insert(signature.clone()) {
+            warn!("[identity] untagged spawn — no `Provenance` on: [{signature}]");
+        }
+        world.entity_mut(e).remove::<UntaggedIdentity>();
+    }
+}
+
 fn assign_global_entity_ids(
     mut commands: Commands,
     q_new: Query<
@@ -873,6 +931,14 @@ fn assign_global_entity_ids(
                     );
                     *warned = true;
                 }
+                // The warn above says "somebody" without saying WHO, which is why
+                // this fallback survived long enough to cost a per-frame wiring
+                // rebuild (see docs/reviews/2026-07-26-fps-regression-analysis.md).
+                // Tag the entity so `report_untagged_identity` can name it by its
+                // component set — the migration needs the list, and the list is
+                // only knowable at runtime.
+                #[cfg(debug_assertions)]
+                commands.entity(entity).try_insert(UntaggedIdentity);
                 commands
                     .entity(entity)
                     .try_insert(GlobalEntityId::allocate_authoritative());
