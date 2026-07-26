@@ -242,6 +242,17 @@ fn drive_link_beams(
                             up: is_up,
                         },
                         lunco_core::NoSelectionBounds,
+                        // A beam is owned and churned by THIS reconciler — spawned when a
+                        // peer appears, despawned when it drops. It is runtime detail, not
+                        // scene content, which is precisely what `SystemManaged` marks.
+                        //
+                        // Without it a beam is indistinguishable from an authored entity,
+                        // so every spawn trips `Added<Mesh3d>` in `scene_topology_changed`
+                        // and rebuilds the whole entity tree — a `String` per named entity
+                        // — to produce an identical list, since the beam has no `Name` and
+                        // never appears in it. `NoSelectionBounds` alone does not say this:
+                        // that marker is about picking, this one is about ownership.
+                        lunco_core::SystemManaged,
                         ChildOf(node),
                     ));
                 }
