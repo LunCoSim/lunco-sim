@@ -256,7 +256,8 @@ impl ApiQueryProvider for SolarPoseProvider {
 /// { nodes:  [{ id, name, class }],           # id = GID
 ///   adj:    { "<gid>": [gid,…] },            # UP links only; keys stringified (JSON)
 ///   edges:  [{ a, b, range_m, light_time_s }],   # deduped, undirected; a/b = GIDs
-///   groups: { class: [gid,…] } }             # authored roles → their members
+///   groups: { class: [gid,…] },              # authored roles → their members
+///   owners: { "<gid>": [gid,…] } }           # containers → the nodes inside them
 /// ```
 /// `light_time_s` is the one-way propagation delay (1.28 s Earth↔Moon).
 ///
@@ -266,6 +267,16 @@ impl ApiQueryProvider for SolarPoseProvider {
 /// group, while "what is Madrid's range?" is a question about the node. Keying the
 /// graph on the shared class collapsed the three into one and made only the last
 /// one answerable. See [`LinkPeer::peer`](crate::link::LinkPeer::peer).
+///
+/// `owners` is the same idea for CONTAINMENT. A link node sits where the link
+/// geometry physically is — on the dish's feed phase centre, so the beam, the RF
+/// state and the range verdict share one transform — which is several levels below
+/// the prim a scene author names. `find("/Rover/Comms")` returns the antenna
+/// assembly's GID; the node's own GID belongs to
+/// `Comms/YawHead/DishGimbal/DishHead/LinkAperture`. Publishing each node's
+/// ancestor chain lets a GID denote the node it contains, so addressing follows the
+/// hierarchy the scene actually authors instead of the mechanism's internals. An
+/// ancestor holding two antennas denotes both, exactly as a class denotes a group.
 pub struct LinksProvider;
 
 impl ApiQueryProvider for LinksProvider {
@@ -280,6 +291,10 @@ impl ApiQueryProvider for LinksProvider {
         // class → the GIDs that carry it, so a role stays routable now that
         // identity is per-node (see the type doc).
         let mut groups: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+        // ancestor GID → the nodes beneath it (see the type doc). Filled after the
+        // sweep, from the entities collected below.
+        let mut owners: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+        let mut node_entities: Vec<(Entity, u64)> = Vec::new();
         let mut q = world.query::<(
             Entity,
             Option<&Name>,
@@ -289,6 +304,7 @@ impl ApiQueryProvider for LinksProvider {
         )>();
         for (e, name, node, state, gid) in q.iter(world) {
             let id = gid.get();
+            node_entities.push((e, id));
             let label = node_label(node.class.as_deref(), name, e);
             if let Some(class) = node.class.as_deref().filter(|c| !c.is_empty()) {
                 groups.entry(class.to_string()).or_default().push(id);
@@ -315,8 +331,23 @@ impl ApiQueryProvider for LinksProvider {
                 "class": node.class.clone().unwrap_or_default(),
             }));
         }
+        // Containment, walked once per node from the node up to the scene root.
+        // Only ancestors that carry a GID are recorded: a GID is what `find()`
+        // returns, so an ancestor without one is not addressable and has nothing to
+        // resolve from.
+        for (entity, id) in node_entities {
+            let mut cur = entity;
+            while let Some(child_of) = world.get::<ChildOf>(cur) {
+                let parent = child_of.parent();
+                if let Some(pgid) = world.get::<GlobalEntityId>(parent) {
+                    owners.entry(pgid.get().to_string()).or_default().push(id);
+                }
+                cur = parent;
+            }
+        }
         ApiResponse::ok(serde_json::json!({
-            "nodes": nodes, "adj": adj, "edges": edges, "groups": groups,
+            "nodes": nodes, "adj": adj, "edges": edges,
+            "groups": groups, "owners": owners,
         }))
     }
 }

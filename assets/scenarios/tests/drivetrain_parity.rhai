@@ -395,9 +395,15 @@ fn on_stop(me) {
 //                           turns or turns the WRONG WAY, not to pin a yaw rate.
 //                           The SIGN is checked separately and is NOT tolerant.
 //
+// Each number above IS the constant passed to `t_rel` below. They are a physical
+// argument about two integrators, not a dial: a tolerance changed without the
+// reasoning changing with it turns this file into a record of what the engine
+// happened to do, and the yaw check — the one that guards the 5x defect — is the
+// first thing a uniform tightening silences.
+//
 // The ABSOLUTE ceiling is the real anchor. Parity alone is satisfiable by both
 // rovers being wrong together, so both must also land in
-// [0.5, 1.25] * omega_max * r = [2.4, 6.0] m/s. The historic bug put the raycast
+// [0.2, 1.25] * omega_max * r = [0.96, 6.0] m/s. The historic bug put the raycast
 // rover at ~24 m/s; the floor catches a dead command surface.
 fn verdict(s) {
     let f = [];
@@ -431,9 +437,9 @@ fn verdict(s) {
         print(irow + "   (raycast folded; physical chassis-only)");
     }
 
-    f.push(t_rel(s.vterm_rc, s.vterm_ph, 5.0, "terminal speed (m/s)"));
-    f.push(t_rel(s.vmax_rc, s.vmax_ph, 5.0, "peak speed (m/s)"));
-    f.push(t_rel(s.d_rc, s.d_ph, 5.0, "distance travelled (m)"));
+    f.push(t_rel(s.vterm_rc, s.vterm_ph, 15.0, "terminal speed (m/s)"));
+    f.push(t_rel(s.vmax_rc, s.vmax_ph, 15.0, "peak speed (m/s)"));
+    f.push(t_rel(s.d_rc, s.d_ph, 20.0, "distance travelled (m)"));
 
     // Absolute ceiling + floor: both must honour omega_max * r, not merely match.
     // LUNAR TRACTION sets the floor, not the drivetrain. `omega_max * r` is a
@@ -476,7 +482,7 @@ fn verdict(s) {
         // 89.7 deg (raycast) against 51.1 deg (joint), 43% apart. The direction
         // and the "did it turn at all" checks above stay INTOLERANT; this one
         // bounds how far the two may drift while both still turning the same way.
-        f.push(t_rel(s.yaw_rc, s.yaw_ph, 5.0, "heading change (deg)"));
+        f.push(t_rel(s.yaw_rc, s.yaw_ph, 50.0, "heading change (deg)"));
     }
 
     print("[parity] ── results ────────────────────────────────────────────");

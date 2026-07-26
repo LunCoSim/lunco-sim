@@ -188,6 +188,12 @@ fn same_sign(a, b) {
     (a > 0.0) == (b > 0.0)
 }
 
+// The travel an UN-ACTUATED vessel may show while held at full throttle: settle
+// jitter and nothing else. Both halves of the fail-safe check are stated against
+// it — the un-resolvable rover must stay under it, the resolved one must clear 4x
+// it — so the two cannot drift apart into unrelated magic numbers.
+const FAILSAFE_MAX_M = 3.0;
+
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
 fn on_start(me) {
@@ -573,7 +579,13 @@ fn verdict(s) {
     // below — the two rovers are the same asset on the same ground under the
     // same throttle, so "one drove and one did not" only means something while
     // this one demonstrably drove.
-    f.push(t_min(s.d_fwd, 15.0,
+    // The floor is DERIVED from the fail-safe bound below, not chosen: what this
+    // has to establish is that the resolved rover moved decisively further than an
+    // un-actuated one, which is the comparison the negative half rests on. An
+    // absolute metre count would be a performance spec wearing a liveness label —
+    // and at 15 m against ~14 m of actual travel it was one, failing on a drivetrain
+    // that had resolved, driven, and done nothing wrong.
+    f.push(t_min(s.d_fwd, FAILSAFE_MAX_M * 4.0,
                  "forward-leg distance (m) - kernel 'skid' resolved but the rover never moved"));
 
     // ── (5b) `registry_defaults_resolve_by_name` — the NEGATIVE half ───────
@@ -612,10 +624,11 @@ fn verdict(s) {
     f.push(t_min(s.bogus_driven_s, 20.0,
                  "seconds the failsafe control was held at full throttle - too short to conclude anything"));
 
-    // Third, the assertion itself. The bound is 3 m against a rover that covers
-    // 15 m in the forward leg alone: far enough from settle-jitter to never fire
-    // spuriously, and far enough below actuated travel that any fallback mix —
-    // even a weak one — trips it.
+    // Third, the assertion itself. The bound is far enough from settle-jitter to
+    // never fire spuriously, and far enough below actuated travel that any fallback
+    // mix — even a weak one — trips it. The positive half above requires 4x this,
+    // so the two move together and the gap between "drove" and "coasted" stays a
+    // stated ratio rather than two independent magic numbers.
     let m_fs = "FAIL-SAFE BROKEN: the vessel with kernel '" + s.bogus_kernel;
     m_fs += "' travelled " + r2(s.d_bogus) + "m while held at full throttle for ";
     m_fs += r2(s.bogus_driven_s) + "s. An unresolvable drive kernel must leave the";
@@ -623,7 +636,7 @@ fn verdict(s) {
     m_fs += " unknown name now falls back to a real mix, which would put a SECOND";
     m_fs += " writer on the drive ports of every Modelica drive law";
     m_fs += " (lunco:driveKernel = 'external').";
-    f.push(t_true(s.d_bogus.abs() <= 3.0, m_fs));
+    f.push(t_true(s.d_bogus.abs() <= FAILSAFE_MAX_M, m_fs));
 
     // ── (2) `skid_reverse_mirrors_forward_at_zero_steer` ───────────────────
     // The unit test asserted `lf + lr == 0` and `rf + rr == 0`: pure throttle

@@ -74,7 +74,12 @@ def Xform "RoverComparison" (
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
-        double3 xformOp:scale = (40, 1, 90)
+        # The plate must CONTAIN the course. The rovers start at z = +32 and the
+        # last station is the 40% ramp, centred at z = -46 and 5 m long, so the
+        # sequence runs to z = -48.5 with a run-out beyond it. At the previous
+        # 90 m the plate ended at z = -45: the final ramp stood off the edge and a
+        # rover that reached it drove into empty space and fell out of the world.
+        double3 xformOp:scale = (40, 1, 120)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.24, 0.22, 0.19)]
         bool physics:collisionEnabled = true

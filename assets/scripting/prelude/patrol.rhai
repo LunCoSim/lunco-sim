@@ -64,8 +64,13 @@ fn patrol(vessel, points, speed, radius, dwell) {
 /// `(vessel, points)` — set patrol with default tuning.
 fn patrol(vessel, points) { patrol(vessel, points, (), (), ()); }
 
-/// Append a checkpoint to THIS scenario's per-vessel list (kept on `this` so a
-/// long mission can accumulate), then re-emit a patrol covering the full list.
+/// Append a checkpoint to THIS scenario's per-vessel list, then re-emit a patrol
+/// covering the full list.
+///
+/// CALL IT AS A METHOD ON THE SCENARIO STATE — `this.add_checkpoint(v, x, y, z)`.
+/// The list lives on `this` so a long mission can accumulate, and Rhai binds
+/// `this` for method-call syntax only: a plain `add_checkpoint(v, x, y, z)`
+/// raises "'this' not bound" and takes the calling tick down with it.
 ///
 /// Interactive (Ctrl+LMB) additions go through the Rust UI and don't call this —
 /// that path mutates the live spec and re-emits `SetAutopilotBehavior` directly.
@@ -84,6 +89,10 @@ fn add_checkpoint(vessel, x, y, z) {
 /// the same verb the Command Deck "Clear patrol" button and the
 /// delete-last-waypoint path use (§4.2 — one input shape, every surface). No
 /// hand-built `Brake` JSON.
+///
+/// CALL IT AS A METHOD ON THE SCENARIO STATE — `this.clear_patrol(vessel)`, for
+/// the same reason as `add_checkpoint` above: it touches the scenario's own
+/// checkpoint list, and Rhai binds `this` for method-call syntax only.
 fn clear_patrol(vessel) {
     if this.__checkpoints != () { this.__checkpoints.remove(vessel); }
     cmd("ClearPatrol", #{ vessel: vessel });
