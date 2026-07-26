@@ -381,6 +381,8 @@ impl TutorialAppExt for App {
     }
 }
 
+pub mod curriculum;
+
 /// Persisted tutorial progress, under the `"tutorial_progress"` key of `settings.json`.
 #[derive(Resource, Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
 pub struct TutorialProgress {

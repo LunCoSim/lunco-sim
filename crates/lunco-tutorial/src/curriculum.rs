@@ -1,0 +1,168 @@
+//! Reading a curriculum out of USD.
+//!
+//! A curriculum is a USD layer, not a bespoke manifest: a track is a prim
+//! applying `LunCoTutorialTrackAPI`, and each child applying `LunCoTutorialAPI`
+//! is a lesson whose script is `LunCoProgramAPI`'s `info:sourceAsset` and whose
+//! world is a `payload` arc. See `assets/tutorials/sandbox/curriculum.usda`.
+//!
+//! WHY THE STAGE AND NOT A PARSE. Composition is the feature being bought. An
+//! app offers tracks by sublayering them (`assets/tutorials/sandbox.usda`), so
+//! "which tracks does this app show" and "in what order" are answered by the
+//! layer stack rather than by `hosts`/`order` attributes that could disagree
+//! with it; a twin contributes by composing its own layer and withdraws by
+//! being removed. Re-parsing layers by hand would mean reimplementing that.
+//!
+//! PAYLOADS ARE NEVER LOADED HERE. The stage opens with
+//! [`InitialLoadSet::LoadNone`], so a lesson's world is READ as an arc — a
+//! declaration — and never composed into the curriculum stage. Loading it would
+//! pull whole terrain scenes into a catalogue read, and would make the
+//! curriculum stage become the world, which is the one thing it must not do.
+//! Mounting stays the existing `LoadScene` path.
+//!
+//! This module deliberately depends on `openusd` DIRECTLY and never on
+//! `lunco-usd-bevy`: that crate pulls `lunco-render`, and cargo unifies features
+//! across the graph, so depending on it would relink the GPU stack into the
+//! headless server. See docs/architecture/render-decoupling.md.
+
+use bevy::prelude::*;
+use openusd::{sdf, usd};
+
+/// One lesson, as composed.
+#[derive(Clone, Debug)]
+pub struct Lesson {
+    /// Prim path — the lesson's IDENTITY. Progress, `StartTutorial` and the
+    /// chain all key off it, so there is no separate id string to keep in step
+    /// with the prim it names.
+    pub path: String,
+    /// Track prim path this lesson belongs to (its parent).
+    pub track: String,
+    pub title: String,
+    pub blurb: String,
+    pub difficulty: String,
+    /// `info:sourceAsset` — the `.rhai`, as an asset path (`lunco://…`, `twin://…`).
+    pub script: String,
+    /// The `payload` arc's asset path, or `None` when the lesson DECLARES it has
+    /// no world (a UI tour). Absent is a statement here, not a missing value —
+    /// that distinction is the reason the curriculum moved into USD.
+    pub world: Option<String>,
+    pub first_start: bool,
+    /// `rel lunco:tutorial:next` — the successor's prim path.
+    pub next: Option<String>,
+}
+
+/// One track's presentation.
+#[derive(Clone, Debug)]
+pub struct Track {
+    pub path: String,
+    pub label: String,
+}
+
+/// Everything one curriculum layer contributes.
+#[derive(Clone, Debug, Default)]
+pub struct Curriculum {
+    pub tracks: Vec<Track>,
+    pub lessons: Vec<Lesson>,
+}
+
+/// A `string`/`token`/`asset` attribute as text.
+///
+/// One reader for all three because USD distinguishes them and this code must
+/// not: `sdf::Value::String`, `::Token` and `::AssetPath` are different variants
+/// carrying the same characters, and matching only the one an author happened to
+/// use is how an attribute silently reads back empty.
+fn text(prim: &usd::Prim, name: &str) -> Option<String> {
+    match prim.attribute(name).get::<sdf::Value>().ok().flatten()? {
+        sdf::Value::String(s) => Some(s),
+        sdf::Value::Token(t) => Some(t.to_string()),
+        sdf::Value::AssetPath(a) => Some(a.to_string()),
+        _ => None,
+    }
+}
+
+fn flag(prim: &usd::Prim, name: &str) -> bool {
+    matches!(
+        prim.attribute(name).get::<sdf::Value>().ok().flatten(),
+        Some(sdf::Value::Bool(true))
+    )
+}
+
+/// The world a lesson declares, or `None` when it declares none.
+///
+/// `payload_asset_paths` READS the arc; the stage was opened with payloads
+/// unloaded precisely so that asking stays a read. Strongest arc wins — a lesson
+/// declares one world.
+fn payload_asset(prim: &usd::Prim) -> Option<String> {
+    prim.payload_asset_paths().ok()?.into_iter().next()
+}
+
+/// Compose `layer` and read every track and lesson it contributes.
+///
+/// Errors are logged and skipped rather than propagated: a malformed curriculum
+/// must cost its own lessons, never every other track in the composition.
+pub fn read(layer: &str) -> Curriculum {
+    let stage = match usd::Stage::builder()
+        .initial_load_set(usd::InitialLoadSet::LoadNone)
+        .open(layer)
+    {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("[tutorial] curriculum layer '{layer}' did not open: {e}");
+            return Curriculum::default();
+        }
+    };
+    for err in stage.composition_errors() {
+        warn!("[tutorial] curriculum '{layer}': {err:?}");
+    }
+
+    let mut out = Curriculum::default();
+    let root = stage.prim(sdf::Path::abs_root());
+    let Ok(top) = root.children() else {
+        return out;
+    };
+    for track_prim in top {
+        if !track_prim
+            .has_api_schema("LunCoTutorialTrackAPI")
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let track_path = track_prim.path().to_string();
+        out.tracks.push(Track {
+            path: track_path.clone(),
+            label: text(&track_prim, "lunco:track:label").unwrap_or_default(),
+        });
+
+        let Ok(children) = track_prim.children() else {
+            continue;
+        };
+        for prim in children {
+            if !prim.has_api_schema("LunCoTutorialAPI").unwrap_or(false) {
+                continue;
+            }
+            let path = prim.path().to_string();
+            // The script is the one property a lesson cannot do without: with no
+            // program there is nothing to run, so the lesson is not registered
+            // rather than offered and then failing when a student picks it.
+            let Some(script) = text(&prim, "info:sourceAsset") else {
+                warn!("[tutorial] lesson '{path}' declares no info:sourceAsset — skipped");
+                continue;
+            };
+            out.lessons.push(Lesson {
+                world: payload_asset(&prim),
+                next: prim
+                    .relationship("lunco:tutorial:next")
+                    .targets()
+                    .ok()
+                    .and_then(|t| t.first().map(|p| p.to_string())),
+                title: text(&prim, "lunco:tutorial:title").unwrap_or_else(|| path.clone()),
+                blurb: text(&prim, "lunco:tutorial:blurb").unwrap_or_default(),
+                difficulty: text(&prim, "lunco:tutorial:difficulty").unwrap_or_default(),
+                first_start: flag(&prim, "lunco:tutorial:firstStart"),
+                track: track_path.clone(),
+                path,
+                script,
+            });
+        }
+    }
+    out
+}

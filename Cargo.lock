@@ -7720,6 +7720,7 @@ dependencies = [
  "lunco-settings",
  "lunco-workbench",
  "lunco-workspace",
+ "openusd",
  "serde",
  "serde_json",
 ]
@@ -9143,7 +9144,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 [[package]]
 name = "openusd"
 version = "0.5.0"
-source = "git+https://github.com/LunCoSim/openusd?branch=main#a198b40776620dd819baa12b2cda08b74492c649"
+source = "git+https://github.com/LunCoSim/openusd?branch=main#778e553488d7d732f9827642f543bb1a331a98d5"
 dependencies = [
  "anyhow",
  "bitflags 2.13.0",
