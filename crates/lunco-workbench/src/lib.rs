@@ -3025,7 +3025,7 @@ fn render_layout(
                                     .on_hover_text(path.display().to_string())
                                     .clicked()
                                 {
-                                    world.trigger(file_ops::OpenTwin {
+                                    world.trigger(lunco_workspace::open::OpenTwin {
                                         path: path.display().to_string(),
                                     });
                                     ui.close();

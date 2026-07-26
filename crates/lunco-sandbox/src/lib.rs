@@ -2309,13 +2309,20 @@ impl Plugin for SandboxCorePlugin {
         // twin (`[journal] persist = true`); without it the journal is
         // session-only and nothing touches disk.
         if self.headless {
-            // `setup_sandbox`'s twin-load path (and the journal persistence) needs
-            // `WorkspaceResource`, which the GUI gets from `lunco-workbench`'s
-            // `WorkspacePlugin` — a crate the headless server doesn't link. Bare
-            // `init_resource` + just the journal plugin (not the full
-            // `WorkspacePlugin`) keeps the headless surface minimal.
-            app.init_resource::<lunco_workspace::WorkspaceResource>();
-            app.add_plugins(lunco_workspace::journal_persistence::WorkspaceJournalPlugin);
+            // The workspace session — `setup_sandbox`'s twin-load path and the
+            // journal persistence both need it. The SAME plugin the GUI gets:
+            // `WorkspacePlugin` lives in `lunco-workspace`, which this binary
+            // already links, and it is headless by construction (bevy substrate
+            // only, no render/winit/egui).
+            //
+            // This used to be a bare `init_resource` + the journal plugin, on
+            // the belief that the full plugin was a workbench thing. It was not,
+            // and the difference was `OpenTwin`: a server could run a twin's
+            // scenarios but had no way to MOUNT the twin they belong to, so the
+            // only way in was to open it in a GUI first and let the session
+            // restore. Half a plugin is not a smaller surface, it is a subset
+            // nobody declared.
+            app.add_plugins(lunco_workspace::WorkspacePlugin);
         }
 
         // Multiplayer. Native: `--host [port]` / `--connect <addr>`; browser:

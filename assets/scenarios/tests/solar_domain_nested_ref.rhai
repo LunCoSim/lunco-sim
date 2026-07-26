@@ -98,6 +98,11 @@ fn on_tick(me) {
 
     this.done = true;
 
+    print("[solar-nested] direct  solar_power=" + get(this.d_elec, "solar_power") +
+          " soc=" + get(this.d_elec, "soc"));
+    print("[solar-nested] nested  solar_power=" + get(this.n_elec, "solar_power") +
+          " soc=" + get(this.n_elec, "soc"));
+
     let d_word = if d_live { "yes" } else { "no" };
     let n_word = if n_live { "yes" } else { "no" };
     print("[solar-nested] t=" + r2(this.t) + "  direct_island=" + d_word +
