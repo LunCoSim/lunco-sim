@@ -105,18 +105,22 @@ class LunCoPolicy "LunCoPolicy" (
         doc = """The seam this policy governs (the extension point it hooks).
         Uniform: a policy cannot change which seam it guards over time."""
     )
-    string info:sourceCode = "" (
+    uniform string info:sourceCode = "" (
         doc = """The rhai source of the hook, authored INLINE. Editing it live
         re-registers the hook. Inline source rides the USD journal plane — it is a
         per-op edit that syncs and converges like any other doc op, so it is the form
         for live/dynamic policy editing.
+
+        `uniform`, matching `LunCoProgramAPI`: implementation source is config-time
+        metadata, never time-sampled. Uniform constrains variability (no time
+        samples), not mutability — a live edit still lands as a default-value op.
 
         `UsdShade`'s own property name, as on `LunCoProgramAPI`: a policy is a pluggable
         implementation behind a named seam, which is the same shape of thing a shader
         is. For a file-backed policy author `info:sourceAsset` instead; inline wins
         when both are present."""
     )
-    asset info:sourceAsset = @@ (
+    uniform asset info:sourceAsset = @@ (
         doc = """File-backed alternative to `info:sourceCode`: an `@…rhai@` reference to
         the hook's rhai source, loaded via the asset server (wasm-safe, hot-reloadable).
 

@@ -452,6 +452,20 @@ pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGrou
         .set(bevy::log::LogPlugin {
             // Quieten third-party noise (rumoca JIT + diffsol per-step).
             filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
+            // Bevy's default fmt layer always emits ANSI colour codes to stderr,
+            // even when stderr is redirected to a file or pipe — which peppers
+            // captured logs (agent/CI/`> log 2>&1`) with `\x1b[..m` escapes. Emit
+            // colour only for a real terminal, and honour `NO_COLOR` either way.
+            fmt_layer: |_app| {
+                use std::io::IsTerminal;
+                let ansi =
+                    std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+                Some(Box::new(
+                    bevy::log::tracing_subscriber::fmt::Layer::default()
+                        .with_ansi(ansi)
+                        .with_writer(std::io::stderr),
+                ))
+            },
             ..default()
         });
 
