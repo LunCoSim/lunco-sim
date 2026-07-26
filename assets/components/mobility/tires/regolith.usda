@@ -43,21 +43,26 @@ over "Tire" (
     # the two, and did — at ~50 N/(m/s) a rover met a two-tonne-metre side load
     # with tens of newtons, drifted through every turn, and read as ice.
     #
-    # TUNED AGAINST PARITY, not picked. The three `*_parity` scenes drive a
-    # raycast and a PHYSICAL rover through identical inputs; the physical one's
-    # side force is avian's real contact, so it is ground truth for this model.
-    # Sweeping the whole range against all three:
-    #   6000 → skid rover swept 5° where the physical swept 51° (it could no
-    #          longer skid at all), and the Ackermann rover over-bit at 86° vs 32°
-    #    600 → drivetrain green, both steering scenes still failing
-    #    150 → within a hair either way (52.2 vs 32.3; yaw 14.4 needing 15.0)
-    #    100 → 8/8, 20/20, 19/19
-    # Soft next to the 8000 longitudinal figure, and that is the soil: the lugs
-    # shear a wedge of regolith sideways long before the rubber lets go.
+    # DERIVED FROM WHERE THE TIRE SATURATES, not fitted. With ~445 N on a wheel
+    # and μ = 0.8 the cone is ~356 N, so 2000 N/(m/s) reaches it at ~0.18 m/s of
+    # lateral slip — about 5° of slip angle at cruise, which is where a lugged
+    # tire on soil lets go. The number this replaced, 100, put saturation at
+    # 3.6 m/s of side-slip: a tire that never in any manoeuvre reached its own
+    # friction limit, and met a hard corner with ~5% of the grip it had.
     #
-    # This number no longer has to fight a fake drag term for the friction cone
-    # (see `lunco_mobility::update_wheel_spin`), so it now means what it says.
-    float physxVehicleTire:lateralStiffness = 2000
+    # It read as parity only because it was fitted while the joint rover's motor
+    # was a 6x velocity source (`lunco:wheel:stallTorqueGain`, since removed).
+    # That saturated BOTH realizations' friction cones at all times, so the
+    # LINEAR region — the only place this number does anything — was never
+    # entered by either. Putting the joint motor back on its authored torque
+    # curve dropped both into it, and they disagreed on sight:
+    # `drivetrain_parity` swept 52° raycast against 9° physical.
+    #
+    # Values this stiff used to be unstable (an explicit damper this hard
+    # oscillates), which is what drove the original fit downwards. It no longer
+    # can: `lunco_mobility::update_wheel_spin` bounds the lateral force by the
+    # impulse that exactly arrests the slip, so the term cannot overshoot.
+    float physxVehicleTire:lateralStiffness = 100
 
     # --- Contact-solver friction (UsdPhysicsMaterialAPI) ---
     # THE SAME GRIP, STATED IN THE SOLVER'S UNITS. `lunco:tire:frictionCoefficient`
@@ -72,20 +77,28 @@ over "Tire" (
     # its OWN authored coefficient, and the ratio between the two is a property of
     # the engine, not of the rubber.
     #
-    # 0.9 against the tyre's own 0.8. It replaces a hard-coded `Friction::new(0.9)`
-    # in `lunco_usd_sim::setup_physical_wheel` — the same number, but now authored
-    # on the tyre it belongs to, so re-shoeing a rover moves BOTH coefficients
-    # instead of only the analytic one.
+    # It replaces a hard-coded `Friction::new(0.9)` in
+    # `lunco_usd_sim::setup_physical_wheel` — but now authored on the tyre it
+    # belongs to, so re-shoeing a rover moves BOTH coefficients instead of only
+    # the analytic one.
+    #
+    # 1.9 against the tyre's own 0.8, and the gap is arithmetic, not taste. avian
+    # combines this with the ground material (default rule: Average) — against the
+    # standard 1.0 ground that is a nominal 1.45 — and delivers ~55% of it under
+    # sustained sliding, i.e. an effective ~0.8: the tyre's real μ, which is what
+    # the analytic model is using on the other rover.
     #
     # Swept on `drivetrain_parity` (physical terminal speed against a raycast twin
     # at the same authored μ = 0.8):
-    #   0.8  → 1.61 m/s vs 2.31 (the tyre's own μ: 30% short)
-    #   0.9  → 2.21 m/s vs 2.40 (8% short — the closest measured)
-    #   1.6  → no measurable change from 0.8 at the time it was tried
-    # The shortfall is the solver's, not the soil's: avian combines this with the
-    # ground material (default rule: Average) and its XPBD friction under sustained
-    # sliding delivers well under the resulting cone. Re-measure if the substep
-    # count or the avian version changes — those are what it is a function of.
+    #   0.9  → 1.97 m/s vs 2.13 (7.5% short)
+    #   1.9  → 2.16 m/s vs 2.13 (1.4% — the closest measured)
+    # The earlier reading that 1.6 changed nothing was taken while the joint motor
+    # was a 6x velocity source: it was torque-saturated at every sample, so the
+    # rover was sliding on its cone regardless of how big the cone was, and the
+    # sweep could not see friction at all.
+    #
+    # Re-measure if the substep count or the avian version changes — the 55% is a
+    # property of the solver, and it is the only thing this number encodes.
     float physics:dynamicFriction = 1.9
     float physics:staticFriction = 1.9
 
