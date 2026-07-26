@@ -14,7 +14,7 @@ Status legend: **Implemented** (built, in tree) · **Partial** (core built, gaps
 | 008 | Developer Experience | Partial | scripting is rhai, not Lua/Python |
 | 009 | Coordinate Frame Tree | Partial | `big_space` floating-origin built; named TF-tree types absent |
 | 010 | Authority / RBAC | Implemented | |
-| 011 | Interactive Tutorials | Implemented | all six tutorial tasks built (see design.md for as-built reference) |
+| 011 | Interactive Tutorials | Implemented (§8 pending) | all six tutorial tasks built; design.md §8 moves a lesson's environment from an `on_start` call to a declared USD `payload` — not yet built |
 | 012 | Sensor-to-Dashboard | Partial | telemetry bridge + scalar sensing; no camera/RGB sensors, no OpenMCT/Grafana |
 | 013 | SysML Integration | Not built | overlaps 017 (interop/model mapping) |
 | 014 | Modelica Simulation | Implemented | rumoca runtime |

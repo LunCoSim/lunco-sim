@@ -194,3 +194,115 @@ existing `HelpAnchors` keys) is a clean, isolated follow-up.
 ### Why this is cheap
 - Step logic, event waiting, goal evaluation, command dispatch, world reads, scene loading, USD script attachment — **all already exist**.
 - New Rust ≈ 2 HUD commands + 2 spotlight commands + 1 event registrar + 1 small UI-gated crate. Everything else is Rhai + USD + TOML data.
+
+---
+
+## 8. A lesson's ENVIRONMENT must be declared, not called (2026-07-26)
+
+### The defect that forced this
+
+A lesson set up its own world by calling `load_scene(...)` as the first statement
+of `on_start`. Nothing checked that it did. `sandbox/rhai_repl.rhai` did not, so
+opening it drew coach marks over whatever scene happened to be loaded — the
+symptom being "the tutorial doesn't load its scenario, it just overlays the
+current one". A sweep of every shipped lesson found exactly one other shape:
+`lunica/*` lessons legitimately have **no** world at all, so "every lesson calls
+`load_scene`" is not even a valid rule to enforce.
+
+The problem is not the file format. It is that the environment is an imperative
+side effect of running the lesson, so its absence is unrepresentable and
+therefore unverifiable. Two further consequences, both observed live:
+
+- The lesson's own `load_scene` RACES its own HUD publication — the scene mount
+  and the first `hint()` land in one `on_start`. Clearing stale overlay state on
+  a scene change has to happen synchronously on the `LoadScene` trigger, or it
+  wipes the incoming lesson's hint instead of the outgoing lesson's.
+- Chaining a lesson whose successor uses the SAME `.usda` takes the
+  `already loaded — no-op` path (correct), so the world visibly does not change
+  while the avatar/camera is re-derived — which reads to a user as a bug.
+
+### Decision
+
+**The lesson prim declares its world as a `payload`; the launcher mounts it
+before running the scenario.** A lesson with no payload is *declaring* itself a
+UI tour. A lesson that meant to have a world and lacks one is a lint finding, not
+a student's discovery.
+
+```usda
+def Scope "Sandbox" ( prepend apiSchemas = ["LunCoTutorialTrackAPI"] ) {
+    string lunco:track:label = "1️⃣ Sandbox Onboarding"
+
+    def Scope "FirstDrive" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @./first_drive.usda@      # deferred by construction
+    ) {
+        asset  info:sourceAsset     = @./first_drive.rhai@
+        string lunco:tutorial:title = "First Drive"
+        rel    lunco:tutorial:next  = </Sandbox/SandboxIntro>
+    }
+}
+```
+
+Why each part is the canonical spelling, not a preference:
+
+- **`payload`, not a string field or a `rel`.** USD already means by payload what
+  we mean: heavy content, referenced but *unloaded until asked*. It is in the
+  dependency closure, so the world ships with the lesson. A `rel` targets a prim
+  inside the composed stage — it is not an asset dependency at all, and a string
+  path is invisible to every USD tool. `openusd`'s stage carries real load rules
+  (`InitialLoadSet`, `load`/`unload`), so deferral is a mechanism we have.
+- **The payload is a DECLARATION; mounting stays `LoadScene`.** The curriculum
+  stage must not become the world. The launcher reads the arc and mounts it
+  through the one scene path that already exists.
+- **`LunCoProgramAPI` + `info:sourceAsset`** is already how this engine binds a
+  rhai program to a prim. A lesson is that, plus display attributes.
+- **`next` as a `rel`** makes a dangling chain a lint error instead of an
+  unchecked string. Order IS the chain (`TutorialRegistry::ordered()` already
+  walks it), so there is no `order` field.
+- **NO `hosts` attribute.** Which app offers which track is application
+  configuration, not scene description — the same category error as
+  `kind = "tutorialTrack"` (which is also invalid: `kind` is the model hierarchy,
+  a registered token set). The canonical expression is **which layers the app
+  composes**: bundled tracks are sublayers of the app's curriculum stage; a twin
+  contributes by adding its layer on the SESSION layer (runtime, non-persistent,
+  removed when the twin closes). That deletes the hand-rolled twin path —
+  `TWIN_TUTORIALS_MANIFEST`, `from_twin`, `retain_bundled`,
+  `LoadedTwinCurriculum`, a second parse — because composition already answers
+  "these layers, in this order".
+
+### What stays OUT of USD
+
+Lesson **logic**. Objectives, gating, coach steps stay rhai. Encoding control
+flow as prim attributes means writing an interpreter for a language expressed in
+attributes — strictly worse than the rhai already sanctioned for behaviour.
+
+### Prerequisite: the dependency closure must be the library's answer
+
+"Does this lesson's world/script ship" is `UsdUtils.ComputeAllDependencies`.
+Ours re-parsed layers and matched raw spec fields, and stopped at composition
+arcs — so anything bound by an `asset` attribute (`info:sourceAsset`, textures)
+was outside the closure.
+
+- **Landed** (openusd `a198b40`): `Data::composition_asset_dependencies()`
+  (`SdfLayer::GetCompositionAssetDependencies`) and `Data::asset_dependencies()`.
+  `lunco-usd-bevy::closure` now asks the library; `discover_arcs`/`ArcFilter` are
+  deleted.
+- **Pending**: a recursive, resolver-anchored `compute_all_dependencies` in the
+  fork, so `reference_closure` can be deleted and the `TODO(multiplayer)`
+  unconfined-walker note answered (a resolver context has a root; `base.join`
+  does not).
+
+### Current state vs. target
+
+As-built today is the interim: the catalog is `assets/tutorials/<track>/tutorials.json`
+plus a `track.json` (`label`, `order`, `hosts` — all required, no defaults),
+discovered by walking `assets/tutorials/`, and the environment is still
+`load_scene` inside `on_start`. That fixed the live defect and made tracks
+data-driven rather than a `["basic"]` list in Rust, but it is **superseded** by
+the layer above: `tutorials.json` + `track.json` become the curriculum layer,
+and `hosts` disappears into composition.
+
+Migration order: closure prerequisite → curriculum layer + codeless schema
+(registered in `plugInfo.json`, or it does not exist outside this engine) →
+launcher mounts the payload before running the scenario → `load_scene` leaves
+the lesson scripts → twin path deleted in favour of session-layer composition.
