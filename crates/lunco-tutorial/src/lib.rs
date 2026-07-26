@@ -12,8 +12,10 @@
 //! (`lunco-workbench::tutorial_overlay`) + the rhai prelude.
 //!
 //! So this crate is the thin **shell** shared by all apps:
-//! - [`TutorialRegistry`] — the catalog; apps register their own tutorials via
-//!   [`TutorialAppExt::register_tutorial`] after adding [`TutorialCorePlugin`].
+//! - [`TutorialRegistry`] — the catalog, composed from curriculum LAYERS
+//!   (`assets/tutorials/<app>.usda`) by [`curriculum::read`]; a twin contributes
+//!   its own root, and apps may still add lessons via
+//!   [`TutorialAppExt::register_tutorial`].
 //! - a top-level **🎓 Tutorials** menu + a dockable [`TutorialsPanel`].
 //! - [`StartTutorial`] — load `<script>` and run it on the host (the single
 //!   launch path; menu, F1, HTTP API, MCP, and other scripts all funnel here).
@@ -40,92 +42,62 @@ use lunco_workbench::tutorial_overlay::TutorialHud;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
 use serde::{Deserialize, Serialize};
 
-/// One tutorial's catalog entry. The lesson itself is the `.rhai` at `script`;
-/// this is what the menu/panel needs to list + launch it.
+/// One tutorial's catalog entry — a lesson prim, flattened for the menu/panel.
 ///
-/// **Data, not code.** Entries live in a per-app JSON manifest
-/// (`assets/tutorials/<app>/tutorials.json`) and are scanned by [`TutorialCorePlugin`]
+/// **Data, not code.** Lessons are authored in a curriculum LAYER
+/// (`assets/tutorials/<track>/curriculum.usda`) and read by [`curriculum::read`]
 /// at startup — adding a lesson never touches Rust.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct TutorialMeta {
-    /// Stable id (kebab-case). Progress, chaining, and [`StartTutorial`] key off this.
+    /// The lesson's prim path — its IDENTITY. Progress, chaining and
+    /// [`StartTutorial`] key off this, so there is no separate id string to keep
+    /// in step with the prim that defines the lesson.
     pub id: String,
     /// Display title.
     pub title: String,
     /// One-line description shown under the title / on hover.
-    #[serde(default)]
     pub blurb: String,
-    /// Which app it targets — `"sandbox"`, `"lunica"`, or `"any"` (informational;
-    /// the manifest it lives in already scopes it to one app).
-    #[serde(default)]
+    /// The TRACK prim path this lesson belongs to. The menu groups by it and
+    /// looks the heading up in [`TutorialRegistry::tracks`] under the same key.
     pub app: String,
     /// Difficulty tag (`"beginner"` / `"intermediate"` / …) shown as a chip.
-    #[serde(default)]
     pub difficulty: String,
-    /// The orchestrator's path **relative to `assets/tutorials/`** (e.g.
-    /// `"lunica/overview.rhai"`, `"sandbox/first_drive.rhai"`). Loaded at
-    /// launch by [`lunco_assets::tutorials::tutorial_source`] — disk on native
-    /// (live-editable), embedded on wasm.
+    /// The orchestrator, as an authored asset path (`lunco://…`, `twin://…`) —
+    /// resolved at launch by [`CurriculumRoot::read`].
     pub script: String,
+    /// The world this lesson teaches in, from its `payload` arc, or `None` when
+    /// the lesson DECLARES it has no world (a UI tour). The launcher mounts it
+    /// before running the script; absent is a statement, not a missing value.
+    pub world: Option<String>,
     /// Auto-launch this tutorial once on the user's first run (persisted via
-    /// [`TutorialProgress::onboarded`]). At most one entry per app should set it —
+    /// [`TutorialSeen::onboarded`]). At most one lesson per app should set it —
     /// the onboarding entry point.
-    #[serde(default)]
     pub first_start: bool,
-    /// The id of the tutorial to chain to when this one completes
-    /// (`MISSION_COMPLETE`). Data, not code. `None` = the chain ends here.
-    #[serde(default)]
+    /// The prim path of the lesson to chain to on completion
+    /// (`MISSION_COMPLETE`). `None` = the chain ends here.
     pub next: Option<String>,
     /// Which root contributed this lesson. Provenance, stamped at registration —
-    /// never authored, hence `skip`. It is what [`script`](Self::script) resolves
-    /// against, so a twin's lesson and a bundled one load by the same rule.
-    #[serde(skip)]
+    /// never authored. It is what [`script`](Self::script) resolves against, so a
+    /// twin's lesson and a bundled one load by the same rule.
     pub source: CurriculumSource,
 }
 
-/// One TRACK's catalog entry — `assets/tutorials/<track>/track.json`.
+/// One TRACK's presentation, as composed.
 ///
-/// Presentation and hosting for a whole track, as DATA. Both used to be Rust:
-/// a `for track in ["basic"]` list in the sandbox app and a `[("basic", "2️⃣ Rover
-/// Driving & Slopes"), …]` table in the menu, so adding a track meant editing two
-/// crates and a track existed only in the build that happened to name it. Now the
-/// asset tree answers "which tracks exist" ([`lunco_assets::tutorials::tutorial_tracks`])
-/// and this file answers "who shows it, under what heading, in what order".
-///
-/// ONE form, every field required. A track without a readable `track.json` is
-/// not loaded at all and says so — no defaulted label, no inferred host, no
-/// "works anyway" path to keep a second shape alive. A curriculum that wants to
-/// be shown declares how.
-#[derive(Clone, Debug, Deserialize)]
+/// Both fields are now COMPOSITION facts rather than authored ones. A track used
+/// to declare `hosts = ["sandbox"]` and `order = 2` in its own `track.json`,
+/// which put an application's configuration inside scene description and gave
+/// ordering two mechanisms that could disagree. An app now offers a track by
+/// sublayering it ([`assets/tutorials/sandbox.usda`]), so the layer stack answers
+/// both "which tracks" and "in what order", and a track that wants to be shown
+/// somewhere else is composed somewhere else.
+#[derive(Clone, Debug)]
 pub struct TrackMeta {
-    /// Heading shown for this track in the 🎓 menu.
+    /// Heading shown for this track in the 🎓 menu (`lunco:track:label`).
     pub label: String,
-    /// Sort key among tracks in the menu, ascending.
-    pub order: i32,
-    /// App ids that load this track. `basic` names `sandbox` here — that is the
-    /// whole reason the field exists: a track is not owned by the app it happens
-    /// to be named after.
-    pub hosts: Vec<String>,
-}
-
-impl TrackMeta {
-    /// Does `app` load this track?
-    fn hosted_by(&self, app: &str) -> bool {
-        self.hosts.iter().any(|h| h == app)
-    }
-}
-
-/// Parse one `track.json`. `None` (with a reason) if it is unreadable — the
-/// single parse used by both the bundled tracks and a twin's, so the two cannot
-/// drift into different rules about what a track declaration is.
-fn parse_track_meta(source: &str, src: &str) -> Option<TrackMeta> {
-    match serde_json::from_str::<TrackMeta>(src) {
-        Ok(m) => Some(m),
-        Err(e) => {
-            warn!("[tutorial] {source} is invalid: {e} (needs label, order, hosts)");
-            None
-        }
-    }
+    /// Position in the composed stack — derived from the order tracks were read,
+    /// never authored. Ascending.
+    pub order: usize,
 }
 
 // ── Curriculum roots: the one extension point ───────────────────────────────
@@ -163,23 +135,31 @@ pub enum CurriculumSource {
 pub struct CurriculumRoot {
     /// Provenance — what gets dropped when this provider goes away.
     pub source: CurriculumSource,
-    /// Base every path in this root resolves against: `assets/tutorials/` for
-    /// bundled (implicit — that root reads through [`lunco_assets`], which owns
-    /// the disk-vs-embedded policy), the twin's directory for a twin. A lesson's
-    /// `script` is base-relative, which is already true of both today.
+    /// This root's curriculum LAYER. Opening it composes whatever it sublayers,
+    /// so one path is the whole contribution however many tracks it offers.
+    pub layer: std::path::PathBuf,
+    /// The twin directory `twin://` paths resolve against; `None` for bundled
+    /// (which reads through [`lunco_assets`], the owner of the
+    /// disk-vs-embedded policy).
     pub base: Option<std::path::PathBuf>,
 }
 
-/// Where a twin publishes its curriculum, relative to the twin root. A twin may
-/// put one track here (a `track.json` beside its lessons) or several (a
-/// subdirectory per track) — the same rule the bundled root already follows.
-const TWIN_CURRICULUM_DIR: &str = "sim/tutorials";
+/// Where a twin publishes its curriculum, relative to the twin root — one layer,
+/// which may sublayer as many tracks as the twin likes.
+const TWIN_CURRICULUM_LAYER: &str = "sim/tutorials/curriculum.usda";
 
 impl CurriculumRoot {
-    /// The bundled root — `assets/tutorials/`.
-    pub fn bundled() -> Self {
+    /// The bundled root — the app's own layer, `assets/tutorials/<app>.usda`.
+    /// That layer is where the app declares which tracks it offers.
+    pub fn bundled(app: &str) -> Self {
         Self {
             source: CurriculumSource::Bundled,
+            // `assets_dir_abs`, never a bare `"assets"` join: a relative join
+            // follows the CWD of whoever launched the process, and a packaged
+            // binary carries `assets/` beside the executable instead.
+            layer: lunco_assets::assets_dir_abs()
+                .join("tutorials")
+                .join(format!("{app}.usda")),
             base: None,
         }
     }
@@ -187,90 +167,71 @@ impl CurriculumRoot {
     /// A twin's root, based at the twin directory.
     pub fn twin(id: lunco_workspace::TwinId, root: std::path::PathBuf) -> Self {
         Self {
+            layer: root.join(TWIN_CURRICULUM_LAYER),
             source: CurriculumSource::Twin(id),
             base: Some(root),
         }
     }
 
-    /// Read a file by its path relative to this root's base.
+    /// Read an authored asset path through THIS root.
     ///
-    /// The bundled root goes through [`lunco_assets::tutorials::tutorial_source`]
-    /// — on-disk first (so a lesson edit replays with no rebuild), embedded
-    /// fallback (a packaged binary, wasm). A twin is on disk by definition.
-    pub fn read(&self, rel: &str) -> Option<String> {
-        match &self.base {
-            None => lunco_assets::tutorials::tutorial_source(rel),
-            Some(base) => std::fs::read_to_string(base.join(rel)).ok(),
+    /// `lunco://` goes through [`lunco_assets::tutorials::tutorial_source`] —
+    /// on-disk first (so a lesson edit replays with no rebuild), embedded
+    /// fallback (a packaged binary, wasm). `twin://<Name>/…` resolves against the
+    /// root's own twin directory: the name is not looked up, because provenance
+    /// already decided which twin is asking — that is what stopped a bundled
+    /// lesson and a twin's from shadowing each other by relative path.
+    pub fn read(&self, asset: &str) -> Option<String> {
+        let (scheme, rest) = asset.split_once("://")?;
+        match scheme {
+            "lunco" => lunco_assets::tutorials::tutorial_source(rest.strip_prefix("tutorials/")?),
+            "twin" => {
+                let (_twin, rel) = rest.split_once('/')?;
+                std::fs::read_to_string(self.base.as_ref()?.join(rel)).ok()
+            }
+            _ => None,
         }
     }
 
-    /// Directories in this root that declare a track, base-relative. A track IS
-    /// a directory holding a `track.json` — discovery, not a list, so adding one
-    /// is dropping in a directory.
-    fn track_dirs(&self) -> Vec<String> {
-        let Some(base) = &self.base else {
-            return lunco_assets::tutorials::tutorial_tracks();
-        };
-        let dir = base.join(TWIN_CURRICULUM_DIR);
-        if dir.join("track.json").is_file() {
-            return vec![TWIN_CURRICULUM_DIR.to_string()];
+    /// Compose this root's layer and register everything it contributes.
+    /// Returns the number of tracks added.
+    fn load_into(&self, registry: &mut TutorialRegistry) -> usize {
+        // A root with no curriculum layer is normal, not an error: most twins
+        // ship none, and the app layer is optional for an app with no lessons.
+        if !self.layer.is_file() {
+            return 0;
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return Vec::new(); // a twin with no curriculum is normal, not an error
+        let Some(layer) = self.layer.to_str() else {
+            return 0;
         };
-        let mut out: Vec<String> = entries
-            .flatten()
-            .filter(|e| e.path().join("track.json").is_file())
-            .filter_map(|e| e.file_name().to_str().map(|n| format!("{TWIN_CURRICULUM_DIR}/{n}")))
-            .collect();
-        out.sort();
-        out
-    }
-
-    /// Load every track this root declares that `host` shows, into `registry`.
-    fn load_into(&self, host: &str, registry: &mut TutorialRegistry) -> usize {
-        let mut loaded = 0;
-        for dir in self.track_dirs() {
-            let track_path = format!("{dir}/track.json");
-            let Some(track_src) = self.read(&track_path) else {
-                warn!(
-                    "[tutorial] '{dir}' has no readable track.json — its lessons are \
-                     not loaded. Declare `label`, `order` and `hosts`."
-                );
-                continue;
-            };
-            let Some(track) = parse_track_meta(&track_path, &track_src) else {
-                continue;
-            };
-            if !track.hosted_by(host) {
-                continue; // this track is for a different app
-            }
-            let manifest_path = format!("{dir}/tutorials.json");
-            let Some(src) = self.read(&manifest_path) else {
-                warn!("[tutorial] no lesson manifest at '{manifest_path}'");
-                continue;
-            };
-            let metas = match serde_json::from_str::<Vec<TutorialMeta>>(&src) {
-                Ok(m) => m,
-                // Say so. A malformed manifest used to fail silently, and its
-                // lessons simply never appeared with nothing anywhere saying why.
-                Err(e) => {
-                    warn!("[tutorial] '{manifest_path}' is invalid: {e}");
-                    continue;
-                }
-            };
-            // Keyed by the `app` its lessons declare — the same key the menu
-            // groups by, so the heading always lands on its own group.
-            if let Some(key) = metas.first().map(|m| m.app.clone()) {
-                registry.tracks.insert(key, track);
-            }
-            for mut meta in metas {
-                meta.source = self.source;
-                registry.register_tutorial(meta);
-            }
-            loaded += 1;
+        let composed = curriculum::read(layer);
+        let tracks = composed.tracks.len();
+        for track in composed.tracks {
+            // Keyed by the track's PRIM PATH — the same key each lesson carries
+            // in `app`, so a heading always lands on its own group. The old
+            // bundled loader keyed by directory name and the twin one by the
+            // lessons' declared app, and a track whose directory did not match
+            // lost its heading. There is only one name here now.
+            let order = registry.tracks.len();
+            registry
+                .tracks
+                .insert(track.path, TrackMeta { label: track.label, order });
         }
-        loaded
+        for lesson in composed.lessons {
+            registry.register_tutorial(TutorialMeta {
+                id: lesson.path,
+                app: lesson.track,
+                title: lesson.title,
+                blurb: lesson.blurb,
+                difficulty: lesson.difficulty,
+                script: lesson.script,
+                world: lesson.world,
+                first_start: lesson.first_start,
+                next: lesson.next,
+                source: self.source,
+            });
+        }
+        tracks
     }
 }
 
@@ -288,18 +249,18 @@ pub struct CurriculumRoots(pub Vec<CurriculumRoot>);
 /// unload rule that had to be kept in step with the load rule by hand, and once
 /// wasn't (it matched on the literal app name `"school"`, making a twin's chosen
 /// label a reserved word in the engine).
-fn rebuild_curriculum(roots: &CurriculumRoots, host: &str, registry: &mut TutorialRegistry) {
+fn rebuild_curriculum(roots: &CurriculumRoots, registry: &mut TutorialRegistry) {
     *registry = TutorialRegistry::default();
     let mut tracks = 0;
     for root in &roots.0 {
-        tracks += root.load_into(host, registry);
+        tracks += root.load_into(registry);
     }
     if tracks == 0 {
         warn!(
-            "[tutorial] app '{host}' shows no tutorial track — nothing will appear in \
-             the 🎓 menu. A track is a directory with a `tutorials.json` and a \
-             `track.json`; it is shown here when that `track.json` lists this app in \
-             `hosts`."
+            "[tutorial] no tutorial track composed — nothing will appear in the 🎓 \
+             menu. A track is a prim applying `LunCoTutorialTrackAPI` in a \
+             curriculum layer; an app shows it by sublayering that layer from its \
+             own `assets/tutorials/<app>.usda`."
         );
     } else {
         info!(
@@ -423,15 +384,6 @@ pub struct TutorialSeen {
 impl lunco_settings::SettingsSection for TutorialSeen {
     const KEY: &'static str = "tour_seen";
 }
-
-/// The app id this host runs as (`"sandbox"`, `"lunica"`, …) — the value
-/// [`TutorialCorePlugin::app`] was built with.
-///
-/// A resource because the rule "which tracks does this app load" is enforced in
-/// two places that must agree: plugin build (bundled tracks) and
-/// [`sync_twin_tutorials`] (a twin's). One value, read by both.
-#[derive(Resource, Clone, Debug)]
-pub struct TutorialHostApp(pub String);
 
 /// The persistent entity every tutorial scenario attaches to. Spawned lazily on
 /// the first launch; re-launching hot-reloads the scenario on it.
@@ -558,6 +510,27 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             warn!("[tutorial] no source for '{id}' ({})", meta.script);
             return;
         };
+        // MOUNT THE DECLARED WORLD, if the lesson declares one.
+        //
+        // This is what the `payload` arc bought. A lesson used to open its own
+        // world with `load_scene(...)` as the first statement of `on_start`,
+        // which meant a lesson that HAS no world (every lunica lesson, the
+        // join-team lesson) was indistinguishable from one that forgot — the
+        // reported "switching lessons only changes the overlay, not the scene"
+        // was both cases at once and no way to tell them apart. Declared, the
+        // launcher can act: mount, or deliberately leave the viewport alone.
+        //
+        // Sent as a named command rather than a typed one because this crate
+        // sits above USD and does not depend on it — the same arrangement
+        // `SCENE_LOAD_FAILED` already uses in the other direction.
+        if let Some(scene) = &meta.world {
+            info!("[tutorial] '{}' declares world {scene}", meta.title);
+            world.trigger(lunco_api::ApiCommandEvent {
+                command: "LoadScene".to_string(),
+                params: serde_json::json!({ "path": scene }),
+                id: 0,
+            });
+        }
         let host = ensure_host(world);
         info!("[tutorial] starting '{}' → {}", meta.title, meta.script);
         world.trigger(lunco_scripting::commands::RunScenario {
@@ -969,7 +942,6 @@ fn sync_twin_curriculum_root(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut roots: ResMut<CurriculumRoots>,
     mut registry: ResMut<TutorialRegistry>,
-    host: Res<TutorialHostApp>,
 ) {
     let active = workspace.as_ref().and_then(|ws| ws.0.active_twin);
     let mounted = roots.0.iter().find_map(|r| match r.source {
@@ -987,7 +959,7 @@ fn sync_twin_curriculum_root(
             roots.0.push(CurriculumRoot::twin(id, twin.root.clone()));
         }
     }
-    rebuild_curriculum(&roots, &host.0, &mut registry);
+    rebuild_curriculum(&roots, &mut registry);
 }
 
 // ── Menu + launcher panel ───────────────────────────────────────────────────
@@ -1029,11 +1001,10 @@ fn register_tutorials_menu(world: &mut World) {
             grouped.entry(meta.app.clone()).or_default().push(meta);
         }
 
-        // Heading + order per track come from that track's `track.json`
+        // Heading + order per track come from the composed curriculum
         // (`registry.tracks`), so a new track brings its own presentation and this
-        // menu never learns any track's name. A group with no metadata — a twin's
-        // curriculum, a user's own manifest — renders under its authored `app` key
-        // and sorts after the tracks that declared an order.
+        // menu never learns any track's name. A group with no metadata renders
+        // under its own prim path and sorts after everything composed.
         let mut groups: Vec<(&String, &Vec<&TutorialMeta>)> = grouped.iter().collect();
         groups.sort_by_key(|(app_key, _)| {
             (
@@ -1041,7 +1012,7 @@ fn register_tutorials_menu(world: &mut World) {
                     .tracks
                     .get(app_key.as_str())
                     .map(|t| t.order)
-                    .unwrap_or(i32::MAX),
+                    .unwrap_or(usize::MAX),
                 (*app_key).clone(),
             )
         });
@@ -1198,22 +1169,21 @@ impl Panel for TutorialsPanel {
 
 /// Headless-safe tutorial execution: registry, source loading, typed commands,
 /// completion chaining, boot policy, and twin curriculum discovery. Tutorials
-/// are loaded from `assets/tutorials/<app>/tutorials.json`.
+/// are composed from `assets/tutorials/<app>.usda`.
 pub struct TutorialCorePlugin {
-    /// App name — selects `assets/tutorials/<app>/tutorials.json`.
+    /// App name — selects the curriculum layer `assets/tutorials/<app>.usda`.
     pub app: String,
 }
 
 impl Plugin for TutorialCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialRegistry>();
-        app.insert_resource(TutorialHostApp(self.app.clone()));
         // The app contributes the bundled root; a twin adds its own when it opens
         // (`sync_twin_curriculum_root`). Both go through the SAME loader, so the
         // engine names no track and knows no lesson.
-        let mut roots = CurriculumRoots(vec![CurriculumRoot::bundled()]);
+        let mut roots = CurriculumRoots(vec![CurriculumRoot::bundled(&self.app)]);
         let mut registry = TutorialRegistry::default();
-        rebuild_curriculum(&roots, &self.app, &mut registry);
+        rebuild_curriculum(&roots, &mut registry);
         // `roots` is moved in whole so a provider added later (a pack, a
         // classroom server) is a push here and needs no code in this crate.
         roots.0.shrink_to_fit();
@@ -1241,7 +1211,7 @@ impl Plugin for TutorialCorePlugin {
 /// ```
 #[cfg(feature = "ui")]
 pub struct TutorialPlugin {
-    /// App name — selects `assets/tutorials/<app>/tutorials.json`.
+    /// App name — selects the curriculum layer `assets/tutorials/<app>.usda`.
     pub app: String,
 }
 
@@ -1264,6 +1234,13 @@ impl Plugin for TutorialPlugin {
 mod tests {
     use super::*;
 
+    /// The execution core runs and stops a lesson with no UI plugin present.
+    ///
+    /// The lesson is registered HERE rather than taken from the shipped
+    /// curriculum: a curriculum layer is composed from disk (`assets_dir_abs`),
+    /// and a unit test's working directory is its own crate, so depending on the
+    /// bundled catalog would make this a test of where cargo happens to put the
+    /// CWD. What it means to test is start → `current`, stop → cleared.
     #[test]
     fn core_executes_and_stops_a_lesson_without_the_ui_plugin() {
         let mut app = App::new();
@@ -1271,9 +1248,23 @@ mod tests {
             .add_plugins(TutorialCorePlugin {
                 app: "sandbox".into(),
             });
+        app.register_tutorial(TutorialMeta {
+            id: "/Test/Lesson".into(),
+            title: "Test".into(),
+            blurb: String::new(),
+            app: "/Test".into(),
+            difficulty: String::new(),
+            // A real shipped script, so it resolves through the EMBEDDED copy
+            // wherever this runs from. No world: a lesson may decline one.
+            script: "lunco://tutorials/sandbox/first_drive.rhai".into(),
+            world: None,
+            first_start: false,
+            next: None,
+            source: CurriculumSource::Bundled,
+        });
 
         app.world_mut().trigger(StartTutorial {
-            id: "first-drive".into(),
+            id: "/Test/Lesson".into(),
         });
         app.update();
         assert_eq!(
@@ -1281,7 +1272,7 @@ mod tests {
                 .resource::<TutorialProgress>()
                 .current
                 .as_deref(),
-            Some("first-drive")
+            Some("/Test/Lesson")
         );
 
         app.world_mut().trigger(SkipTutorial {});

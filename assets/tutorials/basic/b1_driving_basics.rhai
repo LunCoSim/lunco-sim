@@ -7,7 +7,8 @@
 //! timer (see first_drive.rhai for the pattern this follows).
 
 fn on_start(me) {
-    load_scene("lunco://tutorials/basic/driving_basics.usda");
+    // The world this lesson teaches in is DECLARED in the curriculum layer
+    // (a `payload` arc) and mounted by the launcher before this runs.
     // No ordinal: position lives in `tutorials.json` alone. Ordinals duplicated
     // into scripts are how this track ended up titled "2 ·" while toasting "S3".
     notify_kind("Basic · Moon Driving Basics", "info");

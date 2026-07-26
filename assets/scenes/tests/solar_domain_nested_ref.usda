@@ -1,0 +1,128 @@
+#usda 1.0
+(
+    defaultPrim = "SolarDomainNestedRef"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── "The solar variant survives a second reference arc" rig ──────────────────
+#
+# WHAT IT GUARDS. That a rover's `generation = "solar"` electrical island still
+# composes when the selection is made in a PROFILE ASSET rather than in the
+# scene — scene → profile → base instead of scene → base.
+#
+# WHY THAT IS NOT PEDANTRY. The generation variant authors its membership with an
+# ABSOLUTE path, inside a variant, in the asset that owns the collection:
+#
+#     over "Electrical" {
+#         float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
+#         prepend rel collection:components:includes = [</RockerBogie/SolarPanel>]
+#     }
+#
+# Every reference arc has to remap that path and merge that `prepend` list op. At
+# one arc it demonstrably works (`scenes/sandbox/solar_rover_demo.usda`). At two
+# arcs a workshop build reported the panel dropping out of the composed
+# collection while `outputs:solar_power.connect` still pointed at it, so
+# `project_domain_islands` rejected the whole network with
+#
+#     output source component `…/SolarPanel` is outside collection `…/Electrical`
+#
+# and the rover silently lost its electrical domain: no `soc`, no `solar_power`,
+# no error anywhere a driver would look. Every purchasable rover configuration is
+# a wrapper asset, so this is the arc count that ships.
+#
+# HOW IT IS MEASURED. Ports, not logs. A rejected island produces no
+# `SimComponent`, so `get(<rover>/Electrical, "solar_power")` returns `()`. Both
+# rovers are read the same way and the verdict names which one lost its domain.
+#
+# THE CONTROL IS THE POINT. `Direct` selects the SAME two variants at the scene,
+# one arc from the base. It is the only difference between the two rovers:
+#
+#   both alive           → nesting is fine, the report's defect is elsewhere
+#   Direct alive, Nested dead → the second arc is the bug (the reported failure)
+#   both dead            → the solar variant itself is broken at any depth, and
+#                          this scene proves nothing about nesting — the
+#                          scenario says so instead of reporting a green nesting
+#                          result on a rig that could not have shown one.
+#
+#     scene_test --scene scenes/tests/solar_domain_nested_ref.usda
+
+def Xform "SolarDomainNestedRef" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "One rover with the solar variant selected at the scene and one with it selected in a profile asset; both must compose an electrical island."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    # Flat and level. Nothing here is a mobility test — the rovers sit still and
+    # are read through their ports — but they must rest on something or they fall
+    # out of the world before the island is ever queried.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </SolarDomainNestedRef/PhysicsMaterials/Friction_1_0>
+    }
+
+    over "Sun"
+    {
+        double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0, 1, 0)
+        double3 xformOp:translate = (0, 8, 16)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # ── CONTROL: one reference arc ───────────────────────────────────────────
+    # The selection is made HERE, in the scene that references the base. This is
+    # the arrangement that already works in `scenes/sandbox/solar_rover_demo.usda`,
+    # and it is what makes a red on `Nested` mean "the extra arc", rather than
+    # "solar is broken".
+    def Xform "Direct" (
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+        variants = {
+            string power = "battery"
+            string generation = "solar"
+        }
+    )
+    {
+        double3 xformOp:translate = (-6, 1.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # ── CASE: two reference arcs ─────────────────────────────────────────────
+    # Identical selection, made one level up in a profile asset. The profile adds
+    # nothing but a hull colour, so any difference from `Direct` is composition.
+    def Xform "Nested" (
+        prepend references = @lunco://vessels/rovers/variants/rover_solar.usda@</RoverSolar>
+    )
+    {
+        double3 xformOp:translate = (6, 1.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "solar-domain-nested-ref"
+        def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"])
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/solar_domain_nested_ref.rhai@
+        }
+    }
+}

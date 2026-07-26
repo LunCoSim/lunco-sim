@@ -2237,9 +2237,9 @@ impl Plugin for SandboxCorePlugin {
             // Tutorials are executable scenario products, not a UI-only feature:
             // headless hosts expose StartTutorial through the same command API.
             // The menu/HUD projection is added separately by SandboxUiPlugin.
-            // Which TRACKS this resolves to is data: every directory under
-            // `assets/tutorials/` with a `tutorials.json` is discovered, and each
-            // one's `track.json` says which apps host it (`basic` names `sandbox`).
+            // Which TRACKS this resolves to is data: the app's curriculum layer
+            // `assets/tutorials/sandbox.usda` sublayers the tracks it offers
+            // (`basic` among them, despite not being named after this app).
             .add_plugins(lunco_tutorial::TutorialCorePlugin {
                 app: "sandbox".into(),
             })

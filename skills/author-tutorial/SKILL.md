@@ -35,61 +35,57 @@ read that first for hooks, `this`-state, and verbs. Reference lesson:
 ## Layout & the two-step add
 
 ```
-assets/tutorials/<app>/<name>.rhai        # the lesson (app = "sandbox" | "lunica" | …)
-assets/tutorials/<app>/<name>.usda        # optional env-only scene, load_scene'd (3D lessons)
+assets/tutorials/<track>/curriculum.usda   # the track: its lessons, as prims
+assets/tutorials/<track>/<name>.rhai       # one lesson's script
+assets/tutorials/<track>/<name>.usda       # optional env-only scene (3D lessons)
+assets/tutorials/<app>.usda                # the app: which tracks it offers
 ```
 
-**1. Drop the `.rhai`** (author with the prelude verbs below).
-**2. Declare the catalog entry** — **data, not Rust**. Two homes, pick by whether
-the lesson has a scene:
+**1. Drop the `.rhai`** (author with the prelude verbs below). It does NOT open
+its own world — see below.
 
-**(a) JSON manifest** `assets/tutorials/<app>/tutorials.json` — the default,
-required for **scene-less** lessons (coach tours, model lessons).
-`TutorialCorePlugin { app }` scans it at startup; `TutorialPlugin { app }` adds
-the optional launcher UI. Note: strict JSON, **no comments**.
-
-```json
-{
-  "id": "first-drive", "title": "First Drive",
-  "blurb": "Take control of a rover and drive it to a flag.",
-  "app": "sandbox", "difficulty": "beginner",
-  "script": "sandbox/first_drive.rhai",
-  "first_start": false,
-  "next": "lander-mission"
-}
-```
-
-**(b) On the scene (hybrid)** — a **scene-backed** 3D lesson may instead declare
-its catalog entry on its own `.usda`, as `lunco:tutorial*` on the default prim,
-so the file that IS the environment doubles as the catalog row (single source of
-truth). `lunco_usd_bevy::tutorial_scene_metas(app)` scans `<app>/*.usda`, and the
-launcher merges these with the JSON manifest (idempotent on `id`, ordered by the
-`next` chain). **Presence of `lunco:tutorialId` = this scene is a tutorial**; omit
-it and the `.usda` is just an environment. Don't also add a JSON row for the same
-`id`. (Wiring is per-app + USD-only, so lunica/luncosim — which have no scene
-lessons — never pull in `openusd`; sandbox does the scan.)
+**2. Declare the lesson in the track's `curriculum.usda`** — **data, not Rust**.
+A lesson is a prim applying `LunCoTutorialAPI` (presentation) and
+`LunCoProgramAPI` (behaviour), whose world is a `payload` arc:
 
 ```usda
-def Xform "FirstDrive"
+def Scope "FirstDrive" (
+    prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
+)
 {
-    custom string lunco:tutorialId = "first-drive"
-    custom string lunco:tutorialTitle = "First Drive"
-    custom string lunco:tutorialBlurb = "Take control of a rover and drive it to a flag."
-    custom string lunco:tutorialDifficulty = "beginner"
-    custom string lunco:tutorialScript = "sandbox/first_drive.rhai"
-    custom string lunco:tutorialNext = "lander-mission"   # omit for end-of-chain
-    # … the lesson environment (ground, rover, flag, lights) …
+    uniform asset info:sourceAsset = @lunco://tutorials/sandbox/first_drive.rhai@
+    string lunco:tutorial:title = "First Drive"
+    string lunco:tutorial:blurb = "Take control of a rover and drive it to a flag."
+    uniform token lunco:tutorial:difficulty = "beginner"
+    uniform bool lunco:tutorial:firstStart = false      # true = onboarding entry
+    rel lunco:tutorial:next = </Sandbox/LanderMission>  # omit to end the chain
 }
 ```
+
+The lesson's IDENTITY is its prim path, so `next` is a real relationship rather
+than an id string that nothing checks.
+
+**DECLARE THE WORLD, NEVER OPEN IT.** The launcher mounts the `payload` through
+`LoadScene` before running the script. A lesson used to call `load_scene(...)` as
+the first statement of `on_start`, which made a lesson that HAS no world (a UI
+tour) indistinguishable from one that forgot — and lessons that share a world
+would reload it on every switch. Omitting the payload is a statement: this lesson
+leaves the viewport alone.
+
+**A new TRACK** is a new `curriculum.usda` with a `LunCoTutorialTrackAPI` prim
+(`string lunco:track:label = "…"`) — and it appears in an app only when that
+app's `assets/tutorials/<app>.usda` sublayers it. Sublayer order is menu order.
+Nothing in a track names an app: which app shows it is composition.
 
 **Prerequisite (once per app):** the host app includes the scripting runtime
 (`LunCoScriptingPlugin`) + `lunco_tutorial::TutorialCorePlugin { app: "<app>".into() }`.
 Add `TutorialPlugin` as well when the host provides the optional workbench UI,
 and have the host call `lunco_tutorial::consult_boot(world, has_scene_arg, automated)` at startup
 for first-run onboarding. `sandbox` and `lunica` have this; a bare app does not.
-Adding *lessons* after that never touches Rust — just the manifest + a `.rhai`.
+Adding *lessons* after that never touches Rust — the curriculum layer + a `.rhai`.
 
-That's it. `StartTutorial{id}` loads the source via `tutorial_source(script)` —
+That's it. `StartTutorial{id}` mounts the declared world, then loads the script —
 **disk on native** (edit + replay, no rebuild) / **embedded on wasm** — and runs
 it. F1 (`EditorIntent::ShowTutorial`) and the 🎓 Tutorials panel also launch it.
 

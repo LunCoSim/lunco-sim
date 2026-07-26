@@ -30,7 +30,8 @@
 fn on_start(me) {
     // One source: the tutorial loads its own environment. The scene's embedded
     // scenarios do the flying; the mission() below coaches over their events.
-    load_scene("lunco://scenes/sandbox/lander_ops.usda");
+    // The world this lesson teaches in is DECLARED in the curriculum layer
+    // (a `payload` arc) and mounted by the launcher before this runs.
     hint("A powered descent is landing a rover. Watch it touch down — then you'll take control and drive.");
     notify_kind("Tutorial: Lander & Rover Mission", "info");
 }

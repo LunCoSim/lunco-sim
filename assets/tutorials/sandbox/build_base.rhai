@@ -34,7 +34,8 @@ fn has_structure(keyword) {
 }
 
 fn on_start(me) {
-    load_scene("lunco://tutorials/sandbox/build_base.usda");
+    // The world this lesson teaches in is DECLARED in the curriculum layer
+    // (a `payload` arc) and mounted by the launcher before this runs.
     notify_kind("Tutorial: Build a Lunar Base", "info");
     hint("Open the palette (bottom dock) and find the new Structures group. Pick a part and drop it onto the ground, then click-drag its gizmo to place it. Fly the camera with right-mouse + WASD.");
     spotlight("panel.bottom", "Your parts live here — the Structures group holds the habitat, power, comms, ISRU and the landing pad.");

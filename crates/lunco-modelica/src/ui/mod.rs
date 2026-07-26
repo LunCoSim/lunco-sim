@@ -714,7 +714,7 @@ impl Plugin for ModelicaUiPlugin {
         // runs each as a scenario on a host entity. Apps that embed the Modelica
         // workbench as a *secondary* workspace (sandbox's Design tab) pre-insert
         // `ModelicaUiConfig { include_help_overlay: false, .. }` to suppress it.
-        // Tutorials load from assets/tutorials/lunica/tutorials.json (data, not code).
+        // Tutorials compose from assets/tutorials/lunica.usda (data, not code).
         #[cfg(feature = "scripting")]
         if config.include_help_overlay {
             app.add_plugins(lunco_tutorial::TutorialPlugin {

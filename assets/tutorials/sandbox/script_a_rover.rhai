@@ -17,7 +17,8 @@ fn steps() {
 fn show(s, i) { let step = s[i]; coach(i, s.len(), step.anchor, step.title, step.body); }
 
 fn on_start(me) {
-    load_scene("lunco://tutorials/sandbox/first_drive.usda");
+    // The world this lesson teaches in is DECLARED in the curriculum layer
+    // (a `payload` arc) and mounted by the launcher before this runs.
     this.i = 0;
     show(steps(), 0);
     notify_kind("Tutorial: Script a Rover", "info");

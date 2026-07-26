@@ -1,0 +1,49 @@
+#usda 1.0
+(
+    defaultPrim = "RoverSolar"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Rover variant: SOLAR ─────────────────────────────────────────────────────
+#
+# A PROFILE, in the same sense as `rover_easy` / `rover_medium` / `rover_awful`:
+# it references the shared rocker-bogie base and does nothing but SELECT the
+# base's own variants. It adds no prim, overrides no attribute.
+#
+#     power      = "battery"     finite bus, so a source has somewhere to push
+#     generation = "solar"       the base's panel + its electrical membership
+#
+# WHY IT EXISTS. `generation = "solar"` was only ever selected AT A SCENE, one
+# reference arc from the base. A profile puts a SECOND arc in front of it —
+# scene → profile → base — which is how every purchasable rover configuration is
+# authored (a wrapper asset the scene references), and nothing tested that the
+# solar variant survives it. `scenes/tests/solar_domain_nested_ref.usda` runs
+# this profile and a one-arc rover side by side; if the two disagree, the arc
+# count is the only difference between them.
+#
+# The variant carries `prepend rel collection:components:includes =
+# [</RockerBogie/SolarPanel>]` — an ABSOLUTE path, authored inside a variant, in
+# the asset that owns the collection. Every reference arc must remap it. That is
+# the composition this profile exercises.
+def Xform "RoverSolar" (
+    doc = "Solar rover profile — the rocker-bogie base with a battery bus and the solar generation variant selected, one reference arc above the base."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
+    variants = {
+        string power = "battery"
+        string generation = "solar"
+    }
+)
+{
+    uniform bool lunco:spawnable = true
+
+    # Livery only — amber hull, so a solar rover is identifiable next to the
+    # three handling tiers. Nothing electrical is authored here on purpose: this
+    # profile must be a pure variant selection, or a passing test would only
+    # prove that the profile RE-AUTHORED what the base already said.
+    over "Body"
+    {
+        color3f[] primvars:displayColor = [(0.85, 0.62, 0.15)]
+    }
+}

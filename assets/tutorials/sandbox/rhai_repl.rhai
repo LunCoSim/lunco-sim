@@ -20,7 +20,8 @@ fn on_start(me) {
     // "open the tutorial" changed nothing but the overlay. Same rover scene as
     // the neighbouring script/inspect lessons, so the REPL examples below have
     // a live entity to talk to.
-    load_scene("lunco://tutorials/sandbox/first_drive.usda");
+    // The world this lesson teaches in is DECLARED in the curriculum layer
+    // (a `payload` arc) and mounted by the launcher before this runs.
     this.i = 0;
     show(steps(), 0);
     notify_kind("Tutorial: Rhai Editor & REPL", "info");

@@ -8,7 +8,8 @@
 //! itself is read with `is_tipped` / `tilt_deg` (prelude, off `world_rotation`).
 
 fn on_start(me) {
-    load_scene("lunco://tutorials/basic/slope_test.usda");
+    // The world this lesson teaches in is DECLARED in the curriculum layer
+    // (a `payload` arc) and mounted by the launcher before this runs.
     notify_kind("Basic · Slopes & Tip-Over", "info");
     hint("This is the Hauler — heavy and top-heavy on purpose. Click it (or press F) to take control.");
 }

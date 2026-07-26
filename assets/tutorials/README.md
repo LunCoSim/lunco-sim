@@ -10,50 +10,63 @@ card / spotlight / objectives come from the shared HUD + the rhai prelude.
 ```
 assets/tutorials/
   learning_paths.json        # the Welcome-panel MSL curriculum (separate feature)
-  lunica/                    # lunica (Modelica workbench) lessons
-    overview.rhai  run.rhai  experiments.rhai  …
-  sandbox/                   # sandbox (3D world) lessons
+  sandbox.usda               # the SANDBOX app: which tracks it offers (sublayers)
+  lunica.usda  luncosim.usda # ditto, per app
+  sandbox/                   # a TRACK
+    curriculum.usda          #   its lessons, as prims — the catalog
     sandbox_intro.rhai
-    first_drive.rhai   first_drive.usda      # env `.usda` co-located, load_scene'd
+    first_drive.rhai   first_drive.usda      # env `.usda` co-located, declared as a payload
     lander_mission.rhai
+  basic/                     # a track offered BY sandbox, not named after it
+    curriculum.usda  b1_driving_basics.rhai  …
+  lunica/                    # lunica (Modelica workbench) lessons
+    curriculum.usda  overview.rhai  run.rhai  …
 ```
 
-Convention: **`tutorials/<app>/<name>.rhai`**. A lesson that needs a 3D world
-ships an env-only `.usda` next to it (or reuses one under `scenes/`) and pulls it
-in with `load_scene(...)`. A lesson that needs a model just `cmd("OpenClass", …)`.
+A **track** is a `curriculum.usda`. An **app** is a layer that sublayers the
+tracks it offers — that layer is the whole answer to "which tracks does this app
+show, in what order", and it is why `basic` appears under sandbox without any
+track declaring `hosts = ["sandbox"]`. A **twin** contributes by composing its
+own `sim/tutorials/curriculum.usda`, on the same terms as the engine.
 
 ## Add a tutorial (two steps)
 
-1. Drop `tutorials/<app>/<name>.rhai`. Author it with the prelude verbs:
+1. Drop `tutorials/<track>/<name>.rhai`. Author it with the prelude verbs:
    - `coach_step(steps, i)` + the `on_event` cursor — a guided coach-mark tour.
    - `hint(...)`, `spotlight(anchor, caption)`, `notify_kind(...)` — HUD.
    - `mission(me)` with `objective(...)` — auto-published objectives that advance
      on real actions (`requires_event`, `done` predicates); emits `MISSION_COMPLETE`.
-   - Setup: `load_scene("lunco://scenes/…")`, `cmd("OpenClass", #{ qualified })`,
-     `set_subsystem(name, on)`. Scene paths are **scheme-qualified** — a bare
-     path is ambiguous once a Twin is open (it would resolve against the Twin)
-     and is rejected; see `docs/architecture/55-scene-addressing-and-roots.md`.
-2. Declare its catalog entry in the **JSON manifest** `tutorials/<app>/tutorials.json`
-   — **data, not Rust**. The single catalog; a 3D lesson's `.usda` is just the
-   environment its script loads. The simulation host loads it via
-   `TutorialCorePlugin { app: "<app>" }`; a workbench host additionally adds
-   `TutorialPlugin { app: "<app>" }` for the launcher UI.
-   Strict JSON — **no comments** (the `//` below are for the doc only).
-   ```json
+   - Setup: `cmd("OpenClass", #{ qualified })`, `set_subsystem(name, on)`.
+   - **NOT `load_scene(...)`** — the world is declared, see step 2.
+
+2. Declare it in `tutorials/<track>/curriculum.usda` — **data, not Rust**:
+
+   ```usda
+   def Scope "MyLesson" (
+       prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+       prepend payload = @lunco://tutorials/sandbox/my_lesson.usda@   # omit = no world
+   )
    {
-     "id": "sandbox-my-lesson",           // app-prefixed (shared progress settings)
-     "title": "My Lesson", "blurb": "…",
-     "app": "sandbox", "difficulty": "beginner",
-     "script": "sandbox/my_lesson.rhai",  // path under assets/tutorials/
-     "first_start": false,                // true = the once-only onboarding entry
-     "next": null                         // "next-id" to chain on completion
+       uniform asset info:sourceAsset = @lunco://tutorials/sandbox/my_lesson.rhai@
+       string lunco:tutorial:title = "My Lesson"
+       string lunco:tutorial:blurb = "…"
+       uniform token lunco:tutorial:difficulty = "beginner"
+       uniform bool lunco:tutorial:firstStart = false   # true = onboarding entry
+       rel lunco:tutorial:next = </Sandbox/NextLesson>  # omit to end the chain
    }
    ```
 
-That's it — **no rebuild, no Rust**. On native the manifest *and* the script are
-read fresh from disk (`lunco_assets::tutorials::tutorial_source`) — edit and
-relaunch; on wasm both are embedded at build time. `StartTutorial{id}` loads the
-script and runs it on the host.
+   The lesson's id is its PRIM PATH, so the chain is a real relationship. The
+   launcher mounts the `payload` through `LoadScene` **before** running the
+   script; a lesson with no payload deliberately leaves the viewport alone.
+
+   Asset paths are **scheme-qualified** (`lunco://`, `twin://`) — a bare path is
+   ambiguous once a Twin is open; see
+   `docs/architecture/55-scene-addressing-and-roots.md`.
+
+That's it — **no rebuild, no Rust**. On native the curriculum *and* the script
+are read fresh from disk — edit and relaunch; on wasm scripts are embedded at
+build time. `StartTutorial{id}` mounts the world and runs the script on the host.
 
 ## Anchors (for `spotlight` / `coach_step` focus)
 

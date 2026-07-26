@@ -12,7 +12,8 @@ fn on_start(me) {
     // Load the env-only scene (rover, flag, avatar); the mission below find()s its
     // entities once they spawn. The scenario runs on an independent host entity, so
     // it survives its own load_scene.
-    load_scene("lunco://tutorials/sandbox/first_drive.usda");
+    // The world this lesson teaches in is DECLARED in the curriculum layer
+    // (a `payload` arc) and mounted by the launcher before this runs.
     hint("Welcome to LunCoSim! Let's drive a rover on the Moon.");
     notify_kind("Tutorial: First Drive", "info");
 }

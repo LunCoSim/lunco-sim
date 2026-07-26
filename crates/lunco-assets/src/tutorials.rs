@@ -89,69 +89,10 @@ pub fn tutorial_files() -> Vec<(String, String)> {
     out
 }
 
-/// Every tutorial TRACK that ships in `assets/tutorials/` — a track being any
-/// directory that holds a `tutorials.json`. Sorted, so the catalog order is
-/// stable across runs and platforms.
-///
-/// Discovery, not a list. Which tracks exist is a property of the asset tree, so
-/// adding one is dropping in a directory — no app names a track in Rust, and no
-/// code has to be found and edited when a track is added, renamed, or removed.
-/// Whether a given app *shows* a discovered track is a separate question, and it
-/// is answered by that track's own `track.json` (see `lunco-tutorial`), which is
-/// data too.
-///
-/// Native walks the on-disk `assets/tutorials/` (so a track added without a
-/// rebuild is found), falling back to the embedded tree when that directory is
-/// absent — a packaged binary run outside the repo. wasm always uses the
-/// embedded tree.
-pub fn tutorial_tracks() -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let root = crate::assets_dir().join("tutorials");
-        if let Ok(entries) = std::fs::read_dir(&root) {
-            for e in entries.flatten() {
-                if !e.path().join("tutorials.json").is_file() {
-                    continue;
-                }
-                if let Some(name) = e.file_name().to_str() {
-                    out.push(name.to_string());
-                }
-            }
-        }
-    }
-    if out.is_empty() {
-        for d in TUTORIALS.dirs() {
-            if d.get_file(d.path().join("tutorials.json")).is_none() {
-                continue;
-            }
-            if let Some(name) = d.path().file_name().and_then(|n| n.to_str()) {
-                out.push(name.to_string());
-            }
-        }
-    }
-    out.sort();
-    out
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Discovery finds the shipped tracks, and every one of them can be loaded.
-    /// Enumerated rather than asserted against a fixed list — a hardcoded
-    /// expectation here would be the same defect this function exists to remove.
-    #[test]
-    fn tracks_are_discovered_and_loadable() {
-        let tracks = tutorial_tracks();
-        assert!(!tracks.is_empty(), "no tutorial tracks discovered");
-        for track in tracks {
-            let path = format!("{track}/tutorials.json");
-            let src = tutorial_source(&path).unwrap_or_else(|| panic!("{path} does not load"));
-            serde_json::from_str::<serde_json::Value>(&src)
-                .unwrap_or_else(|e| panic!("{path} is invalid JSON: {e}"));
-        }
-    }
 
     #[test]
     fn learning_paths_parse_as_json() {
@@ -161,47 +102,5 @@ mod tests {
             .get("paths")
             .and_then(|p| p.as_array())
             .is_some_and(|a| !a.is_empty()));
-    }
-
-    /// Every track manifest parses, and every lesson it names actually resolves.
-    ///
-    /// A manifest is data loaded at runtime, so a typo'd `script` path is invisible
-    /// to the compiler and shows up as a lesson that opens to nothing. Enumerated
-    /// from the embedded tree rather than a hardcoded list, so a NEW track is
-    /// covered the moment it exists — the failure mode being guarded here is
-    /// precisely a track that nothing looks at.
-    #[test]
-    fn every_track_manifest_resolves_its_scripts() {
-        let mut manifests = 0;
-        for dir in TUTORIALS.dirs() {
-            let Some(f) = dir.get_file(dir.path().join("tutorials.json")) else {
-                continue; // not a track (e.g. a shared asset dir)
-            };
-            let track = dir.path().display();
-            let src = f.contents_utf8().expect("manifest is utf8");
-            let metas: Vec<serde_json::Value> = serde_json::from_str(src)
-                .unwrap_or_else(|e| panic!("tutorials/{track}/tutorials.json is invalid: {e}"));
-            assert!(
-                !metas.is_empty(),
-                "tutorials/{track}/tutorials.json is empty"
-            );
-            manifests += 1;
-
-            for m in metas {
-                let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("<no id>");
-                let script = m
-                    .get("script")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_else(|| panic!("tutorials/{track}: '{id}' has no script"));
-                assert!(
-                    TUTORIALS.get_file(script).is_some(),
-                    "tutorials/{track}: '{id}' names script '{script}', which does not exist"
-                );
-            }
-        }
-        assert!(
-            manifests >= 2,
-            "expected at least the basic + sandbox tracks, found {manifests}"
-        );
     }
 }

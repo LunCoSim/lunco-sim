@@ -38,7 +38,8 @@ fn show(s, i) {
 }
 
 fn on_start(me) {
-    load_scene("lunco://tutorials/sandbox/sandbox_intro.usda");
+    // The world this lesson teaches in is DECLARED in the curriculum layer
+    // (a `payload` arc) and mounted by the launcher before this runs.
     this.i = 0;
     show(steps(), 0);
 }

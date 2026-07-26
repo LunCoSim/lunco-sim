@@ -108,7 +108,7 @@ impl Plugin for SandboxUiPlugin {
             // See docs/architecture/render-decoupling.md.
             // The shared tutorial launcher: registry + 🎓 menu + panel +
             // Start/Skip/SetSubsystemEnabled + progress + onboarding + F1.
-            // Tutorials load from assets/tutorials/sandbox/tutorials.json (data, not code).
+            // Tutorials compose from assets/tutorials/sandbox.usda (data, not code).
             .add_plugins(lunco_tutorial::TutorialPlugin {
                 app: "sandbox".into(),
             })
@@ -271,12 +271,12 @@ impl Plugin for SandboxUiPlugin {
         // polar site).
         app.add_systems(Update, mode_exposure);
 
-        // Extra tutorial TRACKS are registered by `SandboxCorePlugin` (see
-        // `register_extra_tutorial_tracks`), not here: a lesson is an executable
-        // scenario, so `StartTutorial { id: "basic-…" }` must resolve on a
-        // headless/API host too. Registering them from the UI plugin made the
-        // whole `basic` track exist only in the windowed build — over the API it
-        // answered `unknown id` and nothing loaded.
+        // Tutorial TRACKS come from the curriculum layer `TutorialCorePlugin`
+        // composes, not from here: a lesson is an executable scenario, so
+        // `StartTutorial { id }` must resolve on a headless/API host too.
+        // Registering tracks from the UI plugin once made the whole `basic`
+        // track exist only in the windowed build — over the API it answered
+        // `unknown id` and nothing loaded.
 
         // Embed the FULL lunica workbench as the "Design" workspace via the
         // shared bundle — same clipboard bridge, autosave, worker, and panels
