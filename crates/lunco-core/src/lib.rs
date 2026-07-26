@@ -929,9 +929,20 @@ fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>
 /// one says so. See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
 fn assign_global_entity_ids(
     mut commands: Commands,
+    // `Provenance` is OPTIONAL, and a runtime instance is admitted on its own
+    // marker. A `SkipContentStamp` root normally also carries a `Content` stamp
+    // from the USD loader (which this system then ignores in favour of an
+    // authoritative id) — but a stage with no asset path gets no stamp at all,
+    // and requiring `&Provenance` silently dropped exactly those roots from the
+    // query. No `GlobalEntityId` means possession cannot claim ownership, so a
+    // `piloted`-gated vessel spawned that way is dead on arrival with nothing
+    // logged. The `Or` keeps the scan to entities that could ever want an id.
     q_new: Query<
-        (Entity, &Provenance, Has<session::SkipContentStamp>),
-        Without<GlobalEntityId>,
+        (Entity, Option<&Provenance>, Has<session::SkipContentStamp>),
+        (
+            Without<GlobalEntityId>,
+            Or<(With<Provenance>, With<session::SkipContentStamp>)>,
+        ),
     >,
     // Authority is derived from the role, not a separate `IsServer` flag — the two
     // used to drift (a `Standalone` sandbox with `IsServer(false)` minted no ids
@@ -955,6 +966,11 @@ fn assign_global_entity_ids(
             }
             continue;
         }
+        // No stamp and not a runtime instance: nothing to derive an id from, and
+        // nothing asked for one.
+        let Some(prov) = prov else {
+            continue;
+        };
         match prov {
             Provenance::Local => { /* never networked, no id */ }
             p @ (Provenance::Content { .. } | Provenance::Derived { .. }) => {
