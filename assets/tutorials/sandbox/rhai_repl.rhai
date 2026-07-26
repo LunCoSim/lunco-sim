@@ -15,6 +15,12 @@ fn show(s, i) {
 }
 
 fn on_start(me) {
+    // One source: the lesson sets up its own environment. Without this the
+    // coach marks landed on top of whatever scene happened to be open, so
+    // "open the tutorial" changed nothing but the overlay. Same rover scene as
+    // the neighbouring script/inspect lessons, so the REPL examples below have
+    // a live entity to talk to.
+    load_scene("lunco://tutorials/sandbox/first_drive.usda");
     this.i = 0;
     show(steps(), 0);
     notify_kind("Tutorial: Rhai Editor & REPL", "info");

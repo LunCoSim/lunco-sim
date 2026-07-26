@@ -159,7 +159,9 @@ impl Plugin for SandboxUiPlugin {
             .add_observer(
                 |t: On<lunco_usd::LoadScene>,
                  mut current: ResMut<CurrentScenePath>,
-                 current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>| {
+                 current_name: Option<ResMut<lunco_workbench::CurrentSceneName>>,
+                 hud: Option<ResMut<lunco_workbench::tutorial_overlay::TutorialHud>>,
+                 pending: Option<ResMut<lunco_tutorial::PendingAdvance>>| {
                     current.0 = t.event().path.clone();
                     if let Some(mut name) = current_name {
                         name.0 = std::path::Path::new(&t.event().path)
@@ -167,6 +169,28 @@ impl Plugin for SandboxUiPlugin {
                             .and_then(|f| f.to_str())
                             .unwrap_or(&t.event().path)
                             .to_string();
+                    }
+                    // The overlay belongs to the scene that was on screen. A
+                    // scene switch leaves hints, objectives, a spotlight ring or
+                    // a half-finished coach card pointing at entities that no
+                    // longer exist, and the "continue to the next lesson?" popup
+                    // floating over a world it was never about.
+                    //
+                    // Cleared HERE — synchronously, on the LoadScene TRIGGER —
+                    // rather than from a change-detection system: a lesson's
+                    // `on_start` calls `load_scene` FIRST and then publishes its
+                    // own hint/coach step, so anything that ran a frame later
+                    // would wipe the incoming lesson's overlay instead of the
+                    // outgoing one's. A still-running mission re-publishes its
+                    // objectives on the next tick, so only stale state is lost.
+                    if let Some(mut hud) = hud {
+                        hud.hint.clear();
+                        hud.objectives.clear();
+                        hud.spotlight = None;
+                        hud.tour = None;
+                    }
+                    if let Some(mut pending) = pending {
+                        pending.0 = None;
                     }
                 },
             )
@@ -238,39 +262,12 @@ impl Plugin for SandboxUiPlugin {
         // polar site).
         app.add_systems(Update, mode_exposure);
 
-        // Extra tutorial TRACKS — Basic (rover fundamentals) and Space School
-        // (the IKI event scenario). `TutorialPlugin` is added once above for the
-        // primary "sandbox" app (its build() does the one-time command/panel/
-        // observer setup); adding it again would panic on duplicate-plugin. So
-        // these extra apps just contribute their JSON catalog into the shared
-        // `TutorialRegistry` via `register_tutorial`.
-        // Data-driven: a new track is a `tutorials.json` + `.rhai`.
-        //
-        // Only tracks this app SHIPS. Space School is not one of them — it is a
-        // TWIN (`sim/tutorials/tutorials.json`), loaded by `sync_twin_tutorials`
-        // when that twin is opened. Registering it here too would double-register
-        // the same lesson ids against a stale bundled copy of the scene.
-        {
-            use lunco_tutorial::TutorialAppExt;
-            for track in ["basic"] {
-                let path = format!("{track}/tutorials.json");
-                match lunco_assets::tutorials::tutorial_source(&path) {
-                    Some(src) => {
-                        match serde_json::from_str::<Vec<lunco_tutorial::TutorialMeta>>(&src) {
-                            Ok(metas) => {
-                                for m in metas {
-                                    app.register_tutorial(m);
-                                }
-                            }
-                            Err(e) => {
-                                bevy::log::warn!("tutorials manifest '{path}' failed to parse: {e}")
-                            }
-                        }
-                    }
-                    None => bevy::log::warn!("no tutorials manifest at 'assets/tutorials/{path}'"),
-                }
-            }
-        }
+        // Extra tutorial TRACKS are registered by `SandboxCorePlugin` (see
+        // `register_extra_tutorial_tracks`), not here: a lesson is an executable
+        // scenario, so `StartTutorial { id: "basic-…" }` must resolve on a
+        // headless/API host too. Registering them from the UI plugin made the
+        // whole `basic` track exist only in the windowed build — over the API it
+        // answered `unknown id` and nothing loaded.
 
         // Embed the FULL lunica workbench as the "Design" workspace via the
         // shared bundle — same clipboard bridge, autosave, worker, and panels

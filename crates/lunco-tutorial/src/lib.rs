@@ -85,12 +85,79 @@ pub struct TutorialMeta {
     pub from_twin: Option<lunco_workspace::TwinId>,
 }
 
-/// The catalog of registered tutorials. Empty until an app registers its own via
-/// [`TutorialAppExt::register_tutorial`] — this crate ships no built-ins so the
-/// same engine serves every app with only that app's lessons in its registry.
+/// One TRACK's catalog entry — `assets/tutorials/<track>/track.json`.
+///
+/// Presentation and hosting for a whole track, as DATA. Both used to be Rust:
+/// a `for track in ["basic"]` list in the sandbox app and a `[("basic", "2️⃣ Rover
+/// Driving & Slopes"), …]` table in the menu, so adding a track meant editing two
+/// crates and a track existed only in the build that happened to name it. Now the
+/// asset tree answers "which tracks exist" ([`lunco_assets::tutorials::tutorial_tracks`])
+/// and this file answers "who shows it, under what heading, in what order".
+///
+/// Every field is optional: a track with no `track.json` is hosted by the app
+/// whose name matches its directory, labelled with that directory name, and
+/// sorted last. So a curriculum that never heard of this file still works.
+#[derive(Clone, Debug, Deserialize)]
+pub struct TrackMeta {
+    /// Heading shown for this track in the 🎓 menu. Defaults to the track name.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Sort key among tracks in the menu (ascending). Untagged tracks sort last.
+    #[serde(default)]
+    pub order: Option<i32>,
+    /// App ids that load this track. `basic` names `sandbox` here — that is the
+    /// whole reason the field exists: a track is not required to be owned by the
+    /// app it is named after. Absent = hosted by the app of the same name.
+    #[serde(default)]
+    pub hosts: Option<Vec<String>>,
+}
+
+impl TrackMeta {
+    /// The heading for `track`, falling back to the track's own name.
+    fn label_for(&self, track: &str) -> String {
+        self.label.clone().unwrap_or_else(|| track.to_string())
+    }
+
+    /// Does `app` load this track? Absent `hosts` = only the app of the same name.
+    fn hosted_by(&self, track: &str, app: &str) -> bool {
+        match &self.hosts {
+            Some(hosts) => hosts.iter().any(|h| h == app),
+            None => track == app,
+        }
+    }
+}
+
+/// Load `<track>/track.json`, or the all-defaults metadata when there is none.
+fn track_meta(track: &str) -> TrackMeta {
+    let default = TrackMeta {
+        label: None,
+        order: None,
+        hosts: None,
+    };
+    let Some(src) = lunco_assets::tutorials::tutorial_source(&format!("{track}/track.json")) else {
+        return default;
+    };
+    match serde_json::from_str::<TrackMeta>(&src) {
+        Ok(m) => m,
+        // Say so: a typo'd track.json is invisible otherwise — the track keeps
+        // working, just under its bare directory name and hosted nowhere useful.
+        Err(e) => {
+            warn!("[tutorial] {track}/track.json is invalid: {e}");
+            default
+        }
+    }
+}
+
+/// The catalog of registered tutorials. Filled by [`TutorialCorePlugin`] from the
+/// tracks it discovers, plus anything an app or twin adds via
+/// [`TutorialAppExt::register_tutorial`] — this crate ships no built-ins, so the
+/// same engine serves every app with only the lessons that app hosts.
 #[derive(Resource, Default, Clone)]
 pub struct TutorialRegistry {
     pub tutorials: Vec<TutorialMeta>,
+    /// Per-track presentation, keyed by track name — for the tracks actually
+    /// registered. Menu headings and their order come from here.
+    pub tracks: std::collections::HashMap<String, TrackMeta>,
 }
 
 impl TutorialRegistry {
@@ -111,6 +178,14 @@ impl TutorialRegistry {
     /// the registry can hold rather than a name it has to recognise.
     pub fn retain_bundled(&mut self) {
         self.tutorials.retain(|t| t.from_twin.is_none());
+        // A track's heading goes with its lessons — otherwise the departed twin's
+        // label sits in the map and re-decorates any later group that happens to
+        // reuse the key.
+        let live: std::collections::HashSet<&str> =
+            self.tutorials.iter().map(|t| t.app.as_str()).collect();
+        let live: std::collections::HashSet<String> =
+            live.into_iter().map(str::to_string).collect();
+        self.tracks.retain(|key, _| live.contains(key));
     }
 
     fn get(&self, id: &str) -> Option<TutorialMeta> {
@@ -677,6 +752,23 @@ fn sync_twin_tutorials(
     match serde_json::from_str::<Vec<TutorialMeta>>(&text) {
         Ok(metas) => {
             let n = metas.len();
+            // A twin's track gets its heading from the same `track.json` a
+            // bundled one uses — next to its manifest, keyed by the `app` its
+            // lessons declare. Absent, the menu falls back to that bare key.
+            let track_key = metas.first().map(|m| m.app.clone()).unwrap_or_default();
+            if let Some(dir) = manifest.parent() {
+                if let Ok(src) = std::fs::read_to_string(dir.join("track.json")) {
+                    match serde_json::from_str::<TrackMeta>(&src) {
+                        Ok(t) => {
+                            registry.tracks.insert(track_key, t);
+                        }
+                        Err(e) => warn!(
+                            "[tutorial] {}/track.json is invalid: {e}",
+                            dir.display()
+                        ),
+                    }
+                }
+            }
             for mut m in metas {
                 m.from_twin = Some(id);
                 registry.register_tutorial(m);
@@ -731,61 +823,45 @@ fn register_tutorials_menu(world: &mut World) {
             grouped.entry(meta.app.clone()).or_default().push(meta);
         }
 
-        // Display labels for the tracks THIS APP SHIPS — presentation and ordering,
-        // nothing more. A track is not required to be here: anything else (a twin's
-        // curriculum, a user's own manifest) renders below under its authored `app`.
-        //
-        // `"school"` was in this table, which made the Summer Space School a special
-        // case in the engine. It is not: it is a twin like any other, and it names
-        // its own track in its manifest. Bundled tracks are listed here because the
-        // app genuinely owns them — not because the engine knows who they are.
-        let tracks = [
-            ("sandbox", "1️⃣ Sandbox Onboarding"),
-            ("basic", "2️⃣ Rover Driving & Slopes"),
-            ("lunica", "3️⃣ Modelica Workbench"),
-        ];
+        // Heading + order per track come from that track's `track.json`
+        // (`registry.tracks`), so a new track brings its own presentation and this
+        // menu never learns any track's name. A group with no metadata — a twin's
+        // curriculum, a user's own manifest — renders under its authored `app` key
+        // and sorts after the tracks that declared an order.
+        let mut groups: Vec<(&String, &Vec<&TutorialMeta>)> = grouped.iter().collect();
+        groups.sort_by_key(|(app_key, _)| {
+            (
+                registry
+                    .tracks
+                    .get(app_key.as_str())
+                    .and_then(|t| t.order)
+                    .unwrap_or(i32::MAX),
+                (*app_key).clone(),
+            )
+        });
 
-        for &(app_key, label) in &tracks {
-            if let Some(metas) = grouped.get(app_key) {
-                ui.menu_button(label, |ui| {
-                    for meta in metas {
-                        let done = progress.is_completed(&meta.id);
-                        let glyph = if done { "✓" } else { "🎓" };
-                        if ui
-                            .button(format!("{glyph}  {}", meta.title))
-                            .on_hover_text(meta.blurb.as_str())
-                            .clicked()
-                        {
-                            world.trigger(StartTutorial {
-                                id: meta.id.to_string(),
-                            });
-                            ui.close();
-                        }
+        for (app_key, metas) in groups {
+            let label = registry
+                .tracks
+                .get(app_key.as_str())
+                .map(|t| t.label_for(app_key))
+                .unwrap_or_else(|| app_key.clone());
+            ui.menu_button(label, |ui| {
+                for meta in metas {
+                    let done = progress.is_completed(&meta.id);
+                    let glyph = if done { "✓" } else { "🎓" };
+                    if ui
+                        .button(format!("{glyph}  {}", meta.title))
+                        .on_hover_text(meta.blurb.as_str())
+                        .clicked()
+                    {
+                        world.trigger(StartTutorial {
+                            id: meta.id.to_string(),
+                        });
+                        ui.close();
                     }
-                });
-            }
-        }
-
-        // Any other apps/tracks not in our hardcoded list
-        for (app_key, metas) in &grouped {
-            if !tracks.iter().any(|(k, _)| k == app_key) {
-                ui.menu_button(app_key.as_str(), |ui| {
-                    for meta in metas {
-                        let done = progress.is_completed(&meta.id);
-                        let glyph = if done { "✓" } else { "🎓" };
-                        if ui
-                            .button(format!("{glyph}  {}", meta.title))
-                            .on_hover_text(meta.blurb.as_str())
-                            .clicked()
-                        {
-                            world.trigger(StartTutorial {
-                                id: meta.id.to_string(),
-                            });
-                            ui.close();
-                        }
-                    }
-                });
-            }
+                }
+            });
         }
 
         ui.separator();
@@ -925,18 +1001,40 @@ pub struct TutorialCorePlugin {
 impl Plugin for TutorialCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialRegistry>();
-        let manifest_path = format!("{}/tutorials.json", self.app);
-        match lunco_assets::tutorials::tutorial_source(&manifest_path) {
-            Some(src) => match serde_json::from_str::<Vec<TutorialMeta>>(&src) {
+        // Every track in the asset tree, filtered by who hosts it — both facts
+        // are data (`tutorial_tracks()` walks the tree, `track.json` names the
+        // hosts). No app names a track in Rust, so a new track is a directory.
+        let mut hosted = 0;
+        for track in lunco_assets::tutorials::tutorial_tracks() {
+            let meta = track_meta(&track);
+            if !meta.hosted_by(&track, &self.app) {
+                continue;
+            }
+            let manifest_path = format!("{track}/tutorials.json");
+            let Some(src) = lunco_assets::tutorials::tutorial_source(&manifest_path) else {
+                warn!("no tutorials manifest found at 'assets/tutorials/{manifest_path}'");
+                continue;
+            };
+            match serde_json::from_str::<Vec<TutorialMeta>>(&src) {
                 Ok(metas) => {
                     let mut reg = app.world_mut().resource_mut::<TutorialRegistry>();
                     for meta in metas {
                         reg.register_tutorial(meta);
                     }
+                    reg.tracks.insert(track.clone(), meta);
+                    hosted += 1;
                 }
                 Err(e) => warn!("tutorials manifest '{manifest_path}' failed to parse: {e}"),
-            },
-            None => warn!("no tutorials manifest found at 'assets/tutorials/{manifest_path}'"),
+            }
+        }
+        if hosted == 0 {
+            warn!(
+                "[tutorial] app '{}' hosts no tutorial track — nothing will appear in the \
+                 🎓 menu. A track is a directory under `assets/tutorials/` with a \
+                 `tutorials.json`; it is shown here when its `track.json` lists this app \
+                 in `hosts` (or when the directory is named after it).",
+                self.app
+            );
         }
         app.init_resource::<TutorialHost>();
         app.init_resource::<PendingAdvance>();
