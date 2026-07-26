@@ -1,0 +1,47 @@
+#usda 1.0
+(
+    defaultPrim = "Ussuriysk"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Ussuriysk / Galenki (Уссурийск, Галёнки), Primorsky Krai — the Eastern Centre
+# for Deep Space Communications. Its P-2500 (RT-70) is a 70 m dish, the largest
+# in the Russian deep-space network; a 64 m TNA-1500 stands on the same site.
+#
+# The EASTERN half of the Russian pair (see `bear_lakes.usda`), ~93° of longitude
+# away, which is what turns two stations into most of a day's coverage.
+#
+# Flown on Luna-25 (2023), the most recent Russian lunar mission.
+#
+# See `structures/ground_stations/README.md` — the height here is approximate.
+def Xform "Ussuriysk" (
+    prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
+    kind = "component"
+    doc = "Ussuriysk / Galenki, Primorsky Krai — P-2500 (RT-70), 70 m. Eastern half of the Russian deep-space pair."
+)
+{
+    custom string lunco:label = "Ussuriysk · RT-70"
+
+    double lunco:anchor:lat = 44.02
+    double lunco:anchor:lon = 131.76
+    double lunco:anchor:height = 200
+    int lunco:anchor:body = 399
+
+    # 70 m aperture = 1.16 · 60.34 — the component default, restated so a reader
+    # sees this station's size in this station's file rather than inheriting it
+    # silently and having it change under them.
+    over "Antenna"
+    {
+        over "YawHead"
+        {
+            over "DishGimbal"
+            {
+                over "DishHead"
+                {
+                    double3 xformOp:scale = (60.34, 60.34, 60.34)
+                }
+            }
+        }
+    }
+}
