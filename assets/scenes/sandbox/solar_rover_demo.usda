@@ -122,6 +122,15 @@ def Xform "SolarRoverTest" (
             # The complete reusable panel: visual, collision, mass, and its
             # independent electrical source facet. The assembly below decides
             # whether that pin is wired to the battery bus.
+            # ONE spec per prim, per layer. The bus connection below used to be a
+            # sibling `over "YawHead" { over "SolarPanel" { … } }` further down
+            # this file, and the `over` won: the composed panel kept `connectors:p`
+            # and lost EVERYTHING this `def` brings — the reference, the children,
+            # `LunCoProgramAPI`, `info:sourceAsset`. `read_network` skips a member
+            # with no program API, so the runtime blamed the collection instead
+            # (`SolarPanel is outside collection Electrical`) and this demo has
+            # been shipping with a dead electrical island. See
+            # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
             def Xform "SolarPanel" (
                 prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
             )
@@ -129,6 +138,7 @@ def Xform "SolarRoverTest" (
                 double3 xformOp:translate = (0, 0.4, 0)
                 double3 xformOp:scale = (0.3, 0.2, 0.25)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                custom token connectors:p.connect = </SolarRoverTest/SolarRover/Battery.connectors:p>
             }
         }
 
@@ -167,13 +177,6 @@ def Xform "SolarRoverTest" (
         {
             float outputs:solar_power.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:power_out>
             prepend rel collection:components:includes = [</SolarRoverTest/SolarRover/YawHead/SolarPanel>]
-        }
-        over "YawHead"
-        {
-            over "SolarPanel"
-            {
-                custom token connectors:p.connect = </SolarRoverTest/SolarRover/Battery.connectors:p>
-            }
         }
 
         # ── Autopilot Script (Rhai) ──

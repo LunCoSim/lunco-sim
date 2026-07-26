@@ -72,6 +72,15 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 15.0
         bool physics:collisionEnabled = true
+
+        # ONE spec per prim, per layer. This was a sibling `over "SolarPanel"`
+        # further down this file, and the `over` won: the composed panel kept
+        # `connectors:p` and lost the reference, the children, `LunCoProgramAPI`
+        # and `info:sourceAsset`. The runtime then blamed the collection —
+        # `SolarPanel is outside collection Electrical` — and the whole
+        # electrical island was rejected. See
+        # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
+        custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
     }
 
     # --- Battery (physical part; its charge is the Electrical circuit's) ---
@@ -107,10 +116,6 @@ def Xform "Rucheyok" (
             </Rucheyok/Motor_RL>,
             </Rucheyok/Motor_RR>,
         ]
-    }
-    over "SolarPanel"
-    {
-        custom token connectors:p.connect = </Rucheyok/Battery.connectors:p>
     }
 
     # --- Wheels (from component) ---

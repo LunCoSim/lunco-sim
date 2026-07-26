@@ -445,18 +445,23 @@ def Xform "SkidRover" (
                 double3 xformOp:translate = (0, 0.45, 0)
                 double3 xformOp:scale = (0.42, 0.2, 0.42)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                # ONE spec per prim, per layer. This was a sibling
+                # `over "SolarPanel"` below, and the `over` won: the composed
+                # panel kept `connectors:p` and lost the reference, the children,
+                # `LunCoProgramAPI` and `info:sourceAsset`. The runtime then
+                # blamed the collection — `SolarPanel is outside collection
+                # Electrical` — and every solar rover's island was rejected. See
+                # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
+                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
-            # `Electrical` and `Battery` are contributed only by the battery
-            # power variant. These overs therefore express a connection when
-            # both assembly layers are present, never a panel-side dependency.
+            # `Electrical` is contributed only by the battery power variant, a
+            # SIBLING variantSet — a different composition arc, which does merge.
+            # This over therefore expresses a connection when both assembly
+            # layers are present, never a panel-side dependency.
             over "Electrical"
             {
                 float outputs:solar_power.connect = </SkidRover/SolarPanel.outputs:power_out>
                 prepend rel collection:components:includes = [</SkidRover/SolarPanel>]
-            }
-            over "SolarPanel"
-            {
-                custom token connectors:p.connect = </SkidRover/Battery.connectors:p>
             }
         }
     }

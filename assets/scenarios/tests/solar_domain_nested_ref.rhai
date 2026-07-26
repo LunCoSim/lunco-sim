@@ -105,11 +105,15 @@ fn on_tick(me) {
 
     // ── The anti-trivial gate ────────────────────────────────────────────────
     if !d_live {
-        let why = "the CONTROL rover has no electrical island either. ";
-        why += "generation=\"solar\" is then broken at ONE reference arc, not by ";
-        why += "the profile's second arc — fix the variant in ";
-        why += "vessels/rovers/rocker_bogie.usda before reading this rig's ";
-        why += "nested result, which cannot mean anything while the control is red";
+        let why = "the CONTROL rover has no electrical island either, so the ";
+        why += "profile's second reference arc is NOT the cause. A `prepend` on ";
+        why += "`collection:components:includes` from a stronger layer is not ";
+        why += "reaching the composed collection at ANY depth — the same failure ";
+        why += "the shipped scenes/sandbox/solar_rover_demo.usda has, where the ";
+        why += "membership is authored in the scene itself. Fix the relationship ";
+        why += "list-op composition behind StageView::rel_targets (the ";
+        why += "`explicitOnly` path of collection_members); re-authoring assets ";
+        why += "cannot fix it, and this rig stays red until it is";
         fail_fast(why, "SOLAR DOMAIN NESTED REF", "SOLAR_DOMAIN_NESTED_REF");
         return;
     }

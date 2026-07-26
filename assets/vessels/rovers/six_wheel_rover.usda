@@ -391,6 +391,14 @@ def Xform "SixWheelRover" (
         }
 
         "solar" {
+            # ONE spec per prim, per layer. The bus connection below used to be a
+            # sibling `over "SolarPanel"` next to this `def`, and the `over` won:
+            # the composed panel kept `connectors:p` and lost EVERYTHING the `def`
+            # brought — the reference, the children, `LunCoProgramAPI`,
+            # `info:sourceAsset`. `read_network` then skips a member with no
+            # program API, and the runtime blames the collection instead:
+            # `SolarPanel is outside collection Electrical`. See
+            # `sibling_over_does_not_erase_a_def_in_the_same_layer`.
             def Xform "SolarPanel" (
                 prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
             )
@@ -398,15 +406,12 @@ def Xform "SixWheelRover" (
                 double3 xformOp:translate = (0, 0.45, 0)
                 double3 xformOp:scale = (0.42, 0.2, 0.42)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
             }
             over "Electrical"
             {
                 float outputs:solar_power.connect = </SixWheelRover/SolarPanel.outputs:power_out>
                 prepend rel collection:components:includes = [</SixWheelRover/SolarPanel>]
-            }
-            over "SolarPanel"
-            {
-                custom token connectors:p.connect = </SixWheelRover/Battery.connectors:p>
             }
         }
     }

@@ -1360,6 +1360,10 @@ pub struct ModelicaCorePlugin;
 impl Plugin for ModelicaCorePlugin {
     fn build(&self, app: &mut App) {
         build_modelica_core(app);
+        // `Exit` — session lifecycle, not a UI command. Registered here so a
+        // headless host can shut itself down; see `ui::commands::util`.
+        #[cfg(feature = "ui")]
+        ui::commands::util::register_all_commands(app);
     }
 }
 

@@ -931,6 +931,9 @@ pub struct ApiExecutorPlugin;
 
 impl Plugin for ApiExecutorPlugin {
     fn build(&self, app: &mut App) {
+        // Session commands (`Ping`) — registered with the command CORE, so any
+        // host that can receive a command can answer a readiness probe.
+        crate::session::register_all_commands(app);
         app.init_resource::<ApiIdCounter>()
             // Command-result store + active-id scope. Also init'd by
             // lunco-core; idempotent, kept here so the API plugin is

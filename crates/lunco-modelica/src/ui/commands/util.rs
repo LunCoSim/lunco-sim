@@ -1,13 +1,17 @@
-//! Miscellaneous utility commands: Ping and Exit.
+//! Session lifecycle: `Exit`.
+//!
+//! REGISTERED BY `ModelicaCorePlugin`, not by the UI commands plugin — see the
+//! `register_commands!` at the bottom. `Exit { force: true }` documents itself as
+//! "the reliable path for automation / headless control", and it was registered
+//! only by `ModelicaCommandsPlugin`, which a headless host never adds: the one
+//! caller who cannot fall back to a window was the one caller it rejected.
+//!
+//! `Ping` moved to `lunco_api::session` — a probe of the API belongs to the API.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
+use lunco_core::{on_command, register_commands, Command};
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
-
-/// API readiness probe.
-#[Command(default)]
-pub struct Ping {}
 
 /// Shut down the application.
 ///
@@ -23,11 +27,6 @@ pub struct Exit {
 }
 
 // ─── Observers ───────────────────────────────────────────────────────────────
-
-#[on_command(Ping)]
-pub fn on_ping(trigger: On<Ping>) {
-    // Intentional no-op.
-}
 
 #[on_command(Exit)]
 pub fn on_exit(
@@ -63,3 +62,9 @@ pub fn on_exit(
         });
     }
 }
+
+// Registered from `ModelicaCorePlugin` (headless included), NOT from the UI
+// commands plugin. The `force = false` branch still needs a human at the window,
+// but which branch runs is the caller's choice — refusing the command outright
+// took that choice away from every windowless host.
+register_commands!(on_exit);

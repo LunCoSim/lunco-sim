@@ -40,10 +40,24 @@
 #
 #   both alive           → nesting is fine, the report's defect is elsewhere
 #   Direct alive, Nested dead → the second arc is the bug (the reported failure)
-#   both dead            → the solar variant itself is broken at any depth, and
-#                          this scene proves nothing about nesting — the
-#                          scenario says so instead of reporting a green nesting
-#                          result on a rig that could not have shown one.
+#   both dead            → the membership never composes at any depth, and this
+#                          scene proves nothing about NESTING — the scenario says
+#                          so instead of reporting a green nesting result on a
+#                          rig that could not have shown one.
+#
+# WHAT IT ACTUALLY FOUND, first run, 2026-07-27: BOTH DEAD. The arc count is
+# innocent. `scenes/sandbox/solar_rover_demo.usda` — shipped, one arc, membership
+# authored in the scene itself, no profile anywhere — is rejected with the same
+# error, so no solar electrical island in this repo has ever assembled. A
+# `prepend` on `collection:components:includes` from a stronger layer does not
+# reach the composed collection, which puts the defect in relationship list-op
+# composition (the `explicitOnly` branch of `StageView::collection_members` reads
+# `rel_targets` directly), not in any asset. That is why the workshop build's two
+# attempts to re-author the collection both failed: neither could have worked.
+#
+# This rig is RED ON PURPOSE until that is fixed. It keeps both rovers because
+# once composition is correct, the arc count is still worth holding down: every
+# purchasable rover configuration is a profile asset.
 #
 #     scene_test --scene scenes/tests/solar_domain_nested_ref.usda
 

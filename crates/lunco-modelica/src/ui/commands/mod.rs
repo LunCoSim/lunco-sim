@@ -37,7 +37,7 @@ pub use nav::{
 };
 pub use plot::{AddSignalToPlot, NewPlotPanel};
 pub use sim::{apply_set_model_input, SetModelInput, SetModelInputError};
-pub use util::{Exit, Ping};
+pub use util::Exit;
 
 pub struct ModelicaCommandsPlugin;
 
@@ -95,7 +95,6 @@ register_commands!(
     lifecycle::on_create_new_scratch_model,
     lifecycle::on_duplicate_active_doc,
     lifecycle::on_duplicate_model_from_read_only,
-    util::on_exit,
     nav::on_fit_canvas,
     nav::on_focus_component,
     nav::on_focus_document_by_name,
@@ -110,7 +109,6 @@ register_commands!(
     lifecycle::on_open_file,
     lifecycle::on_open_in_new_view,
     nav::on_pan_canvas,
-    util::on_ping,
     doc::on_redo,
     doc::on_redo_document,
     doc::on_save_active_document,
