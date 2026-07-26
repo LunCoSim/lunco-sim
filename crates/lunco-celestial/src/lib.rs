@@ -343,7 +343,23 @@ impl Plugin for CelestialPlugin {
                 // `ephemeris_update_system` never touches the Solar Grid (id 10),
                 // so the pin persists between anchor runs — no mid-chain window
                 // where the hierarchy sits un-anchored.
-                placement::anchor_solar_frame_to_site.run_if(cadence::celestial_epoch_advanced),
+                //
+                // NOT cadence-gated, and it must never be. This is not an epoch
+                // COMPUTATION whose result may be stale for a while; it is the
+                // maintainer of a frame INVARIANT — the authored site coincides
+                // with the scene origin, ENU-aligned — and it re-derives that pin
+                // from the STORED f32 grid chain, which every other writer keeps
+                // nudging. Cadence-gating it re-applied the pin in bursts (~one
+                // per 0.01° of body motion, i.e. ~65 s of sim time at 1×) instead
+                // of every frame, so between bursts the world sat on a stale pin
+                // and each burst snapped it: the avatar "moves and jumps back",
+                // and a scene loaded between bursts stayed un-anchored (no
+                // `SiteAligned` ⇒ ecliptic-aimed sun ⇒ black scene). Cadence is
+                // for VALUES (ephemeris, poses, trajectories); invariants hold
+                // every frame or they are not invariants. Its own internal
+                // epoch/site edge check already makes the steady-state body
+                // cheap.
+                placement::anchor_solar_frame_to_site,
                 placement::place_celestial_bound_entities,
                 // Defeat stale-GT / compat-strobe frames for the celestial
                 // subtree — measured load-bearing; see the system doc (a deletion

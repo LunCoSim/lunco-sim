@@ -138,12 +138,8 @@ pub(crate) fn instantiate_camera_prim(
         // into `Camera3d` + `Tonemapping::AgX` + MSAA in render builds; headless
         // it stays pure scene data. Every "which entity is the scene camera?"
         // query filters `With<SceneCamera>`.
-        SceneCamera::agx(),
+        lunco_render::scene_camera_look(read_camera_exposure_ev100(reader, sdf_path)),
         projection,
-        Exposure {
-            ev100: read_camera_exposure_ev100(reader, sdf_path)
-                .unwrap_or(lunco_render::LUNAR_SUN_EXPOSURE_EV100),
-        },
     ));
 
     info!(

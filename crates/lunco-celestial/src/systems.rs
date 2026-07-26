@@ -292,6 +292,10 @@ pub fn update_sun_light_system(
     // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
     q_site: Query<&crate::geo::GeodeticAnchor, With<crate::geo::SiteAnchor>>,
     orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
+    // One-shot latch for the unaligned-site diagnostic below.
+    mut warned_unaligned: Local<bool>,
+    // Last reported sun elevation, so the aim is logged on material change only.
+    mut last_logged_elevation: Local<f32>,
 ) {
     let Some((align_grid_tf, site_aligned)) = q_solar.iter().next() else {
         return;
@@ -299,6 +303,22 @@ pub fn update_sun_light_system(
     let align_rot = if site_aligned.is_some() {
         align_grid_tf.rotation
     } else {
+        // IDENTITY means "no site frame yet", which is right for a heliocentric
+        // scene and WRONG for a site-anchored one: the ecliptic direction gets
+        // written to the light as if it were world, aiming the sun tens of
+        // degrees off — usually below the local horizon, i.e. a black scene with
+        // only specular rim light. That used to self-heal on the next frame,
+        // when `anchor_solar_frame_to_site` had inserted `SiteAligned`; under a
+        // cadence gate the next frame can be a minute away, or never on a
+        // static-epoch scene. A site-anchored scene reaching here is a fault.
+        if !q_site.is_empty() && !*warned_unaligned {
+            *warned_unaligned = true;
+            warn!(
+                "[celestial] scene declares a site anchor but the Solar Grid is not \
+                 `SiteAligned` yet — aiming the sun in ECLIPTIC axes, which will look unlit \
+                 until `anchor_solar_frame_to_site` runs"
+            );
+        }
         Quat::IDENTITY
     };
     let Some(ephemeris) = ephemeris else {
@@ -327,7 +347,25 @@ pub fn update_sun_light_system(
     // `dir` is in ECLIPTIC (solar-frame) axes. `align_rot` on `SiteAlignGrid`
     // is R_site_to_solar, so transforming from solar to site-ENU world frame
     // requires align_rot.inverse().
+    let ecliptic_dir = dir;
     let dir = (align_rot.inverse() * dir).normalize();
+    // A site-anchored scene authors the sun's elevation/azimuth as the MEASURED
+    // consequence of its epoch (see `traverse.usda`), so the computed aim is
+    // checkable against the scene. Report each material change once: a wrong
+    // frame here is invisible in every other signal — the light stays bright and
+    // the scene simply renders as if at night.
+    let elevation_deg = (-dir.y).asin().to_degrees();
+    if (elevation_deg - *last_logged_elevation).abs() > 0.5 {
+        *last_logged_elevation = elevation_deg;
+        let azimuth_deg = dir.x.atan2(dir.z).to_degrees().rem_euclid(360.0);
+        info!(
+            "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}° \
+             (observer body {observer_body}, site-aligned {}, align {:?}, ecliptic dir {:?})",
+            site_aligned.is_some(),
+            align_rot.to_euler(EulerRot::XYZ),
+            ecliptic_dir,
+        );
+    }
     let up = if dir.dot(Vec3::Y).abs() > 0.99 {
         Vec3::X
     } else {

@@ -881,7 +881,14 @@ pub fn spawn_avatar_camera(
     commands
         .spawn((
             // Nested: a bundle tuple maxes out at 16 elements, and `SceneCamera` made 17.
-            (Camera::default(), lunco_render::SceneCamera::default()),
+            //
+            // `scene_camera_look(None)` — the SAME pair the USD camera projection
+            // uses, with no authored opinion to honour here. This camera used to
+            // spawn `SceneCamera::default()` and no `Exposure`, which left it at
+            // Bevy's EV 9.7 against the 131 klx lunar sun (~5 stops open, every
+            // surface white) and, because `project_env_settings` only writes
+            // cameras that already have the component, permanently uncorrectable.
+            (Camera::default(), lunco_render::scene_camera_look(None)),
             FreeFlightCamera {
                 yaw,
                 pitch,

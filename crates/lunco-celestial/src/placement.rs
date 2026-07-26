@@ -104,14 +104,41 @@ pub fn anchor_solar_frame_to_site(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     mut last_jd: Local<f64>,
+    // One-shot latch for the "declared a site but cannot anchor it" diagnostics
+    // below. Latched, not rate-limited: the condition is structural, so it would
+    // otherwise repeat every gated frame for the life of the scene.
+    mut warned: Local<bool>,
 ) {
+    // The diagnostics below latch so a structural fault doesn't repeat every
+    // gated frame — but the latch belongs to the SCENE, not the process. A new
+    // site anchor is a new scene: re-arm, or the twin loaded after the sandbox
+    // scene inherits a spent latch and reports nothing at all.
+    if !q_site_changed.is_empty() {
+        *warned = false;
+    }
     let Some(ephemeris) = ephemeris else { return };
     let anchor_opt = q_site.iter().next();
     // Without a site anchor the solar tree stays heliocentric.
     if anchor_opt.is_none() {
         return;
     }
+    // From here on the scene HAS asked to be site-anchored, so every remaining
+    // early return is a failure to deliver something the scene declared — and
+    // its visible consequence is severe and silent: no `SiteAligned` ⇒
+    // `update_sun_light_system` falls back to an IDENTITY alignment and aims the
+    // sun along raw ECLIPTIC axes, which puts it below the local horizon and
+    // renders the whole scene black. Say so once instead of letting a black
+    // frame be the only symptom.
     let Ok((solar_entity, mut cell, mut tf)) = q_solar.single_mut() else {
+        if !*warned {
+            *warned = true;
+            warn!(
+                "[celestial] site-anchored scene has {} Solar Grid entities (need exactly 1) — \
+                 cannot anchor the solar frame, so the sun stays ECLIPTIC-aligned and the \
+                 scene will render unlit",
+                q_solar.iter().count()
+            );
+        }
         return;
     };
 
@@ -132,11 +159,28 @@ pub fn anchor_solar_frame_to_site(
             .iter()
             .find(|b| b.ephemeris_id == anchor.body)
         else {
+            if !*warned {
+                *warned = true;
+                warn!(
+                    "[celestial] site anchor names body {} but the registry declares no such \
+                     body — cannot anchor the solar frame, so the scene will render unlit",
+                    anchor.body
+                );
+            }
             return;
         };
         // No ephemeris ⇒ we do not know where the body IS, so we cannot anchor a site to it.
         // Leaving the anchor un-placed is honest; placing it at the Sun's centre is not.
         let Some(p) = ephemeris.provider.global_position(anchor.body, jd) else {
+            if !*warned {
+                *warned = true;
+                warn!(
+                    "[celestial] ephemeris has no position for body {} at JD {jd:.5} \
+                     (NoOp provider, or the epoch is outside its span) — cannot anchor the \
+                     solar frame, so the scene will render unlit",
+                    anchor.body
+                );
+            }
             return;
         };
         let body_center = ecliptic_to_bevy(p).raw();
