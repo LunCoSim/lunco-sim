@@ -497,6 +497,11 @@ fn main() -> std::process::ExitCode {
     // With `--jitter` this resource is re-set before each update; it is still
     // `ManualDuration`, so the wall clock never enters the run either way.
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
+    // The other determinism knob: solve the celestial tree EVERY tick, so a
+    // developer's persisted cadence tolerance can never change a verdict. The
+    // production default trades ≤0.01° of celestial angle for ~10 ms/frame;
+    // a test that asserts a sun angle or a shadow must not inherit that trade.
+    app.insert_resource(lunco_celestial::cadence::CelestialCadenceSettings::EXACT);
 
     app.insert_resource(Verdict {
         result: None,

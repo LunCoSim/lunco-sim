@@ -810,15 +810,26 @@ fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>
 /// Content/Derived → deterministic hash (same on every peer); Authoritative →
 /// server-allocated (clients receive it via replication); Local → no id at all.
 ///
-/// **Migration (safe/incremental):** entities not yet tagged with a `Provenance`
-/// keep the pre-Ph1 behavior — an auto-allocated id — and we `warn!` once. This
-/// lands the machinery with zero day-one breakage; spawners get migrated to
-/// attach `Provenance` over time, after which the fallback arm can flip to a
-/// hard skip.
+/// **Identity is opt-in: `With<Provenance>`.** An entity that does not declare
+/// where it came from does not get a network identity, full stop.
+///
+/// This replaces a Ph1 migration fallback that auto-allocated an id for any
+/// untagged entity and `warn!`ed once. The fallback was not harmless:
+///
+/// - It made "I forgot to declare `Provenance`" **invisible**, which is how
+///   `rewire_usd_connections` came to re-trigger its own `Added<GlobalEntityId>`
+///   gate every frame and rebuild the entire co-sim wiring graph forever.
+/// - Because the filter was `Without<GlobalEntityId>` alone, and Bevy 0.19
+///   stores resources AS ENTITIES, it was minting network identities for **688
+///   resource entities** — `AppTypeRegistry`, `AccumulatedMouseScroll`, every
+///   `Assets<T>`. Identity for a resource is meaningless.
+///
+/// A missing `Provenance` now fails the honest way: no id, and whatever needed
+/// one says so. See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
 fn assign_global_entity_ids(
     mut commands: Commands,
     q_new: Query<
-        (Entity, Option<&Provenance>, Has<session::SkipContentStamp>),
+        (Entity, &Provenance, Has<session::SkipContentStamp>),
         Without<GlobalEntityId>,
     >,
     // Authority is derived from the role, not a separate `IsServer` flag — the two
@@ -826,7 +837,6 @@ fn assign_global_entity_ids(
     // for runtime spawns). `Host` and `Standalone` mint; a pure `Client` never
     // reaches the minting arms because it pins host-allocated ids via replication.
     role: Res<session::NetworkRole>,
-    mut warned: Local<bool>,
 ) {
     let is_authoritative = role.is_authoritative();
     for (entity, prov, runtime_instance) in q_new.iter() {
@@ -845,37 +855,21 @@ fn assign_global_entity_ids(
             continue;
         }
         match prov {
-            Some(Provenance::Local) => { /* never networked, no id */ }
-            Some(p @ (Provenance::Content { .. } | Provenance::Derived { .. })) => {
+            Provenance::Local => { /* never networked, no id */ }
+            p @ (Provenance::Content { .. } | Provenance::Derived { .. }) => {
                 if let Some(id) = identity::derive_id(p) {
                     commands
                         .entity(entity)
                         .try_insert(GlobalEntityId::from_raw(id));
                 }
             }
-            Some(Provenance::Authoritative) => {
+            Provenance::Authoritative => {
                 // Only an authoritative peer mints; clients receive the id via replication.
                 if is_authoritative {
                     commands
                         .entity(entity)
                         .try_insert(GlobalEntityId::allocate_authoritative());
                 }
-            }
-            None => {
-                // Untagged entity — preserve pre-Ph1 behavior (auto-allocate),
-                // warn once. Migrate spawners to attach `Provenance` to opt into
-                // deterministic identity / Local opt-out.
-                if !*warned {
-                    warn!(
-                        "entity without `Provenance` got an auto-allocated \
-                         GlobalEntityId (Ph1 migration fallback). Tag spawners \
-                         with a Provenance to opt into deterministic identity."
-                    );
-                    *warned = true;
-                }
-                commands
-                    .entity(entity)
-                    .try_insert(GlobalEntityId::allocate_authoritative());
             }
         }
     }

@@ -6979,6 +6979,7 @@ dependencies = [
  "lunco-materials",
  "lunco-obstacle-field",
  "lunco-render",
+ "lunco-settings",
  "lunco-storage",
  "lunco-terrain-core",
  "lunco-terrain-globe",

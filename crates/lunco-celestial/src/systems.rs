@@ -14,31 +14,41 @@ use lunco_time::WorldTime;
 pub fn ephemeris_update_system(
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
-    mut q_entities: Query<(
-        Entity,
-        &mut CellCoord,
-        &mut Transform,
-        Option<&CelestialBody>,
-        Option<&CelestialReferenceFrame>,
-    )>,
+    // The `Option`s pick the branch; the FILTER is what keeps this off every
+    // other entity in the world. Without it the query matched anything with
+    // `CellCoord + Transform` — every rover wheel, every terrain tile, ~2373
+    // entities on `sandbox_scene.usda` — and `continue`d on all but a handful of
+    // bodies, for 3-5 ms a frame. An `Option<&T>` is a projection, never a
+    // predicate: if a system only wants `T`-ish entities, say so in the filter.
+    mut q_entities: Query<
+        (
+            Entity,
+            &mut CellCoord,
+            &mut Transform,
+            Option<&CelestialBody>,
+            Option<&CelestialReferenceFrame>,
+        ),
+        Or<(With<CelestialBody>, With<CelestialReferenceFrame>)>,
+    >,
     _q_all_parents: Query<&ChildOf>,
     _q_frames: Query<&CelestialReferenceFrame>,
     q_grids: Query<&Grid>,
-    mut last_jd: Local<f64>,
 ) {
     let Some(ephemeris) = ephemeris else {
         return;
     };
 
-    // Gate: re-project the whole body/frame hierarchy only when the epoch
-    // has actually advanced. `last_jd` starts at 0.0 (a JD this clock never
-    // takes), so the first real epoch always runs; thereafter a paused /
-    // time-warp-stopped clock skips the full recompute. (This is the gate
-    // the doc comment always promised but never wired up.)
-    if (world.epoch_jd - *last_jd).abs() < 1e-9 {
-        return;
-    }
-    *last_jd = world.epoch_jd;
+    // The epoch gate is NOT here any more. It used to be a private
+    // `Local<f64>` comparing against 1e-9 JD — i.e. "did the epoch change at
+    // all" — which meant a running clock re-projected the whole body/frame
+    // hierarchy every single frame. It is now the shared
+    // `cadence::celestial_epoch_advanced` run condition, on an angular error
+    // budget, applied at registration alongside the other four celestial
+    // systems.
+    //
+    // Deliberately shared and not re-derived locally: two gates with two
+    // `Local`s drift, and a half-advanced celestial tree puts the sun and the
+    // bodies at different instants.
 
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body {
