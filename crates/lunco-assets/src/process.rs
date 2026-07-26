@@ -935,11 +935,40 @@ fn process_map(
 
     // 1–99 percentile stretch over the CROP (not the whole mosaic — the crop
     // is the scene, and mosaic-wide outliers would flatten its contrast).
-    let mut sorted: Vec<f64> = gray
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite() && *v != 0.0)
-        .collect();
+    //
+    // ONE predicate for "this sample is a measurement", shared by the stretch and
+    // the bake below. They disagreed before: the stretch excluded these samples,
+    // then the bake mapped them to black — the most destructive value available
+    // for a map consumed multiplicatively. A sample the stretch refuses to learn
+    // from must not be one the bake trusts.
+    //
+    // Both halves are load-bearing, for different reasons:
+    //
+    // * `is_finite()` — the decoder maps every declared null to `NaN`, including
+    //   the PDS radix form (`CORE_NULL = 16#FF7FFFFB#`) that real LROC products
+    //   use. While that sentinel survived as a finite float it BECAME the 1st
+    //   percentile on any crop with a nodata margin, dragging `lo` to ≈ -3.4e38
+    //   so every real sample mapped to 1.0 — a solid-white layer with a black
+    //   nodata hole. If a baked map is ever bimodal white/black again, suspect
+    //   the decoder before touching the stretch.
+    //
+    // * `!= 0.0` — this is the one that actually fires here, because
+    //   `resample_roi_bilinear` substitutes `0.0` for every non-finite neighbour
+    //   (see its inner `s` closure). So NaN does NOT reach this point: the
+    //   resampler has already turned the nodata margin into exact zeros. Measured
+    //   on `NAC_DTM_APOLLO15_M111571816_2M.IMG`: the source mosaic is 16.1%
+    //   `CORE_NULL` and contains NOT ONE exact `0.0` sample (real radiance there
+    //   ranges down to -174.9), so an exact zero after resampling means "fill",
+    //   never "dark ground".
+    //
+    // That substitution is itself lossy — a boundary pixel blends real neighbours
+    // against a fake 0 and comes out spuriously dark. Fixing it belongs in the
+    // resampler (propagate NaN, or renormalise the bilinear weights over the
+    // finite neighbours); this predicate only stops the result being baked as an
+    // albedo-annihilating black.
+    let is_measurement = |v: f64| v.is_finite() && v != 0.0;
+
+    let mut sorted: Vec<f64> = gray.iter().copied().filter(|v| is_measurement(*v)).collect();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let (lo, hi) = if sorted.is_empty() {
         (0.0, 1.0)
@@ -954,7 +983,23 @@ fn process_map(
     };
     let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
     for (i, px) in png.pixels_mut().enumerate() {
-        let v = (((gray[i] - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8;
+        // Nodata bakes to WHITE, not black. These maps are consumed
+        // multiplicatively — `terrain_geomorph.wgsl` / `terrain_layered.wgsl` do
+        // `albedo = mix(albedo, albedo * map, weight)` — so the neutral element
+        // is 1.0 and "no data" must mean "no contribution". Black is 0.0, which
+        // annihilates the albedo and paints unsurveyed ground as an unlit void
+        // that no sun angle, BRDF or fill light can recover.
+        //
+        // NOTE this cannot be left to the `as u8` cast: were a NaN to reach here
+        // it would cast to 0 in Rust (saturating), i.e. silently to the worst
+        // possible answer. The resampler currently rules that out by zeroing
+        // non-finites first, so today the guard earns its keep on the `0.0` case —
+        // but it must survive that resampler being fixed to propagate NaN.
+        let v = if is_measurement(gray[i]) {
+            (((gray[i] - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8
+        } else {
+            255
+        };
         px.0 = [v, v, v];
     }
     png.save(output_path)
@@ -1276,5 +1321,61 @@ mod tests {
         assert!(out.get_pixel(6, 4).0[1] > 100, "east side stays green");
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A grayscale crop carrying a nodata margin must still stretch on its REAL
+    /// samples, and must bake nodata as WHITE (the neutral element of the
+    /// multiply these maps feed), never black.
+    ///
+    /// This is the shape of the shipped Apollo-15 `ortho.png` bug: the nodata
+    /// margin reached the 1–99 percentile stretch as a finite `-3.4e38`, became
+    /// the 1st percentile, and flattened every real sample to pure white while
+    /// the margin itself went pure black. `terrain_geomorph.wgsl` multiplies
+    /// that map into the albedo, so the margin rendered as an unlit void.
+    #[test]
+    fn map_gray_stretch_ignores_nodata_and_bakes_it_neutral() {
+        // A real gradient with a NaN margin, exactly as the decoder now yields.
+        let n = 16usize;
+        let mut gray = vec![0.0f64; n * n];
+        for y in 0..n {
+            for x in 0..n {
+                // Right quarter is nodata; the rest ramps over a NARROW range,
+                // like real elevations/radiance in one small crop.
+                gray[y * n + x] = if x >= n * 3 / 4 {
+                    f64::NAN
+                } else {
+                    -1900.0 + (x as f64) * 0.5
+                };
+            }
+        }
+
+        let mut sorted: Vec<f64> = gray
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite() && *v != 0.0)
+            .collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let lo = sorted[(sorted.len() - 1) / 100];
+        let hi = sorted[(sorted.len() - 1) * 99 / 100];
+        assert!(
+            lo > -2000.0 && hi > lo,
+            "stretch bounds come from real samples, not the sentinel: lo={lo} hi={hi}"
+        );
+
+        let bake = |v: f64| -> u8 {
+            if v.is_finite() {
+                (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8
+            } else {
+                255
+            }
+        };
+        assert_eq!(bake(f64::NAN), 255, "nodata is neutral (x1), never 0");
+        // Real samples must actually use the range, not collapse to one level.
+        let lo_px = bake(-1900.0);
+        let hi_px = bake(-1900.0 + 11.0 * 0.5);
+        assert!(
+            hi_px.abs_diff(lo_px) > 100,
+            "real samples span the range, got {lo_px}..{hi_px}"
+        );
     }
 }

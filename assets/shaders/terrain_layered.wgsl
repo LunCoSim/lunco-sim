@@ -35,8 +35,8 @@
     mesh_view_bindings::lights,
 }
 #import lunco::horizon::sun_visibility_resolved
-#import lunco::lunar::regolith_factor
-#import lunco::noise::fbm
+#import lunco::lunar::{regolith_factor, ORTHO_GAIN}
+#import lunco::terrain::{aa_fade, bump_layer, layer_height, ramp, surface_fbm}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -67,6 +67,17 @@
 //!@default weight_ao         0
 //!@ui      weight_normal     0 1         "Normal map weight"
 //!@default weight_normal     0
+// --- lunar photometry (lunco::lunar) ---------------------------------------
+// Fitted lunar values (Chrono/UW-Madison, arxiv 2410.04371 Table 1), not taste.
+// MUST match `terrain_geomorph.wgsl`: the same site renders through whichever of
+// these shaders its terrain happens to use, so a divergence here is a divergence
+// in how the Moon looks depending on streaming.
+//!@ui      surge_amp         0 3         "Opposition surge amplitude (Hapke Bs0)"
+//!@default surge_amp         1.80
+//!@ui      surge_width       0.01 0.3    "Opposition surge width, rad (Hapke hs)"
+//!@default surge_width       0.0715
+//!@ui      photometry_gain   0.2 2       "Photometry gain (1 = Lambert parity at mu0==mu)"
+//!@default photometry_gain   1.0
 //!@engine  sun_dir
 //!@engine  sun_dir_world
 //!@engine  sun_tan_radius
@@ -89,6 +100,9 @@ struct Material {
     weight_rough:      f32,
     weight_ao:         f32,
     weight_normal:     f32,
+    surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
+    surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
+    photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
     sun_tan_radius:    f32,  // engine-filled: tan(sun angular radius)
     sun_dir:           vec3<f32>,  // engine-filled: terrain-local to-sun dir
     sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun (lunar BRDF)
@@ -131,41 +145,6 @@ var normal_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(9)
 var normal_smp: sampler;
 
-fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
-    return saturate((x - lo) / (hi - lo));
-}
-
-fn aa_fade(scale: f32, pw: f32) -> f32 {
-    let px_per_period = 1.0 / max(scale * pw, 1e-6);
-    return saturate((px_per_period - 6.0) / 18.0);
-}
-
-fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
-    return ramp(fbm(p * scale, octaves, gain), lo, hi);
-}
-
-fn bump_layer(
-    n: vec3<f32>, p: vec3<f32>,
-    scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
-    strength: f32, out_h: ptr<function, f32>,
-) -> vec3<f32> {
-    var up = vec3(0.0, 1.0, 0.0);
-    if (abs(n.y) > 0.99) { up = vec3(1.0, 0.0, 0.0); }
-    let t = normalize(cross(up, n));
-    let b = cross(n, t);
-    let eps = 0.5 / scale;
-    let h0 = layer_height(p, scale, octaves, gain, lo, hi);
-    let ht = layer_height(p + t * eps, scale, octaves, gain, lo, hi);
-    let hb = layer_height(p + b * eps, scale, octaves, gain, lo, hi);
-    *out_h = h0;
-    let grad = (ht - h0) * t + (hb - h0) * b;
-    let perturbed = n - strength * grad / eps;
-    if (length(perturbed) < 1e-3 || dot(perturbed, n) <= 0.0) {
-        return n;
-    }
-    return normalize(perturbed);
-}
-
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let macro_scale = mat.macro_clump_scale;
@@ -202,7 +181,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
     let dust_fade = aa_fade(0.008, pw);
     if (dust_fade > 0.0) {
-        let dust = fbm(p * 0.008, 3, 0.5);
+        let dust = surface_fbm(p * 0.008, 3, 0.5);
         albedo *= 1.0 + (dust - 0.5) * 0.18 * dust_fade;
     }
     albedo *= 1.0 + (mix(0.5, mid_h, mid_fade) - 0.5) * mottle;
@@ -214,10 +193,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Guarded by VERTEX_UVS_A: with no UVs we stay pure procedural.
 #ifdef VERTEX_UVS_A
     let uv = in.uv;
-    // Albedo: real colour mosaic mixed over the procedural albedo.
+    // Albedo: real colour mosaic mixed over the procedural albedo. `ORTHO_GAIN`
+    // undoes the bake's 1–99 percentile stretch (mean ≈ 1/3, not 1) so the
+    // multiply modulates the regolith instead of dimming it — see the constant's
+    // definition in `lunar_brdf.wgsl`. Must stay identical to the streamed path
+    // in `terrain_geomorph.wgsl` or the same scene reads two ways.
     if (mat.weight_albedo > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
-        albedo = mix(albedo, albedo * a, mat.weight_albedo);
+        albedo = mix(albedo, albedo * a * ORTHO_GAIN, mat.weight_albedo);
     }
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a
@@ -251,7 +234,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var lunar_k = 1.0;
     let sw = mat.sun_dir_world;
     if (dot(sw, sw) > 0.25) {
-        lunar_k = regolith_factor(pbr_input.N, normalize(sw), pbr_input.V);
+        lunar_k = regolith_factor(
+            pbr_input.N, normalize(sw), pbr_input.V,
+            mat.surge_amp, mat.surge_width, mat.photometry_gain);
     }
     pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
     pbr_input.material.perceptual_roughness = roughness;

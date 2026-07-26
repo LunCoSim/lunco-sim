@@ -61,7 +61,7 @@ use crate::stream_viz::DemHeightField;
 /// window ≈ 8 m/texel.
 ///
 /// Raising this cannot close a mid-depth detail hole: the map only blends in
-/// where it is FINER than the tile mesh (`tile_map_weights` needs
+/// where it is FINER than the tile mesh (`tile_map_ratio` / `map_weights` need
 /// `r = LAYER_RES / (2^depth · 48) > 0.75`, depth ≤ 4.8 at 1024), while over-zoom
 /// craterlets fade out going COARSER — any gap between the two is closed from the
 /// MESH side (the scene's `lunco:layer:maxFeature`), not by resolution the far

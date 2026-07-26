@@ -46,7 +46,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
-#import lunco::noise::fbm
+#import lunco::terrain::{aa_fade, bump_layer, layer_height, ramp, surface_fbm}
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
@@ -70,6 +70,17 @@
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6       "Albedo mottle"
 //!@default mottle            0.22
+// --- lunar photometry (lunco::lunar) ---------------------------------------
+// Fitted lunar values (Chrono/UW-Madison, arxiv 2410.04371 Table 1), not taste.
+// MUST match `terrain_geomorph.wgsl`: the same site renders through whichever of
+// these shaders its terrain happens to use, so a divergence here is a divergence
+// in how the Moon looks depending on streaming.
+//!@ui      surge_amp         0 3         "Opposition surge amplitude (Hapke Bs0)"
+//!@default surge_amp         1.80
+//!@ui      surge_width       0.01 0.3    "Opposition surge width, rad (Hapke hs)"
+//!@default surge_width       0.0715
+//!@ui      photometry_gain   0.2 2       "Photometry gain (1 = Lambert parity at mu0==mu)"
+//!@default photometry_gain   1.0
 //!@engine  sun_dir
 //!@engine  sun_dir_world
 //!@engine  sun_tan_radius
@@ -87,6 +98,9 @@ struct Material {
     fine_bump:         f32,
     rough_mix:         f32,
     mottle:            f32,
+    surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
+    surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
+    photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
     sun_tan_radius:    f32,  // engine-filled: tan(sun angular radius)
     sun_dir:           vec3<f32>,  // engine-filled: terrain-local to-sun dir
     sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun (lunar BRDF)
@@ -116,58 +130,18 @@ var shadow_cache: texture_2d<f32>;
 var shadow_cache_sampler: sampler;
 
 // Blender linear ColorRamp with two stops (black @ lo, white @ hi).
-fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
-    return saturate((x - lo) / (hi - lo));
-}
-
 // Analytic anti-aliasing weight for a noise layer of `scale` periods/metre
 // against pixel footprint `pw` (metres). Full strength only while features
 // span ≥24 px, gone by 6 px: features a few pixels wide still read as
 // static even when technically resolvable, so the rolloff starts well
 // before Nyquist and spans two octaves — a wide band also keeps the
 // texture→smooth transition from showing as a line on the ground.
-fn aa_fade(scale: f32, pw: f32) -> f32 {
-    let px_per_period = 1.0 / max(scale * pw, 1e-6);
-    return saturate((px_per_period - 6.0) / 18.0);
-}
-
 // --- height-field bump ---------------------------------------------------
 
 // Height of one noise layer at world point p.
-fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
-    return ramp(fbm(p * scale, octaves, gain), lo, hi);
-}
-
 // Perturbs n by the tangent-plane gradient of a height layer (classic bump
 // mapping, same as Blender's Bump node). Returns the new normal; also writes
 // the centre-tap height to `out_h` so the roughness path can reuse it.
-fn bump_layer(
-    n: vec3<f32>, p: vec3<f32>,
-    scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
-    strength: f32, out_h: ptr<function, f32>,
-) -> vec3<f32> {
-    // Tangent basis from the (already possibly perturbed) normal.
-    var up = vec3(0.0, 1.0, 0.0);
-    if (abs(n.y) > 0.99) { up = vec3(1.0, 0.0, 0.0); }
-    let t = normalize(cross(up, n));
-    let b = cross(n, t);
-    // Sample spacing: half a period of the base octave.
-    let eps = 0.5 / scale;
-    let h0 = layer_height(p, scale, octaves, gain, lo, hi);
-    let ht = layer_height(p + t * eps, scale, octaves, gain, lo, hi);
-    let hb = layer_height(p + b * eps, scale, octaves, gain, lo, hi);
-    *out_h = h0;
-    let grad = (ht - h0) * t + (hb - h0) * b;
-    // Guard against a degenerate perturbation: a strong bump on a steep ramp
-    // can push the normal to ~zero length or below the surface → normalize()
-    // would NaN / flip. Keep the geometric normal in those cases.
-    let perturbed = n - strength * grad / eps;
-    if (length(perturbed) < 1e-3 || dot(perturbed, n) <= 0.0) {
-        return n;
-    }
-    return normalize(perturbed);
-}
-
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     // Named params (defaults supplied by the schema, so no `select` fallbacks).
@@ -214,7 +188,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // hectometre dust patches (own AA fade for orbital views).
     let dust_fade = aa_fade(0.008, pw);
     if (dust_fade > 0.0) {
-        let dust = fbm(p * 0.008, 3, 0.5);
+        let dust = surface_fbm(p * 0.008, 3, 0.5);
         albedo *= 1.0 + (dust - 0.5) * 0.18 * dust_fade;
     }
     albedo *= 1.0 + (mix(0.5, mid_h, mid_fade) - 0.5) * mottle;
@@ -251,7 +225,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let sw = mat.sun_dir_world;
     var lunar_k = 1.0;
     if (dot(sw, sw) > 0.25) {
-        lunar_k = regolith_factor(pbr_input.N, normalize(sw), pbr_input.V);
+        lunar_k = regolith_factor(
+            pbr_input.N, normalize(sw), pbr_input.V,
+            mat.surge_amp, mat.surge_width, mat.photometry_gain);
     }
     pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
     pbr_input.material.perceptual_roughness = roughness;

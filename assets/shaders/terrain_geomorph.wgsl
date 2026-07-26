@@ -30,8 +30,8 @@
     mesh_view_bindings::view,
 }
 #import lunco::pbr_lit::{lit_n, sun_to_light}
-#import lunco::noise::vnoise
-#import lunco::lunar::regolith_factor
+#import lunco::terrain::{aa_fade, bump_layer, layer_height, map_weights, ramp, surface_fbm}
+#import lunco::lunar::{regolith_factor, ORTHO_GAIN}
 #import lunco::transfer::{slope_hazard_color, slope_of}
 
 //!@ui      albedo            color  "Albedo"
@@ -52,16 +52,25 @@
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6  "Albedo mottle"
 //!@default mottle            0.22
-//!@ui      weight_normal     0 1    "Baked normal-map weight"
-//!@default weight_normal     0
-//!@ui      weight_ao         0 1    "Baked AO weight"
-//!@default weight_ao         0
-//!@ui      weight_tone       0 1    "Baked tonal (albedo) weight"
-//!@default weight_tone       0
+// weight_normal / weight_ao / weight_tone are NO LONGER uniforms: they are
+// derived per fragment from `map_ratio` and the CDLOD morph, so they cannot step
+// at an LOD boundary. See `map_weights` in `lunco::terrain`.
+//!@default map_ratio        1.0
 //!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
 //!@default weight_albedo     0
 //!@ui      weight_mineral    0 1    "Overlay drape weight (unlit)"
 //!@default weight_mineral    0
+// --- lunar photometry (lunco::lunar) ---------------------------------------
+// The knobs that decide whether this reads as the Moon or as grey PBR. Defaults
+// are the fitted lunar values from the Chrono/UW-Madison sensor simulator
+// (arxiv 2410.04371 Table 1), NOT taste: `Bs0 = 1.80238`, `hs = 0.07145 rad`.
+// Ranges bracket maria (darker, less backscatter) through highlands.
+//!@ui      surge_amp         0 3    "Opposition surge amplitude (Hapke Bs0)"
+//!@default surge_amp         1.80
+//!@ui      surge_width       0.01 0.3 "Opposition surge width, rad (Hapke hs)"
+//!@default surge_width       0.0715
+//!@ui      photometry_gain   0.2 2  "Photometry gain (1 = Lambert parity at mu0==mu)"
+//!@default photometry_gain   1.0
 //!@engine  shadow_cache_on
 //!@engine  csm_far
 //!@default morph_start  1.0e20
@@ -82,11 +91,12 @@ struct Material {
     fine_bump:         f32,
     rough_mix:         f32,
     mottle:            f32,
-    weight_normal:     f32,  // baked meso normal (fades IN where geometry is coarser than the map)
-    weight_ao:         f32,  // baked ambient occlusion (crater bowls/valleys darken)
-    weight_tone:       f32,  // baked relief-correlated albedo scalar (normal_tex alpha)
+    map_ratio:         f32,  // engine-filled: tile vertex pitch / map texel pitch at THIS depth
     weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
     weight_mineral:    f32,  // AUTHORED overlay drape, composited UNLIT after lighting
+    surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
+    surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
+    photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
     shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache bound and valid
     csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
@@ -139,57 +149,6 @@ var shadow_cache: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(11)
 var shadow_cache_sampler: sampler;
 
-// --- 3D value noise + FBM (ported from regolith.wgsl) --------------------
-
-fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
-    var sum = 0.0;
-    var amp = 1.0;
-    var total = 0.0;
-    var q = p;
-    // Rotate the domain about +Y by the golden angle (≈2.4 rad) each octave.
-    // Value noise is axis-aligned, so un-rotated octaves stack into diagonal
-    // grid streaks that read as static under grazing lunar light; a per-octave
-    // rotation decorrelates them into isotropic grain.
-    let rc = cos(2.399963);
-    let rs = sin(2.399963);
-    for (var o = 0; o < octaves; o++) {
-        sum += amp * vnoise(q);
-        total += amp;
-        amp *= gain;
-        q *= 2.0;
-        q = vec3(rc * q.x - rs * q.z, q.y, rs * q.x + rc * q.z);
-    }
-    return sum / total;
-}
-
-fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
-    return saturate((x - lo) / (hi - lo));
-}
-
-// Layer CUT-OUT threshold, in screen pixels per noise period. A layer costs its
-// full FBM (3 × `layer_height`, each octave an 8-tap `vnoise`) on EVERY fragment
-// where this is > 0 — so this number, not the ramp width, is what sets the radius
-// of the expensive disc around the camera. At 3 px the meso layer alone ran out to
-// ~960 m: essentially the whole screen when standing on the surface (~20 vnoise ≈
-// 160 hash13 per pixel).
-//
-// 5 px cuts each layer's disc radius by ~40% (⇒ ~2.8× fewer expensive fragments)
-// and drops exactly the band that was closest to aliasing anyway: a 5 px period is
-// where value-noise detail stops reading as relief and starts reading as shimmer.
-// The baked normal/AO/tone maps carry the relief past the hand-off — the ramp below
-// still fades rather than cuts, so nothing pops.
-const AA_CUT_PX: f32 = 5.0;
-const AA_RAMP_PX: f32 = 7.0;
-
-fn aa_fade(scale: f32, pw: f32) -> f32 {
-    let px_per_period = 1.0 / max(scale * pw, 1e-6);
-    // Fade a layer out once its period shrinks under `AA_CUT_PX`. The ramp used to
-    // be very wide (/22 — FBM carried to ~1 km because nothing else textured the
-    // far field, at real fragment cost); now the baked derived maps take over
-    // beyond the near field, so the procedural layers can hand off much sooner.
-    return saturate((px_per_period - AA_CUT_PX) / AA_RAMP_PX);
-}
-
 // NOTE (Phase 1, 2026-07-05): the fragment previously faked crater + rock relief
 // here as a Voronoi HEIGHT field perturbing only the shading normal. That read as
 // a painted-on "mess" up close — normal-only features have no silhouette/parallax,
@@ -219,32 +178,6 @@ fn lod_depth_color(d: f32) -> vec3<f32> {
         vec3(0.85, 0.30, 0.80),
     );
     return p[i];
-}
-
-fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
-    return ramp(fbm(p * scale, octaves, gain), lo, hi);
-}
-
-fn bump_layer(
-    n: vec3<f32>, p: vec3<f32>,
-    scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
-    strength: f32, out_h: ptr<function, f32>,
-) -> vec3<f32> {
-    var up = vec3(0.0, 1.0, 0.0);
-    if (abs(n.y) > 0.99) { up = vec3(1.0, 0.0, 0.0); }
-    let t = normalize(cross(up, n));
-    let b = cross(n, t);
-    let eps = 0.5 / scale;
-    let h0 = layer_height(p, scale, octaves, gain, lo, hi);
-    let ht = layer_height(p + t * eps, scale, octaves, gain, lo, hi);
-    let hb = layer_height(p + b * eps, scale, octaves, gain, lo, hi);
-    *out_h = h0;
-    let grad = (ht - h0) * t + (hb - h0) * b;
-    let perturbed = n - strength * grad / eps;
-    if (length(perturbed) < 1e-3 || dot(perturbed, n) <= 0.0) {
-        return n;
-    }
-    return normalize(perturbed);
 }
 
 // --- vertex: CDLOD geomorph ---------------------------------------------
@@ -335,13 +268,33 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // of parallax is imperceptible) + lunar photometry + broad albedo variation.
     var n = normalize(in.world_normal);
 
+    // Baked-map weights, evaluated HERE rather than uploaded per tile.
+    //
+    // `map_ratio` is this tile's vertex-pitch / map-texel-pitch at its own depth.
+    // Re-deriving the SAME morph factor the vertex stage used (same formula, same
+    // uniforms, distance instead of the pre-morph position — a difference far below
+    // one texel) lets the ratio slide toward the parent's exactly as the geometry
+    // does: `r_parent = 2 * r_self`, because the parent has half the vertices.
+    //
+    // This is what removes the straight brightness seam along quadtree edges. The
+    // weights used to be CPU-computed from the INTEGER depth, so they stepped at
+    // every LOD boundary while the mesh morphed through it continuously.
+    let dist_f = distance(view.world_position, p);
+    var morph_f = 0.0;
+    if (mat.morph_end > mat.morph_start) {
+        morph_f = smoothstep(mat.morph_start, mat.morph_end, dist_f);
+    }
+    let w = map_weights(mat.map_ratio * (1.0 + morph_f));
+    let weight_normal = w.x;
+    let weight_ao = w.y;
+    let weight_tone = w.z;
+
     // Baked meso normal: where tile geometry has LOD'd coarser than the map's
     // texel pitch (far tiles), the map carries the crater rims/slopes the mesh
-    // no longer has. weight_normal is set per LOD depth by the streamer (0 on
-    // fine near tiles whose geometry out-resolves the map).
-    if (mat.weight_normal > 0.0) {
+    // no longer has (0 on fine near tiles whose geometry out-resolves the map).
+    if (weight_normal > 0.0) {
         let n_baked = normalize(map_n.xyz * 2.0 - 1.0);
-        n = normalize(mix(n, n_baked, mat.weight_normal));
+        n = normalize(mix(n, n_baked, weight_normal));
     }
 
     //   • meso hummocks — the ~0.7–2 m relief band. The geometry stack carries
@@ -385,7 +338,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Large-scale tonal variation (albedo only — cheap, no relief, carries far).
     // Very low frequency = broad maria/highland-style patches, NOT per-metre
     // speckle. This breaks up the flat grey without inventing fake geometry.
-    let dust = fbm(p * 0.004, 3, 0.5);
+    let dust = surface_fbm(p * 0.004, 3, 0.5);
     albedo *= 1.0 + (dust - 0.5) * mottle;
 
     // Metre-scale tonal grain: between the 250 m dust wash above and the
@@ -395,7 +348,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // height in, plus an independent ~3 m fbm. Footprint-faded like the bumps.
     let grain_fade = aa_fade(0.35, pw);
     if (grain_fade > 0.0) {
-        let grain = fbm(p * 0.35, 2, 0.5);
+        let grain = surface_fbm(p * 0.35, 2, 0.5);
         albedo *= 1.0 + (grain - 0.5) * 0.16 * grain_fade;
         albedo *= 1.0 + (meso_h - 0.5) * 0.10 * meso_fade;
     }
@@ -403,13 +356,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Baked relief tone: rims/ejecta brighter, bowls darker (normal_tex alpha,
     // 0.5 = neutral). This is what keeps distant relief legible after the
     // procedural layers and even the mesh detail have faded out.
-    albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * mat.weight_tone);
+    albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * weight_tone);
 
     // Baked ambient occlusion: crater interiors and valley floors receive less
     // sky/bounce light. Darkens the diffuse base rather than the direct sun
     // term (lit_n owns that), which visually matches at the distances where
     // this weight is raised.
-    let map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, mat.weight_ao);
+    let map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, weight_ao);
     albedo *= map_ao;
 
     // AUTHORED albedo (the site's real orthophoto). Applied HERE — after every
@@ -417,15 +370,30 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // then lights, and so the micro-grain above still modulates it instead of
     // being erased by it.
     //
-    // MODULATES rather than replaces, and the formula is character-for-character
-    // the one in `terrain_layered.wgsl`: `mix(albedo, albedo * a * 3.0, w)`.
-    // Both paths must agree on what a given `weight_albedo` MEANS, or the same
-    // authored scene reads differently depending on whether its site streams —
-    // and the ×3 is not arbitrary: the procedural base sits near 0.13 while the
-    // baked ortho is a 1–99 percentile stretch, so a plain multiply would render
-    // the real photograph as near-black mud.
+    // MODULATES rather than replaces, and the formula must stay character-for-
+    // character the one in `terrain_layered.wgsl`. Both paths must agree on what
+    // a given `weight_albedo` MEANS, or the same authored scene reads differently
+    // depending on whether its site streams.
+    //
+    // ORTHO_GAIN is what makes the multiply energy-preserving, and it is NOT
+    // arbitrary. The bake (`process.rs`, `kind = "map"`) writes a 1–99 PERCENTILE
+    // STRETCH: it spends the full 0..255 range on the site's own brightness
+    // spread, so the result is a CONTRAST map whose mean lands near 1/3 — not a
+    // reflectance map with mean 1. Multiplying by it therefore does not tint the
+    // regolith, it DIMS it by that mean.
+    //
+    // Measured on the shipped Apollo 15 ortho (2500², 2026-07-26): mean over real
+    // measurements = 0.412, so a plain multiply renders the authored 0.13 lunar
+    // albedo at 0.054 — 41% of it, a permanent ~1.3-stop underexposure of the
+    // ground and nothing else. That is the "near-black mud" this comment used to
+    // warn about while the code below did the plain multiply anyway.
+    //
+    // The exact normaliser is 1/mean ≈ 2.43; 3.0 is the authored round number and
+    // lands at 0.161 (124% of lunar), which is the right side of correct for a
+    // stretch whose mean drifts per site. If a future bake normalises the map to
+    // unit mean, this constant goes to 1.0 and the comment goes with it.
     if (mat.weight_albedo > 0.0) {
-        albedo = mix(albedo, albedo * map_a, mat.weight_albedo);
+        albedo = mix(albedo, albedo * map_a * ORTHO_GAIN, mat.weight_albedo);
     }
 
     // --- Lunar photometry: the actual realism lever -----------------------
@@ -437,7 +405,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // instead of generic grey PBR.
     let L = normalize(sun_to_light());
     let V = normalize(view.world_position - p);
-    let lunar_k = regolith_factor(n, L, V);
+    let lunar_k = regolith_factor(
+        n, L, V, mat.surge_amp, mat.surge_width, mat.photometry_gain);
     let base_albedo = albedo;
     albedo = albedo * lunar_k;
 
@@ -454,7 +423,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Regolith is rough and non-metallic; rough_mix nudges it, and the baked
     // slope-derived roughness (surface_tex R) leans in where the maps are live.
     let roughness =
-        clamp(mix(0.6 + rough_mix * 0.4, map_s.r, 0.35 * mat.weight_ao), 0.05, 1.0);
+        clamp(mix(0.6 + rough_mix * 0.4, map_s.r, 0.35 * weight_ao), 0.05, 1.0);
     var color = lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
 
     // Far-field terrain self-shadow: beyond the Sun cascades, sample the
@@ -492,7 +461,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         if (mat.overlay_mode < 1.5) {
             var n_haz = n_geo;
 #ifdef VERTEX_UVS_A
-            if (mat.weight_normal > 0.0) {
+            if (weight_normal > 0.0) {
                 n_haz = normalize(map_n.xyz * 2.0 - 1.0);
             }
 #endif

@@ -94,6 +94,39 @@ fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
     return sum / total;
 }
 
+/// `fbm` with the domain ROTATED about +Y by the golden angle (≈2.4 rad) each
+/// octave — the 3D counterpart of `fbm2d`'s rotation, and for the same reason.
+///
+/// Value noise is axis-aligned, so un-rotated octaves stack into diagonal grid
+/// streaks that read as static under grazing lunar light. `fbm2d` has rotated
+/// since it was written; the 3D `fbm` above never did, so every native terrain
+/// shader that used it inherited the streaks while its own `_web` twin (on
+/// `fbm2d`) did not.
+///
+/// This function is not new code: it is `terrain_geomorph.wgsl`'s private copy,
+/// which fixed the streaking locally in 2026-07 and was never promoted here. The
+/// other two native terrain shaders kept calling the unrotated `fbm`. Lifting it
+/// into the shared module is what lets `lunco::terrain` hand every terrain shader
+/// the same isotropic grain on both platforms.
+///
+/// `fbm` is left as-is: non-terrain callers were authored against its output.
+fn fbm_rot(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
+    var sum = 0.0;
+    var amp = 1.0;
+    var total = 0.0;
+    var q = p;
+    let rc = cos(2.399963);
+    let rs = sin(2.399963);
+    for (var o = 0; o < octaves; o++) {
+        sum += amp * vnoise(q);
+        total += amp;
+        amp *= gain;
+        q *= 2.0;
+        q = vec3(rc * q.x - rs * q.z, q.y, rs * q.x + rc * q.z);
+    }
+    return sum / total;
+}
+
 fn hash12(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 31.32);

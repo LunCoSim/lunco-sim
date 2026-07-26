@@ -28,6 +28,13 @@
 // albedo is author-settable; the rest are engine-filled by the horizon system.
 //!@ui      albedo color "Albedo"
 //!@default albedo 0.13,0.13,0.13
+// --- lunar photometry (lunco::lunar) — see `terrain_geomorph.wgsl` -----------
+//!@ui      surge_amp         0 3      "Opposition surge amplitude (Hapke Bs0)"
+//!@default surge_amp         1.80
+//!@ui      surge_width       0.01 0.3 "Opposition surge width, rad (Hapke hs)"
+//!@default surge_width       0.0715
+//!@ui      photometry_gain   0.2 2    "Photometry gain (1 = Lambert parity at mu0==mu)"
+//!@default photometry_gain   1.0
 //!@engine  sun_dir
 //!@engine  sun_dir_world
 //!@engine  sun_tan_radius
@@ -38,6 +45,9 @@
 struct Material {
     albedo:         vec3<f32>,
     sun_tan_radius: f32,
+    surge_amp:      f32,  // Hapke Bs0 — opposition surge amplitude
+    surge_width:    f32,  // Hapke hs (rad) — surge angular width
+    photometry_gain: f32, // trim on the Lommel-Seeliger x surge multiplier
     sun_dir:        vec3<f32>,    // engine: terrain-local to-sun (heightfield march)
     sun_dir_world:  vec3<f32>,    // engine: world-space to-sun (lunar BRDF)
     hf_size:        vec2<f32>,
@@ -81,7 +91,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var lunar_k = 1.0;
     let sw = mat.sun_dir_world;
     if (dot(sw, sw) > 0.25) {
-        lunar_k = regolith_factor(pbr_input.N, normalize(sw), pbr_input.V);
+        lunar_k = regolith_factor(
+            pbr_input.N, normalize(sw), pbr_input.V,
+            mat.surge_amp, mat.surge_width, mat.photometry_gain);
     }
     pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
     pbr_input.material.perceptual_roughness = 0.95;

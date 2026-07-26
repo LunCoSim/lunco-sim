@@ -75,12 +75,12 @@ fn test_solar_panel_shader_reflects_seamless_u_and_v_scale() {
 /// terrain shaders that import `lunco::horizon`.
 #[test]
 fn test_terrain_shaders_reflect_shadow_cache_on() {
+    // The `_web` twins are gone: one file per family now, with the native/web
+    // difference behind `LUNCO_NOISE_2D` in `lunco::terrain`.
     let shaders = [
         "regolith.wgsl",
-        "regolith_web.wgsl",
         "terrain_shadow.wgsl",
         "terrain_layered.wgsl",
-        "terrain_layered_web.wgsl",
     ];
     for name in shaders {
         let wgsl = std::fs::read_to_string(

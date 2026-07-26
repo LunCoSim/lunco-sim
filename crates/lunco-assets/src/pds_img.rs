@@ -64,6 +64,11 @@ struct Label {
     scaling_factor: Option<f64>,
     offset: Option<f64>,
     missing: Vec<f64>,
+    /// Missing constants the label wrote in PDS radix form (`16#FF7FFFFB#`),
+    /// held as raw bits until `SAMPLE_TYPE`/`SAMPLE_BITS` are known. A label may
+    /// declare `CORE_NULL` before either of them, so these cannot be resolved
+    /// inside the parse loop without depending on key order.
+    missing_radix: Vec<u64>,
     extent: Option<PdsExtent>,
     map_scale_m: Option<f64>,
     projection: Option<String>,
@@ -78,9 +83,47 @@ fn strip_units(v: &str) -> &str {
 }
 
 fn parse_f64(v: &str) -> Option<f64> {
-    // PDS radices like `16#FF7FFFFB#` (raw-bit missing constants) carry no
-    // decodable geographic meaning here — reject, callers treat as absent.
+    // Decimal only. PDS radix values (`16#FF7FFFFB#`) are a bit pattern, not a
+    // decimal number, so they are rejected here and handled by
+    // [`parse_pds_radix`] — see its note for why they must NOT be dropped.
     strip_units(v).trim_matches('"').parse::<f64>().ok()
+}
+
+/// Parse PDS integer-radix notation — `base#digits#`, e.g. `16#FF7FFFFB#`.
+///
+/// **This is how real LROC products spell their null value**, and dropping it is
+/// why an entire class of nodata went undetected. `CORE_NULL = 16#FF7FFFFB#` on
+/// a `PC_REAL`/32-bit band is the IEEE-754 bit pattern of the ISIS special value
+/// (≈ -3.4028233e38): precisely decodable, given the sample layout. Treating it
+/// as "no decodable meaning" left the sentinel in the samples as a *finite*
+/// float, where every downstream `is_finite()` test reads it as a real
+/// measurement — the exact failure `lunco_geotiff::nodata_to_nan` exists to
+/// prevent, reintroduced one decoder further up the chain.
+///
+/// Returns the raw bits; [`resolve_radix_missing`] turns them into the value a
+/// sample would compare equal to, which needs `SAMPLE_TYPE`/`SAMPLE_BITS`.
+fn parse_pds_radix(v: &str) -> Option<u64> {
+    let s = strip_units(v).trim_matches('"').trim();
+    let (base, rest) = s.split_once('#')?;
+    let digits = rest.strip_suffix('#')?;
+    let base: u32 = base.trim().parse().ok()?;
+    if !(2..=36).contains(&base) {
+        return None;
+    }
+    u64::from_str_radix(digits.trim(), base).ok()
+}
+
+/// Reinterpret a radix-declared missing constant as the f64 a decoded sample
+/// carries, per the band's declared layout. Real bands hold a float bit pattern;
+/// integer bands hold the integer itself.
+fn resolve_radix_missing(bits: u64, sample_type: Option<&str>, sample_bits: Option<usize>) -> f64 {
+    let is_real = sample_type.map(|t| t.contains("REAL")).unwrap_or(false);
+    match (is_real, sample_bits.unwrap_or(32)) {
+        (true, 32) => f32::from_bits(bits as u32) as f64,
+        (true, 64) => f64::from_bits(bits),
+        // Integer band: the radix IS the value.
+        (_, _) => bits as f64,
+    }
 }
 
 fn parse_usize(v: &str) -> Option<usize> {
@@ -148,8 +191,13 @@ fn parse_label(text: &str) -> Label {
                 "SCALING_FACTOR" => lbl.scaling_factor = parse_f64(val),
                 "OFFSET" => lbl.offset = parse_f64(val),
                 "MISSING_CONSTANT" | "NULL" | "CORE_NULL" => {
+                    // Decimal (`-3.4028227e38`) resolves now; radix
+                    // (`16#FF7FFFFB#`) is deferred until the sample layout is
+                    // known, since the label may declare it before SAMPLE_TYPE.
                     if let Some(m) = parse_f64(val) {
                         lbl.missing.push(m);
+                    } else if let Some(bits) = parse_pds_radix(val) {
+                        lbl.missing_radix.push(bits);
                     }
                 }
                 _ => {}
@@ -168,6 +216,14 @@ fn parse_label(text: &str) -> Label {
                 _ => {}
             }
         }
+    }
+
+    // Resolve deferred radix missing-constants now that SAMPLE_TYPE/SAMPLE_BITS
+    // are known, regardless of the order the label declared them in.
+    let (stype, sbits) = (lbl.sample_type.clone(), lbl.sample_bits);
+    for bits in std::mem::take(&mut lbl.missing_radix) {
+        lbl.missing
+            .push(resolve_radix_missing(bits, stype.as_deref(), sbits));
     }
 
     if let (Some(a), Some(b), Some(w), Some(e)) = (min_lat, max_lat, west_lon, east_lon) {
@@ -359,6 +415,77 @@ mod tests {
         let p = dir.join(name);
         std::fs::write(&p, file).unwrap();
         p
+    }
+
+    /// The spelling REAL LROC products use. `NAC_DTM_APOLLO15_E261N0036.IMG`
+    /// declares `CORE_NULL = 16#FF7FFFFB#` — a radix bit pattern, not a decimal
+    /// — and the parser used to drop it as "no decodable meaning". The sentinel
+    /// then stayed in the samples as a FINITE float, so `is_finite()` read it as
+    /// a measurement all the way down. Downstream, `process_map`'s 1–99
+    /// percentile stretch took it as the 1st percentile, which drove `lo` to
+    /// ≈ -3.4e38 and mapped every real sample to 1.0: the shipped `ortho.png`
+    /// came out 81% pure white / 18% pure black, and the terrain shader
+    /// multiplied that mask straight into the albedo as black holes.
+    ///
+    /// The decimal case is covered above; it passing is precisely why this went
+    /// unnoticed, so both spellings must be tested.
+    #[test]
+    fn radix_core_null_is_missing() {
+        let dir = std::env::temp_dir().join(format!("lunco-pds-radix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 0xFF7FFFFB as an IEEE-754 f32 — the ISIS null the real product ships.
+        let null = f32::from_bits(0xFF7F_FFFB);
+        assert!(null.is_finite(), "the whole problem: the sentinel is finite");
+        let vals: [f32; 4] = [-1900.0, null, -1895.5, -1892.25];
+        let mut px = Vec::new();
+        for v in vals {
+            px.extend_from_slice(&v.to_le_bytes());
+        }
+        // CORE_NULL is declared BEFORE SAMPLE_TYPE/SAMPLE_BITS here on purpose:
+        // resolution must not depend on label key order.
+        let label = "PDS_VERSION_ID = PDS3\r\n\
+                     RECORD_BYTES  = 512\r\n\
+                     LABEL_RECORDS = 1\r\n\
+                     ^IMAGE        = 2\r\n\
+                     OBJECT = IMAGE\r\n\
+                       LINES        = 2\r\n\
+                       LINE_SAMPLES = 2\r\n\
+                       CORE_NULL    = 16#FF7FFFFB#\r\n\
+                       SAMPLE_TYPE  = PC_REAL\r\n\
+                       SAMPLE_BITS  = 32\r\n\
+                     END_OBJECT = IMAGE\r\n\
+                     END\r\n";
+        let p = write_attached_img(&dir, "radix.IMG", label, &px);
+
+        let img = PdsImage::decode(&p).unwrap();
+        assert_eq!((img.width, img.height), (2, 2));
+        assert!(
+            img.samples[1].is_nan(),
+            "radix CORE_NULL must decode to NaN, got {}",
+            img.samples[1]
+        );
+        // Real measurements must survive untouched.
+        assert_eq!(img.samples[0], -1900.0);
+        assert_eq!(img.samples[3], -1892.25);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn radix_notation_parses_across_bases() {
+        assert_eq!(parse_pds_radix("16#FF7FFFFB#"), Some(0xFF7F_FFFB));
+        assert_eq!(parse_pds_radix("2#1011#"), Some(0b1011));
+        assert_eq!(parse_pds_radix("10#42#"), Some(42));
+        // Not radix notation → None, so the decimal path keeps handling it.
+        assert_eq!(parse_pds_radix("-3.4028227e38"), None);
+        assert_eq!(parse_pds_radix("42"), None);
+        // A real band reinterprets the bits; an integer band takes the value.
+        assert_eq!(
+            resolve_radix_missing(0xFF7F_FFFB, Some("PC_REAL"), Some(32)) as f32,
+            f32::from_bits(0xFF7F_FFFB)
+        );
+        assert_eq!(resolve_radix_missing(255, Some("LSB_INTEGER"), Some(16)), 255.0);
     }
 
     #[test]

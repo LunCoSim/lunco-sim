@@ -201,15 +201,11 @@ fn apply_usd_shader_material_read(
         };
         textures.insert(layer, asset_server.load(&uri));
     }
-    #[cfg(target_arch = "wasm32")]
-    let resolved_shader_path = if shader_path == "shaders/regolith.wgsl" {
-        "shaders/regolith_web.wgsl".to_string()
-    } else if shader_path == "shaders/terrain_layered.wgsl" {
-        "shaders/terrain_layered_web.wgsl".to_string()
-    } else {
-        shader_path
-    };
-    #[cfg(not(target_arch = "wasm32"))]
+    // No platform swap: the terrain shaders are one file per family now. What used
+    // to justify a `_web` twin — 2D vs 3D noise and a halved octave budget — lives
+    // in `lunco::terrain` (terrain_surface.wgsl) behind the `LUNCO_NOISE_2D`
+    // shader_def that `shader_material.rs::specialize` sets on wasm. The twins were
+    // 88-92% identical and had already drifted apart twice; a shader_def cannot.
     let resolved_shader_path = shader_path;
 
     debug!(

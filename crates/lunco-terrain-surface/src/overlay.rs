@@ -49,7 +49,7 @@ pub struct OverlayUniforms {
 }
 
 /// `overlay_mode` values, mirrored by the `mat.overlay_mode` branches in
-/// `terrain_geomorph.wgsl` / `_web.wgsl`. Named here so the two languages do not
+/// `terrain_geomorph.wgsl`. Named here so the two languages do not
 /// drift on a bare float: adding a mode means adding a constant and one shader
 /// branch, not hunting literals.
 pub mod overlay_mode {

@@ -274,7 +274,7 @@ impl TerrainShaderMode {
     /// everywhere. Web used to default to [`Plain`](Self::Plain) when the Lit
     /// far field was carried by ~5 unconditional per-fragment `fbm` calls
     /// (~100 ms on a WebGL iGPU); the far field is texture-driven now (baked
-    /// surface/normal maps) and `terrain_geomorph_web.wgsl` gates every bump
+    /// surface/normal maps) and `terrain_geomorph.wgsl` gates every bump
     /// layer behind its distance fade, so distant fragments cost two texture
     /// samples. Switchable live in the Inspector either way.
     pub fn platform_default() -> Self {
@@ -284,16 +284,9 @@ impl TerrainShaderMode {
     /// The `.wgsl` this mode draws with (all carry the CDLOD vertex morph).
     fn shader_path(self) -> &'static str {
         match self {
-            TerrainShaderMode::Lit => {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    "shaders/terrain_geomorph_web.wgsl"
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    "shaders/terrain_geomorph.wgsl"
-                }
-            }
+            // One file for both platforms: the noise/octave split moved into
+            // `lunco::terrain` behind the `LUNCO_NOISE_2D` shader_def.
+            TerrainShaderMode::Lit => "shaders/terrain_geomorph.wgsl",
             TerrainShaderMode::DebugLod | TerrainShaderMode::Plain => {
                 "shaders/terrain_geomorph_flat.wgsl"
             }
@@ -877,7 +870,7 @@ impl LodTiles {
     }
 
     /// Every resident tile as `(quadtree depth, entity)` — the depth drives the
-    /// derived-map blend weights (`tile_map_weights`).
+    /// derived-map blend ratio (`tile_map_ratio`; weights derived in-shader).
     pub(crate) fn tiles_with_depth(&self) -> impl Iterator<Item = (u32, Entity)> + '_ {
         self.tiles.iter().map(|(c, s)| (c.depth as u32, s.entity))
     }
@@ -1228,12 +1221,11 @@ pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShad
 ///   there would only blur real relief).
 /// - `weight_ao` / `weight_tone` stay partially on everywhere (bowls genuinely
 ///   receive less sky light at any range) and saturate on coarse tiles.
-fn tile_map_weights(depth: u32, map_res: usize, tile_res: usize) -> (f32, f32, f32) {
-    let r = map_res as f32 / (((1u32 << depth.min(24)) * (tile_res as u32 - 1)) as f32);
-    let w_normal = ((r - 0.75) / 1.5).clamp(0.0, 1.0);
-    let w_ao = (0.35 + (r - 0.5) * 0.4).clamp(0.35, 1.0);
-    let w_tone = (0.5 + (r - 0.5) * 0.35).clamp(0.5, 1.0);
-    (w_normal, w_ao, w_tone)
+/// The weights THEMSELVES are no longer computed here — `map_weights` in
+/// `lunco::terrain` derives them from this ratio per fragment, so they can follow
+/// the CDLOD morph instead of stepping at the tile edge.
+fn tile_map_ratio(depth: u32, map_res: usize, tile_res: usize) -> f32 {
+    map_res as f32 / (((1u32 << depth.min(24)) * (tile_res as u32 - 1)) as f32)
 }
 
 /// Bind a terrain's baked derived maps + per-depth weights onto one tile
@@ -1258,10 +1250,14 @@ pub(crate) fn apply_maps_to_look(
         .insert(TextureLayer::Surface, maps.surface.clone());
     look.textures
         .insert(TextureLayer::Normal, maps.normal.clone());
-    let (w_normal, w_ao, w_tone) = tile_map_weights(depth, maps.res, tile_res);
-    set_param(look, "weight_normal", ParamValue::F32(w_normal));
-    set_param(look, "weight_ao", ParamValue::F32(w_ao));
-    set_param(look, "weight_tone", ParamValue::F32(w_tone));
+    // Send the RATIO, not the weights. The shader turns it into
+    // `weight_normal`/`weight_ao`/`weight_tone` per fragment (`map_weights` in
+    // `lunco::terrain`), sliding it toward the parent's value across the CDLOD
+    // morph band. Computing the weights here instead meant they were constant per
+    // tile and therefore STEPPED at every LOD boundary — a hard brightness seam
+    // along the quadtree, on a mesh that morphs through that same boundary
+    // smoothly. A ratio is the only form of this number that can be interpolated.
+    set_param(look, "map_ratio", ParamValue::F32(tile_map_ratio(depth, maps.res, tile_res)));
 }
 
 /// Bind a terrain's AUTHORED layer maps (from its UsdShade Material network)

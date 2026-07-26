@@ -325,6 +325,22 @@ impl Material for ShaderMaterial {
             .label
             .as_ref()
             .is_some_and(|l| l.contains("prepass"));
+        // The ONE place the native/web shading split lives. `lunco::terrain`
+        // (terrain_surface.wgsl) keys its noise dimensionality and octave budget
+        // off this def, which is what let the six terrain shaders collapse to one
+        // implementation instead of a native file and an 88-92%-identical `_web`
+        // copy that silently drifted apart. Set on the vertex stage too: the CDLOD
+        // geomorph vertex shader imports the same module.
+        #[cfg(target_arch = "wasm32")]
+        {
+            descriptor
+                .vertex
+                .shader_defs
+                .push("LUNCO_NOISE_2D".into());
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push("LUNCO_NOISE_2D".into());
+            }
+        }
         if !is_prepass {
             if let Some(fragment) = descriptor.fragment.as_mut() {
                 fragment.shader = key.bind_group_data.shader.clone();
@@ -388,6 +404,18 @@ pub struct LunarBrdfModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 #[derive(Resource)]
 pub struct NoiseModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 
+/// Keeps the shared `lunco::terrain` WGSL module (the regolith surface kernel —
+/// `ramp`/`aa_fade`/`layer_height`/`bump_layer`, plus the native-vs-web noise
+/// split behind `LUNCO_NOISE_2D`) loaded so `#import lunco::terrain` resolves in
+/// every terrain shader.
+///
+/// A missing entry here is SILENT and total: the import fails to resolve, the
+/// whole material fails to compose, and the terrain draws with no shader at all —
+/// flat untextured grey, which reads as "the ground went transparent" rather than
+/// as a shader error. Anything under `#define_import_path` needs a line here.
+#[derive(Resource)]
+pub struct TerrainSurfaceModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+
 /// Keeps the shared `lunco::transfer` WGSL module (the value→colour plane of
 /// Data → Transfer → Blend) loaded so `#import lunco::transfer` resolves in the
 /// terrain shaders. The GPU twin of `lunco_terrain_core::transfer` — one ramp,
@@ -426,6 +454,11 @@ impl Plugin for ShaderMaterialPlugin {
             .resource::<AssetServer>()
             .load("shaders/lunco_noise.wgsl");
         app.insert_resource(NoiseModule(noise));
+        let terrain_surface = app
+            .world()
+            .resource::<AssetServer>()
+            .load("shaders/terrain_surface.wgsl");
+        app.insert_resource(TerrainSurfaceModule(terrain_surface));
         let transfer = app
             .world()
             .resource::<AssetServer>()
