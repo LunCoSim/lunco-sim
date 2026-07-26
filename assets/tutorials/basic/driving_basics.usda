@@ -92,18 +92,15 @@ def Xform "DrivingBasics" (
     }
 
     # Low ESE sun (matches the event lighting the teams will meet in the traverse).
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
+    def DistantLight "Sun"
     {
+        float inputs:intensity = 128000
+        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-14.0, 110.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
-
-        # Standard `UsdLuxShadowAPI`. The cascade SPLIT stays in the renderer
-        # namespace — UsdLux has no attribute for it, because cascaded shadow
-        # maps are a rasterizer technique.
-        float inputs:shadow:distance = 600.0
+        custom float lunco:shadow:maxDistance = 600.0
         custom float lunco:shadow:firstCascadeFarBound = 20.0
+        custom int lunco:shadow:numCascades = 4
     }
 
     # Chase-style fly-cam over the SW corner so the rover and ramp are both framed.

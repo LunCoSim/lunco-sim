@@ -18,7 +18,6 @@
 # do, and all of which come from the same cubemap.
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "HdriTest" (
-    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "HDRI environment probe: a textured UsdLuxDomeLight driving skybox + image-based lighting on a row of metal/rough spheres."
 )
@@ -30,6 +29,15 @@ def Xform "HdriTest" (
     custom string lunco:notHeadlessTestable = "a render check: the thing under test is the image, and scene_test has no GPU"
 
 
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
 
     def DomeLight "Sky"
     {
@@ -66,12 +74,10 @@ def Xform "HdriTest" (
     # The sun still exists as a real DistantLight: an HDRI gives soft ambient +
     # reflections, but a 0.53°-disc sun in a 2k equirect is a handful of texels
     # and cannot cast a sharp shadow. The dome lights, the DistantLight shadows.
-    over "Sun"
+    def DistantLight "Sun"
     {
-        # Deliberately BELOW the calibrated 128 klx: this scene exists to show an
-        # HDRI environment, and the key light is pulled down so the dome's
-        # contribution is visible rather than washed out.
         float inputs:intensity = 100000
+        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-20.0, 160.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

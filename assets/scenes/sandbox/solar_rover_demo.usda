@@ -19,13 +19,32 @@
 #   cargo run -p lunco-sandbox --bin sandbox -- --scene scenes/sandbox/solar_rover_demo.usda
 
 def Xform "SolarRoverTest" (
-    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Solar-powered rover co-simulation scene. The rover drives Waypoints, drains its battery, then stops to track the sun and charge."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+    # UsdPhysicsMaterialAPI
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
@@ -62,8 +81,10 @@ def Xform "SolarRoverTest" (
     }
 
     # The Sun - connected to SunOrbit modelica output via USD wire
-    over "Sun"
+    def DistantLight "Sun"
     {
+        float inputs:intensity = 128000
+        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-30.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
 

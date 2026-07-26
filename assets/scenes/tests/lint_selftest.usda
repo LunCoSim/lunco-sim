@@ -39,15 +39,20 @@
 #     scene_test --scene scenes/tests/lint_selftest.usda
 
 def Xform "LintSelftest" (
-    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Deliberately mis-authored physics, so the USD lint rules can be proven to fire — and one correct nested body they must ignore."
 )
 {
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
     uniform bool lunco:spawnable = false
 
-    over "Sun"
+    def DistantLight "Sun"
     {
+        float inputs:intensity = 128000
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

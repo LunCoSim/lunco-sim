@@ -49,20 +49,6 @@ def Xform "SolarSystem" (
     {
         uniform int lunco:body = 399
 
-        # Earthshine: the light Earth throws back onto whatever is looking at it.
-        # It hangs UNDER the body it comes from, so the namespace states the
-        # relationship and no attribute has to. Declaring Earth therefore brings
-        # its illumination with it — a scene gets the fill by asking for the
-        # body, not by knowing to spawn a second light.
-        #
-        # Intensity is 0 until the ephemeris resolves Earth's phase; see
-        # `lunco://lighting/earthshine.usda`.
-        def DistantLight "Earthshine" (
-            prepend references = @lunco://lighting/earthshine.usda@</Earthshine>
-        )
-        {
-        }
-
         # Earth's orbit around the Sun, as a drawn line. AUTHORED CONTENT, and
         # OFF unless a scene asks for it — see the `OrbitView` note under Moon.
         def Xform "OrbitView" (

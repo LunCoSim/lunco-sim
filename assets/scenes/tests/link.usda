@@ -33,12 +33,21 @@
 # independently. A scene-local prim (a rover mast) would need that site anchor —
 # which is exactly the trap the school twin hit.
 def Xform "LinkTest" (
-    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Connectivity-kernel smoke scene: one link node per placement kind — Earth-surface geodetic, Moon-surface geodetic, lunar Kepler orbit, and Earth-Moon L1/L2/L4 libration points."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
+
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
     bool lunco:spawnable = false
 
     # An epoch, so the DSN geometry is reproducible. Earth's rotation is a

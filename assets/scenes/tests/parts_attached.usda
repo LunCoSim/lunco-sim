@@ -42,14 +42,30 @@
 # motors, gearboxes, headlights, masts, batteries, solar panels, antennae.
 
 def Xform "PartsAttached" (
-    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Four rovers driven in a straight line; every descendant part must still be at its authored offset afterwards."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
+    # The Moon — the gravity every one of these vehicles is sized for, and the
+    # gravity that decides how fast a loose part separates.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
     uniform bool lunco:spawnable = false
 
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
 
     # Flat and level: a slope would make the rovers slide and turn the radial
     # measurement into a gradeability test.
@@ -66,8 +82,10 @@ def Xform "PartsAttached" (
         rel material:binding:physics = </PartsAttached/PhysicsMaterials/Friction_1_0>
     }
 
-    over "Sun"
+    def DistantLight "Sun"
     {
+        float inputs:intensity = 128000
+        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

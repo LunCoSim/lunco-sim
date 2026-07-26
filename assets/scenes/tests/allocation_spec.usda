@@ -40,19 +40,37 @@
 #     sandbox --scene scenes/tests/allocation_spec.usda
 
 def Xform "AllocationSpec" (
-    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Two skid rovers differing only in drive-kernel name — one resolvable, one not — for the drive-allocation spec."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
+    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
+    # reads gravity from it and applies it to every body, so a second scene prim
+    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
+    # tuning are authored against — stated here rather than left to a default.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
     # A test rig, not a spawnable part.
     uniform bool lunco:spawnable = false
 
-    # ONE friction material under BOTH rovers — the inherited `Friction_1_0`.
-    # The bogus rover's assertion is "it did not move", which a different surface
-    # under it would trivially satisfy for the wrong reason.
+    # ONE friction material under BOTH rovers. The bogus rover's assertion is
+    # "it did not move", which a different surface under it would trivially
+    # satisfy for the wrong reason.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
 
     # Flat, level, 500 x 500 m. Level matters here more than usual: on a slope an
     # un-actuated rover ROLLS, and "the fail-safe coasted" would be
@@ -70,8 +88,10 @@ def Xform "AllocationSpec" (
         rel material:binding:physics = </AllocationSpec/PhysicsMaterials/Friction_1_0>
     }
 
-    over "Sun"
+    def DistantLight "Sun"
     {
+        float inputs:intensity = 128000
+        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
