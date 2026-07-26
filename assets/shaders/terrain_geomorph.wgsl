@@ -29,7 +29,7 @@
     forward_io::VertexOutput,
     mesh_view_bindings::view,
 }
-#import lunco::pbr_lit::{lit_n, sun_to_light}
+#import lunco::pbr_lit::lit_n
 #import lunco::terrain::{aa_fade, bump_layer, layer_height, map_weights, ramp, surface_fbm}
 #import lunco::lunar::{regolith_factor, ORTHO_GAIN}
 #import lunco::transfer::{slope_hazard_color, slope_of}
@@ -71,6 +71,14 @@
 //!@default surge_width       0.0715
 //!@ui      photometry_gain   0.2 2  "Photometry gain (1 = Lambert parity at mu0==mu)"
 //!@default photometry_gain   1.0
+// The CANONICAL scene sun, picked STRUCTURALLY on the CPU (`pick_sun`) and
+// written to every non-terrain ShaderMaterial by `wire_sun_for_non_terrain_materials`
+// — streamed tiles included, since a tile carries no `HorizonMap`. This shader
+// used to re-derive the sun in-shader with `sun_to_light()`, which picked the
+// BRIGHTEST directional light: correct only while the sun happens to be the
+// brightest, silent when it is not, and a different answer from the one the
+// static-mesh terrain shaders were already using from this very uniform.
+//!@engine  sun_dir_world
 //!@engine  shadow_cache_on
 //!@engine  csm_far
 //!@default morph_start  1.0e20
@@ -97,6 +105,7 @@ struct Material {
     surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
     surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
     photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
+    sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun, the canonical scene sun
     shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache bound and valid
     csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
@@ -403,10 +412,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // lit_n's Lambert + CSM shadows complete the response. This is what makes the
     // surface read as the Moon (flat, then a bright surge toward opposition)
     // instead of generic grey PBR.
-    let L = normalize(sun_to_light());
+    // Same guard as the static-mesh path: before the wiring system has run the
+    // uniform is zero, and `normalize` of that is NaN — which would propagate
+    // through the albedo multiply and paint black holes across the terrain.
     let V = normalize(view.world_position - p);
-    let lunar_k = regolith_factor(
-        n, L, V, mat.surge_amp, mat.surge_width, mat.photometry_gain);
+    var lunar_k = 1.0;
+    let sw = mat.sun_dir_world;
+    if (dot(sw, sw) > 0.25) {
+        lunar_k = regolith_factor(
+            n, normalize(sw), V, mat.surge_amp, mat.surge_width, mat.photometry_gain);
+    }
     let base_albedo = albedo;
     albedo = albedo * lunar_k;
 

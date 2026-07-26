@@ -27,7 +27,6 @@
     pbr_functions,
     mesh_bindings::mesh,
     mesh_view_bindings::view,
-    mesh_view_bindings::lights,
 }
 
 // Full PBR lighting using the mesh's geometric normal. `base_color`/`emissive`
@@ -73,28 +72,21 @@ fn lit_n(
     return pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
 }
 
-// World-space to-sun, read straight from the scene lights (no per-material
-// uniform wiring needed). Picks the BRIGHTEST directional light rather than
-// `directional_lights[0]`, so a body's reflected fill can never be mistaken for
-// the sun.
+// `sun_to_light()` WAS HERE and is deliberately gone (2026-07-26).
 //
-// The CPU-side pickers identify the sun STRUCTURALLY (the fill is a child of the
-// body prim it comes from, and carries `Earthshine`) precisely because brightness
-// is a guess. This shader cannot: the light array is flat and carries no prim
-// identity, so brightness is the only signal that survives the boundary. It is a
-// safe one HERE — the fill is ~12 lx against a ~128 klx sun, three orders of
-// magnitude, and it is the only other directional light a scene composes.
-fn sun_to_light() -> vec3<f32> {
-    var best = vec3(0.0, 1.0, 0.0);
-    var best_lum = -1.0;
-    let n = lights.n_directional_lights;
-    for (var i = 0u; i < n; i = i + 1u) {
-        let dl = lights.directional_lights[i];
-        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > best_lum) {
-            best_lum = lum;
-            best = dl.direction_to_light;
-        }
-    }
-    return best;
-}
+// It returned the BRIGHTEST directional light as the sun. That is a guess: it is
+// correct only while the sun happens to outshine everything else, it fails
+// SILENTLY when it does not, and it gave a different answer from the engine-filled
+// `sun_dir_world` the static-mesh terrain shaders were already using — so the same
+// site could be lit from two different vectors depending on whether its terrain
+// streamed. Its own comment conceded the point ("brightness is a guess") and
+// justified it by a 3-orders-of-magnitude gap to earthshine, which is a property of
+// the scenes that exist today, not an invariant.
+//
+// The sun is a scene-global fact. It is picked STRUCTURALLY on the CPU (`pick_sun`
+// — the fill is a child of the body prim it comes from and carries `Earthshine`)
+// and written to every ShaderMaterial as `sun_dir_world` by
+// `wire_terrain_materials` / `wire_sun_for_non_terrain_materials`. Declare
+// `//!@engine sun_dir_world` and read the uniform; do not re-derive it here. The
+// light array is flat and carries no prim identity, so nothing this module can see
+// is able to answer the question correctly.
