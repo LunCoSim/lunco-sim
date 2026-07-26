@@ -12,15 +12,20 @@
 # translate to the HOST rover root through the reference arc.
 #
 # What it does: replaces the authored `DriveMix` scope (the instant six-channel
-# skid mix) with a physical command→torque law. The MODEL is the same
-# `models/LunCo/Mobility/RoverDrivetrain.mo` the skid law uses — deliberately: the law is
-# per-SIDE (one motor controller per bank), and fanning a side out to three
-# wheel ports is wiring, not physics. Native USD connections write the
-# rover's six per-wheel FSW ports (`drive_w0..w2` = left bank,
-# `drive_w3..w5` = right bank) instead of `drive_left`/`drive_right`.
-# USD wires + Modelica physics; no numerical Rhai bridge.
+# skid mix) with a physical command→torque law. The physics is per-SIDE (one
+# motor controller per bank, two states, not six) and identical to the skid
+# law's; `RoverSixIndependentDrivetrain.mo` differs from `RoverDrivetrain.mo`
+# only in publishing the six per-wheel names this vehicle declares
+# (`drive_w0..w2` = left bank, `drive_w3..w5` = right bank).
 #
 # NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
+# ── The law FORWARDS the vessel's outputs — see `modelica_skid.usda` ─────────
+#
+# `drive_w0..drive_w5` are OUTPUTS of the rover root — the commands each wheel
+# consumes. A drive law replaces their PRODUCER, so these are output-to-output
+# forwards, and the per-side fan-out is exactly that: wiring, not physics, which
+# is why one `RoverDrivetrain` still serves. ⚠ The engine does not yet read
+# `outputs:*.connect` — see the note in `modelica_skid.usda`.
 def Xform "DriveLaw" (
     kind = "component"
 )
@@ -30,14 +35,16 @@ def Xform "DriveLaw" (
     # is written) — which is exactly what a program-driven drive law needs:
     # nothing else may write the six wheel ports it owns.
     string lunco:driveKernel = "external"
-    float inputs:drive_w0.connect = </DriveLaw/Drivetrain.outputs:drive_left>
-    float inputs:drive_w1.connect = </DriveLaw/Drivetrain.outputs:drive_left>
-    float inputs:drive_w2.connect = </DriveLaw/Drivetrain.outputs:drive_left>
-    float inputs:drive_w3.connect = </DriveLaw/Drivetrain.outputs:drive_right>
-    float inputs:drive_w4.connect = </DriveLaw/Drivetrain.outputs:drive_right>
-    float inputs:drive_w5.connect = </DriveLaw/Drivetrain.outputs:drive_right>
+    float outputs:drive_w0.connect = </DriveLaw/Drivetrain.outputs:drive_left>
+    float outputs:drive_w1.connect = </DriveLaw/Drivetrain.outputs:drive_left>
+    float outputs:drive_w2.connect = </DriveLaw/Drivetrain.outputs:drive_left>
+    float outputs:drive_w3.connect = </DriveLaw/Drivetrain.outputs:drive_right>
+    float outputs:drive_w4.connect = </DriveLaw/Drivetrain.outputs:drive_right>
+    float outputs:drive_w5.connect = </DriveLaw/Drivetrain.outputs:drive_right>
 
-    # The physics: per-side first-order motor lag, solver-clocked.
+    # The physics: per-side first-order motor lag, solver-clocked. In a CHILD
+    # prim because the rover root already binds the OBC's model and
+    # `info:sourceAsset` is single-valued.
     def Scope "Drivetrain" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )

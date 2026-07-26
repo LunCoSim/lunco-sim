@@ -17,6 +17,39 @@
 # outputs onto the rover ports; no tick script participates.
 #
 # NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
+# ── The law FORWARDS the vessel's output; it does not write an input ─────────
+#
+# `drive_left` on a rover root is an OUTPUT — the mixed command every wheel
+# consumes (`inputs:demand.connect = </SkidRover.outputs:drive_left>`). A drive
+# law replaces the PRODUCER of that signal, so the connection to author is an
+# OUTPUT-TO-OUTPUT forward: the root's output resolves to the law's output.
+#
+#     float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
+#
+# This file used to author `inputs:drive_left.connect` instead, which cannot
+# work: a connection names a consumer's input and a producer's output, and there
+# is no `inputs:` half of `drive_left` on the root to write into. The measured
+# result was a rover that travelled 0.00 m while its control reached 2.13 m/s —
+# `apply_drive_mix` stood the built-in down exactly as asked and nothing took its
+# place. The same forwarding idiom is already used by `skid_rover.usda`'s own
+# `Electrical` scope (`outputs:soc.connect = </SkidRover/Battery.outputs:soc_out>`).
+#
+# ── Why the model stays in a CHILD prim ──────────────────────────────────────
+#
+# Not for tidiness — the rover root is already taken. It references
+# `components/avionics/obc.usda`, so it ALREADY carries `LunCoProgramAPI` and an
+# `info:sourceAsset`. That attribute is single-valued and the OBC's arc is
+# stronger, so a second `info:sourceAsset` here would be silently overridden and
+# the drive law would never bind at all. One prim, one model.
+#
+# ⚠ NOT YET LIVE. `derive_usd_connections` enumerates only `inputs:` attributes
+# (`let Some(sink_conn) = attr.strip_prefix("inputs:") else { continue }`), so
+# `outputs:*.connect` is never read and these forwards do nothing today. The
+# rover still travels 0.00 m. This is the authoring form the engine should
+# honour — it is the only direction that is type-correct, and `skid_rover.usda`'s
+# `Electrical` scope already assumes it — but until the wiring pass reads output
+# connections there is NO way for a replacement producer to supply a vessel's
+# output port, and `driveKernel = "external"` names no provider to ask.
 def Xform "DriveLaw" (
     kind = "component"
 )
@@ -26,8 +59,8 @@ def Xform "DriveLaw" (
     # is written) — which is exactly what a program-driven drive law needs:
     # nothing else may write the drive ports it owns.
     string lunco:driveKernel = "external"
-    float inputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
-    float inputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
+    float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
+    float outputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
 
     # The physics: per-side first-order motor lag, solver-clocked.
     def Scope "Drivetrain" (

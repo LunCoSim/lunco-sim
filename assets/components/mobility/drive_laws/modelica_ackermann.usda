@@ -21,6 +21,12 @@
 # USD wires + Modelica physics; no numerical Rhai bridge.
 #
 # NOT `lunco:spawnable` — an overlay for a rover that already has FSW ports.
+# ── The law FORWARDS the vessel's outputs — see `modelica_skid.usda` ─────────
+#
+# `drive_left`/`drive_right`/`steering` are OUTPUTS of the rover root. A drive
+# law replaces their PRODUCER, so the connections below are output-to-output
+# forwards, not `inputs:` writes. ⚠ The engine does not yet read
+# `outputs:*.connect` — see the note in `modelica_skid.usda`.
 def Xform "DriveLaw" (
     kind = "component"
 )
@@ -30,12 +36,13 @@ def Xform "DriveLaw" (
     # is written) — which is exactly what a program-driven drive law needs:
     # nothing else may write the drive/steering ports it owns.
     string lunco:driveKernel = "external"
-    float inputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
-    float inputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
-    float inputs:steering.connect = </DriveLaw/Drivetrain.outputs:steering>
+    float outputs:drive_left.connect = </DriveLaw/Drivetrain.outputs:drive_left>
+    float outputs:drive_right.connect = </DriveLaw/Drivetrain.outputs:drive_right>
+    float outputs:steering.connect = </DriveLaw/Drivetrain.outputs:steering>
 
     # The physics: shared-axle first-order motor lag + steering passthrough,
-    # solver-clocked.
+    # solver-clocked. In a CHILD prim because the rover root already binds the
+    # OBC's model and `info:sourceAsset` is single-valued.
     def Scope "Drivetrain" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
