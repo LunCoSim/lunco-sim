@@ -42,6 +42,7 @@ use bevy::prelude::*;
 pub mod avian;
 pub mod component;
 pub mod connection;
+pub mod diagnostics;
 pub mod joint;
 pub mod ports;
 pub mod sensors;
@@ -51,6 +52,7 @@ pub mod systems;
 pub use avian::*;
 pub use component::*;
 pub use connection::*;
+pub use diagnostics::{BrokenConnection, CosimDiagnostics};
 pub use joint::*;
 pub use ports::*;
 pub use suggestion::*;
@@ -92,6 +94,9 @@ impl Plugin for CoSimPlugin {
         // read/write through this one registry. Registration order = resolution
         // precedence (Modelica, avian, then single-value hardware ports).
         app.init_resource::<lunco_core::ports::PortRegistry>();
+        // Machine-readable dangling-wire report, refreshed each propagation tick
+        // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
+        app.init_resource::<diagnostics::CosimDiagnostics>();
         {
             let mut registry = app
                 .world_mut()

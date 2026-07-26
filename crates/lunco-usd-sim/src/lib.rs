@@ -193,6 +193,8 @@ impl Plugin for UsdSimPlugin {
         app.add_systems(Update, recover_stuck_usd_prims);
         // USD → cosim wiring through native `connectionPaths` — see `cosim.rs`.
         cosim::install(app);
+        // `GET /api/diagnostics` read side — exposes the cosim dangling-wire report.
+        cosim_diagnostics::register(app);
     }
 }
 
@@ -201,6 +203,7 @@ impl Plugin for UsdSimPlugin {
 pub mod billboard;
 pub mod celestial;
 pub mod cosim;
+pub mod cosim_diagnostics;
 pub mod domain_projection;
 pub mod powertrain;
 pub mod readiness;

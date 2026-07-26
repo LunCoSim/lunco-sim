@@ -116,6 +116,25 @@ pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse
     .await
 }
 
+/// `GET /api/diagnostics` — co-sim connection health. Reaches into the world for
+/// the `GetBrokenConnections` query: the wiring targets that dropped their write
+/// on the last propagation tick, each tagged `fault` (genuine dangling wire) vs
+/// structural/still-loading. `200` with the report either way — "some broken" is
+/// a valid state to report, not a request error.
+pub async fn handle_diagnostics(State(bridge): State<HttpBridge>) -> impl IntoResponse {
+    // A query provider — returns data inline, never `command_accepted` — so the
+    // sync-wait path is a no-op; pass `true` to skip it.
+    execute_api_request(
+        bridge,
+        ApiRequest::ExecuteCommand {
+            command: "GetBrokenConnections".to_string(),
+            params: serde_json::json!({}),
+        },
+        true,
+    )
+    .await
+}
+
 /// `GET /api/commands/schema` — the derived command schema (`DiscoverSchema`).
 /// Same data the MCP tool list is built from; a GET so it is trivially
 /// browsable and scriptable.

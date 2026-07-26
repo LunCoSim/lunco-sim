@@ -278,6 +278,11 @@ pub fn propagate_connections(
     }
 
     if compiled.targets.is_empty() {
+        // No wires ⇒ nothing broken. Clear any report left from a prior fabric.
+        let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+        if !diag.broken.is_empty() {
+            diag.broken.clear();
+        }
         return;
     }
 
@@ -311,6 +316,9 @@ pub fn propagate_connections(
         world.get_resource::<lunco_core::NetworkRole>().copied(),
         Some(lunco_core::NetworkRole::Client)
     );
+    // Machine-readable mirror of the dangling-wire log lines below, rebuilt every
+    // tick so `GET /api/diagnostics` polls the current fabric (see `CosimDiagnostics`).
+    let mut broken: Vec<crate::diagnostics::BrokenConnection> = Vec::new();
     for (i, t) in compiled.targets.iter().enumerate() {
         if !peer_simulates(world, t.entity, is_client) {
             continue;
@@ -345,22 +353,37 @@ pub fn propagate_connections(
         // shape — a model that never publishes `sun_azimuth` — and dropping the
         // line entirely would have taken the only evidence with it.
         let has_port_surface = !registry.entity_ports(world, t.entity).is_empty();
-        if !written && reported.insert(t.name.clone()) {
-            if has_port_surface {
-                warn!(
-                    "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
-                     (declare the port or fix the wire)",
-                    t.name, t.entity
-                );
-            } else {
-                debug!(
-                    "[cosim] connection targets '{}' on {:?}, which exposes no ports yet — \
-                     value dropped (structural endpoint, or a model still loading)",
-                    t.name, t.entity
-                );
+        if !written {
+            // Diagnostics carry EVERY unresolved target this tick (a poller wants
+            // the live set), whereas the log is deduped per name to stay readable.
+            broken.push(crate::diagnostics::BrokenConnection {
+                entity: t.entity,
+                global_id: world.get::<lunco_core::GlobalEntityId>(t.entity).copied(),
+                port: t.name.clone(),
+                has_port_surface,
+                dropped_value: acc[i],
+            });
+            if reported.insert(t.name.clone()) {
+                if has_port_surface {
+                    warn!(
+                        "[cosim] connection targets unknown input port '{}' on {:?} — value dropped \
+                         (declare the port or fix the wire)",
+                        t.name, t.entity
+                    );
+                } else {
+                    debug!(
+                        "[cosim] connection targets '{}' on {:?}, which exposes no ports yet — \
+                         value dropped (structural endpoint, or a model still loading)",
+                        t.name, t.entity
+                    );
+                }
             }
         }
     }
+
+    // Publish the tick's report. Overwrites last tick's (the set is "what is broken
+    // now"), so a wire that resolves once its model loads clears itself.
+    world.resource_mut::<crate::diagnostics::CosimDiagnostics>().broken = broken;
 }
 
 #[cfg(test)]
@@ -426,6 +449,62 @@ mod wire_order_tests {
         assert_eq!(
             a.iter().map(|(g, _)| *g).collect::<Vec<_>>(),
             vec![Some(10), Some(20), Some(30)]
+        );
+    }
+
+    /// A wire whose target accepts no write must land in [`CosimDiagnostics`] —
+    /// the machine-readable form behind `GET /api/diagnostics`. Empty registry ⇒
+    /// the sink exposes no port surface, so it reports as a structural/loading
+    /// endpoint (`has_port_surface == false`), not a genuine fault, but it is
+    /// still reported (a poller wants the full unresolved set).
+    #[test]
+    fn broken_wire_populates_diagnostics() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let src = world.spawn(GlobalEntityId::from_raw(10)).id();
+        // Sink has an id but no port backend of any kind.
+        let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
+        world.spawn(SimConnection {
+            start_element: src,
+            start_connector: "out".into(),
+            end_element: sink,
+            end_connector: "nonexistent_port".into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+
+        world.run_system_once(propagate_connections).unwrap();
+
+        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        assert_eq!(diag.broken.len(), 1, "the one unresolved target is reported");
+        let b = &diag.broken[0];
+        assert_eq!(b.port, "nonexistent_port");
+        assert_eq!(b.global_id, Some(GlobalEntityId::from_raw(20)));
+        assert!(
+            !b.has_port_surface,
+            "empty registry ⇒ sink exposes no ports ⇒ not a genuine fault"
+        );
+
+        // And it self-clears: give the sink nothing new, but drop the wire, and the
+        // report empties on the next tick (the set is "what is broken NOW").
+        let conns: Vec<Entity> = {
+            let mut q = world.query_filtered::<Entity, With<SimConnection>>();
+            q.iter(&world).collect()
+        };
+        for e in conns {
+            world.entity_mut(e).despawn();
+        }
+        world.run_system_once(propagate_connections).unwrap();
+        assert!(
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .broken
+                .is_empty(),
+            "no wires ⇒ report clears"
         );
     }
 }

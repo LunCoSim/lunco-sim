@@ -74,6 +74,8 @@ use lunco_modelica::ModelicaSet;
 /// `ui`-gated. See [`light_policy`].
 #[cfg(feature = "ui")]
 mod light_policy;
+/// Collapse repeated WARN/ERROR log lines into one line + a count (§6.4).
+mod log_dedup;
 #[cfg(feature = "ui")]
 mod terrain_horizon;
 #[cfg(feature = "ui")]
@@ -315,6 +317,8 @@ pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
     // snapshots the source registry.
     lunco_assets::register_lunco_asset_sources(&mut app);
     app.add_plugins(default_plugins(headless, offscreen));
+    // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
+    app.add_plugins(log_dedup::LogDedupPlugin);
     app.add_plugins(SandboxCorePlugin { headless });
     app
 }
@@ -457,13 +461,17 @@ pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGrou
             // captured logs (agent/CI/`> log 2>&1`) with `\x1b[..m` escapes. Emit
             // colour only for a real terminal, and honour `NO_COLOR` either way.
             fmt_layer: |_app| {
+                use bevy::log::tracing_subscriber::Layer;
                 use std::io::IsTerminal;
                 let ansi =
                     std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+                // Collapse repeated WARN/ERROR lines (§6.4): the filter suppresses
+                // and counts, `LogDedupPlugin` flushes the counts as summaries.
                 Some(Box::new(
                     bevy::log::tracing_subscriber::fmt::Layer::default()
                         .with_ansi(ansi)
-                        .with_writer(std::io::stderr),
+                        .with_writer(std::io::stderr)
+                        .with_filter(crate::log_dedup::DedupFilter),
                 ))
             },
             ..default()

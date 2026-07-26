@@ -127,6 +127,8 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
             //   GET  /api/health          — liveness; no world access
             //   GET  /api/ready           — readiness; reads the world's
             //                               `ReadinessRegistry` via `GetReadiness`
+            //   GET  /api/diagnostics     — co-sim wiring health; reads the world's
+            //                               `CosimDiagnostics` via `GetBrokenConnections`
             //   GET  /api/commands/schema — the `DiscoverSchema` result, i.e.
             //                               the same derived list the MCP tool
             //                               surface is built from
@@ -141,6 +143,10 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
                 )
                 .route("/api/health", axum::routing::get(http::handle_health))
                 .route("/api/ready", axum::routing::get(http::handle_ready))
+                .route(
+                    "/api/diagnostics",
+                    axum::routing::get(http::handle_diagnostics),
+                )
                 .with_state(bridge);
 
             // TODO(multiplayer): deferred — singleplayer focus for now, RBAC
