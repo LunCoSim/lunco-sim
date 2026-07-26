@@ -188,7 +188,13 @@ impl Plugin for UsdAvianPlugin {
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
                 (
-                    build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
+                    // Seats its joints, then hands each to `attach_joint`. Ordered
+                    // BEFORE `JointAdmission` (configured below) so the sync point
+                    // falls between: the constraint it seated this tick is
+                    // installed this tick, not after gravity has moved the pair.
+                    build_usd_physics_joints
+                        .before(JointAdmission)
+                        .run_if(any_with_component::<PendingUsdJoint>),
                     // Same window, same reason: avian's broad phase never
                     // re-filters a pair already in the contact graph, so a filter
                     // armed after the first narrow phase does not apply to the
@@ -2307,6 +2313,18 @@ pub fn attach_joint<J: Component + Clone>(
 /// [`UsdAvianPlugin`] adds it; a plain-avian harness adds it directly.
 pub struct JointAttachPlugin;
 
+/// The systems that install parked joints.
+///
+/// Public so a joint BUILDER can order itself before them. That ordering is not
+/// cosmetic: a builder seats its joint (moves body1 onto the authored anchors,
+/// matches its velocity) and the seating is only true for the tick it ran on. If
+/// the constraint lands a tick later, gravity has already pulled the pair apart
+/// and the solver resolves the violation impulsively — an authored lander's legs
+/// leave the world at ~13 km/s. Ordering the build set before this one lets
+/// Bevy's sync point fall between them, so seat and install are the same tick.
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct JointAdmission;
+
 impl Plugin for JointAttachPlugin {
     fn build(&self, app: &mut App) {
         // One registration per joint type: the ticket is generic over the
@@ -2331,6 +2349,7 @@ impl Plugin for JointAttachPlugin {
                 admit_pending_joints::<DistanceJoint>
                     .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
             )
+                .in_set(JointAdmission)
                 .in_set(avian3d::prelude::PhysicsSystems::Prepare)
                 .after(avian3d::prelude::PhysicsSystems::First)
                 .before(avian3d::schedule::PhysicsStepSystems::First),

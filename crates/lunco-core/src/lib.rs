@@ -211,16 +211,113 @@ impl std::str::FromStr for GlobalEntityId {
     }
 }
 
-/// Marker component for the user's active avatar/entity in the simulation.
+/// Marker component for an avatar/entity in the simulation — this peer's
+/// ([`LocalAvatar`]) or, in a networked session, another user's
+/// ([`RemoteAvatar`]).
 #[derive(Component)]
 pub struct Avatar;
 
-/// Marks **this peer's own** avatar — the one its local input drives. Each
-/// process has exactly one (its camera); other players' avatars are not
-/// replicated (gap G3), so this is what gates raw-input→command mapping to "my"
-/// vessel only (gap G1). Inserted by `lunco-avatar`'s `mark_local_avatar`.
+/// **This peer's own avatar — there is exactly one, and that is enforced here.**
+///
+/// One process, one user, one avatar. Other users' avatars exist only in a
+/// networked session, belong to a session that is not this one, and are marked
+/// [`RemoteAvatar`] instead; they are a different path end to end and never
+/// acquire this marker.
+///
+/// # Why the invariant is a component hook
+///
+/// It used to be a convention, repaired after the fact by whichever spawner
+/// noticed: `lunco-usd-sim` stripped the role off prior holders when a scene
+/// authored a new `Avatar` prim. That covered ONE of the ways an avatar comes
+/// into being — a USD scene's prim, the app's fallback free-flight camera, a
+/// scene reload that re-composes the prim — so the others produced two live
+/// avatars. Two `Avatar` + `Camera3d` entities render ambiguously (the viewport
+/// visibly flickers between them) and split the input path: a click binds the
+/// chase camera on one while the window renders the other, keyboard drives every
+/// avatar's linked vessel at once, and release fires twice.
+///
+/// The hook runs on EVERY insert, whatever the path, so a new spawner cannot
+/// forget it — there is no code to remember. The newest claimant wins (a scene
+/// that authors an avatar is stating what the user should be looking through),
+/// and the previous holder loses both markers, so it stops being an avatar
+/// rather than lingering as a second one.
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[component(on_insert = local_avatar_claimed, on_remove = local_avatar_released)]
 pub struct LocalAvatar;
+
+/// Another user's avatar in a networked session, keyed by the session that owns
+/// it. Never this peer's — inserting it drops [`LocalAvatar`], so the two can
+/// never describe one entity.
+///
+/// Spawned only by the networking layer, from replicated state. Local input
+/// never reaches it: every input path filters on [`LocalAvatar`], which a remote
+/// avatar by construction does not have.
+#[derive(Component, Clone, Copy, Debug)]
+#[component(on_insert = remote_avatar_claimed)]
+pub struct RemoteAvatar {
+    /// The session this avatar belongs to. Not this process's.
+    pub session: u64,
+}
+
+/// The one entity currently holding [`LocalAvatar`], or `None` before the first
+/// avatar exists.
+///
+/// A resource, so "which entity is the avatar" is a single slot the type system
+/// keeps singular, rather than a query that might return two and a convention
+/// that says it should not. Maintained by the hooks below; read it (or query
+/// `Single<_, With<LocalAvatar>>`) — never write it.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TheLocalAvatar(pub Option<Entity>);
+
+/// `LocalAvatar` was inserted: this entity becomes THE avatar, and any previous
+/// holder stops being one.
+fn local_avatar_claimed(mut world: bevy::ecs::world::DeferredWorld, ctx: bevy::ecs::lifecycle::HookContext) {
+    let entity = ctx.entity;
+    // A remote avatar cannot also be the local one. Whichever order they arrive
+    // in, the entity ends up with exactly one role — see `remote_avatar_claimed`.
+    if world.get::<RemoteAvatar>(entity).is_some() {
+        world.commands().entity(entity).remove::<LocalAvatar>();
+        return;
+    }
+    let prior = world
+        .get_resource::<TheLocalAvatar>()
+        .and_then(|slot| slot.0)
+        .filter(|prior| *prior != entity);
+    if let Some(prior) = prior {
+        // `try_remove`-equivalent: the prior holder may already be despawned by
+        // the same flush that spawned this one (the usual scene-reload shape).
+        if let Ok(mut prior_entity) = world.commands().get_entity(prior) {
+            prior_entity.remove::<(LocalAvatar, Avatar)>();
+        }
+    }
+    if let Some(mut slot) = world.get_resource_mut::<TheLocalAvatar>() {
+        slot.0 = Some(entity);
+    }
+}
+
+/// `LocalAvatar` was removed or the entity despawned: clear the slot if it named
+/// this entity, so nothing reads a stale avatar.
+fn local_avatar_released(
+    mut world: bevy::ecs::world::DeferredWorld,
+    ctx: bevy::ecs::lifecycle::HookContext,
+) {
+    let entity = ctx.entity;
+    if let Some(mut slot) = world.get_resource_mut::<TheLocalAvatar>() {
+        if slot.0 == Some(entity) {
+            slot.0 = None;
+        }
+    }
+}
+
+/// A remote avatar can never be the local one.
+fn remote_avatar_claimed(
+    mut world: bevy::ecs::world::DeferredWorld,
+    ctx: bevy::ecs::lifecycle::HookContext,
+) {
+    if world.get::<LocalAvatar>(ctx.entity).is_some() {
+        world.commands().entity(ctx.entity).remove::<LocalAvatar>();
+    }
+}
 
 /// The main window's 3D **viewport**: which camera it renders from, whether
 /// it's shown, and the sub-rect it occupies. A single reconciler
@@ -662,6 +759,10 @@ impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LunCoLogPlugin);
         app.add_plugins(BigSpaceInvariantsPlugin);
+        // The single-avatar slot the `LocalAvatar` hooks maintain. Init'd here
+        // because the invariant is the engine's, not any app's — an app that
+        // spawns an avatar must not have to remember to install its bookkeeping.
+        app.init_resource::<TheLocalAvatar>();
         app.register_type::<GridAnchor>()
             .register_type::<CinematicCameraLock>()
             .register_type::<NeedsGroundSettle>()

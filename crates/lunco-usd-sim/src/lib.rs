@@ -406,7 +406,6 @@ fn process_usd_sim_prims(
     q_grids: Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
-    q_prior_avatars: Query<Entity, With<Avatar>>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -569,7 +568,6 @@ fn process_usd_sim_prims(
             &wheel_attachment_targets,
             &q_existing_floating_origins,
             &q_provisional_cameras,
-            &q_prior_avatars,
             &q_grids,
             active_sun.as_deref(),
             &mut commands,
@@ -649,7 +647,6 @@ fn process_usd_sim_prim_read(
     wheel_attachment_targets: &HashMap<(Handle<UsdStageAsset>, String), String>,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
-    q_prior_avatars: &Query<Entity, With<Avatar>>,
     q_grids: &Query<(Entity, &Grid, Has<lunco_celestial::SiteAlignGrid>)>,
     active_sun: Option<&lunco_environment::LunarSun>,
     mut commands: &mut Commands,
@@ -910,64 +907,13 @@ fn process_usd_sim_prim_read(
                 commands.entity(prov).try_despawn();
             }
         }
-        // Same takeover for PRIOR AVATAR entities. A stage recompose can
-        // hand this prim a FRESH ECS entity while an earlier pass's avatar
-        // entity lives on (this system's `Without<UsdSimProcessed>` marker
-        // proves each pass processes a new entity). Two live
-        // `Avatar`+`Camera3d` entities render ambiguously and SPLIT the
-        // input/possession path: a click binds the chase camera on one
-        // avatar while the window renders the other ("possessed but the
-        // camera is frozen"), keyboard drives every avatar's linked vessel
-        // at once, and Backspace releases twice. Strip the avatar role off
-        // every prior holder — the newest authored pass wins.
-        for prior in q_prior_avatars.iter() {
-            if prior != entity {
-                warn!(
-                    "[avatar] stripping avatar role from prior entity {prior} \
-                         (superseded by re-composed prim {})",
-                    prim_path.path
-                );
-                commands.entity(prior).try_remove::<(
-                    SceneCamera,
-                    Avatar,
-                    LocalAvatar,
-                    FreeFlightCamera,
-                    OrbitCamera,
-                    SpringArmCamera,
-                    lunco_avatar::SurfaceRelativeMode,
-                    lunco_controller::ControllerLink,
-                    IntentAnalogState,
-                    ActionState<lunco_core::UserIntent>,
-                )>();
-                // DEACTIVATE the prior camera — do NOT remove `Camera`.
-                //
-                // The old code REMOVED `Camera`/`RenderTarget`/`Projection` to
-                // kill a GHOST second active window camera (a bare active camera
-                // that `reconcile_scene_viewport`, filtered `With<SceneCamera>`,
-                // could no longer reach once its `SceneCamera` was stripped). But
-                // removing `Camera` from a still-ACTIVE, still-extracted window
-                // camera in the SAME frame the new scene's shadow-casting sun
-                // initialises orphaned its render-world view for one frame:
-                // `build_directional_light_cascades` (main world) had already
-                // dropped that entity's cascade, so `bevy_pbr::prepare_lights`
-                // unwrapped `None` and hard-crashed the render app — deterministically
-                // on every elevated scene load (the moonbase Sun casts shadows; the
-                // flat sandbox sun does not, which is why it "used to work").
-                //
-                // Setting `is_active = false` reaches the SAME goal without the
-                // race: an inactive camera is not extracted as a view (so it needs
-                // no cascade) and does not render (so no ghost). Deactivation is a
-                // normal per-frame operation bevy handles cleanly; component
-                // REMOVAL of a live camera is what raced. `SceneCamera`
-                // is still stripped above, so `reconcile_scene_viewport` leaves it
-                // alone and it stays off for good.
-                commands.queue(move |world: &mut World| {
-                    if let Some(mut cam) = world.get_mut::<bevy::camera::Camera>(prior) {
-                        cam.is_active = false;
-                    }
-                });
-            }
-        }
+        // PRIOR AVATARS are not this code's problem. `LocalAvatar` is singular
+        // by construction (`lunco_core`'s component hook): inserting it below
+        // demotes whatever held it, and `lunco_avatar::demote_former_avatar`
+        // strips that entity's camera/control roles and deactivates its camera.
+        // This used to be a loop right here, which is precisely why the OTHER
+        // ways an avatar appears (the app's fallback camera, a recomposed prim)
+        // could leave a second live one.
         // `token`, per luncoSchema — so `text`, not `scalar::<String>`, which
         // matches `Value::String` alone and reads every token as `None`.
         let camera_mode = reader

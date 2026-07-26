@@ -625,6 +625,7 @@ impl Plugin for LunCoAvatarPlugin {
         // The local avatar is a controllable like any vessel: stamp its FSW command
         // surface + control binding so the shared `drive_from_bindings` path moves it.
         app.add_observer(stamp_avatar_controls);
+        app.add_observer(demote_former_avatar);
         // Mirror native possession onto the `cmd:*` script/telemetry bus (the UI
         // path bypasses ApiCommandEvent) so tutorials can advance on it.
         app.add_observer(project_possess_event);
@@ -950,6 +951,43 @@ pub fn spawn_avatar_camera(
 /// `lunco_mobility::sync_input_ports`, exactly like a rover. Authored in
 /// code for now; P3 will move it to an `_AvatarControl` USD profile so the avatar
 /// is spawned identically via code or USD.
+/// The other half of [`stamp_avatar_controls`]: an entity that has just STOPPED
+/// being the local avatar gives back everything being the avatar gave it.
+///
+/// Losing [`LocalAvatar`] is the one signal, and `lunco_core`'s hook is what
+/// produces it — the moment a new claimant appears, the previous holder is
+/// demoted here, wherever either of them came from (a USD `Avatar` prim, the
+/// app's fallback free-flight camera, a scene recompose handing the prim a fresh
+/// entity). `lunco-usd-sim` used to do this itself, in a loop it ran only on the
+/// authored-prim path, which is why the other paths left a second live avatar:
+/// two `Camera3d`s rendering the same window (the viewport flickers between
+/// them), input driving both linked vessels, release firing twice.
+///
+/// The camera is DEACTIVATED, never stripped of `Camera`. Removing `Camera` from
+/// a live, already-extracted window camera in the same frame a new scene's
+/// shadow-casting sun initialises orphans its render-world view:
+/// `build_directional_light_cascades` has dropped the cascade, `prepare_lights`
+/// unwraps `None`, and the render app hard-crashes — deterministically, on every
+/// elevated scene load. An inactive camera is not extracted, so it neither needs
+/// a cascade nor renders a ghost.
+fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands) {
+    let entity = trigger.entity;
+    commands.entity(entity).try_remove::<(
+        Avatar,
+        FreeFlightCamera,
+        OrbitCamera,
+        SpringArmCamera,
+        SurfaceRelativeMode,
+        lunco_controller::ControllerLink,
+        IntentAnalogState,
+    )>();
+    commands.queue(move |world: &mut World| {
+        if let Some(mut cam) = world.get_mut::<bevy::camera::Camera>(entity) {
+            cam.is_active = false;
+        }
+    });
+}
+
 fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) {
     let binding = lunco_core::ControlBinding::from_intent_entries(&[
         ("MoveForward".to_string(), "forward".to_string(), 1.0),
