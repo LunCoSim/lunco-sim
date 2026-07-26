@@ -191,8 +191,22 @@ sync_dir() {
         # cp -r "$src"* "$dest" — the glob handles visible files; dotfiles
         # need a separate pass (shopt -s dotglob would be cleaner but bash
         # 3.2 on macOS handles it; Git Bash on Windows also supports it).
-        ( shopt -s dotglob nullglob 2>/dev/null; cp -r "$src"* "$dest" 2>/dev/null ) || \
-            cp -r "$src". "$dest"
+        #
+        # `2>/dev/null` used to sit on this cp, with `||` falling through to the
+        # `"$src".` spelling. That combination could not distinguish "this shell
+        # doesn't do dotglob" (the case the fallback is FOR) from "the copy
+        # half-failed" — a partial tree, on Windows most plausibly a path over
+        # MAX_PATH — and it discarded the message that would have said which.
+        # A package that ships an incomplete assets/ tree looks identical at
+        # runtime to one whose asset resolution is broken, and that is exactly
+        # the wrong place to start debugging. Let cp speak, and fail the build.
+        if ! ( shopt -s dotglob nullglob 2>/dev/null; cp -r "$src"* "$dest" ); then
+            cp -r "$src". "$dest" || {
+                echo "ERROR: failed to copy '$src' → '$dest'." >&2
+                echo "       The package would ship an incomplete assets/ tree." >&2
+                return 1
+            }
+        fi
     fi
 }
 

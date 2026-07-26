@@ -71,10 +71,34 @@ pub(crate) async fn fetch_layer_closure(
             // default-source relative path → `assets/lunco://vessels/…` →
             // "Path not found". `AssetPath::parse` routes `lunco://…` to the
             // registered `lunco` source; plain relative ids stay default-source.
-            let fetched = load_context
+            let fetched = match load_context
                 .read_asset_bytes(AssetPath::parse(&child_id).into_owned())
                 .await
-                .map_err(|e| anyhow!("failed to fetch sublayer {child_id}: {e}"))?;
+            {
+                Ok(fetched) => fetched,
+                // A sublayer that cannot be fetched is NOT fatal to the stage.
+                //
+                // USD semantics: an unresolvable arc posts an error and
+                // composition continues with what did resolve. Aborting the
+                // whole closure instead meant one missing environment layer
+                // cost a tester the entire session — no scene, no cameras, and
+                // 2 s later a fallback free-flight camera in an empty world.
+                // A rover with no ground under it is a far more useful bug
+                // report than a blank window.
+                //
+                // Skipping is all that is needed to get there: the id never
+                // enters `bytes`, so `LuncoUsdResolver::resolve` answers `None`
+                // for it — the same "unresolvable" signal openusd handles by
+                // composing the rest.
+                Err(e) => {
+                    bevy::log::error!(
+                        "[usd] sublayer `{child_id}` of `{id}` could not be fetched ({e}). \
+                         The stage will compose WITHOUT it — expect missing content \
+                         rather than a missing scene."
+                    );
+                    continue;
+                }
+            };
             bytes.insert(child_id.clone(), fetched);
             queue.push(child_id);
         }

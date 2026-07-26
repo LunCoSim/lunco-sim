@@ -769,7 +769,8 @@ impl UsdDocument {
         if self.changes.len() == CHANGE_HISTORY_CAPACITY {
             self.changes.pop_front();
         }
-        self.changes.push_back((self.generation, UsdChange::FullReload));
+        self.changes
+            .push_back((self.generation, UsdChange::FullReload));
         self.record_op(UsdOp::ReplaceSource {
             edit_target: LayerId::root(),
             text: String::new(),

@@ -336,7 +336,7 @@ pub(crate) fn apply_rotates_live(world: &mut World, id: AssetId<UsdStageAsset>, 
 /// the live entity (`lunco_usd_bevy::dome`). The HDRI, its tint/intensity and
 /// the skybox toggle are plain attributes, so only this sees them move.
 pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[String]) {
-    use lunco_usd_bevy::{CanonicalStages, dome};
+    use lunco_usd_bevy::{dome, CanonicalStages};
     if paths.is_empty() {
         return;
     }
