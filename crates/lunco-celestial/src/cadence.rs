@@ -126,18 +126,48 @@ pub fn bump_celestial_inputs_revision(
     decl_added: Query<(), Added<crate::CelestialBodyDecl>>,
     grid_added: Query<(), Added<crate::big_space_setup::SolarSystemRoot>>,
     mut decl_removed: RemovedComponents<crate::CelestialBodyDecl>,
+    // [frames, bumps, site_added, site_moved, decl_added, grid_added, removed]
+    mut stats: Local<[u32; 7]>,
 ) {
-    // `removed.read()` must be drained unconditionally — an unread reader keeps
-    // redelivering, so `||` short-circuiting past it would leave the revision
-    // bumping for frames after the fact.
-    let any_removed = decl_removed.read().next().is_some();
-    if any_removed
-        || !site_added.is_empty()
-        || !site_moved.is_empty()
-        || !decl_added.is_empty()
-        || !grid_added.is_empty()
-    {
+    // `removed.read()` must be DRAINED — an unread reader keeps redelivering, so
+    // the revision would go on bumping for frames after the fact. `.count()`
+    // consumes the iterator; the previous `.next().is_some()` took exactly one
+    // event and left any others to come back next frame, which is the same bug
+    // the comment was written to prevent.
+    let removed = decl_removed.read().count();
+    let (site_a, site_m) = (!site_added.is_empty(), !site_moved.is_empty());
+    let (decl_a, grid_a) = (!decl_added.is_empty(), !grid_added.is_empty());
+
+    let bumped = removed > 0 || site_a || site_m || decl_a || grid_a;
+    if bumped {
         rev.0 = rev.0.wrapping_add(1);
+    }
+
+    // A structural edge is by definition occasional. If the inputs are dirty on
+    // most frames the cadence gate silently becomes a no-op: the cluster
+    // re-solves at frame rate and the cost reads as "celestial is just
+    // expensive". Measured as a RATE over a window, not a consecutive streak —
+    // an input dirty 9 frames in 10 resets a streak counter and would never
+    // report, which is exactly how this went unnoticed.
+    const WINDOW: u32 = 300;
+    stats[0] += 1;
+    stats[1] += u32::from(bumped);
+    stats[2] += u32::from(site_a);
+    stats[3] += u32::from(site_m);
+    stats[4] += u32::from(decl_a);
+    stats[5] += u32::from(grid_a);
+    stats[6] += u32::from(removed > 0);
+    if stats[0] >= WINDOW {
+        if stats[1] * 2 > WINDOW {
+            warn!(
+                "[celestial] cadence gate ineffective: inputs revision bumped on \
+                 {}/{} frames, so the celestial cluster is re-solving at frame \
+                 rate. Dirty-frame counts — site_added={} site_moved={} \
+                 decl_added={} grid_added={} decl_removed={}",
+                stats[1], stats[0], stats[2], stats[3], stats[4], stats[5], stats[6],
+            );
+        }
+        *stats = [0; 7];
     }
 }
 
