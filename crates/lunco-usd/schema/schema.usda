@@ -1035,3 +1035,86 @@ class "LunCoSuspensionVisualAPI" (
         allowedTokens = ["piston", "spring"]
     )
 }
+
+class "LunCoTutorialTrackAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a prim as a TRACK — a named group of lessons that appear
+    together under one heading.
+
+    Carries presentation only. It deliberately does NOT say which app shows the
+    track, and does NOT carry a sort order:
+
+    - WHICH APP is answered by composition. An app's curriculum root layer
+      sublayers the tracks it offers; a twin contributes by adding its layer at
+      runtime. A `hosts = ["sandbox"]` attribute would restate, inside scene
+      description, a fact that layering already expresses — the same category
+      error as `kind = "tutorialTrack"` (`kind` being the model hierarchy, a
+      registered token set, not a free-form tag).
+    - ORDER is sublayer order, strongest first, exactly as USD orders every
+      other opinion. A numeric `order` field is a second ordering mechanism that
+      can disagree with the first."""
+)
+{
+    string lunco:track:label = "" (
+        doc = """Heading this track appears under, e.g. `"2 · Rover Driving"`.
+        Display text, so `string` rather than `token`: it is prose, not a value
+        from a fixed set."""
+    )
+}
+
+class "LunCoTutorialAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a prim as ONE LESSON, and carries how it is presented.
+
+    A lesson prim is three things composed, none of them invented here:
+    - its BEHAVIOUR is `LunCoProgramAPI` + `info:sourceAsset = @./first_drive.rhai@`,
+      the way this engine already binds a rhai program to a prim;
+    - its WORLD is a `payload` arc to the scene it teaches in;
+    - its PRESENTATION is the properties below.
+
+    THE WORLD IS A PAYLOAD, not a property, and this is the whole point of the
+    schema. A lesson used to set its world by calling `load_scene(...)` as the
+    first statement of `on_start`, so a lesson that forgot was indistinguishable
+    from a lesson that has no world on purpose (a pure UI tour legitimately has
+    none) — the absent environment was unrepresentable and therefore
+    unverifiable, and the observed failure was a lesson drawing its coach marks
+    over whatever scene happened to be open. Declared as a payload it is
+    checkable before anything runs, it travels in the dependency closure so the
+    world ships with the lesson, and USD already means by `payload` exactly what
+    is meant here: heavy content, referenced but not loaded until asked.
+
+    The curriculum stage is opened with payloads UNLOADED. The arc is read to
+    learn WHICH world the lesson wants; mounting it stays the one existing scene
+    path (`LoadScene`), so the curriculum never becomes the world."""
+)
+{
+    string lunco:tutorial:title = "" (
+        doc = "Display title, e.g. `\"First Drive\"`."
+    )
+    string lunco:tutorial:blurb = "" (
+        doc = "One-line description, shown under the title and on hover."
+    )
+    uniform token lunco:tutorial:difficulty = "beginner" (
+        doc = "Difficulty chip. A closed set, hence `token`."
+        allowedTokens = ["beginner", "intermediate", "advanced"]
+    )
+    uniform bool lunco:tutorial:firstStart = false (
+        doc = """Whether this lesson is a track's onboarding entry, offered once
+        on a user's first run. At most one lesson per track should set it."""
+    )
+    rel lunco:tutorial:next (
+        doc = """The lesson to continue to when this one completes.
+
+        A RELATIONSHIP, not an id string: a relationship targets a prim in the
+        composed stage, so a chain naming a lesson that does not exist is
+        detectable by composition rather than discovered by a student who
+        finishes a lesson and goes nowhere. The chain IS the curriculum order —
+        display walks it — so lessons carry no separate index."""
+    )
+}
