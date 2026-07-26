@@ -855,14 +855,14 @@ fn report_untagged_identity(
         let Ok(info) = world.inspect_entity(e) else {
             continue;
         };
-        let mut names: Vec<&str> = info
+        let mut names: Vec<String> = info
             .map(|c| {
-                let n = c.name();
+                let n = c.name().to_string();
                 // `foo::bar::Baz<Qux>` → `Baz<Qux>`: the leaf is what identifies
-                // the spawner; the paths make the line unreadable.
-                n.rsplit("::").next().unwrap_or(n)
+                // the spawner; the full paths make the line unreadable.
+                n.rsplit("::").next().unwrap_or(&n).to_string()
             })
-            .filter(|n| *n != "UntaggedIdentity" && *n != "GlobalEntityId")
+            .filter(|n| n != "UntaggedIdentity" && n != "GlobalEntityId")
             .collect();
         names.sort_unstable();
         let signature = names.join(", ");
