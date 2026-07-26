@@ -2,18 +2,22 @@
 //! "what a sun's shadows look like at lunar scale".
 //!
 //! Before this module the same cascade split, biases and shadow-map size were
-//! copy-pasted into four places that had silently drifted apart:
+//! copy-pasted into several Rust sun-spawn paths that had silently drifted
+//! apart — the worst offender spawned a `DirectionalLight` with *no*
+//! `CascadeShadowConfig` at all, so it rendered with Bevy's single-cascade
+//! default (wrong terrain self-shadowing, clipped low-sun streaks).
 //!
-//! - the celestial bootstrap fallback sun (`lunco-celestial`),
-//! - the sandbox binary fallback sun (`lunco-sandbox`),
-//! - the USD `DistantLight` loader (`lunco-usd-bevy`),
+//! Nothing spawns a sun from Rust any more: the sun is authored USD
+//! (`lunco://lighting/sun.usda`) and there is exactly one instantiation path.
+//! Two consumers remain, and both start from [`LunarSunShadow`]:
+//!
+//! - the USD `DistantLight` loader (`lunco-usd-bevy`), which overrides only
+//!   what the prim authors,
 //! - the `SetEnvironmentLight` runtime tuner (`lunco-environment`).
 //!
-//! The worst offender spawned a `DirectionalLight` with *no* `CascadeShadowConfig`
-//! at all, so it rendered with Bevy's single-cascade default — wrong terrain
-//! self-shadowing and clipped low-sun streaks. Now every spawn path builds its
-//! light from [`LunarSunShadow`], so a tuning change lands everywhere by
-//! construction and no path can forget the cascade/bias/map setup.
+//! Cascade COUNT and the depth/normal biases live here and are **not**
+//! authorable — they are renderer policy, not scene content, and a knob for
+//! them would be tunable but not persistable since the loader reads neither.
 
 use bevy::light::{
     CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLight, DirectionalLightShadowMap,
@@ -34,6 +38,22 @@ use bevy::prelude::Color;
 /// exposure writes all agree on one number, so there is no window in which
 /// the 131 klx sun renders against an EV-9.7 camera (a ~5-stop blowout).
 pub const LUNAR_SUN_EXPOSURE_EV100: f32 = 16.0;
+
+/// Sol's apparent angular **diameter** in degrees, from the Moon or the Earth
+/// (the two are indistinguishable at this precision).
+///
+/// Here for the same reason as [`LUNAR_SUN_EXPOSURE_EV100`]: it is the lowest
+/// crate both readers reach. `lunco_environment::LunarSun` publishes it as
+/// environmental state, and the `lunco-usd-bevy` `DistantLight` loader — which
+/// sits BELOW environment — needs it as the fallback for an unauthored
+/// `inputs:angle`. Two literals would be two numbers that can drift, and the
+/// symptom of drift is a penumbra width that changes depending on whether a
+/// scene authored the attribute.
+///
+/// It is also exactly `UsdLuxDistantLight`'s schema fallback for
+/// `inputs:angle`, so an unauthored prim lands where USD says it lands rather
+/// than on an engine opinion.
+pub const SOLAR_ANGULAR_DIAMETER_DEG: f32 = 0.53;
 
 /// How to **render** a lunar sun's shadows — the cascade split, biases and
 /// atlas size. This is render-side *presentation* config only; the sun's
@@ -79,6 +99,12 @@ pub struct LunarSunShadow {
 impl Default for LunarSunShadow {
     fn default() -> Self {
         Self {
+            // WEB: half the cascades. Same rule as the atlas size below — a
+            // platform decision, made once here rather than re-derived at each
+            // spawn site or asked of scene authors.
+            #[cfg(target_arch = "wasm32")]
+            num_cascades: 2,
+            #[cfg(not(target_arch = "wasm32"))]
             num_cascades: 4,
             minimum_distance: 0.1,
             first_cascade_far_bound: 40.0,
@@ -116,15 +142,27 @@ impl LunarSunShadow {
         .build()
     }
 
-    /// Build the shadow-casting [`DirectionalLight`] with the given color and
-    /// illuminance (lux). Illuminance is *physical* state — the caller passes it
-    /// from `lunco_environment::LunarSun` (or an authored USD value); biases are
-    /// this struct's render config.
-    pub fn directional_light(&self, color: Color, illuminance_lux: f32) -> DirectionalLight {
+    /// Build the [`DirectionalLight`] with the given color and illuminance
+    /// (lux). Illuminance is *physical* state — the caller passes it from
+    /// `lunco_environment::LunarSun` (or an authored USD value); biases are this
+    /// struct's render config.
+    ///
+    /// `casts_shadows` comes from `UsdLuxShadowAPI`'s `inputs:shadow:enable`. It
+    /// is a PARAMETER and not a hardcoded `true` because not every
+    /// `DistantLight` is the key light: a body's reflected fill (earthshine)
+    /// authors `false`, and honouring that is the difference between one shadow
+    /// pass and two over the whole scene for a contribution measured in single
+    /// lux — which also double-darkens every contact shadow.
+    pub fn directional_light(
+        &self,
+        color: Color,
+        illuminance_lux: f32,
+        casts_shadows: bool,
+    ) -> DirectionalLight {
         DirectionalLight {
             color,
             illuminance: illuminance_lux,
-            shadow_maps_enabled: true,
+            shadow_maps_enabled: casts_shadows,
             shadow_depth_bias: self.depth_bias,
             shadow_normal_bias: self.normal_bias,
             ..Default::default()

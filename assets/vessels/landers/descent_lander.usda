@@ -728,15 +728,18 @@ def Xform "DescentLander" (
         # simulation. Retint the plume and this and `Photometry`'s `luminance` both
         # follow — they are the chroma and the luma of the same three numbers.
         #
-        # Shadows are left OFF (the loader's default for local lights): a
-        # shadow-casting point light re-renders the scene into a cubemap every
-        # frame, and this one sits inside the plume pointing at open ground with
-        # nothing meaningful to occlude.
         def SphereLight "PlumeLight" (
-            prepend apiSchemas = ["LunCoLightAPI"]
+            prepend apiSchemas = ["ShadowAPI", "LunCoLightAPI"]
         )
         {
             float inputs:intensity = 0
+
+            # Shadows OFF, authored rather than assumed: `UsdLuxShadowAPI`
+            # falls back to ENABLED, and the loader honours that fallback. A
+            # shadow-casting point light re-renders the scene into a cubemap
+            # every frame, and this one sits inside the plume pointing at open
+            # ground with nothing meaningful to occlude.
+            bool inputs:shadow:enable = false
             float inputs:radius = 0.06
             color3f inputs:color = (1.0, 0.5833, 0.15)
             # Schema-declared (LunCoLightAPI), so no `custom` — that qualifier is

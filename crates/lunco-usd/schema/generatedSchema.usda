@@ -215,26 +215,22 @@ class "LunCoShadowAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """Cascaded-shadow tuning for a UsdLux light. UsdLux has `ShadowAPI`
-    (enable/colour/distance) but says nothing about cascade counts or depth bias,
-    which are renderer concerns — so these are ours, and namespaced as such rather
-    than invented into the `shadow:` namespace UsdLux already owns."""
+    doc = """The near/far split of a cascaded shadow map, for a UsdLux light.
+
+    Everything UsdLux CAN say, it says: shadow enable/colour and the far bound
+    are `UsdLuxShadowAPI` (`inputs:shadow:enable`, `inputs:shadow:distance`),
+    and the loader reads those. What is left is the cascade split itself — a
+    rasterizer technique UsdLux has no concept of — so it takes a renderer
+    namespace the way `ri:` / `karma:` / `arnold:` do.
+
+    Cascade COUNT and the depth/normal biases are deliberately absent: they are
+    engine policy in `lunco_render::LunarSunShadow`, not scene content. An
+    authored value for them would be tunable but not persistable, and a scene
+    that set them would be describing this renderer rather than the light."""
 )
 {
-    float lunco:shadow:maxDistance = 1500 (
-        doc = "Far bound of the shadow cascades, metres."
-    )
     float lunco:shadow:firstCascadeFarBound = 40 (
         doc = "Far bound of the first (highest-resolution) cascade, metres."
-    )
-    float lunco:shadow:depthBias = 0 (
-        doc = "Shadow depth bias — trades acne against peter-panning."
-    )
-    float lunco:shadow:normalBias = 0 (
-        doc = "Shadow normal bias."
-    )
-    int lunco:shadow:numCascades = 1 (
-        doc = "Number of cascades in the near/far split of ONE light."
     )
 }
 

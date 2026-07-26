@@ -67,7 +67,10 @@ impl Default for LunarSun {
     fn default() -> Self {
         Self {
             illuminance_lux: 128_000.0,
-            angular_diameter_deg: 0.53,
+            // Same one-constant rule as `exposure_ev100` below: the USD
+            // `DistantLight` loader sits under this crate and needs the same
+            // number as the fallback for an unauthored `inputs:angle`.
+            angular_diameter_deg: lunco_render::SOLAR_ANGULAR_DIAMETER_DEG,
             // Shared with `lunco-usd-bevy`'s USD camera spawn via the one
             // constant both crates can reach (`lunco_render::
             // LUNAR_SUN_EXPOSURE_EV100`). Inlining a literal here would let it

@@ -2,6 +2,12 @@
 (
     defaultPrim = "Earthshine"
     doc = "Reflected fill from a nearby body — the light a planet throws onto its moon's night side."
+    # Same Y-up / metres convention as every scene that composes this. The fill
+    # authors no transform of its own (it inherits the body prim's orientation),
+    # but a layer that can be opened standalone should still state its stage
+    # conventions rather than leave them to the USD fallbacks.
+    metersPerUnit = 1
+    upAxis = "Y"
 )
 
 # A body's REFLECTED illumination, as a composable `UsdLuxDistantLight`.

@@ -457,17 +457,20 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
 /// no light of its own — the regression it guards is someone reintroducing a
 /// "helpful" default sun here.
 ///
-/// Two suns is not merely wasteful. `update_sun_light_system` steers only the
+/// Two suns is not merely wasteful. `update_sun_light_system` used to steer the
 /// BRIGHTEST `DirectionalLight`, so the 128 klx fallback took the aim and the
 /// scene's authored sun stayed frozen at its authored `xformOp:rotateXYZ` — the
 /// summer-space-school twin lighting and shadowing Hadley from a direction the
-/// ephemeris never sanctioned ("the DistantLight does not follow the sun").
+/// ephemeris never sanctioned ("the DistantLight does not follow the sun"). It
+/// now picks structurally instead, but a second unfilterable top-level
+/// `DistantLight` would still make "which one?" unanswerable — which is why the
+/// spawn had to go rather than the tiebreak get smarter.
 ///
 /// Asserted on the light COUNT and on which entity survives, because "the authored
 /// one is aimed correctly" passes for the wrong reason as soon as the authored sun
 /// happens to be the brighter of the two.
 #[test]
-fn a_scene_authored_sun_suppresses_the_fallback_sun() {
+fn the_celestial_takeover_spawns_no_sun_of_its_own() {
     let mut app = celestial_test_app();
     app.insert_resource(EphemerisResource {
         provider: Arc::new(StubEphemeris),

@@ -60,10 +60,12 @@ use crate::dome;
 use crate::read::UsdRead;
 
 /// Marker for a *dominant* scene light — a sun (`DistantLight`) or sky
-/// (`DomeLight`) — whose presence retires the binary's fallback sun/ambient.
-/// Its `Add` observer enforces that policy (see module docs). Deliberately
-/// NOT stamped on local lights like `SphereLight` headlights: a spawned
-/// vessel's lamp must not darken the scene by despawning the fallback sun.
+/// (`DomeLight`) — i.e. one that establishes how the whole scene is lit.
+/// Its `Add` observer recomputes the global ambient from authored
+/// `DomeLight`s ([`on_usd_light_added`]). Deliberately NOT stamped on local
+/// lights like `SphereLight` headlights: a spawned vessel's lamp is not a sky,
+/// and letting it trigger the ambient recompute would make scene brightness
+/// depend on what happens to be spawned.
 #[derive(Component)]
 pub struct UsdAuthoredLight;
 
@@ -259,6 +261,29 @@ fn read_shadow_distance(reader: &crate::StageView<'_>, path: &SdfPath, default: 
     }
 }
 
+/// `UsdLuxShadowAPI`'s schema fallback for `inputs:shadow:enable`: **true**.
+///
+/// Spelled once, as a named constant, because an unauthored attribute is the
+/// case where a reader's default IS the engine's answer — and a default that
+/// disagrees with the schema is a silent deviation. The scene says nothing, the
+/// stage resolves to one value, the engine uses another, and the only evidence
+/// is a look nobody authored. A light that should not cast says so, in USD.
+const USDLUX_SHADOW_ENABLE: bool = true;
+
+/// Whether this light casts shadows — `UsdLuxShadowAPI`, at its schema
+/// fallback.
+///
+/// The same rule for every light type. It used to be `true` for the sun and
+/// `false` for local lights, on the reasoning that each shadow-casting
+/// spot/point re-renders the scene into its own map and a few rovers stack up a
+/// dozen extra passes. That cost is real, but it is not a licence to answer a
+/// question the stage already answered: the fix is for the light to author
+/// `inputs:shadow:enable = false` — which shipped local lights now do — so the
+/// scene states its own render budget and the engine reads it.
+fn read_shadow_enable(reader: &crate::StageView<'_>, path: &SdfPath) -> bool {
+    get_attribute_as_bool(reader, path, "inputs:shadow:enable").unwrap_or(USDLUX_SHADOW_ENABLE)
+}
+
 /// If `prim_type` is a supported UsdLux light, attach the corresponding
 /// Bevy light components to `entity` and return `true`. Called from
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
@@ -288,9 +313,8 @@ pub(crate) fn instantiate_light_prim(
 
             // Start from the canonical lunar sun (single source of truth) and
             // override only the attributes the prim authors. An unauthored
-            // attribute therefore matches the engine's fallback suns by
-            // construction — no copy of the cascade split / bias / atlas values
-            // can drift here.
+            // attribute therefore lands on engine policy by construction — no
+            // copy of the cascade split / bias / atlas values can drift here.
             //
             // `firstCascadeFarBound` is the near/far split inside ONE light:
             // tight near cascades keep contact shadows crisp while the far
@@ -301,32 +325,33 @@ pub(crate) fn instantiate_light_prim(
             let d = LunarSunShadow::default();
             // Physical identity (illuminance + apparent size) is *authored* on
             // this prim: illuminance from `intensity`×2^`exposure`, angular size
-            // from `inputs:angle`. The canonical default for an unauthored angle
-            // lives in `lunco_environment::LunarSun` — but this loader sits below
-            // environment (materials → usd-bevy forbids the edge), so it carries
-            // its own fallback const. Keep it in sync with `LunarSun::default`.
-            const DEFAULT_SUN_ANGULAR_DIAMETER_DEG: f32 = 0.53;
+            // from `inputs:angle`. The unauthored fallback is
+            // `UsdLuxDistantLight`'s own — one constant, shared with
+            // `lunco_environment::LunarSun`, which sits above this loader and so
+            // cannot be read from here.
             let angular_diameter_deg = reader
                 .real_f32(sdf_path, "inputs:angle")
-                .unwrap_or(DEFAULT_SUN_ANGULAR_DIAMETER_DEG);
+                .unwrap_or(lunco_render::SOLAR_ANGULAR_DIAMETER_DEG);
+            // Cascade COUNT, the depth/normal biases and the per-platform atlas
+            // are engine policy — `lunco_render::LunarSunShadow` owns all of
+            // them, including the wasm overrides. Authored content overrides
+            // only the two ranges below.
             let sun = LunarSunShadow {
                 maximum_distance: read_shadow_distance(reader, sdf_path, d.maximum_distance),
                 first_cascade_far_bound: reader
                     .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
                     .unwrap_or(d.first_cascade_far_bound),
-                // Cascade COUNT and the depth/normal biases are engine policy,
-                // not authored content — `lunco_render::LunarSunShadow` owns
-                // them. WASM halves the count: a platform decision, made here
-                // rather than asked of authors.
-                #[cfg(target_arch = "wasm32")]
-                num_cascades: 2,
                 ..d
             };
+
+            // A body's reflected fill authors `false` — see
+            // `lunco://lighting/earthshine.usda`.
+            let casts_shadows = read_shadow_enable(reader, sdf_path);
 
             commands.insert_resource(sun.shadow_map());
             commands.entity(entity).try_insert((
                 lunco_core::SunAngularDiameter(angular_diameter_deg),
-                sun.directional_light(color, illuminance_lux),
+                sun.directional_light(color, illuminance_lux, casts_shadows),
                 sun.cascade_config(),
                 UsdAuthoredLight,
             ));
@@ -449,18 +474,16 @@ pub(crate) fn instantiate_light_prim(
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))
                 .unwrap_or(Color::WHITE);
-            // Local lights (SphereLight → Spot/Point: rover headlights, fill
-            // lamps) default to NO cast shadows: each shadow-casting spot/point
-            // renders the whole scene again into its own shadow map every frame,
-            // and a scene with several rovers (two SphereLights each) stacks up a
-            // dozen extra shadow passes — profiled as the dominant render cost on
-            // the moonbase twin (`queue_shadows` / `check_point_light_mesh…`), and
-            // it also blows past Bevy's per-cluster shadow-caster cap. The light
-            // still ILLUMINATES; it just doesn't cast. A scene that genuinely
-            // wants a hero cast shadow opts in per-light with
-            // `inputs:shadow:enable = true`.
-            let shadow_maps_enabled =
-                get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
+            // COST WARNING for authors, not a reader deviation: each
+            // shadow-casting spot/point renders the whole scene again into its
+            // own map every frame, so several rovers (two SphereLights each)
+            // stack up a dozen extra passes — profiled as the dominant render
+            // cost on the moonbase twin (`queue_shadows` /
+            // `check_point_light_mesh…`) and enough to blow past Bevy's
+            // per-cluster shadow-caster cap. A local light that does not need to
+            // cast therefore authors `inputs:shadow:enable = false`, and the
+            // light still ILLUMINATES.
+            let shadow_maps_enabled = read_shadow_enable(reader, sdf_path);
             let range = read_light_range(reader, sdf_path);
 
             if let Some(cone_angle_deg) = reader.real_f32(sdf_path, "inputs:shaping:cone:angle") {
@@ -476,7 +499,7 @@ pub(crate) fn instantiate_light_prim(
 
                 // No `UsdAuthoredLight`: a SphereLight is a *local* light (e.g. a
                 // vessel headlight), not a scene-dominant sun/sky. Stamping it
-                // would retire the binary's fallback sun the instant a rover
+                // would re-run the dome ambient recompute every time a rover
                 // spawns — see the marker docs.
                 commands.entity(entity).try_insert(SpotLight {
                     color,
@@ -506,7 +529,7 @@ pub(crate) fn instantiate_light_prim(
                 );
             } else {
                 // Pointlight path (standard SphereLight). No `UsdAuthoredLight`
-                // — local light, must not retire the fallback sun (see above).
+                // — local light, not a scene-dominant sun/sky (see above).
                 commands.entity(entity).try_insert(PointLight {
                     color,
                     intensity: intensity_lm,
@@ -554,7 +577,6 @@ pub(crate) fn instantiate_light_prim(
 
             // No `UsdAuthoredLight`: like SphereLight, a rect is a LOCAL light (a
             // deck-ceiling panel, a softbox fill), not a scene-dominant sun/sky.
-            // Stamping it would retire the binary's fallback sun.
             commands.entity(entity).try_insert(RectLight {
                 color,
                 intensity: intensity_lm,

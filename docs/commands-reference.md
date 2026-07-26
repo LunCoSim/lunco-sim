@@ -2275,8 +2275,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `shadow_maps_enabled` | `Option < bool >` |  Whether the sun casts shadows. `None` keeps current. |
 | `shadow_first_cascade_bound` | `Option < f32 >` |  Far bound of the first (sharpest) shadow cascade, metres.  `None` keeps current. |
 | `shadow_max_distance` | `Option < f32 >` |  Total shadow-casting range, metres. Smaller ⇒ denser shadow-map  texels ⇒ crisper shadows. `None` keeps current. |
-| `shadow_depth_bias` | `Option < f32 >` |  Shadow depth bias — raise to suppress self-shadow acne stripes  (cost: shadows detach slightly). `None` keeps current. |
-| `shadow_normal_bias` | `Option < f32 >` |  Shadow normal bias, in shadow-texel units — the main acne killer on  terrain under grazing light (Bevy default 1.8). `None` keeps current. |
 | `ambient_brightness` | `Option < f32 >` |  Global ambient brightness (cd/m²-scaled). `None` keeps current. |
 | `exposure_ev100` | `Option < f32 >` |  Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).  Moves with `illuminance`: brighter sun ⇒ higher EV. `None` keeps current. |
 | `earthshine_illuminance` | `Option < f32 >` |  [`Earthshine`] fill illuminance, lux (~10–15 typical). `None` keeps current. |

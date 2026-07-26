@@ -875,11 +875,12 @@ fn install_shadow_cache(
 ///
 /// The filters are STRUCTURAL, not a guess about brightness:
 ///
-/// * `Without<Earthshine>` — the earthshine fill is the one other
-///   `DirectionalLight` the engine ever makes, and it is spawned by
-///   [`crate::spawn_earthshine`], never authored. The sun is the light that came
-///   from a `UsdLuxDistantLight` prim; earthshine is engine furniture. That is a
-///   fact about where each entity came from, so the query states it.
+/// * `Without<Earthshine>` — a body's reflected fill is authored as a
+///   `DistantLight` CHILD of the body prim it comes from
+///   (`lunco://lighting/earthshine.usda` under the Earth prim), and
+///   `lunco-usd-sim` stamps [`crate::Earthshine`] from exactly that namespace
+///   nesting. The scene's key light is the top-level `DistantLight`. That is a
+///   fact about where each prim sits in the stage, so the query states it.
 /// * `Without<RenderLayers>` — preview-viewport suns are scoped to their own
 ///   layer and are not the scene's sun.
 ///

@@ -1,6 +1,14 @@
 #usda 1.0
 (
     defaultPrim = "Sun"
+    doc = "The engine's sun: a composable UsdLuxDistantLight, calibrated at 1 AU."
+    # Stated because this layer authors a rotation: `xformOp:rotateXYZ` below is
+    # only meaningful against a stated up-axis. Layer metadata does not compose
+    # through a reference — only the root layer's counts — so this is for the
+    # case the file is opened on its own, and it must match the Y-up scenes that
+    # reference it.
+    metersPerUnit = 1
+    upAxis = "Y"
 )
 
 # The engine's sun: a composable `UsdLuxDistantLight`.
@@ -27,6 +35,10 @@
 # answer for a composition without a sky — a QGIS shadow pass, or this file
 # opened on its own — and which opinion wins is inspectable through the property
 # stack rather than being a runtime convention.
+# `ShadowAPI` is applied here, with no opinions on it, so that a scene can
+# refine `inputs:shadow:*` in an `over` without having to apply the schema
+# itself — applying an API is a structural statement about the prim, and the
+# prim is defined here.
 def DistantLight "Sun" (
     prepend apiSchemas = ["ShadowAPI"]
 )
@@ -40,10 +52,18 @@ def DistantLight "Sun" (
     # horizon-shadow march. Not a look knob: it is how big the sun is.
     float inputs:angle = 0.53
 
-    # Standard `UsdLuxShadowAPI`. UsdLux defines -1 as "no limit"; a cascade
-    # shadow map has no such mode, so the loader reads any non-positive value as
-    # the engine default. Shadow texel density scales inversely with this.
-    float inputs:shadow:distance = 1500
+    # NOT authored here: `inputs:shadow:distance`. Shadow range is renderer
+    # policy, not the sun's physics, and `lunco_render::LunarSunShadow` already
+    # holds the number — repeating it here would be a second copy that can
+    # drift. `UsdLuxShadowAPI` falls back to -1 ("no limit"), which a cascade
+    # split cannot express, so the loader reads any non-positive value as that
+    # policy default. A scene whose terrain wants another range authors it:
+    #
+    #     over "Sun" { float inputs:shadow:distance = 3000 }
+    #
+    # Texel density scales inversely with it. Shadow ENABLE is likewise
+    # unauthored: `UsdLuxShadowAPI` falls back to on, which is what a key light
+    # wants, and the loader honours that fallback.
 
     # The standing direction: what lights the scene before an ephemeris steers,
     # and in scenes that mount none.
