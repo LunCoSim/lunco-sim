@@ -102,6 +102,7 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
                 .iter()
                 .map(|r| AssetSource::get_default_reader(r.clone())())
                 .collect(),
+            roots: roots.clone(),
         }) as Box<dyn ErasedAssetReader>
     })
 }
@@ -118,8 +119,22 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
 /// retrying it against the next root would convert a real error into a
 /// confusing "not found" and hide the actual cause. The LAST root's error is
 /// the one returned, so a miss reports the deepest place we looked.
+///
+/// That last part is a trap for whoever reads the log, which is why [`read`]
+/// also names every root. A miss on `lunco://environment/lunar_surface.usda`
+/// surfaced as `Path not found: C:\Users\…\AppData\Local\lunco\environment/…`,
+/// and a bug report reasonably concluded that `lunco://` resolved *into the
+/// AppData cache and never into the install's own `assets/`* — the exact
+/// opposite of the resolution order, which tries `assets/` FIRST. The proposed
+/// remedy ("fall back to `<install>/assets` on a cache miss") was already the
+/// behaviour, in reverse. One root named out of three read as the only root
+/// tried.
+///
+/// [`read`]: AssetReader::read
 struct FallbackReader {
     readers: Vec<Box<dyn ErasedAssetReader>>,
+    /// Parallel to `readers`, kept solely so a miss can say where it looked.
+    roots: Vec<String>,
 }
 
 /// Try each root in order; the first non-`NotFound` answer wins.
@@ -142,7 +157,23 @@ macro_rules! try_both {
 
 impl AssetReader for FallbackReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        try_both!(self, read, path)
+        let result = try_both!(self, read, path);
+        if matches!(result, Err(AssetReaderError::NotFound(_))) {
+            // Only `read`. Bevy probes for a sibling `.meta` on EVERY asset and
+            // almost never finds one, so warning from `read_meta` would bury
+            // this line in noise from the ordinary case.
+            bevy::log::warn!(
+                "[lunco://] `{}` not found in any library root. Looked in order:\n{}",
+                path.display(),
+                self.roots
+                    .iter()
+                    .enumerate()
+                    .map(|(i, root)| format!("  {}. {root}", i + 1))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
+        result
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
