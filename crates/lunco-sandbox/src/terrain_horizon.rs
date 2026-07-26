@@ -233,15 +233,19 @@ pub(crate) fn wire_tile_shadow_cache(
             Option<&CascadeShadowConfig>,
             Option<&RenderLayers>,
         ),
-        With<DirectionalLight>,
+        (
+            With<DirectionalLight>,
+            Without<lunco_environment::Earthshine>,
+        ),
     >,
 ) {
-    // The same "one sun" rule as the environment's wiring: brightest
-    // directional light not scoped to a preview render layer.
+    // The same "one sun" rule as the environment's wiring, and the same
+    // STRUCTURAL basis: a body's reflected fill is authored under that body's
+    // prim and carries `Earthshine`; a preview sun carries `RenderLayers`. What
+    // is left is the scene's sun, so there is nothing to rank.
     let csm_far: f32 = sun
         .iter()
-        .filter(|(_, _, layers)| layers.is_none())
-        .max_by(|a, b| a.0.illuminance.total_cmp(&b.0.illuminance))
+        .find(|(_, _, layers)| layers.is_none())
         .and_then(|(light, cascades, _)| {
             if !light.shadow_maps_enabled {
                 return Some(0.0);

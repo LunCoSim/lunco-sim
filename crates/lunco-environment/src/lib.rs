@@ -478,34 +478,15 @@ register_commands!(on_set_environment_light);
 /// 2. [`EnvironmentSet::Apply`] — applies gravity forces to Avian RigidBodies
 pub struct EnvironmentPlugin;
 
-/// Spawns the optional [`Earthshine`] light at zero intensity once at startup
-/// (skipped if one already exists). A scene may configure it through
-/// [`SetEnvironmentLight`] once it has a physically meaningful Earth direction
-/// and phase.
-///
-/// Native only: the web build renders on WebGL2, which supports a single
-/// `DirectionalLight`. A second light there culls the sun, so earthshine is not
-/// spawned on wasm (see the gated registration in `EnvironmentPlugin`).
-#[cfg(not(target_arch = "wasm32"))]
-fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>>) {
-    if !existing.is_empty() {
-        return;
-    }
-    // The zero-intensity default is inert; the transform is only a placeholder
-    // until a scene/ephemeris authors Earthshine deliberately.
-    let es = EarthshineParams::default();
-    commands.spawn((
-        Earthshine,
-        DirectionalLight {
-            illuminance: es.illuminance_lux,
-            color: Color::linear_rgb(es.color[0], es.color[1], es.color[2]),
-            shadow_maps_enabled: false,
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 3.6, -0.25, 0.0)),
-        Name::new("Earthshine"),
-    ));
-}
+// NOTE: earthshine is not spawned here. It is authored USD, nested under the
+// body it comes from (`lunco://lighting/earthshine.usda`, referenced by the
+// Earth prim in `lunco://celestial/solar_system.usda`), so a scene gets the fill
+// by declaring the body rather than by the engine adding a light nobody asked
+// for. `lunco-usd-sim` stamps [`Earthshine`] from that namespace structure.
+//
+// ⚠ WEB: WebGL2 supports a single `DirectionalLight`, and a second one culls the
+// sun. A wasm build must therefore not compose a body fill — the gate now lives
+// where the light is instantiated rather than where it used to be spawned.
 
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
@@ -610,11 +591,6 @@ impl Plugin for EnvironmentPlugin {
         // left at ZERO — the "not known" state — so a scene with no celestial
         // hierarchy reads as no-data rather than as a missing resource.
         app.init_resource::<EarthDirectionWorld>();
-
-        // Optional earthshine starts at zero. Skipped on web: WebGL2 supports
-        // only ONE `DirectionalLight`, and a second one culls the sun.
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Startup, spawn_earthshine);
 
         // Solar source: mirror gravity. Compute the per-entity sun
         // direction, then publish it as cosim outputs before propagation

@@ -261,7 +261,14 @@ pub fn update_sun_light_system(
     // filled here — the same shape as `LunarSun` below. `Option` because a build
     // without `EnvironmentPlugin` has no such resource and must still get a sun.
     mut earth_dir_out: Option<ResMut<lunco_environment::EarthDirectionWorld>>,
-    mut q_light: Query<(&mut Transform, &mut DirectionalLight)>,
+    // The scene's sun, identified STRUCTURALLY. A body's reflected fill
+    // (earthshine and its analogues) is authored under that body's prim and
+    // carries `Earthshine`; the scene's key light is not. See
+    // `lunco_environment::horizon::SunQuery` for the same filter render-side.
+    mut q_light: Query<
+        (&mut Transform, &mut DirectionalLight),
+        Without<lunco_environment::Earthshine>,
+    >,
     // The site-ENU alignment now lives on the Site Align Grid (the Solar
     // Grid's rotation is IDENTITY — see `anchor_solar_frame_to_site`).
     q_solar: Query<
@@ -349,11 +356,12 @@ pub fn update_sun_light_system(
         }
     }
 
-    // The sun is the brightest `DirectionalLight` (Earthshine fill is far dimmer).
-    if let Some((mut light_tf, mut light)) = q_light
-        .iter_mut()
-        .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
-    {
+    // The sun is the scene's one non-fill `DirectionalLight` — see the query.
+    // It used to be "the brightest", which is a guess: it silently picked when a
+    // scene had two suns, and with equal illuminance it picked by archetype
+    // iteration order. That guess is exactly how an engine-spawned duplicate
+    // came to take the ephemeris aim while the scene's own sun stayed frozen.
+    if let Some((mut light_tf, mut light)) = q_light.iter_mut().next() {
         // DEAD-BAND the aim. Unguarded, this rewrote the light every frame
         // from a direction that steps in f32-quat ULPs (the site pin's
         // `align` is recomputed per frame) — continuous sub-texel

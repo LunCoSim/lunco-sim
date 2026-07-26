@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
-use lunco_celestial::CelestialBody;
 use lunco_celestial::CelestialPlugin;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
 use lunco_time::WorldTime;
