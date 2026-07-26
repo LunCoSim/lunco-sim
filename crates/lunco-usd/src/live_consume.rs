@@ -112,6 +112,14 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim::cosim::WiringDirty>() {
         dirty.0 = true;
     }
+    // Same reason, one level up: a live edit to an already-spawned prim changes
+    // the composed stage without spawning or despawning anything, so it raises no
+    // ECS-structural signal. Every USD-derived view-model gates on this revision
+    // (`lunco_usd_bevy::UsdStageRevision`), so without the bump an edit would
+    // never reach the connection canvas or the prim tree.
+    if let Some(mut rev) = world.get_resource_mut::<lunco_usd_bevy::UsdStageRevision>() {
+        rev.bump();
+    }
 }
 
 /// Apply the composed `xformOp:translate` of each `path` to its live entity,

@@ -297,21 +297,32 @@ impl Plugin for SandboxEditUiPlugin {
         );
 
         // USD connection canvas: the scene is derived from the live composed
-        // stage by a main-thread producer (the stage is `!Send`), hash-gated so
-        // it only rebuilds on a topology change. No `run_if` — the system
-        // early-returns cheaply when nothing is wired or the topology is stable.
+        // stage by a main-thread producer (the stage is `!Send`).
+        //
+        // This used to run ungated on the claim that it "early-returns cheaply
+        // when the topology is stable". It does not: the early-return compares a
+        // hash that costs ~20 000 composed-stage lookups and a sorted `Vec<String>`
+        // to compute — 11 ms/frame on `sandbox_scene.usda`, the single largest
+        // item in the frame. A gate derived from the OUTPUT can never be cheaper
+        // than the output. `UsdStageRevision` is stamped by the writers instead.
+        // The internal hash stays, now purely as the idempotence guard it should
+        // always have been (a bumped revision does not imply a changed topology).
         app.init_resource::<connection_canvas::UsdCanvasState>()
             .add_systems(
                 Update,
-                connection_canvas::produce_usd_canvas.in_set(ViewModelSet),
+                connection_canvas::produce_usd_canvas
+                    .in_set(ViewModelSet)
+                    .run_if(resource_changed::<lunco_usd_bevy::UsdStageRevision>),
             );
 
         // USD prim tree: same main-thread producer pattern (the stage is
-        // `!Send`), hash-gated on the prim-path set.
+        // `!Send`), same gate for the same reason.
         app.init_resource::<usd_prim_tree::UsdPrimTreeView>()
             .add_systems(
                 Update,
-                usd_prim_tree::produce_usd_prim_tree.in_set(ViewModelSet),
+                usd_prim_tree::produce_usd_prim_tree
+                    .in_set(ViewModelSet)
+                    .run_if(resource_changed::<lunco_usd_bevy::UsdStageRevision>),
             );
 
         // USD parameter sliders: harvest the selected prim's customData-ranged

@@ -1207,6 +1207,18 @@ pub fn rewire_usd_connections(
                         offset,
                     },
                     UsdWiredConnection,
+                    // A derived edge is a PURE CACHE of USD wiring — every peer
+                    // re-derives it from the same stage, so it must never carry
+                    // network identity. `Local` is not a micro-optimisation here,
+                    // it closes a FEEDBACK LOOP: untagged entities fall into the
+                    // `None` arm of `assign_global_entity_ids` (lunco-core) and
+                    // get an auto-allocated id, which makes this system's own
+                    // `Added<GlobalEntityId>` gate fire on the very next frame,
+                    // which despawns and respawns every edge, which mints fresh
+                    // ids… Steady state cost was a full wiring rebuild EVERY
+                    // FRAME (8.6 ms on sandbox_scene) with nothing changing.
+                    // See docs/reviews/2026-07-26-fps-regression-analysis.md.
+                    lunco_core::Provenance::Local,
                 ));
             }
         }

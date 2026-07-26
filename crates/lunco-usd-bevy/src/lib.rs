@@ -187,6 +187,13 @@ impl Plugin for UsdBevyPlugin {
             // loaded `UsdStageAsset`'s `StageRecipe` (`sync_canonical_stages`).
             // `NonSend` — holds `!Send` openusd `Stage`s.
             .init_non_send::<canonical::CanonicalStages>()
+            // The one "USD projection changed" signal every derived consumer
+            // gates on. `PreUpdate` runs before the `Update` producers, so a
+            // spawn is observed here the frame AFTER it is applied and the
+            // view-model re-derives one frame later — the right trade for a
+            // panel, not for anything a simulation step depends on.
+            .init_resource::<UsdStageRevision>()
+            .add_systems(PreUpdate, bump_usd_stage_revision)
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             .add_observer(on_cell_coord_added)
@@ -501,6 +508,62 @@ impl Default for UsdPrimPath {
             stage_handle: Handle::default(),
             path: "/".to_string(),
         }
+    }
+}
+
+/// Monotonic "the USD projection may have changed" signal.
+///
+/// USD is the source of truth and the ECS is its projection, so everything
+/// derived *from* USD — a view-model, a wiring cache, a panel's graph — needs to
+/// know when to re-derive. This resource is that one signal, and consumers gate
+/// on it with `run_if(resource_changed::<UsdStageRevision>)`.
+///
+/// Why a counter and not a hash of the derived result: a revision is O(1) and
+/// **cannot drift from the truth**, because it is stamped by the writers
+/// themselves. A hash can only tell you *after* paying to produce the thing you
+/// were deciding whether to produce — which is exactly the bug this replaces
+/// (`produce_usd_canvas` spent 11 ms/frame building a graph and hashing it just
+/// to discover the graph was unchanged). Keep hashes for assertions, never for
+/// gates. See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
+///
+/// Bumped by [`bump_usd_stage_revision`] on prim spawn/despawn and stage asset
+/// modification, and directly by the live-edit drain in `lunco-usd`
+/// (`live_consume`) for `ApplyUsdOp` edits to already-spawned prims, which raise
+/// no ECS-structural signal of their own.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsdStageRevision(pub u64);
+
+impl UsdStageRevision {
+    /// Mark the USD projection as changed. Consumers gated on
+    /// `resource_changed::<UsdStageRevision>` re-derive on the next run.
+    pub fn bump(&mut self) {
+        self.0 = self.0.wrapping_add(1);
+    }
+}
+
+/// Raise [`UsdStageRevision`] when the USD→ECS projection changes structurally.
+///
+/// Deliberately does NOT touch the resource when nothing happened: writing it
+/// unconditionally would fire `resource_changed` every frame and defeat every
+/// gate downstream.
+pub fn bump_usd_stage_revision(
+    mut rev: ResMut<UsdStageRevision>,
+    added: Query<(), Added<UsdPrimPath>>,
+    mut removed: RemovedComponents<UsdPrimPath>,
+    mut stage_events: MessageReader<AssetEvent<UsdStageAsset>>,
+) {
+    let stage_changed = stage_events.read().any(|e| {
+        matches!(
+            e,
+            AssetEvent::Modified { .. } | AssetEvent::LoadedWithDependencies { .. }
+        )
+    });
+    // `removed.read()` must be drained unconditionally — an unread reader keeps
+    // redelivering, and `||` short-circuiting past it is what let the old wiring
+    // gate stay "structural" for frames after the fact.
+    let any_removed = removed.read().next().is_some();
+    if !added.is_empty() || any_removed || stage_changed {
+        rev.bump();
     }
 }
 
