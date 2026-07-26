@@ -563,7 +563,12 @@ mod tests {
 
         let mut checked = 0;
         for triangle in indices.chunks_exact(3) {
-            let [a, b, c] = triangle.map(|index| index as usize);
+            // `chunks_exact(3)` yields `&[u32]`, not `[u32; 3]` — destructure the
+            // slice, don't `map` it.
+            let &[a, b, c] = triangle else {
+                unreachable!("chunks_exact(3) yields exactly three indices")
+            };
+            let (a, b, c) = (a as usize, b as usize, c as usize);
             let geometric = (Vec3::from(positions[b]) - Vec3::from(positions[a]))
                 .cross(Vec3::from(positions[c]) - Vec3::from(positions[a]));
             if geometric.length_squared() < 1e-10 {
