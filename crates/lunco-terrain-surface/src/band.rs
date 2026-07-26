@@ -35,6 +35,7 @@
 //!   parent's 2×-spaced grid, so its gate is `4·step` (a fully-morphed tile IS
 //!   the parent surface).
 
+use bevy::reflect::Reflect;
 use crate::oracle::SurfaceOracle;
 
 /// A named, shared filter policy for a band-limited surface product.
@@ -42,7 +43,7 @@ use crate::oracle::SurfaceOracle;
 /// Construct via the named constructors ([`Self::contact`], [`Self::visual`],
 /// [`Self::visual_parent`]); the `min_wavelength` is the sole policy field.
 /// Apply with [`Self::limited`] to get a gated [`SurfaceOracle`] view.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Reflect)]
 pub struct SurfaceBand {
     /// Minimum wavelength (m) the surface keeps. Features below this are
     /// Nyquist-gated out by [`SurfaceOracle::detail_limited`].
