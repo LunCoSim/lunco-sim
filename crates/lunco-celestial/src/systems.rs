@@ -43,7 +43,7 @@ pub fn ephemeris_update_system(
     // `Local<f64>` comparing against 1e-9 JD — i.e. "did the epoch change at
     // all" — which meant a running clock re-projected the whole body/frame
     // hierarchy every single frame. It is now the shared
-    // `cadence::celestial_epoch_advanced` run condition, on an angular error
+    // `cadence::celestial_needs_solve` run condition, on an angular error
     // budget, applied at registration alongside the other four celestial
     // systems.
     //
@@ -376,7 +376,7 @@ pub fn update_sun_light_system(
                 );
                 (p.normalize_or_zero().y as f32).asin().to_degrees()
             });
-        info!(
+        debug!(
             "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}° \
              @ JD {:.5} (observer {observer_body}, sun BODY elevation {:?} — must match)",
             world.epoch_jd, body_elevation,

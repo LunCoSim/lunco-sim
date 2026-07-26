@@ -200,7 +200,7 @@ impl Plugin for CelestialPlugin {
         app.register_type::<pose::SolarTracked>();
         app.add_systems(
             Update,
-            pose::update_solar_poses.run_if(cadence::celestial_epoch_advanced),
+            pose::update_solar_poses.run_if(cadence::celestial_needs_solve),
         );
 
         // Generic connectivity kernel: cadence-gated pairwise link solving in
@@ -325,15 +325,20 @@ impl Plugin for CelestialPlugin {
         // gated system in this frame saw the same `CelestialSolvedEpoch`, so the
         // cluster advances together or not at all. A half-advanced tree would put
         // the sun and the bodies at different instants.
+        // The structural half of the cluster gate: bumped in `First`, so an edge
+        // (scene load, site edit, hierarchy rebuild) is visible to every gated
+        // member in the same frame, and committed in `Last` with the epoch.
+        app.init_resource::<cadence::CelestialInputsRevision>();
+        app.add_systems(First, cadence::bump_celestial_inputs_revision);
         app.add_systems(
             Last,
-            cadence::commit_celestial_epoch.run_if(cadence::celestial_epoch_advanced),
+            cadence::commit_celestial_epoch.run_if(cadence::celestial_needs_solve),
         );
 
         app.add_systems(
             PreUpdate,
             (
-                ephemeris_update_system.run_if(cadence::celestial_epoch_advanced),
+                ephemeris_update_system.run_if(cadence::celestial_needs_solve),
                 body_rotation_system,
                 // Star-fixed frames co-located with the rotating body grids (the
                 // orbit camera lives in one). After the ephemeris, whose pose it
@@ -344,22 +349,17 @@ impl Plugin for CelestialPlugin {
                 // so the pin persists between anchor runs — no mid-chain window
                 // where the hierarchy sits un-anchored.
                 //
-                // NOT cadence-gated, and it must never be. This is not an epoch
-                // COMPUTATION whose result may be stale for a while; it is the
-                // maintainer of a frame INVARIANT — the authored site coincides
-                // with the scene origin, ENU-aligned — and it re-derives that pin
-                // from the STORED f32 grid chain, which every other writer keeps
-                // nudging. Cadence-gating it re-applied the pin in bursts (~one
-                // per 0.01° of body motion, i.e. ~65 s of sim time at 1×) instead
-                // of every frame, so between bursts the world sat on a stale pin
-                // and each burst snapped it: the avatar "moves and jumps back",
-                // and a scene loaded between bursts stayed un-anchored (no
-                // `SiteAligned` ⇒ ecliptic-aimed sun ⇒ black scene). Cadence is
-                // for VALUES (ephemeris, poses, trajectories); invariants hold
-                // every frame or they are not invariants. Its own internal
-                // epoch/site edge check already makes the steady-state body
-                // cheap.
-                placement::anchor_solar_frame_to_site,
+                // On the SAME condition as `ephemeris_update_system` above, and
+                // that is load-bearing: the pin is derived FROM the body poses,
+                // so solving it at a different epoch than the bodies puts the
+                // site frame and the tree at different instants. Ungating it
+                // (tried, 2026-07-26) made the pin fresh while the bodies stayed
+                // at the last solved epoch — the sun disc and the light then
+                // disagreed and the world snapped whenever the bodies caught up
+                // ("I move and it jumps back"). The cluster advances together or
+                // not at all; `celestial_needs_solve` also fires on structural
+                // edges, so a scene loading at a standing epoch still anchors.
+                placement::anchor_solar_frame_to_site.run_if(cadence::celestial_needs_solve),
                 placement::place_celestial_bound_entities,
                 // Defeat stale-GT / compat-strobe frames for the celestial
                 // subtree — measured load-bearing; see the system doc (a deletion
@@ -425,7 +425,7 @@ impl Plugin for CelestialPlugin {
         // orientation from the site-anchored hierarchy.
         app.add_systems(
             Update,
-            update_sun_light_system.run_if(cadence::celestial_epoch_advanced),
+            update_sun_light_system.run_if(cadence::celestial_needs_solve),
         );
     }
 }

@@ -186,7 +186,7 @@ impl Plugin for TrajectoryPlugin {
                 // Same angular budget as the rest of the celestial cluster: an
                 // orbit line whose bodies moved <0.01° has not visibly moved
                 // either, and re-placing it every frame cost 2.6 ms.
-                .run_if(crate::cadence::celestial_epoch_advanced),
+                .run_if(crate::cadence::celestial_needs_solve),
         );
 
         // Drag diagnostic — reads the FINAL `GlobalTransform`s, so it must run
