@@ -782,12 +782,29 @@ pauses, a second render-rate copy (`spring_arm_paused_system`) had to exist for 
 One behaviour, two systems, gated on the transport: that duplication is what a cadence/clock
 conflation always produces.
 
+**Status: migrated.** `lunco-avatar` registers every camera writer (`spring_arm_system`,
+`orbit_system`, `freeflight_system`, `surface_camera_system`, `apply_fly`, the clip-plane pass) in
+`InteractionSchedule`, inside `AvatarCameraSet` ordered between `InteractionRestoreSet` and
+`InteractionRecordSet`. Deleted with it: `spring_arm_paused_system` and its `run_if(paused)` gate,
+the `update_spring_arm_impl` wrapper that existed only to share math between the twins, every
+`InteractionTime` read in those systems (they read `Res<Time>` — the interaction clock — like any
+`FixedUpdate` system reads `Time<Fixed>`), and avian's `TranslationInterpolation`/
+`RotationInterpolation` on camera entities. Render smoothing is `InteractionEased`, added on
+`Added<Avatar>`; `lunco-avatar` clears its history on a big_space cell rebase, because two poses
+either side of a rebase are expressed in different cells and must not be interpolated.
+
+The same rule applies to *input*: `lunco-controller::drive_self_drivers` (the free avatar's own
+command surface) runs in `InteractionSchedule`, while `drive_from_bindings` (vessels, predicted,
+seq-stamped) stays on `FixedUpdate`. A possessed vessel carries a `ControllerLink` and is therefore
+excluded from the self-drive query, so pausing still freezes the rover — it just no longer freezes
+the human.
+
 **Two cadences, split by what they are FOR:**
 
 | System mutates… | Cadence | `dt` | Pauses? | Rate-scales? |
 |---|---|---|---|---|
 | replicated **sim state** (physics, tick, cosim, netcode) | `FixedUpdate` — the fixed step **is** the tick | `SECS_PER_TICK` | yes | yes |
-| **presentation** (avatar, cameras, UI easing, HUD) | `InteractionSchedule` — wall-rooted | constant (120 Hz) | **never** | **never** |
+| **presentation** (avatar, cameras, UI easing, HUD) | `InteractionSchedule` — wall-rooted | constant (60 Hz) | **never** | **never** |
 
 `InteractionSchedule` (`lunco-time/src/interaction.rs`) is a second stepped cadence, drained from
 `Time<Real>`. Inside it the generic `Time` **is** the interaction clock — the same contract `Time`
@@ -855,6 +872,7 @@ domain, which can be rate-scaled freely.
    well-known handles (`real`, `sim`, `interaction`, `celestial`); `SetClock` command (journaled +
    replicated — it is world state, per §6).
 2. **Celestial as a clock**: `epoch_jd` written from the celestial node. Behaviour-identical default.
-3. **Interaction clock**: `lunco-avatar` binds to it; deletes the raw `Time<Real>` reads and the
-   duplicated `spring_arm_paused_system`.
+3. **Interaction clock** — DONE: `lunco-avatar` (all camera writers) and `lunco-controller`
+   (self-drive) run in `InteractionSchedule`; the raw `Time<Real>` reads and the duplicated
+   `spring_arm_paused_system` are deleted. See the status note in §11e-bis.
 4. **USD-authored celestial**: `LuncoCelestialBodyAPI`, `solar_system.usda`, delete the flag.
