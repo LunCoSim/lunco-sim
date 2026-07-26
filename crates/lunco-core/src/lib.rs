@@ -53,6 +53,9 @@ pub mod tools;
 
 pub mod pacing;
 
+/// Run-condition effectiveness — see [`gate::tracked`].
+pub mod gate;
+
 pub use architecture::*;
 pub use derived::RebuildOnChange;
 pub use markers::NoSelectionBounds;

@@ -62,25 +62,48 @@ pub struct ViewModelSet(());
 /// See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
 pub trait ViewModelAppExt {
     /// Add `producer` to [`ViewModelSet`] in `Update`, gated on `gate`.
-    fn add_view_model<M, C, CM>(
+    fn add_view_model<P, M, C, CM>(
         &mut self,
-        producer: impl IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
+        producer: P,
         gate: C,
     ) -> &mut Self
     where
+        P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
         C: SystemCondition<CM> + Send + 'static;
 }
 
 impl ViewModelAppExt for App {
-    fn add_view_model<M, C, CM>(
+    fn add_view_model<P, M, C, CM>(
         &mut self,
-        producer: impl IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
+        producer: P,
         gate: C,
     ) -> &mut Self
     where
+        P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
         C: SystemCondition<CM> + Send + 'static,
     {
-        self.add_systems(Update, producer.in_set(ViewModelSet(())).run_if(gate))
+        // Every view-model gate is tracked HERE rather than at each call site:
+        // a gate that silently degrades to always-true costs exactly what it was
+        // added to save, and nothing catches that at compile time (effectiveness
+        // is a runtime property). Wrapping at the one registration point means a
+        // new view model cannot be added without its gate being measured — no
+        // per-site discipline required, and no way to forget.
+        //
+        // Named after the PRODUCER, not the condition. Naming it after the
+        // condition reported `fn() -> bool` for every gate built by a factory
+        // (`every_frame()` and friends return a fn pointer, so the item type —
+        // and with it the path — is gone). The producer is a plain fn item whose
+        // `type_name` is its full path, and "which view model is rebuilding" is
+        // the more useful thing to read in a log line anyway.
+        self.add_systems(
+            Update,
+            producer
+                .in_set(ViewModelSet(()))
+                .run_if(lunco_core::gate::tracked(
+                    std::any::type_name::<P>(),
+                    gate,
+                )),
+        )
     }
 }
 

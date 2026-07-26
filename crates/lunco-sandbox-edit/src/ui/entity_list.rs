@@ -230,6 +230,10 @@ pub(crate) fn populate_entity_tree_view(
 /// harvest (unless shown): terrain streaming spawns and despawns tiles every
 /// frame, and counting those as "topology changed" would rebuild the whole tree
 /// every frame to produce an identical result.
+/// Tracked automatically by `add_view_model` — see [`lunco_core::gate::tracked`].
+/// Measured firing on 2692 of 2694 frames while looking entirely correct,
+/// rebuilding the whole tree (a `String` per named entity) to produce an
+/// identical result.
 pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
     settings: Res<EntityListSettings>,
