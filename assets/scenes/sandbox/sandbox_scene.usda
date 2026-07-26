@@ -114,16 +114,11 @@ def Xform "SandboxScene" (
 
     # ── Sun ────────────────────────────────────────────────────────────────
     #
-    # The scene's light, composed from the shared engine sun. There is no
-    # Rust-spawned "fallback" sun to conflict with: the fallback IS this
-    # reference — the weakest opinion on this prim — so a scene that refines
-    # nothing still gets a correct, complete light, and a scene that refines
-    # something gets exactly that. One prim, one light, no spawn ordering.
-    #
-    # This scene wants the shared values verbatim (128 000 lx, 0.53°, the
-    # standing pre-aim), so it authors NO local opinions at all. Refine here
-    # only what this scene genuinely differs on; see `sun.usda` for what each
-    # attribute means and for which of them the ephemeris overrides at runtime.
+    # The scene's light, composed from the shared engine sun. This scene wants
+    # the shared values verbatim (128 000 lx, 0.53°, the standing aim), so it
+    # authors no local opinions at all. Refine here only what this scene
+    # genuinely differs on; `sun.usda` documents each attribute and which of
+    # them the ephemeris refines at runtime.
     def DistantLight "Sun" (
         prepend references = @lunco://lighting/sun.usda@</Sun>
     )

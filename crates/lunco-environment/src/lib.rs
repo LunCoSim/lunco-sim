@@ -310,10 +310,9 @@ pub struct SetEnvironmentLight {
     /// Total shadow-casting range, metres. Smaller ⇒ denser shadow-map
     /// texels ⇒ crisper shadows. `None` keeps current.
     pub shadow_max_distance: Option<f32>,
-    // NO depth/normal bias here. They were live-tunable but not persistable —
-    // the USD loader reads neither, so a tuned value silently reverted on
-    // reload. Both are engine policy in `lunco_render::LunarSunShadow`, and
-    // neither was ever authored in any scene.
+    // Shadow depth/normal bias are deliberately absent: they are engine policy
+    // in `lunco_render::LunarSunShadow`. A knob here would be tunable but not
+    // persistable, since the USD loader reads neither.
     /// Global ambient brightness (cd/m²-scaled). `None` keeps current.
     pub ambient_brightness: Option<f32>,
     /// Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).

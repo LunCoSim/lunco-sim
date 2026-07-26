@@ -24,41 +24,32 @@
 //! equivalent, and approximating a disk with a rect would silently change the
 //! authored lighting rather than admit the gap.
 //!
-//! ## There is no fallback light, because the default sun is USD
+//! ## Lights are scene content
 //!
-//! Nothing spawns a default sun. The engine default is authored content —
-//! `lunco://lighting/sun.usda` — that every scene references, so the engine
-//! default and the scene's own opinions are two layers on ONE prim rather than
-//! two entities racing to despawn each other. Composition resolves them before
-//! anything reaches the ECS.
+//! Nothing spawns a default sun. The engine default is authored USD —
+//! `lunco://lighting/sun.usda` — that scenes reference, so the engine default
+//! and a scene's own opinions are two layers on ONE prim. Composition resolves
+//! them before anything reaches the ECS, which makes "one scene, one sun"
+//! structural rather than an invariant the engine has to police against
+//! spawn ordering. A scene that references no sun is unlit.
 //!
-//! That replaced a `FallbackSceneLight` marker plus a spawn-and-despawn
-//! handshake between the binary, `lunco-celestial` and this loader. The
-//! handshake was order-dependent and lost: the celestial takeover runs after
-//! the scene's own light, so it re-created the duplicate the despawn existed to
-//! prevent, and every site-anchored twin rendered with two shadow-casting suns.
-//! A scene that wants light references the sun; a scene that references nothing
-//! is unlit, and that is now a visible authoring fact rather than an engine
-//! default papering over it.
-//!
-//! [`on_usd_light_added`] still recomputes the global ambient from authored
+//! [`on_usd_light_added`] recomputes the global ambient from authored
 //! `DomeLight`s only (**no dome ⇒ ambient 0**), so an airless-Moon scene
 //! authoring a single `DistantLight` gets jet-black shadow cores for free.
 //!
 //! ## Shadow quality knobs
 //!
 //! The sun's shadow range is standard `UsdLuxShadowAPI`:
-//! `inputs:shadow:distance` (non-positive ⇒ engine default, since UsdLux's
-//! -1 "no limit" has no meaning for a cascade split). Texel density scales
+//! `inputs:shadow:distance`. Non-positive means engine default, since UsdLux's
+//! -1 "no limit" has no meaning for a cascade split. Texel density scales
 //! inversely with it, so a scene wanting crisp near-field shadows over a huge
 //! terrain authors a shorter distance.
 //!
-//! `lunco:shadow:firstCascadeFarBound` (default 40 m) is the ONE renderer-specific
-//! knob left: cascaded shadow maps are a rasterizer technique UsdLux has no
-//! attribute for, so it takes a renderer namespace the way `ri:` / `karma:` /
-//! `arnold:` do. Cascade COUNT and the depth/normal biases are deliberately not
-//! authorable — they are engine policy, every scene that ever set a count set it
-//! to the default anyway, and the biases were never authored at all.
+//! `lunco:shadow:firstCascadeFarBound` (default 40 m) is the only
+//! renderer-specific knob: cascaded shadow maps are a rasterizer technique
+//! UsdLux has no attribute for, so it takes a renderer namespace the way `ri:` /
+//! `karma:` / `arnold:` do. Cascade COUNT and the depth/normal biases are engine
+//! policy in `lunco_render::LunarSunShadow`, not authorable.
 
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
@@ -253,13 +244,7 @@ fn read_light_range(reader: &crate::StageView<'_>, path: &SdfPath) -> f32 {
     }
 }
 
-/// The sun's shadow-casting range — standard `UsdLuxShadowAPI`, one spelling.
-///
-/// `inputs:shadow:distance` is the schema's own name for "how far this light casts
-/// shadows". This loader already spoke its sibling `inputs:shadow:enable` on the
-/// local-light path; the sun path had invented `lunco:shadow:maxDistance` for a
-/// quantity the standard already names. The invented name is gone — not
-/// deprecated, gone — so there is exactly one way to author this.
+/// The sun's shadow-casting range — standard `UsdLuxShadowAPI`.
 ///
 /// UsdLux defines the schema fallback as **-1 = no limit**. A cascade shadow map
 /// has no unlimited mode (the split has to end somewhere), so a non-positive
@@ -329,14 +314,10 @@ pub(crate) fn instantiate_light_prim(
                 first_cascade_far_bound: reader
                     .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
                     .unwrap_or(d.first_cascade_far_bound),
-                // Cascade COUNT and the depth/normal biases are ENGINE POLICY,
-                // not authored content. They were readable per-prim and it bought
-                // nothing: every scene that ever set a count set it to the
-                // canonical 4 (or to 5/6, which the loader silently clamped to 4),
-                // and the biases were never authored anywhere at all. Three
-                // namespaced attributes whose only effect was to let a file claim
-                // a value the engine ignored. WASM still halves the cascade count
-                // — a platform decision, made here rather than asked of authors.
+                // Cascade COUNT and the depth/normal biases are engine policy,
+                // not authored content — `lunco_render::LunarSunShadow` owns
+                // them. WASM halves the count: a platform decision, made here
+                // rather than asked of authors.
                 #[cfg(target_arch = "wasm32")]
                 num_cascades: 2,
                 ..d
@@ -622,11 +603,9 @@ pub(crate) fn instantiate_light_prim(
 /// the old name. If a second independent ambient contributor is ever introduced,
 /// this must become a composition of tracked contributions rather than an
 /// assignment — that is precisely what would reintroduce the bug above.
-/// Fallback-sun retirement used to live here too, and was deleted with the
-/// fallback itself — the default sun is composed USD now, so there is no second
-/// light to retire. What remains IS edge-shaped: the ambient total is a pure
-/// reduction over the domes that currently exist, so recomputing it when the
-/// dome set changes is exactly right.
+/// Edge-triggered by design: the ambient total is a pure reduction over the
+/// domes that currently exist, so recomputing it when the dome set changes is
+/// exactly right.
 pub(crate) fn on_usd_light_added(
     _trigger: On<Add, UsdAuthoredLight>,
     domes: Query<&UsdDomeAmbient>,

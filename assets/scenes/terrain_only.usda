@@ -13,9 +13,8 @@ def Xform "TerrainOnly" (
     kind = "assembly"
 )
 {
-    # The scene's sun, composed from the shared engine light. Nothing spawns a
-    # default sun any more — the engine default IS this reference — so a scene
-    # that omits it renders unlit. See `lunco://lighting/sun.usda`.
+    # The scene's sun, composed from the shared engine light. The engine default
+    # IS this reference, so a scene that omits it is unlit.
     def DistantLight "Sun" (
         prepend references = @lunco://lighting/sun.usda@</Sun>
     )

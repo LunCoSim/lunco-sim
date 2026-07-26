@@ -473,28 +473,17 @@ pub fn setup_big_space_hierarchy(
 
     // ── Sun Light: NOT SPAWNED HERE ────────────────────────────────────────
     //
-    // This takeover used to spawn a marked "fallback" sun and despawn any prior
-    // one, on the theory that whoever spawns last should win. That is an N×N
-    // handshake between light producers, and it only holds for arrival orders
-    // someone thought about. This one runs LAST — it is triggered by the site
-    // anchor the scene load itself detects — so it landed after the scene's own
-    // `DistantLight` and re-created the duplicate the despawn existed to
-    // prevent. Every site-anchored twin therefore ran with two shadow-casting
-    // suns, and since only the BRIGHTEST is steered from the ephemeris, the
-    // 128 klx fallback took the aim while the scene's authored sun sat frozen at
-    // its authored `xformOp:rotateXYZ` — lighting the site from a direction the
-    // sky never sanctioned.
-    //
-    // The sun is now scene content composed from `lunco://lighting/sun.usda`: the
-    // engine default is the WEAKEST OPINION on the scene's own `Sun` prim, not a
+    // The sun is scene content, composed from `lunco://lighting/sun.usda`: the
+    // engine default is the weakest opinion on the scene's own `Sun` prim, not a
     // second entity. Composition resolves it before anything reaches the ECS, so
-    // there is one prim, one light, and no ordering to get wrong. The whole
-    // fallback concept — marker, spawn, retirement — is gone rather than guarded;
-    // a scene that references no sun is unlit, which is an authoring fact the
-    // author can see, not an engine default quietly covering for it.
+    // there is one prim and one light no matter what order things load in —
+    // which matters here because this takeover is triggered by the site anchor
+    // the scene load itself detects, i.e. it runs AFTER the scene's own light.
+    // Spawning a sun here would be a second one, and since only the brightest is
+    // steered from the ephemeris it would take the aim and leave the scene's own
+    // sun frozen at its authored rotation.
     //
-    // Physical/render lighting STATE is still established here — that part was
-    // never the bug.
+    // Physical/render lighting STATE is established here; the LIGHT is not.
     let sun = lunco_render::LunarSunShadow::default();
     // Physical sun identity (illuminance / angular size) is environmental state.
     // A new celestial hierarchy starts with its physical lighting baseline.
