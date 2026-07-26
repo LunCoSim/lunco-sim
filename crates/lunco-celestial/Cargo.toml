@@ -59,6 +59,7 @@ lunco-core = { path = "../lunco-core" }
 # See docs/architecture/render-decoupling.md.
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-settings = { path = "../lunco-settings" }
 lunco-time = { path = "../lunco-time" }
 # `LunarSunShadow` (the canonical cascade config) AND the appearance/camera INTENT
 # types this crate now states instead of materials: `PbrLook`, `SceneCamera`.

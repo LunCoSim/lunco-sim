@@ -182,7 +182,11 @@ impl Plugin for TrajectoryPlugin {
             PostUpdate,
             trajectory_alignment_system
                 .after(crate::placement::anchor_solar_frame_to_site)
-                .before(bevy::transform::TransformSystems::Propagate),
+                .before(bevy::transform::TransformSystems::Propagate)
+                // Same angular budget as the rest of the celestial cluster: an
+                // orbit line whose bodies moved <0.01° has not visibly moved
+                // either, and re-placing it every frame cost 2.6 ms.
+                .run_if(crate::cadence::celestial_epoch_advanced),
         );
 
         // Drag diagnostic — reads the FINAL `GlobalTransform`s, so it must run

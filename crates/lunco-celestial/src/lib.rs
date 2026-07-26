@@ -17,6 +17,7 @@ mod big_space_setup;
 /// The frame conversions. `coords` is `pub` because `lunco-celestial-ephemeris` was
 /// re-implementing `ecliptic_to_bevy` by hand for want of access — a conversion people copy
 /// is a conversion that drifts.
+pub mod cadence;
 pub mod coords;
 mod embedded_assets;
 pub mod ephemeris;
@@ -197,7 +198,10 @@ impl Plugin for CelestialPlugin {
         // `SolarPose` (incl. scene-local prims a read-only query can't resolve).
         queries::register_celestial_queries(app);
         app.register_type::<pose::SolarTracked>();
-        app.add_systems(Update, pose::update_solar_poses);
+        app.add_systems(
+            Update,
+            pose::update_solar_poses.run_if(cadence::celestial_epoch_advanced),
+        );
 
         // Generic connectivity kernel: cadence-gated pairwise link solving in
         // Rust, verdict via the language-neutral `link.connected` hook, cadence
@@ -304,10 +308,32 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<placement::OrbitalViewPin>();
         app.init_resource::<systems::SunDirectionWorld>();
 
+        // Celestial cadence: the tree is re-solved on an ANGULAR ERROR BUDGET,
+        // not every frame and not at a fixed Hz (sim time warps, so a rate is
+        // wrong at every other warp factor — see `cadence`). Solving every frame
+        // measured ~10 ms/frame across the five systems gated below.
+        //
+        // `touch_celestial_transforms` and the rest of the chain stay UNGATED on
+        // purpose: the touch is load-bearing against stale-GT strobing every
+        // frame (a deletion attempt on 2026-07-11 strobed the whole tree), so the
+        // gate goes on the individual expensive systems, never on the set.
+        app.init_resource::<cadence::CelestialSolvedEpoch>();
+        lunco_settings::AppSettingsExt::register_settings_section::<
+            cadence::CelestialCadenceSettings,
+        >(app);
+        // One writer, in `Last`, under the same condition as its readers: every
+        // gated system in this frame saw the same `CelestialSolvedEpoch`, so the
+        // cluster advances together or not at all. A half-advanced tree would put
+        // the sun and the bodies at different instants.
+        app.add_systems(
+            Last,
+            cadence::commit_celestial_epoch.run_if(cadence::celestial_epoch_advanced),
+        );
+
         app.add_systems(
             PreUpdate,
             (
-                ephemeris_update_system,
+                ephemeris_update_system.run_if(cadence::celestial_epoch_advanced),
                 body_rotation_system,
                 // Star-fixed frames co-located with the rotating body grids (the
                 // orbit camera lives in one). After the ephemeris, whose pose it
@@ -317,7 +343,7 @@ impl Plugin for CelestialPlugin {
                 // `ephemeris_update_system` never touches the Solar Grid (id 10),
                 // so the pin persists between anchor runs — no mid-chain window
                 // where the hierarchy sits un-anchored.
-                placement::anchor_solar_frame_to_site,
+                placement::anchor_solar_frame_to_site.run_if(cadence::celestial_epoch_advanced),
                 placement::place_celestial_bound_entities,
                 // Defeat stale-GT / compat-strobe frames for the celestial
                 // subtree — measured load-bearing; see the system doc (a deletion
@@ -381,7 +407,10 @@ impl Plugin for CelestialPlugin {
         // must not ride the Solar Grid — heliocentric-magnitude translations
         // corrupt the f32 cascade-shadow matrices) and therefore inherits no
         // orientation from the site-anchored hierarchy.
-        app.add_systems(Update, update_sun_light_system);
+        app.add_systems(
+            Update,
+            update_sun_light_system.run_if(cadence::celestial_epoch_advanced),
+        );
     }
 }
 

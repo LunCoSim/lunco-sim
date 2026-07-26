@@ -33,21 +33,22 @@ pub fn ephemeris_update_system(
     _q_all_parents: Query<&ChildOf>,
     _q_frames: Query<&CelestialReferenceFrame>,
     q_grids: Query<&Grid>,
-    mut last_jd: Local<f64>,
 ) {
     let Some(ephemeris) = ephemeris else {
         return;
     };
 
-    // Gate: re-project the whole body/frame hierarchy only when the epoch
-    // has actually advanced. `last_jd` starts at 0.0 (a JD this clock never
-    // takes), so the first real epoch always runs; thereafter a paused /
-    // time-warp-stopped clock skips the full recompute. (This is the gate
-    // the doc comment always promised but never wired up.)
-    if (world.epoch_jd - *last_jd).abs() < 1e-9 {
-        return;
-    }
-    *last_jd = world.epoch_jd;
+    // The epoch gate is NOT here any more. It used to be a private
+    // `Local<f64>` comparing against 1e-9 JD — i.e. "did the epoch change at
+    // all" — which meant a running clock re-projected the whole body/frame
+    // hierarchy every single frame. It is now the shared
+    // `cadence::celestial_epoch_advanced` run condition, on an angular error
+    // budget, applied at registration alongside the other four celestial
+    // systems.
+    //
+    // Deliberately shared and not re-derived locally: two gates with two
+    // `Local`s drift, and a half-advanced celestial tree puts the sun and the
+    // bodies at different instants.
 
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body {
