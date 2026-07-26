@@ -200,7 +200,7 @@ impl Plugin for CelestialPlugin {
         app.register_type::<pose::SolarTracked>();
         app.add_systems(
             Update,
-            pose::update_solar_poses.run_if(cadence::celestial_needs_solve),
+            pose::update_solar_poses.run_if(cadence::tracked_needs_solve()),
         );
 
         // Generic connectivity kernel: cadence-gated pairwise link solving in
@@ -332,13 +332,13 @@ impl Plugin for CelestialPlugin {
         app.add_systems(First, cadence::bump_celestial_inputs_revision);
         app.add_systems(
             Last,
-            cadence::commit_celestial_epoch.run_if(cadence::celestial_needs_solve),
+            cadence::commit_celestial_epoch.run_if(cadence::tracked_needs_solve()),
         );
 
         app.add_systems(
             PreUpdate,
             (
-                ephemeris_update_system.run_if(cadence::celestial_needs_solve),
+                ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
                 body_rotation_system,
                 // Star-fixed frames co-located with the rotating body grids (the
                 // orbit camera lives in one). After the ephemeris, whose pose it
@@ -359,7 +359,7 @@ impl Plugin for CelestialPlugin {
                 // ("I move and it jumps back"). The cluster advances together or
                 // not at all; `celestial_needs_solve` also fires on structural
                 // edges, so a scene loading at a standing epoch still anchors.
-                placement::anchor_solar_frame_to_site.run_if(cadence::celestial_needs_solve),
+                placement::anchor_solar_frame_to_site.run_if(cadence::tracked_needs_solve()),
                 placement::place_celestial_bound_entities,
                 // Defeat stale-GT / compat-strobe frames for the celestial
                 // subtree — measured load-bearing; see the system doc (a deletion
@@ -425,7 +425,7 @@ impl Plugin for CelestialPlugin {
         // orientation from the site-anchored hierarchy.
         app.add_systems(
             Update,
-            update_sun_light_system.run_if(cadence::celestial_needs_solve),
+            update_sun_light_system.run_if(cadence::tracked_needs_solve()),
         );
     }
 }

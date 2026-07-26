@@ -143,12 +143,11 @@ pub fn bump_celestial_inputs_revision(
         rev.0 = rev.0.wrapping_add(1);
     }
 
-    // A structural edge is by definition occasional. If the inputs are dirty on
-    // most frames the cadence gate silently becomes a no-op: the cluster
-    // re-solves at frame rate and the cost reads as "celestial is just
-    // expensive". Measured as a RATE over a window, not a consecutive streak —
-    // an input dirty 9 frames in 10 resets a streak counter and would never
-    // report, which is exactly how this went unnoticed.
+    // Which INPUT is dirty, for when the gate reports itself ineffective.
+    // `lunco_core::gate` says *that* a gate stopped gating; only the gate's own
+    // inputs can say *why*, and that is domain knowledge the substrate cannot
+    // have. Attribution is therefore kept here — but the rate measurement and
+    // the reporting threshold are not duplicated, they belong to the substrate.
     const WINDOW: u32 = 300;
     stats[0] += 1;
     stats[1] += u32::from(bumped);
@@ -159,11 +158,10 @@ pub fn bump_celestial_inputs_revision(
     stats[6] += u32::from(removed > 0);
     if stats[0] >= WINDOW {
         if stats[1] * 2 > WINDOW {
-            warn!(
-                "[celestial] cadence gate ineffective: inputs revision bumped on \
-                 {}/{} frames, so the celestial cluster is re-solving at frame \
-                 rate. Dirty-frame counts — site_added={} site_moved={} \
-                 decl_added={} grid_added={} decl_removed={}",
+            info!(
+                "[celestial] inputs revision bumped on {}/{} frames — \
+                 site_added={} site_moved={} decl_added={} grid_added={} \
+                 decl_removed={}",
                 stats[1], stats[0], stats[2], stats[3], stats[4], stats[5], stats[6],
             );
         }
@@ -183,7 +181,25 @@ pub fn bump_celestial_inputs_revision(
 /// epoch and the bodies at the last solved one — the sun disc and the light then
 /// disagree, and the world visibly snaps each time the gate finally fires ("I
 /// move and it jumps back").
-pub fn celestial_needs_solve(
+/// [`celestial_needs_solve`], wrapped so its firing rate is reported.
+///
+/// **This is the only way to obtain this gate.** The raw condition is
+/// `pub(crate)` on purpose: a run condition that silently stops gating costs
+/// exactly what it was added to save, and the failure is invisible without a
+/// profiler. Effectiveness is a runtime property — no type can prove a gate
+/// still gates — but *tracking* can be made unavoidable, and visibility is the
+/// cheapest enforcement there is. A future registration site cannot reach the
+/// untracked form to forget it.
+///
+/// The cluster shares ONE condition across five registration sites; naming it
+/// here keeps that name from being repeated as a literal at each. Every site
+/// evaluates it separately, so the tally counts evaluations, not frames — the
+/// rate is what matters, not the absolute count.
+pub fn tracked_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
+    lunco_core::gate::tracked("celestial_needs_solve", celestial_needs_solve)
+}
+
+pub(crate) fn celestial_needs_solve(
     world: Option<Res<WorldTime>>,
     solved: Res<CelestialSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
@@ -213,11 +229,61 @@ pub fn celestial_needs_solve(
 /// solve instead of re-solving forever.
 pub fn commit_celestial_epoch(
     world: Option<Res<WorldTime>>,
+    settings: Option<Res<CelestialCadenceSettings>>,
     revision: Res<CelestialInputsRevision>,
     mut solved: ResMut<CelestialSolvedEpoch>,
+    mut solves: Local<u64>,
 ) {
     if let Some(world) = world {
+        // Why the EPOCH branch of `celestial_needs_solve` fires, for when
+        // `lunco_core::gate` reports the cluster ungated and the revision
+        // attribution stays quiet (i.e. structure is NOT the cause). The delta
+        // is what the gate compares against `max_epoch_step_jd`; if it exceeds
+        // the step every frame the clock is advancing faster than the tolerance
+        // allows, and the cadence cannot help.
+        let delta = (world.epoch_jd - solved.jd).abs();
+        // The LIVE setting, resolved exactly as `celestial_needs_solve` resolves
+        // it. Reading `default()` here instead was a real defect: with the
+        // resource set to `EXACT` (tolerance 0 => step 0) the gate fires on
+        // `delta >= 0.0` — always, even for an unchanged epoch — while this log,
+        // comparing against the 0.01-degree default's step, stayed silent. A
+        // diagnostic that does not read the same input as the thing it explains
+        // can only mislead, and it did: it made an EXACT-mode configuration look
+        // like a broken gate.
+        let step = settings
+            .map(|s| s.max_epoch_step_jd())
+            .unwrap_or_else(|| CelestialCadenceSettings::default().max_epoch_step_jd());
+        if step <= 0.0 {
+            bevy::log::warn_once!(
+                "[celestial] cadence tolerance is 0 (EXACT): the gate solves EVERY \
+                 frame by definition, costing ~10 ms/frame. That is intended for \
+                 `scene_test` determinism — outside one it is a misconfiguration."
+            );
+        }
+        // Periodic, not `_once`: the first frame always exceeds the step because
+        // `solved.jd` starts at the "never solved" sentinel (-inf), so a one-shot
+        // log reports the bootstrap and tells you nothing about steady state —
+        // which is the only interesting case.
+        *solves += 1;
+        if delta >= step && *solves % 300 == 0 {
+            bevy::log::info!(
+                "[celestial] epoch branch opens the gate: |{:.6} - {:.6}| = {:.3e} d \
+                 >= step {:.3e} d ({:.1} s of epoch per solve)",
+                world.epoch_jd,
+                solved.jd,
+                delta,
+                step,
+                delta * 86_400.0,
+            );
+        }
         solved.jd = world.epoch_jd;
+    } else {
+        // The gate returns TRUE unconditionally without a clock — worth saying
+        // out loud, because it looks identical to "the epoch moved".
+        bevy::log::warn_once!(
+            "[celestial] no `WorldTime`: the cadence gate cannot gate and the \
+             whole cluster solves every frame."
+        );
     }
     solved.revision = revision.0;
 }

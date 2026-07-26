@@ -1968,6 +1968,12 @@ impl Plugin for SandboxCorePlugin {
         // bevy_render → wgpu + naga), not merely from running it. The runtime
         // `!headless` check remains for a `ui`-built binary launched headless.
         // See docs/architecture/render-decoupling.md.
+        // Run-condition effectiveness reporting. In `SandboxCorePlugin` rather
+        // than the UI plugin because the gates it watches (celestial cadence,
+        // view-model producers) exist headless too, and a gate that stops gating
+        // costs the same on a server as it does in the GUI.
+        app.add_plugins(lunco_core::gate::GatePlugin);
+
         #[cfg(feature = "ui")]
         if !self.headless {
             app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
