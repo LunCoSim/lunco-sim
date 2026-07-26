@@ -22,10 +22,13 @@ use lunco_core::{on_command, register_commands, Command};
 
 /// USD prim type for the scene-level **environment settings** prim (a singleton
 /// under the default prim, e.g. `/World/Environment`). It carries the render
-/// knobs that have no natural light-prim home — `lunco:env:exposureEv100`,
-/// `bloomIntensity`, `earthshineIntensity`, `earthshineColor`.
+/// knobs that have no natural light-prim home — `lunco:env:exposureEv100` and
+/// `lunco:env:bloomIntensity`.
 ///
-/// **Ambient is not among them.** Uniform environment illumination is standard
+/// **Ambient and earthshine are not among them.** Earthshine is an authored
+/// `DistantLight` nested under the body it reflects from, so its brightness and
+/// tint are `inputs:intensity` / `inputs:color` on that prim — standard UsdLux,
+/// read back by the standard light loader. Uniform environment illumination is standard
 /// UsdLux — an untextured `DomeLight` — and `GlobalAmbientLight` is composed as
 /// the sum over those domes. The ambient slider therefore persists onto a
 /// `DomeLight` child of this prim (`<Environment>/AmbientFill`), not onto a
@@ -452,6 +455,24 @@ fn on_set_environment_light(
     }
 
     // Earthshine fill light.
+    //
+    // The fill exists only in a scene that DECLARES the body it reflects from
+    // (`lunco://lighting/earthshine.usda`, nested under that body's prim), so
+    // this query is legitimately empty in a scene with no sky. Report it rather
+    // than let the request evaporate: nothing here can conjure the light, since
+    // which body it belongs to — and therefore its direction and phase — is
+    // exactly what the scene did not say. Spawning a stand-in would be an
+    // unshadowed fill nobody authored, aimed nowhere in particular.
+    if (cmd.earthshine_illuminance.is_some() || cmd.earthshine_color.is_some())
+        && q_earthshine.is_empty()
+    {
+        warn_once!(
+            "[environment] earthshine requested, but this scene declares no body to \
+             reflect it — nothing to apply. Reference a celestial body that carries \
+             the fill (`lunco://celestial/solar_system.usda` brings Earth's), or nest \
+             `lunco://lighting/earthshine.usda` under the body prim yourself."
+        );
+    }
     for mut fill in &mut q_earthshine {
         if let Some(lux) = cmd.earthshine_illuminance {
             fill.illuminance = lux;

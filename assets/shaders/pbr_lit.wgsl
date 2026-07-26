@@ -75,8 +75,15 @@ fn lit_n(
 
 // World-space to-sun, read straight from the scene lights (no per-material
 // uniform wiring needed). Picks the BRIGHTEST directional light rather than
-// `directional_lights[0]`, so the dim earthshine fill
-// (`lunco:env:earthshineIntensity`) can never be mistaken for the sun.
+// `directional_lights[0]`, so a body's reflected fill can never be mistaken for
+// the sun.
+//
+// The CPU-side pickers identify the sun STRUCTURALLY (the fill is a child of the
+// body prim it comes from, and carries `Earthshine`) precisely because brightness
+// is a guess. This shader cannot: the light array is flat and carries no prim
+// identity, so brightness is the only signal that survives the boundary. It is a
+// safe one HERE — the fill is ~12 lx against a ~128 klx sun, three orders of
+// magnitude, and it is the only other directional light a scene composes.
 fn sun_to_light() -> vec3<f32> {
     var best = vec3(0.0, 1.0, 0.0);
     var best_lum = -1.0;

@@ -97,7 +97,7 @@ def Xform "SlopeTest" (
 
         # Standard `UsdLuxShadowAPI`.
         float inputs:shadow:distance = 600.0
-        custom float lunco:shadow:firstCascadeFarBound = 20.0
+        float lunco:shadow:firstCascadeFarBound = 20.0
     }
 
     def Camera "Avatar" (

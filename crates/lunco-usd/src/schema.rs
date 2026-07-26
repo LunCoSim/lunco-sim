@@ -1038,10 +1038,6 @@ class "SquatterAPI" (
             reg.property("lunco:env:exposureEv100").unwrap().type_name,
             "float"
         );
-        assert_eq!(
-            reg.property("lunco:env:earthshineColor").unwrap().type_name,
-            "color3f"
-        );
         assert_eq!(reg.property("lunco:layer:seed").unwrap().type_name, "int64");
         assert_eq!(
             reg.property("lunco:layer:colliderRing").unwrap().type_name,

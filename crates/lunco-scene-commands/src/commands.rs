@@ -1329,6 +1329,16 @@ pub fn persist_environment_light_to_runtime_layer(
             Without<lunco_environment::Earthshine>,
         ),
     >,
+    // The body fill, which now has a prim of its own to be written to — the
+    // exact complement of `q_sun`, so no light is addressed twice.
+    q_earthshine: Query<
+        &UsdPrimPath,
+        (
+            With<lunco_usd_bevy::UsdAuthoredLight>,
+            With<DirectionalLight>,
+            With<lunco_environment::Earthshine>,
+        ),
+    >,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -1416,7 +1426,51 @@ pub fn persist_environment_light_to_runtime_layer(
         }
     }
 
-    // Render knobs (exposure / bloom / ambient / earthshine) have no natural
+    // ── Earthshine → its own `DistantLight` prim, standard UsdLux ────────────
+    //
+    // Same treatment as the sun above, because it is the same kind of thing: a
+    // light with an authored prim, whose brightness and tint are
+    // `inputs:intensity` / `inputs:color`. The loader reads those back, so the
+    // round trip needs no second spelling.
+    //
+    // Empty when the scene declares no body to reflect from — a scene gets the
+    // fill by declaring the body, so there is nothing to write and nothing to
+    // invent. `on_set_environment_light` is where that is reported.
+    let mut fill_attrs: Vec<(&str, &str, String)> = Vec::new();
+    if let Some(lux) = cmd.earthshine_illuminance {
+        fill_attrs.push(("inputs:intensity", "float", lux.to_string()));
+    }
+    if let Some([r, g, b]) = cmd.earthshine_color {
+        fill_attrs.push(("inputs:color", "color3f", format!("({r}, {g}, {b})")));
+    }
+    if !fill_attrs.is_empty() {
+        for prim in &q_earthshine {
+            // Ownership guard, exactly as for the sun: only author onto fills the
+            // active document actually holds.
+            let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
+                continue;
+            };
+            let owned = host.document().data().spec(&prim_sdf).is_some()
+                || host.document().runtime_data().spec(&prim_sdf).is_some();
+            if !owned {
+                continue;
+            }
+            for (name, type_name, value) in &fill_attrs {
+                commands.trigger(ApplyUsdOp {
+                    doc,
+                    op: UsdOp::SetAttribute {
+                        edit_target: LayerId::runtime(),
+                        path: prim.path.clone(),
+                        name: (*name).to_string(),
+                        type_name: (*type_name).to_string(),
+                        value: value.clone(),
+                    },
+                });
+            }
+        }
+    }
+
+    // Render knobs (exposure / bloom / ambient) have no natural
     // light-prim home — they apply to global/camera state — so per the schema
     // decision they persist onto a dedicated `LunCoEnvironment` settings prim
     // (a singleton under the default prim). A projector in `lunco-sandbox` reads
@@ -1435,16 +1489,8 @@ pub fn persist_environment_light_to_runtime_layer(
     // write outlived its reader: the slider applied live, journalled an attribute
     // nothing consumed, and the change vanished on reload while the journal
     // claimed it had persisted. Ambient is authored as a dome below instead.
-    if let Some(v) = cmd.earthshine_illuminance {
-        env_attrs.push(("lunco:env:earthshineIntensity", "float", v.to_string()));
-    }
-    if let Some([r, g, b]) = cmd.earthshine_color {
-        env_attrs.push((
-            "lunco:env:earthshineColor",
-            "color3f",
-            format!("({r}, {g}, {b})"),
-        ));
-    }
+    // Earthshine is not among them: it has a light prim, so it persists onto it
+    // like the sun does. See the earthshine block above.
     // Ambient shares the `Environment` scope but NOT the custom-attribute
     // mechanism, so the prim has to be ensured for either reason.
     if env_attrs.is_empty() && cmd.ambient_brightness.is_none() {

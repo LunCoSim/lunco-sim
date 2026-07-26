@@ -103,7 +103,7 @@ def Xform "DrivingBasics" (
         # namespace — UsdLux has no attribute for it, because cascaded shadow
         # maps are a rasterizer technique.
         float inputs:shadow:distance = 600.0
-        custom float lunco:shadow:firstCascadeFarBound = 20.0
+        float lunco:shadow:firstCascadeFarBound = 20.0
     }
 
     # Chase-style fly-cam over the SW corner so the rover and ramp are both framed.

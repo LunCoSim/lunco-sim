@@ -35,12 +35,15 @@
 # answer for a composition without a sky — a QGIS shadow pass, or this file
 # opened on its own — and which opinion wins is inspectable through the property
 # stack rather than being a runtime convention.
-# `ShadowAPI` is applied here, with no opinions on it, so that a scene can
-# refine `inputs:shadow:*` in an `over` without having to apply the schema
-# itself — applying an API is a structural statement about the prim, and the
-# prim is defined here.
+# Both shadow schemas are applied here, with no opinions on either, so that a
+# scene can refine `inputs:shadow:*` and `lunco:shadow:*` in an `over` without
+# applying anything itself. Applying an API is a structural statement about the
+# prim, and the prim is defined here — which also means a refining scene writes
+# a DECLARED attribute rather than a `custom` one. `custom` is USD's word for
+# "no schema defines this", so spelling it on a property a schema does define
+# says something false about the stage.
 def DistantLight "Sun" (
-    prepend apiSchemas = ["ShadowAPI"]
+    prepend apiSchemas = ["ShadowAPI", "LunCoShadowAPI"]
 )
 {
     # The calibrated lunar sun, paired with EV100 16 on the camera

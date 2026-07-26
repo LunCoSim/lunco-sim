@@ -70,7 +70,7 @@ def Xform "BuildBase" (
 
         # Standard `UsdLuxShadowAPI`.
         float inputs:shadow:distance = 1200.0
-        custom float lunco:shadow:firstCascadeFarBound = 25.0
+        float lunco:shadow:firstCascadeFarBound = 25.0
     }
 
     # Fly-cam looking down over the empty plot from the south-west, so the

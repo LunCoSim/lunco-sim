@@ -1478,7 +1478,8 @@ fn project_env_settings(
     // Ambient is NOT projected here any more — it is composed from authored
     // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
     _ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
-    mut q_earthshine: Query<&mut DirectionalLight, With<lunco_environment::Earthshine>>,
+    // Earthshine is likewise NOT projected here any more — it is an authored
+    // light prim, loaded like every other. See the note below.
     // The exposure single-source-of-truth — see the `exposureEv100` branch.
     mut lunar_sun: Option<ResMut<lunco_environment::LunarSun>>,
     mut last: Local<Option<(usize, u64)>>,
@@ -1537,16 +1538,10 @@ fn project_env_settings(
             //
             // Scenes author the bounce as a `DomeLight` prim now. There is
             // deliberately no fallback read.
-            if let Some(lux) = view.value::<f32>(&prim, "lunco:env:earthshineIntensity") {
-                for mut l in &mut q_earthshine {
-                    l.illuminance = lux;
-                }
-            }
-            if let Some([r, g, b]) = view.value_vec3(&prim, "lunco:env:earthshineColor") {
-                for mut l in &mut q_earthshine {
-                    l.color = Color::linear_rgb(r as f32, g as f32, b as f32);
-                }
-            }
+            // Earthshine is not projected here either. It is an authored
+            // `DistantLight` under the body it reflects from, so its brightness
+            // and tint are `inputs:intensity` / `inputs:color` on that prim,
+            // read by the standard light loader.
         }
     }
 }

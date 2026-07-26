@@ -109,9 +109,11 @@ Two consequences that are not obvious:
 
 The scene-level `LunCoEnvironment` prim (a singleton under the default prim, e.g.
 `/World/Environment`) carries the render knobs with no natural light-prim home:
-`lunco:env:exposureEv100`, `lunco:env:bloomIntensity`, `lunco:env:earthshineIntensity`,
-`lunco:env:earthshineColor`. **Ambient is deliberately not among them** — the ambient
-slider persists onto a `DomeLight` child of that prim (`<Environment>/AmbientFill`).
+`lunco:env:exposureEv100`, `lunco:env:bloomIntensity`. **Ambient and earthshine are
+deliberately not among them** — both are lights, and USD already spells lights. The
+ambient slider persists onto a `DomeLight` child of that prim
+(`<Environment>/AmbientFill`); earthshine persists as `inputs:intensity` /
+`inputs:color` on the authored `DistantLight` nested under the body it reflects from.
 
 > These are **static almanac values** for the Shackleton region. The intended end state is
 > ephemeris-driven (Sun direction/distance ⇒ illuminance and angular size; Earth phase ⇒

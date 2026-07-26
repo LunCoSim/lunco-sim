@@ -88,12 +88,9 @@ class LunCoEnvironment "LunCoEnvironment" (
     # two spellings fought over `GlobalAmbientLight`, order-dependently. Author
     # an untextured `DomeLight` instead; the scene ambient is the SUM over them.
     # The ambient slider owns `<Environment>/AmbientFill` for exactly this.
-    float lunco:env:earthshineIntensity = 0 (
-        doc = "Earthshine illuminance in lux."
-    )
-    color3f lunco:env:earthshineColor = (0.6, 0.7, 1) (
-        doc = "Earthshine tint — Earth's albedo is blue-biased."
-    )
+    # Earthshine is likewise absent: it is a `DistantLight` nested under the body
+    # it reflects from (`lunco://lighting/earthshine.usda`), so its brightness
+    # and tint are `inputs:intensity` / `inputs:color` on that prim.
 }
 
 class LunCoPolicy "LunCoPolicy" (
