@@ -63,6 +63,18 @@ pub struct ApiRequestUnified {
     pub language: Option<String>,
     pub code: Option<String>,
     pub filter: Option<serde_json::Value>,
+    /// Transport-level flag (HTTP): opt into the legacy **fire-and-forget** shape.
+    /// Default `false` ⇒ the HTTP transport waits for the command's terminal
+    /// outcome and returns it inline (`{command_id, status, outcome}`); `true` ⇒
+    /// the caller gets an immediate `command_accepted{command_id}` and polls
+    /// `QueryCommandResult` itself, as before.
+    ///
+    /// This is a transport concern, not part of [`ApiRequest`], so it is read off
+    /// the envelope BEFORE conversion. It is an **explicit** field (not swept into
+    /// `extra`) precisely so the typed-command promotion below never forwards
+    /// `async` into a command's `params`.
+    #[serde(rename = "async", default)]
+    pub is_async: bool,
     /// Catches every other top-level field. Used by the typed-command
     /// fallback to forward the caller's payload as `params`.
     #[serde(flatten)]
