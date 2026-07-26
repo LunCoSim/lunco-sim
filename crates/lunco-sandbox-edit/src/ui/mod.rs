@@ -40,16 +40,19 @@ pub mod usd_variants;
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
 /// egui panels to read (WP-8). `Update` runs before `EguiPrimaryContextPass`, so
-/// resources written here are visible to the panels the same frame. Later panels
-/// add their producers to this set; gate each with its own `run_if` so it only
-/// runs when its source data changes.
+/// resources written here are visible to the panels the same frame.
+///
+/// The private field is the enforcement: the set cannot be named at a call site,
+/// so the only way into it is [`ViewModelAppExt::add_view_model`], which demands
+/// a gate. A label plus a doc line asking for one was the arrangement that cost
+/// 12 ms a frame.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ViewModelSet;
+pub struct ViewModelSet(());
 
 /// Register a view-model producer, **gate required**.
 ///
-/// `ViewModelSet` used to be a label plus the doc line above ("gate each with its
-/// own `run_if`"), which is advice a registration can silently ignore — and two
+/// `ViewModelSet` used to be a label plus a doc line ("gate each with its own
+/// `run_if`"), which is advice a registration can silently ignore — and two
 /// did, for 12 ms a frame. Here the gate is an argument: you cannot register a
 /// producer without stating when it runs.
 ///
@@ -77,8 +80,24 @@ impl ViewModelAppExt for App {
     where
         C: SystemCondition<CM> + Send + 'static,
     {
-        self.add_systems(Update, producer.in_set(ViewModelSet).run_if(gate))
+        self.add_systems(Update, producer.in_set(ViewModelSet(())).run_if(gate))
     }
+}
+
+/// Gate for the producers that read the **selected prim out of the composed
+/// stage** (`usd_params`, `usd_variants`, `usd_mount`).
+///
+/// Their inputs are exactly three: what is selected, what is drilled into, and
+/// the USD projection itself. All three are change-detected, and the stage walk
+/// they do on a miss is the expensive part — the same `CanonicalStages` lookups
+/// that made `produce_usd_canvas` 11 ms a frame. Nothing here early-returns
+/// cheaply, so nothing here may run ungated.
+pub fn usd_selection_view_changed(
+    selection: Res<crate::SelectedEntities>,
+    target: Res<crate::InspectorTarget>,
+    revision: Res<lunco_usd_bevy::UsdStageRevision>,
+) -> bool {
+    selection.is_changed() || target.is_changed() || revision.is_changed()
 }
 
 /// The explicit "this one really does run every frame" gate for
@@ -185,6 +204,14 @@ impl Plugin for SandboxEditUiPlugin {
     fn build(&self, app: &mut App) {
         // Camera-path overlay: state + the gizmo pass that draws it, and the
         // tracker that tells the panel's transport which path clock to drive.
+        // Gate inputs for `usd_selection_view_changed`. `SandboxEditPlugin` also
+        // inits both, but this plugin is added independently of it (see
+        // `lunco_sandbox::ui`), and a run condition that reads a missing resource
+        // panics — the producers' own `Option<Res<_>>` tolerance does not cover
+        // the gate.
+        app.init_resource::<crate::SelectedEntities>();
+        app.init_resource::<crate::InspectorTarget>();
+
         app.init_resource::<cinematic::CinematicViz>();
         app.init_resource::<cinematic::CinematicTarget>();
         app.init_resource::<LiveHelpSections>();
@@ -193,9 +220,12 @@ impl Plugin for SandboxEditUiPlugin {
             (
                 cinematic::track_active_camera_path,
                 cinematic::draw_camera_paths,
-                refresh_view_help_controls.in_set(ViewModelSet),
             ),
         );
+        // One `ControllerLink` lookup and three `Ref` checks on a single entity,
+        // then an early return — an O(1) live readout, the sanctioned
+        // `every_frame` shape.
+        app.add_view_model(refresh_view_help_controls, every_frame());
         app.register_panel(spawn_palette::SpawnPalette)
             .register_panel(inspector::Inspector)
             .register_panel(inspector::EnvironmentPanel)
@@ -323,22 +353,19 @@ impl Plugin for SandboxEditUiPlugin {
             asset_visibility::AssetVisibilitySettings,
         >(app);
         app.add_systems(Startup, asset_visibility::register_settings_menu);
-        app.init_resource::<entity_list::EntityTreeView>()
-            .add_systems(
-                Update,
-                entity_list::populate_entity_tree_view
-                    .in_set(ViewModelSet)
-                    .run_if(entity_list::scene_topology_changed),
-            );
+        app.init_resource::<entity_list::EntityTreeView>();
+        app.add_view_model(
+            entity_list::populate_entity_tree_view,
+            entity_list::scene_topology_changed,
+        );
 
         // WP-8: the Inspector reads query-derived sun / camera / joint state
         // (which `PanelCtx` can't gather in paint) from `InspectorView`,
         // produced each frame by an exclusive system before the egui pass.
-        app.init_resource::<inspector::InspectorView>().add_systems(
-            Update,
-            inspector::populate_inspector_view
-                .in_set(ViewModelSet)
-                .run_if(inspector::inspector_inputs_changed),
+        app.init_resource::<inspector::InspectorView>();
+        app.add_view_model(
+            inspector::populate_inspector_view,
+            inspector::inspector_inputs_changed,
         );
 
         // USD connection canvas: the scene is derived from the live composed
@@ -352,56 +379,48 @@ impl Plugin for SandboxEditUiPlugin {
         // than the output. `UsdStageRevision` is stamped by the writers instead.
         // The internal hash stays, now purely as the idempotence guard it should
         // always have been (a bumped revision does not imply a changed topology).
-        app.init_resource::<connection_canvas::UsdCanvasState>()
-            .add_systems(
-                Update,
-                connection_canvas::produce_usd_canvas
-                    .in_set(ViewModelSet)
-                    .run_if(resource_changed::<lunco_usd_bevy::UsdStageRevision>),
-            );
+        app.init_resource::<connection_canvas::UsdCanvasState>();
+        app.add_view_model(
+            connection_canvas::produce_usd_canvas,
+            resource_changed::<lunco_usd_bevy::UsdStageRevision>,
+        );
 
         // USD prim tree: same main-thread producer pattern (the stage is
         // `!Send`), same gate for the same reason.
-        app.init_resource::<usd_prim_tree::UsdPrimTreeView>()
-            .add_systems(
-                Update,
-                usd_prim_tree::produce_usd_prim_tree
-                    .in_set(ViewModelSet)
-                    .run_if(resource_changed::<lunco_usd_bevy::UsdStageRevision>),
-            );
+        app.init_resource::<usd_prim_tree::UsdPrimTreeView>();
+        app.add_view_model(
+            usd_prim_tree::produce_usd_prim_tree,
+            resource_changed::<lunco_usd_bevy::UsdStageRevision>,
+        );
 
         // USD parameter sliders: harvest the selected prim's customData-ranged
-        // attributes for the Inspector's data-driven Parameters section.
-        app.init_resource::<usd_params::UsdParamView>().add_systems(
-            Update,
-            usd_params::produce_usd_param_view.in_set(ViewModelSet),
-        );
+        // attributes for the Inspector's data-driven Parameters section. Walks
+        // the composed stage on every run, so it is gated on its three inputs
+        // (`usd_selection_view_changed`) rather than run every frame.
+        app.init_resource::<usd_params::UsdParamView>();
+        app.add_view_model(usd_params::produce_usd_param_view, usd_selection_view_changed);
 
         // Variant sets: which configurations the selected prim ships (a rover's
         // `drivetrain`, a scenario scene's `terrain` site) and which composes
-        // now — the Inspector's ⎇ Variants picker.
-        app.init_resource::<usd_variants::UsdVariantView>()
-            .add_systems(
-                Update,
-                usd_variants::produce_usd_variant_view.in_set(ViewModelSet),
-            );
+        // now — the Inspector's ⎇ Variants picker. Same stage walk, same gate.
+        app.init_resource::<usd_variants::UsdVariantView>();
+        app.add_view_model(
+            usd_variants::produce_usd_variant_view,
+            usd_selection_view_changed,
+        );
 
         // Mount snap: resolve each socket the selected host advertises + the
         // placement that lands its part's plug on the socket (Inspector 🔩 Mount).
-        app.init_resource::<usd_mount::UsdMountView>().add_systems(
-            Update,
-            usd_mount::produce_usd_mount_view.in_set(ViewModelSet),
-        );
+        // Same stage walk, same gate.
+        app.init_resource::<usd_mount::UsdMountView>();
+        app.add_view_model(usd_mount::produce_usd_mount_view, usd_selection_view_changed);
 
         // Command Deck view-model: selection + possession + behaviour-spec
         // readout for the currently-selected vessel. Cheap O(1) single-entity
         // lookups each `Update` (the sanctioned live-readout exception to §7),
         // so no change-gate — same shape as the avatar status producer.
-        app.init_resource::<command_deck::CommandDeckView>()
-            .add_systems(
-                Update,
-                command_deck::populate_command_deck_view.in_set(ViewModelSet),
-            );
+        app.init_resource::<command_deck::CommandDeckView>();
+        app.add_view_model(command_deck::populate_command_deck_view, every_frame());
 
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
