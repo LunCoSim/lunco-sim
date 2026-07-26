@@ -45,6 +45,7 @@
 #![warn(missing_docs)]
 
 pub mod journal_persistence;
+pub mod open;
 pub mod recents;
 pub mod session;
 

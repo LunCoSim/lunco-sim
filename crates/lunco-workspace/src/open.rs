@@ -1,0 +1,204 @@
+//! Opening a Twin — the command and the scan pipeline behind it.
+//!
+//! WHY HERE AND NOT IN THE WORKBENCH. Opening a Twin is a WORKSPACE operation:
+//! it walks a folder, adds the result to [`WorkspaceResource`] and fires
+//! [`TwinAdded`]. None of that needs a window. It nevertheless lived in
+//! `lunco-workbench`, a crate a headless host never adds, so `OpenTwin` came
+//! back over the API as `not found or not API-accessible` — a server could run a
+//! twin's scenarios but could not mount the twin they belong to, and the only
+//! way in was to have opened it in a GUI beforehand and let the session restore.
+//!
+//! WHAT STAYED BEHIND. Exactly one thing: choosing a folder when the caller
+//! names none. An empty `path` means "ask the human", which is the workbench's
+//! job and nobody else's — so the workbench keeps an observer for that case
+//! alone, and the picker fires this same command back with a resolved path. The
+//! open pipeline is not duplicated; there is one implementation and one seam.
+
+use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task};
+use lunco_core::{on_command, register_commands, Command};
+use lunco_twin::{TwinError, TwinMode};
+
+use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
+
+/// Open a Twin folder — strict: the folder must contain a `twin.toml`.
+///
+/// VS Code semantics: this **replaces** the currently open folders. Use
+/// `AddTwin` (workbench) to keep them.
+///
+/// Empty `path` means "ask the user", which only a windowed host can honour —
+/// see the module docs.
+#[Command(default)]
+pub struct OpenTwin {
+    /// Filesystem path of the Twin root (must contain `twin.toml`).
+    /// Empty asks a windowed host to show a folder picker.
+    pub path: String,
+}
+
+#[on_command(OpenTwin)]
+fn on_open_twin(
+    trigger: On<OpenTwin>,
+    mut workspace: ResMut<WorkspaceResource>,
+    mut pending: ResMut<PendingTwinOpens>,
+    mut commands: Commands,
+) {
+    let path = trigger.event().path.clone();
+    if path.is_empty() {
+        // A windowed host answers this with a picker (workbench observes the
+        // same command for exactly this case). A headless one cannot, and
+        // saying so beats scanning the current directory by accident.
+        return;
+    }
+    let folder = std::path::Path::new(&path);
+    let manifest = folder.join(lunco_twin::MANIFEST_FILENAME);
+    if !manifest.is_file() {
+        warn!(
+            "[OpenTwin] {} has no {} — refusing (use OpenFolder for plain folders)",
+            path,
+            lunco_twin::MANIFEST_FILENAME
+        );
+        return;
+    }
+    close_all_open_folders(&mut workspace, &mut commands, "OpenTwin");
+    spawn_twin_from_path(folder, &mut pending, "OpenTwin");
+}
+
+/// Close every open folder/Twin, firing [`TwinClosed`] for each.
+///
+/// Shared by the replace-semantics openers (`OpenTwin` here, `OpenFolder` in the
+/// workbench), so "replacing the workspace" means the same thing in both.
+pub fn close_all_open_folders(
+    workspace: &mut WorkspaceResource,
+    commands: &mut Commands,
+    log_tag: &str,
+) {
+    let ids: Vec<crate::TwinId> = workspace.twins().map(|(id, _)| id).collect();
+    for id in ids {
+        workspace.close_twin(id);
+        commands.trigger(TwinClosed { twin: id });
+        info!("[{log_tag}] closed pre-existing Twin {:?}", id);
+    }
+}
+
+/// In-flight folder scans. [`TwinMode::open`] walks the filesystem
+/// synchronously — large trees (~/.cargo, node_modules, …) easily take seconds
+/// to enumerate, and running that on the UI thread freezes the window long
+/// enough for the Wayland/X11 compositor to drop the client. Each open
+/// dispatches its scan to [`AsyncComputeTaskPool`] and parks the handle here;
+/// [`drain_pending_twin_opens`] polls one frame at a time and registers the Twin
+/// once the walker finishes.
+#[derive(Resource, Default)]
+pub struct PendingTwinOpens {
+    tasks: Vec<TwinOpenTask>,
+}
+
+struct TwinOpenTask {
+    task: Task<Result<TwinMode, TwinError>>,
+    path: std::path::PathBuf,
+    log_tag: String,
+    /// Scene to select once the scan lands, relative to the scanned folder.
+    /// `Some` when the caller opened a *scene file* rather than a folder.
+    scene: Option<String>,
+}
+
+/// Shared helper for Open Folder / Open Twin / Add Folder / Add Twin.
+///
+/// Spawns the scan asynchronously and parks the handle in [`PendingTwinOpens`].
+/// The actual `add_twin` + [`TwinAdded`] firing happens in
+/// [`drain_pending_twin_opens`] once the walker returns.
+pub fn spawn_twin_from_path(
+    folder: &std::path::Path,
+    pending: &mut PendingTwinOpens,
+    log_tag: &str,
+) {
+    spawn_twin_scan(folder, pending, log_tag, None);
+}
+
+/// As [`spawn_twin_from_path`], but selects `scene` (root-relative) once the
+/// scan lands — the "opening a scene file IS opening its root" path.
+pub fn spawn_twin_scan(
+    folder: &std::path::Path,
+    pending: &mut PendingTwinOpens,
+    log_tag: &str,
+    scene: Option<String>,
+) {
+    let path = folder.to_path_buf();
+    let scan_path = path.clone();
+    let task = AsyncComputeTaskPool::get().spawn(async move { TwinMode::open(&scan_path) });
+    match &scene {
+        Some(rel) => info!(
+            "[{log_tag}] scanning {} for `{rel}` (off-thread)…",
+            path.display()
+        ),
+        None => info!("[{log_tag}] scanning {} (off-thread)…", path.display()),
+    }
+    pending.tasks.push(TwinOpenTask {
+        task,
+        path,
+        log_tag: log_tag.to_string(),
+        scene,
+    });
+}
+
+/// Poll each in-flight folder scan. Ready scans add their Twin to the Workspace
+/// and fire [`TwinAdded`]; in-flight ones are kept for the next frame.
+pub fn drain_pending_twin_opens(
+    mut pending: ResMut<PendingTwinOpens>,
+    mut workspace: ResMut<WorkspaceResource>,
+    mut commands: Commands,
+) {
+    use bevy::tasks::futures_lite::future;
+    if pending.tasks.is_empty() {
+        return;
+    }
+    let mut still_running = Vec::with_capacity(pending.tasks.len());
+    for mut entry in pending.tasks.drain(..) {
+        match future::block_on(future::poll_once(&mut entry.task)) {
+            None => still_running.push(entry),
+            Some(Ok(TwinMode::Twin(mut twin))) | Some(Ok(TwinMode::Folder(mut twin))) => {
+                // Opened by scene file → select it, so the doc-first mount that
+                // `TwinAdded` kicks off loads that scene rather than whatever
+                // `twin.toml` happened to name as default.
+                if let Some(rel) = &entry.scene {
+                    twin.set_default_scene(rel.clone());
+                }
+                let twin_id = workspace.add_twin(twin);
+                commands.trigger(TwinAdded { twin: twin_id });
+                match &entry.scene {
+                    Some(rel) => info!(
+                        "[{}] opened {} @ `{rel}`",
+                        entry.log_tag,
+                        entry.path.display()
+                    ),
+                    None => info!("[{}] opened {}", entry.log_tag, entry.path.display()),
+                }
+            }
+            Some(Ok(TwinMode::Orphan(_))) => {
+                warn!(
+                    "[{}] {} resolved to Orphan unexpectedly — ignoring",
+                    entry.log_tag,
+                    entry.path.display()
+                );
+            }
+            Some(Err(e)) => {
+                warn!(
+                    "[{}] failed to index {}: {e}",
+                    entry.log_tag,
+                    entry.path.display()
+                );
+            }
+        }
+    }
+    pending.tasks = still_running;
+}
+
+/// Wire `OpenTwin` + the scan pipeline. Added by
+/// [`WorkspacePlugin`](crate::session::WorkspacePlugin), so every host that has
+/// a workspace can open a Twin — window or no window.
+pub(crate) fn build(app: &mut App) {
+    app.init_resource::<PendingTwinOpens>()
+        .add_systems(Update, drain_pending_twin_opens);
+    register_all_commands(app);
+}
+
+register_commands!(on_open_twin);

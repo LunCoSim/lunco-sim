@@ -181,6 +181,9 @@ impl Plugin for WorkspacePlugin {
         // shared with the headless server (DRY). No-op without a
         // `JournalResource`, so journal-free builds are unaffected.
         app.add_plugins(crate::journal_persistence::WorkspaceJournalPlugin);
+        // `OpenTwin` + the folder-scan pipeline. Here rather than in the
+        // workbench because opening a Twin needs no window — see `crate::open`.
+        crate::open::build(app);
     }
 }
 

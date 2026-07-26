@@ -6,6 +6,9 @@ license.workspace = true
 description = "LunCoSim's editor session (VS Code Workspace analog). Tracks open Twins + loose documents, the active Twin / Document / Perspective, and a recents list. Headless and UI-free — depends only on the bevy ECS/app substrate (no render/winit/egui), so it runs identically in a windowed editor and a `--no-ui` server."
 
 [dependencies]
+# `#[Command]` / `on_command` / `register_commands!` for `OpenTwin` — the
+# command substrate, no domain types. See `crate::open`.
+lunco-core         = { path = "../lunco-core" }
 lunco-doc          = { path = "../lunco-doc" }
 lunco-twin         = { path = "../lunco-twin" }
 lunco-storage      = { path = "../lunco-storage" }
