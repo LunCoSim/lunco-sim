@@ -64,6 +64,49 @@ fn mark_actuator_driven_steer(trigger: On<Add, SteeringActuator>, mut commands: 
         .try_insert(lunco_core::ActuatorDrivenJoint);
 }
 
+/// THE motor torque–speed law, on the axle. Signed, four-quadrant, one definition.
+///
+/// This is the authored curve the USD schema states — `τ = k·(V − k·ω)/R`
+/// (`LunCoMotorAPI` doc) — with demand `d` scaling the applied voltage:
+///
+/// ```text
+/// i = (d·V − k_e·ω)/R
+/// τ = k_t·i = τ_stall·d − (k_t·k_e/R)·ω = τ_stall·(d − ω/ω_nl)
+/// ```
+///
+/// **Both wheel realizations call this.** It lives here rather than in
+/// `lunco-mobility` because `lunco-mobility` already depends on this crate, and
+/// here it sits beside [`MotorActuator`], the machine it describes. It is a pure
+/// function of authored numbers — no solver state, no servo gain — so sharing it
+/// does not transcribe avian's solver math into our crates (the gain stays each
+/// actuator's own business, and is unobservable because this curve saturates first).
+///
+/// Two properties matter and both fall out of the linear law rather than being
+/// bolted on:
+///
+/// * **Correct at partial demand.** Torque reaches zero at `d·ω_nl`, the speed the
+///   servo targets. The previous form, `τ_stall·d·(1 − ω/ω_nl)`, kept authority all
+///   the way to `ω_nl` — at `d = 0.4, ω = 2.4` it delivered 1.6× the authored torque.
+/// * **Four-quadrant.** Above `d·ω_nl` the result goes negative on its own: that is
+///   back-EMF braking, and it is why the old `.clamp(0.0, 1.0)` — not a missing
+///   feature — was what removed the motor's ability to resist being back-driven.
+///
+/// `omega` must be the axle speed **in the demand-positive sense** (each realization
+/// applies its own `drive_sign`/convention before calling).
+///
+/// Magnitude is clamped to `peak_torque`: plugging (`d` opposing `ω`) is genuinely
+/// ~2× stall current in a real machine, but no authored number sanctions torque
+/// beyond the stall figure, and a real controller current-limits there.
+#[inline]
+pub fn axle_torque(peak_torque: f64, max_omega: f64, demand: f64, omega: f64) -> f64 {
+    if max_omega <= 0.0 {
+        // No authored no-load speed: the motor is the plain torque source its
+        // stall figure describes.
+        return demand * peak_torque;
+    }
+    (peak_torque * (demand - omega / max_omega)).clamp(-peak_torque, peak_torque)
+}
+
 /// A wheel-hub motor drives a rover through its axle [RevoluteJoint]. Its target
 /// velocity establishes direction and no-load speed; its torque ceiling is the
 /// same live, command-scaled DC curve used by raycast wheels. Wheel-ground
@@ -139,13 +182,10 @@ fn motor_actuator_system(
         // carrier is whatever the wheel hinges to, which on a rocker-bogie is a
         // suspension link with no command surface: reading `body1` there answers
         // "not braking" for a rover that is braking, and says nothing about it.
-        let braking = lunco_core::architecture::owning_input_ports(
-            joint.body2,
-            &q_child_of,
-            &q_inputs,
-        )
-        .map(|c| c.brake_active)
-        .unwrap_or(false);
+        let braking =
+            lunco_core::architecture::owning_input_ports(joint.body2, &q_child_of, &q_inputs)
+                .map(|c| c.brake_active)
+                .unwrap_or(false);
         if braking && motor.brake_torque > 0.0 {
             joint.motor.enabled = true;
             joint.motor.target_velocity = 0.0;
@@ -177,22 +217,26 @@ fn motor_actuator_system(
         // its world-space form is the axle speed seen by the motor curve.
         let axle = carrier_rot.0 * joint.hinge_axis;
         let relative_omega = (wheel_omega.0 - carrier_omega.0).dot(axle);
-        let commanded_speed = relative_omega * motor.drive_sign * throttle.signum();
-        let rolloff = (1.0 - commanded_speed / motor.max_omega).clamp(0.0, 1.0);
-        let available_torque = motor.peak_torque * throttle.abs() * rolloff;
+        // Axle speed in the motor's own positive sense, which is what the curve
+        // is written in.
+        let omega_signed = relative_omega * motor.drive_sign;
+        let available_torque =
+            axle_torque(motor.peak_torque, motor.max_omega, throttle, omega_signed);
 
-        // Avian uses zero as the *unlimited* torque sentinel. At no-load the
-        // DC curve reaches exactly zero, so the physically correct operation is
-        // to release the motor rather than writing that sentinel and injecting an
-        // unbounded joint impulse.
-        if available_torque <= f64::EPSILON {
+        // Avian uses zero as the *unlimited* torque sentinel, and `max_torque` is a
+        // MAGNITUDE — the servo supplies the sign by driving toward its target from
+        // whichever side it is on, which is what makes the negative (braking) branch
+        // of the curve reach the joint at all. At the curve's zero crossing the motor
+        // is genuinely at equilibrium, so releasing it is correct rather than writing
+        // the sentinel and injecting an unbounded impulse.
+        if available_torque.abs() <= f64::EPSILON {
             joint.motor.enabled = false;
             continue;
         }
 
         joint.motor.enabled = true;
         joint.motor.target_velocity = motor.drive_sign * throttle * motor.max_omega;
-        joint.motor.max_torque = available_torque;
+        joint.motor.max_torque = available_torque.abs();
     }
 }
 
@@ -331,5 +375,60 @@ fn sensor_velocity_system(
             let world_axis = rotation.0 * sensor.axis;
             port.value = velocity.0.dot(world_axis);
         }
+    }
+}
+
+#[cfg(test)]
+mod motor_curve_tests {
+    use super::axle_torque;
+
+    const PEAK: f64 = 255.0;
+    const W_NL: f64 = 12.0;
+
+    /// The authored endpoints: stall torque at rest, zero at no-load.
+    #[test]
+    fn the_curve_hits_its_two_authored_endpoints() {
+        assert!((axle_torque(PEAK, W_NL, 1.0, 0.0) - PEAK).abs() < 1e-9);
+        assert!(axle_torque(PEAK, W_NL, 1.0, W_NL).abs() < 1e-9);
+    }
+
+    /// Torque must vanish at `d·ω_nl` — the speed the servo targets — not at the
+    /// full no-load speed. The previous form kept authority to `ω_nl`, delivering
+    /// 1.6x the authored torque at `d = 0.4, ω = 2.4`.
+    #[test]
+    fn torque_vanishes_at_the_partial_demand_no_load_speed() {
+        let d = 0.4;
+        assert!(axle_torque(PEAK, W_NL, d, d * W_NL).abs() < 1e-9);
+
+        let mid = axle_torque(PEAK, W_NL, d, 2.4);
+        let previous_form = PEAK * d * (1.0 - 2.4 / W_NL);
+        assert!((mid - 0.2 * PEAK).abs() < 1e-9, "authored law: {mid}");
+        assert!(
+            previous_form > mid * 1.5,
+            "regression guard: {previous_form}"
+        );
+    }
+
+    /// Above the demand's no-load speed the motor RESISTS — this is the quadrant a
+    /// `.clamp(0.0, 1.0)` used to remove, leaving a rover that freewheels downhill.
+    #[test]
+    fn back_driving_past_no_load_produces_braking_torque() {
+        let tau = axle_torque(PEAK, W_NL, 0.5, W_NL);
+        assert!(tau < 0.0, "expected braking torque, got {tau}");
+    }
+
+    /// Plugging is real but bounded: no authored number sanctions torque beyond stall.
+    #[test]
+    fn magnitude_never_exceeds_the_authored_stall_torque() {
+        for &(d, w) in &[(-1.0, W_NL), (1.0, -W_NL), (1.0, 0.0), (-1.0, -W_NL)] {
+            assert!(axle_torque(PEAK, W_NL, d, w).abs() <= PEAK + 1e-9);
+        }
+    }
+
+    /// An unauthored no-load speed degenerates to a plain torque source, which is
+    /// what the raycast fallback branch relies on.
+    #[test]
+    fn no_authored_no_load_speed_degenerates_to_a_torque_source() {
+        assert!((axle_torque(PEAK, 0.0, 0.5, 99.0) - 0.5 * PEAK).abs() < 1e-9);
     }
 }

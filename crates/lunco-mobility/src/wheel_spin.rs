@@ -95,24 +95,18 @@ pub(crate) fn update_wheel_spin(
             .get(wheel.drive_port)
             .map(|p| p.value.clamp(-1.0, 1.0))
             .unwrap_or(0.0);
-        // THE MOTOR CURVE, ON THE AXLE. `drive_torque_max` is the STALL torque —
-        // what the motor delivers at ω = 0 — and this used to apply it flat, at
-        // every speed. A motor that never falls off has no top speed, so a wheel
-        // that broke traction accelerated until bearing drag alone balanced it:
-        // ω ≈ τ/c_bearing, some twenty times the axle's real no-load speed. That
-        // is the visible "wheels spin far too fast" — and it fired on ANY
-        // throttle, because the drive torque was several times the traction limit
-        // (μ·N·r) so the tire broke loose immediately.
+        // THE MOTOR CURVE, ON THE AXLE — [`lunco_hardware::axle_torque`], the one
+        // definition both realizations evaluate. `drive_torque_max` is the STALL
+        // torque (what the motor delivers at ω = 0) and `max_rotation_speed` the
+        // axle no-load speed, both geared down from `lunco:motor:*` through
+        // `PowertrainParams`. The curve bounds this wheel's torque authority, so a
+        // wheel that breaks traction terminates at its no-load speed rather than
+        // accelerating until bearing drag alone balances it.
         //
-        // `τ(ω) = τ_stall · (1 − ω/ω_noload)` is the motor's own authored law
-        // (`lunco:motor:stallTorque` / `:noLoadSpeed`, geared down), and it is the
-        // SAME rolloff `drive_force_mag` applies on the force side. Both halves of
-        // the wheel now obey one torque–speed curve, so a free-spinning wheel
-        // terminates at `max_rotation_speed` instead of running away.
-        //
-        // Signed and clamped at 0 like the force-side rolloff: commanding reverse
-        // while still spinning forwards gives full authority, never a wheel that
-        // cannot be stopped because it is fast.
+        // The curve is four-quadrant: above `u·ω_max` it returns negative torque
+        // (back-EMF braking), so commanding reverse while still spinning forwards —
+        // or rolling downhill past no-load — has real authority rather than a
+        // released motor.
         //
         // ── THROTTLE SETS A SPEED, NOT ONLY A TORQUE ──────────────────────────
         //
@@ -138,10 +132,17 @@ pub(crate) fn update_wheel_spin(
         let tau_drive = if throttle.abs() <= f64::EPSILON {
             0.0
         } else if wheel.max_rotation_speed > 0.0 {
-            let rolloff = (1.0 - (wheel.spin_velocity * throttle.signum())
-                / wheel.max_rotation_speed)
-                .clamp(0.0, 1.0);
-            let ceiling = wheel.drive_torque_max * throttle.abs() * rolloff;
+            // ONE curve, shared as CODE now rather than as a rule: the identical
+            // authored law the joint wheel's `MotorActuator` evaluates. `spin_velocity`
+            // is already in the demand-positive sense (the servo below targets
+            // `throttle · ω_max` in it), which is the sense the curve is written in.
+            let ceiling = lunco_hardware::axle_torque(
+                wheel.drive_torque_max,
+                wheel.max_rotation_speed,
+                throttle,
+                wheel.spin_velocity,
+            )
+            .abs();
             // Servo to the commanded speed, held inside the curve — the SAME
             // shape as the brake below, which servos to zero inside its own
             // ceiling. One idiom, two ceilings.
@@ -157,12 +158,17 @@ pub(crate) fn update_wheel_spin(
             // its `dt`-dependence) into this crate for no measurable difference,
             // and would go stale the moment avian changed its motor model.
             let w_target = throttle * wheel.max_rotation_speed;
-            (-w_stop_torque(wheel.spin_velocity - w_target, inertia, dt))
-                .clamp(-ceiling, ceiling)
+            (-w_stop_torque(wheel.spin_velocity - w_target, inertia, dt)).clamp(-ceiling, ceiling)
         } else {
-            // No authored no-load speed: nothing defines a target, so the motor
-            // is the plain torque source its stall figure describes.
-            throttle * wheel.drive_torque_max
+            // No authored no-load speed: nothing defines a target to servo to, so
+            // the curve degenerates to the plain torque source its stall figure
+            // describes — which is exactly what `axle_torque` returns here.
+            lunco_hardware::axle_torque(
+                wheel.drive_torque_max,
+                wheel.max_rotation_speed,
+                throttle,
+                wheel.spin_velocity,
+            )
         };
 
         // Ground speed at the contact patch, split on the wheel's own axes in the
@@ -494,7 +500,7 @@ mod tests {
                     bearing_damping: 0.45,
                     friction_mu: 0.8,
                     slip_stiffness: 8000.0,
-                        lateral_grip_stiffness: 800.0,
+                    lateral_grip_stiffness: 800.0,
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,
                 },

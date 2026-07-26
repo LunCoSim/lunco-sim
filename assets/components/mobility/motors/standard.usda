@@ -1,0 +1,46 @@
+#usda 1.0
+(
+    defaultPrim = "MotorClass"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# STANDARD winding — the fleet default, and the one every measured figure in
+# `rocker_bogie.usda` was taken on.
+#
+# A motor class is a separate file for the same reason a tire is: it is a separate
+# DECISION. Re-winding a motor does not change the housing, the mount, the thermal
+# model or the electrical connector — only the four numbers below — and two rovers
+# carrying the same `motor.usda` may run different windings.
+#
+# ── WHAT MAKES A WINDING SELF-CONSISTENT ─────────────────────────────────────
+#
+# All classes in this directory share ONE frame: the same rotor iron, the same
+# housing, the same 28 V bus. Within a frame:
+#
+#   * `stallTorque · noLoadSpeed ≈ const` — a winding trades torque for speed at
+#     roughly constant power. τ = k_t·V/R and ω_nl = V/k_e with k_t = k_e, so more
+#     turns buys torque and gives away speed in the same proportion.
+#     Peak mechanical power is τ_stall·ω_nl/4 ≈ 900 W for every class here.
+#   * `rotorInertia` is a property of the FRAME, not the winding — the rotor iron
+#     is the same lump whichever way it is wound. It is identical across every
+#     class in this file's directory, and only changes for a different frame size
+#     (τ ∝ s³ but J ∝ s⁵, so a bigger motor's inertia grows much faster than its
+#     torque — see `lunokhod.usda`, the one genuinely smaller machine).
+#   * `continuousTorque` tracks stall at ~60%, the usual thermal margin, and must
+#     never exceed it.
+#
+# 14 400 rad/s is fast for a machine this size — deliberately so. See `motor.usda`
+# for why the speed lives in the winding rather than in the gearbox reduction.
+
+def Xform "MotorClass" (
+    prepend apiSchemas = ["LunCoMotorAPI"]
+    kind = "component"
+)
+{
+    float lunco:motor:stallTorque = 0.25
+    float lunco:motor:noLoadSpeed = 14400.0
+    float lunco:motor:continuousTorque = 0.15
+    float lunco:motor:rotorInertia = 0.00012
+    float lunco:motor:ratedVoltage = 28.0
+}
