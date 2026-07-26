@@ -730,7 +730,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_ML>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
-            float lunco:motor:noLoadSpeed = 14400.0   # 12.9 km/h — see Motor_FL
+            float lunco:motor:noLoadSpeed = 14400.0   # 2.71 m/s terminal — see Motor_FL
         }
 
         def Xform "Gearbox_ML" (
@@ -753,7 +753,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieL/Wheel_RL>
             float inputs:demand.connect = </RockerBogie.outputs:drive_left>
-            float lunco:motor:noLoadSpeed = 14400.0   # 12.9 km/h — see Motor_FL
+            float lunco:motor:noLoadSpeed = 14400.0   # 2.71 m/s terminal — see Motor_FL
         }
 
         def Xform "Gearbox_RL" (
@@ -900,7 +900,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_MR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
-            float lunco:motor:noLoadSpeed = 14400.0   # 12.9 km/h — see Motor_FL
+            float lunco:motor:noLoadSpeed = 14400.0   # 2.71 m/s terminal — see Motor_FL
         }
 
         def Xform "Gearbox_MR" (
@@ -923,7 +923,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             prepend rel lunco:motor:drivenWheel = </RockerBogie/BogieR/Wheel_RR>
             float inputs:demand.connect = </RockerBogie.outputs:drive_right>
-            float lunco:motor:noLoadSpeed = 14400.0   # 12.9 km/h — see Motor_FL
+            float lunco:motor:noLoadSpeed = 14400.0   # 2.71 m/s terminal — see Motor_FL
         }
 
         def Xform "Gearbox_RR" (

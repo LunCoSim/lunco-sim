@@ -214,18 +214,3 @@ fn collect_by_api(
     }
 }
 
-/// Path of the motor prim that drives `joint`, searched among `candidates`.
-///
-/// A motor declares what it turns (`rel lunco:motor:drivenJoint`) rather than a joint
-/// declaring what turns it, because a joint is a physics constraint and should not know
-/// about avionics — the same reason a connection is a property of its consumer.
-pub fn motor_for_joint<'a>(
-    reader: &lunco_usd_bevy::StageView<'_>,
-    joint: &SdfPath,
-    candidates: &'a [SdfPath],
-) -> Option<&'a SdfPath> {
-    let want = joint.as_str();
-    candidates
-        .iter()
-        .find(|m| reader.rel_target(m, "lunco:motor:drivenJoint").as_deref() == Some(want))
-}

@@ -545,8 +545,11 @@ fn main() -> std::process::ExitCode {
 
                 if let Some(e) = target_ent {
                     app.world_mut().entity_mut(e).insert(Selected);
-                    let Some(body_transform) = app.world().get::<GlobalTransform>(e).copied() else {
-                        warn!("[selection-aabb] Prim '{target_prim}' ({e:?}) has no body transform");
+                    let Some(body_transform) = app.world().get::<GlobalTransform>(e).copied()
+                    else {
+                        warn!(
+                            "[selection-aabb] Prim '{target_prim}' ({e:?}) has no body transform"
+                        );
                         continue;
                     };
                     let mut state_aabb =

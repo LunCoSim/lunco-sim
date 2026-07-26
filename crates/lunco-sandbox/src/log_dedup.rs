@@ -28,8 +28,8 @@
 //! Only WARN and ERROR are deduped; INFO/DEBUG/TRACE pass untouched, so the hot
 //! logging path pays nothing but a level comparison.
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -167,7 +167,8 @@ fn flush_dedup_summaries(time: Res<Time<Real>>, mut acc: Local<f32>) {
     // filter, which takes the same lock.
     let summaries: Vec<(String, u64)> = {
         let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
-        st.seen.retain(|_, e| now.duration_since(e.last_shown) < PRUNE_AFTER);
+        st.seen
+            .retain(|_, e| now.duration_since(e.last_shown) < PRUNE_AFTER);
         st.seen
             .values_mut()
             .filter(|e| e.suppressed > 0)

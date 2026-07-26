@@ -246,7 +246,10 @@ fn bind_pbr_look(
     // Keep the concrete render material exclusive too. Although callers must
     // replace the render-free look, a late observer can otherwise leave an old
     // WGSL material beside this StandardMaterial and submit the same mesh twice.
-    ec.remove::<MeshMaterial3d<ShaderMaterial>>();
+    // `try_remove` for the same reason as the `try_insert` beside it: the entity may
+    // already be despawned when the deferred command runs, and a plain `remove` turns
+    // that into a formatted error through the command error handler every frame.
+    ec.try_remove::<MeshMaterial3d<ShaderMaterial>>();
     ec.try_insert(MeshMaterial3d(handle));
     if look.no_shadow_cast {
         ec.try_insert(NotShadowCaster);
@@ -292,7 +295,7 @@ fn rebind_changed_pbr_look(
         // is nothing to render and nothing to lose.
         commands
             .entity(e)
-            .remove::<MeshMaterial3d<ShaderMaterial>>()
+            .try_remove::<MeshMaterial3d<ShaderMaterial>>()
             .try_insert(MeshMaterial3d(handle));
         apply_shadow_flag(&mut commands, e, look);
     }

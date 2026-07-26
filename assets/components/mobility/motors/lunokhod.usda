@@ -1,0 +1,34 @@
+#usda 1.0
+(
+    defaultPrim = "MotorClass"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# LUNOKHOD — the authentic machine, and a SMALLER FRAME than the other classes.
+#
+# Sized so the 1200:1 reduction lands the axle at 1.39 rad/s: 0.56 m/s of rim
+# speed on a 0.4 m wheel, which is Lunokhod's real ~2 km/h.
+#
+# This is the one class where `rotorInertia` differs, because it is the one class
+# that is not the same lump of rotor iron. A ~100 W machine against the ~900 W
+# frame the others share: torque scales as s^3 and inertia as s^5, so a frame
+# roughly 0.7x linear gives ~0.35x the torque-speed product and ~0.17x the
+# inertia. 6e-5 kg.m^2 is that estimate, not a measurement.
+#
+# ⚠ AUTHENTIC AND, FOR TEACHING, UNUSABLE. This was tried on the school scenario
+# and rejected: it turns a 2.7 km round trip into a multi-hour wait. It is kept
+# because a fidelity comparison is worth having, not because anything drives it.
+
+def Xform "MotorClass" (
+    prepend apiSchemas = ["LunCoMotorAPI"]
+    kind = "component"
+)
+{
+    float lunco:motor:stallTorque = 0.24
+    float lunco:motor:noLoadSpeed = 1667.0
+    float lunco:motor:continuousTorque = 0.14
+    # Smaller FRAME, so this one really does differ — see the header.
+    float lunco:motor:rotorInertia = 0.00006
+    float lunco:motor:ratedVoltage = 28.0
+}

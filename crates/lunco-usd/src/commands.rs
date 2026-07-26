@@ -136,6 +136,26 @@ impl Plugin for UsdCommandsPlugin {
         // a UI feature gate.
         app.init_resource::<EmptyViewportReason>();
         app.add_observer(open_usd_docs_on_twin_added);
+        // A mount that died on a missing/unreadable stage leaves the same empty
+        // viewport as a deliberate clear. `on_load_scene` cleared the reason on
+        // the way in (a load was committed), so without this the placeholder
+        // says nothing and the tester sees a blank window with the explanation
+        // only in the log. `lunco_usd_bevy::SCENE_LOAD_FAILED` carries the path.
+        app.add_observer(
+            |trigger: On<lunco_core::TelemetryEvent>,
+             mut empty_reason: ResMut<EmptyViewportReason>| {
+                if trigger.event().name != lunco_usd_bevy::SCENE_LOAD_FAILED {
+                    return;
+                }
+                let lunco_core::TelemetryValue::String(path) = &trigger.event().data else {
+                    return;
+                };
+                empty_reason.set(format!(
+                    "`{path}` could not be loaded. Check that the file exists and is \
+                     readable — see the log for the underlying asset error."
+                ));
+            },
+        );
         // C5-A: persist/reload the runtime overlay (C4b spawns + moves) to
         // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
         app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
@@ -483,6 +503,46 @@ fn on_load_scene(
     }
     let root_prim = resolve_root_prim(&path, &cmd.root_prim);
 
+    // Single-flight guard, asked FIRST — before the `asset_server.load()` below.
+    //
+    // A load is already in flight, so this one never proceeds; only the message
+    // differs:
+    //
+    // - SAME path: this scene is already being mounted. The `q_usd` check below
+    //   cannot see that yet (its prims have not spawned, which is exactly what
+    //   "in flight" means), so without this arm a redundant request would clear
+    //   and remount a scene that is mid-spawn. That is the client's
+    //   scenario-ready `LoadScene` landing ~1 s after its own boot load, and it
+    //   tore down the live scene — a teardown that can trip avian's island
+    //   solver. The two guards are complementary: `SceneLoadInFlight` covers the
+    //   spawn window, `q_usd` covers everything after it, so a repeat request is
+    //   a no-op at any point in a scene's life.
+    // - DIFFERENT path: the in-flight load wins. Prevents the startup race where
+    //   the boot policy's tutorial `load_scene` and the page's moonbase autoload
+    //   both fire before either scene's prims have spawned. See
+    //   `SceneLoadInFlight` for the ordering argument for why the tutorial (the
+    //   higher-priority onboarding intent on a first run) is the one that wins.
+    //
+    // ORDER MATTERS. This used to sit below the no-op guard, which meant a
+    // suppressed request had already called `asset_server.load()` to get an id to
+    // compare with — kicking off a real fetch for a scene we had just decided not
+    // to mount. The log then read "suppressing X" immediately followed by
+    // bevy_asset's "Failed to load asset X", two lines that flatly contradict each
+    // other. Neither guard below needs to run when a load is in flight, and this
+    // one needs no asset id, so it goes first and the fetch never starts.
+    if let Some(g) = &in_flight {
+        if g.path == path {
+            info!("[load-scene] `{}` is already mounting — no-op", path);
+        } else {
+            info!(
+                "[load-scene] suppressing `{}` — another scene load is in-flight (`{}`); \
+                 the in-flight load wins",
+                path, g.path
+            );
+        }
+        return;
+    }
+
     // Blender-style no-op: same stage, same root prim, already mounted.
     //
     // The identity is the PAIR `(stage asset, root prim)`, but the two halves of
@@ -517,38 +577,6 @@ fn on_load_scene(
             path, root_prim
         );
         return;
-    }
-
-    // Single-flight guard. A load is already in flight, so this one never
-    // proceeds — only the message differs:
-    //
-    // - SAME path: this scene is already being mounted. The `q_usd` check above
-    //   cannot see that yet (its prims have not spawned, which is exactly what
-    //   "in flight" means), so without this arm a redundant request would clear
-    //   and remount a scene that is mid-spawn. That is the client's
-    //   scenario-ready `LoadScene` landing ~1 s after its own boot load, and it
-    //   tore down the live scene — a teardown that can trip avian's island
-    //   solver. The two guards are complementary: `SceneLoadInFlight` covers the
-    //   spawn window, `q_usd` covers everything after it, so a repeat request is
-    //   a no-op at any point in a scene's life.
-    // - DIFFERENT path: the in-flight load wins. Prevents the startup race where
-    //   the boot policy's tutorial `load_scene` and the page's moonbase autoload
-    //   both fire before either scene's prims have spawned. See
-    //   `SceneLoadInFlight` for the ordering argument for why the tutorial (the
-    //   higher-priority onboarding intent on a first run) is the one that wins.
-    if let Some(g) = &in_flight {
-        if g.path == path {
-            info!("[load-scene] `{}` is already mounting — no-op", path);
-            return;
-        }
-        if g.path != path {
-            info!(
-                "[load-scene] suppressing `{}` — another scene load is in-flight (`{}`); \
-                 the in-flight load wins",
-                path, g.path
-            );
-            return;
-        }
     }
 
     info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);

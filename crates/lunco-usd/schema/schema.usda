@@ -789,9 +789,11 @@ class "LunCoMotorAPI" (
     to the joint it turns: it is a multiple-apply API ON A JOINT carrying a target, a
     stiffness, a damping and a force cap, and it cannot carry a mass, an efficiency, a
     thermal model or a power draw — a joint is a constraint, not a machine. So the motor
-    is its own prim with its own properties, and it NAMES the joint it drives
-    (`lunco:motor:drivenJoint` + `lunco:motor:driveInstance`); the loader writes that
-    joint's `drive:<instance>:physics:*` from this motor's curve. This mirrors MuJoCo,
+    is its own prim with its own properties, and it NAMES THE WHEEL it drives
+    (`lunco:motor:drivenWheel` + `lunco:motor:driveInstance`); the loader resolves that
+    wheel's axle joint and writes its `drive:<instance>:physics:*` from this motor's
+    curve. It names the wheel rather than the joint because a wheel exists in both
+    realizations and a joint only in the physical one — see `drivenWheel`. This mirrors MuJoCo,
     where `<actuator>` is a separate element with its own properties that targets a
     joint, and it is why one machine can carry six independently-controlled motors that
     differ in size, wear and temperature.
