@@ -10,6 +10,7 @@
 # cache; it should keep the StandardMaterial (displayColor) and warn once.
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "ShaderFallbackTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Robustness probe: a cube that wrongly points its material at a shader library with no fragment entry. The app must keep the StandardMaterial and warn once instead of storming the pipeline cache."
 )
@@ -19,18 +20,8 @@ def Xform "ShaderFallbackTest" (
     custom string lunco:notHeadlessTestable = "a render check: asserts what a material looks like when its shader is missing"
 
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
-    # tuning are authored against — stated here rather than left to a default.
-    def PhysicsScene "PhysicsScene"
+    over "Sun"
     {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
-    def DistantLight "Sun"
-    {
-        float inputs:intensity = 128000
         double3 xformOp:rotateXYZ = (-40.0, 30.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

@@ -16,33 +16,14 @@
 #   scene_test --scene scenes/tests/landing_legs.usda --max-ticks 240
 
 def Xform "LandingLegsTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "A lander dropped onto its legs from 3 m — the landing gear with nothing else attached."
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. The MOON: the lander's struts, its GNC and its
-    # propellant budget all take their numbers from this, so the scene states it
-    # rather than inherit a terrestrial default.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
     uniform bool lunco:spawnable = false
 
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
@@ -57,13 +38,6 @@ def Xform "LandingLegsTest" (
         rel material:binding:physics = </LandingLegsTest/PhysicsMaterials/Friction_1_0>
     }
 
-    def DistantLight "Sun"
-    {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
-        double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
-        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
-    }
 
     def Xform "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]

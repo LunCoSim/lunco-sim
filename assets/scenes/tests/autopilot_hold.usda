@@ -19,34 +19,13 @@
 #       --scene scenes/tests/autopilot_hold.usda
 
 def Xform "AutopilotHoldTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Two rovers under autopilot: one with no waypoints, one with a route. Checks that an autopilot with nowhere to go holds still instead of driving off, while a routed one still drives."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Lunar gravity.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
-
-    # UsdPhysicsMaterialAPI — friction/restitution live on a Material bound with
-    # the purpose-specific `material:binding:physics`, which is how UsdPhysics
-    # (and Omniverse) actually spell a surface.
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
     uniform bool lunco:spawnable = false
 
     # FLAT ground, deliberately. A slope would make "it held" depend on brake
@@ -65,10 +44,8 @@ def Xform "AutopilotHoldTest" (
         rel material:binding:physics = </AutopilotHoldTest/PhysicsMaterials/Friction_1_0>
     }
 
-    def DistantLight "Sun"
+    over "Sun"
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

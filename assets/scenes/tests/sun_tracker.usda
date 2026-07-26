@@ -26,35 +26,13 @@
 
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SunTrackerTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
-    # tuning are authored against — stated here rather than left to a default.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
-
-    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
-    # bound with the purpose-specific `material:binding:physics`, which is
-    # how UsdPhysics (and Omniverse) actually spell a surface.
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
     uniform bool lunco:spawnable = false
 
     def Scope "Looks"
@@ -108,10 +86,8 @@ def Xform "SunTrackerTest" (
     # The sun. DistantLight emits along local -Z; rotateXYZ aims it. Start
     # mid-sky so the azimuth is well-defined; move it live with
     # `SetEnvironmentLight` to watch the panel track.
-    def DistantLight "Sun"
+    over "Sun"
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

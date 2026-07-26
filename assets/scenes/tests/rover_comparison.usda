@@ -25,6 +25,7 @@
 # Run: sandbox --scene scenes/tests/rover_comparison.usda
 
 def Xform "RoverComparison" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Three rover variants simultaneously crossing identical primitive lunar terrain lanes for drivetrain, clearance, traction, and stability comparison."
     prepend apiSchemas = ["LunCoCatalogAPI"]
@@ -32,13 +33,9 @@ def Xform "RoverComparison" (
 {
     uniform bool lunco:spawnable = false
 
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
-
-    def Scope "PhysicsMaterials"
+    # This scene studies traction, so it adds its own graded surface to the
+    # inherited `PhysicsMaterials` scope rather than binding the default.
+    over "PhysicsMaterials"
     {
         def Material "Regolith" (
             prepend apiSchemas = ["PhysicsMaterialAPI"]
@@ -84,10 +81,8 @@ def Xform "RoverComparison" (
         rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
     }
 
-    def DistantLight "Sun"
+    over "Sun"
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-35, 40, 0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

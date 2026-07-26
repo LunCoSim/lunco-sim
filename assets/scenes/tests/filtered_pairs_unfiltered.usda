@@ -21,16 +21,12 @@
 # Loaded by `sandbox --scene scenes/tests/filtered_pairs_unfiltered.usda`.
 
 def Xform "SandboxScene" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "The never-collide pair test with the pairing removed, so the overlapping parts collide as usual. Shows what the authored pair does by showing what happens without it."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
 
     uniform bool lunco:spawnable = false
 

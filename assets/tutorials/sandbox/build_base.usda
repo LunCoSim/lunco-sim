@@ -61,15 +61,16 @@ def Xform "BuildBase" (
 
     # Raking polar sun — low on the horizon, the lighting a real polar base
     # lives under (and the reason the solar tower's panel is vertical).
-    def DistantLight "Sun"
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-12.0, 35.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
-        custom float lunco:shadow:maxDistance = 1200.0
+
+        # Standard `UsdLuxShadowAPI`.
+        float inputs:shadow:distance = 1200.0
         custom float lunco:shadow:firstCascadeFarBound = 25.0
-        custom int lunco:shadow:numCascades = 5
     }
 
     # Fly-cam looking down over the empty plot from the south-west, so the

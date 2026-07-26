@@ -8,21 +8,12 @@
 
 # A scene root is an `assembly` — the thing you OPEN, not a part you place.
 def Xform "TerrainOnly" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     doc = "Bare scene: a free-flight camera and nothing else. Load a DEM on top with SpawnDemTerrain."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "assembly"
 )
 {
-
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
-    # tuning are authored against — stated here rather than left to a default.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
     uniform bool lunco:spawnable = false
 
     # --- Avatar (Camera) --- freeflight, parked high so a spawned DEM (site
