@@ -311,6 +311,15 @@ impl Plugin for UsdBevyPlugin {
                             >,
                         )
                         .after(canonical::sync_canonical_stages),
+                    // The other half of the same queue: `sync_usd_visuals` drains
+                    // prims whose stage arrived, this one drains prims whose stage
+                    // never will. Both must exist or the queue has an outcome it
+                    // cannot leave.
+                    fail_awaiting_stage_prims.run_if(
+                        bevy::ecs::schedule::common_conditions::on_message::<
+                            bevy::asset::AssetLoadFailedEvent<UsdStageAsset>,
+                        >,
+                    ),
                     // Upgrades parked runtime-instance descendants to a
                     // hierarchical `Derived` id (gap G2/B.1) once their root id
                     // is allocated. Cheap: the query is empty unless a runtime
@@ -1737,6 +1746,68 @@ pub fn sync_usd_visuals(
                 &mut meshes,
             );
         }
+    }
+}
+
+/// Telemetry event name published when a stage asset a prim was waiting on
+/// failed to load. The load is over and it did not happen; anything that
+/// treated "still awaiting" as "still might work" learns otherwise here.
+///
+/// Consumers deliberately reach for this rather than for the asset event:
+/// `AssetLoadFailedEvent` is per-asset and says nothing about whether the
+/// failure mattered, while this fires only when a prim was actually parked on
+/// the asset — i.e. only when a mount really was lost.
+pub const SCENE_LOAD_FAILED: &str = "SCENE_LOAD_FAILED";
+
+/// Makes a failed stage load TERMINAL for the prims parked on it.
+///
+/// [`sync_usd_visuals`] drains `UsdAwaitingStage` on `LoadedWithDependencies`,
+/// which is the only outcome it models. A stage that fails to load never emits
+/// that event, so without this its prims wait forever — and because
+/// "any prim still awaiting this stage" is what
+/// `lunco_usd_sim::cosim::clear_scene_load_in_flight` reads to decide the scene
+/// is still spawning, one missing file pinned `SceneLoadInFlight` for the rest
+/// of the process. That guard suppresses every later `LoadScene`, and the
+/// readiness ticket derived from it held the world until its 60 s deadline
+/// fired. One unreadable asset made the app unable to load ANY scene again.
+///
+/// A parked prim whose stage will never arrive cannot become anything, so it is
+/// despawned rather than left as an inert husk that later passes for a mounted
+/// scene. The failure is loud (`error!`) and published as [`SCENE_LOAD_FAILED`]
+/// so callers that requested the mount can react — see `lunco_tutorial`, where
+/// a lesson whose scene never loaded must not go on to report success.
+fn fail_awaiting_stage_prims(
+    mut ev: MessageReader<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>,
+    q: Query<(Entity, &UsdPrimPath), With<UsdAwaitingStage>>,
+    mut commands: Commands,
+) {
+    for failure in ev.read() {
+        let parked: Vec<Entity> = q
+            .iter()
+            .filter(|(_, prim_path)| prim_path.stage_handle.id() == failure.id)
+            .map(|(entity, _)| entity)
+            .collect();
+        if parked.is_empty() {
+            continue;
+        }
+        error!(
+            "[usd] stage `{}` failed to load ({}) — {} prim(s) waiting on it will \
+             never instantiate and are being dropped. The mount is abandoned; \
+             later scene loads are free to proceed.",
+            failure.path,
+            failure.error,
+            parked.len()
+        );
+        for entity in parked {
+            commands.entity(entity).despawn();
+        }
+        commands.trigger(lunco_core::TelemetryEvent {
+            name: SCENE_LOAD_FAILED.into(),
+            source: 0,
+            severity: lunco_core::Severity::Error,
+            data: lunco_core::TelemetryValue::String(failure.path.to_string()),
+            timestamp: 0.0,
+        });
     }
 }
 
@@ -5950,5 +6021,88 @@ mod default_prim_attr_tests {
     #[test]
     fn unparseable_text_is_none() {
         assert!(attr("this is not USDA", "lunco:description").is_none());
+    }
+}
+
+#[cfg(test)]
+mod awaiting_stage_failure_tests {
+    //! A stage load that fails must END the wait it started.
+    //!
+    //! The regression these guard is the one that made an app unable to load any
+    //! scene after a single bad path: `sync_usd_visuals` only ever drains
+    //! `UsdAwaitingStage` on success, so a failed load left its prims parked, and
+    //! "a prim is still awaiting this stage" is what keeps `SceneLoadInFlight`
+    //! set — which suppresses every subsequent `LoadScene`.
+    use super::*;
+    use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath};
+
+    /// Bare app: the system reads a message and a query, and writes commands.
+    /// Nothing here needs an asset pipeline, which is the point — the behaviour
+    /// under test is what happens when the pipeline has already given up.
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_message::<AssetLoadFailedEvent<UsdStageAsset>>();
+        app.add_systems(Update, fail_awaiting_stage_prims);
+        app
+    }
+
+    fn parked(app: &mut App, handle: Handle<UsdStageAsset>) -> Entity {
+        app.world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: handle,
+                    path: "/Scene".into(),
+                },
+                UsdAwaitingStage,
+            ))
+            .id()
+    }
+
+    fn fail(app: &mut App, handle: &Handle<UsdStageAsset>, path: &str) {
+        app.world_mut()
+            .resource_mut::<Messages<AssetLoadFailedEvent<UsdStageAsset>>>()
+            .write(AssetLoadFailedEvent {
+                id: handle.id(),
+                path: AssetPath::from(path.to_string()),
+                error: AssetLoadError::EmptyPath(AssetPath::from(path.to_string())),
+            });
+    }
+
+    #[test]
+    fn a_failed_stage_drops_the_prims_parked_on_it() {
+        let mut app = app();
+        let handle = Handle::<UsdStageAsset>::default();
+        let entity = parked(&mut app, handle.clone());
+
+        app.update();
+        assert!(
+            app.world().get_entity(entity).is_ok(),
+            "nothing has failed yet — the prim is still legitimately waiting"
+        );
+
+        fail(&mut app, &handle, "missing.usda");
+        app.update();
+        assert!(
+            app.world().get_entity(entity).is_err(),
+            "the stage will never arrive, so the prim can never instantiate; \
+             leaving it parked is what pinned `SceneLoadInFlight` forever"
+        );
+    }
+
+    #[test]
+    fn a_different_stages_failure_leaves_this_prim_waiting() {
+        let mut app = app();
+        let mine = Handle::<UsdStageAsset>::default();
+        let entity = parked(&mut app, mine);
+
+        let other: Handle<UsdStageAsset> =
+            bevy::asset::uuid_handle!("5ce7e000-0000-4000-8000-000000000001");
+        fail(&mut app, &other, "someone_elses.usda");
+        app.update();
+
+        assert!(
+            app.world().get_entity(entity).is_ok(),
+            "one scene failing must not tear down prims waiting on another stage"
+        );
     }
 }

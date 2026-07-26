@@ -482,6 +482,49 @@ fn on_mission_complete(
     }
 }
 
+/// Abandon the running lesson when a scene load fails, so it cannot go on to
+/// report success it did not earn.
+///
+/// A lesson's first act is almost always `load_scene(...)`, and nothing after
+/// that checks whether the scene arrived. A coach-mark tour in particular
+/// advances on the user pressing Next, so against an empty viewport it walks
+/// its whole step list, emits `MISSION_COMPLETE`, records a completion and
+/// starts its successor — the observed failure, where a tutorial wrote
+/// `MISSION_COMPLETE` to the black box with no scene loaded at all. An
+/// automated suite reads that as green while it has tested nothing, which is
+/// worse than a red run: a red run gets investigated.
+///
+/// Clearing `current` is what makes the false pass impossible rather than
+/// merely unlikely: [`on_mission_complete`] attributes a completion to whatever
+/// lesson is running, so with no lesson running a late `MISSION_COMPLETE` from
+/// the abandoned script records nothing and advances nothing.
+///
+/// Deliberately not filtered to "the scene THIS lesson asked for": a lesson has
+/// no way to declare that, and any scene failing to mount while a lesson is
+/// running means the lesson is not showing what it claims to. The event is
+/// published by `lunco_usd_bevy::SCENE_LOAD_FAILED`, matched by name here
+/// because the tutorial crate sits above USD and does not depend on it — the
+/// same arrangement `MISSION_COMPLETE` already uses in the other direction.
+fn on_scene_load_failed(
+    trigger: On<TelemetryEvent>,
+    mut progress: ResMut<TutorialProgress>,
+    mut pending: ResMut<PendingAdvance>,
+) {
+    if trigger.event().name != "SCENE_LOAD_FAILED" {
+        return;
+    }
+    let Some(id) = progress.current.take() else {
+        return;
+    };
+    pending.0 = None;
+    error!(
+        "[tutorial] abandoning '{id}' — its scene failed to load ({:?}). The \
+         lesson cannot demonstrate anything against an empty viewport, so it is \
+         NOT recorded as complete and its successor will not start.",
+        trigger.event().data
+    );
+}
+
 /// A tidy display name for a tutorial id: prefer its registered title, else the id.
 #[cfg(feature = "ui")]
 fn pretty_tutorial(registry: &TutorialRegistry, id: &str) -> String {
@@ -1065,6 +1108,7 @@ impl Plugin for TutorialCorePlugin {
         app.register_settings_section::<TutorialSeen>();
         register_all_commands(app);
         app.add_observer(on_mission_complete);
+        app.add_observer(on_scene_load_failed);
         app.add_observer(resolve_show_tutorial_intent);
         app.init_resource::<LoadedTwinCurriculum>();
         app.add_systems(Update, sync_twin_tutorials);
