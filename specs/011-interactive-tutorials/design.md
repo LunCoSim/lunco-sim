@@ -294,9 +294,7 @@ was outside the closure.
 
 ### Current state vs. target
 
-As-built is the JSON catalog: `assets/tutorials/<track>/tutorials.json` plus a
-`track.json` (`label`, `order`, `hosts` — all required, no defaults), and the
-environment is still `load_scene` inside `on_start`.
+**Implemented (2026-07-27).** See §10.
 
 ## 9. Curriculum ROOTS — the composition idea, at the current cost (2026-07-26)
 
@@ -337,24 +335,10 @@ already drifted into two different sets of rules:
   `TutorialRegistry::retain_bundled`, `LoadedTwinCurriculum`, and the second
   parse.
 
-### Where USD still wins, and what it would take
+### Where USD still wins — SUPERSEDED by §10
 
-§8 is **deferred, not withdrawn**. Two of its properties are genuinely absent
-here and only USD gives them:
-
-1. **The environment stays imperative.** A lesson's world is still a `load_scene`
-   call inside `on_start`, so a lesson that forgets one is still unrepresentable
-   as an error rather than a lint finding — the original defect's root, treated
-   but not cured.
-2. **Roots are a flat list, not a composition.** There is no stronger-vs-weaker
-   opinion, so two roots contributing the same track id is first-wins rather
-   than a resolved override. Nothing needs that yet.
-
-Adopt §8 when a lesson must be authored *in a scene* rather than beside one, or
-when a twin needs to override a bundled lesson rather than add to it. Its
-prerequisite is unchanged and is now written at the call site: the recursive,
-resolver-anchored `compute_all_dependencies` in the openusd fork
-(`TODO(openusd)` on `lunco_usd_bevy::closure::reference_closure`).
+This section listed the two properties §9 could not give and only USD could. Both
+are now delivered; see §10.
 
 ### Why the tutorial crate is not deleted
 
@@ -378,3 +362,88 @@ The accurate statement is subtler: **nothing left in the crate is about
 tutorials.** It discovers content packs, lists them, runs a rhai program on a
 host entity, and remembers progress. The word "tutorial" is the only
 tutorial-specific thing in it — the engine names no track and knows no lesson.
+
+
+## 10. The curriculum IS a USD layer (2026-07-27)
+
+§8 landed, on §9's foundation. A curriculum is now scene description, and the
+JSON catalog is gone — not deprecated, deleted.
+
+### Shape
+
+```usda
+def Scope "Sandbox" (prepend apiSchemas = ["LunCoTutorialTrackAPI"]) {
+    string lunco:track:label = "1️⃣ Sandbox Onboarding"
+
+    def Scope "FirstDrive" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/first_drive.rhai@
+        string lunco:tutorial:title = "First Drive"
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Sandbox/LanderMission>
+    }
+}
+```
+
+- A **track** is a prim applying `LunCoTutorialTrackAPI`; a **lesson** is a child
+  applying `LunCoTutorialAPI`. Both schemas are codeless, in `lunco-usd/schema`.
+- **Behaviour** is `LunCoProgramAPI` + `info:sourceAsset` — the engine's existing
+  way of binding a rhai program to a prim. Nothing was invented for tutorials.
+- A lesson's **identity is its prim path**, so `lunco:tutorial:next` is a real
+  relationship rather than an id string that nothing checks.
+
+### What composition replaced
+
+| Was | Is |
+|---|---|
+| `hosts = ["sandbox"]` on each track | the app's layer `assets/tutorials/<app>.usda` sublayers the tracks it offers |
+| `order = 2` on each track | sublayer order |
+| `TrackMeta::hosted_by`, `parse_track_meta` | deleted — composition already decided |
+| a track = a directory holding `track.json` | a track = a prim applying the schema |
+| twin discovery walking `sim/tutorials/*/track.json` | one twin layer, `sim/tutorials/curriculum.usda`, which may sublayer as many tracks as it likes |
+
+An app's configuration is no longer inside scene description, and ordering has
+one mechanism instead of two that could disagree.
+
+### The world is DECLARED
+
+A lesson's environment is a `payload` arc. The launcher reads it and mounts it
+through `LoadScene` **before** running the script; the script no longer calls
+`load_scene` at all (stripped from all 17 lessons, engine and twin).
+
+This cures the defect §8 was written for. `world: Option<String>` makes
+**absent a statement**: the lunica track and `JoinTeam` declare no world and the
+launcher deliberately leaves the viewport alone, which is exactly the reported
+"switching lessons only changes the overlay, not the scene" — two different
+situations that the imperative form could not tell apart. Five sandbox lessons
+sharing `first_drive.usda` is likewise now visible in the data.
+
+**Payloads are never loaded here.** `curriculum::read` opens the stage with
+`InitialLoadSet::LoadNone`, so a world is read as an arc — a declaration — and
+never composed into the curriculum stage. That needed one openusd addition
+(fork `778e553`): `StageBuilder::initial_load_set` and `Prim::payload_asset_paths`.
+
+### Render decoupling
+
+`lunco-tutorial` depends on `openusd` **directly**, never on `lunco-usd-bevy`:
+that crate pulls `lunco-render`, and cargo unifies features across the graph, so
+the dependency would relink the GPU stack into the `--no-ui` server. Mounting
+stays a named `ApiCommandEvent { command: "LoadScene" }`, the same arrangement
+`SCENE_LOAD_FAILED` already uses in the other direction.
+
+### Verification
+
+`crates/lunco-tutorial/tests/curriculum_composes.rs` — enumerated from what
+composes, never a hardcoded list, so a new track is covered the moment it exists:
+the app layer composes the tracks it offers, every lesson resolves its script,
+declared worlds exist **and world-less lessons are allowed**, and no chain
+targets a lesson that does not exist.
+
+### Still open
+
+The recursive, resolver-anchored `compute_all_dependencies` in the openusd fork,
+so `lunco_usd_bevy::closure::reference_closure` can be deleted (`TODO(openusd)`
+at the call site). Independent of this section.

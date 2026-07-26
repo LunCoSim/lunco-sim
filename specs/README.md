@@ -14,7 +14,7 @@ Status legend: **Implemented** (built, in tree) · **Partial** (core built, gaps
 | 008 | Developer Experience | Partial | scripting is rhai, not Lua/Python |
 | 009 | Coordinate Frame Tree | Partial | `big_space` floating-origin built; named TF-tree types absent |
 | 010 | Authority / RBAC | Implemented | |
-| 011 | Interactive Tutorials | Implemented (§8 deferred) | all six tutorial tasks built; §9 makes curriculum providers pluggable via `CurriculumRoots` (bundled + twin through one loader). §8 — a lesson's environment as a declared USD `payload` — is deferred, not withdrawn; adopt it when a lesson must be authored *in* a scene or a twin must override a bundled lesson |
+| 011 | Interactive Tutorials | Implemented | all six tutorial tasks built; §10 — the curriculum IS a USD layer (`LunCoTutorialTrackAPI`/`LunCoTutorialAPI`), tracks composed by sublayer, a lesson's world declared as a `payload` and mounted by the launcher. §9's `CurriculumRoots` remains the provider seam (bundled + twin through one loader) |
 | 012 | Sensor-to-Dashboard | Partial | telemetry bridge + scalar sensing; no camera/RGB sensors, no OpenMCT/Grafana |
 | 013 | SysML Integration | Not built | overlaps 017 (interop/model mapping) |
 | 014 | Modelica Simulation | Implemented | rumoca runtime |
