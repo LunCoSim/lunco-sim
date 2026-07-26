@@ -1,0 +1,72 @@
+#usda 1.0
+(
+    """
+    Rover driving & slopes curriculum. See `../sandbox/curriculum.usda` for what
+    a track and a lesson are made of.
+
+    The track is named `basic` and hosted by the SANDBOX app — the two are
+    unrelated, which is exactly why no `hosts` attribute appears here. A track is
+    offered by whichever app sublayers it (`assets/tutorials/sandbox.usda`),
+    so a track is never owned by the app it happens to be named after.
+
+    JoinTeam carries NO payload, and that is a statement, not an omission: it is
+    a networking tour with no world of its own, and it runs in whatever world is
+    already open. Under the old `load_scene`-inside-`on_start` model this was
+    indistinguishable from a lesson that forgot to open one — the failure that
+    motivated declaring the environment.
+    """
+    defaultPrim = "Basic"
+)
+
+def Scope "Basic" (
+    prepend apiSchemas = ["LunCoTutorialTrackAPI"]
+)
+{
+    string lunco:track:label = "2️⃣ Rover Driving & Slopes"
+
+    def Scope "MoonDrivingBasics" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/basic/driving_basics.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/basic/b1_driving_basics.rhai@
+        string lunco:tutorial:title = "1 · Moon Driving Basics"
+        string lunco:tutorial:blurb = "Take control of a rover — throttle, steer, brake, camera — and climb a gentle ramp to feel wheel slip on a gravel grade."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Basic/SlopesTipOver>
+    }
+
+    def Scope "SlopesTipOver" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/basic/slope_test.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/basic/b3_slopes_tipover.rhai@
+        string lunco:tutorial:title = "2 · Slopes & Tip-Over"
+        string lunco:tutorial:blurb = "Climb a borderline grade and feel exactly why a top-heavy rover rolls — plus how to right one that has."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Basic/RoverVariants>
+    }
+
+    def Scope "RoverVariants" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/basic/driving_basics.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/basic/b4_rover_variants.rhai@
+        string lunco:tutorial:title = "3 · Rover Variants"
+        string lunco:tutorial:blurb = "Drive the three rovers back to back — Explorer LT, Standard, Hauler — and feel how centre of mass and power change the handling."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Basic/JoinTeam>
+    }
+
+    def Scope "JoinTeam" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/basic/b5_join_team.rhai@
+        string lunco:tutorial:title = "4 · Join a Team Session"
+        string lunco:tutorial:blurb = "Connect to a server, find and possess your rover, and read your telemetry — everything you need to drive with a team."
+        uniform token lunco:tutorial:difficulty = "beginner"
+    }
+}

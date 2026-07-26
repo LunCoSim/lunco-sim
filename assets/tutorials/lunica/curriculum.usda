@@ -1,0 +1,100 @@
+#usda 1.0
+(
+    """
+    Modelica workbench curriculum. See `../sandbox/curriculum.usda` for what a
+    track and a lesson are made of.
+
+    NO LESSON HERE CARRIES A PAYLOAD, and every one of them is correct. These are
+    workbench tours — they teach panels, compilation, plots and the API, none of
+    which is a 3D world — so they run in whatever the user already has open. That
+    a whole track legitimately declares no environment is why "every lesson opens
+    a scene" was never a rule that could be enforced, and why the environment had
+    to become something a lesson DECLARES (present, or deliberately absent)
+    rather than something it calls.
+    """
+    defaultPrim = "Lunica"
+)
+
+def Scope "Lunica" (
+    prepend apiSchemas = ["LunCoTutorialTrackAPI"]
+)
+{
+    string lunco:track:label = "3️⃣ Modelica Workbench"
+
+    def Scope "Overview" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/lunica/overview.rhai@
+        string lunco:tutorial:title = "Lunica Overview"
+        string lunco:tutorial:blurb = "A 90-second guided tour of the whole workbench — start here."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        uniform bool lunco:tutorial:firstStart = true
+        rel lunco:tutorial:next = </Lunica/Workspace>
+    }
+
+    def Scope "Workspace" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/lunica/workspace.rhai@
+        string lunco:tutorial:title = "1 · Your Workspace"
+        string lunco:tutorial:blurb = "Twins, the browser, read-only libraries, and learning paths."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Lunica/Model>
+    }
+
+    def Scope "Model" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/lunica/model.rhai@
+        string lunco:tutorial:title = "2 · Open & View a Model"
+        string lunco:tutorial:blurb = "The four views (Text/Diagram/Icon/Docs) + graphical composition."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Lunica/Run>
+    }
+
+    def Scope "Run" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/lunica/run.rhai@
+        string lunco:tutorial:title = "3 · Compile & Run"
+        string lunco:tutorial:blurb = "Interactive vs Fast Run, and driving inputs live."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Lunica/Experiments>
+    }
+
+    def Scope "Experiments" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/lunica/experiments.rhai@
+        string lunco:tutorial:title = "4 · Experiments & Sweeps"
+        string lunco:tutorial:blurb = "Override parameters and sweep them without editing source."
+        uniform token lunco:tutorial:difficulty = "intermediate"
+        rel lunco:tutorial:next = </Lunica/Plots>
+    }
+
+    def Scope "Plots" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/lunica/plots.rhai@
+        string lunco:tutorial:title = "5 · Plots & Results"
+        string lunco:tutorial:blurb = "Reading a run: graphs, diagnostics, and the console."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Lunica/Scripting>
+    }
+
+    def Scope "Scripting" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/lunica/scripting.rhai@
+        string lunco:tutorial:title = "6 · Automate (API + MCP)"
+        string lunco:tutorial:blurb = "Drive the workbench from scripts, the HTTP API, and MCP."
+        uniform token lunco:tutorial:difficulty = "intermediate"
+    }
+}

@@ -1,0 +1,148 @@
+#usda 1.0
+(
+    """
+    Sandbox onboarding curriculum.
+
+    A TRACK is a prim applying `LunCoTutorialTrackAPI`; each child applying
+    `LunCoTutorialAPI` is one LESSON. A lesson composes three things, none of
+    them invented for tutorials:
+
+      - BEHAVIOUR — `LunCoProgramAPI` + `info:sourceAsset`, this engine's
+        existing way of binding a rhai program to a prim.
+      - WORLD — a `payload` arc to the scene the lesson teaches in. Declared,
+        never called: a lesson used to open its world with `load_scene(...)` as
+        the first statement of `on_start`, so a lesson that forgot was
+        indistinguishable from one that has no world on purpose. The launcher
+        reads this arc and mounts it through `LoadScene` BEFORE running the
+        script; the curriculum stage itself is opened with payloads unloaded, so
+        it never becomes the world.
+      - PRESENTATION — the title/blurb/difficulty properties.
+
+    A lesson's IDENTITY is its prim path, so `lunco:tutorial:next` is a real
+    relationship rather than an id string that nothing checks.
+
+    Note how often a world REPEATS here: five lessons share `first_drive.usda`
+    and two share `lander_ops.usda`. That is deliberate — a scenery change is not
+    what those lessons teach — and it is why switching between them leaves the
+    viewport alone.
+
+    This track is offered by an app that sublayers it (see
+    `assets/tutorials/sandbox.usda`). Nothing here names an app: which app shows
+    a track is composition, not scene description.
+    """
+    defaultPrim = "Sandbox"
+)
+
+def Scope "Sandbox" (
+    prepend apiSchemas = ["LunCoTutorialTrackAPI"]
+)
+{
+    string lunco:track:label = "1️⃣ Sandbox Onboarding"
+
+    def Scope "SandboxIntro" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/sandbox/sandbox_intro.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/sandbox_intro.rhai@
+        string lunco:tutorial:title = "Sandbox Intro"
+        string lunco:tutorial:blurb = "A guided coach-mark tour of the workspace — viewport, browser, inspector, console. Chains into First Drive."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        uniform bool lunco:tutorial:firstStart = true
+        rel lunco:tutorial:next = </Sandbox/FirstDrive>
+    }
+
+    def Scope "FirstDrive" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/first_drive.rhai@
+        string lunco:tutorial:title = "First Drive"
+        string lunco:tutorial:blurb = "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Sandbox/LanderMission>
+    }
+
+    def Scope "LanderMission" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://scenes/sandbox/lander_ops.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/lander_mission.rhai@
+        string lunco:tutorial:title = "Lander & Rover Mission"
+        string lunco:tutorial:blurb = "Watch a powered descent land a rover, then drive the deployed rover through a course."
+        uniform token lunco:tutorial:difficulty = "intermediate"
+    }
+
+    def Scope "BuildScene" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/build_scene.rhai@
+        string lunco:tutorial:title = "Build a Scene"
+        string lunco:tutorial:blurb = "Compose the 3D world — the spawn palette, the gizmo, the inspector, and the USD underneath."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Sandbox/BuildBase>
+    }
+
+    def Scope "BuildBase" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/sandbox/build_base.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/build_base.rhai@
+        string lunco:tutorial:title = "Build a Lunar Base"
+        string lunco:tutorial:blurb = "Compose a surface base from the moonbase Structures kit — solar/fission power, a crew habitat, a comms mast, an ISRU plant and a landing pad."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Sandbox/ScriptARover>
+    }
+
+    def Scope "ScriptARover" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/script_a_rover.rhai@
+        string lunco:tutorial:title = "Script a Rover"
+        string lunco:tutorial:blurb = "What a rhai scenario is and how to attach one — lifecycle hooks, prelude verbs, hot-reload."
+        uniform token lunco:tutorial:difficulty = "intermediate"
+        rel lunco:tutorial:next = </Sandbox/RhaiRepl>
+    }
+
+    def Scope "RhaiRepl" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/rhai_repl.rhai@
+        string lunco:tutorial:title = "Rhai Editor & REPL"
+        string lunco:tutorial:blurb = "Learn how to write scripts in the in-app editor, run commands in the live REPL, and use parameter hints."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Sandbox/InspectSim>
+    }
+
+    def Scope "InspectSim" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://tutorials/sandbox/first_drive.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/inspect_sim.rhai@
+        string lunco:tutorial:title = "Inspect the Simulation"
+        string lunco:tutorial:blurb = "Read live state — selection, telemetry ports and plots, and reading it all back over the API."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        rel lunco:tutorial:next = </Sandbox/Cosim>
+    }
+
+    def Scope "Cosim" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+        prepend payload = @lunco://scenes/sandbox/lander_ops.usda@
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/sandbox/cosim.rhai@
+        string lunco:tutorial:title = "Cosim — Model meets Physics"
+        string lunco:tutorial:blurb = "How a Modelica model flies a physics body: the model, the SimConnection wire, Modelica events, and verifying the result."
+        uniform token lunco:tutorial:difficulty = "intermediate"
+    }
+}

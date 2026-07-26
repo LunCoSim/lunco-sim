@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    """
+    The curriculum the LUNCOSIM flagship offers. See `./sandbox.usda` for why
+    this layer exists rather than a `hosts` attribute on each track.
+    """
+    subLayers = [
+        @./luncosim/curriculum.usda@
+    ]
+)

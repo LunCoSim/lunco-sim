@@ -1,0 +1,40 @@
+#usda 1.0
+(
+    """
+    Flagship curriculum. See `../sandbox/curriculum.usda` for what a track and a
+    lesson are made of.
+
+    Neither lesson carries a payload: the flagship opens on its own solar system
+    and these lessons teach how to move around the world that is already there.
+    """
+    defaultPrim = "LunCoSim"
+)
+
+def Scope "LunCoSim" (
+    prepend apiSchemas = ["LunCoTutorialTrackAPI"]
+)
+{
+    string lunco:track:label = "🌍 LunCoSim Flagship"
+
+    def Scope "Welcome" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/luncosim/welcome.rhai@
+        string lunco:tutorial:title = "Welcome to LunCoSim"
+        string lunco:tutorial:blurb = "A guided tour of the flagship — the live solar system, the camera, and time-warp."
+        uniform token lunco:tutorial:difficulty = "beginner"
+        uniform bool lunco:tutorial:firstStart = true
+        rel lunco:tutorial:next = </LunCoSim/Controls>
+    }
+
+    def Scope "Controls" (
+        prepend apiSchemas = ["LunCoProgramAPI", "LunCoTutorialAPI"]
+    )
+    {
+        uniform asset info:sourceAsset = @lunco://tutorials/luncosim/controls.rhai@
+        string lunco:tutorial:title = "Controls & Command"
+        string lunco:tutorial:blurb = "Focus a body, fly the camera, and possess a vessel — then hand back to the autopilot."
+        uniform token lunco:tutorial:difficulty = "beginner"
+    }
+}
