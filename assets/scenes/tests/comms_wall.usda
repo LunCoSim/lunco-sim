@@ -40,21 +40,13 @@
 # celestial hierarchy stays dormant (docs 43/49). That keeps this scene fast and
 # keeps the test about occlusion.
 def Xform "CommsWallTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Rover, base comms mast, and a wall between them — the minimal proof that authored geometry severs a link."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
-    # tuning are authored against — stated here rather than left to a default.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
     uniform bool lunco:spawnable = false
 
     # Site anchor: the scene origin sits at this geodetic point (ENU axes), which
@@ -65,16 +57,6 @@ def Xform "CommsWallTest" (
     double lunco:anchor:height = 0.0
     int lunco:anchor:body = 301
 
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
 
     # Flat plot, ±100 m — enough to drive around the wall.
     def Cube "Ground" (
@@ -172,9 +154,7 @@ def Xform "CommsWallTest" (
     }
 
     # Low sun from the east, so the wall reads as a solid object on the ground.
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
+    over "Sun"
     {
         double3 xformOp:rotateXYZ = (-15.0, 90.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]

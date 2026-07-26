@@ -36,24 +36,13 @@
 # carries the vehicle rigidly while reporting no spring force at all.
 
 def Xform "PrismaticSpringTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "Raked prismatic springs under known loads — the landing-leg joint, isolated, in both regimes."
 )
 {
-    # Moon, matching the vehicles this joint is authored for, so the expected
-    # compression above is the one the gear is actually sized against.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
     uniform bool lunco:spawnable = false
 
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
-    {
-    }
 
     def Xform "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]

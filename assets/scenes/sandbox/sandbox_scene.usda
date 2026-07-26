@@ -6,35 +6,13 @@
 )
 
 def Xform "SandboxScene" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     doc = "The main sandbox: a large flat ground with ramps and rovers. The everyday space for driving rovers around obstacles."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "assembly"
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
-    # tuning are authored against — stated here rather than left to a default.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
-
-    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
-    # bound with the purpose-specific `material:binding:physics`, which is
-    # how UsdPhysics (and Omniverse) actually spell a surface.
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
     # A whole scene, not a spawnable part — excluded from the spawn catalog.
     uniform bool lunco:spawnable = false
 
@@ -110,19 +88,6 @@ def Xform "SandboxScene" (
         bool primvars:doNotCastShadows = true
         bool lunco:surface:additive = true
         rel material:binding = </SandboxScene/Looks/Starfield>
-    }
-
-    # ── Sun ────────────────────────────────────────────────────────────────
-    #
-    # The scene's light, composed from the shared engine sun. This scene wants
-    # the shared values verbatim (128 000 lx, 0.53°, the standing aim), so it
-    # authors no local opinions at all. Refine here only what this scene
-    # genuinely differs on; `sun.usda` documents each attribute and which of
-    # them the ephemeris refines at runtime.
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
-    {
     }
 
     # Looks — the scene's materials. A WGSL shader is bound the way USD binds every

@@ -13,28 +13,12 @@
 # `query("Links")` graph snapshot and `link.aos` / `link.los` events. Ask it from
 # rhai: `can_reach("rover", "earth")` (see `scripting/prelude/links.rhai`).
 def Xform "CommsDemoScene" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     doc = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — connectivity via the generic link kernel (lunco:linkNode; link.aos/link.los events)."
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "assembly"
 )
 {
-    # The scene's sun, composed from the shared engine light. The engine default
-    # IS this reference, so a scene that omits it is unlit.
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
-    {
-    }
-
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. Earth gravity, which this scene's vehicles and their
-    # tuning are authored against — stated here rather than left to a default.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
     bool lunco:spawnable = false
 
     # This scene wants a sky: Sun, Earth and Moon. Celestial content is opt-in per

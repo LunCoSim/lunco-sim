@@ -27,24 +27,12 @@
 # Loaded by `sandbox --scene scenes/tests/collision_groups.usda`.
 
 def Xform "SandboxScene" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "The overlapping pad-and-hull rig again, with the never-collide rule stated as two collision groups instead of one named pair. Checks the group form reaches the same answer."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-    # The scene's sun, composed from the shared engine light. The engine default
-    # IS this reference, so a scene that omits it is unlit.
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
-    {
-    }
-
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
 
     uniform bool lunco:spawnable = false
 

@@ -22,31 +22,14 @@
 #   scene_test --scene scenes/tests/lander_rover_stack.usda --max-ticks 500
 
 def Xform "LanderRoverStack" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "A lander with a rover bolted underneath, dropped onto its legs."
 )
 {
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. The MOON, matching the lander's own sizing.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
 
     uniform bool lunco:spawnable = false
 
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
@@ -61,11 +44,6 @@ def Xform "LanderRoverStack" (
         rel material:binding:physics = </LanderRoverStack/PhysicsMaterials/Friction_1_0>
     }
 
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
-    {
-    }
 
     def Xform "Avatar" (
         prepend apiSchemas = ["LunCoAvatarAPI"]

@@ -21,24 +21,12 @@
 # Loaded by `sandbox --scene scenes/tests/filtered_pairs.usda`.
 
 def Xform "SandboxScene" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "A pad bolted to an arm bolted to a hull, with the pad deliberately overlapping the hull. Checks that an authored never-collide pair really does stop the two touching."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-    # The scene's sun, composed from the shared engine light. The engine default
-    # IS this reference, so a scene that omits it is unlit.
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
-    {
-    }
-
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
 
     uniform bool lunco:spawnable = false
 

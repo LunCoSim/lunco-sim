@@ -1,0 +1,68 @@
+#usda 1.0
+(
+    defaultPrim = "LunarSurface"
+    doc = "Shared preamble for a scene standing on the Moon: lunar gravity, the engine sun, and the default contact material."
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+# What every lunar-surface scene has in common, as ONE referenceable prim.
+#
+# Scene roots reference this and add only what makes them that scene:
+#
+#     def Xform "RockerBogieTest" (
+#         prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+#         prepend apiSchemas = ["LunCoCatalogAPI"]
+#         kind = "assembly"
+#     )
+#     {
+#         over "Sun" { double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0) }
+#         def Cube "Ground" { ... }
+#         def Xform "Avatar" { ... }
+#     }
+#
+# References are live composition, not a copy: an edit here reaches every scene
+# that references it, which is the point. What lives here therefore has to be
+# genuinely shared — gravity and the sun are identical in every surface scene,
+# while ground geometry and camera framing differ per scene and stay local. A
+# base that provided those would be an indirection most scenes immediately
+# override, which is worse than the duplication it removes.
+#
+# `def`, not `class`: this file is also a valid minimal scene, so it can be
+# opened on its own to check the shared half in isolation.
+def Xform "LunarSurface"
+{
+    # Lunar surface gravity. ONE `UsdPhysicsScene` per stage — the engine reads
+    # gravity from it and applies it to every body, so a second would be a
+    # second answer to the same question. A scene elsewhere in the solar system
+    # overrides `physics:gravityMagnitude` rather than adding a prim.
+    def PhysicsScene "PhysicsScene"
+    {
+        vector3f physics:gravityDirection = (0, -1, 0)
+        float physics:gravityMagnitude = 1.62
+    }
+
+    # The sun, composed in turn from the shared light. Scenes aim it with
+    # `over "Sun" { double3 xformOp:rotateXYZ = ... }`; in a scene with a site
+    # anchor and a real ephemeris, `lunco-celestial` aims it instead.
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
+    {
+    }
+
+    # Default contact material. Standard `UsdPhysicsMaterialAPI`; friction 1.0
+    # is the neutral "grippy ground" every scene that is not specifically
+    # studying traction binds. Scenes needing other surfaces add materials to
+    # this scope with `over "PhysicsMaterials" { def Material "..." { ... } }`.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+}

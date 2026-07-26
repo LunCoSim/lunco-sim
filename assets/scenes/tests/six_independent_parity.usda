@@ -68,34 +68,16 @@
 # of ground under it — enough that a full-lock steer leg cannot run off the pad.
 
 def Xform "SixIndependentParity" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
     doc = "One six-wheel independent-drive rover on flat ground, for the authored-driveMix motion-correctness regression test. Raycast-only: this rover has no physical drivetrain variant."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
-    # UsdPhysicsScene — simulation-wide settings. ONE per scene: this engine
-    # reads gravity from it and applies it to every body, so a second scene prim
-    # would be a second answer to the same question. The MOON — every vehicle in
-    # this scene is sized for 1.62, so the scene states it rather than inherit it.
-    def PhysicsScene "PhysicsScene"
-    {
-        vector3f physics:gravityDirection = (0, -1, 0)
-        float physics:gravityMagnitude = 1.62
-    }
     # A test rig, not a spawnable part.
     uniform bool lunco:spawnable = false
 
-    def Scope "PhysicsMaterials"
-    {
-        def Material "Friction_1_0" (
-            prepend apiSchemas = ["PhysicsMaterialAPI"]
-        )
-        {
-            float physics:dynamicFriction = 1.0
-            float physics:staticFriction = 1.0
-        }
-    }
 
     # Flat, level, 500 x 500 m. Level matters: the pivot phase asserts that the
     # rover travels almost NOWHERE while spinning, and on any slope it would
@@ -114,9 +96,7 @@ def Xform "SixIndependentParity" (
         rel material:binding:physics = </SixIndependentParity/PhysicsMaterials/Friction_1_0>
     }
 
-    def DistantLight "Sun" (
-        prepend references = @lunco://lighting/sun.usda@</Sun>
-    )
+    over "Sun"
     {
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
