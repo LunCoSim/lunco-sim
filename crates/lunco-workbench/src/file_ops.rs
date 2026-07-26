@@ -42,8 +42,8 @@ use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 
 use crate::picker::{PickFollowUp, PickResolved};
 use lunco_workspace::open::{
-    close_all_open_folders, drain_pending_twin_opens, spawn_twin_from_path, spawn_twin_scan,
-    OpenTwin, PendingTwinOpens,
+    close_all_open_folders, drain_pending_twin_opens, spawn_twin_scan, AddFolderToWorkspace,
+    AddTwin, OpenFolder, OpenTwin, PendingTwinOpens,
 };
 use lunco_workspace::{FileRenamed, WorkspaceResource};
 
@@ -83,42 +83,6 @@ pub use lunco_doc_bevy::{NewDocument, OpenFile};
 /// clipboard (a headless server has none); see the query registry.
 #[Command(default)]
 pub struct CopyShareLink {}
-
-/// Open a folder (no `twin.toml` requirement).
-///
-/// Empty `path` triggers a native folder picker. Resolved folders are
-/// classified at the observer level: presence of `twin.toml` promotes
-/// to a Twin (equivalent to firing [`OpenTwin`]); absence opens it as
-/// a plain folder workspace.
-#[Command(default)]
-pub struct OpenFolder {
-    /// Filesystem path of the folder to open. Empty triggers the picker.
-    pub path: String,
-}
-
-/// Add a folder to the current workspace **without** closing existing
-/// folder Twins. VS Code's "Add Folder to Workspace…" semantics.
-///
-/// Use this when the user wants a multi-root workspace. The companion
-/// [`OpenFolder`] command *replaces* the open folder(s) instead.
-///
-/// Empty `path` triggers a folder picker. Resolved folders are
-/// classified the same way as [`OpenFolder`] (presence of `twin.toml`
-/// promotes to a Twin spawn).
-#[Command(default)]
-pub struct AddFolderToWorkspace {
-    /// Filesystem path of the folder to add. Empty triggers the picker.
-    pub path: String,
-}
-
-/// Strict variant of [`AddFolderToWorkspace`] — requires a `twin.toml`
-/// in the chosen folder. Used by recents reopen and HTTP callers.
-#[Command(default)]
-pub struct AddTwin {
-    /// Filesystem path of the Twin root (must contain `twin.toml`).
-    /// Empty triggers the picker.
-    pub path: String,
-}
 
 /// Rename an open document (a tab in the workspace).
 ///
@@ -321,38 +285,6 @@ fn is_scene_path(path: &str) -> bool {
         .any(|ext| lower.ends_with(ext))
 }
 
-#[on_command(OpenFolder)]
-fn on_open_folder(
-    trigger: On<OpenFolder>,
-    mut workspace: ResMut<WorkspaceResource>,
-    mut pending: ResMut<PendingTwinOpens>,
-    mut commands: Commands,
-) {
-    let path = trigger.event().path.clone();
-    if path.is_empty() {
-        warn!(
-            "[OpenFolder] fired with empty path — ignoring (use ShowOpenFolderPicker for dialog)"
-        );
-        return;
-    }
-    let folder = std::path::Path::new(&path);
-    let manifest = folder.join(lunco_twin::MANIFEST_FILENAME);
-    if manifest.is_file() {
-        info!(
-            "[OpenFolder] {} contains {} — routing to OpenTwin",
-            path,
-            lunco_twin::MANIFEST_FILENAME
-        );
-        commands.trigger(OpenTwin { path });
-        return;
-    }
-    // VS Code semantics: "Open Folder" *replaces* the current workspace
-    // folders. Callers that want to keep existing roots and add another
-    // fire `AddFolderToWorkspace` instead.
-    close_all_open_folders(&mut workspace, &mut commands, "OpenFolder");
-    spawn_twin_from_path(folder, &mut pending, "OpenFolder");
-}
-
 /// The ONE thing about opening a Twin that needs a window: choosing which one.
 ///
 /// The open pipeline itself lives in `lunco_workspace::open` — it walks a
@@ -373,63 +305,6 @@ fn on_open_twin_pick(trigger: On<OpenTwin>, mut commands: Commands) {
     });
 }
 
-#[on_command(AddFolderToWorkspace)]
-fn on_add_folder_to_workspace(
-    trigger: On<AddFolderToWorkspace>,
-    mut pending: ResMut<PendingTwinOpens>,
-    mut commands: Commands,
-) {
-    use crate::picker::{PickHandle, PickMode};
-    let path = trigger.event().path.clone();
-    if path.is_empty() {
-        commands.trigger(PickHandle {
-            mode: PickMode::OpenFolder,
-            on_resolved: PickFollowUp::AddFolderToWorkspace,
-        });
-        return;
-    }
-    let folder = std::path::Path::new(&path);
-    let manifest = folder.join(lunco_twin::MANIFEST_FILENAME);
-    if manifest.is_file() {
-        info!(
-            "[AddFolderToWorkspace] {} contains {} — routing to AddTwin",
-            path,
-            lunco_twin::MANIFEST_FILENAME
-        );
-        commands.trigger(AddTwin { path });
-        return;
-    }
-    spawn_twin_from_path(folder, &mut pending, "AddFolderToWorkspace");
-}
-
-#[on_command(AddTwin)]
-fn on_add_twin(
-    trigger: On<AddTwin>,
-    mut pending: ResMut<PendingTwinOpens>,
-    mut commands: Commands,
-) {
-    use crate::picker::{PickHandle, PickMode};
-    let path = trigger.event().path.clone();
-    if path.is_empty() {
-        commands.trigger(PickHandle {
-            mode: PickMode::OpenFolder,
-            on_resolved: PickFollowUp::AddTwin,
-        });
-        return;
-    }
-    let folder = std::path::Path::new(&path);
-    let manifest = folder.join(lunco_twin::MANIFEST_FILENAME);
-    if !manifest.is_file() {
-        warn!(
-            "[AddTwin] {} has no {} — refusing (use AddFolderToWorkspace for plain folders)",
-            path,
-            lunco_twin::MANIFEST_FILENAME
-        );
-        return;
-    }
-    spawn_twin_from_path(folder, &mut pending, "AddTwin");
-}
-
 /// Open the root that owns `scene` and select that scene.
 ///
 /// Opening a scene file *is* opening its root — USD references are relative, so
@@ -439,7 +314,16 @@ fn on_add_twin(
 ///
 /// This is why a scene anywhere on disk opens with no new command: `OpenFile`
 /// routes here and reuses the same mount as Open Folder / Open Twin.
-pub(crate) fn spawn_twin_from_scene(scene: &std::path::Path, pending: &mut PendingTwinOpens, log_tag: &str) {
+///
+/// Stays in this crate (rather than beside the rest of the pipeline in
+/// `lunco_workspace::open`) because resolving the root-relative path needs
+/// `lunco_assets`, which the workspace crate does not depend on. It reaches the
+/// shared scan through [`spawn_twin_scan`].
+pub(crate) fn spawn_twin_from_scene(
+    scene: &std::path::Path,
+    pending: &mut PendingTwinOpens,
+    log_tag: &str,
+) {
     let abs = std::fs::canonicalize(scene).unwrap_or_else(|_| scene.to_path_buf());
     let root = lunco_twin::root_for_file(&abs);
     let rel = abs
@@ -452,6 +336,35 @@ pub(crate) fn spawn_twin_from_scene(scene: &std::path::Path, pending: &mut Pendi
                 .into_owned()
         });
     spawn_twin_scan(&root, pending, log_tag, Some(rel));
+}
+
+/// Picker seam for [`AddFolderToWorkspace`] — see [`on_open_twin_pick`].
+#[on_command(AddFolderToWorkspace)]
+fn on_add_folder_to_workspace_pick(
+    trigger: On<AddFolderToWorkspace>,
+    mut commands: Commands,
+) {
+    use crate::picker::{PickHandle, PickMode};
+    if !trigger.event().path.is_empty() {
+        return; // handled by `lunco_workspace::open`
+    }
+    commands.trigger(PickHandle {
+        mode: PickMode::OpenFolder,
+        on_resolved: PickFollowUp::AddFolderToWorkspace,
+    });
+}
+
+/// Picker seam for [`AddTwin`] — see [`on_open_twin_pick`].
+#[on_command(AddTwin)]
+fn on_add_twin_pick(trigger: On<AddTwin>, mut commands: Commands) {
+    use crate::picker::{PickHandle, PickMode};
+    if !trigger.event().path.is_empty() {
+        return; // handled by `lunco_workspace::open`
+    }
+    commands.trigger(PickHandle {
+        mode: PickMode::OpenFolder,
+        on_resolved: PickFollowUp::AddTwin,
+    });
 }
 
 #[on_command(RenameOpenDocument)]
@@ -718,10 +631,9 @@ fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
 // loads `.mo` content lives in `lunco-modelica` and registers itself
 // there; the workbench owns only the typed struct.
 register_commands!(
-    on_add_folder_to_workspace,
-    on_add_twin,
+    on_add_folder_to_workspace_pick,
+    on_add_twin_pick,
     on_new_document,
-    on_open_folder,
     on_open_twin_pick,
     on_rename_open_document,
     on_rename_twin_entry,

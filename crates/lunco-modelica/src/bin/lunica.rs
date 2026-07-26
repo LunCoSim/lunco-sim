@@ -464,6 +464,6 @@ fn open_latest_twin_on_startup(
     if let Some(latest) = workspace.recents.twin_paths.first() {
         let path = latest.to_string_lossy().into_owned();
         bevy::log::info!("[lunica] Auto-opening latest twin from recents: {}", path);
-        commands.trigger(lunco_workbench::file_ops::OpenFolder { path });
+        commands.trigger(lunco_workspace::open::OpenFolder { path });
     }
 }

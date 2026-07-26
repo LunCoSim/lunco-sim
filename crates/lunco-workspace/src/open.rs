@@ -10,9 +10,14 @@
 //!
 //! WHAT STAYED BEHIND. Exactly one thing: choosing a folder when the caller
 //! names none. An empty `path` means "ask the human", which is the workbench's
-//! job and nobody else's — so the workbench keeps an observer for that case
-//! alone, and the picker fires this same command back with a resolved path. The
-//! open pipeline is not duplicated; there is one implementation and one seam.
+//! job and nobody else's — so the workbench keeps picker-only observers for that
+//! case alone, and the picker fires these same commands back with a resolved
+//! path. The open pipeline is not duplicated; there is one implementation and
+//! one seam.
+//!
+//! The same split covers [`OpenFolder`], [`AddFolderToWorkspace`] and
+//! [`AddTwin`]. `OpenFile` stays in the workbench: it resolves scene paths and
+//! opens documents, and reaches this module through [`spawn_twin_scan`].
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
@@ -24,7 +29,7 @@ use crate::session::{TwinAdded, TwinClosed, WorkspaceResource};
 /// Open a Twin folder — strict: the folder must contain a `twin.toml`.
 ///
 /// VS Code semantics: this **replaces** the currently open folders. Use
-/// `AddTwin` (workbench) to keep them.
+/// [`AddTwin`] to keep them.
 ///
 /// Empty `path` means "ask the user", which only a windowed host can honour —
 /// see the module docs.
@@ -63,10 +68,117 @@ fn on_open_twin(
     spawn_twin_from_path(folder, &mut pending, "OpenTwin");
 }
 
+
+/// Open a folder as the workspace root — a Twin if it has a `twin.toml`,
+/// otherwise a plain folder Twin (a first-class mode, no manifest required).
+///
+/// VS Code semantics: this **replaces** the current workspace folders. Use
+/// [`AddFolderToWorkspace`] to keep them.
+///
+/// Unlike [`OpenTwin`], an empty `path` is an ERROR rather than a picker
+/// request — a windowed host dispatches `ShowOpenFolderPicker` for that.
+#[Command(default)]
+pub struct OpenFolder {
+    /// Filesystem path of the folder to open.
+    pub path: String,
+}
+
+#[on_command(OpenFolder)]
+fn on_open_folder(
+    trigger: On<OpenFolder>,
+    mut workspace: ResMut<WorkspaceResource>,
+    mut pending: ResMut<PendingTwinOpens>,
+    mut commands: Commands,
+) {
+    let path = trigger.event().path.clone();
+    if path.is_empty() {
+        warn!("[OpenFolder] fired with empty path — ignoring (use ShowOpenFolderPicker for dialog)");
+        return;
+    }
+    let folder = std::path::Path::new(&path);
+    if folder.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+        info!(
+            "[OpenFolder] {} contains {} — routing to OpenTwin",
+            path,
+            lunco_twin::MANIFEST_FILENAME
+        );
+        commands.trigger(OpenTwin { path });
+        return;
+    }
+    // VS Code semantics: "Open Folder" *replaces* the current workspace
+    // folders. Callers that want to keep existing roots and add another fire
+    // `AddFolderToWorkspace` instead.
+    close_all_open_folders(&mut workspace, &mut commands, "OpenFolder");
+    spawn_twin_from_path(folder, &mut pending, "OpenFolder");
+}
+
+/// Add a folder to the workspace **without** closing the open ones —
+/// VS Code's "Add Folder to Workspace…". A folder with a `twin.toml` routes to
+/// [`AddTwin`].
+///
+/// Empty `path` asks a windowed host for a picker (see the module docs).
+#[Command(default)]
+pub struct AddFolderToWorkspace {
+    /// Filesystem path of the folder to add. Empty asks for a picker.
+    pub path: String,
+}
+
+#[on_command(AddFolderToWorkspace)]
+fn on_add_folder_to_workspace(
+    trigger: On<AddFolderToWorkspace>,
+    mut pending: ResMut<PendingTwinOpens>,
+    mut commands: Commands,
+) {
+    let path = trigger.event().path.clone();
+    if path.is_empty() {
+        return; // windowed hosts answer this with a picker
+    }
+    let folder = std::path::Path::new(&path);
+    if folder.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+        info!(
+            "[AddFolderToWorkspace] {} contains {} — routing to AddTwin",
+            path,
+            lunco_twin::MANIFEST_FILENAME
+        );
+        commands.trigger(AddTwin { path });
+        return;
+    }
+    spawn_twin_from_path(folder, &mut pending, "AddFolderToWorkspace");
+}
+
+/// Strict variant of [`AddFolderToWorkspace`] — requires a `twin.toml`.
+///
+/// Empty `path` asks a windowed host for a picker (see the module docs).
+#[Command(default)]
+pub struct AddTwin {
+    /// Filesystem path of the Twin root (must contain `twin.toml`).
+    /// Empty asks for a picker.
+    pub path: String,
+}
+
+#[on_command(AddTwin)]
+fn on_add_twin(trigger: On<AddTwin>, mut pending: ResMut<PendingTwinOpens>) {
+    let path = trigger.event().path.clone();
+    if path.is_empty() {
+        return; // windowed hosts answer this with a picker
+    }
+    let folder = std::path::Path::new(&path);
+    if !folder.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+        warn!(
+            "[AddTwin] {} has no {} — refusing (use AddFolderToWorkspace for plain folders)",
+            path,
+            lunco_twin::MANIFEST_FILENAME
+        );
+        return;
+    }
+    spawn_twin_from_path(folder, &mut pending, "AddTwin");
+}
+
 /// Close every open folder/Twin, firing [`TwinClosed`] for each.
 ///
-/// Shared by the replace-semantics openers (`OpenTwin` here, `OpenFolder` in the
-/// workbench), so "replacing the workspace" means the same thing in both.
+/// Shared by the replace-semantics openers ([`OpenTwin`], [`OpenFolder`], and
+/// the workbench's `OpenFile`-on-a-scene), so "replacing the workspace" means
+/// the same thing everywhere.
 pub fn close_all_open_folders(
     workspace: &mut WorkspaceResource,
     commands: &mut Commands,
@@ -201,4 +313,9 @@ pub(crate) fn build(app: &mut App) {
     register_all_commands(app);
 }
 
-register_commands!(on_open_twin);
+register_commands!(
+    on_open_twin,
+    on_open_folder,
+    on_add_folder_to_workspace,
+    on_add_twin,
+);

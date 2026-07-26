@@ -43,14 +43,14 @@
 ///
 /// `rover` is the rover prim's name; the network root is always its `Electrical`
 /// child, and the mangling replaces each `/` with `_x2f_`.
-fn port_name(rover, member, var) {
-    "SolarDomainNestedRef_x2f_" + rover + "_x2f_" + member + "." + var
+fn port_name(rover, member, field) {
+    "SolarDomainNestedRef_x2f_" + rover + "_x2f_" + member + "." + field
 }
 
 /// Whether an island is stepping — i.e. publishing the member port at all.
-fn island_live(elec, rover, member, var) {
+fn island_live(elec, rover, member, field) {
     if elec < 0 { return false; }
-    get(elec, port_name(rover, member, var)) != ()
+    get(elec, port_name(rover, member, field)) != ()
 }
 
 fn on_start(me) {

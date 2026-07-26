@@ -11,7 +11,7 @@ fn on_start(me) {
     // One source: the tutorial IS this script, and it sets up its own environment.
     // Load the env-only scene (rover, flag, avatar); the mission below find()s its
     // entities once they spawn. The scenario runs on an independent host entity, so
-    // it survives its own load_scene.
+    // it survives the scene mount the launcher performs before this runs.
     // The world this lesson teaches in is DECLARED in the curriculum layer
     // (a `payload` arc) and mounted by the launcher before this runs.
     hint("Welcome to LunCoSim! Let's drive a rover on the Moon.");
