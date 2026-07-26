@@ -16,10 +16,27 @@
 def Xform "CommsMast" (
     kind = "component"
     doc = "LunaNet comms mast — tower, dish and feed horn. The base's link home; put it on the highest ground you have for Earth line-of-sight."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsRigidBodyAPI"]
 )
 {
     uniform bool lunco:spawnable = true
+
+    # ── The mast is ONE static body, and that is what the antenna mounts to ──
+    #
+    # `rigidBodyEnabled = false` makes it `RigidBody::Static`: a tower does not
+    # move. The footpad, tower and head colliders below fold into this body's
+    # compound shape, which is what the USD physics spec says happens to a
+    # collider under a rigid body — they used to be three separate standalone
+    # static colliders that merely stood in the same place.
+    #
+    # Declaring it HERE, on the root, is load-bearing for the antenna. The dish
+    # yaws against the nearest ANCESTOR body of wherever it is parented, and
+    # `Antenna` is a child of this root — a sibling of the tower, not a
+    # descendant of it. Without a body here the mechanism has nothing to mount
+    # to. Reparenting the antenna under `Tower` would work equally well for
+    # physics and would silently break every scene that reaches it by
+    # `over "Antenna"` (`scenes/tests/comms_wall.usda` does exactly that).
+    bool physics:rigidBodyEnabled = false
 
     def Cube "FootPad" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
@@ -44,43 +61,41 @@ def Xform "CommsMast" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.58)]
         bool physics:collisionEnabled = true
+    }
 
-        # The antenna's feed endpoint is scene-local (no anchor/orbit): the site
-        # frame poses it, so it rides whatever ground the mast is placed on.
-        #
-        # It is also the DISH ITSELF: the catalogue antenna arrives by reference,
-        # so this mast draws the same lathed paraboloid as the lander and the
-        # ground stations instead of the flattened sphere that used to stand here.
-        # Its own `Mast` stalk is hidden — the tower below is the mast — and the
-        # head is scaled to a 4 m aperture, the size the sphere it replaces read as.
-        #
-        # It is a CHILD OF THE TOWER because the tower is the body it yaws
-        # against. The component's own `YawJoint` resolves its mount by ancestry,
-        # so parenting is the whole attachment and this file authors no joint. The
-        # translate is relative to the tower's own centre (y = 5.0).
-        def "Antenna" (
-            prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
-        )
+    # The antenna's feed endpoint is scene-local (no anchor/orbit): the site frame
+    # poses it, so it rides whatever ground the mast is placed on.
+    #
+    # It is also the DISH ITSELF: the catalogue antenna arrives by reference, so this
+    # mast draws the same lathed paraboloid as the lander and the ground stations
+    # instead of the flattened sphere that used to stand here. Its own `Mast` stalk is
+    # hidden — the tower below is the mast — and the head is scaled to a 4 m aperture,
+    # the size the sphere it replaces read as.
+    #
+    # No joint is authored here. The component owns both its hinges and mounts by
+    # ancestry, and its nearest ancestor body is this file's root (see above).
+    def "Antenna" (
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    )
+    {
+        double3 xformOp:translate = (0, 10.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Mast"
         {
-            double3 xformOp:translate = (0, 5.6, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-
-            over "Mast"
+            token visibility = "invisible"
+        }
+        over "YawHead"
+        {
+            double3 xformOp:translate = (0, 0.3, 0.4)
+            over "DishGimbal"
             {
-                token visibility = "invisible"
-            }
-            over "YawHead"
-            {
-                double3 xformOp:translate = (0, 0.3, 0.4)
-                over "DishGimbal"
+                over "DishHead"
                 {
-                    over "DishHead"
+                    double3 xformOp:scale = (3.4, 3.4, 3.4)
+                    over "LinkAperture"
                     {
-                        double3 xformOp:scale = (3.4, 3.4, 3.4)
-                        over "LinkAperture"
-                        {
-                            string lunco:link:class = "base"
-                        }
+                        string lunco:link:class = "base"
                     }
                 }
             }

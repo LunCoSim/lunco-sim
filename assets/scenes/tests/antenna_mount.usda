@@ -1,0 +1,146 @@
+#usda 1.0
+(
+    defaultPrim = "AntennaMountTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+    doc = "One antenna component mounted on four different hosts: every mount must attach and slew, and the one deliberately parked must not."
+)
+
+# ── Scene: Antenna Mount Test ────────────────────────────────────────────────
+#
+# `components/comms/antenna.usda` owns BOTH its hinges and mounts by ANCESTRY:
+# its `YawJoint` names its own root, a plain `Xform`, which resolves to the
+# nearest ancestor rigid body — whatever it happens to be parented under. The
+# host authors a `translate` and nothing else.
+#
+# That is a claim about EVERY host, so this scene mounts the same component on
+# every KIND of host the catalogue has, in one tick, and asserts each one
+# actually articulates:
+#
+#   Rover        dynamic body, antenna is a direct child        (skid_rover)
+#   Lander       dynamic body, antenna is a direct child        (descent_lander)
+#   Mast         STATIC body, antenna is a SIBLING of the tower (comms_mast)
+#   Bare         a body this scene declares itself, no catalogue host at all
+#
+# The mast is the interesting one and the reason this scene exists rather than a
+# unit test. Its tower is a sibling of the antenna, not its ancestor, so the mount
+# resolves only because the mast's ROOT carries `PhysicsRigidBodyAPI`. Nothing
+# else in the project would notice if that came off — the dish would simply stop
+# tracking Earth, exactly as it silently did for as long as the yaw joint was
+# authored per-host.
+#
+# `Bare` is the anti-catalogue case: proof the component needs NOTHING from a
+# host but a body to hang under, so a scene can mount one on a prim it invents.
+#
+# ── The control ──────────────────────────────────────────────────────────────
+#
+# `Parked` mounts the same component on the same kind of body and switches the
+# joint off with stock `physics:jointEnabled = false` — what a host does when it
+# wants the dish as scenery (`components/comms/ground_station.usda` parks its
+# dish this way, for stations with no lunar target to track).
+#
+# Without it, every assertion here passes for a scene where the engine attaches a
+# joint to anything that asks, including things that asked not to. The control is
+# what makes "it attached" mean "it attached BECAUSE it was authored to".
+def Xform "AntennaMountTest" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "The antenna component on four host kinds plus a parked control — the mount contract, end to end."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    # Same site as the other comms scenes, so the tracker has a real Earth
+    # direction to point at rather than a degenerate one.
+    double lunco:anchor:lat = -85.0
+    double lunco:anchor:lon = 0.0
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (-14.0, 0.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Lander" (
+        prepend references = @lunco://vessels/landers/descent_lander.usda@</DescentLander>
+    )
+    {
+        double3 xformOp:translate = (0, 0.5, -14.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Mast" (
+        prepend references = @lunco://structures/comms_mast.usda@</CommsMast>
+    )
+    {
+        double3 xformOp:translate = (14.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # A host this scene invents: a plain static box, nothing from the catalogue.
+    # If the antenna needs anything of a host beyond "be a body", this is where
+    # it shows.
+    def Cube "Bare" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 0.5, 14.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.4, 0.42, 0.45)]
+        bool physics:rigidBodyEnabled = false
+
+        def "Antenna" (
+            prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+        )
+        {
+            double3 xformOp:translate = (0, 0.5, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+
+    # ── THE CONTROL ── same component, same kind of host, joint switched off.
+    def Cube "Parked" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 0.5, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.45, 0.35, 0.35)]
+        bool physics:rigidBodyEnabled = false
+
+        def "Antenna" (
+            prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+        )
+        {
+            double3 xformOp:translate = (0, 0.5, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            # Stock UsdPhysics. Declared `bool`, NOT `uniform bool` — spelling it
+            # uniform is a variability mismatch and the override is ignored, which
+            # would quietly turn this control into a fifth positive case.
+            over "YawJoint"
+            {
+                bool physics:jointEnabled = false
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "antenna-mount"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/antenna_mount.rhai@
+        }
+    }
+}
