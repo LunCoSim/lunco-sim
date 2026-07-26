@@ -280,12 +280,71 @@ impl ApiQueryProvider for ReadPortsProvider {
     }
 }
 
+/// `GetReadiness` — backs `GET /api/ready`. Reports whether the world is holding
+/// on any not-yet-satisfied readiness wait (scene load, program compile,
+/// participant init) and enumerates what is still pending.
+///
+/// Truthful by construction: it reports exactly what the [`ReadinessRegistry`]
+/// tracks and nothing it doesn't. It does NOT invent asset/camera/port readiness
+/// signals the substrate can't vouch for — a false "ready" is the failure mode
+/// the interaction report calls out, so an untracked host reports
+/// `ready: false, readiness_tracked: false` rather than a hopeful `true`.
+///
+/// params: none · returns:
+/// `{ ready, world_hold, readiness_tracked, pending_count, pending: [{kind, subject, label, elapsed_s, action}] }`
+pub struct ReadinessProvider;
+impl ApiQueryProvider for ReadinessProvider {
+    fn name(&self) -> &'static str {
+        "GetReadiness"
+    }
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+        use lunco_readiness::{ReadinessRegistry, ReadinessState, Subject};
+        let registry = world.get_resource::<ReadinessRegistry>();
+        let world_hold = world
+            .get_resource::<ReadinessState>()
+            .is_some_and(|s| s.world_hold);
+        let pending: Vec<serde_json::Value> = registry
+            .map(|r| {
+                r.pending()
+                    .map(|item| {
+                        let subject = match item.subject {
+                            Subject::World => serde_json::json!("world"),
+                            // Entity bits are stable within the session; the
+                            // richer `api_id` isn't worth a second registry lookup
+                            // for a transient wait.
+                            Subject::Entity(e) => serde_json::json!({ "entity_bits": e.to_bits() }),
+                        };
+                        serde_json::json!({
+                            "kind": item.kind,
+                            "subject": subject,
+                            "label": item.label,
+                            "elapsed_s": item.elapsed_s,
+                            "action": item.action.name(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let ready = registry.is_some() && pending.is_empty() && !world_hold;
+        ApiResponse::ok(serde_json::json!({
+            "ready": ready,
+            "world_hold": world_hold,
+            "readiness_tracked": registry.is_some(),
+            "pending_count": pending.len(),
+            "pending": pending,
+        }))
+    }
+}
+
 pub fn register_builtin_spatial_queries(registry: &mut ApiQueryRegistry) {
     registry.register(NearestProvider);
     registry.register(EntitiesInRadiusProvider);
     // Not spatial, but built-in and transform/physics-agnostic (it only reads the
     // `PortRegistry`), so it registers here with the other always-available queries.
     registry.register(ReadPortsProvider);
+    // Readiness status — backs `GET /api/ready`. Always available; degrades to
+    // `readiness_tracked: false` when the readiness substrate isn't installed.
+    registry.register(ReadinessProvider);
 }
 
 // ─── ApiVisibility ─────────────────────────────────────────────────────

@@ -121,10 +121,12 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
             }
         };
         rt.block_on(async move {
-            // Three routes, all of them real (the docs used to list four more
-            // that were never registered — every curl example 404'd):
+            // Four routes, all of them real (the docs used to list ones that were
+            // never registered — every curl example 404'd):
             //   POST /api/commands        — the one command funnel
             //   GET  /api/health          — liveness; no world access
+            //   GET  /api/ready           — readiness; reads the world's
+            //                               `ReadinessRegistry` via `GetReadiness`
             //   GET  /api/commands/schema — the `DiscoverSchema` result, i.e.
             //                               the same derived list the MCP tool
             //                               surface is built from
@@ -138,6 +140,7 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
                     axum::routing::get(http::handle_schema),
                 )
                 .route("/api/health", axum::routing::get(http::handle_health))
+                .route("/api/ready", axum::routing::get(http::handle_ready))
                 .with_state(bridge);
 
             // TODO(multiplayer): deferred — singleplayer focus for now, RBAC

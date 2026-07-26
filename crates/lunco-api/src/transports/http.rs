@@ -97,6 +97,25 @@ pub async fn handle_health() -> impl IntoResponse {
         .into_response()
 }
 
+/// `GET /api/ready` — readiness. Unlike `/api/health` (liveness, no world
+/// access), this reaches into the world for the `ReadinessRegistry` state via the
+/// `GetReadiness` query provider: `ready` is true only when nothing is holding on
+/// a scene load / program compile / participant init. Answers `200` with the
+/// structured status either way — "not ready" is a valid state, not an error.
+pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse {
+    // A query provider — returns data inline, never `command_accepted` — so the
+    // sync-wait path is a no-op; pass `true` to skip it.
+    execute_api_request(
+        bridge,
+        ApiRequest::ExecuteCommand {
+            command: "GetReadiness".to_string(),
+            params: serde_json::json!({}),
+        },
+        true,
+    )
+    .await
+}
+
 /// `GET /api/commands/schema` — the derived command schema (`DiscoverSchema`).
 /// Same data the MCP tool list is built from; a GET so it is trivially
 /// browsable and scriptable.

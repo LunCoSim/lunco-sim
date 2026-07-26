@@ -245,18 +245,8 @@ fn drivetrain_raycast_has_no_joints() {
     );
 }
 
-/// Binary-asset shim: the Perseverance glTF payload surfaces as a
-/// `lunco:resolvedAsset` URI on its Visual prim.
-#[test]
-fn gltf_resolved_asset_synthesized() {
-    let cs = compose("scenes/sandbox/sandbox_scene.usda");
-    let view = cs.view();
-    let visual = SdfPath::new("/SandboxScene/Perseverance/Visual").unwrap();
-    let uri = view
-        .resolved_asset(&visual)
-        .expect("Perseverance/Visual missing lunco:resolvedAsset");
-    assert!(
-        uri.contains("perseverance.glb"),
-        "resolved URI should be the glb, got {uri}"
-    );
-}
+// (Removed `gltf_resolved_asset_synthesized`: it asserted on the sandbox scene's
+// Perseverance glTF prim, which has been removed from the default scene. The glTF
+// `lunco:resolvedAsset` synthesis it exercised is covered independently by
+// `lunco-usd-bevy` `compose::tests::glb_payload_in_referenced_wrapper_anchors_on_composed_prim`,
+// which uses a self-contained inline fixture.)

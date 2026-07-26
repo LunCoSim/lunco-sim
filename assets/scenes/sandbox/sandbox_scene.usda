@@ -533,59 +533,6 @@ def Xform "SandboxScene" (
         }
     }
 
-    # --- glTF rover (NASA Mars 2020 Perseverance) ---
-    #
-    # **USD placeholder + payload pattern**: an `Xform` root holds the
-    # spawn transform (translate/rotate); the placeholder Cube and the
-    # glTF-loading Xform are siblings underneath.
-    #
-    #   * Blender / usdview / Houdini  →  `lunco://` payload fails
-    #     to resolve, the placeholder Cube renders → tan box at the
-    #     correct location and bbox dimensions.
-    #   * LunCoSim                     →  composer detects `.glb`
-    #     extension, the `lunco://` resolver finds the binary — under
-    #     `assets/` if committed, else in the download cache — and the
-    #     glTF SceneRoot spawns under `Visual`. The
-    #     `hide_glb_placeholder_meshes` observer drops the Cube
-    #     `Mesh3d` once the Scene asset is loaded.
-    #
-    # Fresh clone (no `cargo run -p lunco-assets -- download` yet) →
-    # AssetServer fails, Cube stays as the visible fallback.
-    #
-    # Why the Xform-root split: `xformOp:scale` on a parent prim
-    # propagates to children through Bevy's Transform hierarchy.
-    # Putting the placeholder's bbox-scale on the Xform root would
-    # also stretch the glTF rover when it loaded. Keeping the scale
-    # on the leaf `Placeholder` Cube isolates it.
-    def Xform "Perseverance"
-    {
-        double3 xformOp:translate = (5.0, 0.5, 25.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        def Cube "Placeholder"
-        {
-            double size = 1.0
-            double3 xformOp:scale = (2.7, 1.85, 3.1)
-            uniform token[] xformOpOrder = ["xformOp:scale"]
-            color3f[] primvars:displayColor = [(0.6, 0.4, 0.2)] # Mars-tan
-            # `lunco:placeholder = true` keeps the Cube hidden in our
-            # pipeline — third-party USD tools (Blender, usdview) still
-            # render it because they ignore the custom attribute and
-            # the `lunco://` payload fails to resolve, so the
-            # local Cube definition is the only thing left to draw.
-            # Hiding by default in our renderer prevents a brief
-            # placeholder flash while the glTF Scene is async-loading.
-            bool lunco:placeholder = true
-        }
-
-        def Xform "Visual" (
-            prepend payload = @lunco://models/perseverance.glb@
-        )
-        {
-            string lunco:assetMode = "scene"
-        }
-    }
-
     # --- Balloons (cosim entities — geometry/physics + Modelica/Python wiring all in USD) ---
 
     def "RedBalloon" (

@@ -6856,6 +6856,7 @@ dependencies = [
  "base64",
  "bevy",
  "lunco-core",
+ "lunco-readiness",
  "serde",
  "serde_json",
  "tokio",

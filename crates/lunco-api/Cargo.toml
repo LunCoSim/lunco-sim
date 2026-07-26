@@ -40,6 +40,9 @@ winit = ["bevy/bevy_winit"]
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }
+# Substrate (bevy + lunco-hooks only — no cycle): read by the `GetReadiness`
+# provider that backs `GET /api/ready`.
+lunco-readiness = { path = "../lunco-readiness" }
 # SUBSTRATE ONLY — no bevy_render, no way to opt in. The screenshot's GPU half lives in
 # `lunco-workbench::screenshot`; see the note above `default`.
 bevy = { workspace = true }
