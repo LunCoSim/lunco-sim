@@ -12,7 +12,7 @@
 # translate to the HOST rover root through the reference arc.
 #
 # What it does: replaces the instant built-in skid mixing with a physical
-# command→torque law — `models/RoverDrivetrain.mo` integrates a first-order
+# command→torque law — `models/LunCo/Mobility/RoverDrivetrain.mo` integrates a first-order
 # motor lag per side on the solver clock. Native USD connections project the
 # outputs onto the rover ports; no tick script participates.
 #
@@ -34,7 +34,7 @@ def Xform "DriveLaw" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
-        uniform asset info:sourceAsset = @lunco://models/RoverDrivetrain.mo@
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverDrivetrain.mo@
         uniform bool lunco:program:realtimeSafe = true
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same FSW command ports the built-in kernels read.

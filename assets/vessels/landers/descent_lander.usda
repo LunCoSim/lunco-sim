@@ -490,16 +490,6 @@ def Xform "DescentLander" (
         }
     }
 
-    def PhysicsRevoluteJoint "HighGainYawJoint"
-    {
-        rel physics:body0 = </DescentLander>
-        rel physics:body1 = </DescentLander/HighGainDish/YawHead>
-        uniform token physics:axis = "Y"
-        point3f physics:localPos0 = (0, 2.33, 0)
-        point3f physics:localPos1 = (0, 0, 0)
-        float inputs:angle.connect = </DescentLander/HighGainDish/EarthTrackerController.outputs:az>
-    }
-
     # ── Engine bell ─────────────────────────────────────────────────────────
     # A real BELL, lathed as a rational NurbsPatch — not a cone.
     #

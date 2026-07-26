@@ -58,7 +58,7 @@ def Xform "SolarRoverTest" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
-        uniform asset info:sourceAsset = @lunco://models/SunOrbit.mo@
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunOrbit.mo@
     }
 
     # The Sun - connected to SunOrbit modelica output via USD wire

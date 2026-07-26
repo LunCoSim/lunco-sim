@@ -161,8 +161,9 @@ def Xform "RockerBogie" (
         bool physics:collisionEnabled = false
     }
 
-    # Shared Earth-tracking antenna. The component owns elevation; this chassis
-    # owns the single yaw hinge that attaches it, as for the solar tracker.
+    # Shared Earth-tracking antenna. The component owns BOTH its hinges and its
+    # mount: being a child of this chassis is the attachment, so there is no
+    # antenna joint to author here.
     #
     # ⚠ THIS IS THE ROVER'S ONLY ANTENNA. A scene that wants a link node on a
     # rocker-bogie authors an `over "Antenna"` here — it does NOT add a second
@@ -201,16 +202,6 @@ def Xform "RockerBogie" (
                 }
             }
         }
-    }
-
-    def PhysicsRevoluteJoint "AntennaYawJoint"
-    {
-        rel physics:body0 = </RockerBogie>
-        rel physics:body1 = </RockerBogie/Antenna/YawHead>
-        uniform token physics:axis = "Y"
-        point3f physics:localPos0 = (-0.35, 0.72, 0.6)
-        point3f physics:localPos1 = (0, 0, 0)
-        float inputs:angle.connect = </RockerBogie/Antenna/EarthTrackerController.outputs:az>
     }
 
     # Instrument platform / science mast

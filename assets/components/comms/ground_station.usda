@@ -50,9 +50,16 @@
 # joints they would otherwise be FREE dynamic bodies, and a dish in free fall is
 # a worse bug than a dish that does not track.
 #
-# To make a station track after all: drop the two `active = false` overrides, add
-# a `PhysicsRevoluteJoint` from `Pedestal` to `Antenna/YawHead` on the Y axis
-# (copy `structures/comms_mast.usda`), and give the tracker a lunar target.
+# The antenna component owns BOTH its hinges, so both are deactivated here — the
+# yaw joint alongside the elevation joint and the controller. Nothing about the
+# mount is authored in this file: the component resolves its own mount by
+# ancestry, which is why a station opts OUT explicitly rather than opting in by
+# writing a joint.
+#
+# To make a station track after all: drop the three `active = false` overrides,
+# make `Pedestal` a body it can yaw against (a `PhysicsCollisionAPI` is enough —
+# a standalone collider is static geometry) and parent `Antenna` under it, then
+# give the tracker a lunar target.
 def Xform "GroundStation" (
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
@@ -155,6 +162,12 @@ def Xform "GroundStation" (
         # Pointing is off — the mechanism is scenery. See the header for why, and
         # for what to change to turn it back on.
         over "EarthTrackerController" (
+            active = false
+        )
+        {
+        }
+
+        over "YawJoint" (
             active = false
         )
         {

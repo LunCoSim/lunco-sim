@@ -317,26 +317,15 @@ def Xform "SkidRover" (
     }
 
     # --- Comms ---------------------------------------------------------
-    # Shared Earth-tracking antenna. The component owns its moving elevation
-    # mechanism; this host contributes its one yaw hinge, exactly as the solar
-    # tracker does. A generic hinge is not a wheel and cannot classify this rover
-    # as an articulated drivetrain.
+    # Shared Earth-tracking antenna. The component owns both its hinges; being a
+    # child of this rover body is the mount, so nothing is authored here but the
+    # position.
     def Xform "Comms" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
         double3 xformOp:translate = (0, 0.15, -0.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-
-    def PhysicsRevoluteJoint "CommsYawJoint"
-    {
-        rel physics:body0 = </SkidRover>
-        rel physics:body1 = </SkidRover/Comms/YawHead>
-        uniform token physics:axis = "Y"
-        point3f physics:localPos0 = (0, 0.95, -0.5)
-        point3f physics:localPos1 = (0, 0, 0)
-        float inputs:angle.connect = </SkidRover/Comms/EarthTrackerController.outputs:az>
     }
 
     # --- Drivetrain variant set ---------------------------------------

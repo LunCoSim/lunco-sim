@@ -41,9 +41,27 @@
 #           the authored feed-arm control points, so a rim change wants the arm
 #           re-authored; scale does not.
 #
-#   MOUNT → Author ONE `PhysicsRevoluteJoint` from the host body to
-#           `Antenna/YawHead`. The antenna never names its host, so the same
-#           component mounts on a rover, lander, tower, or ground station.
+#   MOUNT → Reference this prim as a child of the body it rides on, and place it
+#           with `xformOp:translate`. That is the whole mount. The antenna owns
+#           BOTH its joints and names nothing outside itself, so the same
+#           component mounts on a rover, lander, tower, or ground station with no
+#           host-side physics at all.
+#
+#           `YawJoint` names `</CommsAntenna>` — this root, a plain Xform. A joint
+#           endpoint that is not itself a body resolves to the nearest ANCESTOR
+#           body, so the endpoint is whatever vehicle this is parented under.
+#           Parenting IS the attachment; the component cannot know, and never
+#           writes, the host's path.
+#
+#           To mount it inert (a parked dish, a static display), either
+#           `over "YawJoint" ( active = false )` to take the mechanism off the
+#           stage — what `ground_station.usda` does, since it parks the elevation
+#           hinge and the controller too — or
+#           `over "YawJoint" { bool physics:jointEnabled = false }` to keep the
+#           prim and leave it unsimulated. Both are stock USD and neither
+#           requires touching this file. (`jointEnabled` is declared `bool`, NOT
+#           `uniform bool`: spelling it uniform is a variability mismatch and the
+#           override is silently ignored.)
 #
 # Examples in the tree: `structures/comms_mast.usda` (s = 3.4, mast hidden — the
 # tower is the mast), `vessels/landers/descent_lander.usda` (s = 2.6, mast as the
@@ -51,11 +69,12 @@
 def Xform "CommsAntenna" (
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
-    doc = "Parabolic Earth-tracking antenna mechanism — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. Mount it by a host-owned yaw joint."
+    doc = "Parabolic Earth-tracking antenna mechanism — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. Owns both its hinges — mount it by referencing it as a child of the body it rides on."
 )
 {
-    # This is a mechanism overlay, not a free-standing object: its yaw joint must
-    # name the body it mounts to. `comms_mast.usda` is the spawnable tower host.
+    # A mechanism, not a free-standing object: it has no body of its own and
+    # yaws against whatever it is parented to. `comms_mast.usda` is the spawnable
+    # tower host.
     uniform bool lunco:spawnable = false
 
     def Cylinder "Mast"
@@ -77,8 +96,8 @@ def Xform "CommsAntenna" (
     # the host vehicle's articulation and lets its constraint impulses corrupt
     # the chassis solve.
     #
-    # The host supplies only the yaw attachment point; the antenna owns its
-    # elevation hinge.
+    # The antenna owns both hinges; the host supplies nothing but a parent and a
+    # translate.
     def Xform "YawHead" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
@@ -214,9 +233,37 @@ def Xform "CommsAntenna" (
         float inputs:earth_mount_z.connect = </CommsAntenna/EarthTrackerController.outputs:earth_mount_z>
     }
 
-    # `body0` is the yaw head and `body1` the elevation frame. The Modelica
-    # controller provides radians directly to the standard joint port; it never
-    # writes an Euler transform. The host-facing yaw joint follows the same rule.
+    # ── The two hinges. BOTH live here, and nowhere else. ────────────────────
+    #
+    # They used to be split: elevation here, azimuth authored by each host. Every
+    # host therefore wrote the same joint against a prim inside this component's
+    # namespace — `AntennaYawJoint`, `CommsYawJoint`, `HighGainYawJoint`, three
+    # spellings of one mechanism, each also hand-typing an anchor that had to
+    # agree with a mast height it did not own. One host simply never wrote it and
+    # its dish silently never tracked.
+    #
+    # The Modelica controller provides radians directly to the standard joint
+    # port; neither joint ever writes an Euler transform.
+
+    # AZIMUTH. `body0` is this component's ROOT — not a body — so it resolves to
+    # the nearest ancestor body: whatever vehicle this antenna is parented under.
+    # That is the entire mount interface, and it is why nothing here names a host.
+    #
+    # Both anchors are deliberately UNAUTHORED. They derive from the transform
+    # hierarchy, which is the only place that knows where the head sits: the host
+    # sets this component's `translate` and may override the mast's height, and a
+    # typed anchor would have to be kept in agreement with both by hand — which is
+    # precisely what the old per-host joints got wrong.
+    def PhysicsRevoluteJoint "YawJoint"
+    {
+        rel physics:body0 = </CommsAntenna>
+        rel physics:body1 = </CommsAntenna/YawHead>
+        uniform token physics:axis = "Y"
+        float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:az>
+    }
+
+    # ELEVATION. `body0` is the yaw head and `body1` the elevation frame — both
+    # local, both bodies, so no resolution is involved.
     def PhysicsRevoluteJoint "ElevationJoint"
     {
         rel physics:body0 = </CommsAntenna/YawHead>

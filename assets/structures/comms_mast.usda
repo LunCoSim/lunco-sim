@@ -21,54 +21,6 @@ def Xform "CommsMast" (
 {
     uniform bool lunco:spawnable = true
 
-    # The antenna's feed endpoint is scene-local (no anchor/orbit): the site frame
-    # poses it, so it rides whatever ground the mast is placed on.
-    #
-    # It is also the DISH ITSELF: the catalogue antenna arrives by reference, so this
-    # mast draws the same lathed paraboloid as the lander and the ground stations
-    # instead of the flattened sphere that used to stand here. Its own `Mast` stalk is
-    # hidden — the tower below is the mast — and the head is scaled to a 4 m aperture,
-    # the size the sphere it replaces read as.
-    def "Antenna" (
-        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
-    )
-    {
-        double3 xformOp:translate = (0, 10.6, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        over "Mast"
-        {
-            token visibility = "invisible"
-        }
-        over "YawHead"
-        {
-            double3 xformOp:translate = (0, 0.3, 0.4)
-            over "DishGimbal"
-            {
-                over "DishHead"
-                {
-                    double3 xformOp:scale = (3.4, 3.4, 3.4)
-                    over "LinkAperture"
-                    {
-                        string lunco:link:class = "base"
-                    }
-                }
-            }
-        }
-    }
-
-    # The tower's static collider is the physical anchor; the antenna component
-    # supplies the rotating body and elevation hinge.
-    def PhysicsRevoluteJoint "AntennaYawJoint"
-    {
-        rel physics:body0 = </CommsMast/Tower>
-        rel physics:body1 = </CommsMast/Antenna/YawHead>
-        uniform token physics:axis = "Y"
-        point3f physics:localPos0 = (0, 5.9, 0.4)
-        point3f physics:localPos1 = (0, 0, 0)
-        float inputs:angle.connect = </CommsMast/Antenna/EarthTrackerController.outputs:az>
-    }
-
     def Cube "FootPad" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
@@ -92,6 +44,47 @@ def Xform "CommsMast" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.58)]
         bool physics:collisionEnabled = true
+
+        # The antenna's feed endpoint is scene-local (no anchor/orbit): the site
+        # frame poses it, so it rides whatever ground the mast is placed on.
+        #
+        # It is also the DISH ITSELF: the catalogue antenna arrives by reference,
+        # so this mast draws the same lathed paraboloid as the lander and the
+        # ground stations instead of the flattened sphere that used to stand here.
+        # Its own `Mast` stalk is hidden — the tower below is the mast — and the
+        # head is scaled to a 4 m aperture, the size the sphere it replaces read as.
+        #
+        # It is a CHILD OF THE TOWER because the tower is the body it yaws
+        # against. The component's own `YawJoint` resolves its mount by ancestry,
+        # so parenting is the whole attachment and this file authors no joint. The
+        # translate is relative to the tower's own centre (y = 5.0).
+        def "Antenna" (
+            prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+        )
+        {
+            double3 xformOp:translate = (0, 5.6, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+
+            over "Mast"
+            {
+                token visibility = "invisible"
+            }
+            over "YawHead"
+            {
+                double3 xformOp:translate = (0, 0.3, 0.4)
+                over "DishGimbal"
+                {
+                    over "DishHead"
+                    {
+                        double3 xformOp:scale = (3.4, 3.4, 3.4)
+                        over "LinkAperture"
+                        {
+                            string lunco:link:class = "base"
+                        }
+                    }
+                }
+            }
+        }
     }
 
     def Cube "Head"

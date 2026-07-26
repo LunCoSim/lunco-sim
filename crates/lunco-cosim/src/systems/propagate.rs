@@ -319,6 +319,9 @@ pub fn propagate_connections(
     // Machine-readable mirror of the dangling-wire log lines below, rebuilt every
     // tick so `GET /api/diagnostics` polls the current fabric (see `CosimDiagnostics`).
     let mut broken: Vec<crate::diagnostics::BrokenConnection> = Vec::new();
+    // Targets that DID take their write this tick — the proof a wire is real, and
+    // the only thing that can retract a fault (see below).
+    let mut landed: Vec<(Entity, String)> = Vec::new();
     for (i, t) in compiled.targets.iter().enumerate() {
         if !peer_simulates(world, t.entity, is_client) {
             continue;
@@ -352,8 +355,12 @@ pub fn propagate_connections(
         // DOWNGRADED, not silenced. `sun_tracker` fails today with exactly this
         // shape — a model that never publishes `sun_azimuth` — and dropping the
         // line entirely would have taken the only evidence with it.
+        if written {
+            landed.push((t.entity, t.name.clone()));
+            continue;
+        }
         let has_port_surface = !registry.entity_ports(world, t.entity).is_empty();
-        if !written {
+        {
             // Diagnostics carry EVERY unresolved target this tick (a poller wants
             // the live set), whereas the log is deduped per name to stay readable.
             broken.push(crate::diagnostics::BrokenConnection {
@@ -383,7 +390,29 @@ pub fn propagate_connections(
 
     // Publish the tick's report. Overwrites last tick's (the set is "what is broken
     // now"), so a wire that resolves once its model loads clears itself.
-    world.resource_mut::<crate::diagnostics::CosimDiagnostics>().broken = broken;
+    //
+    // `faults` is the opposite: it REMEMBERS which wires have never carried a
+    // value. Propagation is change-driven, so a wire that dropped its write at
+    // load is not re-attempted on a quiet tick and the live set reads empty a
+    // second later — a gate sampling it at verdict time passes a run whose vehicle
+    // was never actuated.
+    //
+    // A wire that DOES land retracts its fault and is never reported again: the
+    // first write may well arrive late (a joint's `angle` port exists only once
+    // avian admits both bodies), and that window is load order, not an authoring
+    // error. Only a wire that never lands at all survives here.
+    let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+    for key in landed {
+        diag.faults.remove(&key);
+        diag.landed.insert(key);
+    }
+    for b in &broken {
+        let key = (b.entity, b.port.clone());
+        if b.has_port_surface && !diag.landed.contains(&key) {
+            diag.faults.entry(key).or_insert_with(|| b.clone());
+        }
+    }
+    diag.broken = broken;
 }
 
 #[cfg(test)]
@@ -505,6 +534,83 @@ mod wire_order_tests {
                 .broken
                 .is_empty(),
             "no wires ⇒ report clears"
+        );
+    }
+
+    /// A structural endpoint is load order, not an authoring error, so it must
+    /// never reach `faults` — the field a gate fails a run on.
+    #[test]
+    fn an_endpoint_with_no_port_surface_is_not_recorded_as_a_fault() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let src = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
+        world.spawn(SimConnection {
+            start_element: src,
+            start_connector: "out".into(),
+            end_element: sink,
+            end_connector: "not_yet_loaded".into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+
+        world.run_system_once(propagate_connections).unwrap();
+
+        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        assert_eq!(diag.broken.len(), 1, "still visible to a poller");
+        assert!(
+            diag.faults.is_empty(),
+            "a target exposing no ports at all is still loading, not misauthored"
+        );
+    }
+
+    /// A wire proven to have carried a value can never be re-reported as a fault.
+    ///
+    /// This is the rule that a permanent-fault-log version of this got wrong. A
+    /// joint's `angle` port exists only once avian has admitted both its bodies
+    /// into the island graph — a documented multi-frame window every jointed
+    /// mechanism passes through — so recording that first dropped write forever
+    /// failed `rocker_bogie` on the very antenna its own scenario measured
+    /// working. Landing is monotone: once wired, always wired.
+    #[test]
+    fn a_wire_that_has_landed_is_never_re_reported_as_a_fault() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let src = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
+        world.spawn(SimConnection {
+            start_element: src,
+            start_connector: "out".into(),
+            end_element: sink,
+            end_connector: "angle".into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+
+        // Stand in for "this wire wrote successfully on an earlier tick", which
+        // is all `landed` records. Reaching a real port backend would need a
+        // registered provider and would test that provider, not this rule.
+        world
+            .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+            .landed
+            .insert((sink, "angle".to_string()));
+
+        world.run_system_once(propagate_connections).unwrap();
+
+        assert!(
+            world
+                .resource::<crate::diagnostics::CosimDiagnostics>()
+                .faults
+                .is_empty(),
+            "a wire already proven to have landed must not be re-reported"
         );
     }
 }

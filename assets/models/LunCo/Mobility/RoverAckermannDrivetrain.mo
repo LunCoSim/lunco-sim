@@ -1,3 +1,4 @@
+within LunCo.Mobility;
 // Ackermann rover drivetrain: throttle in, common axle torque + steering out.
 //
 // The OPTIONAL Modelica drive law (`driveLaw = "modelica"` variant on

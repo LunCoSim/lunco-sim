@@ -12,7 +12,7 @@
 # translate to the HOST rover root through the reference arc.
 #
 # What it does: replaces the instant built-in Ackermann linear kernel with a
-# physical command→torque law — `models/RoverAckermannDrivetrain.mo` integrates
+# physical command→torque law — `models/LunCo/Mobility/RoverAckermannDrivetrain.mo` integrates
 # ONE first-order motor lag on the shared axle (Ackermann steers with the front
 # knuckles, not a torque differential). Native USD connections project its
 # normalized outputs onto `drive_left`/`drive_right`/`steering`.
@@ -40,7 +40,7 @@ def Xform "DriveLaw" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
-        uniform asset info:sourceAsset = @lunco://models/RoverAckermannDrivetrain.mo@
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverAckermannDrivetrain.mo@
         uniform bool lunco:program:realtimeSafe = true
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same FSW command ports the built-in kernels read.

@@ -1,3 +1,4 @@
+within LunCo.Mobility;
 // Per-side rover drivetrain: throttle + steer in, left/right axle torque out.
 //
 // The OPTIONAL Modelica drive law (`driveLaw = "modelica"` variant on

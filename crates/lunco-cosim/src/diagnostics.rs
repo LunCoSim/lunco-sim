@@ -47,8 +47,47 @@ pub struct BrokenConnection {
 /// The live set of unresolved connection targets, refreshed every propagation
 /// tick. Empty when every wire resolves. Read by the API's `GetBrokenConnections`
 /// query (registered in `lunco-usd-sim`, which sees both this crate and the API).
+///
+/// **Two questions, two fields.** A poller asks *"what is broken right now"* and
+/// wants [`broken`](Self::broken), which clears itself when a wire resolves. A
+/// gate asks *"did anything ever fail to land"* and cannot use that: propagation
+/// is CHANGE-DRIVEN, so a wire that dropped its write at load is not re-attempted
+/// on a quiet tick and the live set reads empty a second later. A scene test that
+/// sampled `broken` at verdict time therefore passed a run whose rover was never
+/// actuated — the failure had happened, been reported, and been overwritten.
+///
+/// [`faults`](Self::faults) is the record of what happened, so the answer does
+/// not depend on when it is asked.
 #[derive(Resource, Debug, Default)]
 pub struct CosimDiagnostics {
     /// Targets that dropped their write on the most recent tick.
     pub broken: Vec<BrokenConnection>,
+    /// Wires that have NEVER successfully written, keyed by `(entity, port)` so a
+    /// wire that drops on a thousand ticks is one entry.
+    ///
+    /// Only `has_port_surface` targets are recorded: an endpoint that exposes no
+    /// ports at all is a structural or still-loading target, and admitting those
+    /// would make this a load-order report instead of a fault log — the same
+    /// distinction the `warn!`/`debug!` split at the write site already draws.
+    ///
+    /// **A wire that later lands RETRACTS its entry**, and once landed it can
+    /// never be re-reported (see [`landed`](Self::landed)). Dropping a write
+    /// before the endpoint is ready is not an authoring error, it is load order:
+    /// a joint's `angle` port exists only once avian has admitted both its bodies
+    /// into the island graph, which is a documented multi-frame window every
+    /// jointed mechanism passes through. Recording those permanently made every
+    /// antenna in the project look broken while `rocker_bogie`'s own scenario
+    /// measured the joint working.
+    ///
+    /// What survives is the wire that never landed at all — the Modelica drive
+    /// law writing a port no rover declares, the antenna joint that never
+    /// attaches. That is the authoring error, and it is what a gate must fail on.
+    pub faults: std::collections::HashMap<(Entity, String), BrokenConnection>,
+    /// `(entity, port)` pairs proven wired by at least one successful write.
+    ///
+    /// Needed because propagation is CHANGE-DRIVEN and cannot be re-asked: a
+    /// quiet tick writes nothing, so "is this wire fine *now*" has no answer.
+    /// "Has this wire ever carried a value" does, and it only ever ratchets one
+    /// way, which is what makes the gate order-independent.
+    pub landed: std::collections::HashSet<(Entity, String)>,
 }

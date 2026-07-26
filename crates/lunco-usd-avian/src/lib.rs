@@ -756,6 +756,57 @@ fn has_rigid_body_ancestor(reader: &StageView<'_>, sdf_path: &SdfPath) -> bool {
     false
 }
 
+/// Does this prim BECOME a body in avian? Mirrors the two arms of
+/// [`process_usd_avian_prims`] that insert a `RigidBody`, and must keep mirroring
+/// them: `PhysicsRigidBodyAPI` (dynamic/kinematic/static per its own attributes),
+/// terrain (always static), or a collider with no rigid-body ancestor, which the
+/// USD physics spec makes standalone static geometry.
+///
+/// A collider that DOES have a rigid-body ancestor is not a body — it is folded
+/// into that ancestor's compound shape — so it is deliberately not one here.
+fn is_avian_body(reader: &StageView<'_>, path: &SdfPath) -> bool {
+    reader.has_api_schema(path, ptok::API_RIGID_BODY)
+        || reader.has_api_schema(path, "LunCoTerrainAPI")
+        || (reader.has_api_schema(path, ptok::API_COLLISION)
+            && !has_rigid_body_ancestor(reader, path))
+}
+
+/// The body a joint endpoint actually attaches to: `path` itself when it is a
+/// body, otherwise its NEAREST ANCESTOR that is one.
+///
+/// **Why an endpoint may name a non-body.** A mechanism that mounts on something
+/// — an antenna on a rover, a lander, a tower — has to name the thing it mounts
+/// to. If that must be the HOST's body prim, the component is naming a path it
+/// cannot know, so every host ends up reaching into the component's namespace and
+/// authoring the mount joint itself. That is exactly what happened: `AntennaYawJoint`
+/// was written three times, in three hosts, each targeting a prim inside a nested
+/// reference. With this rule the component names its OWN root, and parenting it
+/// under a vehicle is the mount.
+///
+/// The rule keys off "a named prim that is not a body". It never keys off an
+/// EMPTY rel — UsdPhysics already gives that the meaning "world", and quietly
+/// redefining a spec meaning is how `driveKernel = "external"` became a no-op
+/// nobody noticed. `None` when the path names nothing that is or sits under a
+/// body, which stays an unresolved joint and still warns.
+///
+/// Resolving here rather than at ECS-match time is deliberate: `read_joint_spec_typed`
+/// derives an unauthored anchor from the two body paths ([`derive_joint_anchor`]),
+/// and that derivation must run against the frame of the body the joint is really
+/// built on. Resolving later would leave the anchor expressed in the wrong frame.
+fn nearest_body_path(reader: &StageView<'_>, path: &SdfPath) -> Option<SdfPath> {
+    let mut cur = Some(path.clone());
+    while let Some(p) = cur {
+        if p.is_abs_root() {
+            return None;
+        }
+        if is_avian_body(reader, &p) {
+            return Some(p);
+        }
+        cur = p.parent();
+    }
+    None
+}
+
 /// Terrain prims whose collider is built from a loaded `Mesh3d` — a glTF DEM
 /// brought in via `lunco:assetMode = "mesh"` (e.g. the Shackleton ridge).
 ///
@@ -1315,6 +1366,19 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     use openusd::schemas::physics::{self, JointAxis, JointBase};
 
     let view = StageView::new(stage);
+    // `physics:jointEnabled` (schema default true) is the spec's own way to say a
+    // joint is not simulated. It matters now that COMPONENTS own their mount
+    // joints: a host that wants the mechanism inert — `ground_station.usda` parks
+    // its dish and disables both link bodies, because a station with no target to
+    // track is better still than swinging — needs a way to say so without editing
+    // the component. `over "YawJoint" { uniform bool physics:jointEnabled = false }`
+    // is that way, and it is stock UsdPhysics rather than anything invented here.
+    if !view
+        .scalar::<bool>(path, ptok::A_JOINT_ENABLED)
+        .unwrap_or(true)
+    {
+        return None;
+    }
     // **Units/axes convert here** (doc 41). `axis` names an axis of the STAGE's
     // frame, so on a Z-up stage an authored `"Z"` is *up* — canonical up is +Y.
     // Read raw it would hinge about the wrong axis while the meshes and colliders
@@ -1380,20 +1444,16 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         let conv = lunco_usd_bevy::stage_convention(reader);
         let to_dvec =
             move |a: [f32; 3]| conv.point_d(DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64));
-        let b0 = j
-            .body0_rel()
-            .targets()
-            .ok()?
-            .into_iter()
-            .next()?
-            .to_string();
-        let b1 = j
-            .body1_rel()
-            .targets()
-            .ok()?
-            .into_iter()
-            .next()?
-            .to_string();
+        // An endpoint that names a prim which is not itself a body resolves to
+        // the body that prim is rigidly part of — see [`nearest_body_path`].
+        // This is what lets a mounted mechanism name its own root instead of its
+        // host's chassis. An exact hit is the normal case and costs one lookup.
+        let resolve = |target: &openusd::sdf::Path| -> Option<String> {
+            let p = SdfPath::new(&target.to_string()).ok()?;
+            Some(nearest_body_path(reader, &p)?.to_string())
+        };
+        let b0 = resolve(&j.body0_rel().targets().ok()?.into_iter().next()?)?;
+        let b1 = resolve(&j.body1_rel().targets().ok()?.into_iter().next()?)?;
         let lp0_auth = j
             .local_pos0_attr()
             .get::<[f32; 3]>()
@@ -1879,7 +1939,9 @@ fn build_usd_physics_joints(
             continue;
         }
         let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
-        // Find body0 and body1 entities by matching USD paths and instance roots
+        // Find body0 and body1 entities by matching USD paths and instance roots.
+        // The paths were already resolved to real bodies at parse time (see
+        // [`nearest_body_path`]), so this is an exact match by construction.
         let body0_ent = q_bodies
             .iter()
             .find(|(e, path)| {
@@ -3147,6 +3209,66 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             j.local_pos0,
             DVec3::new(1.0, 2.0, 3.0),
             "authored lp0 wins over derivation"
+        );
+    }
+
+    /// A MOUNTED MECHANISM, in the shape `components/comms/antenna.usda` uses.
+    ///
+    /// The mechanism is a plain `Xform` (`Mount`) parented under a host body, and
+    /// its own joint names THAT XFORM as `body0` — it cannot name the host, which
+    /// it has never heard of. The endpoint must resolve to the nearest ancestor
+    /// body, and the derived anchor must land in THAT body's frame: the mechanism
+    /// sits at (0, 1, 0) on the host and its head 0.5 m above that, so lp0 is the
+    /// head's origin in host coordinates, (0, 1.5, 0) — not (0, 0.5, 0), which is
+    /// what resolving after the anchor derivation would produce.
+    const MOUNT_FIXTURE: &str = "#usda 1.0\n\
+def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
+    def Xform \"Mount\"\n    {\n\
+        double3 xformOp:translate = (0, 1, 0)\n\
+        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n\
+        def Xform \"Head\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n        {\n\
+            double3 xformOp:translate = (0, 0.5, 0)\n\
+            uniform token[] xformOpOrder = [\"xformOp:translate\"]\n        }\n\
+        def PhysicsRevoluteJoint \"YawJoint\"\n        {\n\
+            rel physics:body0 = </Host/Mount>\n\
+            rel physics:body1 = </Host/Mount/Head>\n\
+            uniform token physics:axis = \"Y\"\n        }\n    }\n}\n";
+
+    #[test]
+    fn joint_endpoint_that_is_not_a_body_resolves_to_its_nearest_ancestor_body() {
+        let stage = write_and_compose("mount.usda", MOUNT_FIXTURE);
+        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Host/Mount/YawJoint").unwrap())
+            .expect("revolute joint reads");
+        assert_eq!(
+            j.body0_path, "/Host",
+            "body0 named a non-body Xform, so it resolves to the host body it hangs under"
+        );
+        assert_eq!(j.body1_path, "/Host/Mount/Head", "body1 is already a body");
+        assert!(
+            close(j.local_pos0, DVec3::new(0.0, 1.5, 0.0)),
+            "the anchor must be derived in the RESOLVED body's frame: {:?}",
+            j.local_pos0
+        );
+    }
+
+    #[test]
+    fn joint_disabled_by_physics_joint_enabled_is_not_built() {
+        // The spec's own opt-out, and the only way a host can park a mechanism
+        // whose joints live inside a component it does not own.
+        let stage = write_and_compose(
+            "mount_off.usda",
+            // NB: the `\` line continuations in `MOUNT_FIXTURE` strip the source
+            // indentation, so match the attribute ALONE. A pattern written with
+            // leading spaces matches nothing, leaves the fixture unmodified, and
+            // the test then fails against a joint that was never disabled.
+            &MOUNT_FIXTURE.replace(
+                "physics:axis = \"Y\"\n",
+                "physics:axis = \"Y\"\nbool physics:jointEnabled = false\n",
+            ),
+        );
+        assert!(
+            read_joint_spec_typed(&stage, &SdfPath::new("/Host/Mount/YawJoint").unwrap()).is_none(),
+            "physics:jointEnabled = false must suppress the joint"
         );
     }
 

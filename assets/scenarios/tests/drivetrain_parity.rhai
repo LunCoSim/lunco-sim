@@ -219,8 +219,22 @@ fn on_tick(me) {
     // the same `world_pos` the odometer uses, so speed and distance can never
     // disagree about whether the rover moved.
     let d_t = dt();
-    let v_rc = if d_t > 0.0 { seg(this.p_rc, pos_rc) / d_t } else { 0.0 };
-    let v_ph = if d_t > 0.0 { seg(this.p_ph, pos_ph) / d_t } else { 0.0 };
+    let prev_rc = this.p_rc;
+    let prev_ph = this.p_ph;
+    let v_rc = if d_t > 0.0 { seg(prev_rc, pos_rc) / d_t } else { 0.0 };
+    let v_ph = if d_t > 0.0 { seg(prev_ph, pos_ph) / d_t } else { 0.0 };
+    // Advance the reference EVERY tick, unconditionally, and before any phase
+    // block can `return`.
+    //
+    // It used to be advanced only inside the `drive` block, so during `steer`
+    // this divided displacement-since-the-last-drive-tick by ONE tick's `dt`.
+    // The steer log read `v_ray=399.41  v_phy=452.74` against an authored
+    // ceiling of 4.8 m/s — a rover apparently doing 1400 km/h. Nothing was
+    // wrong with the physics; the readout was integrating. A failing test whose
+    // evidence lies is worse than no evidence: it invites a hunt for a runaway
+    // that never happened, and it hides the real gap sitting next to it.
+    this.p_rc = pos_rc;
+    this.p_ph = pos_ph;
 
     // ── Phase 1: settle ─────────────────────────────────────────────────────
     if this.phase == "settle" {
@@ -248,10 +262,11 @@ fn on_tick(me) {
         drive(this.rc, 1.0, 0.0);
         drive(this.ph, 1.0, 0.0);
 
-        this.d_rc += seg(this.p_rc, pos_rc);
-        this.d_ph += seg(this.p_ph, pos_ph);
-        this.p_rc = pos_rc;
-        this.p_ph = pos_ph;
+        // Distance is the STRAIGHT-RUN odometer, so it accumulates only here.
+        // The position REFERENCE is advanced unconditionally at the end of the
+        // tick — see the note there.
+        this.d_rc += seg(prev_rc, pos_rc);
+        this.d_ph += seg(prev_ph, pos_ph);
         if v_rc > this.vmax_rc { this.vmax_rc = v_rc; }
         if v_ph > this.vmax_ph { this.vmax_ph = v_ph; }
 

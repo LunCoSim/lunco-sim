@@ -13,7 +13,7 @@
 #
 # What it does: replaces the authored `DriveMix` scope (the instant six-channel
 # skid mix) with a physical command→torque law. The MODEL is the same
-# `models/RoverDrivetrain.mo` the skid law uses — deliberately: the law is
+# `models/LunCo/Mobility/RoverDrivetrain.mo` the skid law uses — deliberately: the law is
 # per-SIDE (one motor controller per bank), and fanning a side out to three
 # wheel ports is wiring, not physics. Native USD connections write the
 # rover's six per-wheel FSW ports (`drive_w0..w2` = left bank,
@@ -42,7 +42,7 @@ def Xform "DriveLaw" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
-        uniform asset info:sourceAsset = @lunco://models/RoverDrivetrain.mo@
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Mobility/RoverDrivetrain.mo@
         uniform bool lunco:program:realtimeSafe = true
         # `</DriveLaw.…>` = the host rover root after arc translation: the
         # model reads the same FSW command ports the built-in kernels read.

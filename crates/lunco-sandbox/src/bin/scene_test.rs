@@ -624,7 +624,57 @@ fn main() -> std::process::ExitCode {
         cli.jitter, cli.seed, cli.tick_hz
     );
 
+    // A PASS cannot stand while the engine is still reporting broken wires.
+    //
+    // `CosimDiagnostics.faults` is the substrate's OWN account of which
+    // connections failed to write, recorded when it happened rather than
+    // sampled now. `broken` is the wrong field for a gate: propagation is
+    // CHANGE-DRIVEN, so a wire that dropped its value at load is not retried
+    // on a quiet tick and the live set reads empty long before the verdict.
+    // Only genuine faults are recorded (`has_port_surface`), so a structural
+    // or still-loading endpoint never reaches here.
+    // Nothing is inferred and no log is scraped; the harness reads the
+    // diagnostic the propagation master already publishes.
+    //
+    // This exists because a dropped wire is invisible in every way that
+    // matters. `rocker_bogie` passes 9/9 while its antenna yaw joint never
+    // attaches, so `inputs:angle` lands nowhere and the dish never tracks
+    // Earth. The Modelica drive law drops `drive_left`/`drive_right` and the
+    // vessel is simply never actuated. Both emit one `warn!` into a log no
+    // test reads. A wire that does not land is an authoring error, and an
+    // authoring error must fail the gate that is supposed to be watching.
+    let broken: Vec<String> = app
+        .world()
+        .get_resource::<lunco_cosim::diagnostics::CosimDiagnostics>()
+        .map(|d| {
+            let mut v: Vec<String> = d
+                .faults
+                .values()
+                .map(|b| format!("`{}` on {:?}", b.port, b.entity))
+                .collect();
+            // A HashMap has no order and the gate's output is compared between runs.
+            v.sort();
+            v
+        })
+        .unwrap_or_default();
+
     match app.world().resource::<Verdict>().result.clone() {
+        Some((channel, true)) if !broken.is_empty() => {
+            println!(
+                "scene_test FAIL  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
+                cli.scene
+            );
+            println!(
+                "  the scenario reported PASS, but {} connection(s) never landed: {}",
+                broken.len(),
+                broken.join(", ")
+            );
+            println!(
+                "  a wire that targets a port the endpoint does not expose is an authoring \
+                 error — the subsystem it feeds is dead, whatever the scenario measured"
+            );
+            std::process::ExitCode::from(1)
+        }
         Some((channel, true)) => {
             println!(
                 "scene_test PASS  scene={}  channel={channel}  ticks={ticks}  sim={sim_seconds:.2}s  {cfg}",
