@@ -442,3 +442,74 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
         "an unanchored scene's authored sun must not be re-aimed by the ephemeris"
     );
 }
+
+/// **The celestial takeover must not add a SECOND sun to a scene that authored one.**
+///
+/// The takeover used to spawn its own marked "fallback" sun. `lunco-usd-bevy` retired
+/// such lights when an authored one appeared, but that retirement was edge-triggered on
+/// the authored light's `Add` — and the celestial hierarchy is enabled by the site
+/// anchor the scene load itself detects, so it runs AFTER that edge has passed. Its
+/// unconditional spawn therefore re-created the duplicate the retirement existed to
+/// prevent.
+///
+/// The spawn is now gone entirely: the engine sun is composed from
+/// `lunco://lighting/sun.usda` as the weakest opinion on the scene's own `Sun` prim,
+/// so there is one prim and nothing to race. This test pins that the takeover adds
+/// no light of its own — the regression it guards is someone reintroducing a
+/// "helpful" default sun here.
+///
+/// Two suns is not merely wasteful. `update_sun_light_system` steers only the
+/// BRIGHTEST `DirectionalLight`, so the 128 klx fallback took the aim and the
+/// scene's authored sun stayed frozen at its authored `xformOp:rotateXYZ` — the
+/// summer-space-school twin lighting and shadowing Hadley from a direction the
+/// ephemeris never sanctioned ("the DistantLight does not follow the sun").
+///
+/// Asserted on the light COUNT and on which entity survives, because "the authored
+/// one is aimed correctly" passes for the wrong reason as soon as the authored sun
+/// happens to be the brighter of the two.
+#[test]
+fn a_scene_authored_sun_suppresses_the_fallback_sun() {
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(StubEphemeris),
+    });
+
+    // The scene's own sun, present BEFORE the celestial takeover — the real
+    // ordering, where the site anchor that enables the hierarchy is detected
+    // during the same scene load that instantiated this light.
+    let authored = app
+        .world_mut()
+        .spawn((
+            DirectionalLight {
+                illuminance: 10_000.0, // dimmer than the 128 klx fallback, as the twin authors it
+                ..default()
+            },
+            Transform::default(),
+        ))
+        .id();
+
+    for _ in 0..8 {
+        app.update();
+    }
+
+    // CONTROL: the takeover really ran, so a missing fallback means "suppressed",
+    // not "the hierarchy never came up".
+    let mut q_grid = app
+        .world_mut()
+        .query_filtered::<(), With<lunco_celestial::SiteAlignGrid>>();
+    assert_eq!(
+        q_grid.iter(app.world()).count(),
+        1,
+        "the celestial hierarchy must have been built — otherwise this test proves nothing"
+    );
+
+    let mut q_lights = app.world_mut().query::<(Entity, &DirectionalLight)>();
+    let lights: Vec<Entity> = q_lights.iter(app.world()).map(|(e, _)| e).collect();
+    assert_eq!(
+        lights,
+        vec![authored],
+        "the scene authored its own sun, so the celestial takeover must not spawn a \
+         fallback beside it — two DirectionalLights make `update_sun_light_system`'s \
+         brightest-wins pick steer the wrong one"
+    );
+}

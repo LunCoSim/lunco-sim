@@ -74,10 +74,14 @@ def Xform "HdriTest" (
     # The sun still exists as a real DistantLight: an HDRI gives soft ambient +
     # reflections, but a 0.53°-disc sun in a 2k equirect is a handful of texels
     # and cannot cast a sharp shadow. The dome lights, the DistantLight shadows.
-    def DistantLight "Sun"
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
     {
+        # Deliberately BELOW the calibrated 128 klx: this scene exists to show an
+        # HDRI environment, and the key light is pulled down so the dome's
+        # contribution is visible rather than washed out.
         float inputs:intensity = 100000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-20.0, 160.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

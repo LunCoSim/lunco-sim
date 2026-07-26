@@ -84,10 +84,10 @@ def Xform "RoverComparison" (
         rel material:binding:physics = </RoverComparison/PhysicsMaterials/Regolith>
     }
 
-    def DistantLight "Sun"
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-35, 40, 0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

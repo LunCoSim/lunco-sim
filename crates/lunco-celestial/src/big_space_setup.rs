@@ -282,7 +282,6 @@ pub fn setup_big_space_hierarchy(
     q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
     q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
-    q_prior_fallback_lights: Query<Entity, With<lunco_core::FallbackSceneLight>>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
 ) {
     // A site-anchored DEM twin authors its own rocks and bakes rock features
@@ -472,23 +471,30 @@ pub fn setup_big_space_hierarchy(
         .set_parent_in_place(solar_grid)
         .id();
 
-    // ── Sun Light ──────────────────────────────────────────────────────────
-    // Tagged `FallbackSceneLight`: a scene that authors its own UsdLux
-    // light (e.g. the moonbase Twin's `DistantLight`) replaces this default
-    // sun — TWO simultaneous DirectionalLights double-light the scene and
-    // make "which sun?" ambiguous for shadow systems.
-    // Canonical lunar-sun shadows (cascade split + biases + 4096² atlas) from
-    // the single source of truth — see `lunco_render::LunarSunShadow`. This
-    // spawn used to omit the cascade config entirely, so it rendered with
-    // Bevy's single-cascade default (wrong terrain self-shadow, clipped
-    // low-sun streaks). Now it matches the sandbox + USD paths by construction.
-    // REPLACE any pre-existing fallback sun (the sandbox binary spawns one at
-    // startup, before the celestial hierarchy enables on site-anchor
-    // detection). Two simultaneous shadow-casting suns double-light the scene
-    // from conflicting directions.
-    for e in q_prior_fallback_lights.iter() {
-        commands.entity(e).despawn();
-    }
+    // ── Sun Light: NOT SPAWNED HERE ────────────────────────────────────────
+    //
+    // This takeover used to spawn a marked "fallback" sun and despawn any prior
+    // one, on the theory that whoever spawns last should win. That is an N×N
+    // handshake between light producers, and it only holds for arrival orders
+    // someone thought about. This one runs LAST — it is triggered by the site
+    // anchor the scene load itself detects — so it landed after the scene's own
+    // `DistantLight` and re-created the duplicate the despawn existed to
+    // prevent. Every site-anchored twin therefore ran with two shadow-casting
+    // suns, and since only the BRIGHTEST is steered from the ephemeris, the
+    // 128 klx fallback took the aim while the scene's authored sun sat frozen at
+    // its authored `xformOp:rotateXYZ` — lighting the site from a direction the
+    // sky never sanctioned.
+    //
+    // The sun is now scene content composed from `lunco://lighting/sun.usda`: the
+    // engine default is the WEAKEST OPINION on the scene's own `Sun` prim, not a
+    // second entity. Composition resolves it before anything reaches the ECS, so
+    // there is one prim, one light, and no ordering to get wrong. The whole
+    // fallback concept — marker, spawn, retirement — is gone rather than guarded;
+    // a scene that references no sun is unlit, which is an authoring fact the
+    // author can see, not an engine default quietly covering for it.
+    //
+    // Physical/render lighting STATE is still established here — that part was
+    // never the bug.
     let sun = lunco_render::LunarSunShadow::default();
     // Physical sun identity (illuminance / angular size) is environmental state.
     // A new celestial hierarchy starts with its physical lighting baseline.
@@ -509,22 +515,6 @@ pub fn setup_big_space_hierarchy(
     // visibility at a few percent, so shadowed terrain keeps its relief and
     // space stays black.
     commands.insert_resource(sun.shadow_map());
-    // Top-level entity, NOT a child of the Solar Grid: a `DirectionalLight`
-    // only needs orientation (`update_sun_light_system` steers it in WORLD
-    // axes), and parenting it into the solar hierarchy gives it a
-    // heliocentric-magnitude (~1e11 m) GlobalTransform translation. Bevy
-    // builds the cascade-shadow matrices from that transform in f32 — at that
-    // magnitude they collapse into garbage that swallows the whole ground on
-    // random frames (the site-anchored-scene lit/black strobe).
-    commands.spawn((
-        sun.directional_light(Color::WHITE, ls.illuminance_lux),
-        sun.cascade_config(),
-        lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
-        Transform::default(),
-        GlobalTransform::default(),
-        Name::new("Sun Light"),
-        lunco_core::FallbackSceneLight,
-    ));
 
     // ── EMB Grid (inertial anchor for Earth-Moon system) ───────────────────
     let emb_grid = commands

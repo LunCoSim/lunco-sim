@@ -126,16 +126,6 @@ pub struct ActuatorDrivenJoint;
 #[reflect(Component)]
 pub struct SoiMigrant;
 
-/// Tag for a binary's built-in default sun (or other default lights).
-/// The USD loader despawns every `FallbackSceneLight` the moment a scene
-/// authors its own light prim — scene lighting is the source of truth.
-/// Lives in `lunco-core` so every light-spawning crate (binaries,
-/// `lunco-celestial`'s solar-system bootstrap) can tag without depending
-/// on the USD stack.
-#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct FallbackSceneLight;
-
 /// Angular **diameter** of a sun (`DirectionalLight`) in degrees, from the
 /// UsdLux `inputs:angle` attribute (Sol from Earth/Moon ≈ 0.53°). Drives
 /// physically-scaled penumbra width in the horizon-shadow ray-march:
@@ -199,7 +189,7 @@ impl Default for HorizonShadowTerrain {
 ///
 /// Lives in `lunco-core` so the loader and the scripting runtime share the
 /// contract without depending on each other (same pattern as
-/// [`HorizonShadowTerrain`] / [`FallbackSceneLight`]).
+/// [`HorizonShadowTerrain`]).
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct EmbeddedScenarioSource(pub String);

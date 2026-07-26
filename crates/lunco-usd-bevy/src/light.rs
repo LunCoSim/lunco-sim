@@ -24,24 +24,41 @@
 //! equivalent, and approximating a disk with a rect would silently change the
 //! authored lighting rather than admit the gap.
 //!
-//! ## Fallback policy
+//! ## There is no fallback light, because the default sun is USD
 //!
-//! Binaries tag their built-in default sun with [`FallbackSceneLight`].
-//! The moment any scene-authored light instantiates, every fallback light
-//! is despawned and the global ambient is recomputed from authored
-//! `DomeLight`s only — **no dome ⇒ ambient 0**. An airless-Moon scene
-//! authors a single `DistantLight` and nothing else, and gets jet-black
-//! shadow cores for free; scenes that author no lights leave the binary's
-//! defaults untouched.
+//! Nothing spawns a default sun. The engine default is authored content —
+//! `lunco://lighting/sun.usda` — that every scene references, so the engine
+//! default and the scene's own opinions are two layers on ONE prim rather than
+//! two entities racing to despawn each other. Composition resolves them before
+//! anything reaches the ECS.
+//!
+//! That replaced a `FallbackSceneLight` marker plus a spawn-and-despawn
+//! handshake between the binary, `lunco-celestial` and this loader. The
+//! handshake was order-dependent and lost: the celestial takeover runs after
+//! the scene's own light, so it re-created the duplicate the despawn existed to
+//! prevent, and every site-anchored twin rendered with two shadow-casting suns.
+//! A scene that wants light references the sun; a scene that references nothing
+//! is unlit, and that is now a visible authoring fact rather than an engine
+//! default papering over it.
+//!
+//! [`on_usd_light_added`] still recomputes the global ambient from authored
+//! `DomeLight`s only (**no dome ⇒ ambient 0**), so an airless-Moon scene
+//! authoring a single `DistantLight` gets jet-black shadow cores for free.
 //!
 //! ## Shadow quality knobs
 //!
-//! Cascade policy (count, biases, 4096² map) is engine policy, but the two
-//! scene-dependent ranges are overridable per light with custom attributes:
-//! `lunco:shadow:maxDistance` (default 1500 m) and
-//! `lunco:shadow:firstCascadeFarBound` (default 40 m). A scene that wants
-//! crisp near-field shadows over a huge terrain authors a shorter
-//! `maxDistance` — texel density scales inversely with it.
+//! The sun's shadow range is standard `UsdLuxShadowAPI`:
+//! `inputs:shadow:distance` (non-positive ⇒ engine default, since UsdLux's
+//! -1 "no limit" has no meaning for a cascade split). Texel density scales
+//! inversely with it, so a scene wanting crisp near-field shadows over a huge
+//! terrain authors a shorter distance.
+//!
+//! `lunco:shadow:firstCascadeFarBound` (default 40 m) is the ONE renderer-specific
+//! knob left: cascaded shadow maps are a rasterizer technique UsdLux has no
+//! attribute for, so it takes a renderer namespace the way `ri:` / `karma:` /
+//! `arnold:` do. Cascade COUNT and the depth/normal biases are deliberately not
+//! authorable — they are engine policy, every scene that ever set a count set it
+//! to the default anyway, and the biases were never authored at all.
 
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
@@ -50,12 +67,6 @@ use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::dome;
 use crate::read::UsdRead;
-
-/// Tag for a binary's built-in default sun — defined in `lunco-core` (so
-/// non-USD crates can tag their lights too), re-exported here where the
-/// despawn policy lives. Despawned as soon as the loaded scene authors its
-/// own light prim.
-pub use lunco_core::FallbackSceneLight;
 
 /// Marker for a *dominant* scene light — a sun (`DistantLight`) or sky
 /// (`DomeLight`) — whose presence retires the binary's fallback sun/ambient.
@@ -242,6 +253,27 @@ fn read_light_range(reader: &crate::StageView<'_>, path: &SdfPath) -> f32 {
     }
 }
 
+/// The sun's shadow-casting range — standard `UsdLuxShadowAPI`, one spelling.
+///
+/// `inputs:shadow:distance` is the schema's own name for "how far this light casts
+/// shadows". This loader already spoke its sibling `inputs:shadow:enable` on the
+/// local-light path; the sun path had invented `lunco:shadow:maxDistance` for a
+/// quantity the standard already names. The invented name is gone — not
+/// deprecated, gone — so there is exactly one way to author this.
+///
+/// UsdLux defines the schema fallback as **-1 = no limit**. A cascade shadow map
+/// has no unlimited mode (the split has to end somewhere), so a non-positive
+/// authored value means "engine default" here — the same rule
+/// [`read_light_range`] applies to `lunco:light:range`, and for the same reason:
+/// an author who applies the API without overriding the attribute must land on
+/// the engine default, not on a light that shadows nothing.
+fn read_shadow_distance(reader: &crate::StageView<'_>, path: &SdfPath, default: f32) -> f32 {
+    match get_attribute_as_f32(reader, path, "inputs:shadow:distance") {
+        Some(d) if d > 0.0 => d,
+        _ => default,
+    }
+}
+
 /// If `prim_type` is a supported UsdLux light, attach the corresponding
 /// Bevy light components to `entity` and return `true`. Called from
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
@@ -275,13 +307,12 @@ pub(crate) fn instantiate_light_prim(
             // construction — no copy of the cascade split / bias / atlas values
             // can drift here.
             //
-            // `lunco:shadow:numCascades` is the near/far split inside ONE light:
+            // `firstCascadeFarBound` is the near/far split inside ONE light:
             // tight near cascades keep contact shadows crisp while the far
             // cascades carry mesh-accurate terrain self-shadow out to
-            // `maxDistance` (the heightfield march covers beyond). The bias
-            // defaults favour acne-free terrain over the last centimetres of
-            // contact tightness; `inputs:angle` is the sun's angular diameter
-            // driving the horizon-shadow penumbra.
+            // `inputs:shadow:distance` (the heightfield march covers beyond).
+            // `inputs:angle` is the sun's angular diameter driving the
+            // horizon-shadow penumbra.
             let d = LunarSunShadow::default();
             // Physical identity (illuminance + apparent size) is *authored* on
             // this prim: illuminance from `intensity`×2^`exposure`, angular size
@@ -294,29 +325,20 @@ pub(crate) fn instantiate_light_prim(
                 .real_f32(sdf_path, "inputs:angle")
                 .unwrap_or(DEFAULT_SUN_ANGULAR_DIAMETER_DEG);
             let sun = LunarSunShadow {
-                maximum_distance: reader
-                    .real_f32(sdf_path, "lunco:shadow:maxDistance")
-                    .unwrap_or(d.maximum_distance),
+                maximum_distance: read_shadow_distance(reader, sdf_path, d.maximum_distance),
                 first_cascade_far_bound: reader
                     .real_f32(sdf_path, "lunco:shadow:firstCascadeFarBound")
                     .unwrap_or(d.first_cascade_far_bound),
-                // TODO(review #3): clamp narrowed 1..=8 → 1..=4. If this is an
-                // intentional alignment with the canonical 4-cascade default,
-                // `warn!` when a scene authors >4 instead of silently clamping;
-                // if unintentional, restore 1..=8.
+                // Cascade COUNT and the depth/normal biases are ENGINE POLICY,
+                // not authored content. They were readable per-prim and it bought
+                // nothing: every scene that ever set a count set it to the
+                // canonical 4 (or to 5/6, which the loader silently clamped to 4),
+                // and the biases were never authored anywhere at all. Three
+                // namespaced attributes whose only effect was to let a file claim
+                // a value the engine ignored. WASM still halves the cascade count
+                // — a platform decision, made here rather than asked of authors.
                 #[cfg(target_arch = "wasm32")]
                 num_cascades: 2,
-                #[cfg(not(target_arch = "wasm32"))]
-                num_cascades: reader
-                    .real_f32(sdf_path, "lunco:shadow:numCascades")
-                    .map(|n| (n as usize).clamp(1, 4))
-                    .unwrap_or(d.num_cascades),
-                depth_bias: reader
-                    .real_f32(sdf_path, "lunco:shadow:depthBias")
-                    .unwrap_or(d.depth_bias),
-                normal_bias: reader
-                    .real_f32(sdf_path, "lunco:shadow:normalBias")
-                    .unwrap_or(d.normal_bias),
                 ..d
             };
 
@@ -600,17 +622,16 @@ pub(crate) fn instantiate_light_prim(
 /// the old name. If a second independent ambient contributor is ever introduced,
 /// this must become a composition of tracked contributions rather than an
 /// assignment — that is precisely what would reintroduce the bug above.
+/// Fallback-sun retirement used to live here too, and was deleted with the
+/// fallback itself — the default sun is composed USD now, so there is no second
+/// light to retire. What remains IS edge-shaped: the ambient total is a pure
+/// reduction over the domes that currently exist, so recomputing it when the
+/// dome set changes is exactly right.
 pub(crate) fn on_usd_light_added(
     _trigger: On<Add, UsdAuthoredLight>,
-    fallbacks: Query<Entity, With<FallbackSceneLight>>,
     domes: Query<&UsdDomeAmbient>,
     ambient: Option<ResMut<GlobalAmbientLight>>,
-    mut commands: Commands,
 ) {
-    for e in &fallbacks {
-        debug!("[usd-bevy] scene authored a light — despawning fallback light {e:?}");
-        commands.entity(e).try_despawn();
-    }
     if let Some(mut ambient) = ambient {
         ambient.brightness = domes.iter().map(|d| d.0).sum();
     }

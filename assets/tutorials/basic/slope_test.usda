@@ -88,15 +88,16 @@ def Xform "SlopeTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def DistantLight "Sun"
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-16.0, 60.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
-        custom float lunco:shadow:maxDistance = 600.0
+
+        # Standard `UsdLuxShadowAPI`.
+        float inputs:shadow:distance = 600.0
         custom float lunco:shadow:firstCascadeFarBound = 20.0
-        custom int lunco:shadow:numCascades = 4
     }
 
     def Camera "Avatar" (

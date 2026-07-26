@@ -32,6 +32,15 @@ def Xform "SandboxScene" (
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
+    # The scene's sun, composed from the shared engine light. Nothing spawns a
+    # default sun any more — the engine default IS this reference — so a scene
+    # that omits it renders unlit. See `lunco://lighting/sun.usda`.
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
+    {
+    }
+
     def PhysicsScene "PhysicsScene"
     {
         vector3f physics:gravityDirection = (0, -1, 0)

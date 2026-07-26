@@ -1,0 +1,73 @@
+#usda 1.0
+(
+    defaultPrim = "Sun"
+)
+
+# The engine's sun, as a COMPOSABLE ASSET rather than a spawned entity.
+#
+# ── Why this file exists ────────────────────────────────────────────────────
+# The default sun used to be spawned imperatively, in two different crates
+# (`lunco-sandbox` at startup and `lunco-celestial` on site-anchor takeover),
+# and each spawner despawned the others' lights at its own spawn instant. That
+# is an N×N handshake between producers, and it is only correct for the arrival
+# orders someone thought about: the celestial takeover is triggered by the site
+# anchor the scene load itself detects, so it landed AFTER the scene's own
+# `DistantLight` and re-created the very duplicate the despawn existed to
+# prevent. Every site-anchored twin ran with two shadow-casting suns, and since
+# only the BRIGHTEST is steered from the ephemeris, the scene's authored sun sat
+# frozen at its authored `xformOp:rotateXYZ` — lighting the site from a
+# direction the sky never sanctioned.
+#
+# USD already solves "several sources want to define one thing", and it solves
+# it with composition: a total, deterministic strength order (LIVRPS) resolved
+# by PCP before anything reaches the renderer. So the fallback sun is not an
+# entity anyone spawns — it is the WEAKEST OPINION on the same prim. A scene
+# references this file and refines it; a scene that refines nothing gets these
+# values. One prim, therefore one light, in both cases, regardless of what loads
+# first. There is nothing left to race.
+#
+# ── How to use it ───────────────────────────────────────────────────────────
+#     def DistantLight "Sun" (
+#         prepend references = @lunco://lighting/sun.usda@</Sun>
+#     )
+#     {
+#         # refinements only — omit anything you are happy to inherit
+#         float inputs:shadow:distance = 1400
+#         double3 xformOp:rotateXYZ = (-8.14, 95.72, 0.0)
+#     }
+#
+# ── What is authored here vs. computed at runtime ───────────────────────────
+# These are the light's PHYSICAL identity at 1 AU. In a scene with a site anchor
+# and a real ephemeris, `lunco-celestial` refines `xformOp:rotateXYZ` (true Sun
+# direction at the scene epoch) and `inputs:intensity` (1/r² for the site's
+# actual distance) in a STRONGER layer. Authored values therefore remain correct
+# as the "composed without a sky" answer — which is what a QGIS shadow pass or a
+# non-celestial composition reads — while the live scene shows the real sky.
+# Which opinion won is inspectable the ordinary USD way, through the property
+# stack, instead of being a runtime convention nobody can query.
+def DistantLight "Sun" (
+    prepend apiSchemas = ["ShadowAPI"]
+)
+{
+    # The calibrated lunar sun. Paired with EV100 16 on the camera
+    # (`lunco_render::LUNAR_SUN_EXPOSURE_EV100`) — a freshly-spawned camera and
+    # this light must agree on one number or the scene opens ~5 stops blown out.
+    float inputs:intensity = 128000
+
+    # Sol's angular diameter, driving physically-scaled penumbra width in the
+    # horizon-shadow march. Not a look knob: it is how big the sun IS.
+    float inputs:angle = 0.53
+
+    # Standard `UsdLuxShadowAPI`. This is the schema's own name for "how far
+    # this light casts shadows" — it replaces the `lunco:shadow:maxDistance`
+    # the engine had invented for a quantity UsdLux already names. UsdLux
+    # defines -1 as "no limit"; a cascade shadow map has no such mode (the
+    # split has to end somewhere), so the loader reads any non-positive value
+    # as "engine default".
+    float inputs:shadow:distance = 1500
+
+    # A sane pre-aim for the moment before the ephemeris steers, and the
+    # standing direction in scenes that mount no ephemeris at all.
+    double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
+    uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+}

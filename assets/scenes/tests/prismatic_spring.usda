@@ -49,11 +49,10 @@ def Xform "PrismaticSpringTest" (
     }
     uniform bool lunco:spawnable = false
 
-    def DistantLight "Sun"
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
     {
-        float inputs:intensity = 128000
-        double3 xformOp:rotateXYZ = (-30.0, 45.0, 0.0)
-        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
     def Xform "Avatar" (

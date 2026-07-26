@@ -1350,16 +1350,13 @@ pub fn persist_environment_light_to_runtime_layer(
         attrs.push(("inputs:color", "color3f", format!("({r}, {g}, {b})")));
     }
     if let Some(v) = cmd.shadow_max_distance {
-        attrs.push(("lunco:shadow:maxDistance", "float", v.to_string()));
+        // Standard `UsdLuxShadowAPI`, not an invented `lunco:` name.
+        attrs.push(("inputs:shadow:distance", "float", v.to_string()));
     }
     if let Some(v) = cmd.shadow_first_cascade_bound {
+        // The one renderer-specific knob: cascaded shadow maps are a rasterizer
+        // technique UsdLux has no attribute for.
         attrs.push(("lunco:shadow:firstCascadeFarBound", "float", v.to_string()));
-    }
-    if let Some(v) = cmd.shadow_depth_bias {
-        attrs.push(("lunco:shadow:depthBias", "float", v.to_string()));
-    }
-    if let Some(v) = cmd.shadow_normal_bias {
-        attrs.push(("lunco:shadow:normalBias", "float", v.to_string()));
     }
     // Direction changes when yaw or pitch is specified.
     let direction_changed = cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some();

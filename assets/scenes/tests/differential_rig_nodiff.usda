@@ -50,9 +50,10 @@ def Xform "DiffRigTest" (
         bool physics:collisionEnabled = true
         rel material:binding:physics = </DiffRigTest/PhysicsMaterials/Friction_1_0>
     }
-    def DistantLight "Sun"
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
     {
-        float inputs:intensity = 128000
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

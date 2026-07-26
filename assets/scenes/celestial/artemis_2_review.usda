@@ -22,6 +22,14 @@
 
 def Xform "Artemis2Review"
 {
+    # The scene's sun, composed from the shared engine light. Nothing spawns a
+    # default sun any more — the engine default IS this reference — so a scene
+    # that omits it renders unlit. See `lunco://lighting/sun.usda`.
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
+    {
+    }
 
     # NO `UsdPhysicsScene` HERE, deliberately. That prim states ONE gravity
     # vector for a whole scene, which is the wrong shape for an orbital scene:

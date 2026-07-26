@@ -108,10 +108,10 @@ def Xform "SunTrackerTest" (
     # The sun. DistantLight emits along local -Z; rotateXYZ aims it. Start
     # mid-sky so the azimuth is well-defined; move it live with
     # `SetEnvironmentLight` to watch the panel track.
-    def DistantLight "Sun"
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }

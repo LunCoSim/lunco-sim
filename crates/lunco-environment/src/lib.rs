@@ -310,12 +310,10 @@ pub struct SetEnvironmentLight {
     /// Total shadow-casting range, metres. Smaller ⇒ denser shadow-map
     /// texels ⇒ crisper shadows. `None` keeps current.
     pub shadow_max_distance: Option<f32>,
-    /// Shadow depth bias — raise to suppress self-shadow acne stripes
-    /// (cost: shadows detach slightly). `None` keeps current.
-    pub shadow_depth_bias: Option<f32>,
-    /// Shadow normal bias, in shadow-texel units — the main acne killer on
-    /// terrain under grazing light (Bevy default 1.8). `None` keeps current.
-    pub shadow_normal_bias: Option<f32>,
+    // NO depth/normal bias here. They were live-tunable but not persistable —
+    // the USD loader reads neither, so a tuned value silently reverted on
+    // reload. Both are engine policy in `lunco_render::LunarSunShadow`, and
+    // neither was ever authored in any scene.
     /// Global ambient brightness (cd/m²-scaled). `None` keeps current.
     pub ambient_brightness: Option<f32>,
     /// Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).
@@ -343,10 +341,11 @@ pub struct SetEnvironmentLight {
 /// meaningful Earth direction and phase before it contributes. This avoids an
 /// implicit, unshadowed fill source changing the appearance of Sun shadows.
 ///
-/// Its own marker (not `FallbackSceneLight`) keeps it **persistent** — the real
-/// Moon always has earthshine, so it survives the USD light-import that
-/// despawns fallback suns. The `SetEnvironmentLight` sun loop excludes it via
-/// `Without<Earthshine>` so a sun tweak never overwrites the fill.
+/// It carries its own marker because it is **persistent** scene-independent
+/// state — the real Moon always has earthshine. The `SetEnvironmentLight` sun
+/// loop excludes it via `Without<Earthshine>` so a sun tweak never overwrites
+/// the fill, and the sun-steering pick must likewise never mistake this ~12 lx
+/// fill for the ~128 klx key light.
 ///
 /// **Render-free**: a `DirectionalLight` is `bevy_light`, which does not depend
 /// on `bevy_render`. The marker (and the light it tags) exist headless too.
@@ -405,13 +404,6 @@ fn on_set_environment_light(
         if let Some(s) = cmd.shadow_maps_enabled {
             light.shadow_maps_enabled = s;
         }
-        if let Some(b) = cmd.shadow_depth_bias {
-            light.shadow_depth_bias = b;
-        }
-        if let Some(b) = cmd.shadow_normal_bias {
-            light.shadow_normal_bias = b;
-        }
-
         if cmd.shadow_first_cascade_bound.is_some() || cmd.shadow_max_distance.is_some() {
             if let Some(mut cfg) = cascades {
                 // Rebuild from the live config, overriding only the two

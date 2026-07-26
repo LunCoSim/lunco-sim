@@ -172,14 +172,16 @@ def Xform "CommsWallTest" (
     }
 
     # Low sun from the east, so the wall reads as a solid object on the ground.
-    def DistantLight "Sun"
+    def DistantLight "Sun" (
+        prepend references = @lunco://lighting/sun.usda@</Sun>
+    )
     {
-        float inputs:intensity = 128000
-        float inputs:angle = 0.53
         double3 xformOp:rotateXYZ = (-15.0, 90.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
-        custom float lunco:shadow:maxDistance = 300.0
-        custom int lunco:shadow:numCascades = 4
+
+        # Standard `UsdLuxShadowAPI`. A short range concentrates shadow texels
+        # on this scene's small footprint.
+        float inputs:shadow:distance = 300.0
     }
 
     # Side-on fly-cam: rover, wall and mast all in frame, so the geometry of the
