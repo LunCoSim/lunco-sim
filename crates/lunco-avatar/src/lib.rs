@@ -2815,6 +2815,45 @@ fn find_control_owner_from_hit(
 /// Idempotency lives in each observer (no-op if state already matches).
 /// `DragModeActive` blocks clicks while a transform gizmo is up so the user
 /// can drag a handle without flipping the camera.
+/// Whether a plain left-click may focus a **celestial body** (the analytic
+/// hit-sphere branch of [`avatar_raycast_possession`]).
+///
+/// **OFF, deliberately — TODO: fix the occlusion test and turn this back on.**
+///
+/// # The bug this switches off
+///
+/// Standing on the surface at a site twin (summer-space-school), every click that
+/// did not land on a rover flung the camera into lunar orbit. The body hit-sphere
+/// is the Moon itself — radius 1737 km, centred below your feet — so a
+/// surface camera's ray ALWAYS intersects it. The only thing that was ever meant to
+/// stop that is the occlusion test above: `min_t` starts at `click.hit.depth` so the
+/// ground shadows the sphere.
+///
+/// That test silently stopped working for DEM terrain. `min_t` falls back to
+/// `f32::INFINITY` when `click.hit.position` is `None`, and a streamed terrain tile
+/// can never produce a mesh hit: `stream_viz.rs` bakes LOD tile meshes with
+/// `RenderAssetUsages::RENDER_WORLD` only ("picking rides the oracle"), so
+/// `MeshPickingPlugin` has no CPU vertex data to hit-test. The ground is therefore
+/// invisible to picking, `min_t` stays infinite, and the Moon wins every click —
+/// exactly the leak the comment above documents for Earth, via a route it did not
+/// anticipate.
+///
+/// # The real fix (why this is a switch and not a patch)
+///
+/// Occlusion must not depend on a mesh pick. The analytic spheres should be tested
+/// against the terrain the same way every other placement tool already does — cast
+/// the click ray at the surface oracle (`lunco_terrain_surface::GridSurfaceQuery::raycast`,
+/// which `spawn.rs` and `checkpoint_click.rs` both use) and fold that distance into
+/// `min_t` before the sphere loop. That fixes Earth-through-the-ground too, and stops
+/// the behaviour depending on whether a terrain happens to be tile-streamed.
+///
+/// Doing it here means giving this observer a `GridSurfaceQuery`, which pulls
+/// `lunco-terrain-surface` into `lunco-avatar`'s dependency set — a call the crate
+/// boundary owner should make, not something to slip into a bug fix. Until then:
+/// off. Focus is still reachable through the `FocusTarget` command and the
+/// `focus_target` API/MCP verb; only the click gesture is suppressed.
+const CELESTIAL_CLICK_FOCUS: bool = false;
+
 pub fn avatar_raycast_possession(
     // Driven by bevy_picking: a global `On<Pointer<Click>>` observer. The
     // egui-vs-scene guard is `EguiFocus.wants_pointer` (via `scene_click_ray`) —
@@ -2943,18 +2982,22 @@ pub fn avatar_raycast_possession(
     }
 
     // Celestial bodies — focus only (orbit-distance scale).
+    //
+    // TEMPORARILY DISABLED. See `CELESTIAL_CLICK_FOCUS`.
     let mut body_hit: Option<Entity> = None;
-    for (entity, gtf, body) in q_bodies.iter() {
-        let oc = ray.origin - gtf.translation();
-        let b = oc.dot(ray.direction.as_vec3());
-        let c = oc.dot(oc) - (body.radius_m as f32).powi(2);
-        let discr = b * b - c;
-        if discr >= 0.0 {
-            let t = -b - discr.sqrt();
-            if t > 0.0 && t < min_t {
-                min_t = t;
-                spacecraft_hit = None;
-                body_hit = Some(entity);
+    if CELESTIAL_CLICK_FOCUS {
+        for (entity, gtf, body) in q_bodies.iter() {
+            let oc = ray.origin - gtf.translation();
+            let b = oc.dot(ray.direction.as_vec3());
+            let c = oc.dot(oc) - (body.radius_m as f32).powi(2);
+            let discr = b * b - c;
+            if discr >= 0.0 {
+                let t = -b - discr.sqrt();
+                if t > 0.0 && t < min_t {
+                    min_t = t;
+                    spacecraft_hit = None;
+                    body_hit = Some(entity);
+                }
             }
         }
     }

@@ -146,32 +146,47 @@ def Xform "Motor" (
     # ceiling (12 rad/s × 0.4 m). See `rocker_bogie.usda` `Motor_FL` for measured
     # terminal speeds.
     float lunco:motor:stallTorque = 1.5
-    # FLEET SPEED. 4800 rad/s through the 200:1 gives a 24 rad/s axle — 9.6 m/s of
-    # rim speed on the 0.4 m wheel. Doubled from the 2400 this carried (12 rad/s
-    # axle, 4.8 m/s rim), because the school's multi-kilometre traverses were
-    # dominated by transit time — the same usability argument the
-    # `motors/lunokhod.usda` note makes against authentic speeds.
+    # FLEET SPEED — A DELIBERATE PACING OVERRIDE, NOT A PLAUSIBLE MACHINE.
     #
-    # The RIM CEILING IS NOT THE ROAD SPEED, and the terminal figure at 24 rad/s
-    # has NOT been measured. `vessels/rovers/rocker_bogie.usda` `Motor_FL` holds the
-    # measured table (12 rad/s → 2.71 m/s, 19.5 rad/s → 5.72 m/s) and the standing
-    # rule: the response is non-linear, so measure it, never derive it.
+    # 24000 rad/s through the 200:1 gives a 120 rad/s axle — 48 m/s of rim speed on
+    # the 0.4 m wheel. Raised 10x from the 2400 this originally carried (12 rad/s
+    # axle, 4.8 m/s rim) because the school's multi-kilometre traverses were dominated
+    # by transit time — the usability argument `motors/lunokhod.usda` makes against
+    # authentic speeds, taken much further.
+    #
+    # ⚠ THIS WINDING IS NOT REAL HARDWARE. 24000 rad/s is ~229 000 rpm, past the
+    # 14 400 rad/s this file's own history rejected as "no real machine", and peak
+    # mechanical power (stall·noLoad/4) is ~9 kW against the 2000 W
+    # `inputs:rated_power` below. Nothing enforces that rating today — the powertrain
+    # reads only the two curve scalars (`usd-sim/powertrain.rs`) — so the number
+    # stands, but it is a fiction. Treat it as a pacing knob, not a spec.
+    #
+    # ⚠ THE RIM CEILING IS NOT THE ROAD SPEED, and nothing at 120 rad/s has been
+    # measured. `vessels/rovers/rocker_bogie.usda` `Motor_FL` holds the measured table
+    # (12 rad/s → 2.71 m/s, 19.5 rad/s → 5.72 m/s) and the standing rule: the response
+    # is non-linear and SUPERLINEAR, so measure it, never derive it. 5x the ceiling is
+    # therefore much more than 5x the road speed.
+    #
+    # ⚠ WATCH FOR TERRAIN TUNNELLING HERE. The physics collider ring streams 15.6 m
+    # tiles around each rover (`terrain-surface/collider_ring.rs`, COLLIDER_DEPTH 9).
+    # A vehicle actually reaching tens of m/s crosses a tile in a fraction of a second
+    # — the regime where a body outruns its ring and drops through the surface. If
+    # rovers start falling through terrain, suspect this number first.
+    #
+    # To revert: 2400.0 = original, 4800.0 = 2x. The six instance overrides in
+    # `vessels/rovers/rocker_bogie.usda` restate whatever is chosen here.
     #
     # RAISED AT CONSTANT TORQUE, deliberately. `stallTorque` is untouched, so axle
-    # torque stays 255 N·m and gradeability is exactly as before — this is a bigger
-    # motor, not a re-wind. `motors/fast.usda` is the power-conserving alternative
-    # (half the torque for twice the speed); it is a different trade and is left
-    # alone, as are the other winding classes, so that taxonomy stays coherent.
+    # torque and the whole `variants/rover_*.usda` difficulty ladder are exactly as
+    # before — this is a (fictionally) bigger motor, not a re-wind. `motors/fast.usda`
+    # is the power-conserving alternative (half the torque for twice the speed); it is
+    # a different trade and is left alone, as are the other winding classes, so that
+    # taxonomy stays coherent.
     #
-    # Two consequences worth knowing. Peak mechanical power doubles (~900 W → ~1.8 kW),
-    # so `inputs:rated_power` below is now the binding limit rather than the curve.
-    # And torque RISES at every non-zero speed (`τ = stall·(1 − ω/noLoad)`), so
-    # acceleration improves too — this is not only a higher ceiling.
-    #
-    # Reflected inertia is UNCHANGED: it is `J · ratio²` and the ratio did not move.
-    # To revert the fleet to the old speed, put this back to 2400.0 (and the six
-    # instance overrides in `vessels/rovers/rocker_bogie.usda`, which restate it).
-    float lunco:motor:noLoadSpeed = 4800.0
+    # Torque RISES at every non-zero speed (`τ = stall·(1 − ω/noLoad)`), so this
+    # improves acceleration too, not only the ceiling. Reflected inertia is UNCHANGED:
+    # `J · ratio²`, and the ratio did not move.
+    float lunco:motor:noLoadSpeed = 24000.0
     # Continuous rating, below stall: what it can hold all day without cooking. 0.9
     # against a 1.5 stall is 60%, the usual margin. Must always stay ≤ `stallTorque`,
     # or the motor is rated to sustain more than it can ever produce.
