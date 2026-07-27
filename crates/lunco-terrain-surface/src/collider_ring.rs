@@ -926,7 +926,7 @@ fn recover_assembly(
         // Reseat: the deepest post-rotation member ends RESCUE_CLEARANCE above
         // its local surface (only ever lifting — gravity handles settling down).
         let mut lift = 0.0_f64;
-        for (_t_gt, hf) in &terrains {
+        for (_t_gt, hf) in terrains {
             let half = hf.0.half_extent() as f64;
             // Grid-absolute frame: `post` positions ARE avian `Position`
             // (grid-absolute) and the oracle is sampled in that frame. The terrain
