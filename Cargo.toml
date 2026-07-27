@@ -114,7 +114,7 @@ resolver = "2"
 # through `::get()` would silently drop every inherited binding. This is what lets
 # `resolve_bound_material` (lunco-usd-bevy) delegate to openusd's spec
 # implementation instead of re-deriving USD's binding rules by hand.
-openusd = { path = "../openusd" }  # LOCAL DEV — restore the git line before committing
+openusd = { git = "https://github.com/LunCoSim/openusd", branch = "main" }
 
 # transform-gizmo: NO upstream ref has bevy 0.19 AND egui 0.35 together — the
 # bevy-0.19 port (mitchty/transform-gizmo@d95d069) is on egui 0.34, and the
