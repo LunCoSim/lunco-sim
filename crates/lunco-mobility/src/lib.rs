@@ -1099,9 +1099,14 @@ fn differential_coupling_system(
     // the two do not conflict.
     q_inertia: Query<&ComputedAngularInertia>,
     // The implicit solve needs the step it is solving over — see
-    // `differential_lambda`. Same `Res<Time>` the wheel systems read in
-    // `FixedUpdate`, so it is this tick's fixed step.
-    time: Res<Time>,
+    // `differential_lambda`, and the `stiffness < I/dt²` bound above. Asking for
+    // `Time<Fixed>` states that as a TYPE rather than trusting where the system
+    // happens to be registered: on the variable-dt render clock the penalty would
+    // ring or diverge the moment a frame ran long, so a future move into `Update`
+    // must fail to compile. Same clock the wheel systems read. Rollback replay is
+    // unaffected — `replay_one_tick` runs `RollbackReplay` with `Time<Fixed>`'s own
+    // delta.
+    time: Res<Time<Fixed>>,
 ) {
     let dt = time.delta_secs_f64();
     if dt <= 0.0 {

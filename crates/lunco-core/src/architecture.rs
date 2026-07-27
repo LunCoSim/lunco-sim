@@ -112,7 +112,22 @@ pub struct IntentAnalogState {
     pub side: f32,
     /// Normalized up/down value (-1.0 to 1.0).
     pub elevation: f32,
-    /// Screen-space or angular delta for rotation.
+    /// Pointer look delta in **screen space** — never radians.
+    ///
+    /// `+x` is pointer-right, `+y` is pointer-down (the raw device convention),
+    /// in device units scaled by the capture gain: the producer
+    /// (`lunco_avatar::capture_avatar_intent`) writes
+    /// `ActionState::axis_pair(Look) * 10.0`, i.e. mouse motion, not an angle.
+    ///
+    /// Consumers turn it into an angle themselves — the only one today is
+    /// `lunco_avatar::avatar_behavior_input_system`, which applies
+    /// `-look_delta * sensitivity * 0.01` to get yaw/pitch radians (note the sign
+    /// flip: screen-down must become pitch-up). Steering does **not** read this
+    /// field; vessel control flows through the port path
+    /// (`ControlBinding` → `SetPorts`), so there is exactly one interpretation.
+    ///
+    /// Anything new that consumes it owns the same screen-space → radians
+    /// conversion; do not write pre-converted angles here.
     pub look_delta: Vec2,
     /// Simulation time when this state was captured.
     pub timestamp: f64,

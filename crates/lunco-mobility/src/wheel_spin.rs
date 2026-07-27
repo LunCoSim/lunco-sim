@@ -74,7 +74,15 @@ pub(crate) fn update_wheel_spin(
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
     q_child_of: Query<&ChildOf>,
     q_inputs: Query<&InputPorts>,
-    time: Res<Time>,
+    // THE FIXED CLOCK BY TYPE, NOT BY PLACEMENT. This integrator is only correct
+    // on a fixed step (the implicit grip solve and the `τ = I·ω/dt` servo/brake
+    // targets are all written against a constant `dt`), so it asks for
+    // `Time<Fixed>` rather than the ambient generic clock. Registering it into
+    // `Update` — where the generic clock is the variable-dt render clock — now
+    // fails to compile instead of silently integrating with a frame-rate-dependent
+    // step. Rollback replay is unaffected: `replay_one_tick` runs
+    // `RollbackReplay` with `Time<Fixed>`'s own delta.
+    time: Res<Time<Fixed>>,
 ) {
     use std::f64::consts::TAU;
 
@@ -352,20 +360,34 @@ pub(crate) fn update_wheel_spin(
         } else {
             0.0
         };
+        // ── THE FRICTION CONE — SCALE THE FORCE, DON'T RE-DERIVE IT ────────────
+        //
+        // The two components above are the whole tire model: `f_long` from the slip
+        // RATIO solve, `f_lat` from the slip ANGLE. When their resultant exceeds the
+        // cone `μ·N`, the patch cannot deliver it, so the pair is scaled back onto
+        // the cone along its own direction. That is ONE force law with a magnitude
+        // bound.
+        //
+        // It used to re-derive a direction here from `(ω·r − v_long, −v_lat)` — a
+        // slip-VELOCITY vector. That reintroduced, in the saturated regime only, the
+        // exact lateral variable the slip-angle model was written to replace
+        // (`v_lat`, whose grip vanishes with speed), so the tire obeyed one lateral
+        // law below the cone and a different one above it. Two laws in one function
+        // is the bug, not the numbers: the authored `cornering_stiffness` set the
+        // direction the force pointed under grip and had no say in it under
+        // saturation.
+        //
+        // Nothing else handled a degeneracy: the ill-conditioned case that direction
+        // had to guard (`s_mag → 0`, a tire filling its cone while barely sliding —
+        // which is exactly the low-speed case) already fell through to this same
+        // scaling. The low-speed conditioning that matters lives where it belongs,
+        // in `V_REF` flooring the slip-angle denominator; `mag > 1e-9` keeps this
+        // divide safe (and covers `μ·N = 0`, where the cone collapses to nothing).
         let (f_long, f_lat) = {
             let mag = (f_long * f_long + f_lat * f_lat).sqrt();
             if mag > mu_n && mag > 1.0e-9 {
-                let s_long = w * r - v_long;
-                let s_lat = -v_lat;
-                let s_mag = (s_long * s_long + s_lat * s_lat).sqrt();
-                if s_mag > 1.0e-9 {
-                    (mu_n * s_long / s_mag, mu_n * s_lat / s_mag)
-                } else {
-                    // Nothing is sliding, so there is no slip direction to point
-                    // along: the cone was filled by the stick bound at rest.
-                    let s = mu_n / mag;
-                    (f_long * s, f_lat * s)
-                }
+                let s = mu_n / mag;
+                (f_long * s, f_lat * s)
             } else {
                 (f_long, f_lat)
             }
@@ -395,8 +417,28 @@ mod tests {
     use avian3d::prelude::*;
     use bevy::math::DVec3;
     use bevy::prelude::*;
-    use bevy::time::Time;
+    use bevy::time::{Time, TimePlugin, TimeUpdateStrategy};
     use std::time::Duration;
+
+    /// Put a test app on the SAME clock the product runs on: one fixed tick of
+    /// exactly `dt` per `app.update()`.
+    ///
+    /// `update_wheel_spin` reads `Time<Fixed>` and is registered in `FixedUpdate`,
+    /// so a test that pokes the generic clock and registers into `Update` exercises
+    /// a path the vehicle never takes. `TimeUpdateStrategy::ManualDuration` pins the
+    /// real-clock advance and `Time::<Fixed>` is matched to it, so the accumulator
+    /// expends exactly one step per update — deterministic, and `dt` is explicit at
+    /// every call site. This is how every other physics test in the workspace drives
+    /// the fixed schedule (see `lunco_cosim::joint` tests).
+    fn app_on_fixed_clock(dt: f64) -> App {
+        let mut app = App::new();
+        app.add_plugins(TimePlugin);
+        app.insert_resource(Time::<Fixed>::from_duration(Duration::from_secs_f64(dt)));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs_f64(dt),
+        ));
+        app
+    }
 
     /// Drive `update_wheel_spin` one tick on a single grounded raycast wheel and
     /// return the resulting axle `spin_velocity`.
@@ -410,10 +452,9 @@ mod tests {
     /// on `wheel_gtf_translation`; post-fix it reconstructs the hub from the chassis
     /// pose (`pos + rot·wheel_local`, pure avian), so spin is invariant to it.
     fn run_raycast_spin(ang: DVec3, wheel_local: Vec3, wheel_gtf_translation: Vec3) -> f64 {
-        let mut app = App::new();
-        let mut time = Time::<()>::default();
-        time.advance_by(Duration::from_secs_f64(0.1));
-        app.insert_resource(time);
+        // dt = 0.1 s, chosen so the expected gripped ω below is exact arithmetic
+        // (inertia/dt = 10). One fixed tick per `app.update()`.
+        let mut app = app_on_fixed_clock(0.1);
 
         // Entity with no `Port` → throttle reads 0 (free-rolling, so the spin
         // is driven purely by ground speed / the lever arm under test).
@@ -471,7 +512,7 @@ mod tests {
             ChildOf(chassis),
         ));
 
-        app.add_systems(Update, update_wheel_spin);
+        app.add_systems(FixedUpdate, update_wheel_spin);
         app.update();
 
         app.world_mut()
@@ -493,10 +534,8 @@ mod tests {
     #[test]
     fn a_free_spinning_wheel_stops_at_the_motors_no_load_speed() {
         let max_omega = 24.0;
-        let mut app = App::new();
-        let mut time = Time::<()>::default();
-        time.advance_by(Duration::from_secs_f64(1.0 / 60.0));
-        app.insert_resource(time);
+        // The product's step: 60 Hz fixed, one tick per update.
+        let mut app = app_on_fixed_clock(1.0 / 60.0);
 
         let port = app
             .world_mut()
@@ -557,7 +596,7 @@ mod tests {
             ))
             .id();
 
-        app.add_systems(Update, update_wheel_spin);
+        app.add_systems(FixedUpdate, update_wheel_spin);
         // Ten seconds of full throttle with nothing to grip.
         for _ in 0..600 {
             app.update();
