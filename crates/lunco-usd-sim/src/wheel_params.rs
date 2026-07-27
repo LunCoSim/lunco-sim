@@ -98,6 +98,11 @@ pub struct WheelParams {
     /// and `physxVehicleWheel:radius`. That is a derivation from authored
     /// physics, not an invented default — no number enters that nothing authored.
     pub moment_of_inertia: f64,
+    /// Rotor inertia reflected through the gearbox to the axle, kg·m²
+    /// (`J·ratio²`, from the motor behind this wheel). `0` for an undriven
+    /// wheel. At the shipped reductions it dominates the tire's ½·m·r² —
+    /// see [`crate::powertrain::PowertrainParams::reflected_inertia`].
+    pub reflected_inertia: f64,
     /// Engine peak drive torque, N·m (`physxVehicleEngine:peakTorque`).
     pub peak_torque: f64,
     /// No-load axle speed, rad/s (`physxVehicleEngine:maxRotationSpeed`). THE
@@ -181,6 +186,7 @@ impl WheelParams {
         // numerical guard, not a fallback value.
         let peak_torque = powertrain.map_or(0.0, |p| p.axle_peak_torque());
         let max_rotation_speed = powertrain.map_or(1e-3, |p| p.axle_no_load_speed().max(1e-3));
+        let reflected_inertia = powertrain.map_or(0.0, |p| p.reflected_inertia());
         let bearing_damping = req("physxVehicleWheel:dampingRate");
         let brake_torque_max = req("physxVehicleWheel:maxBrakeTorque");
         let slip_stiffness = req("physxVehicleTire:longitudinalStiffness");
@@ -223,6 +229,7 @@ impl WheelParams {
             radius,
             mass,
             moment_of_inertia,
+            reflected_inertia,
             peak_torque,
             max_rotation_speed,
             bearing_damping,
@@ -262,6 +269,7 @@ impl WheelParams {
         wheel.wheel_radius = self.radius;
         wheel.mass = self.mass;
         wheel.moment_of_inertia = self.moment_of_inertia;
+        wheel.reflected_inertia = self.reflected_inertia;
         wheel.drive_torque_max = self.peak_torque;
         wheel.max_rotation_speed = self.max_rotation_speed;
         wheel.bearing_damping = self.bearing_damping;
@@ -323,20 +331,22 @@ impl WheelParams {
 
     /// Axle moment of inertia, kg·m² — authored `physxVehicleWheel:moi` when it
     /// is stated, otherwise the solid-disk derivation `½·m·r²` from the authored
-    /// mass and radius.
+    /// mass and radius — plus the drivetrain's reflected rotor inertia.
     ///
     /// The SAME derivation `WheelRaycast::axle_inertia` applies on the raycast
     /// side (it cannot be shared as code — `lunco-mobility` does not depend on
     /// this crate — so it is shared as a rule, and both are fed by this reader).
-    /// The physical wheel's real inertia comes from its cylinder collider at
-    /// `wheel_density()`, which is ½·m·r² about the axle by construction, so this
-    /// is that same number and not a parallel one.
+    /// The physical wheel's tire term comes from its cylinder collider at
+    /// `wheel_density()`, which is ½·m·r² about the axle by construction; the
+    /// reflected term is stamped on top as an explicit `AngularInertia`
+    /// override at spawn, so both realizations integrate the same total.
     pub fn axle_inertia(&self) -> f64 {
-        if self.moment_of_inertia > 0.0 {
+        let tire = if self.moment_of_inertia > 0.0 {
             self.moment_of_inertia
         } else {
             0.5 * self.mass * self.radius * self.radius
-        }
+        };
+        tire + self.reflected_inertia
     }
 
     /// Collider density realising `physics:mass` on the physical wheel's

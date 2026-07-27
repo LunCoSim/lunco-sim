@@ -214,32 +214,22 @@ pub fn parse_attribute_value(type_name: &str, literal: &str) -> Result<Value> {
         .ok_or_else(|| anyhow!("could not parse `{type_name} = {literal}` into a USD value"))
 }
 
-/// Best-effort inverse of [`parse_attribute_value`]: format `value` (of USD type
+/// Inverse of [`parse_attribute_value`]: format `value` (of USD type
 /// `type_name`) back into the USDA literal that `parse_attribute_value(type_name,
-/// <literal>)` would re-read to the same value. Round-trips through the USDA
-/// writer ([`data_to_usda`]) so every value type formats exactly as the parser
-/// expects — no hand-maintained per-type formatter to drift.
+/// <literal>)` would re-read to the same value. Delegates to the fork's own
+/// writer-side formatter ([`openusd::usda::format_value_literal`]) so every
+/// value type — including arrays and matrices, which it emits single-line —
+/// formats exactly as the parser expects; no hand-maintained per-type formatter
+/// to drift.
 ///
-/// Returns `None` when the literal can't be cleanly recovered — most notably a
-/// value the writer emits across multiple lines (large arrays, matrices). Callers
-/// use this for *typed* op inverses (so undo replays incrementally) and fall back
-/// to a whole-layer snapshot inverse on `None`, which is always correct; so a
-/// miss here only costs a coarser undo, never correctness.
+/// Returns `None` only for values with no USDA literal form (`Value::None`,
+/// `Value::Value`). Callers use this for *typed* op inverses (so undo replays
+/// incrementally) and fall back to a whole-layer snapshot inverse on `None`,
+/// which is always correct; so a miss here only costs a coarser undo, never
+/// correctness.
 pub fn value_to_literal(type_name: &str, value: Value) -> Option<String> {
-    let empty = usda_to_data("#usda 1.0\n").ok()?;
-    let stage = open_doc_stage(&empty).ok()?;
-    stage.define_prim("/_v").ok()?;
-    stage
-        .create_attribute("/_v._a", type_name)
-        .ok()?
-        .set(value)
-        .ok()?;
-    let data = extract_root_layer_data(&stage).ok()?;
-    let text = data_to_usda(&data).ok()?;
-    // Extract the right-hand side of the single `<type> _a = <literal>` line. A
-    // value the writer wraps across lines has no ` = <rhs>` on one line → `None`.
-    let rhs = text.lines().find_map(|l| l.split_once(" _a = "))?.1.trim();
-    (!rhs.is_empty()).then(|| rhs.to_string())
+    let _ = type_name; // typing is carried by the value itself
+    openusd::usda::format_value_literal(&value).ok()
 }
 
 /// Overlay the `runtime` layer's opinions onto `base` as an **sdf layer-stack

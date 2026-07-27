@@ -3394,7 +3394,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.118",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -9142,7 +9142,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 [[package]]
 name = "openusd"
 version = "0.5.0"
-source = "git+https://github.com/LunCoSim/openusd?branch=main#778e553488d7d732f9827642f543bb1a331a98d5"
+source = "git+https://github.com/LunCoSim/openusd?branch=main#e388c0edb1f350d8c02e1fa37294e680dda5b2dd"
 dependencies = [
  "anyhow",
  "bitflags 2.13.0",
