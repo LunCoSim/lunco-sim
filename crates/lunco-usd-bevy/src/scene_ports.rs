@@ -18,7 +18,7 @@
 //! ```
 //!
 //! **This module adds no resolver and no per-frame system**, exactly like
-//! [`shader_ports`](crate::shader_ports): `rewire_usd_connections` already turns
+//! `lunco-usd-sim`'s `shader_ports`: `rewire_usd_connections` already turns
 //! any `inputs:foo.connect` into a `SimConnection` with no check on what kind of
 //! thing the target is, and `propagate_connections` already routes every write
 //! through [`PortRegistry::write_port`]. Making a scene property drivable is one
@@ -248,7 +248,15 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
 /// (`translation_x`) rather than bare, so there is no simulation port on any prim
 /// for this to shadow. Widening a name here — accepting `intensity`, say — would
 /// break that guarantee, because `inputs:intensity` is also stock UsdLux.
-pub(crate) fn build(app: &mut App) {
+pub struct ScenePortsPlugin;
+
+impl Plugin for ScenePortsPlugin {
+    fn build(&self, app: &mut App) {
+        build(app);
+    }
+}
+
+pub fn build(app: &mut App) {
     app.init_resource::<PortRegistry>()
         .world_mut()
         .resource_mut::<PortRegistry>()

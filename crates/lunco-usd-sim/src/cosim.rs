@@ -1032,6 +1032,57 @@ pub struct WiringDirty(pub bool);
 /// A connection whose source prim is not yet spawned is skipped (its later spawn
 /// re-runs this); a malformed source path is logged and skipped — restoring the
 /// diagnostic the deleted `process_usd_cosim_wire_read` emitted.
+/// `inputs:` ports whose connection is a STRUCTURAL binding — read once at PARSE to
+/// discover topology — rather than a live scalar wire.
+///
+/// Each row is `(port, api_schema)`: the port name, and the applied schema that makes
+/// the prim the kind of thing whose parse-time reader consumes it. Both halves matter —
+/// `torque` is a perfectly ordinary live port on a motor, and only structural on a
+/// gearbox.
+///
+/// **Why this table exists at all.** A USD connection into a structural binding is real
+/// and correct USD; what it is *not* is a value the runtime propagates. Nothing ever
+/// registers a backend for these ports, so materialising them as `SimConnection`s leaves
+/// targets no backend claims. Propagation then reports each one as a genuine dangling
+/// wire — genuine because these prims *do* expose other ports, so `has_port_surface` is
+/// true, which is precisely the discriminator the diagnostic uses to separate "typo'd"
+/// from "still loading". The result is a permanent, self-confirming false fault on
+/// hardware that works.
+///
+/// That failure mode has now cost two separate investigations: it produced the Apollo-15
+/// report's critical misdiagnosis (`torque` read as "the rover's drive authority is
+/// dropped") and, once the never-landed gate started reading faults as a test verdict, it
+/// failed four scenes — `autopilot_hold`, `six_independent_parity`, `six_wheel` and
+/// `lint_selftest` — whose rovers measurably drive.
+///
+/// **The rule for adding a row:** the port must have a named parse-time reader, and that
+/// reader must be cited here. If no code reads it at parse and no backend claims it at
+/// runtime, the wire is dangling for real and belongs in the diagnostic, not in this table.
+const STRUCTURAL_INPUT_BINDINGS: &[(&str, &str)] = &[
+    // `Gearbox.inputs:torque ← Motor.outputs:torque`. Read by
+    // `powertrain::find_for_wheel`, which folds `stallTorque × ratio × efficiency`
+    // into a static `WheelParams`. Live axle torque is written every tick by
+    // `MotorActuator`, never through this port.
+    ("torque", "LunCoGearboxAPI"),
+    // `Wheel.inputs:drive` / `inputs:steer`. Read by `connected_port` in
+    // `crate::lib`, which resolves the connection to the FSW port NAME the wheel
+    // should subscribe to (`PendingWheelWiring::drive_port_name`). The value then
+    // flows through the port registry, not along this edge.
+    ("drive", "LunCoWheelAPI"),
+    ("steer", "LunCoWheelAPI"),
+];
+
+/// Is this `inputs:` port one of [`STRUCTURAL_INPUT_BINDINGS`] on this prim?
+fn is_structural_binding(
+    view: &lunco_usd_bevy::StageView<'_>,
+    sink: &SdfPath,
+    port: &str,
+) -> bool {
+    STRUCTURAL_INPUT_BINDINGS
+        .iter()
+        .any(|(name, schema)| *name == port && view.has_api_schema(sink, schema))
+}
+
 pub fn rewire_usd_connections(
     mut commands: Commands,
     added: Query<(), Added<UsdPrimPath>>,
@@ -1149,20 +1200,9 @@ pub fn rewire_usd_connections(
             let Some(sink_conn) = attr.strip_prefix("inputs:") else {
                 continue;
             };
-            // `Gearbox.inputs:torque ← Motor.outputs:torque` is a real USD
-            // connection, but — exactly like the `LunCoEvent.inputs:trigger` skip
-            // above — its consumer is NOT the scalar `SimConnection` fabric. It is a
-            // STRUCTURAL/topology binding: `powertrain::find_for_wheel` reads it at
-            // PARSE to discover which motor feeds this gearbox, then folds
-            // `stallTorque × ratio × efficiency` into a static `WheelParams`. The
-            // live axle torque is written every tick by `MotorActuator`, never
-            // through this port — nothing ever registers a `torque` backend on a
-            // gearbox. Materialising it as a live wire leaves a target no backend
-            // claims, which (because every gearbox carries a `piloted` marker port,
-            // so `has_port_surface` is true) propagation reports as a genuine
-            // dangling wire on every tick, forever. The coupling is already
-            // resolved; do not build a phantom wire for it.
-            if sink_conn == "torque" && view.has_api_schema(&sink_sdf, "LunCoGearboxAPI") {
+            // A structural binding is already resolved; building a phantom wire
+            // for it manufactures a dangling-wire report that can never clear.
+            if is_structural_binding(&view, &sink_sdf, sink_conn) {
                 continue;
             }
             // SSP `LinearTransformation`: the propagated value is `src * factor +
@@ -1207,6 +1247,32 @@ pub fn rewire_usd_connections(
                     );
                     continue;
                 };
+                // Follow output-to-output forwards to the attribute that actually
+                // PRODUCES this value — USD's `GetValueProducingAttributes`, in
+                // openusd where USD puts it. A connectable container may publish
+                // an interior node's result as its own (`outputs:drive_left.connect
+                // = </Rover/DriveLaw/Drivetrain.outputs:drive_left>`), which is how
+                // a component REPLACES a producer: every existing consumer of the
+                // vessel's port silently reads the model instead, and not one wire
+                // on the host moves.
+                //
+                // Resolved HERE, at network-extraction time, exactly as a renderer
+                // flattens a shading network — the forward is an identity, not a
+                // dataflow step, so it costs one walk per structural rewire and
+                // nothing per tick.
+                let forwarded = SdfPath::new(&format!("{src_prim}.{src_leaf}"))
+                    .ok()
+                    .map(|p| {
+                        openusd::schemas::shade::value_producing_attribute(
+                            cs.stage(),
+                            &p,
+                        )
+                        .to_string()
+                    });
+                let (src_prim, src_leaf) = forwarded
+                    .as_deref()
+                    .and_then(|s| s.rsplit_once('.'))
+                    .unwrap_or((src_prim, src_leaf));
                 let Some(&start_element) = by_path.get(&(sink_instance, src_prim.to_string()))
                 else {
                     // Two very different situations, and they must not look alike.

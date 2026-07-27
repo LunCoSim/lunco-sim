@@ -281,10 +281,10 @@ pub(crate) fn build(app: &mut App) {
             Update,
             (rebind_changed_shader_look, sweep_look_cache::<ShaderLook>),
         );
-    // Shader parameters become connection targets: a USD `.connect` on a bound prim
-    // drives a WGSL uniform through the ordinary port graph. The writes land in
-    // `ShaderLook::live`, which `rebind_changed_shader_look` above already drains.
-    crate::shader_ports::build(app);
+    // Shader parameters become connection targets in `lunco-usd-sim`'s
+    // `shader_ports` — beside the pass that authors `ShaderLook::driven`, so a
+    // shader wire lands in a headless build too. The writes arrive in
+    // `ShaderLook::live`, which `rebind_changed_shader_look` above drains.
 }
 
 #[cfg(test)]

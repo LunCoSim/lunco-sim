@@ -58,6 +58,27 @@
 //! That is a deliberate deferral with a known migration path — not an absence of a
 //! standard. When the binder learns graphs, this should move to primvars.
 //!
+//! ## Why this lives beside the AUTHORING, not beside the renderer
+//!
+//! It used to live in `lunco-render-bevy`, and answered `has_port` by reflecting the
+//! bound `ShaderMaterial`'s WGSL schema. That made a shader-driven port exist only in a
+//! build with a render stack — so in the headless harness the backend was never even
+//! registered, every shader wire in the scene dropped its value forever, and the
+//! never-landed gate reported the descent lander's plume `throttle`, its legs'
+//! `load_frac` and its light wires as authoring faults. Three green scenes went red for
+//! a reason that was purely about which crates the binary linked.
+//!
+//! Nothing here needs the GPU. [`ShaderLook::driven`] is the authoring pass's own
+//! answer to "which of this prim's wires name parameters its shader declares"
+//! (`shader.rs`, `driven_shader_inputs`) — computed from the WGSL source at author
+//! time, present in every build. The write lands in [`ShaderLook::live`], a plain
+//! component. So the backend belongs where that component is filled, which is this
+//! crate, and it is registered unconditionally.
+//!
+//! This is the same rule the sun ports follow: a port backend belongs to the crate
+//! that owns the component it reads, never to the crate that happens to consume the
+//! value downstream.
+//!
 //! ## Naming
 //!
 //! `to_snake_case` is applied HERE rather than in the wiring pass, because
@@ -69,26 +90,6 @@ use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortRegistry};
 use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
 use lunco_materials::naming::to_snake_case;
-
-use crate::shader_material::ShaderMaterial;
-
-/// The reflected schema for `entity`'s bound material, when one is available.
-///
-/// Returns `None` while the material or its shader is still loading — the schema
-/// is reflected from WGSL source by `reflect_shader_schemas`, which cannot have run
-/// before the asset exists.
-fn schema_of(
-    world: &World,
-    entity: Entity,
-) -> Option<std::sync::Arc<lunco_materials::dyn_params::ParamSchema>> {
-    let handle = world.get::<MeshMaterial3d<ShaderMaterial>>(entity)?;
-    let assets = world.get_resource::<Assets<ShaderMaterial>>()?;
-    let mat = assets.get(&handle.0)?;
-    if mat.schema.fields.is_empty() {
-        return None;
-    }
-    Some(mat.schema.clone())
-}
 
 /// Does this entity drive a shader parameter called `key`?
 ///
@@ -110,12 +111,12 @@ fn declares(world: &World, entity: Entity, key: &str) -> bool {
 fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
     let key = to_snake_case(name);
     let look = world.get::<ShaderLook>(entity)?;
-    let v = look
-        .live
-        .get(&key)
-        .or_else(|| look.values.get(&key))
-        .copied()
-        .or_else(|| schema_of(world, entity)?.field(&key)?.default)?;
+    // `live` (a landed wire) beats `values` (the authored constant). There is no
+    // third fallback to the shader's declared default: that would need the reflected
+    // material schema, which only exists in a render build, and reading a port
+    // differently depending on whether a GPU is present is the defect this module
+    // was moved here to remove. An undriven, unauthored parameter reads as absent.
+    let v = *look.live.get(&key).or_else(|| look.values.get(&key))?;
     match v {
         ParamValue::F32(v) => Some(v),
         ParamValue::I32(v) => Some(v as f32),
@@ -130,23 +131,25 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
 /// never a source another prim reads. Exposing them as readable inputs (and not as
 /// outputs) is what keeps `read_output_port` from resolving a material parameter as
 /// a connection SOURCE and silently forming a feedback wire.
-pub(crate) const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
+pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
     list: |world, entity, out| {
-        if world.get::<ShaderLook>(entity).is_none() {
-            return;
-        }
-        let Some(schema) = schema_of(world, entity) else {
+        let Some(look) = world.get::<ShaderLook>(entity) else {
             return;
         };
-        for f in &schema.fields {
-            // EVERY declared field is listed, whether or not it currently holds a
-            // value — the shader's parameters are what the prim HAS, and a field
-            // still at its default is not a missing one. Listing only the fields
-            // that read back would hide half a shader's surface from `ListPorts`.
+        // The prim's DRIVEN parameters plus whatever it authored a value for — the
+        // same set `write_input` accepts, so listing and writing can never disagree.
+        //
+        // It used to list every field the bound material's WGSL declares. That was a
+        // strictly larger set (a shared shader's full surface, most of it irrelevant
+        // to this prim) and it required the reflected schema, i.e. a GPU build. The
+        // parameters a prim actually HAS are the ones it drives or authors.
+        let mut names: std::collections::BTreeSet<&String> = look.driven.iter().collect();
+        names.extend(look.values.keys());
+        for name in names {
             out.push(PortRef {
-                name: f.name.clone(),
+                name: name.clone(),
                 direction: PortDirection::In,
-                value: read_value(world, entity, &f.name).unwrap_or(0.0) as f64,
+                value: read_value(world, entity, name).unwrap_or(0.0) as f64,
             });
         }
     },
@@ -188,7 +191,7 @@ pub(crate) const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
 /// the simulation ones. That is safe because it claims a name only when
 /// [`ShaderLook::driven`] names it: a prim's simulation wires are never in that set,
 /// so there is nothing for it to shadow.
-pub(crate) fn build(app: &mut App) {
+pub fn build(app: &mut App) {
     app.init_resource::<PortRegistry>()
         .world_mut()
         .resource_mut::<PortRegistry>()

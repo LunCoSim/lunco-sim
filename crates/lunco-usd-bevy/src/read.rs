@@ -289,6 +289,7 @@ pub trait UsdRead {
         self.connections(prim, name).into_iter().next()
     }
 
+
     /// The live composed [`Stage`] behind this view — the escape hatch to
     /// openusd's typed schemas (`UsdShadeMaterialBindingAPI`, `UsdGeomXformable`),
     /// so we resolve bindings and compose transforms with openusd's spec

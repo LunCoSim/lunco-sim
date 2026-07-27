@@ -56,6 +56,8 @@ mod compose;
 pub mod dome;
 mod light;
 mod resolver;
+/// Light and transform ports — the port backend for what `light`/`compose` spawn.
+pub mod scene_ports;
 pub use camera::read_camera_exposure_ev100;
 pub use camera_switch::SetActiveCamera;
 pub mod author;
@@ -144,6 +146,10 @@ impl Plugin for UsdBevyPlugin {
             // Lights the glTF loader may embed (USD-authored lights take a
             // separate path, but a glTF can carry its own).
             .register_type::<DirectionalLight>()
+            // Light and transform ports. Registered HERE, beside the systems that spawn the
+            // components they read, so a wire into a light lands in a headless build too —
+            // the value is scene data, not a render resource.
+            .add_plugins(scene_ports::ScenePortsPlugin)
             .register_type::<PointLight>()
             .register_type::<SpotLight>()
             .register_type::<bevy::gltf::GltfExtras>()
