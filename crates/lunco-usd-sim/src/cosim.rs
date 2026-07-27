@@ -48,6 +48,17 @@ use std::path::PathBuf;
 
 use crate::UsdSimProcessed;
 
+/// Telemetry event published when a USD-declared model could not be handed to
+/// the solver at all — the worker channel was closed, so the compile that
+/// `SimStatus::Compiling` is waiting for will never be attempted.
+///
+/// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
+/// error-telemetry observer surfaces it, the same arrangement
+/// [`lunco_usd_bevy::SCENE_LOAD_FAILED`] uses. A scene whose models silently
+/// never step is indistinguishable from a scene that is merely still compiling;
+/// the difference has to reach the UI, not just the log.
+pub const MODEL_DISPATCH_FAILED: &str = "MODEL_DISPATCH_FAILED";
+
 /// Marker indicating a USD-driven cosim entity has been wired up by
 /// `process_usd_cosim_prims`. Prevents the system from re-processing
 /// the same entity on the same tick.
@@ -185,6 +196,18 @@ fn any_unwrapped_modelica(
     !q.is_empty()
 }
 
+/// How long [`SceneLoadInFlight`] may be held before the watchdog in
+/// [`clear_scene_load_in_flight`] declares the load lost and drops it.
+///
+/// 60 s, matching the readiness ticket derived from this same guard and
+/// `lunco_terrain_surface`'s `GEN_STATUS_MAX_SECS`. It has to clear a genuine
+/// worst case — a cold web fetch of a large stage plus its reference closure —
+/// so it is deliberately generous; the guard exists to serialise two loads that
+/// arrive in the same event-loop window, not to bound a slow one. A load that
+/// really is still working at 60 s has already blown the readiness deadline, so
+/// nothing downstream is waiting on this guard by then anyway.
+const SCENE_LOAD_MAX_SECS: f64 = 60.0;
+
 /// Clears [`SceneLoadInFlight`] once `sync_usd_visuals` has drained every
 /// `UsdAwaitingStage` prim for the in-flight scene's stage — i.e. once the
 /// scene's prims have all spawned (or failed to load). After this runs, a
@@ -201,13 +224,47 @@ fn any_unwrapped_modelica(
 /// real authoring defect, not a missing default — and it fails LOUD here rather
 /// than rendering dark and silent. `bevy_light`'s `DirectionalLight` is
 /// render-free, so this check is layer-appropriate in this render-free crate.
+///
+/// **Give-up path.** Neither intended clear — the drain, or
+/// `AssetLoadFailedEvent` via `lunco_usd_bevy::fail_awaiting_stage_prims` — is
+/// guaranteed to arrive: a web fetch that 404s can report no failure at all. So
+/// the guard also carries a [`SCENE_LOAD_MAX_SECS`] wall-clock deadline, after
+/// which it is dropped and the abandonment published as
+/// [`lunco_usd_bevy::SCENE_LOAD_FAILED`]. A stuck guard is the worst outcome
+/// available here: it suppresses every subsequent `LoadScene`, so the app looks
+/// alive and never loads a scene again, with nothing but a log line to say so.
+/// The lighting invariant is NOT checked on the watchdog path — a scene that
+/// never finished spawning has not earned that verdict.
 fn clear_scene_load_in_flight(
     in_flight: Option<Res<SceneLoadInFlight>>,
     q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
+    // REAL time, deliberately, and for the same reason
+    // `lunco_api::executor::expire_deferred_requests` uses it: a paused or
+    // time-warped simulation must not change when a load is declared lost.
+    time: Res<Time<bevy::time::Real>>,
+    // Deadline for the guard currently held, re-armed whenever the in-flight
+    // stage changes. A `Local` rather than a field on `SceneLoadInFlight`
+    // because the resource is constructed elsewhere (`lunco_usd::commands`) and
+    // its shape is public.
+    mut deadline: Local<Option<(bevy::asset::AssetId<UsdStageAsset>, f64)>>,
     mut commands: Commands,
 ) {
-    let Some(g) = in_flight else { return };
+    let Some(g) = in_flight else {
+        // No guard held — forget any deadline so the next load arms a fresh one.
+        *deadline = None;
+        return;
+    };
+    let now = time.elapsed_secs_f64();
+    let expires = match *deadline {
+        Some((stage, at)) if stage == g.stage_id => at,
+        // First frame of this load (or a different scene took the guard).
+        _ => {
+            let at = now + SCENE_LOAD_MAX_SECS;
+            *deadline = Some((g.stage_id, at));
+            at
+        }
+    };
     // Still spawning if any prim tagged for this stage hasn't been
     // processed by `sync_usd_visuals` (i.e. still carries
     // `UsdAwaitingStage`).
@@ -215,8 +272,35 @@ fn clear_scene_load_in_flight(
         .iter()
         .any(|upp| upp.stage_handle.id() == g.stage_id);
     if still_awaiting {
+        if now < expires {
+            return;
+        }
+        // WATCHDOG. The two intended clear paths are "every awaiting prim
+        // drained" and `AssetLoadFailedEvent` — and on web a 404 can report
+        // neither (see `lunco_usd_bevy::fail_awaiting_stage_prims`). Left alone
+        // the guard is permanent, and a permanent guard SILENTLY suppresses
+        // every later `LoadScene`: the app looks alive and simply never loads a
+        // scene again. Dropping it is strictly better than that — a second
+        // `LoadScene` can at worst repeat the failure, loudly.
+        error!(
+            "[scene] `{}` never finished spawning within {SCENE_LOAD_MAX_SECS:.0}s — \
+             abandoning the in-flight guard so later scene loads are not suppressed. \
+             Prims still awaiting this stage will never instantiate; the stage asset \
+             most likely failed to load without reporting a failure (a web 404).",
+            g.path
+        );
+        commands.trigger(lunco_core::TelemetryEvent {
+            name: lunco_usd_bevy::SCENE_LOAD_FAILED.into(),
+            source: 0,
+            severity: lunco_core::Severity::Error,
+            data: lunco_core::TelemetryValue::String(g.path.clone()),
+            timestamp: 0.0,
+        });
+        *deadline = None;
+        commands.remove_resource::<SceneLoadInFlight>();
         return;
     }
+    *deadline = None;
     // Scene fully spawned — enforce the lighting invariant before dropping the
     // guard. The celestial bootstrap sun (`lunco_celestial::big_space_setup`)
     // spawns on site-anchor detection during this same load window and is a
@@ -690,37 +774,79 @@ pub fn dispatch_loaded_modelica_sources(
             })
             .collect();
 
+        // DISPATCH FIRST, then stub. NOT `let _ = send(..)`: a closed worker
+        // channel means the compile is never attempted, and a `ModelicaModel`
+        // with no `last_error` and no `variables` projects `SimStatus::Compiling`
+        // *every tick* through `sync_modelica_outputs`/`modelica_status` — a
+        // state nothing can move it out of, so the model silently never steps.
+        // The failure therefore has to live on the MODEL (`last_error`), not on
+        // the component, or the next tick overwrites it. Closed-channel
+        // detection is `send(..).is_err()`, the same test
+        // `source_roots::ensure_loaded` uses.
+        let dispatch_error = channels
+            .tx
+            .send(ModelicaCommand::Compile {
+                entity,
+                session_id: 0,
+                model_name: model_name.clone(),
+                source: src.text.clone(),
+                // Stable per-asset session URI (its asset path) — keeps this
+                // model's overlay distinct in the worker session and consistent
+                // across recompiles. See `ModelicaCommand::Compile::doc_uri`.
+                doc_uri: pending.asset_path.to_string(),
+                extra_sources: Vec::new(),
+                stream: None,
+                // Declared, never inferred. A program without the promise is not
+                // client-predicted, so an adaptive implicit solver is correct for
+                // it — which is exactly what a battery/solar electrical island
+                // needs.
+                realtime_safe: q_realtime_safe.contains(entity),
+            })
+            .err()
+            .map(|_| {
+                format!(
+                    "Modelica worker channel closed — `{}` was never compiled \
+                     and will never step",
+                    pending.asset_path
+                )
+            });
+
         commands.entity(entity).try_insert(ModelicaModel {
             model_path: PathBuf::from(&pending.asset_path),
             model_name: model_name.clone(),
             parameters,
             inputs,
+            // Durable verdict: `modelica_status` reads this first, so the
+            // component reports `Error` on every subsequent tick instead of
+            // reverting to `Compiling`.
+            last_error: dispatch_error.clone(),
             // USD-cosim models are part of the live scene (balloon
             // buoyancy, the solar tracker) — they should simulate as soon
             // as they compile, not land paused. The doc/UI Run path doesn't
             // reach them (they have no DocumentId), so without this they
             // would stay frozen forever. The worker's compile-success
             // handler sets `paused = !resume_after_compile`.
-            resume_after_compile: true,
+            resume_after_compile: dispatch_error.is_none(),
             ..default()
         });
 
-        let _ = channels.tx.send(ModelicaCommand::Compile {
-            entity,
-            session_id: 0,
-            model_name,
-            source: src.text.clone(),
-            // Stable per-asset session URI (its asset path) — keeps this
-            // model's overlay distinct in the worker session and consistent
-            // across recompiles. See `ModelicaCommand::Compile::doc_uri`.
-            doc_uri: pending.asset_path.to_string(),
-            extra_sources: Vec::new(),
-            stream: None,
-            // Declared, never inferred. A program without the promise is not
-            // client-predicted, so an adaptive implicit solver is correct for it
-            // — which is exactly what a battery/solar electrical island needs.
-            realtime_safe: q_realtime_safe.contains(entity),
-        });
+        if let Some(error) = dispatch_error {
+            error!("[usd-cosim] {error}");
+            notices.write(lunco_modelica::ModelicaNotice {
+                level: lunco_modelica::NoticeLevel::Error,
+                text: format!("[{model_name}] {error}"),
+            });
+            // Immediate verdict for this tick; `modelica_status` keeps it from
+            // the following one.
+            component.status = SimStatus::Error(error.clone());
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: MODEL_DISPATCH_FAILED.into(),
+                source: 0,
+                severity: lunco_core::Severity::Error,
+                data: lunco_core::TelemetryValue::String(error),
+                timestamp: 0.0,
+            });
+        }
 
         commands.entity(entity).remove::<PendingModelicaSource>();
     }

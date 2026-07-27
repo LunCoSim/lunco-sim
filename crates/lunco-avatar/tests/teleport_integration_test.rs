@@ -22,9 +22,7 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 
 use lunco_avatar::{FreeFlightCamera, OrbitCamera, SurfaceCamera, SurfaceRelativeMode};
-use lunco_celestial::{
-    CelestialBody, CelestialReferenceFrame, PointMassGravity, TerrainTileConfig,
-};
+use lunco_celestial::{CelestialBody, CelestialReferenceFrame, PointMassGravity};
 use lunco_core::Avatar;
 use lunco_environment::GravityProvider;
 
@@ -39,8 +37,6 @@ fn test_full_teleport_workflow() {
     // Headless app: no window, no renderer, no input
     app.add_plugins((MinimalPlugins, big_space::prelude::BigSpaceDefaultPlugins));
 
-    // Resources needed by the app
-    app.insert_resource(TerrainTileConfig::default());
 
     // Track test state
     app.insert_resource(TestState::default());

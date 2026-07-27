@@ -436,6 +436,26 @@ pub struct CelestialBody {
     pub radius_m: f64,
 }
 
+/// **The** lunar radius, in metres. Every place that needs "how big is the
+/// Moon" — body placement, colliders, ground-relative altitude, the body-radius
+/// citation stamped into a baked GeoTIFF — refers to this.
+///
+/// Source: IAU/WGCCRE mean radius of the Moon, 1737.4 km
+/// (Archinal et al., *Report of the IAU Working Group on Cartographic
+/// Coordinates and Rotational Elements*). The same value the LOLA/LRO products
+/// the terrain pipeline ingests are referenced to.
+///
+/// It exists because the tree carried three disagreeing values (`1737.0e3`,
+/// `1.7374e6` in the sandbox UI, `1_737_400.0` in tests) — a 400 m spread, i.e.
+/// a real altitude/georeferencing bias the moment anything reports a height.
+/// Do not re-type the number; a fourth copy is the bug coming back.
+///
+/// It lives HERE, in the one dependency-light leaf every consumer already sees,
+/// rather than in `lunco-celestial`: the offline `lunco-assets` build tool needs
+/// the same datum for the GeoTIFF it writes and must not take a Bevy-heavy
+/// simulation dependency to get it. `lunco_celestial::registry` re-exports it.
+pub const MOON_MEAN_RADIUS_M: f64 = 1_737_400.0;
+
 // `TimeWarpState` was removed (doc 19): "is physics advancing" had three
 // redundant encodings (`physics_enabled` ≡ `is_running()` ≡
 // `Time<Virtual>.relative_speed > 0`). The single source is now the direct clock

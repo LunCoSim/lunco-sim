@@ -77,16 +77,18 @@ pub enum PlotBinding {
     Doc { doc_id: u64 },
 }
 
-impl Default for PlotBinding {
-    fn default() -> Self {
-        // Backwards-compatible default: legacy scenes deserialised
-        // without a binding land here, matching the old `entity = 0`
-        // unbound behaviour.
-        PlotBinding::Pinned { entity: 0 }
-    }
-}
-
 impl PlotBinding {
+    /// The explicit "not bound to anything yet" binding.
+    ///
+    /// There is deliberately **no `Default` impl**: a plot tile always
+    /// has to say which policy it is under, so a caller that genuinely
+    /// wants an unbound pinned tile has to name it. `entity = 0` is not
+    /// a live entity — `Entity::try_from_bits(0)` is `None` because the
+    /// generation field is non-zero for every real id — so both the
+    /// producer and the visual resolve this to "no samples" rather than
+    /// to some other sim's entity.
+    pub const UNBOUND: Self = PlotBinding::Pinned { entity: 0 };
+
     /// Entity bits if this binding is [`PlotBinding::Pinned`], else
     /// `None`. Used by "is this signal the currently-pinned one?"
     /// checkmark UI which only makes sense in pinned mode — a Doc-
@@ -105,7 +107,7 @@ impl PlotBinding {
 /// The [`PlotBinding`] enum is flattened so the JSON keys stay
 /// top-level (`entity` or `doc_id` alongside `signal_path`/`title`)
 /// — same wire shape as before the refactor.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlotNodeData {
     /// How this tile picks its sim entity. See [`PlotBinding`].
     #[serde(flatten)]
@@ -115,6 +117,25 @@ pub struct PlotNodeData {
     /// Display label. Defaults to `signal_path` when empty.
     #[serde(default)]
     pub title: String,
+}
+
+impl Default for PlotNodeData {
+    /// The empty **stub tile**: no signal, no title, explicitly
+    /// [`PlotBinding::UNBOUND`].
+    ///
+    /// This is not a compatibility fallback for a payload that *had* a
+    /// binding — it is the payload of a tile that has none yet (a
+    /// wrong-type / missing `NodeData`), and it renders as
+    /// "(unbound plot)". Never use it to stand in for a binding you
+    /// failed to read off an existing tile: guessing `Pinned` there
+    /// silently demotes a `Doc`-bound tile.
+    fn default() -> Self {
+        Self {
+            binding: PlotBinding::UNBOUND,
+            signal_path: String::new(),
+            title: String::new(),
+        }
+    }
 }
 
 /// One sampled point — `(time, value)` — used in the per-frame

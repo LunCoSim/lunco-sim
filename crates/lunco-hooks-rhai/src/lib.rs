@@ -11,6 +11,10 @@
 //! and stays wasm-clean — rhai only, no Bevy — so it can back hooks that fire deep
 //! in dependency-free crates (the journal's merge, `lunco-core`'s authorize gate).
 
+/// Shared bounded-resource policy for every Rhai engine in the workspace.
+/// Re-exported as `lunco_scripting::rhai_limits` for the world-bound plane.
+pub mod rhai_limits;
+
 use lunco_hooks::{HookError, HookResult, HookValue, RegisteredHook, ScriptHook};
 use rhai::{Dynamic, Engine, Scope, AST};
 
@@ -33,11 +37,38 @@ impl RhaiHook {
     /// helper functions and top-level `const`s; `entry` is the function invoked
     /// per hook call, receiving the marshalled args positionally.
     pub fn compile(source: &str, entry: impl Into<String>) -> Result<Self, String> {
-        // TODO(multiplayer): deferred — singleplayer focus for now, RBAC disabled
-        // for ease of debugging. All rhai resource limits (max operations, call
-        // depth, string/array/map sizes) are unset on this engine. Revisit before
-        // multiplayer hardening (REVIEW-2026-07-19.md finding #4 / FUZZ-8).
-        let engine = Engine::new();
+        let mut engine = Engine::new();
+
+        // Close the file-import hole BEFORE compiling anything. `Engine::new()`
+        // installs rhai's `FileModuleResolver`, which reads arbitrary files
+        // relative to the process CWD — so a hook source (a peer-supplied merge
+        // policy, an authored `assets/scripting/policy/*.rhai`) could
+        // `import "../../../etc/passwd"`. Hook sources are self-contained
+        // snippets: no shipped policy or lint script uses `import`, and this
+        // crate has no asset layer to resolve one against, so an EMPTY static
+        // resolver is the correct fail-closed choice. If hooks ever need
+        // libraries, they must resolve through `lunco-assets`' script registry —
+        // never off the filesystem.
+        engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
+
+        // NOT applying `rhai_limits` here — deliberate, not an oversight.
+        //
+        // The caps (op budget, call/expression depth, string/array size) are a
+        // MULTIPLAYER/untrusted-source concern: they bound what a peer-supplied
+        // policy can spend. Single-user is the current target, and the depth cap
+        // in particular is a known authoring trap — a legitimately nested
+        // expression in an authored policy fails to PARSE, which reads as "my
+        // script is broken" rather than "you hit a limit".
+        //
+        // The resolver above stays: file access is a different question from
+        // resource budget, and closing it costs authored content nothing (no
+        // shipped hook uses `import`).
+        //
+        // `rhai_limits` lives in this crate and is re-exported as
+        // `lunco_scripting::rhai_limits`, so re-enabling is one line here.
+        // TODO(multiplayer): apply `rhai_limits::apply(&mut engine)` when hook
+        // sources can arrive from a peer; RBAC on hook registration is deferred
+        // with it. See REVIEW-2026-07-19.md finding #4 / FUZZ-8.
         let ast = engine.compile(source).map_err(|e| e.to_string())?;
         // Run top-level statements once to populate consts into the base scope.
         let mut scope = Scope::new();

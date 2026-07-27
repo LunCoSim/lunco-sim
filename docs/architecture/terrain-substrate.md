@@ -62,14 +62,18 @@ exactly one. `crater_delta`
 ([`lunco-obstacle-field/field.rs`](../../crates/lunco-obstacle-field/src/field.rs))
 is reused verbatim — as *math you call*, not pixels you stamp.
 
-> **Invariant: `ObstacleFieldMode::default()` is `DemDelegated`** — the DEM terrain
-> owns crater/rock generation from the same spec, and the obstacle-field plugin does
-> not build a second surface. `Standalone` (which builds its own flat-slab arena) is
-> the pre-DEM test scaffold and is **opt-in**.
+> **Invariant: there is exactly one surface builder — the DEM terrain.** It owns
+> crater/rock generation from the spec; the obstacle-field crate is a pure generator
+> that spawns nothing. The rebuild trigger is `UpdateObstacleFieldSpec`, observed by
+> the terrain crates.
 >
-> It was the default once, and it cost **43× the frame rate**. A default that is the
-> pathological path is a fuse, not a fix: it will be found by whoever forgets to set
-> the mode, which is everyone.
+> This used to be a *mode*: `ObstacleFieldMode::Standalone` built its own flat-slab
+> arena, and it was the default once, costing **43× the frame rate**. It was demoted
+> to opt-in, then became unreachable — nothing (scene attribute, API, or rhai) could
+> select it — and the mode enum plus the whole slab-build path have since been
+> deleted. Recorded because the lesson outlives the code: a default that is the
+> pathological path is a fuse, not a fix, and it will be found by whoever forgets to
+> set the mode, which is everyone.
 
 ### Won't killing the overlay lose crater detail?
 

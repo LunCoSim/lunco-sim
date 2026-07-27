@@ -35,6 +35,16 @@ use super::{entity_for_doc, resolve_doc_or_active};
 
 // ─── Compile typed command ────────────────────────────────────────────────
 
+/// Telemetry event published when a Compile never reaches the worker at all —
+/// the channel is closed or the worker was never started.
+///
+/// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
+/// error-telemetry observer surfaces it, the same arrangement
+/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
+/// use. This is a failure of the user's own click: pressing Compile and getting
+/// nothing back is precisely the case that must not live only in a log.
+pub const COMPILE_DISPATCH_FAILED: &str = "COMPILE_DISPATCH_FAILED";
+
 /// Compile a document: rumoca front-end → DAE → simulator setup. Idempotent —
 /// an already-compiled, unmodified model skips the worker dispatch unless
 /// `force`. Never changes `paused`; type/parse/DAE errors land in
@@ -1157,22 +1167,121 @@ pub fn on_compile_model(
                 }
             }
         }
-        let _ = channels.tx.send(ModelicaCommand::Compile {
-            entity: target_entity,
-            session_id,
-            model_name,
-            source,
-            doc_uri: primary_doc_uri,
-            extra_sources,
-            stream: Some(stream),
-            // A model opened in the workbench is being authored and inspected,
-            // not driving a client-predicted body — the realtime promise is
-            // declared in USD on a program prim, which this path has none of.
-            realtime_safe: false,
-        });
+        // NOT `let _ = send(..)`. `compile_states.mark_started(doc)` above put
+        // this document into `CompileState::Compiling`, and the ONLY thing that
+        // moves it out is a worker reply. If the channel is closed there is no
+        // worker and no reply is ever coming: the toolbar spins, the model never
+        // compiles, and nothing anywhere says why. Same closed-channel detection
+        // as `source_roots::ensure_loaded` — `send(..).is_err()`.
+        if channels
+            .tx
+            .send(ModelicaCommand::Compile {
+                entity: target_entity,
+                session_id,
+                model_name: model_name.clone(),
+                source,
+                doc_uri: primary_doc_uri,
+                extra_sources,
+                stream: Some(stream),
+                // A model opened in the workbench is being authored and
+                // inspected, not driving a client-predicted body — the realtime
+                // promise is declared in USD on a program prim, which this path
+                // has none of.
+                realtime_safe: false,
+            })
+            .is_err()
+        {
+            fail_compile_dispatch(
+                doc,
+                &model_name,
+                target_entity,
+                "Modelica worker channel closed",
+                &mut compile_states,
+                &mut console,
+                diagnostics.as_deref_mut(),
+                &mut q_models,
+                &mut commands,
+            );
+        }
     } else {
-        console.error("Modelica worker channel not available — compile dispatch dropped.");
+        // The resource is absent entirely (worker never started). Same terminal
+        // outcome as a closed channel — and the same reporting, because the user
+        // experiences exactly the same thing: a Compile that goes nowhere. Before
+        // this, `mark_started` had already flipped the doc to `Compiling` and it
+        // stayed there, with only a console line to explain it.
+        fail_compile_dispatch(
+            doc,
+            &model_name,
+            target_entity,
+            "Modelica worker channel not available",
+            &mut compile_states,
+            &mut console,
+            diagnostics.as_deref_mut(),
+            &mut q_models,
+            &mut commands,
+        );
     }
+}
+
+/// One terminal outcome for a Compile that never reached the worker, so the two
+/// dispatch-failure sites cannot report it differently.
+///
+/// Four things have to be undone or said, and missing any one of them is what
+/// made the original `let _ = send(..)` invisible:
+///
+/// 1. the document's compile state leaves `Compiling` for `Error` — this is what
+///    the toolbar spinner and the red tab marker read;
+/// 2. the model entity stops claiming it is compiling/stepping, so
+///    `spawn_modelica_requests` doesn't keep waiting on a reply that is not coming;
+/// 3. the console + Diagnostics log get the reason;
+/// 4. an Error-severity [`lunco_core::TelemetryEvent`] is published, which is
+///    what the workbench status bar's error observer fans to the status bar —
+///    the same mechanism `lunco_usd_bevy::SCENE_LOAD_FAILED` and
+///    `lunco_tutorial::TUTORIAL_FAILED` use. A `console.error` alone is a panel
+///    the user may not have open.
+#[allow(clippy::too_many_arguments)]
+fn fail_compile_dispatch(
+    doc: lunco_doc::DocumentId,
+    model_name: &str,
+    target_entity: Entity,
+    cause: &str,
+    compile_states: &mut DocumentDiagnostics,
+    console: &mut crate::ui::panels::console::ConsoleLog,
+    diagnostics: Option<&mut crate::ui::panels::diagnostics::DiagnosticsLog>,
+    q_models: &mut Query<&mut ModelicaModel>,
+    commands: &mut Commands,
+) {
+    let msg = format!("{cause} — compile of '{model_name}' was never dispatched.");
+    bevy::log::error!("[compile] {msg}");
+    compile_states.set_error_message(doc, msg.clone());
+    console.error(msg.clone());
+    if let Some(diag) = diagnostics {
+        diag.append(vec![crate::ui::panels::log::LogEntry {
+            at: web_time::Instant::now(),
+            level: crate::ui::panels::log::LogLevel::Error,
+            text: msg.clone(),
+            model: Some(model_name.to_string()),
+            loc: None,
+        }]);
+    }
+    // The entity may have been spawned this very tick (deferred), in which case
+    // there is nothing to clear yet — it was spawned with `is_compiling: true`
+    // and no worker will ever answer for it. `set_error_message` above is the
+    // authoritative user-facing verdict either way; this just stops the model
+    // from being polled.
+    if let Ok(mut model) = q_models.get_mut(target_entity) {
+        model.is_compiling = false;
+        model.is_stepping = false;
+        model.resume_after_compile = false;
+        model.last_error = Some(msg.clone());
+    }
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: COMPILE_DISPATCH_FAILED.into(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(msg),
+        timestamp: 0.0,
+    });
 }
 
 // ─── Run-control + FastRun typed commands & observers ────────────────────

@@ -64,7 +64,7 @@ def Xform "SandboxScene" (
         bool physics:collisionEnabled = true
 
         # --- Sensors (mounted 0.3 m above the box centre) ---
-        custom float3 lunco:sensor:offset = (0.0, 0.3, 0.0)
+        custom double3 lunco:sensor:offset = (0.0, 0.3, 0.0)
         custom bool lunco:sensor:imu = true
         custom bool lunco:sensor:range = true
         custom token lunco:sensor:rangeAxis = "-Y"

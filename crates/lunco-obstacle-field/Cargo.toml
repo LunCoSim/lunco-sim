@@ -6,22 +6,18 @@ license.workspace = true
 description = "Procedural crater + rock field generation for rover testing in LunCoSim"
 
 [dependencies]
-# RENDER-FREE. `bevy_mesh` gives `Mesh` + `Mesh3d`, `bevy_camera` gives
-# `Visibility` + `VisibilityRange` — neither depends on `bevy_render`, so this
-# crate does not drag wgpu/naga into the `--no-ui` server or the wasm worker.
+# RENDER-FREE, and now also PHYSICS-FREE. `bevy_mesh` gives `Mesh`; nothing here
+# depends on `bevy_render`, so this crate does not drag wgpu/naga into the
+# `--no-ui` server or the wasm worker.
 #
-# `bevy_pbr` was here for the `StandardMaterial` on generated terrain/rock
-# surfaces. That is now stated as `lunco_render::PbrLook` intent and bound by
-# `lunco-render-bevy`. DO NOT add `bevy_pbr` back: if you need a material here,
-# you want an intent component instead. See docs/architecture/render-decoupling.md.
+# This crate is a pure generator: it produces height grids, placements and mesh
+# data, and spawns nothing. It therefore needs no material, collider or
+# floating-origin dependency. DO NOT add `bevy_pbr`, `avian3d` or `big_space`
+# back — if you need an appearance here you want a `lunco_render` intent
+# component on the consumer instead. See docs/architecture/render-decoupling.md.
 bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_world_serialization", "bevy_light"] }
 bevy_mesh = { workspace = true }
-lunco-render = { path = "../lunco-render" }
-avian3d = { workspace = true }
-lunco-physics = { workspace = true }
-big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-time = { path = "../lunco-time" }
 # `HeightGrid` implements the shared `HeightSource` trait (the impl lives with the
 # type to satisfy the orphan rule); `lunco-terrain-core` is the pure leaf that
 # defines the trait. (The former `lunco-terrain` dep was unused and was removed.)

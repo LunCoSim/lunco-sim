@@ -6,7 +6,7 @@
 //! occlusion (via the generic `TerrainRaycast` query) — then asks a
 //! **language-neutral verdict hook** ([`LINK_HOOK`]) whether each pair is a usable
 //! link. Scripts supply only that verdict (a pure boolean over precomputed
-//! geometry — no loops, no queries), so a rhai / Python / Luau policy is minimal.
+//! geometry — no loops, no queries), so a rhai / Python policy is minimal.
 //!
 //! Nothing here is "comms": nodes, links, and the verdict are generic. A comms
 //! (or sensor, or relay) domain is authored on top — roles, routing, and naming

@@ -7,7 +7,6 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
 pub enum ScriptLanguage {
     Python,
-    Lua,
     /// Pure-Rust embedded engine (rhai). The default browser-capable backend.
     Rhai,
 }

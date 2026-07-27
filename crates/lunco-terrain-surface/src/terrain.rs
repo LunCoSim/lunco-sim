@@ -33,6 +33,32 @@ use lunco_terrain_bake::{BakedGrid, DemBakeJob};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
+/// Telemetry event name published when a DEM terrain build does not produce a
+/// terrain: an unreadable/unfetchable heightmap, a failed worker dispatch, a
+/// failed bake stage, or a build that wedged past the watchdog deadline. The
+/// payload is a human-readable string naming the site/DEM and the cause.
+///
+/// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
+/// error telemetry observer surfaces it — the same arrangement
+/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
+/// use. Terrain IS the world here: a `warn!` in a terminal nobody is reading
+/// leaves the user staring at an empty scene with a clean status bar, unable to
+/// tell "still loading" from "never coming".
+pub const DEM_BUILD_FAILED: &str = "DEM_BUILD_FAILED";
+
+/// The one shape every [`DEM_BUILD_FAILED`] publication takes, so the payload
+/// convention (a cause string naming the DEM/site and the underlying error)
+/// cannot drift between the native, web and watchdog sites.
+fn dem_build_failed(detail: impl Into<String>) -> lunco_core::TelemetryEvent {
+    lunco_core::TelemetryEvent {
+        name: DEM_BUILD_FAILED.into(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(detail.into()),
+        timestamp: 0.0,
+    }
+}
+
 /// Default realized region side length (metres) when `window_m` is 0… no — see
 /// below: 0 means the whole map. This is the fallback when a caller passes a
 /// negative value. A 4 km window at 5 m is 800² ≈ 640 k verts — full detail,
@@ -165,7 +191,7 @@ pub struct DemTerrainRequest {
 }
 
 /// Retained on a built DEM terrain so its crater layer can be **re-baked live**
-/// (Inspector → `RegenerateField`) without re-reading the GeoTIFF: the cropped /
+/// (Inspector → `UpdateObstacleFieldSpec`) without re-reading the GeoTIFF: the cropped /
 /// resampled grid BEFORE any craters were stamped. [`crate::derived_layers`]'s
 /// regenerate path clones this, re-stamps the current [`ObstacleFieldSpec`]
 /// craters, and swaps the result into [`crate::stream_viz::DemHeightField`].
@@ -253,9 +279,15 @@ pub struct TerrainGenStatus {
 }
 
 /// Safety valve: if a build's components linger this long (a lost worker reply,
-/// a wedged bake) clear the overlay so the UI isn't blocked forever. Matches the
-/// spirit of the 30 s ground-collider gate — degrade to "done" loudly rather than
-/// freeze the screen behind a spinner.
+/// a wedged bake) the build is declared dead. Matches the spirit of the 30 s
+/// ground-collider gate — degrade loudly rather than freeze the screen behind a
+/// spinner.
+///
+/// It used to clear only the OVERLAY, which made the UI *lie*: the spinner went
+/// away while the `DemTerrainRequest` / `DemWorkerJob` stayed on the entity
+/// forever, so the app read "generating" (physics still held, `start_dem_builds`
+/// still skipping the entity) while the user read "done". The watchdog now
+/// cancels the actual job and reports it, so the two stories agree.
 const GEN_STATUS_MAX_SECS: f32 = 60.0;
 
 /// Derive [`TerrainGenStatus`] from the terrain build components each frame. A
@@ -268,18 +300,19 @@ const GEN_STATUS_MAX_SECS: f32 = 60.0;
 /// state to a real fraction: `Preparing` → `Building` (coarse) → `Refining`
 /// (full). Native is one async task with no incremental signal → indeterminate.
 fn update_terrain_gen_status(
+    mut commands: Commands,
     time: Res<Time>,
     // `has_request` distinguishes web's two worker phases: the request is dropped
     // once the coarse grid lands, so `job && !request` = refining the full grid.
-    requests: Query<(&DemTerrainRequest, Has<DemBuildTask>)>,
-    worker_jobs: Query<(Option<&DemTerrainRequest>, &DemWorkerJob)>,
+    requests: Query<(Entity, &DemTerrainRequest, Has<DemBuildTask>)>,
+    worker_jobs: Query<(Entity, Option<&DemTerrainRequest>, &DemWorkerJob)>,
     mut status: ResMut<TerrainGenStatus>,
     mut elapsed: Local<f32>,
 ) {
     let mut baking = false; // native async bake task in flight
     let mut queued = false; // a request exists (queued or mid-bake)
     let mut site: Option<&str> = None;
-    for (req, has_task) in &requests {
+    for (_entity, req, has_task) in &requests {
         queued = true;
         baking |= has_task;
         if site.is_none() {
@@ -291,7 +324,7 @@ fn update_terrain_gen_status(
     let mut download_fraction: Option<f32> = None;
     let mut streaming_coarse = false;
     let mut refining_full = false;
-    for (req, job) in &worker_jobs {
+    for (_entity, req, job) in &worker_jobs {
         let _ = job;
         if req.is_some() {
             streaming_coarse = true;
@@ -329,13 +362,47 @@ fn update_terrain_gen_status(
 
     *elapsed += time.delta_secs();
     if *elapsed > GEN_STATUS_MAX_SECS {
-        if status.active {
-            warn!(
-                "[terrain] generation overlay held {GEN_STATUS_MAX_SECS}s — clearing \
-                 (lost worker reply or stuck bake?)"
+        warn!(
+            "[terrain] generation held {GEN_STATUS_MAX_SECS}s — cancelling the wedged build \
+             (lost worker reply or stuck bake?)"
+        );
+        // CANCEL THE JOB, not just the spinner. Dropping `DemBuildTask` drops the
+        // `Task` (which cancels the native bake); removing `DemWorkerJob` fires
+        // `cancel_worker_job_on_remove`, which retires the id in the worker
+        // client so a late reply can't land on a recycled entity. Dropping
+        // `DemTerrainRequest` releases the physics hold and makes the entity
+        // eligible for a fresh `start_dem_builds` attempt (e.g. a re-issued
+        // `SpawnDemTerrain`) instead of being skipped forever.
+        let mut stuck: Vec<String> = Vec::new();
+        for (entity, req, _) in &requests {
+            stuck.push(
+                req.uri
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(req.uri.as_str())
+                    .to_string(),
             );
-            *status = TerrainGenStatus::default();
+            commands
+                .entity(entity)
+                .try_remove::<(DemTerrainRequest, DemBuildTask)>();
         }
+        for (entity, _, _) in &worker_jobs {
+            commands
+                .entity(entity)
+                .try_remove::<(DemTerrainRequest, DemWorkerJob)>();
+        }
+        let named = if stuck.is_empty() {
+            status.site.clone()
+        } else {
+            stuck.join(", ")
+        };
+        commands.trigger(dem_build_failed(format!(
+            "Terrain build for '{named}' gave no result after {GEN_STATUS_MAX_SECS:.0}s and was \
+             cancelled — the ground is missing. Reload the scene to retry."
+        )));
+        *status = TerrainGenStatus::default();
+        *elapsed = 0.0;
         return;
     }
 
@@ -921,16 +988,24 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     }
 }
 
+/// A failed web DEM I/O step, as reported by the detached fetch/dispatch task:
+/// the [`DemWorkerJob`] id plus a user-facing cause string. The task runs with no
+/// `World` access, so the REASON travels with the id and `finish_dem_worker`
+/// (the drain, which does have `Commands`) publishes it as
+/// [`DEM_BUILD_FAILED`] — the id alone would have made the failure unspeakable.
 #[cfg(target_arch = "wasm32")]
-static WASM_BAKE_FAILURES_TX: std::sync::OnceLock<std::sync::mpsc::Sender<u32>> =
+type WasmBakeFailure = (u32, String);
+
+#[cfg(target_arch = "wasm32")]
+static WASM_BAKE_FAILURES_TX: std::sync::OnceLock<std::sync::mpsc::Sender<WasmBakeFailure>> =
     std::sync::OnceLock::new();
 #[cfg(target_arch = "wasm32")]
 static WASM_BAKE_FAILURES_RX: std::sync::OnceLock<
-    std::sync::Mutex<std::sync::mpsc::Receiver<u32>>,
+    std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>>,
 > = std::sync::OnceLock::new();
 
 #[cfg(target_arch = "wasm32")]
-fn get_wasm_bake_failures_tx() -> &'static std::sync::mpsc::Sender<u32> {
+fn get_wasm_bake_failures_tx() -> &'static std::sync::mpsc::Sender<WasmBakeFailure> {
     WASM_BAKE_FAILURES_TX.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel();
         let _ = WASM_BAKE_FAILURES_RX.set(std::sync::Mutex::new(rx));
@@ -939,7 +1014,8 @@ fn get_wasm_bake_failures_tx() -> &'static std::sync::mpsc::Sender<u32> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn get_wasm_bake_failures_rx() -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<u32>> {
+fn get_wasm_bake_failures_rx() -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>>
+{
     let _ = get_wasm_bake_failures_tx(); // ensures initialized
     WASM_BAKE_FAILURES_RX.get().unwrap()
 }
@@ -1060,7 +1136,14 @@ fn start_dem_builds(
                             }
                             Err(e) => {
                                 bevy::log::error!("[dem-terrain] tif read from scenario cache failed: {e}");
-                                let _ = tx.send(id);
+                                let _ = tx.send((
+                                    id,
+                                    format!(
+                                        "Terrain '{site_id}': could not read the cached heightmap \
+                                         '{}' — no ground was created. {e}",
+                                        tif_path.display()
+                                    ),
+                                ));
                                 return;
                             }
                         }
@@ -1091,7 +1174,13 @@ fn start_dem_builds(
                             Ok(b) => b,
                             Err(e) => {
                                 bevy::log::error!("[dem-terrain] tif fetch failed: {e}");
-                                let _ = tx.send(id);
+                                let _ = tx.send((
+                                    id,
+                                    format!(
+                                        "Terrain '{site_id}': could not download the heightmap \
+                                         '{url}' — no ground was created. {e}"
+                                    ),
+                                ));
                                 return;
                             }
                         }
@@ -1139,7 +1228,13 @@ fn start_dem_builds(
                         lunco_terrain_bake::worker_client::dispatch(id, &job, &site_id, &tif)
                     {
                         bevy::log::error!("[dem-terrain] worker dispatch failed: {e:?}");
-                        let _ = tx.send(id);
+                        let _ = tx.send((
+                            id,
+                            format!(
+                                "Terrain '{site_id}': could not start the heightmap bake worker \
+                                 — no ground was created. {e:?}"
+                            ),
+                        ));
                     }
                 })
                 .detach();
@@ -1273,6 +1368,12 @@ fn finish_dem_builds(
             Ok(b) => b,
             Err(err) => {
                 warn!("[dem-terrain] build failed: {err}");
+                // The terrain is simply ABSENT from here on — no collider, no
+                // mesh, no oracle. Say so where the user is looking.
+                commands.trigger(dem_build_failed(format!(
+                    "Terrain build failed for DEM '{}' — no ground was created. {err}",
+                    req.uri
+                )));
                 continue;
             }
         };
@@ -1318,7 +1419,7 @@ fn assemble_dem_build(
             e.try_insert((RigidBody::Static, collider));
         }
         // Retain the pristine base grid + source settings so the crater layer can be
-        // re-baked live from the Inspector (`RegenerateField`) without disk I/O.
+        // re-baked live from the Inspector (`UpdateObstacleFieldSpec`) without disk I/O.
         e.try_insert((
             DemBaseGrid(built.base_grid, built.base_key),
             DemTerrainSource { collider_ring },
@@ -1436,12 +1537,17 @@ fn finish_dem_worker(
     let curvature_radius = curvature.map(|c| c.radius_m);
     // Drain failed wasm bakes:
     if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
-        while let Ok(failed_id) = rx.try_recv() {
+        while let Ok((failed_id, reason)) = rx.try_recv() {
             if let Some((entity, _)) = jobs.iter().find(|(_, j)| j.id == failed_id) {
                 commands
                     .entity(entity)
                     .remove::<(DemTerrainRequest, DemWorkerJob)>();
             }
+            // Published here rather than at the failing I/O step: the detached
+            // fetch/dispatch task has no `World`, so the cause rides the channel
+            // and reaches the user from the drain that owns `Commands`.
+            bevy::log::error!("[dem-terrain] {reason}");
+            commands.trigger(dem_build_failed(reason));
         }
     }
 
@@ -1559,6 +1665,21 @@ fn finish_dem_worker(
             }
             (stage, Err(e)) => {
                 warn!("[dem-terrain] worker bake {stage:?} failed: {e}");
+                // The job's components are dropped just below, so this reply is
+                // the LAST trace of it. A Coarse failure means no terrain at all;
+                // a Full failure means the coarse preview is all the user will
+                // ever get. Both are the user's business, not just the log's.
+                commands.trigger(dem_build_failed(match stage {
+                    lunco_terrain_bake::BakeStage::Full => format!(
+                        "Terrain '{}': the full-detail heightmap bake failed — the low-detail \
+                         preview is all that will load. {e}",
+                        reply.site
+                    ),
+                    _ => format!(
+                        "Terrain '{}': the heightmap bake failed — no ground was created. {e}",
+                        reply.site
+                    ),
+                }));
                 if matches!(stage, lunco_terrain_bake::BakeStage::Full) {
                     commands.entity(entity).remove::<DemWorkerJob>();
                 } else {

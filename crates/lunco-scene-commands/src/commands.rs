@@ -14,7 +14,6 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
-use lunco_obstacle_field::ObstacleFieldRoot;
 // Appearance INTENT (render-free). `SetObjectProperty`'s PBR keys mutate `PbrLook`
 // and its shader keys mutate `ShaderLook`; the render binders re-materialise on
 // `Changed<PbrLook>` / `Changed<ShaderLook>`. This file names no material type —
@@ -22,7 +21,6 @@ use lunco_obstacle_field::ObstacleFieldRoot;
 use crate::catalog::{
     prim_path_from_entry_id, spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource,
 };
-use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderLook};
@@ -3125,73 +3123,6 @@ pub fn on_delete_shader(
 /// observers and the kinematic-pulse cleanup + twin shader auto-scan systems.
 pub struct SpawnCommandPlugin;
 
-/// Replace the flat USD-authored ground once an obstacle field exists: author a
-/// `RemovePrim` op so the `Ground` prim leaves the active stage (the Twin document
-/// stays consistent — a reload won't re-spawn it), and despawn its ECS projection
-/// immediately so the generated heightfield is the only ground collider (also on
-/// the headless server, where no viewport rebuild fires from the doc edit).
-///
-/// Lives here (not in the pure `lunco-obstacle-field` generator) because authoring
-/// stage ops needs USD access. Change-driven via [`obstacle_field_scene_changed`]:
-/// it scans only on frames where a field or a USD prim was just added, never
-/// per-frame for the app lifetime.
-fn remove_legacy_ground_prim(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    registry: Res<DocumentRegistry<UsdDocument>>,
-    ground: Query<(Entity, &UsdPrimPath)>,
-) {
-    for (entity, prim) in &ground {
-        // The USD loader names entities by full prim path (e.g.
-        // `/SandboxScene/Ground`); match the leaf. Generated terrain carries no
-        // `UsdPrimPath`, so it can never match here.
-        if prim.path.rsplit('/').next() != Some("Ground") {
-            continue;
-        }
-        if let Some(doc) = doc_for_stage(&prim.stage_handle, &asset_server, &registry) {
-            commands.trigger(ApplyUsdOp {
-                doc,
-                op: UsdOp::RemovePrim {
-                    edit_target: LayerId::root(),
-                    path: prim.path.clone(),
-                },
-            });
-        }
-        commands.entity(entity).try_despawn();
-    }
-}
-
-/// Run condition for [`remove_legacy_ground_prim`]: a field exists and either it
-/// or a USD prim was just added this frame. Handles both spawn orderings (field
-/// before ground, ground before field) while keeping the system off every other
-/// frame.
-fn obstacle_field_scene_changed(
-    fields_now: Query<(), With<ObstacleFieldRoot>>,
-    fields_added: Query<(), Added<ObstacleFieldRoot>>,
-    prims_added: Query<(), Added<UsdPrimPath>>,
-) -> bool {
-    !fields_now.is_empty() && (!fields_added.is_empty() || !prims_added.is_empty())
-}
-
-/// Resolve the open document that owns `stage_handle` by matching the stage asset
-/// path against the registry (headless-safe — no viewport dependency).
-fn doc_for_stage(
-    stage_handle: &Handle<UsdStageAsset>,
-    asset_server: &AssetServer,
-    registry: &DocumentRegistry<UsdDocument>,
-) -> Option<DocumentId> {
-    let asset_path = asset_server.get_path(stage_handle.id())?;
-    let path_str = asset_path.path().to_string_lossy().into_owned();
-    registry.ids().find(|id| {
-        registry
-            .host(*id)
-            .is_some_and(|h| match h.document().origin() {
-                DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),
-                _ => false,
-            })
-    })
-}
-
 /// Freeze physics and advance it deliberately, one frame at a time.
 ///
 /// The verb a cutscene or an offline recording wants, and the reason it is NOT
@@ -3294,10 +3225,6 @@ impl Plugin for SpawnCommandPlugin {
         // Persist a Persistent DetachJoint into the active doc's runtime layer.
         app.add_observer(persist_detach_to_runtime_layer);
         app.add_observer(persist_delete_to_runtime_layer);
-        app.add_systems(
-            Update,
-            remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),
-        );
         // C4b: persist authored-scene moves into the active doc's runtime layer.
         app.add_observer(persist_move_to_runtime_layer);
         // C4b: persist palette/API spawns as referenced runtime-layer prims.

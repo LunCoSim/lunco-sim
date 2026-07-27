@@ -242,6 +242,53 @@ fn artifact_rel_of(entry: &AssetEntry, scope: &DatasetScope, dest: &std::path::P
 /// Cross-thread slot a download task writes its progress into.
 type StatusSlot = Arc<Mutex<Option<DatasetState>>>;
 
+/// Telemetry event name published when a declared dataset cannot be offered or
+/// cannot be fetched: an unparseable `Assets.toml`, a manifest file that will
+/// not read, a duplicate key, or a failed download.
+///
+/// Published at [`Severity::Error`](lunco_core::Severity::Error) so the status
+/// bar's error-telemetry observer surfaces it — the same arrangement
+/// `lunco_usd_bevy::SCENE_LOAD_FAILED` and `lunco_tutorial::TUTORIAL_FAILED`
+/// use. A user whose dataset panel is empty because a manifest is broken must
+/// be told WHY in the UI, not only in a terminal they are not watching.
+/// The payload is a human-readable cause string.
+pub const DATASET_FAILED: &str = "DATASET_FAILED";
+
+/// The one shape every [`DATASET_FAILED`] publication takes, so the payload
+/// convention cannot drift between sites.
+fn dataset_failed(detail: impl Into<String>) -> lunco_core::TelemetryEvent {
+    lunco_core::TelemetryEvent {
+        name: DATASET_FAILED.into(),
+        source: 0,
+        severity: lunco_core::Severity::Error,
+        data: lunco_core::TelemetryValue::String(detail.into()),
+        timestamp: 0.0,
+    }
+}
+
+/// Everything one download ATTEMPT communicates with: the status slot it writes
+/// into, and the flag that tells it to give up.
+///
+/// One handle per attempt, not per entry. A task we stopped waiting for (stall
+/// watchdog, explicit cancel) is detached and may still be inside a blocking
+/// read; if it shared a slot with the next attempt its late verdict would
+/// clobber the live one. Replacing the handle orphans it harmlessly — it writes
+/// into a slot nobody reads, exactly as [`DatasetRegistry::forget_scope`]
+/// already relies on.
+struct DownloadHandle {
+    status: StatusSlot,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Default for DownloadHandle {
+    fn default() -> Self {
+        Self {
+            status: Arc::new(Mutex::new(None)),
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+}
+
 /// Every dataset any crate has declared, and its live state.
 ///
 /// Registration order is irrelevant; keys are unique, and a duplicate key is
@@ -249,8 +296,11 @@ type StatusSlot = Arc<Mutex<Option<DatasetState>>>;
 #[derive(Resource, Default)]
 pub struct DatasetRegistry {
     entries: Vec<DatasetEntry>,
-    /// Per-entry status slot, written by the task, drained in `Update`.
-    slots: Vec<StatusSlot>,
+    /// Per-entry download handle, written by the task, drained in `Update`.
+    slots: Vec<DownloadHandle>,
+    /// Failures raised from `&mut self` methods, which have no `Commands`.
+    /// Drained into [`DATASET_FAILED`] telemetry by [`drain_dataset_status`].
+    pending_failures: Vec<String>,
 }
 
 impl DatasetRegistry {
@@ -275,6 +325,11 @@ impl DatasetRegistry {
             Ok(m) => m,
             Err(e) => {
                 error!("[datasets] {group}: Assets.toml parse failed: {e}");
+                // The log line is not the user's channel: a broken manifest
+                // means the dataset panel silently offers nothing, which is
+                // indistinguishable from "nothing is declared".
+                self.pending_failures
+                    .push(format!("{group}: Assets.toml parse failed: {e}"));
                 return 0;
             }
         };
@@ -292,6 +347,10 @@ impl DatasetRegistry {
                     "[datasets] duplicate dataset key '{key}' within scope '{}' — ignored",
                     scope.label()
                 );
+                self.pending_failures.push(format!(
+                    "duplicate dataset key '{key}' within scope '{}' — ignored",
+                    scope.label()
+                ));
                 continue;
             }
             let path = entry_dest_path(&entry, Some(&dest_root));
@@ -319,7 +378,7 @@ impl DatasetRegistry {
                 artifact_rel,
                 spec: entry,
             });
-            self.slots.push(Arc::new(Mutex::new(None)));
+            self.slots.push(DownloadHandle::default());
             added += 1;
         }
         added
@@ -426,6 +485,11 @@ impl DatasetRegistry {
     /// action, never to startup or scene load.
     ///
     /// No-op when the dataset is already installed or already downloading.
+    ///
+    /// `Downloading` is not a sticky state: every attempt is watched by a stall
+    /// watchdog that turns a wedged transfer into [`DatasetState::Failed`], and
+    /// `Failed` is requestable again — so "the host went away mid-download"
+    /// costs the user a wait, never the process lifetime.
     pub fn request(&mut self, key: &str) {
         let Some(i) = self.entries.iter().position(|e| e.key == key) else {
             warn!("[datasets] request for unknown dataset '{key}'");
@@ -441,9 +505,43 @@ impl DatasetRegistry {
             bytes_done: 0,
             bytes_total: 0,
         };
+        // Fresh handle per attempt — see `DownloadHandle`. A retry after a
+        // stall must not be able to inherit the abandoned task's verdict.
+        self.slots[i] = DownloadHandle::default();
         let scope = self.entries[i].scope.clone();
         let spec = self.entries[i].spec.clone();
-        spawn_download(&self.entries[i], &spec, scope, self.slots[i].clone());
+        spawn_download(
+            &self.entries[i],
+            &spec,
+            scope,
+            self.slots[i].status.clone(),
+            self.slots[i].cancel.clone(),
+        );
+    }
+
+    /// Give up on an in-flight download: raise the task's cancel flag and put
+    /// the entry straight into [`DatasetState::Failed`] so it is requestable
+    /// again immediately.
+    ///
+    /// The state does not wait for the task to notice. A task parked in a
+    /// blocking socket read cannot answer until bytes arrive or the OS gives
+    /// up, and holding the UI hostage to that is exactly the wedge this exists
+    /// to prevent — so the entry is released now and the doomed task, whose
+    /// handle has been replaced, writes into a slot nobody reads.
+    pub fn cancel(&mut self, key: &str) {
+        let Some(i) = self.entries.iter().position(|e| e.key == key) else {
+            warn!("[datasets] cancel for unknown dataset '{key}'");
+            return;
+        };
+        if !matches!(self.entries[i].state, DatasetState::Downloading { .. }) {
+            return;
+        }
+        self.slots[i]
+            .cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.slots[i] = DownloadHandle::default();
+        self.entries[i].state = DatasetState::Failed("cancelled".into());
+        info!("[datasets] '{key}' download cancelled by user");
     }
 
     /// Start every missing dataset. Same authorisation rule as [`request`](Self::request).
@@ -455,10 +553,31 @@ impl DatasetRegistry {
     }
 }
 
-/// Spawn the actual fetch on the async pool.
+/// How often the stall watchdog samples the liveness counter. Small relative to
+/// [`BODY_STALL_TIMEOUT`](crate::download::BODY_STALL_TIMEOUT) so the reported
+/// idle time is accurate to a couple of seconds, large enough that watching a
+/// download costs nothing.
 #[cfg(not(target_arch = "wasm32"))]
-fn spawn_download(entry: &DatasetEntry, spec: &AssetEntry, scope: DatasetScope, slot: StatusSlot) {
-    use crate::download::{download_asset_with_control, DownloadControl};
+const STALL_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Spawn the actual fetch on the async pool, plus the watchdog that gives it a
+/// deadline.
+///
+/// Two tasks, because the fetch cannot time itself: it spends its life inside a
+/// blocking `read` that returns when the peer feels like it. The watchdog
+/// watches a liveness counter instead — an INACTIVITY test, not a
+/// total-duration cap, so an hour-long GeoTIFF over a slow link is fine and a
+/// host that stops sending is not.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_download(
+    entry: &DatasetEntry,
+    spec: &AssetEntry,
+    scope: DatasetScope,
+    slot: StatusSlot,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) {
+    use crate::download::{download_asset_with_control, DownloadControl, BODY_STALL_TIMEOUT};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     let key = entry.key.clone();
     let name = entry.name.clone();
@@ -466,11 +585,74 @@ fn spawn_download(entry: &DatasetEntry, spec: &AssetEntry, scope: DatasetScope, 
     let dest = entry.path.clone();
     let dest_root = scope.dest_root();
     let progress_slot = slot.clone();
+
+    // Shared with the watchdog: a monotonic LIVENESS counter bumped by every
+    // progress tick (a chunk read) and every extraction tick, plus the flag
+    // that retires the watchdog once the fetch returns.
+    //
+    // A counter rather than the byte total, because unpacking a tarball is
+    // also progress and reports no bytes — watching the byte count alone would
+    // declare a healthy 2-minute extraction stalled.
+    let activity = Arc::new(AtomicU64::new(0));
+    let network_done = Arc::new(AtomicBool::new(false));
+
     info!("[datasets] downloading '{key}' ({name}) — user-requested");
+
+    {
+        // Watchdog. Retired the moment the fetch call returns: the
+        // `[*.process]` step after it is long, silent and local — a CPU-bound
+        // DEM crop produces no ticks and cancelling it would be a bug.
+        let activity = activity.clone();
+        let network_done = network_done.clone();
+        let cancel = cancel.clone();
+        let slot = slot.clone();
+        let key = key.clone();
+        bevy::tasks::AsyncComputeTaskPool::get()
+            .spawn(async move {
+                let mut last = u64::MAX; // sentinel: the first sample always counts as progress
+                let mut idle = std::time::Duration::ZERO;
+                loop {
+                    std::thread::sleep(STALL_POLL);
+                    if network_done.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let now = activity.load(Ordering::Relaxed);
+                    if now != last {
+                        last = now;
+                        idle = std::time::Duration::ZERO;
+                        continue;
+                    }
+                    idle += STALL_POLL;
+                    if idle < BODY_STALL_TIMEOUT {
+                        continue;
+                    }
+                    // Give up. Raising the flag lets the fetch task unwind at
+                    // its next chunk boundary if bytes ever resume; the state
+                    // is published NOW regardless, because the whole point is
+                    // that the user must not wait on a peer that is gone.
+                    cancel.store(true, Ordering::Relaxed);
+                    let secs = BODY_STALL_TIMEOUT.as_secs();
+                    warn!("[datasets] '{key}' stalled — no data for {secs}s, giving up");
+                    if let Ok(mut s) = slot.lock() {
+                        *s = Some(DatasetState::Failed(format!(
+                            "download stalled — no data for {secs}s (retry when the \
+                             connection or the host recovers)"
+                        )));
+                    }
+                    return;
+                }
+            })
+            .detach();
+    }
+
+    let progress_activity = activity.clone();
+    let extract_activity = activity;
+    let fetch_done = network_done;
     bevy::tasks::AsyncComputeTaskPool::get()
         .spawn(async move {
             let control = DownloadControl {
                 progress: Some(Box::new(move |done, total| {
+                    progress_activity.fetch_add(1, Ordering::Relaxed);
                     if let Ok(mut s) = progress_slot.lock() {
                         *s = Some(DatasetState::Downloading {
                             bytes_done: done,
@@ -478,19 +660,23 @@ fn spawn_download(entry: &DatasetEntry, spec: &AssetEntry, scope: DatasetScope, 
                         });
                     }
                 })),
-                extracting: None,
-                cancel: None,
+                // Not for display — the tick is what tells the watchdog an
+                // unpacking archive is alive.
+                extracting: Some(Box::new(move |_entries| {
+                    extract_activity.fetch_add(1, Ordering::Relaxed);
+                })),
+                cancel: Some(cancel),
             };
             // The scope decided the root: engine → shared cache, twin →
             // `<twin>/.cache`. Same resolver the CLI downloader uses, so a
             // file fetched from the app and one fetched from the terminal land
             // in exactly the same place.
-            let outcome = match download_asset_with_control(
-                &spec,
-                &key,
-                control,
-                Some(dest_root.as_path()),
-            ) {
+            let fetched =
+                download_asset_with_control(&spec, &key, control, Some(dest_root.as_path()));
+            // Network phase over: retire the watchdog before the process step,
+            // which is local, silent and legitimately slow.
+            fetch_done.store(true, Ordering::Relaxed);
+            let outcome = match fetched {
                 // A download is only half of a derived dataset. The CLI has
                 // always run `process` as a second command; in-app there is no
                 // second command to run, so the fetch that a user authorised
@@ -538,6 +724,7 @@ fn spawn_download(
     _spec: &AssetEntry,
     _scope: DatasetScope,
     slot: StatusSlot,
+    _cancel: Arc<std::sync::atomic::AtomicBool>,
 ) {
     warn!(
         "[datasets] '{}' cannot be downloaded in the browser build — it is served by the host",
@@ -548,10 +735,25 @@ fn spawn_download(
     }
 }
 
-/// Drain task-written status into the registry. Cheap: one `try_lock` per
-/// dataset, and only while something is in flight.
-fn drain_dataset_status(registry: Option<ResMut<DatasetRegistry>>) {
+/// Drain task-written status into the registry, and republish whatever failed
+/// as [`DATASET_FAILED`] telemetry.
+///
+/// Cheap: one `try_lock` per dataset, and only while something is in flight.
+/// The telemetry drain runs unconditionally — registration failures are raised
+/// from `&mut self` methods that have no `Commands`, and they happen when
+/// nothing is downloading.
+fn drain_dataset_status(registry: Option<ResMut<DatasetRegistry>>, mut commands: Commands) {
     let Some(mut registry) = registry else { return };
+
+    // Registration-time failures (parse, unreadable manifest, duplicate key).
+    // Guarded so the common empty case never touches `ResMut`'s deref_mut and
+    // marks the registry changed every frame.
+    if !registry.pending_failures.is_empty() {
+        for detail in std::mem::take(&mut registry.pending_failures) {
+            commands.trigger(dataset_failed(detail));
+        }
+    }
+
     if !registry
         .entries
         .iter()
@@ -560,10 +762,20 @@ fn drain_dataset_status(registry: Option<ResMut<DatasetRegistry>>) {
         return;
     }
     for i in 0..registry.entries.len() {
-        let next = registry.slots[i].lock().ok().and_then(|mut s| s.take());
+        let next = registry.slots[i]
+            .status
+            .lock()
+            .ok()
+            .and_then(|mut s| s.take());
         if let Some(state) = next {
             if let DatasetState::Failed(ref e) = state {
                 warn!("[datasets] '{}' failed: {e}", registry.entries[i].key);
+                // A failed download is a user-visible failure: the panel row
+                // goes red, but the user may be looking anywhere else.
+                commands.trigger(dataset_failed(format!(
+                    "dataset '{}' failed: {e}",
+                    registry.entries[i].key
+                )));
             }
             if state.is_installed() {
                 info!("[datasets] '{}' installed", registry.entries[i].key);
@@ -643,7 +855,15 @@ fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>) {
     for (group, path) in manifests {
         match std::fs::read_to_string(&path) {
             Ok(text) => total += registry.register(&text, &group),
-            Err(e) => error!("[datasets] cannot read {}: {e}", path.display()),
+            Err(e) => {
+                error!("[datasets] cannot read {}: {e}", path.display());
+                // Queued rather than triggered here: this is a `Startup`
+                // system, and one path for every manifest failure means the
+                // panel cannot learn about some of them and not others.
+                registry
+                    .pending_failures
+                    .push(format!("cannot read {}: {e}", path.display()));
+            }
         }
     }
     info!("[datasets] {total} declared dataset(s) from assets/manifests");
@@ -701,6 +921,50 @@ dest = "ephemeris/demo.csv"
         let mut r = DatasetRegistry::default();
         assert_eq!(r.register("this is not toml {{{", "bad"), 0);
         assert!(r.entries().is_empty());
+    }
+
+    /// A broken manifest must not be silent: the panel shows an empty list,
+    /// which is indistinguishable from "nothing declared" unless the failure is
+    /// published. `drain_dataset_status` turns each queued cause into a
+    /// `DATASET_FAILED` Error telemetry event.
+    #[test]
+    fn a_broken_manifest_queues_a_user_visible_failure() {
+        let mut r = DatasetRegistry::default();
+        r.register("this is not toml {{{", "bad");
+        assert_eq!(r.pending_failures.len(), 1);
+        assert!(r.pending_failures[0].contains("bad"));
+
+        // And a duplicate key is a failure too, not just a log line.
+        let mut r = DatasetRegistry::default();
+        r.register(MANIFEST, "first");
+        r.register(MANIFEST, "second");
+        assert_eq!(r.pending_failures.len(), 1);
+        assert!(r.pending_failures[0].contains("demo_vectors"));
+
+        let ev = dataset_failed("boom");
+        assert_eq!(ev.name, DATASET_FAILED);
+        assert_eq!(ev.severity, lunco_core::Severity::Error);
+    }
+
+    /// Cancelling something that is not in flight is a no-op, and cancelling a
+    /// download releases the entry to `Failed` — which `request` accepts — so
+    /// the user is never locked out by a wedged transfer.
+    #[test]
+    fn cancel_releases_the_entry_for_retry() {
+        let mut r = DatasetRegistry::default();
+        r.register(MANIFEST, "demo");
+        r.cancel("demo_vectors"); // not downloading → no-op
+        assert_eq!(r.entries()[0].state, DatasetState::Missing);
+
+        // Simulate an in-flight download without touching the network.
+        r.entries[0].state = DatasetState::Downloading {
+            bytes_done: 0,
+            bytes_total: 0,
+        };
+        r.cancel("demo_vectors");
+        assert!(matches!(r.entries()[0].state, DatasetState::Failed(_)));
+        // `missing()` — what the UI offers a download button for — includes it.
+        assert_eq!(r.missing().count(), 1);
     }
 
     #[test]

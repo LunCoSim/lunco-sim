@@ -17,10 +17,10 @@
 def Xform "BearLakes" (
     prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     kind = "component"
+    displayName = "Bear Lakes · RT-64"
     doc = "Bear Lakes (Медвежьи Озёра), Moscow oblast — TNA-1500, 64 m. Western half of the Russian deep-space pair."
 )
 {
-    custom string lunco:label = "Bear Lakes · RT-64"
 
     double lunco:anchor:lat = 55.87
     double lunco:anchor:lon = 38.23

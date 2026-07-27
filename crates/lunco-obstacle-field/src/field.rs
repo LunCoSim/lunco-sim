@@ -115,8 +115,8 @@ impl HeightGrid {
 
     // (crater cross-section: `crater_delta` below — an f32 wrapper over the
     // canonical `lunco_terrain_core::crater_profile`. Streamed tiles sample
-    // terrain-core's crater layer directly; this stamp path serves only
-    // Standalone-mode obstacle fields.)
+    // terrain-core's crater layer directly; this stamp path serves the
+    // synthesised `HeightGrid` used for analytic `height_at` queries and tests.)
 
     /// Stamp every crater placement using the layer's depth/rim ratios.
     pub fn stamp_craters(&mut self, placements: &[Placement], layer: &CraterLayer) {

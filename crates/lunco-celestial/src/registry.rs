@@ -34,6 +34,16 @@ pub struct CelestialBodyRegistry {
 
 pub use lunco_core::CelestialBody;
 
+/// **The** lunar radius, in metres — declared once in [`lunco_core`] and
+/// re-exported here, where the simulation side has always named it.
+///
+/// The number itself lives in `lunco-core` because the offline `lunco-assets`
+/// build tool stamps the same datum into every baked GeoTIFF and must not take
+/// a Bevy-heavy dependency on this crate to reach it. See
+/// [`lunco_core::MOON_MEAN_RADIUS_M`] for the IAU/WGCCRE citation and the
+/// history. Do not re-type the value anywhere.
+pub use lunco_core::MOON_MEAN_RADIUS_M;
+
 /// Component that identifies an entity as a center of a celestial reference frame.
 ///
 /// **Why**: Essential for the ephemeris system to resolve absolute
@@ -172,7 +182,7 @@ impl CelestialBodyRegistry {
                 BodyDescriptor {
                     name: "Moon".to_string(),
                     ephemeris_id: 301,
-                    radius_m: 1737.0e3,
+                    radius_m: MOON_MEAN_RADIUS_M,
                     gm: 4.9048695e12,
                     soi_radius_m: Some(66.0e6),
                     parent_id: Some(3), // EMB

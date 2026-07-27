@@ -1082,9 +1082,15 @@ class "LunCoControlBindingAPI" (
     vessels by `subLayers` + `inherits`."""
 )
 {
-    uniform string lunco:port = "" (
+    uniform token lunco:port = "" (
         doc = """The vessel input port this intent drives (`"throttle"`,
-        `"pitch"`). Uniform: a binding does not retarget over time."""
+        `"pitch"`). Uniform: a binding does not retarget over time.
+
+        `token`, not `string`: this is an IDENTIFIER — it is matched against the
+        runtime port registry's names, never displayed, concatenated or
+        localized. USD interns tokens for exactly this use, and the type is what
+        tells a reader it must compare, not read. Open vocabulary (a vessel names
+        its own ports), so no `allowedTokens`."""
     )
     uniform double lunco:scale = 1 (
         doc = """Port contribution per unit intent — sign flips an axis, magnitude
@@ -1094,7 +1100,12 @@ class "LunCoControlBindingAPI" (
         doc = """Follow mode the camera adopts when this vessel is possessed —
         authored on the `Controls` scope itself, not a binding child. Canonical
         spellings `heading` | `orbit` | `chase` (synonyms accepted by
-        `lunco_core::parse_camera_follow`); empty = the engine default."""
+        `lunco_core::parse_camera_follow`); empty = the engine default.
+
+        The token set is CLOSED — `parse_camera_follow` returns `None` for
+        anything else and the follow is dropped — so every spelling it accepts is
+        listed, synonyms included. A spelling added there must be added here."""
+        allowedTokens = ["", "heading", "springarm", "yaw", "orbit", "stable", "external", "chase", "cockpit", "attitude", "full"]
     )
 }
 
@@ -1105,10 +1116,17 @@ class "LunCoSceneFlowAPI" (
     doc = """Tutorial/mission chaining: which scene follows this one."""
 )
 {
-    string lunco:nextScene = "" (
+    asset lunco:nextScene = @@ (
         doc = """Scene to load when this scene's mission completes
-        (`"scenes/foo.usda"`). Stamped as a `NextScene` marker and loaded by
-        lunco-tutorial on MISSION_COMPLETE. Empty = the chain ends here."""
+        (`@lunco://scenes/foo.usda@`). Stamped as a `NextScene` marker and loaded
+        by lunco-tutorial on MISSION_COMPLETE. Unauthored = the chain ends here.
+
+        `asset`, never `string` — it names a USD FILE. Only an `asset` is seen by
+        the resolver (so the `lunco://` scheme applies), and only an `asset` is
+        found by anything walking a layer for the files a scene depends on: the
+        reference closure that scenario-sync uses, packaging, `usdzip`. As a
+        `string` the next lesson in a curriculum simply does not travel with the
+        curriculum. Same reasoning as `info:sourceAsset` above."""
     )
 }
 

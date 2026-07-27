@@ -54,8 +54,6 @@ pub struct PhysicsHolds {
 impl PhysicsHolds {
     /// Terrain DEM build / collider-ring warm-up (`lunco-terrain-surface`).
     pub const TERRAIN_READY: &'static str = "terrain-ready";
-    /// Obstacle-field regeneration settle window (`lunco-obstacle-field`).
-    pub const OBSTACLE_FIELD: &'static str = "obstacle-field";
     /// Something the world needs is not ready yet — a scene still composing, a
     /// program still compiling. Raised from [`lunco_readiness`] by
     /// [`readiness::apply_world_readiness_hold`]; the *scope* of a wait (world vs
@@ -255,14 +253,14 @@ mod tests {
         let mut h = PhysicsHolds::default();
         assert!(!h.is_held());
         h.set(PhysicsHolds::TERRAIN_READY, true);
-        h.set(PhysicsHolds::OBSTACLE_FIELD, true);
+        h.set(PhysicsHolds::READINESS, true);
         assert!(h.is_held());
         // Releasing one leaves the other holding — no subsystem can resume physics
         // on another's behalf.
         h.set(PhysicsHolds::TERRAIN_READY, false);
         assert!(h.is_held());
-        assert!(h.holds(PhysicsHolds::OBSTACLE_FIELD));
-        h.set(PhysicsHolds::OBSTACLE_FIELD, false);
+        assert!(h.holds(PhysicsHolds::READINESS));
+        h.set(PhysicsHolds::READINESS, false);
         assert!(!h.is_held());
     }
 

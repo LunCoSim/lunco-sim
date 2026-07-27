@@ -22,6 +22,12 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 # Twin and a downloaded scenario are served uniformly on both platforms.
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin" }
+# A broken `Assets.toml` or a failed dataset download has to REACH the user, and
+# `warn!`/`error!` is not surfacing — the workbench fans an Error-severity
+# `lunco_core::TelemetryEvent` to the status bar and Diagnostics. Plain
+# `[dependencies]`, not target-gated: `drain_dataset_status` runs on wasm too.
+# No cycle — lunco-core's only path deps are command-macro/hash/hooks.
+lunco-core = { path = "../lunco-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

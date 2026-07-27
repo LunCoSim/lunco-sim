@@ -912,8 +912,8 @@ fn replay_scenario_journal_shader(
 }
 
 /// Per-domain journal consume leg for `DomainKind::ObstacleField` — installs a
-/// peer's journaled obstacle-field spec onto the local `ObstacleFieldSpec` and
-/// fires `RegenerateField`. This is what replaced the former bespoke host→client
+/// peer's journaled obstacle-field spec onto the local `ObstacleFieldSpec`.
+/// This is what replaced the former bespoke host→client
 /// broadcast (`sync_obstacle_field_spec`): the spec now rides the journal plane,
 /// so a tweak syncs BOTH directions and persists. No single-doc limitation (the
 /// spec is a singleton). No-ops when the spec resource / journal are absent.
@@ -923,7 +923,6 @@ fn replay_scenario_journal_obstacle(
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
-    mut regen: MessageWriter<lunco_obstacle_field::RegenerateField>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
     let (Some(journal), Some(mut spec)) = (journal, spec) else {
@@ -946,8 +945,7 @@ fn replay_scenario_journal_obstacle(
         lunco_twin_journal::DomainKind::ObstacleField,
     );
     // Coalesce: a batch may carry several SetSpec ops (rapid slider drags); only
-    // the LAST one matters, and each `RegenerateField` is a full terrain re-stamp
-    // + rock re-scatter — so install once and fire one regen.
+    // the LAST one matters — so install once.
     let mut last_spec = None;
     for (id, op) in pending {
         if let Some(new_spec) = lunco_obstacle_field::journal::replay_spec(&op) {
@@ -956,10 +954,9 @@ fn replay_scenario_journal_obstacle(
         applied.insert(id);
     }
     if let Some(new_spec) = last_spec {
-        // Install the peer's spec + regenerate. Sets the resource directly
-        // (NOT the `UpdateObstacleFieldSpec` command), so no re-record.
+        // Install the peer's spec. Sets the resource directly (NOT the
+        // `UpdateObstacleFieldSpec` command), so no re-record.
         *spec = new_spec;
-        regen.write(lunco_obstacle_field::RegenerateField);
     }
 }
 
@@ -2217,16 +2214,11 @@ impl Plugin for SandboxCorePlugin {
             // GravityPlugin now rides in via CelestialPlugin below (guarded).
             .add_plugins(EnvironmentPlugin)
             .add_plugins(TerrainPlugin)
-            // Procedural crater + rock field generator (replaces the flat Cube
-            // ground for rover mobility testing). Server-authoritative colliders;
-            // client adds visuals. See `project_obstacle_field_generator`.
+            // Procedural crater + rock field generator. Owns the shared
+            // `ObstacleFieldSpec` + `UpdateObstacleFieldSpec` only; the real ground
+            // is the USD DEM terrain, which observes that command and stamps
+            // craters / scatters rocks into its own grid.
             .add_plugins(ObstacleFieldPlugin)
-            // ...but in DEM-delegated mode: the real ground is the USD DEM terrain,
-            // which consumes the SAME `ObstacleFieldSpec` (craters stamped into the
-            // grid, rocks scattered on its surface) — so the standalone 400 m flat
-            // slab must NOT build (it would float on / z-fight the DEM). The one
-            // Inspector panel + the networked spec drive the DEM layers directly.
-            .insert_resource(lunco_obstacle_field::ObstacleFieldMode::DemDelegated)
             // Streamed, dynamically-LOD'd terrain (DEM tiles + heightfield
             // colliders). Inert at M0 (config only); see lunco-terrain-surface
             // and docs/terrain-streaming-PLAN.md.

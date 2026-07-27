@@ -18,7 +18,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
@@ -61,6 +60,24 @@ pub struct GlobeTiles {
     /// flickered ("still blinking"). The brief overlap of coplanar identical
     /// surfaces is invisible; a hole is not.
     pub retiring: Vec<(Entity, u8)>,
+    /// Camera position (body-local) the desired set was last solved AND fully
+    /// realised at — the camera-motion gate for [`update_globe_lod`].
+    ///
+    /// `None` means "the last pass left work outstanding" (spawns still queued
+    /// under the budget, or tiles still retiring), so the next frame must run
+    /// regardless of camera motion. It is set to `Some` only when the resident
+    /// set exactly covers the desired set with nothing retiring, i.e. when there
+    /// is provably nothing for another pass to do.
+    ///
+    /// Entity-scoped (a field on the body's own component) rather than a
+    /// `Local<HashMap<Entity, _>>` in the system, for the same reason
+    /// `MissionSpawned` is (missions.rs): a `Local` outlives scene teardown and
+    /// would keep stale keys for despawned bodies, while this dies with the body.
+    pub last_solve_cam: Option<DVec3>,
+    /// The [`GlobePunch`] in force at that solve. The punch is an INPUT to the
+    /// desired set, so a site appearing/moving must re-open the gate even if the
+    /// camera has not moved a millimetre.
+    pub last_solve_punch: Option<GlobePunch>,
 }
 
 /// Frames an outgoing tile stays alive after its replacement spawned.
@@ -78,6 +95,19 @@ const TILE_SPAWN_BUDGET: usize = 16;
 /// hundreds of fine tiles into a few coarse ones in one step; freeing all
 /// their entities + mesh assets in one frame is its own (smaller) hitch.
 const TILE_DESPAWN_BUDGET: usize = 32;
+
+/// Camera motion, as a fraction of its ALTITUDE above the body, below which the
+/// desired tile set cannot have changed enough to be worth recomputing.
+///
+/// Altitude and not distance-to-centre because altitude is what drives
+/// refinement: `subdivide_face` splits when the camera is nearer than the tile's
+/// arc-size times `lod_distance_factor`, and near the surface that distance IS
+/// the altitude. A 1% change in it can only flip a tile already within 1% of its
+/// split threshold — and those are exactly the tiles the resident-set dead band
+/// already holds steady, so no tile changes state that would not have flapped
+/// anyway. The threshold collapses to zero as the camera approaches the surface,
+/// where the gate matters least and precision matters most.
+const LOD_CAMERA_MOTION_FRACTION: f64 = 0.01;
 
 /// Squared camera distance to a tile's centre (body-local) — spawn priority.
 fn tile_dist2(coord: &TileCoord, radius_m: f64, camera_body_local: DVec3) -> f64 {
@@ -189,6 +219,28 @@ pub(crate) fn update_globe_lod(
         };
         let camera_body_local = cam_pos - sg_gt.translation().as_dvec3();
 
+        // CAMERA-MOTION GATE. Everything below — two `HashSet`s, a `Vec`, a sort,
+        // and six recursive quadtree descents — is a pure function of
+        // (camera_body_local, punch, the resident set). With the resident set
+        // settled and both inputs unmoved the answer is bit-identical to last
+        // frame's, so a parked view rebuilt ~600 `TileCoord`s per body per frame
+        // to conclude that nothing should change.
+        //
+        // This is the same shape as the cadence gate the ephemeris cluster uses
+        // (`cadence::tracked_needs_solve`) — an error budget rather than a rate —
+        // but it cannot BE that gate: the tile set depends on the CAMERA, which
+        // no epoch tolerance can see. A body's LOD must react to a camera that
+        // moves while the clock is paused.
+        if let Some(prev_cam) = tiles.last_solve_cam {
+            let altitude = (camera_body_local.length() - lod.radius_m).abs().max(1.0);
+            let slack = LOD_CAMERA_MOTION_FRACTION * altitude;
+            if tiles.last_solve_punch.as_ref() == punch
+                && (camera_body_local - prev_cam).length_squared() < slack * slack
+            {
+                continue;
+            }
+        }
+
         // Desired leaf set: recurse all six faces from the root. The resident
         // set feeds the split/merge dead band (no per-frame flapping when the
         // camera parks exactly on a threshold — e.g. the 3.0-radii focus snap).
@@ -292,7 +344,20 @@ pub(crate) fn update_globe_lod(
                     GlobalTransform::default(),
                     Visibility::Visible,
                     InheritedVisibility::default(),
-                    NoFrustumCulling,
+                    // NO `NoFrustumCulling`. It was here from the era when tile
+                    // meshes were built at full body-local magnitude (vertices
+                    // ~radius from the entity origin) — an AABB that big and that
+                    // badly centred culls wrongly, and switching it off hid the
+                    // symptom. Meshes are CENTRE-RELATIVE now (see the note at
+                    // `create_quadsphere_tile_mesh` below), so each tile's AABB is
+                    // a tight box about its own origin and ordinary culling is
+                    // correct — which is how `lunco-terrain-surface`'s CDLOD tiles,
+                    // grid-direct children with their own `CellCoord` and the same
+                    // cell-local mesh convention, have always rendered. With ~600
+                    // resident tiles per body and most of them on the far side of
+                    // the sphere or off-screen, submitting the whole set every
+                    // frame was pure draw-call overhead.
+                    //
                     // The globe is a FEATURELESS sphere of planetary size; as a
                     // shadow caster it contributes nothing (its night side is
                     // dark by shading) but at grazing sun elevations (+2.6° at
@@ -351,6 +416,16 @@ pub(crate) fn update_globe_lod(
             *frames -= 1;
             true
         });
+
+        // Arm the camera-motion gate ONLY if this pass left nothing outstanding:
+        // every desired tile is resident (the spawn budget may have deferred
+        // some) and nothing is still retiring (those carry a per-frame
+        // countdown). Otherwise the gate stays open and the next frame continues
+        // the work — the budget's whole point is to finish over several frames.
+        let settled =
+            tiles.retiring.is_empty() && desired.iter().all(|c| tiles.resident.contains_key(c));
+        tiles.last_solve_cam = settled.then_some(camera_body_local);
+        tiles.last_solve_punch = punch.copied();
 
         // `LUNCO_LOD_VALIDATE=1`: assert the resident set still covers the
         // whole sphere after this frame's spawn/retire pass (the invariant

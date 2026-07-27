@@ -3,9 +3,9 @@
 //! One backend per language, registered in [`ScriptBackends`] by
 //! `LunCoScriptingPlugin` under the matching cargo feature. The one-shot
 //! command handler (`RunPython`) dispatches through this registry instead of
-//! hard-coding an interpreter — so adding a language later (e.g. Lua) is "add
-//! a feature + a backend + a command", not "edit every call site". Python is
-//! the only backend today.
+//! hard-coding an interpreter — so adding a language later is "add a feature +
+//! a backend + a command", not "edit every call site". Python is the only
+//! backend today.
 
 use crate::doc::ScriptLanguage;
 use bevy::prelude::*;
@@ -46,6 +46,26 @@ impl ScriptBackend for RhaiBackend {
         use std::sync::{Arc, Mutex};
 
         let mut engine = rhai::Engine::new();
+
+        // Replace rhai's default `FileModuleResolver` BEFORE anything can import:
+        // it reads arbitrary files relative to the process CWD, so a one-shot
+        // snippet could `import "../../../etc/passwd"`. Same mechanism the
+        // World-bridge engine installs (`build_world_engine`) — the limits alone
+        // do not close this hole.
+        //
+        // The registry is EMPTY here because this backend is constructed as a unit
+        // struct (`LunCoScriptingPlugin`) and has no `ScriptSources` handle. Empty
+        // means "no import resolves", which is the correct fail-closed default for
+        // an ad-hoc snippet; see the TODO for wiring the real registry.
+        //
+        // TODO(one-shot-imports): give `RhaiBackend` a `ScriptSources` field and
+        // construct it from the resource in `LunCoScriptingPlugin::build`, so a
+        // one-shot snippet can `import "lunco://…"` the same libraries a scenario
+        // can. Nothing calls this backend today, so the empty registry is not a
+        // regression.
+        engine.set_module_resolver(crate::module_resolver::AssetModuleResolver::new(
+            lunco_assets::script_source::ScriptSources::default(),
+        ));
 
         crate::rhai_limits::apply(&mut engine);
 

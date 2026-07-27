@@ -11,7 +11,7 @@
 //! This crate owns the **one abstraction** every scripting backend implements, so
 //! a hook point is defined once (a Rust trait in the crate that owns it, e.g.
 //! [`MergePolicy`](../lunco_twin_journal) in `lunco-twin-journal`) and can be
-//! *filled* by rhai today, Python/Lua/wasm tomorrow — none of which this crate,
+//! *filled* by rhai today, Python/wasm tomorrow — none of which this crate,
 //! or the domain crate, depends on.
 //!
 //! # Shape (mirrors the proven `lunco-tools` split)
