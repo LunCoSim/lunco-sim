@@ -1029,44 +1029,37 @@ def Xform "RockerBogie" (
     }
 
     # ── Differential coupling (rocker-bogie holonomic constraint) ───────────
-    # The standard PhysX gear joint over the two chassis↔rocker hinges: it softly
-    # couples θ_left + θ_right → restSum (the drive's targetPosition), so the chassis
-    # pitch tracks the rocker average instead of flopping on a free pitch DOF. A rigid
-    # gear would fight the terrain and chatter, so the compliance is the joint's own
-    # angular PhysicsDriveAPI (a strong spring-damper), not an ideal constraint.
-    #   stiffness — how strongly the rockers mirror each other
-    #   damping   — kills differential oscillation
-    #   targetPosition — symmetric rest sum (0 rad)
+    # The standard PhysX gear joint over the two chassis↔rocker hinges: it couples
+    # θ_left + θ_right → restSum (the drive's targetPosition), so the chassis pitch
+    # tracks the rocker average instead of flopping on a free pitch DOF.
     #
-    # ⚠ SOLVED IMPLICITLY. THIS IS NO LONGER A STABILITY KNOB — BUT IT IS NOT YET
-    #   AN IDEAL GEAR EITHER. Read both halves before changing it.
+    # ⭐ THIS IS NOW A REAL GEAR, NOT A SPRING. `solve_differential_gear`
+    # (lunco-mobility) solves `θ_a − r·θ_b − rest = 0` as a holonomic constraint
+    # INSIDE avian's substep loop, in `XpbdSolverSystems::SolveUserConstraints`,
+    # with zero compliance. So:
     #
-    # `differential_coupling_system` now evaluates the coupling with backward Euler
-    # against the constraint's own inverse inertia (`J·M⁻¹·Jᵀ`), so the solved
-    # torque is bounded by what the step can absorb. Two things follow, both
-    # measured on `scenes/tests/rocker_bogie.usda` (2026-07-22):
+    #   · `stiffness` is an ENGAGEMENT SWITCH, not a spring rate. Any value > 0
+    #     engages the ideal gear; 0 disengages it, which is exactly how the control
+    #     case `scenes/tests/rocker_bogie_nodiff.usda` authors itself. The number
+    #     below is kept at its historical value only so that diff stays readable.
+    #   · `damping` is UNUSED. An ideal gear dissipates nothing; the rockers' own
+    #     hinges and the tyres carry the losses.
     #
-    #   · NO STIFFNESS DIVERGES ANY MORE. The old EXPLICIT penalty (`λ = k·c + d·ċ`)
-    #     went to NaN inside 10 s at 30 000 and at 60 000. Nothing does now — the
-    #     value below is 6× the old NaN threshold and the rig is steady.
-    #   · MASS NO LONGER SOFTENS IT. `w` scales the response with the inertia it
-    #     acts on. Under the explicit form a 400 kg hull sagged the mirroring to a
-    #     29% residual (a FAILING mechanism); it is 8.6% now. At the shipped 300 kg
-    #     the residual went 20% → 13.4%, back inside the test's original 15% bound.
+    # ⚠ WHY IT CHANGED — it was the rover's visible jitter. As an EXTERNAL torque
+    # evaluated once per 15.6 ms tick and then held constant across all 12 solver
+    # substeps, this coupling was a spring damped against a stale velocity — a
+    # zero-order hold on the damper, i.e. negative damping at high frequency. It
+    # rang at √(k/I) = √(1e5/25) = 63 rad/s. Measured while driving 1–4 m/s
+    # (2026-07-27): chassis height bob 2.51 mm RMS / 28 mm peak at 10.2 Hz, with a
+    # 1.67 % speed ripple as the bounce modulated wheel load and hence traction.
+    # As a substep constraint: 0.08 mm RMS / 1.68 mm peak — 31× less — and the
+    # mirroring became EXACT (L+R = 0.000 rad, against a 13.4 % residual before).
+    # Cost is 0.7 µs per substep solve, i.e. 0.5 ms per simulated second.
     #
-    # ⚠ BUT DO NOT SIMPLY CRANK IT. This is still an EXTERNAL torque applied
-    # alongside avian's solver, not a constraint solved WITH it, so pushing toward
-    # the holonomic limit makes the coupling shove the vehicle around rather than
-    # merely couple it: at 1e6 the gear cancels perfectly (L+R = 0.000) and walks
-    # the rover clean off the test step by t ≈ 4 s; at 1e8 the rig tumbles (168° of
-    # roll). 1e5 is the measured knee — the stiffest setting that still leaves the
-    # rover sitting where it was put.
-    #
-    # A real rocker-bogie differential is a bar or a bevel gearset, with no
-    # compliance at all. Reaching that honestly means solving this INSIDE the
-    # substep loop with the hinges, as a real constraint. Until then this is a very
-    # stiff, mass-independent, unconditionally stable spring — which is a different
-    # and much better thing than what it was, but still a spring.
+    # ⚠ The old warnings about a stability knee (1e5 measured, NaN at 30 000 under
+    # the older explicit form, "walks off the step at 1e6") are HISTORY and no
+    # longer apply — there is no stiffness left to tune. The hull mass ceiling they
+    # pinned is likewise gone: the constraint is exactly mass-independent.
     def PhysxPhysicsGearJoint "Differential" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )

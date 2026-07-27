@@ -73,6 +73,7 @@ use lunco_modelica::ModelicaSet;
 /// possession-driven headlight shadow projection). Client render concern, so
 /// `ui`-gated. See [`light_policy`].
 #[cfg(feature = "ui")]
+mod jitter_probe;
 mod light_policy;
 /// Collapse repeated WARN/ERROR log lines into one line + a count (§6.4).
 mod log_dedup;
@@ -2003,6 +2004,8 @@ impl Plugin for SandboxCorePlugin {
         // view-model producers) exist headless too, and a gate that stops gating
         // costs the same on a server as it does in the GUI.
         app.add_plugins(lunco_core::gate::GatePlugin);
+        // TEMPORARY: chassis smoothness census, off unless `LUNCO_JITTER_CSV` is set.
+        app.add_plugins(jitter_probe::JitterProbePlugin);
 
         #[cfg(feature = "ui")]
         if !self.headless {

@@ -23,6 +23,8 @@
 //! - **Ackermann Steering**: Standard for high-speed mobility; pivots leading
 //!   wheels to maintain a common center of rotation, reducing tire scrub.
 
+use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
+use avian3d::dynamics::solver::xpbd::XpbdSolverSystems;
 use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
@@ -99,12 +101,17 @@ impl Plugin for LunCoMobilityPlugin {
             // control ports, only couples two rocker hinges. Idle unless a
             // `DifferentialCoupling` exists, so it's free for every other vehicle.
             .add_systems(
-                FixedUpdate,
-                differential_coupling_system
+                // SUBSTEP, not `FixedUpdate` — see `solve_differential_gear`. A
+                // coupling applied once per tick and held constant across the 12
+                // substeps rings at √(k/I); solved as a constraint per substep it
+                // has no spring to ring. `SolveUserConstraints` is avian's slot for
+                // exactly this, and XPBD's velocity projection runs after it.
+                SubstepSchedule,
+                solve_differential_gear
+                    .in_set(XpbdSolverSystems::SolveUserConstraints)
                     .run_if(any_with_component::<DifferentialCoupling>)
-                    // Applies an equal-and-opposite force pair at the two rocker
-                    // anchors, so it accumulates across a physics hold exactly as the
-                    // wheel systems do. Same gate, same reason.
+                    // Same live-physics gate as the wheel systems: a frozen scene
+                    // must not have its linkage projected while it is mounting.
                     .run_if(lunco_physics::physics_is_live),
             )
             .add_systems(
@@ -971,200 +978,141 @@ fn angle_about_axis(rel: DQuat, axis: DVec3) -> f64 {
     angle
 }
 
-/// PD multiplier `λ` (N·m about the hinge axis) for the geared constraint
-/// `c = θ_a − r·θ_b − rest_offset`, where `r` is the authored
-/// `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
+/// The gear constraint's Lagrange update for `c = θ_a − r·θ_b − rest_offset`.
 ///
-/// The generalized torque on each body is `τ_i = −λ·∂c/∂θ_i`, so `τ_a = −λ`,
-/// `τ_b = +λ·r`, and the chassis takes `−(τ_a + τ_b) = λ·(1 − r)`, which is what
-/// conserves angular momentum about the axis for any ratio.
+/// `axis_inv_inertias` are each body's inverse angular inertia PROJECTED onto the
+/// hinge axis (`n · I⁻¹ · n`, world space) for `(rocker_a, rocker_b, chassis)`.
+/// That projection is the only thing about the inertia tensors this constraint
+/// needs, which is what makes the whole solve testable without a running solver.
 ///
-/// `rate` is `ċ = (ω_a − r·ω_b − (1 − r)·ω_c) · axis`.
+/// `w = Σ Jᵢ²·wᵢ` with `J = [1, −r, −(1 − r)]` — the constraint's own inverse
+/// inertia, `J·M⁻¹·Jᵀ`. Dividing by it is what makes the response
+/// MASS-INDEPENDENT: a heavier hull raises its contribution and the correction
+/// scales with it, so the linkage mirrors identically at 300 kg and at 600 kg.
 ///
-/// `r = −1` is the mirror/rocker-bogie case (`c = θ_a + θ_b`) and the default.
+/// Returns `Δλ = −c / w` — zero compliance, i.e. the ideal gear. `w ≤ 0` (all three
+/// bodies immovable) leaves nothing to solve against and returns 0.
 ///
-/// # This is a HOLONOMIC constraint, not a spring you must tune
-///
-/// The obvious form — `λ = k·c + d·ċ` — is an EXPLICIT penalty, and it made the
-/// authored stiffness a stability parameter rather than a physical one. A rocker
-/// -bogie differential is a bar or a bevel gearset: it has no compliance, so the
-/// only reason `k` was ever finite was that raising it blew the integrator up.
-/// That coupling was measured (2026-07-22) to fail on both sides at once: at
-/// k = 15 000 it left a 20% residual on a loaded rover AND anything stiffer
-/// (30 000, 60 000) reached NaN within 10 s. There was no value that worked, and
-/// the vehicle's mass budget was pinned by that fact.
-///
-/// So evaluate the same spring-damper IMPLICITLY (backward Euler): solve for the
-/// torque that will be correct at the END of the step rather than the one implied
-/// by the state at its start. With `w` the constraint-space inverse inertia
-/// (below), the impulse that a stiffness `k` and damping `d` really deliver over a
-/// step `dt` is
-///
-/// ```text
-///     λ = (k·c + d·ċ) / (1 + dt·w·(d + dt·k))
-/// ```
-///
-/// which has two properties the explicit form lacks:
-///
-/// * **Unconditionally stable.** The denominator grows with `k`, so `λ` can never
-///   overshoot; there is no `k` that diverges, and the NaN cliff is gone.
-/// * **It converges to the exact constraint.** As `k → ∞`,
-///   `λ → (c/dt + ċ)/(w·dt)` — precisely the impulse that drives `c` and `ċ` to
-///   zero in one step, i.e. the holonomic gear. Authoring a very large `k` now
-///   asks for the ideal joint and GETS it, instead of exploding.
-///
-/// `w` = `n·I_a⁻¹·n + r²·(n·I_b⁻¹·n) + (1 − r)²·(n·I_c⁻¹·n)` — the constraint's own
-/// inverse inertia (`JM⁻¹Jᵀ`), in world space about the hinge axis `n`. Including
-/// it is what makes the response mass-INDEPENDENT: a heavier hull raises `w`'s
-/// contribution and the solved `λ` rises with it, so the linkage mirrors the same
-/// way at 300 kg and at 600 kg. Under the explicit form the same authored `k` got
-/// progressively softer as the vehicle grew, which is exactly how a 400 kg hull
-/// came to break the mirroring.
-///
-/// `w ≤ 0` (all three bodies infinitely massive / kinematic) leaves nothing to
-/// solve against; the implicit correction degenerates to the explicit one.
-fn differential_lambda(
-    angle_a: f64,
-    angle_b: f64,
-    rate: f64,
-    rest_offset: f64,
-    ratio: f64,
-    stiffness: f64,
-    damping: f64,
-    w: f64,
-    dt: f64,
-) -> f64 {
-    let c = angle_a - ratio * angle_b - rest_offset;
-    let explicit = stiffness * c + damping * rate;
-    let scale = 1.0 + dt * w * (damping + dt * stiffness);
-    if scale > 0.0 {
-        explicit / scale
-    } else {
-        explicit
-    }
-}
-
-/// The constraint's inverse inertia about `axis_world` — the `w` in
-/// [`differential_lambda`], i.e. `J·M⁻¹·Jᵀ` for `c = θ_a − r·θ_b − (1 − r)·θ_c`.
-///
-/// Each body contributes `(∂c/∂θ_i)² · (n · I_i⁻¹ · n)` with the inertia taken in
-/// WORLD space — `I_world⁻¹ = R·I_local⁻¹·Rᵀ`, which is what `rotated()` does — so
-/// a rocker that has pitched contributes about the axis it actually has now.
-fn differential_inverse_inertia(
-    axis_world: DVec3,
-    ratio: f64,
-    inertias: [(ComputedAngularInertia, DQuat); 3],
-) -> f64 {
-    let n = axis_world;
-    // ∂c/∂θ for (rocker_a, rocker_b, chassis).
-    let jacobian = [1.0, -ratio, -(1.0 - ratio)];
-    inertias
+/// The chassis term `−(1 − r)` is what conserves angular momentum about the axis
+/// for ANY ratio: the corrections applied to the three bodies sum to zero.
+fn gear_delta_lagrange(c: f64, ratio: f64, axis_inv_inertias: [f64; 3]) -> f64 {
+    let jacobian = gear_jacobian(ratio);
+    let w: f64 = jacobian
         .iter()
-        .zip(jacobian)
-        .map(|((inertia, rotation), j)| {
-            let inv_world = inertia.rotated(*rotation).inverse();
-            j * j * n.dot(inv_world * n)
-        })
-        .sum()
+        .zip(axis_inv_inertias.iter())
+        .map(|(j, wi)| j * j * wi)
+        .sum();
+    if w <= f64::EPSILON { 0.0 } else { -c / w }
 }
 
-/// Enforces every [`DifferentialCoupling`] each fixed step. Reads the two
-/// rockers' pitch + rate relative to the chassis and applies the PD coupling
-/// torque about the hinge axis (equal on each rocker, `−2τ` reaction on the
-/// chassis). Idle unless a `DifferentialCoupling` exists.
+/// `∂c/∂θ` for `(rocker_a, rocker_b, chassis)`.
+fn gear_jacobian(ratio: f64) -> [f64; 3] {
+    [1.0, -ratio, -(1.0 - ratio)]
+}
+
+/// The gear's constraint function `c = θ_a − r·θ_b − rest_offset`, on rocker
+/// pitches measured in the CHASSIS frame. Zero ⇒ the gear is satisfied.
+fn gear_error(angle_a: f64, angle_b: f64, ratio: f64, rest_offset: f64) -> f64 {
+    angle_a - ratio * angle_b - rest_offset
+}
+
+/// The rocker-bogie differential, solved as a HOLONOMIC GEAR inside avian's
+/// substep loop — the constraint `c = θ_a − r·θ_b − rest_offset = 0`, projected to
+/// zero every substep with no compliance at all.
 ///
-/// **Verified** on an isolated rig (`differential_rig.usda`, 2026-06-30):
-/// a fixed base carries a front-heavy rocker A and a balanced rocker B on lateral
-/// revolutes. A/B by hinge `angle` ports —
-/// - coupling OFF: A free-falls to the pendulum bottom (`+3.06`), B untouched (`+0.06`);
-/// - coupling ON:  A held at `+1.72`, B driven to `−1.65` (mirror), `θ_A+θ_B ≈ 0.07`.
+/// **Why this replaced the penalty torque.** The old
+/// `differential_coupling_system` ran in `FixedUpdate`: one implicit PD solve per
+/// 15.6 ms tick, whose torque avian then held constant across all 12 substeps. A
+/// spring sampled once per tick and damped against a stale velocity is a
+/// zero-order hold on the damper, which is negative damping at high frequency —
+/// so the coupling RANG at `√(k/I) = √(1e5/25) = 63 rad/s`. Measured 2026-07-27 on
+/// `scenes/tests/rocker_bogie.usda` while driving 1–4 m/s: chassis height bob
+/// **2.51 mm RMS / 28 mm peak at 10.2 Hz** and a 1.67 % speed ripple, against
+/// **0.19 mm / 4.2 mm / 0.25 %** with the coupling disabled
+/// (`rocker_bogie_nodiff.usda`). That ring WAS the "rovers jitter while driving"
+/// report — the render path was measured clean first (see
+/// `lunco-usd-avian/tests/bridge_vs_interpolation.rs`).
 ///
-/// So the coupling correctly enforces `θ_A − r·θ_B → rest_offset` (that rig authors
-/// the `r = -1` mirror). NOTE: needs a
-/// non-redundant rig to *show* its effect — a passive two-rocker pair each pinned
-/// by its own two ground feet already self-levels, leaving nothing for the
-/// coupling to do (the original `rocker_bogie.usda` is that redundant case).
-/// And keep `stiffness < I/dt²` and damp the rockers, or the explicit penalty
-/// rings / diverges.
-fn differential_coupling_system(
+/// A real rocker-bogie differential is a bar or a bevel gearset: it has NO
+/// compliance, so there is no `√(k/I)` to ring in the first place. Solving it here,
+/// in [`XpbdSolverSystems::SolveUserConstraints`], also removes the reason the
+/// hull mass was pinned — the old penalty could not be stiffened past `k = 1e5`
+/// without walking the rover off the test step, which is what capped the
+/// cancellation residual at ~13–20 %.
+///
+/// `stiffness` is now an ENGAGEMENT switch, not a spring rate: `> 0` engages the
+/// ideal gear, `0` disengages it (which is exactly how `rocker_bogie_nodiff.usda`
+/// authors its control case). `damping` is unused — an ideal gear dissipates
+/// nothing; the rockers' own hinges and the tyres carry the losses.
+///
+/// Runs per substep, so the current world rotation of each body is
+/// `delta_rotation · Rotation` (avian only writes `Rotation` back at the end of the
+/// step) — the same composition avian's own joints use.
+fn solve_differential_gear(
     q_coupling: Query<&DifferentialCoupling>,
-    // Force must land only on a body the solver will integrate. A disabled body
-    // (frozen while its program compiles, say) never has its accumulators
-    // cleared, so force applied to it is stored, not spent, and discharges in
-    // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut q_bodies: Query<Forces, lunco_physics::Integrable>,
-    // `Forces` carries `ComputedAngularInertia` but does not expose it — the field
-    // is private and `ReadRigidBodyForces` has no accessor for it. A second,
-    // READ-ONLY query is the way in: `Forces` only reads that component too, so
-    // the two do not conflict.
-    q_inertia: Query<&ComputedAngularInertia>,
-    // The implicit solve needs the step it is solving over — see
-    // `differential_lambda`, and the `stiffness < I/dt²` bound above. Asking for
-    // `Time<Fixed>` states that as a TYPE rather than trusting where the system
-    // happens to be registered: on the variable-dt render clock the penalty would
-    // ring or diverge the moment a frame ran long, so a future move into `Update`
-    // must fail to compile. Same clock the wheel systems read. Rollback replay is
-    // unaffected — `replay_one_tick` runs `RollbackReplay` with `Time<Fixed>`'s own
-    // delta.
-    time: Res<Time<Fixed>>,
+    mut q_solver: Query<
+        (&mut SolverBody, &SolverBodyInertia, &Rotation),
+        Without<RigidBodyDisabled>,
+    >,
 ) {
-    let dt = time.delta_secs_f64();
-    if dt <= 0.0 {
-        return;
-    }
     for coupling in q_coupling.iter() {
-        let Ok([chassis, mut a, mut b]) =
-            q_bodies.get_many_mut([coupling.chassis, coupling.rocker_a, coupling.rocker_b])
-        else {
+        if coupling.stiffness <= 0.0 {
+            continue; // disengaged — the authored control case
+        }
+        let Ok([(mut sa, ia, ra), (mut sb, ib, rb), (mut sc, ic, rc)]) = q_solver.get_many_mut([
+            coupling.rocker_a,
+            coupling.rocker_b,
+            coupling.chassis,
+        ]) else {
             continue;
         };
-        let rot_c = chassis.rotation().0;
+
+        // Current world rotations inside the substep.
+        let rot_a = sa.delta_rotation.0 * ra.0;
+        let rot_b = sb.delta_rotation.0 * rb.0;
+        let rot_c = sc.delta_rotation.0 * rc.0;
+
         let axis_world = (rot_c * coupling.axis).normalize_or_zero();
-        // Rocker pitch in the chassis frame (twist about the hinge axis).
-        let angle_a = angle_about_axis(rot_c.inverse() * a.rotation().0, coupling.axis);
-        let angle_b = angle_about_axis(rot_c.inverse() * b.rotation().0, coupling.axis);
-        // ċ = (ω_a − r·ω_b − (1 − r)·ω_c) · axis_world.
-        let r = coupling.ratio;
-        let w_c = chassis.angular_velocity();
-        let rate =
-            (a.angular_velocity() - r * b.angular_velocity() - (1.0 - r) * w_c).dot(axis_world);
-        // `J·M⁻¹·Jᵀ` about the hinge axis, from the three bodies' CURRENT world
-        // inertias — recomputed every step because a pitched rocker presents a
-        // different inertia about the axis than a level one.
-        let Ok([inertia_a, inertia_b, inertia_c]) =
-            q_inertia.get_many([coupling.rocker_a, coupling.rocker_b, coupling.chassis])
-        else {
-            continue;
-        };
-        let w = differential_inverse_inertia(
-            axis_world,
-            r,
-            [
-                (*inertia_a, a.rotation().0),
-                (*inertia_b, b.rotation().0),
-                (*inertia_c, rot_c),
-            ],
-        );
-        let lambda = differential_lambda(
-            angle_a,
-            angle_b,
-            rate,
-            coupling.rest_offset,
-            r,
-            coupling.stiffness,
-            coupling.damping,
-            w,
-            dt,
-        );
-        if !lambda.is_finite() {
+        if axis_world == DVec3::ZERO {
             continue;
         }
-        // τ_i = −λ·∂c/∂θ_i: ∂c/∂θ_a = 1, ∂c/∂θ_b = −r.
-        a.apply_torque(axis_world * -lambda);
-        b.apply_torque(axis_world * (lambda * r));
-        // Reaction keeps the system's angular momentum conserved for ANY ratio.
-        let mut chassis = chassis;
-        chassis.apply_torque(axis_world * (lambda * (1.0 - r)));
+
+        // Rocker pitch in the chassis frame, the same reading the penalty used.
+        let angle_a = angle_about_axis(rot_c.inverse() * rot_a, coupling.axis);
+        let angle_b = angle_about_axis(rot_c.inverse() * rot_b, coupling.axis);
+        let r = coupling.ratio;
+        let c = gear_error(angle_a, angle_b, r, coupling.rest_offset);
+
+        let inv_inertias = [
+            ia.effective_inv_angular_inertia(),
+            ib.effective_inv_angular_inertia(),
+            ic.effective_inv_angular_inertia(),
+        ];
+        // Only the axis projection of each inertia tensor matters — see
+        // `gear_delta_lagrange`, which owns the rest of the math (and its tests).
+        let axis_inv_inertias = [
+            axis_world.dot(inv_inertias[0] * axis_world),
+            axis_world.dot(inv_inertias[1] * axis_world),
+            axis_world.dot(inv_inertias[2] * axis_world),
+        ];
+        let delta_lagrange = gear_delta_lagrange(c, r, axis_inv_inertias);
+        if delta_lagrange == 0.0 || !delta_lagrange.is_finite() {
+            continue;
+        }
+        let jacobian = gear_jacobian(r);
+
+        // Δθ_i = J_i · Δλ · I_i⁻¹ · n, applied to the solver's delta rotation.
+        // XPBD's own `VelocityProjection` (which runs after this set) turns these
+        // position corrections into velocities — that is why no torque, no dt and
+        // no damping term appear anywhere in here.
+        for (body, (j, inv)) in [&mut sa, &mut sb, &mut sc]
+            .into_iter()
+            .zip(jacobian.iter().zip(inv_inertias.iter()))
+        {
+            let impulse = axis_world * (j * delta_lagrange);
+            let delta = DQuat::from_scaled_axis(*inv * impulse);
+            body.delta_rotation.0 = (delta * body.delta_rotation.0).normalize();
+        }
     }
 }
 
@@ -1878,130 +1826,104 @@ mod oracle {
 mod differential_tests {
     use super::*;
 
-    /// A representative constraint inverse inertia and fixed step for the pure
-    /// algebra tests below. `w > 0` so the implicit scaling is genuinely exercised
-    /// rather than degenerating to the explicit form.
-    const W: f64 = 0.05;
-    const DT: f64 = 1.0 / 60.0;
+    /// Representative axis-projected inverse inertias for `(rocker_a, rocker_b,
+    /// chassis)`. All non-zero, so `w` is genuinely exercised.
+    const WI: [f64; 3] = [0.05, 0.05, 0.01];
 
-    /// A geared pair satisfies `θ_a = r·θ_b + rest_offset` exactly ⇒ no correction.
+    /// Applying the solved correction drives the constraint to zero — the whole
+    /// definition of a holonomic gear, and what the old penalty could never do at
+    /// any authored stiffness (k = 15 000 left a 20 % residual; 30 000 and 60 000
+    /// both reached NaN inside 10 s on the real vehicle).
     #[test]
-    fn a_satisfied_gear_needs_no_torque() {
+    fn one_solve_closes_the_constraint_exactly() {
+        for (c, r) in [(0.4, -1.0), (-0.15, -1.0), (0.6, 2.0), (0.2, -0.5)] {
+            let dl = gear_delta_lagrange(c, r, WI);
+            // Δθ_i = J_i·Δλ·w_i, so the new error is c + Σ J_i·Δθ_i.
+            let residual: f64 = c + gear_jacobian(r)
+                .iter()
+                .zip(WI.iter())
+                .map(|(j, wi)| j * (j * dl * wi))
+                .sum::<f64>();
+            assert!(
+                residual.abs() < 1e-12,
+                "ratio {r}: one solve left residual {residual}"
+            );
+        }
+    }
+
+    /// A gear that is already satisfied must not pull.
+    #[test]
+    fn a_satisfied_gear_needs_no_correction() {
         for (r, a, b) in [
             (-1.0, 0.2, -0.2),
             (1.0, 0.4, 0.4),
             (2.0, 0.6, 0.3),
             (-0.5, 0.25, -0.5),
         ] {
-            let lambda = differential_lambda(a, b, 0.0, 0.0, r, 1000.0, 100.0, W, DT);
-            assert!(
-                lambda.abs() < 1e-12,
-                "ratio {r}: satisfied gear pulled {lambda}"
-            );
+            let c = gear_error(a, b, r, 0.0);
+            let dl = gear_delta_lagrange(c, r, WI);
+            assert!(dl.abs() < 1e-12, "ratio {r}: satisfied gear pulled {dl}");
         }
     }
 
     /// The ratio is what the constraint MEANS: the same pair of angles is an error
-    /// for one ratio and satisfied by another. Before the authored
-    /// `physxGearJoint:gearRatio` was threaded through, every gear ran as `-1`
-    /// regardless of what the scene said, so this distinction did not exist.
+    /// for one ratio and satisfied by another.
     #[test]
     fn the_ratio_decides_what_counts_as_error() {
-        let (a, b, k, d) = (0.4, 0.4, 1000.0, 0.0);
+        let (a, b) = (0.4, 0.4);
         // r = -1 (mirror): c = θ_a + θ_b = 0.8 → in error.
-        assert!(differential_lambda(a, b, 0.0, 0.0, -1.0, k, d, W, DT).abs() > 1.0);
+        assert!(gear_delta_lagrange(gear_error(a, b, -1.0, 0.0), -1.0, WI).abs() > 1.0);
         // r = +1 (co-rotating): c = θ_a − θ_b = 0 → satisfied.
-        assert!(differential_lambda(a, b, 0.0, 0.0, 1.0, k, d, W, DT).abs() < 1e-9);
+        assert!(gear_delta_lagrange(gear_error(a, b, 1.0, 0.0), 1.0, WI).abs() < 1e-9);
     }
 
-    /// `rest_offset` shifts the target: `c = θ_a − r·θ_b − rest_offset`.
+    /// `rest_offset` shifts the target.
     #[test]
     fn rest_offset_moves_the_target() {
-        let k = 1000.0;
         // θ_a + θ_b = 0.5, and the gear is authored to want exactly that.
-        let at_rest = differential_lambda(0.3, 0.2, 0.0, 0.5, -1.0, k, 0.0, W, DT);
+        let c = gear_error(0.3, 0.2, -1.0, 0.5);
+        assert!(c.abs() < 1e-12, "offset target should be satisfied, got {c}");
+    }
+
+    /// MASS-INDEPENDENCE, now exact rather than approached. Scaling every inertia
+    /// scales `w` and `Δλ` inversely, so the applied ANGULAR CORRECTION is
+    /// identical. This is the property that pinned `rocker_bogie.usda`'s hull at
+    /// 300 kg under the penalty — at 400 kg the same `k` left a 20 % residual.
+    #[test]
+    fn the_correction_is_identical_at_any_mass() {
+        let c = 0.3;
+        let correction = |scale: f64| {
+            let wi = [WI[0] * scale, WI[1] * scale, WI[2] * scale];
+            let dl = gear_delta_lagrange(c, -1.0, wi);
+            // The rocker-a correction angle.
+            gear_jacobian(-1.0)[0] * dl * wi[0]
+        };
+        let light = correction(1.0);
+        let heavy = correction(0.25); // 4x the inertia
         assert!(
-            at_rest.abs() < 1e-12,
-            "offset target should be satisfied, got {at_rest}"
+            (light - heavy).abs() < 1e-12,
+            "4x inertia changed the correction {light} → {heavy}"
         );
     }
 
-    /// Damping opposes constraint-rate even at zero positional error.
+    /// Angular momentum: the three corrections' generalized impulses must sum to
+    /// zero about the axis for ANY ratio, or the coupling injects spin into the rig.
     #[test]
-    fn damping_opposes_constraint_rate() {
-        let lambda = differential_lambda(0.0, 0.0, 0.5, 0.0, -1.0, 1000.0, 100.0, W, DT);
-        // τ_a = −λ must oppose a positive rate.
-        assert!(-lambda < 0.0, "damping did not oppose the rate");
-    }
-
-    /// THE WHOLE POINT OF THE IMPLICIT SOLVE: no stiffness diverges.
-    ///
-    /// The explicit form `k·c + d·ċ` grows without bound in `k`, so a stiff gear
-    /// overshoots and the rig explodes — measured on the real vehicle, where
-    /// k = 30 000 and 60 000 both reached NaN inside 10 s. The correction here is
-    /// bounded by the constraint's own inertia instead.
-    #[test]
-    fn stiffness_cannot_diverge() {
-        let mut previous = 0.0;
-        for k in [1e3, 1e4, 1e5, 1e6, 1e9, 1e15] {
-            let lambda = differential_lambda(0.2, 0.2, 0.0, 0.0, -1.0, k, 100.0, W, DT);
-            assert!(lambda.is_finite(), "k = {k} produced {lambda}");
-            // Monotone in k, and converging rather than running away.
-            assert!(lambda >= previous - 1e-9, "k = {k} went backwards");
-            previous = lambda;
-        }
-        // The ceiling is the exact one-step constraint impulse, (c/dt + ċ)/(w·dt).
-        let c: f64 = 0.4;
-        let ceiling = (c / DT) / (W * DT);
-        assert!(
-            previous <= ceiling * (1.0 + 1e-6),
-            "k → ∞ gave {previous}, above the holonomic impulse {ceiling}"
-        );
-        assert!(
-            previous > ceiling * 0.999,
-            "k → ∞ gave {previous}, short of the holonomic impulse {ceiling} — \
-             the constraint is not being reached"
-        );
-    }
-
-    /// A HOLONOMIC gear is mass-independent: the same authored stiffness must
-    /// mirror the rockers the same way whatever the vehicle weighs.
-    ///
-    /// This is the property the explicit penalty lacked, and the reason
-    /// `rocker_bogie.usda`'s hull mass was pinned at 300 kg — at 400 kg the same
-    /// `k` left a 20% residual. With `w` in the solve, a heavier rig (smaller `w`,
-    /// since `w` is an INVERSE inertia) takes proportionally more torque, and at a
-    /// stiffness in the constraint regime the resulting angular correction is the
-    /// same. Compare the corrective ACCELERATION `λ·w`, which is what actually
-    /// moves the constraint.
-    #[test]
-    fn a_stiff_gear_corrects_the_same_at_any_mass() {
-        let k = 1e9; // constraint regime
-        let accel = |w: f64| differential_lambda(0.15, 0.15, 0.0, 0.0, -1.0, k, 1500.0, w, DT) * w;
-        let light = accel(0.08);
-        let heavy = accel(0.02); // 4× the inertia
-        assert!(
-            (light - heavy).abs() / light < 1e-3,
-            "4x inertia changed the correction {light} → {heavy}; the gear is still \
-             mass-dependent, so the vehicle's mass budget is still pinned by it"
-        );
-    }
-
-    /// Angular momentum: the three generalized torques must sum to zero about the
-    /// axis for ANY ratio — otherwise the coupling injects spin into the rig.
-    #[test]
-    fn reaction_conserves_angular_momentum_at_any_ratio() {
+    fn the_reaction_conserves_angular_momentum_at_any_ratio() {
         for r in [-2.5, -1.0, -0.5, 0.5, 1.0, 3.0] {
-            let lambda = differential_lambda(0.3, -0.1, 0.7, 0.02, r, 5000.0, 100.0, W, DT);
-            let tau_a = -lambda;
-            let tau_b = lambda * r;
-            let chassis = lambda * (1.0 - r);
+            let dl = gear_delta_lagrange(0.3, r, WI);
+            let sum: f64 = gear_jacobian(r).iter().map(|j| j * dl).sum();
             assert!(
-                (tau_a + tau_b + chassis).abs() < 1e-9,
-                "ratio {r}: torques sum to {}, not zero",
-                tau_a + tau_b + chassis
+                sum.abs() < 1e-9,
+                "ratio {r}: impulses sum to {sum}, not zero"
             );
         }
+    }
+
+    /// Three immovable bodies leave nothing to solve against.
+    #[test]
+    fn an_immovable_rig_is_left_alone() {
+        assert_eq!(gear_delta_lagrange(0.5, -1.0, [0.0; 3]), 0.0);
     }
 }
 
