@@ -982,6 +982,34 @@ fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands
         lunco_controller::ControllerLink,
         IntentAnalogState,
     )>();
+    // RETIRE IT FROM THE VIEWPORT POOL, not merely from the avatar role.
+    //
+    // `SceneCamera` is what makes an entity a viewport CANDIDATE: every query that
+    // can put a camera on screen filters on it — `reconcile_scene_viewport`'s
+    // actuation loop and its lowest-entity fallback, `cycle_active_camera` (KeyC),
+    // `activate_offscreen_camera`. Deactivating without removing it left the retired
+    // camera in that pool forever, so the app accumulated one stale candidate per
+    // scene load.
+    //
+    // That is the "two cameras" bug. The app's code-spawned fallback avatar camera
+    // (`spawn_avatar_camera`) is NOT a USD prim, so a scene load's `despawn` sweep
+    // never touches it; when the incoming scene authored its own `lunco:avatar`
+    // camera, the old one was demoted but stayed eligible. It also has a LOWER entity
+    // index than anything the new scene spawns, so the moment the binding went
+    // momentarily invalid — which it does every load, because the new camera's
+    // `Camera3d`/`Projection` is attached later by the deferred `SceneCamera` binder
+    // and the reconciler refuses to activate a projectionless camera — the fallback
+    // picked the STALE one and re-activated it, undoing this demotion.
+    //
+    // `Camera`/`Camera3d` are deliberately left in place: stripping `Camera` from a
+    // live, already-extracted window camera orphans its render-world view and crashes
+    // `prepare_lights` on the cascade unwrap (see this function's docs). Removing only
+    // the intent marker retires the camera from selection while leaving the render
+    // world untouched — and since the reconciler no longer sees it, the `is_active =
+    // false` written below is now final rather than something the next frame undoes.
+    commands
+        .entity(entity)
+        .try_remove::<lunco_render::SceneCamera>();
     commands.queue(move |world: &mut World| {
         if let Some(mut cam) = world.get_mut::<bevy::camera::Camera>(entity) {
             cam.is_active = false;
@@ -4327,6 +4355,76 @@ mod tests {
         assert_eq!(
             find_control_owner_from_hit(wheel_mesh, &q_parents, &q_input_ports, &q_ground),
             Some(rover)
+        );
+    }
+
+    /// **A retired avatar camera must leave the viewport candidate pool.**
+    ///
+    /// Regression for the "two cameras / the view jumps between them" report. The
+    /// app's fallback avatar camera is spawned in code (`spawn_avatar_camera`), not
+    /// from a prim, so a scene load's despawn sweep never removes it. When the
+    /// incoming scene authors its own `lunco:avatar` camera, `LocalAvatar` moves
+    /// (singular by construction) and this observer demotes the old one — but it used
+    /// to leave `SceneCamera` on, and `SceneCamera` is exactly what every
+    /// camera-selection query filters on. The stale camera stayed eligible, kept a
+    /// lower entity index than anything the new scene spawns, and got picked by
+    /// `reconcile_scene_viewport`'s lowest-entity fallback the moment the binding went
+    /// briefly invalid — which happens on every load, since the new camera's
+    /// `Projection` arrives with a deferred `Camera3d`.
+    ///
+    /// `Camera` must SURVIVE: stripping it from a live extracted window camera
+    /// crashes the render app on the shadow cascade unwrap.
+    #[test]
+    fn demoted_avatar_camera_stops_being_a_viewport_candidate() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::TheLocalAvatar>();
+        app.add_observer(demote_former_avatar);
+
+        let old = app
+            .world_mut()
+            .spawn((
+                Camera::default(),
+                lunco_render::scene_camera_look(None),
+                lunco_core::Avatar,
+                LocalAvatar,
+            ))
+            .id();
+        assert!(
+            app.world().get::<lunco_render::SceneCamera>(old).is_some(),
+            "precondition: the fallback camera starts as a viewport candidate"
+        );
+
+        // The scene's own avatar camera arrives and claims the role. `lunco_core`'s
+        // component hook demotes `old`, which fires the observer under test.
+        let new = app
+            .world_mut()
+            .spawn((
+                Camera::default(),
+                lunco_render::scene_camera_look(None),
+                lunco_core::Avatar,
+                LocalAvatar,
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<lunco_core::TheLocalAvatar>().0,
+            Some(new),
+            "the incoming camera holds the avatar role"
+        );
+        assert!(
+            app.world().get::<lunco_render::SceneCamera>(old).is_none(),
+            "the retired camera must leave the viewport pool, or the reconciler's \
+             fallback can put it back on screen — the two-camera bug"
+        );
+        assert!(
+            app.world().get::<lunco_render::SceneCamera>(new).is_some(),
+            "the live camera stays a candidate"
+        );
+        assert!(
+            app.world().get::<Camera>(old).is_some(),
+            "`Camera` must survive demotion: removing it from an extracted window \
+             camera crashes the render app on the shadow cascade unwrap"
         );
     }
 }

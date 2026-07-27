@@ -202,7 +202,23 @@ struct RefSpawn {
     asset_path: String,
     /// In-flight load of the referenced asset (its loader fetches the closure).
     ref_handle: Handle<UsdStageAsset>,
+    /// Frames this spawn has waited for its closure. Bounded by
+    /// [`MAX_REF_SPAWN_ATTEMPTS`] so an asset that never loads fails LOUDLY
+    /// instead of being retried forever in silence — see `drain_ref_spawns`.
+    attempts: u32,
 }
+
+/// Give up on a pending referenced spawn after this many frames without its
+/// asset closure loading, and say so.
+///
+/// Without a cap, an unresolvable reference is retried every frame forever and
+/// reports NOTHING: the prim is authored in the document (so it saves, journals
+/// and survives a reload) while never composing on the live stage — so the object
+/// silently does not appear until the scene is reloaded and the recipe is rebuilt
+/// from source. That is indistinguishable from "the feature is broken", which is
+/// exactly how it was read. Mirrors `MAX_TWIN_DOC_ATTEMPTS`, which bounds the
+/// same shape of wait one level up.
+const MAX_REF_SPAWN_ATTEMPTS: u32 = 600;
 
 /// Referenced spawns waiting on their asset closure to finish loading.
 /// Populated by [`sync_twin_overlays`], drained by [`drain_ref_spawns`].
@@ -962,6 +978,7 @@ fn spawn_prim_op(
                     type_name,
                     asset_path,
                     ref_handle,
+                    attempts: 0,
                 });
         }
     }
@@ -1211,13 +1228,32 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
     }
     let pending = std::mem::take(&mut world.resource_mut::<PendingRefSpawns>().items);
     let mut still = Vec::new();
-    for item in pending {
+    for mut item in pending {
         // Wait for the asset closure (its loader fetches the full `.usda` tree).
         let recipe = world
             .resource::<Assets<UsdStageAsset>>()
             .get(item.ref_handle.id())
             .and_then(|a| a.recipe.clone());
         let Some(recipe) = recipe else {
+            item.attempts += 1;
+            if item.attempts >= MAX_REF_SPAWN_ATTEMPTS {
+                // Drop it, and NAME the asset. The prim stays authored in the
+                // document (it is a legitimate edit and must survive), so the
+                // user-visible symptom is "this object only appears after a
+                // reload" — which is what this line exists to explain.
+                let state = world
+                    .resource::<AssetServer>()
+                    .get_load_state(item.ref_handle.id());
+                warn!(
+                    "[twin] referenced spawn {} gave up after {} frames waiting for `{}` \
+                     to load (asset state: {state:?}). The prim IS authored in the \
+                     document, so it will appear on the next scene reload — but it \
+                     cannot compose on the live stage without that asset's layer \
+                     closure. Check that the asset path resolves from this twin.",
+                    item.prim_path, item.attempts, item.asset_path,
+                );
+                continue;
+            }
             still.push(item);
             continue;
         };

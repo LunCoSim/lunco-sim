@@ -146,7 +146,32 @@ def Xform "Motor" (
     # ceiling (12 rad/s × 0.4 m). See `rocker_bogie.usda` `Motor_FL` for measured
     # terminal speeds.
     float lunco:motor:stallTorque = 1.5
-    float lunco:motor:noLoadSpeed = 2400.0
+    # FLEET SPEED. 4800 rad/s through the 200:1 gives a 24 rad/s axle — 9.6 m/s of
+    # rim speed on the 0.4 m wheel. Doubled from the 2400 this carried (12 rad/s
+    # axle, 4.8 m/s rim), because the school's multi-kilometre traverses were
+    # dominated by transit time — the same usability argument the
+    # `motors/lunokhod.usda` note makes against authentic speeds.
+    #
+    # The RIM CEILING IS NOT THE ROAD SPEED, and the terminal figure at 24 rad/s
+    # has NOT been measured. `vessels/rovers/rocker_bogie.usda` `Motor_FL` holds the
+    # measured table (12 rad/s → 2.71 m/s, 19.5 rad/s → 5.72 m/s) and the standing
+    # rule: the response is non-linear, so measure it, never derive it.
+    #
+    # RAISED AT CONSTANT TORQUE, deliberately. `stallTorque` is untouched, so axle
+    # torque stays 255 N·m and gradeability is exactly as before — this is a bigger
+    # motor, not a re-wind. `motors/fast.usda` is the power-conserving alternative
+    # (half the torque for twice the speed); it is a different trade and is left
+    # alone, as are the other winding classes, so that taxonomy stays coherent.
+    #
+    # Two consequences worth knowing. Peak mechanical power doubles (~900 W → ~1.8 kW),
+    # so `inputs:rated_power` below is now the binding limit rather than the curve.
+    # And torque RISES at every non-zero speed (`τ = stall·(1 − ω/noLoad)`), so
+    # acceleration improves too — this is not only a higher ceiling.
+    #
+    # Reflected inertia is UNCHANGED: it is `J · ratio²` and the ratio did not move.
+    # To revert the fleet to the old speed, put this back to 2400.0 (and the six
+    # instance overrides in `vessels/rovers/rocker_bogie.usda`, which restate it).
+    float lunco:motor:noLoadSpeed = 4800.0
     # Continuous rating, below stall: what it can hold all day without cooking. 0.9
     # against a 1.5 stall is 60%, the usual margin. Must always stay ≤ `stallTorque`,
     # or the motor is rated to sustain more than it can ever produce.

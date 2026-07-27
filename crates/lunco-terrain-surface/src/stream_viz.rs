@@ -144,9 +144,24 @@ pub struct TerrainDetailDemands {
 }
 
 /// Give every perspective scene camera the standard visual-detail policy.
+///
+/// Filtered on PRESENCE, not `Added<Camera>`. A camera's `Projection` does not
+/// always arrive with its `Camera`: `lunco_avatar::spawn_avatar_camera` spawns a
+/// bare `Camera` + `SceneCamera`, and the render half (`Camera3d`, which carries
+/// `Projection` as a required component) is attached afterwards by
+/// `lunco-render-bevy`'s `SceneCamera` binder through `Commands` — a later flush,
+/// measured a second later on a real scene load. Under `Added<Camera>` the one
+/// tick the filter was true had no `Projection` to match, and `Added` never fires
+/// again, so the camera the player looks through was never marked at all (and with
+/// no marked camera there is no visual demand, no near-field error floor, and the
+/// cover freezes coarse — see [`collect_terrain_detail_demands`]).
+///
+/// `Without<TerrainVisualFocus>` keeps this archetype-limited: an entity leaves
+/// the query the moment it is marked, so dropping the change filter costs nothing
+/// in steady state.
 pub(crate) fn mark_terrain_visual_foci(
     mut commands: Commands,
-    cameras: Query<(Entity, &Projection), (Added<Camera>, Without<TerrainVisualFocus>)>,
+    cameras: Query<(Entity, &Projection), (With<Camera>, Without<TerrainVisualFocus>)>,
 ) {
     for (entity, projection) in &cameras {
         if matches!(projection, Projection::Perspective(_)) {
@@ -3372,6 +3387,70 @@ mod draw_partition_tests {
                 "each active camera must retain local detail"
             );
         }
+    }
+
+    /// **The avatar camera must become a terrain-detail focus.**
+    ///
+    /// Regression for: `lunco_avatar::spawn_avatar_camera` spawns `Camera` +
+    /// `SceneCamera` and NO `Projection` — the render pipeline half (`Camera3d`,
+    /// which carries `Projection` as a required component) is attached later by
+    /// `lunco-render-bevy`'s `SceneCamera` binder, through `Commands`, so it lands
+    /// on a later flush (measured a full second later on a real scene load).
+    ///
+    /// `mark_terrain_visual_foci` filtered on `Added<Camera>` while its data query
+    /// demanded `&Projection`, so on the one tick the filter was true the component
+    /// did not exist yet — and `Added` never fires again. The camera the player
+    /// actually looks through therefore never got `TerrainVisualFocus`, so
+    /// `collect_terrain_detail_demands` produced NO visual focus at all: the
+    /// near-field error floor stayed 0, the opening cover build broke after one pass
+    /// (`required_focus_depth` is `None` with no demands), and the selection
+    /// signature became constant — so the idle gate and `settled_sig` both latched
+    /// and the terrain froze at its coarsest cover forever. Flying down to the
+    /// surface loaded no detail.
+    #[test]
+    fn camera_whose_projection_arrives_after_the_camera_still_becomes_a_focus() {
+        let mut app = App::new();
+        app.init_resource::<TerrainDetailDemands>().add_systems(
+            Update,
+            (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
+        );
+        let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
+        // EXACTLY `spawn_avatar_camera`'s shape: a bare `Camera`, no `Projection`.
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    is_active: true,
+                    ..default()
+                },
+                CellCoord::default(),
+                Transform::from_xyz(123.0, 10.0, -45.0),
+                ChildOf(grid),
+            ))
+            .id();
+
+        // Tick with the camera still render-free: nothing to mark yet, and
+        // crucially this is the tick that consumes `Added<Camera>`.
+        app.update();
+
+        // The `SceneCamera` binder catches up: `Camera3d` brings `Projection`.
+        app.world_mut()
+            .entity_mut(camera)
+            .insert(Camera3d::default());
+        app.update();
+
+        assert!(
+            app.world().get::<TerrainVisualFocus>(camera).is_some(),
+            "a camera that gains its projection after `Camera` must still be marked \
+             — `Added<Camera>` has already fired by then"
+        );
+        let demands = app.world().resource::<TerrainDetailDemands>();
+        assert_eq!(
+            demands.visual.len(),
+            1,
+            "the avatar camera must contribute a terrain-detail focus; with none the \
+             near-field error floor is 0 and the cover never refines"
+        );
     }
 
     #[test]
