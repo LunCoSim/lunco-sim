@@ -334,7 +334,25 @@ fn process_asset_to(
 
 /// Bump when any pipeline's OUTPUT changes for identical inputs (resampling
 /// fix, encoding change, new geo tags) — invalidates every stamped bake.
-const PIPELINE_VERSION: u32 = 1;
+///
+/// THIS IS THE ONLY THING THAT INVALIDATES A BAKE AFTER A CODE FIX. The key
+/// hashes (source bytes, config, this number). Source bytes and config are data;
+/// the processing code is not in the hash, so a corrected pipeline that reads the
+/// same inputs produces the same key and the stamp says `✓ up-to-date` over the
+/// output the bug produced.
+///
+/// That is not hypothetical: 2026-07-27, the ROI clamp was fixed to bound against
+/// valid data rather than raster dimensions, and re-running the bake reported
+/// `✓ up-to-date (bake key match)` and skipped — the broken texture stayed on
+/// disk, and it took hand-deleting `.bakekey` to notice the fix had never run.
+///
+/// If you changed anything under `process_dem` / `process_map` /
+/// `process_normalmap` / `resolve_roi` / `resample_roi_bilinear` and did not bump
+/// this, your fix does not exist for anyone with a warm cache — including CI.
+///
+/// v2 (2026-07-27): ROI clamps to the valid-data bounding box, and a crop with
+/// >2% nodata fails the bake instead of shipping (`reject_if_mostly_nodata`).
+const PIPELINE_VERSION: u32 = 3;
 
 /// Where the bake stamp lives: inside the output folder for folder outputs
 /// (`dem`), beside the file for file outputs. Both land under the twin's
@@ -526,7 +544,17 @@ fn process_dem(
     let src = decode_gray_source(source)?;
     let (roi, scale, center_lat, center_lon) = resolve_roi(cfg, &src, "dem")?;
     let (out_n, win) = (roi.out_n, roi.win);
-    let heights = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+    // Sanity ceiling only. A DEM's voids are FILLED below, not avoided — this
+    // exists to catch a window that has wandered off the product entirely.
+    reject_if_mostly_nodata(&roi_samples(&src.samples, src.w, src.h, &roi), "dem", 0.05)?;
+    let mut heights = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+    let filled = fill_dem_voids(&mut heights, out_n, "dem")?;
+    if filled > 0 {
+        println!(
+            "    filled {filled} void sample(s) ({:.2}%) by neighbour interpolation",
+            100.0 * filled as f64 / heights.len().max(1) as f64
+        );
+    }
     let out: Vec<f32> = heights.iter().map(|&v| v as f32).collect();
 
     // ── Write the square float32 heightmap. ───────────────────────────────
@@ -707,6 +735,164 @@ struct RoiCrop {
 /// Fails loudly on a non-equirectangular source (polar stereographic products
 /// need a real projection, not this affine — the known pipeline gate).
 #[cfg(not(target_arch = "wasm32"))]
+/// Bounding box (inclusive) of the samples that are actual measurements.
+///
+/// PDS orthorectified products are footprints padded to a rectangle: the imaged
+/// strip is not axis-aligned, so the raster carries `CORE_NULL` around it. The
+/// raster's dimensions therefore say nothing about where the data is, and any
+/// crop clamped to `0..w` can land squarely in the padding.
+///
+/// Scans rows/columns rather than per-pixel so the cost stays linear in the
+/// raster and negligible against the decode that produced it.
+fn valid_data_bounds(
+    samples: &[f64],
+    w: usize,
+    h: usize,
+) -> Option<(usize, usize, usize, usize)> {
+    // An RGB source carries its data in `planes` and leaves `samples` empty. It
+    // also has no NaN sentinel — colour products encode absence as a colour, not
+    // as a non-finite — so there is nothing to scan and the raster IS the bound.
+    if samples.len() != w.checked_mul(h)? {
+        return Some((0, w.checked_sub(1)?, 0, h.checked_sub(1)?)).map(|(a, b, c, d)| (a, c, b, d));
+    }
+    let finite = |x: usize, y: usize| samples.get(y * w + x).is_some_and(|v| v.is_finite());
+    let row_has = |y: usize| (0..w).any(|x| finite(x, y));
+    let col_has = |x: usize| (0..h).any(|y| finite(x, y));
+    let y0 = (0..h).find(|&y| row_has(y))?;
+    let y1 = (0..h).rev().find(|&y| row_has(y))?;
+    let x0 = (0..w).find(|&x| col_has(x))?;
+    let x1 = (0..w).rev().find(|&x| col_has(x))?;
+    Some((x0, y0, x1, y1))
+}
+
+/// The RAW source samples inside the ROI, un-resampled.
+///
+/// The nodata guard must see these, not the resampled output:
+/// `resample_roi_bilinear` substitutes `0.0` for every non-finite neighbour, so
+/// by the time a value reaches the bake, "no data" has already been laundered
+/// into a plausible-looking measurement and `is_finite()` can no longer find it.
+fn roi_samples(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiCrop) -> Vec<f64> {
+    // RGB sources keep their data in `planes`; nothing to check here (see
+    // `valid_data_bounds`). Returning empty makes the guard a no-op rather than
+    // an index panic.
+    if samples.len() != src_w.saturating_mul(src_h) {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(roi.win * roi.win);
+    for y in roi.y0..(roi.y0 + roi.win).min(src_h) {
+        for x in roi.x0..(roi.x0 + roi.win).min(src_w) {
+            out.push(samples[y * src_w + x]);
+        }
+    }
+    out
+}
+
+/// Interpolate DEM voids from their valid neighbours. Returns how many were filled.
+///
+/// WHY A DEM MUST NEVER SHIP A VOID. A NaN height is not a cosmetic gap: the
+/// heightmap drives the render mesh AND the collider, so it becomes a hole in the
+/// world that a rover can drive into. That is categorically different from a void
+/// in an ortho or normal map, which bakes to a neutral value and merely looks flat.
+///
+/// WHY VOIDS EXIST AT ALL — and they are NOT our bug. `NAC_DTM_APOLLO15.TIF` is
+/// derived from a STEREO PAIR, and stereo matching fails where there is no texture
+/// to match: shadowed crater floors above all. Gaps are a normal property of every
+/// stereo-derived DTM, present in the source as shipped.
+///
+/// WHY NOT JUST SHRINK THE WINDOW. That was the first instinct and it is wrong: it
+/// discards hundreds of metres of good terrain to dodge a handful of bad samples,
+/// and it is luck-dependent — the next site, or the same site re-centred, lands on
+/// a void again. Void-fill is what DEM pipelines do; the window should be chosen
+/// for coverage, not to route around correlation failures.
+///
+/// Iterative neighbour averaging (8-connected): each pass replaces every void that
+/// has at least one valid neighbour with their mean, so fills grow inward from the
+/// rim one ring per pass. Converges in `radius` passes for a void of that radius.
+/// The cap bounds the work and, more usefully, refuses to invent a large interior:
+/// a gap that survives it is too big to fill honestly and is a real authoring
+/// error, not a speckle.
+fn fill_dem_voids(v: &mut [f64], n: usize, kind: &str) -> Result<usize, std::io::Error> {
+    const MAX_PASSES: usize = 64;
+    let idx = |x: usize, y: usize| y * n + x;
+    let mut filled = 0usize;
+    for _ in 0..MAX_PASSES {
+        let holes: Vec<usize> = (0..v.len()).filter(|&i| !v[i].is_finite()).collect();
+        if holes.is_empty() {
+            return Ok(filled);
+        }
+        let snapshot = v.to_vec();
+        let mut progressed = false;
+        for i in holes {
+            let (x, y) = (i % n, i / n);
+            let mut sum = 0.0;
+            let mut cnt = 0.0;
+            for dy in -1isize..=1 {
+                for dx in -1isize..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let (nx, ny) = (x as isize + dx, y as isize + dy);
+                    if nx < 0 || ny < 0 || nx >= n as isize || ny >= n as isize {
+                        continue;
+                    }
+                    let s = snapshot[idx(nx as usize, ny as usize)];
+                    if s.is_finite() {
+                        sum += s;
+                        cnt += 1.0;
+                    }
+                }
+            }
+            if cnt > 0.0 {
+                v[i] = sum / cnt;
+                filled += 1;
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    let left = v.iter().filter(|s| !s.is_finite()).count();
+    if left > 0 {
+        return Err(io_err(format!(
+            "{kind} pipeline: {left} void sample(s) could not be filled after {MAX_PASSES} \
+             passes — the gap is larger than {MAX_PASSES} samples across. Filling it would be \
+             inventing terrain; re-centre the window or pick a source with coverage here."
+        )));
+    }
+    Ok(filled)
+}
+
+/// Reject a crop that is mostly padding.
+///
+/// The clamp above keeps the window inside the valid-data BOUNDING BOX, which is
+/// the right bound for a rectangular footprint but still admits null corners when
+/// the imaged strip is rotated inside it. This is the backstop: a derived map is
+/// consumed as if every texel were a measurement — the ortho multiplies albedo,
+/// the normal map replaces the shading normal — so shipping one that is a third
+/// padding produces confident, wrong ground rather than a visible error.
+///
+/// Fails the bake instead of warning. A warning is what the previous behaviour
+/// effectively was, and an 18%-dead map shipped anyway.
+fn reject_if_mostly_nodata(values: &[f64], kind: &str, limit: f64) -> Result<(), std::io::Error> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    let bad = values.iter().filter(|v| !v.is_finite()).count();
+    let frac = bad as f64 / values.len() as f64;
+    if frac > limit {
+        return Err(io_err(format!(
+            "{kind} pipeline: {:.1}% of the cropped window has no data (limit {:.1}%). \
+             The requested `window_m`/`center_lat`/`center_lon` reaches past this \
+             source's imaged footprint — shrink the window or re-centre it. Baking \
+             this would put a flat, uniformly-shaded band into the terrain.",
+            frac * 100.0,
+            limit * 100.0
+        )));
+    }
+    Ok(())
+}
+
 fn resolve_roi(
     cfg: &ProcessConfig,
     src: &GraySource,
@@ -778,10 +964,28 @@ fn resolve_roi(
     // Clamp the square window to the source; if the author's window falls
     // off the edge, shrink it (still square) rather than emit nodata rows —
     // a smaller-than-asked real surface beats a half-nodata one.
-    let max_half_w = cc.max(0).min(src_w as isize - 1);
-    let max_half_e = (src_w as isize - 1 - cc).max(0);
-    let max_half_n = cr.max(0).min(src_h as isize - 1);
-    let max_half_s = (src_h as isize - 1 - cr).max(0);
+    //
+    // CLAMPED AGAINST VALID DATA, NOT THE RASTER. These are not the same bound,
+    // and assuming they were is what put a dead margin into every derived map of
+    // the Apollo 15 site: `NAC_DTM_APOLLO15_M111571816_2M.IMG` is an
+    // orthorectified frame PADDED to a rectangle with `CORE_NULL`, so ~16% of its
+    // raster carries no measurement at all. A window can sit entirely inside
+    // `src_w`/`src_h` and still be one-sixth null.
+    //
+    // Measured on the shipped bake before this fix: `ortho.png` and `normal.png`
+    // both went dead at exactly x=2100/2500 for every row — the ortho baked to
+    // flat white (which `ORTHO_GAIN` then rendered at 3x the authored albedo) and
+    // the normal map to a zero-relief plane. A smooth, 3x-bright, straight-edged
+    // band along the site boundary, in an engine where nothing downstream can tell
+    // "no data" from "flat bright ground".
+    let (vx0, vy0, vx1, vy1) = valid_data_bounds(&src.samples, src_w, src_h)
+        .ok_or_else(|| io_err(format!("{kind} pipeline: source has no finite samples")))?;
+    let (vx0, vy0) = (vx0 as isize, vy0 as isize);
+    let (vx1, vy1) = (vx1 as isize, vy1 as isize);
+    let max_half_w = (cc - vx0).max(0);
+    let max_half_e = (vx1 - cc).max(0);
+    let max_half_n = (cr - vy0).max(0);
+    let max_half_s = (vy1 - cr).max(0);
     let half = half_px
         .min(max_half_w)
         .min(max_half_e)
@@ -834,23 +1038,47 @@ fn resample_roi_bilinear(samples: &[f64], src_w: usize, src_h: usize, roi: &RoiC
             let sx0 = sx_f.floor() as usize;
             let sx1 = (sx0 + 1).min(src_w - 1);
             let fx = sx_f - sx0 as f64;
-            // Bilinear over the four neighbours; nodata/NaN treated as 0.
-            let s = |col: usize, row: usize| -> f64 {
-                let v = samples.get(row * src_w + col).copied().unwrap_or(0.0);
-                if v.is_finite() {
-                    v
-                } else {
-                    0.0
-                }
+            // Bilinear with the weights RENORMALISED over the finite neighbours,
+            // and NaN out when all four are void.
+            //
+            // This used to substitute `0.0` for every non-finite neighbour, which
+            // is wrong twice over. Near a void it blended real terrain against a
+            // fabricated zero, dragging the edge toward sea level — a dark fringe
+            // in a map, a cliff in a DEM. And where all four were void it emitted
+            // `0.0`, an ordinary-looking elevation, so "no data" arrived downstream
+            // wearing the costume of a measurement: `is_finite()` could no longer
+            // find it, the void-fill below had nothing to fill, and the terrain
+            // plunged to absolute zero in a smooth confident sheet.
+            //
+            // Renormalising keeps every partial neighbourhood honest (three real
+            // samples give a real answer, weighted as if the fourth were absent
+            // rather than zero) and preserves NaN where there is genuinely nothing,
+            // so `fill_dem_voids` can see and repair it.
+            let s = |col: usize, row: usize| -> Option<f64> {
+                samples
+                    .get(row * src_w + col)
+                    .copied()
+                    .filter(|v| v.is_finite())
             };
-            let v00 = s(sx0, sy0);
-            let v10 = s(sx1, sy0);
-            let v01 = s(sx0, sy1);
-            let v11 = s(sx1, sy1);
-            let top = v00 + (v10 - v00) * fx;
-            let bot = v01 + (v11 - v01) * fx;
-            let v = top + (bot - top) * fy;
-            out[oy * out_n + ox] = if v.is_finite() { v } else { 0.0 };
+            let corners = [
+                (s(sx0, sy0), (1.0 - fx) * (1.0 - fy)),
+                (s(sx1, sy0), fx * (1.0 - fy)),
+                (s(sx0, sy1), (1.0 - fx) * fy),
+                (s(sx1, sy1), fx * fy),
+            ];
+            let mut acc = 0.0;
+            let mut wsum = 0.0;
+            for (val, w) in corners {
+                if let Some(v) = val {
+                    acc += v * w;
+                    wsum += w;
+                }
+            }
+            out[oy * out_n + ox] = if wsum > 1e-12 {
+                acc / wsum
+            } else {
+                f64::NAN
+            };
         }
     }
     out
@@ -931,6 +1159,7 @@ fn process_map(
     let src = decode_gray_source(source)?;
     let (roi, _scale, _clat, _clon) = resolve_roi(cfg, &src, "map")?;
     let out_n = roi.out_n;
+    reject_if_mostly_nodata(&roi_samples(&src.samples, src.w, src.h, &roi), "map", 0.02)?;
     let gray = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
 
     // 1–99 percentile stretch over the CROP (not the whole mosaic — the crop
@@ -981,6 +1210,10 @@ fn process_map(
             (lo, hi)
         }
     };
+    // Accumulated over the MEASURED samples only — nodata bakes to white, and
+    // folding that into the mean would bias the gain by the size of the margin.
+    let mut sum_measured = 0.0f64;
+    let mut n_measured = 0.0f64;
     let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
     for (i, px) in png.pixels_mut().enumerate() {
         // Nodata bakes to WHITE, not black. These maps are consumed
@@ -996,7 +1229,10 @@ fn process_map(
         // non-finites first, so today the guard earns its keep on the `0.0` case —
         // but it must survive that resampler being fixed to propagate NaN.
         let v = if is_measurement(gray[i]) {
-            (((gray[i] - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8
+            let s = (((gray[i] - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8;
+            sum_measured += s as f64 / 255.0;
+            n_measured += 1.0;
+            s
         } else {
             255
         };
@@ -1004,6 +1240,28 @@ fn process_map(
     }
     png.save(output_path)
         .map_err(|e| io_err(format!("writing map PNG: {e}")))?;
+
+    // ── The gain this map needs to be consumed multiplicatively ──────────────
+    // A 1–99 percentile stretch spends the full 0..255 range on the site's own
+    // brightness spread, so what lands on disk is a CONTRAST map with mean near
+    // 1/3 — NOT a reflectance map with mean 1. `albedo * map` therefore does not
+    // tint the regolith, it DIMS it by that mean.
+    //
+    // The shader compensated with a hardcoded `ORTHO_GAIN = 3.0`, derived by
+    // measuring THIS site by hand (mean 0.412 ⇒ 1/mean ≈ 2.43, rounded up). That
+    // makes exactly one site correct and every other one approximately correct,
+    // and it puts a texture-bake concern inside `lunar_brdf.wgsl`.
+    //
+    // The mean is known HERE, for free, at the moment the stretch is applied. Write
+    // it beside the map so the engine can fill `ortho_gain = 1/mean` per site and
+    // the shader constant can go to 1.0. `bake_names_not_values`: the sidecar
+    // records the measurement, not a tuned multiplier.
+    if n_measured > 0.0 {
+        let mean = sum_measured / n_measured;
+        let sidecar = output_path.with_extension("mean");
+        std::fs::write(&sidecar, format!("{mean:.6}\n"))?;
+        println!("    map mean {mean:.4} → suggested ortho_gain {:.3}", 1.0 / mean.max(1e-6));
+    }
     Ok(())
 }
 
@@ -1023,6 +1281,7 @@ fn process_normalmap(
     let src = decode_gray_source(source)?;
     let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "normalmap")?;
     let out_n = roi.out_n;
+    reject_if_mostly_nodata(&roi_samples(&src.samples, src.w, src.h, &roi), "normalmap", 0.02)?;
     let h = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
 
     // Metres per output texel — the crop spans `win * scale` metres.
@@ -1066,6 +1325,91 @@ fn tiff_io_err(e: tiff::TiffError) -> std::io::Error {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// A stereo DTM has voids where matching failed — shadowed crater floors
+    /// above all. They must be FILLED, never shipped: a NaN height is a hole in
+    /// the render mesh AND the collider, i.e. a hole in the world.
+    #[test]
+    fn dem_voids_are_filled_from_their_neighbours() {
+        let n = 7;
+        let mut v = vec![10.0f64; n * n];
+        v[3 * n + 3] = f64::NAN; // single interior void
+        v[3 * n + 4] = f64::NAN; // and its neighbour, so the fill must iterate
+        let filled = fill_dem_voids(&mut v, n, "dem").expect("fills");
+        assert_eq!(filled, 2);
+        assert!(v.iter().all(|s| s.is_finite()), "no void may survive");
+        // Flat input ⇒ flat output: interpolation must not invent relief.
+        assert!(v.iter().all(|s| (s - 10.0).abs() < 1e-9));
+    }
+
+    /// The fill must refuse a gap too large to fill honestly rather than invent
+    /// terrain across it — that would be a smooth, confident, fictional surface.
+    #[test]
+    fn an_unfillably_large_void_fails_rather_than_inventing_terrain() {
+        let n = 200;
+        let mut v = vec![f64::NAN; n * n];
+        // One valid rim sample only: the interior is far wider than the pass cap.
+        v[0] = 1.0;
+        assert!(fill_dem_voids(&mut v, n, "dem").is_err());
+    }
+
+    /// PDS orthorectified products are footprints PADDED to a rectangle with
+    /// `CORE_NULL`, so the raster's width is not the width of the data. Clamping a
+    /// crop to `0..w` therefore lands in the padding while looking perfectly legal.
+    ///
+    /// This is the defect that shipped: `ortho.png` and `normal.png` both went dead
+    /// at x=2100 of 2500 — every row, 16% of the site — because the window was
+    /// inside the raster and nobody had asked whether it was inside the DATA.
+    #[test]
+    fn valid_bounds_ignore_the_null_padding_around_a_footprint() {
+        // 10x4 raster whose right 4 columns are padding.
+        let (w, h) = (10usize, 4usize);
+        let mut s = vec![f64::NAN; w * h];
+        for y in 0..h {
+            for x in 0..6 {
+                s[y * w + x] = 1.0;
+            }
+        }
+        assert_eq!(
+            valid_data_bounds(&s, w, h),
+            Some((0, 0, 5, 3)),
+            "bounds must stop at the last real column (5), not the last raster column (9)"
+        );
+    }
+
+    /// An RGB source keeps its data in `planes` and has no NaN sentinel, so there
+    /// is nothing to scan — the raster is the bound. Regression guard: an early
+    /// version of the clamp rejected every RGB crop with "no finite samples".
+    #[test]
+    fn valid_bounds_fall_back_to_the_raster_for_plane_sources() {
+        assert_eq!(valid_data_bounds(&[], 8, 5), Some((0, 0, 7, 4)));
+    }
+
+    /// The backstop. A bounding-box clamp still admits nulls when the imaged strip
+    /// is rotated inside its box, and a derived map is consumed as if every texel
+    /// were a measurement — the ortho MULTIPLIES albedo, the normal map REPLACES
+    /// the shading normal. So a mostly-null crop must fail the bake, not warn:
+    /// warning is effectively what the old behaviour was, and an 18%-dead map
+    /// shipped anyway and rendered as a flat 3x-bright band.
+    #[test]
+    fn a_mostly_nodata_crop_fails_the_bake_rather_than_shipping() {
+        let mut v = vec![1.0f64; 100];
+        v[..10].fill(f64::NAN); // 10% dead
+        assert!(
+            reject_if_mostly_nodata(&v, "map", 0.02).is_err(),
+            "10% nodata must fail a 2% limit"
+        );
+        assert!(
+            reject_if_mostly_nodata(&v, "map", 0.5).is_ok(),
+            "and pass when the caller genuinely allows it"
+        );
+        assert!(
+            reject_if_mostly_nodata(&vec![1.0f64; 100], "map", 0.02).is_ok(),
+            "a clean crop passes"
+        );
+        // Empty = RGB source, nothing to judge.
+        assert!(reject_if_mostly_nodata(&[], "map", 0.0).is_ok());
+    }
 
     /// Encode a `w*h` row-major f32 raster as an in-memory TIFF — the same
     /// proven pattern `lunco-terrain-bake` uses for its fixtures.
