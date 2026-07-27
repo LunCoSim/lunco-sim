@@ -269,6 +269,66 @@ fn forget_dead_bodies(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TEMPORARY DIAGNOSTIC — remove once the rover_comparison wedge is understood.
+//
+// `scenes/tests/rover_comparison.usda` spins one thread at 100% inside the
+// physics step and never returns a tick. These systems answer the two questions
+// that localise it: WHICH body diverges first (and how fast), and WHICH phase of
+// the step is entered last before the silence.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Set once any dynamic body's pose/velocity leaves a sane magnitude, so the
+/// phase markers below stay silent for the entire healthy part of a run.
+#[derive(Resource, Default)]
+struct DivergenceWatch {
+    armed: bool,
+    seen_any: bool,
+}
+
+fn diag_watch_bodies(
+    q: Query<(&Position, &LinearVelocity, Option<&Name>, &RigidBody)>,
+    mut watch: ResMut<DivergenceWatch>,
+) {
+    let mut worst = 0.0_f64;
+    let mut who = "<unnamed>".to_string();
+    for (pos, vel, name, rb) in &q {
+        if !matches!(rb, RigidBody::Dynamic) {
+            continue;
+        }
+        let m = pos.0.abs().max_element().max(vel.0.abs().max_element());
+        let m = if m.is_finite() { m } else { f64::INFINITY };
+        if m > worst {
+            worst = m;
+            who = name.map(|n| n.as_str().to_string()).unwrap_or_default();
+        }
+    }
+    // 100 is quiet for this rig: the rovers run |z| <= 52 at a few m/s, and static
+    // geometry is excluded. A silent log must mean "nothing diverged", never "the
+    // diagnostic was not installed" — hence the one-shot proof below.
+    if !watch.seen_any {
+        watch.seen_any = true;
+        eprintln!("[diag] divergence watch ACTIVE ({} dynamic bodies)", q.iter().count());
+    }
+    if worst > 100.0 {
+        watch.armed = true;
+        eprintln!("[diag] worst dynamic body magnitude {:e} on {}", worst, who);
+    }
+}
+
+fn diag_first(_watch: Res<DivergenceWatch>) {
+    eprintln!("[diag] step phase: First");
+}
+fn diag_broad(_watch: Res<DivergenceWatch>) {
+    eprintln!("[diag] step phase: BroadPhase");
+}
+fn diag_narrow(_watch: Res<DivergenceWatch>) {
+    eprintln!("[diag] step phase: NarrowPhase");
+}
+fn diag_last(_watch: Res<DivergenceWatch>) {
+    eprintln!("[diag] step phase: Last (step completed)");
+}
+
 /// Installs the "left the world" diagnostic. Registered by [`PhysicsGatePlugin`]
 /// — the diagnostic is only useful where physics actually runs.
 ///
@@ -303,12 +363,14 @@ impl Plugin for EscapeDiagnosticPlugin {
                     forget_dead_bodies,
                     update_world_bounds,
                     report_escaped_bodies,
+                    diag_watch_bodies,
                 )
                     .chain()
                     .in_set(PhysicsSystems::Writeback)
                     .after(avian3d::schedule::PhysicsStepSystems::Last)
                     .before(PhysicsSystems::Last),
-            );
+            )
+            .init_resource::<DivergenceWatch>();
     }
 }
 

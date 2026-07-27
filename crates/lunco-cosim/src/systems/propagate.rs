@@ -467,7 +467,6 @@ mod wire_order_tests {
                     end_connector: "force_y".into(),
                     scale: 1.0,
                     offset: 0.0,
-                    start_is_input: false,
                 });
             }
 
@@ -523,7 +522,6 @@ mod wire_order_tests {
             end_connector: "nonexistent_port".into(),
             scale: 1.0,
             offset: 0.0,
-            start_is_input: false,
         });
 
         world.run_system_once(propagate_connections).unwrap();
@@ -577,7 +575,6 @@ mod wire_order_tests {
             end_connector: "not_yet_loaded".into(),
             scale: 1.0,
             offset: 0.0,
-            start_is_input: false,
         });
 
         world.run_system_once(propagate_connections).unwrap();
@@ -616,7 +613,6 @@ mod wire_order_tests {
             end_connector: "angle".into(),
             scale: 1.0,
             offset: 0.0,
-            start_is_input: false,
         });
 
         // Stand in for "this wire wrote successfully on an earlier tick", which

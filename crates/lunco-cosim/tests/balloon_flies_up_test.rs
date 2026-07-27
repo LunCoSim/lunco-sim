@@ -128,7 +128,6 @@ fn setup_balloon_wires(
             end_connector: "force_y".into(),
             scale: 1.0,
             offset: 0.0,
-            start_is_input: false,
         });
         commands.spawn(SimConnection {
             start_element: entity,
@@ -138,7 +137,6 @@ fn setup_balloon_wires(
             end_connector: "height".into(),
             scale: 1.0,
             offset: 0.0,
-            start_is_input: false,
         });
         commands.spawn(SimConnection {
             start_element: entity,
@@ -148,7 +146,6 @@ fn setup_balloon_wires(
             end_connector: "velocity".into(),
             scale: 1.0,
             offset: 0.0,
-            start_is_input: false,
         });
 
         commands.entity(entity).remove::<BalloonModelMarker>();
