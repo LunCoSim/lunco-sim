@@ -82,4 +82,4 @@ CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test -p lunco-scripting --lib --
 ## Docs
 
 - **[Scripting Guide](../../docs/scripting-guide.md)** — how to write scenarios (start here).
-- **[Rhai integration design](../../docs/rhai-integration-design.md)** — design rationale + as-built reference.
+- **[Rhai integration design](../../docs/architecture/rhai-integration.md)** — design rationale + as-built reference.

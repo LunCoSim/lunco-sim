@@ -3,7 +3,7 @@
 How to write **scenarios** — persistent per-entity programs that sense and drive
 the simulation — in LunCoSim.
 
-- **Crate:** [`lunco-scripting`](../crates/lunco-scripting) · **Design rationale:** [rhai-integration-design.md](./rhai-integration-design.md)
+- **Crate:** [`lunco-scripting`](../crates/lunco-scripting) · **Design rationale:** [rhai-integration.md](./architecture/rhai-integration.md)
 - **Examples:** [`assets/scripting/examples/`](../assets/scripting/examples) · **Helper library:** [`assets/scripting/prelude/`](../assets/scripting/prelude)
 - **Every command you can call:** [`commands-reference.md`](./commands-reference.md) (auto-generated)
 
@@ -186,7 +186,7 @@ scripts) is all rhai — see the [examples index](#n-examples-index).
   trees, determinism): [Part II](#part-ii--reference).
 - **Recording deterministic frames** (the offline clock, `shot_*` verbs, `frozen`,
   the `shots.rhai` sequencer): [`offline-recording.md`](./offline-recording.md).
-- **Design rationale**: [`rhai-integration-design.md`](./rhai-integration-design.md).
+- **Design rationale**: [`architecture/rhai-integration.md`](./architecture/rhai-integration.md).
 - **rhai language**: <https://rhai.rs/book/>.
 
 ---
@@ -480,7 +480,7 @@ produces the same sequence — no explicit seeding needed.
 
 - [Command reference](./commands-reference.md) — every `#[Command]`, auto-generated
 - [lunco-scripting crate README](../crates/lunco-scripting/README.md)
-- [Rhai integration design & as-built reference](./rhai-integration-design.md)
+- [Rhai integration design & as-built reference](./architecture/rhai-integration.md)
 - [prelude/](../assets/scripting/prelude) — the helper library (one file per topic)
 - [Examples directory](../assets/scripting/examples)
 - [Crate index](./crates-index.md)

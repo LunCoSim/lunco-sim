@@ -1,6 +1,8 @@
 # Lint substrate — facts in Rust, rules in policy
 
-**Status: implemented.** Substrate `crates/lunco-lint`; USD facts
+> Status: Active · Audience: contributors adding lint facts or authoring lint rules
+
+Substrate `crates/lunco-lint`; USD facts
 `crates/lunco-usd-avian/src/lint.rs`; rules `assets/scripting/policy/lint_usd.rhai`;
 entry points `RunLint` (live scene) and `ValidateAsset` (file).
 

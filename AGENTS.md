@@ -6,11 +6,17 @@ This document provides specific instructions and context for AI agents (Claude, 
 
 Start here, in order (new to the codebase? the canonical narrative path is **[docs/README.md → Reading order for newcomers](docs/README.md#reading-order-for-newcomers)**; the list below is the agent-oriented quick map):
 
+0. **[skills/README.md](skills/README.md)** — task-oriented runbooks. If a skill covers the task, read it *first*; it encodes the traps this file only gestures at.
 1. **[docs/crates-index.md](docs/crates-index.md)** — the map of the ~50-crate workspace and each crate's responsibility. **First stop for "which crate does X".**
 2. **[docs/principles.md](docs/principles.md)** — the non-negotiable design principles. Verify every plan against these.
-3. **[docs/architecture/](docs/architecture/)** — numbered design docs. The ranges are a legend: **00s** overview/ontology, **10s** systems (document, workbench, API, twin, sim layers), **20s** domains (modelica, usd, cosim, environment, sysml, experiments), **30s** platform (wasm/web), **40s** cross-cutting (asset-io, axes-units). Start at `00-overview.md`.
+3. **[docs/architecture/README.md](docs/architecture/README.md)** — the indexed design narrative. Numbers are an ordering hint, not an identity: **00s** overview/ontology, **10s** framework (document, workbench, API, twin, time), **20s** domains (modelica, usd, cosim, environment, sysml, experiments), **30s** platform (wasm/web, networking, spacecraft), **40s** cross-cutting (asset-io, axes-units, frame discipline), **50s–60s** feature subsystems, un-numbered substrates. Start at `00-overview.md`.
 4. **[specs/README.md](specs/README.md)** — feature-spec status index (Implemented / Partial / Not-built / Superseded).
-5. **This file (AGENTS.md)** — the rules below.
+5. **[docs/reviews/](docs/reviews/)** — what is known-broken right now (`open-*.md`).
+6. **This file (AGENTS.md)** — the rules below.
+
+**Every doc carries a status line.** `Status: Active` describes the system as built;
+`Status: Design` is an agreed shape that is *not* fully built. Never implement against a
+Design doc without checking what actually exists first.
 
 ## Agent Mandates
 - **Crate Maintenance**: Whenever a new crate is added to the workspace, the agent MUST update `docs/crates-index.md` to include the new crate in the appropriate category with a concise responsibility summary.
@@ -435,6 +441,18 @@ Document with `///` (items) and `//!` (modules), for maintainers human and agent
 failed — never restate what the code already says.** A comment that survives is one that
 records something the next reader cannot recover from the code. Be concise; redundant
 docs rot fastest.
+
+The same rule governs `docs/`. Conventions — where a doc belongs, the status header, and
+the lifecycle — are in [docs/README.md § Conventions](docs/README.md#conventions). Two
+that bite most often:
+
+- **A doc describes what IS.** No changelogs, no "recently we fixed…". A doc whose only
+  content is *how we got here* — a migration plan, a completed execution checklist, a
+  closed audit — is **deleted** once the work lands. Git remembers it; a stale plan reads
+  as an open commitment.
+- **A pointer to a doc must resolve.** If you move or delete a doc, grep for its name
+  across `docs/`, `skills/`, `crates/` and `assets/` and fix every reference — including
+  the ones in `//!` comments. A dangling pointer is worse than no pointer.
 
 ## 9. Numeric Experiments & Solver Tuning
 

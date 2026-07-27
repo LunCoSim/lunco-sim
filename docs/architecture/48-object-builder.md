@@ -1,7 +1,6 @@
 # 48 — Object Builder
 
-> Renumbered 45 → 48 (2026-07-11): the big_space series (44–47) already owned 45
-> (`45-big-space-correct-usage.md`). No content change.
+> Status: Design · Audience: contributors on the object builder
 
 Design analysis for an in-app tool that builds and edits simulation objects: a canvas
 for wiring connections, an editor for the Rhai behaviour attached to a prim, a USD prim

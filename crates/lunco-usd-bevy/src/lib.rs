@@ -539,7 +539,7 @@ impl Default for UsdPrimPath {
 /// were deciding whether to produce — which is exactly the bug this replaces
 /// (`produce_usd_canvas` spent 11 ms/frame building a graph and hashing it just
 /// to discover the graph was unchanged). Keep hashes for assertions, never for
-/// gates. See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
+/// gates. See `docs/architecture/42-ui-frame-discipline.md` §6.
 ///
 /// Bumped by [`bump_usd_stage_revision`] on prim spawn/despawn and stage asset
 /// modification, and directly by the live-edit drain in `lunco-usd`

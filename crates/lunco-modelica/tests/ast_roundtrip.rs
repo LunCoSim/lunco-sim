@@ -1,8 +1,9 @@
 //! Round-trip fidelity tests: source → AST → source → AST.
 //!
-//! Gate for the AST-canonical migration documented in
-//! `docs/architecture/TAB_AST_ROADMAP.md` Section A. Section A's Path A
-//! commits to regenerating source via [`rumoca_ir_ast::StoredDefinition::to_modelica`]
+//! Gate for the AST-canonical question posed in
+//! `docs/architecture/20-domain-modelica.md` §5.1 — text is canonical today
+//! precisely *because* this round trip is not proven lossless. An
+//! AST-canonical design would regenerate source via [`rumoca_ir_ast::StoredDefinition::to_modelica`]
 //! after every structural edit. Whether that regeneration is *safe*
 //! depends on a single empirical question: does the AST survive the
 //! round trip, and what bytes change?

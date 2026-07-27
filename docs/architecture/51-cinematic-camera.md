@@ -1,6 +1,8 @@
 # 51 — Cinematic Camera Paths
 
-Status: design. Supersedes nothing; extends [35-animate-perspective](35-animate-perspective.md),
+> Status: Design · Audience: contributors on cameras, cinematics, and recording
+>
+> Extends [35-animate-perspective](35-animate-perspective.md),
 whose build-order step 1 (camera-track cuts) is already shipped.
 
 Goal: fly a camera around the moonbase crater on an authored path, edited live the way
@@ -135,7 +137,7 @@ Bake `xformOp:orient` (quaternion), not `rotateXYZ` — the sampler already sler
 ### Why not the waypoint storage pattern?
 
 The shipped waypoint editor bakes coordinates into a BT XML string in one attribute
-(the `info:sourceCode` of the vessel's `LunCoProgramAPI "Mission"` child, `target="x;y;z"`). Its own design doc (`docs/waypoints-in-usd-design.md`)
+(the `info:sourceCode` of the vessel's `LunCoProgramAPI "Mission"` child, `target="x;y;z"`). Its own design doc (`waypoints-in-usd.md`)
 specifies prim-backed storage and calls this drift out as still-open. **Do not copy it.**
 An XML blob is opaque to the inspector, to `over` composition, to selection, and to
 per-knot gizmos. Camera paths get real prims from the start.

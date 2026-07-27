@@ -1,13 +1,15 @@
 # Engineering Backlog & Adopted-Standards Roadmap
 
-**Status:** backlog. This doc is the deliberate exception to "a doc here
-describes what IS" — it records what is *not yet built*, why each item matters,
-and its rough scope, so the reasoning survives until someone picks it up.
-Each entry carries **what**, **why** (the motivating problem), and **scope**.
+> Status: Design · Audience: anyone planning work, or about to re-litigate a rejected standard
+>
+> The deliberate exception to "a doc here describes what IS" — it records what is
+> *not yet built*, why each item matters, and its rough scope, so the reasoning
+> survives until someone picks it up. Each entry carries **what**, **why** (the
+> motivating problem), and **scope**.
 
-Security and multiplayer-hardening deferrals are **not** here — they live in
-[`../../DEFERRED-2026-07-19.md`](../../DEFERRED-2026-07-19.md) §A, annotated
-with `TODO(multiplayer)` at the exact code sites.
+Security and multiplayer-hardening deferrals are **not** here — they are annotated
+with `TODO(multiplayer)` at the exact code sites, and the accepted posture is
+[`../reviews/open-rbac-not-enforced.md`](../reviews/open-rbac-not-enforced.md).
 
 Sourced from the 2026-07-19 static review (`REVIEW-2026-07-19.md` §8) and its
 deferred-work companion. When an item lands, delete it here and let the
@@ -301,9 +303,9 @@ remains is the Storage-API migration, which needs a dependency line from
   on the **live Python-cosim path**, not a dev-dependency. Upgrade when the
   cosim backend is next touched; until then this is accepted, known risk.
 - **cargo-machete pass** — likely-unused dependencies were flagged but not
-  verified (see also
-  [`../../DEFERRED-2026-07-19.md`](../../DEFERRED-2026-07-19.md) §C on why
-  pruning by references alone is not sufficient).
+  verified. Do not prune by references alone: a dep can be reached only through
+  a feature, a macro expansion, or a `cfg`-gated path, so removal must be
+  proven by a build of every feature combination that uses it.
 
 ## 8. Testing debt
 

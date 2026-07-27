@@ -1,116 +1,129 @@
 # LunCoSim Documentation
 
-Welcome. This directory is the authoritative home for LunCoSim architecture,
-design, and reference documentation.
+The authoritative home for LunCoSim architecture, design, and reference docs.
 
-## Application Guide
+**Looking for something specific?** Jump to [I want to…](#i-want-to) below.
+**New to the project?** Follow the [reading order](#reading-order-for-newcomers).
+**An AI agent?** Read [`../AGENTS.md`](../AGENTS.md), then pick a [skill](../skills/README.md).
 
-Documentation for each primary binary and tool in the workspace. The
-**[Applications index](apps/README.md)** lists every runnable binary (primary,
-utility, and dev) with launch commands and the shared CLI/API surface.
+---
+
+## I want to…
+
+| … | Go to |
+|---|---|
+| Run the thing | [`apps/README.md`](apps/README.md) — every binary, its flags, when to use it |
+| Find which crate does X | [`crates-index.md`](crates-index.md) |
+| Find a Modelica model or USD part | [`component-index.md`](component-index.md) |
+| Call the app from code / curl / MCP | [`commands-reference.md`](commands-reference.md) — every `#[Command]`, generated from source |
+| Build a mission end-to-end | [`tutorials/`](tutorials/README.md) |
+| Write rhai behaviour | [`scripting-guide.md`](scripting-guide.md) · [`behaviour-trees.md`](behaviour-trees.md) |
+| Build a rover or lander | [`architecture/55-building-vessels-rovers-and-landers.md`](architecture/55-building-vessels-rovers-and-landers.md) |
+| Record a video / frame-exact capture | [`offline-recording.md`](offline-recording.md) |
+| Understand how it all fits together | [`architecture/README.md`](architecture/README.md) |
+| Know the rules before writing code | [`principles.md`](principles.md) · [`../AGENTS.md`](../AGENTS.md) |
+| Do a task with an agent | [`../skills/README.md`](../skills/README.md) |
+| Check what's specced vs built | [`../specs/README.md`](../specs/README.md) |
+| Know what's currently broken | [`reviews/`](reviews/) |
+
+## Applications
+
+Every runnable binary is indexed in [`apps/README.md`](apps/README.md). The
+primary four:
 
 | App | Purpose |
 |---|---|
 | [**luncosim**](apps/luncosim/README.md) | Flagship lunar-mission simulator (full FSW/robotics/avatar stack) |
-| [**Sandbox**](apps/sandbox/README.md) | Ground mobility and physics testing (+ headless [server](apps/sandbox/OPS.md)) |
-| [**Lunica**](apps/lunica/README.md) | Modelica engineering workbench |
-| [**Assets Manager**](apps/assets-manager/README.md) | Download and process workspace assets |
+| [**sandbox**](apps/sandbox/README.md) | Ground mobility and physics testing (+ headless [server](apps/sandbox/OPS.md)) |
+| [**lunica**](apps/lunica/README.md) | Modelica engineering workbench |
+| [**assets-manager**](apps/assets-manager/README.md) | Download and process workspace assets |
 
-## Skills (AI agents & contributors)
+> `cargo run` alone is ambiguous — pick a target. See the apps index.
 
-Task-oriented runbooks in [`../skills/`](../skills/) — each triggers on a kind of
-request and distills the docs below into a recipe plus the project-specific
-gotchas. Point an agent (or yourself) at these before a hands-on task.
+## Skills (agents & contributors)
+
+Task-oriented runbooks in [`../skills/`](../skills/README.md). Each triggers on a
+kind of request and distils these docs into a recipe plus the project-specific
+traps. Point an agent — or yourself — at one before a hands-on task.
+
+The full catalogue with trigger phrases is in
+[`../skills/README.md`](../skills/README.md). The most-used entry points:
 
 | Skill | Use it when you want to… |
 |---|---|
-| [**repo-map**](../skills/repo-map/SKILL.md) | Get oriented — repo layout, which binary to run, where a feature lives |
-| [**build-usd-scene**](../skills/build-usd-scene/SKILL.md) | Author/edit the 3D world — load scenes, spawn, place, tune objects |
-| [**author-scenario**](../skills/author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, coordination |
-| [**authoring-vessel-controllers**](../skills/authoring-vessel-controllers/SKILL.md) | Give a vessel a self-driving GNC / autopilot + manual handoff |
-| [**compose-multidomain-twin**](../skills/compose-multidomain-twin/SKILL.md) | Assemble a full mission — USD + Modelica + cosim + rhai — into a Twin |
-| [**author-tutorial**](../skills/author-tutorial/SKILL.md) | Build a guided interactive lesson / onboarding flow (rhai + HUD) |
-| [**inspect-simulation**](../skills/inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
-| [**run-modelica**](../skills/run-modelica/SKILL.md) | Run/compile/sweep Modelica models over the API |
-| [**test-via-api**](../skills/test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
-| [**lunco-ui**](../skills/lunco-ui/SKILL.md) · [**lunco-theme**](../skills/lunco-theme/SKILL.md) | Build workbench UI panels / use the design tokens |
+| [repo-map](../skills/repo-map/SKILL.md) | Get oriented — layout, which binary to run, where a feature lives |
+| [build-usd-scene](../skills/build-usd-scene/SKILL.md) | Author/edit the 3D world — load, spawn, place, tune |
+| [author-scenario](../skills/author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions |
+| [build-vehicle](../skills/build-vehicle/SKILL.md) | Build a rover from the mobility component library |
+| [authoring-vessel-controllers](../skills/authoring-vessel-controllers/SKILL.md) | Give a vessel a GNC / autopilot with manual handoff |
+| [compose-multidomain-twin](../skills/compose-multidomain-twin/SKILL.md) | Assemble USD + Modelica + cosim + rhai into a Twin |
+| [inspect-simulation](../skills/inspect-simulation/SKILL.md) | Observe a running sim — ports, variables, screenshots |
+| [test-via-api](../skills/test-via-api/SKILL.md) | Verify a change without asking a human to click |
 
-## Strategic Roadmap
+## Documentation map
 
-We are evolving from a high-fidelity sandbox into a complete autonomous mission design stack.
-
-| Milestone | Status | Description |
-|---|---|---|
-| **Space Robotics Core** | ✅ Foundation | Multi-domain co-simulation (USD + Modelica + Avian3D) with f64 precision. |
-| **Real-world Validation** | 💭 Idea | HIL/SIL integration for hardware-in-the-loop validation (not yet specced). |
-| **Industrial Interop** | 💭 Idea | NASA GMAT for orbital mechanics and **ROS2** for robotics control (not yet specced). |
-| **Advanced Physics** | 📝 Planned | [**PINN Terramechanics**](../specs/025-terramechanics/) for high-fidelity soil interaction. |
-| **Autonomous Missions** | 📝 Planned | [**Agent-Driven Sim**](../specs/033-agent-driven-simulation/) and [**Mission Replay/Audit**](../specs/020-world-state-and-replay/). |
-
-## Architecture & Framework
-
-| Path | Purpose |
-|------|---------|
-| [`principles.md`](principles.md) | Non-negotiable project principles (TDD, plugin-first, etc.) |
-| [`crates-index.md`](crates-index.md) | Navigation guide for the workspace structure |
-| [`component-index.md`](component-index.md) | Canonical index of all Modelica physics models & USD component assets |
-| [`architecture/55-building-vessels-rovers-and-landers.md`](architecture/55-building-vessels-rovers-and-landers.md) | Step-by-step architectural guide for building mission-grade rovers & landers |
-| [`tutorials/`](tutorials/README.md) | Step-by-step build guides — start here to author a scene/mission (USD + rhai + Modelica) |
-| [`scripting-guide.md`](scripting-guide.md) | How to write rhai scenarios — beginner tutorial + full reference (verbs, sequencing, tools, persistence) |
-| [`commands-reference.md`](commands-reference.md) | Every `#[Command]` — the full callable surface (HTTP / MCP / rhai `cmd()`), auto-generated from source |
-| [`rhai-integration-design.md`](rhai-integration-design.md) | Rhai scripting design rationale + as-built reference |
-| [`behaviour-trees.md`](behaviour-trees.md) | The tree kernel — the tick contract, node catalogue, autopilot `BehaviorSpec` |
-| [`offline-recording.md`](offline-recording.md) | Deterministic frame-exact capture — the offline clock's three knobs, the recording verbs, `frozen` semantics, the `shots.rhai` sequencer |
-| [**`architecture/README.md`**](architecture/README.md) | **Index of the design narrative** — start here for how LunCoSim is structured |
-| [`architecture/render-decoupling.md`](architecture/render-decoupling.md) | The material is the boundary — domain crates state appearance *intent*; only `lunco-render-bevy` names `bevy_pbr`, so `--no-ui` links no wgpu/`bevy_render`/egui/winit |
-| [`architecture/shader-layers-and-params.md`](architecture/shader-layers-and-params.md) | Shader looks — WGSL-reflected parameters and named texture layers; adding a parameter is editing a shader, not editing Rust |
-| [`architecture/31-networking-and-state-sync.md`](architecture/31-networking-and-state-sync.md) | Multiplayer sync — the five replication planes (command/state/content/journal/presence), the wire, area-of-interest routing, policy-as-journal |
-| [`architecture/terrain-substrate.md`](architecture/terrain-substrate.md) | Terrain height oracle — one `HeightSource` model from orbit to rover; USD layers, three channels, error-driven detail, solar-system scale |
-| [`architecture/01-ontology.md`](architecture/01-ontology.md) | Terminology reference — Space System, Port, Connection, Attribute |
-| [`reviews/`](reviews/) | Code reviews and the accepted security posture — **the project does not enforce access control** ([`TODO-rbac-not-enforced.md`](reviews/TODO-rbac-not-enforced.md)); trusted LAN only |
-| `../specs/` | Detailed feature specifications (contracts for implementation) |
-| `../crates/<crate>/README.md` | Per-crate quick-start (use this when you want to use a crate) |
+| Path | What lives there |
+|---|---|
+| [`architecture/`](architecture/README.md) | The design narrative — how and why LunCoSim is shaped this way |
+| [`apps/`](apps/README.md) | Per-binary guides: flags, controls, workflows |
+| [`tutorials/`](tutorials/README.md) | Build-something-real walkthroughs (and how the in-app lessons work) |
+| [`reviews/`](reviews/) | Standing known issues (`open-*.md`) and dated audit reports |
+| [`numeric-experiments/`](numeric-experiments/README.md) | Solver/numerics investigations with reproducible setups |
+| [`architecture/research/`](architecture/research/) | Prior art, inspiration, roads not taken |
+| [`../specs/`](../specs/README.md) | Feature contracts, with an Implemented/Partial/Not-built index |
+| `../crates/<crate>/README.md` | Per-crate quick-start — "how do I use this crate now" |
 | [`../scripts/perf/README.md`](../scripts/perf/README.md) | Performance profiling subsystem |
-| [`architecture/research/`](architecture/research/) | Historical analysis, inspiration, rejected paths |
 
 ## Reading order for newcomers
 
-1. **[`architecture/00-overview.md`](architecture/00-overview.md)** — what LunCoSim is, the three-tier model, crate layers
-2. **[`principles.md`](principles.md)** — how we work (TDD, plugin-first, interop, documentation mandate)
-3. **[`architecture/01-ontology.md`](architecture/01-ontology.md)** — vocabulary (Space System, Port, Connection, Typed Commands, etc.)
-4. **[`architecture/10-document-system.md`](architecture/10-document-system.md)** — the foundational data model: Documents, DocumentOps, DocumentViews
-5. **[`architecture/11-workbench.md`](architecture/11-workbench.md)** — UI/UX architecture: workspaces, panels, command palette
-6. **[`architecture/12-api.md`](architecture/12-api.md)** — transport-agnostic API layer, typed commands, and queries
-7. **[`architecture/13-twin-and-workflow.md`](architecture/13-twin-and-workflow.md)** — what a Twin is, save/load/workflow
-8. **[`architecture/17-view-and-intent.md`](architecture/17-view-and-intent.md)** — camera systems and the 5-layer control model
-9. Domain docs as relevant: `20-domain-modelica.md`, `21-domain-usd.md`, `22-domain-cosim.md`, `23-domain-environment.md`, `24-domain-sysml.md`
+1. [`architecture/00-overview.md`](architecture/00-overview.md) — what LunCoSim is, the three-tier model, crate layers
+2. [`principles.md`](principles.md) — how we work (TDD, plugin-first, interop, the documentation mandate)
+3. [`architecture/01-ontology.md`](architecture/01-ontology.md) — vocabulary: Space System, Port, Connection, Typed Command
+4. [`architecture/10-document-system.md`](architecture/10-document-system.md) — the data model: Documents, DocumentOps, DocumentViews
+5. [`architecture/21-domain-usd.md`](architecture/21-domain-usd.md) — USD is the source of truth; ECS is a projection of it
+6. [`architecture/12-api.md`](architecture/12-api.md) — the transport-agnostic command/query layer
+7. [`architecture/13-twin-and-workflow.md`](architecture/13-twin-and-workflow.md) — what a Twin is; save, load, workflow
+8. [`architecture/11-workbench.md`](architecture/11-workbench.md) — UI/UX: workspaces, panels, command palette
+9. Domain docs as needed: `20-domain-modelica`, `22-domain-cosim`, `23-domain-environment`
 
-## Numbering convention
+## Conventions
 
-Architecture docs follow a numeric prefix:
+**Numbering.** Architecture docs carry a numeric prefix; un-numbered files are
+topic docs and substrates. See [`architecture/README.md`](architecture/README.md)
+for the live index.
 
 | Range | Category |
-|-------|----------|
-| `00`–`09` | Foundation (overview, ontology) |
-| `10`–`19` | Framework (document system, workbench, API, viewport, control) |
-| `20`–`29` | Per-domain design (Modelica, USD, cosim, environment, SysML) |
-| `30`–`39` | Infrastructure & Deployment (Wasm, web workers, networking & state sync, CI/CD) |
-| `40`–`49` | Low-level subsystems (Asset IO, axes & units, logging) |
-| `90`–`99` | Forward-looking / roadmap (collaboration, advanced features) |
-| `research/` | Un-numbered historical / inspiration material |
+|---|---|
+| `00`–`09` | Foundation — overview, ontology |
+| `10`–`19` | Framework — documents, workbench, API, twin, time, simulation layers |
+| `20`–`29` | Domains — Modelica, USD, cosim, environment, SysML, experiments |
+| `30`–`39` | Platform — wasm/web, networking, spacecraft & multi-domain composition |
+| `40`–`49` | Cross-cutting — asset I/O, axes & units, frame discipline, views, connectivity |
+| `50`–`69` | Feature subsystems — visuals, camera, suspension, terrain georeferencing, lifecycle |
+| un-numbered | Substrates (`*-substrate.md`) and standalone topic docs |
 
-## Writing new docs
+**Status header.** Every architecture doc opens with one line:
 
-- **Crate READMEs** are for "how do I use this crate right now."
-- **Architecture docs** are for "how does LunCoSim fit together." Narrative, rationale.
-- **Specs** are contracts — what a feature MUST do. Written before implementation.
-- **App READMEs** are for "what is this binary and how do I run it."
+```
+> Status: Active | Design | Draft · Audience: <who should read this>
+```
 
-One topic, one home. Avoid duplicating content — link instead.
+- **Active** — describes the system as built. The default.
+- **Design** — agreed shape, not fully built. Say what is missing.
+- **Draft** — under live review; may be wrong.
 
-## Doc lifecycle
+**Where a doc belongs.** One topic, one home — link, never duplicate.
 
-- **Draft** → live review, prefix title with `> **Draft**`.
-- **Active** → current design.
-- **Superseded** → kept for history in `research/`.
-- **Implemented** → doc describes a design that is now realized in code. Stays active.
+| Kind | Home | Answers |
+|---|---|---|
+| Crate README | `crates/<crate>/README.md` | "How do I use this crate right now?" |
+| App README | `docs/apps/<app>/` | "What is this binary and how do I run it?" |
+| Architecture doc | `docs/architecture/` | "How does LunCoSim fit together, and why?" |
+| Spec | `specs/<nnn>-<name>/` | "What MUST this feature do?" (written before code) |
+| Skill | `skills/<name>/SKILL.md` | "Walk me through doing this task." |
+
+**Lifecycle.** A doc that describes shipped work stays Active — it is reference,
+not history. A doc whose only content is *how we got here* (migration plans,
+completed execution checklists, closed audits) is **deleted**; git remembers it.
+Move a doc to `architecture/research/` only when the idea itself is worth
+keeping but the path was not taken.

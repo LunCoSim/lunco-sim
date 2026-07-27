@@ -62,7 +62,7 @@ pub struct ViewModelSet(());
 /// A producer that genuinely must run every frame passes [`every_frame`], which
 /// puts the claim at the call site where review can see it, next to the reason.
 ///
-/// See `docs/reviews/2026-07-26-fps-regression-analysis.md`.
+/// See `docs/architecture/42-ui-frame-discipline.md` §6.
 pub trait ViewModelAppExt {
     /// Add `producer` to [`ViewModelSet`] in `Update`, gated on `gate`.
     fn add_view_model<P, M, C, CM>(

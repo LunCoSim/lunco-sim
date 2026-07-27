@@ -1,6 +1,10 @@
 # Engagement mechanics — research catalog
 
-Research snapshot, 2026-07-19. What makes rover/space sims engaging, from real
+> Status: Active · Audience: anyone designing gameplay, missions, or onboarding
+>
+> Prior art, not a plan of record.
+
+What makes rover/space sims engaging, from real
 ops history, competition rubrics, teleoperation literature, and comparable
 games — mapped onto the substrate this engine already has. Inspiration/planning
 material, not a description of running code.

@@ -1,7 +1,10 @@
 # 39 — Migration Plan: USD-Native Core
 
-Status: **active plan** · Audience: engineers working the USD-native migration. Consolidates the actionable
-work from docs **36** (comms), **37** (model synthesis), **38** (domains-as-packages / standards / naming).
+> Status: Design · Audience: engineers working the USD-native migration
+>
+> An **active** plan — delete this doc when the last phase lands. Consolidates the actionable
+work from the deleted analysis docs 36 (comms) and 37 (model synthesis) — `git log -- docs/architecture/`
+— and from doc **38** (domains-as-packages / standards / naming), which carries the thesis.
 Constraint: **no legacy to preserve** — every step is a clean cutover-with-verify, one canonical form, no
 back-compat shims.
 
@@ -13,7 +16,7 @@ back-compat shims.
 ## How to read this
 
 Phases are **dependency-ordered**; within a phase, PRs are independent unless noted. Source-of-truth
-sections in docs 36/37/38 are cited. Legend: 🟢 low risk / no behavior change · 🟡 behavior change,
+sections in doc 38 (and the deleted 36/37 — git) are cited. Legend: 🟢 low risk / no behavior change · 🟡 behavior change,
 verifiable · 🔴 needs an `openusd` contribution. Items already in place are marked **[in place]** with a
 one-line statement of what exists; everything else is remaining work.
 

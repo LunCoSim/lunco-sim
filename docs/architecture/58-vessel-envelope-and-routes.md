@@ -1,7 +1,9 @@
-# Vessel Limits and Routes — deriving instead of copying
+# 58 — Vessel Limits and Routes — deriving instead of copying
 
-**Status:** HUD derivation + rhai accessors implemented 2026-07-19; routes and
-tiers still proposed. Companion to
+> Status: Active · Audience: contributors on vehicle capability, HUDs, and routing
+>
+> HUD derivation and the rhai accessors are built; routes and tiers are still
+> proposed. Companion to
 [`57-dem-georeferencing.md`](57-dem-georeferencing.md) — same principle (*one
 source of truth, derive the rest*), applied to vehicle capability and to route
 data rather than to spatial reference.

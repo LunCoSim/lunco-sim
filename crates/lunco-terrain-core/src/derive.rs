@@ -2,7 +2,7 @@
 //! rasters computed as **pure functions of a [`HeightSource`]** over a region.
 //!
 //! These are the engine-neutral half of the layered terrain pipeline (design
-//! `docs/terrain-layered-pipeline-design.md` Part C.2 / tracker P3b). The Bevy
+//! `docs/architecture/terrain-layered-rendering.md` Part C.2 / tracker P3b). The Bevy
 //! layer turns the returned buffers into `Image`s and binds them to the
 //! `terrain_layered.wgsl` material's `surface_map` (binding 6/7, packed
 //! R=roughness G=AO B=rockDens A=hazard) and `normal_map` (binding 8/9) slots —

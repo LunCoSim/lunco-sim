@@ -7,8 +7,8 @@
 //! counterpart to the procedural look in `lunco-materials` and the scatter in
 //! `lunco-obstacle-field`.
 //!
-//! Design constraints (see `docs/terrain-layered-pipeline-design.md` Parts F–G
-//! and `docs/terrain-streaming-PLAN.md`):
+//! Design constraints (see `docs/architecture/terrain-layered-rendering.md` Parts F–G
+//! and `docs/architecture/terrain-substrate.md`):
 //! - **Tile ≤ big_space cell**; tiles anchor via `lunco_core` `CellCoord` and
 //!   stream by `FloatingOrigin` position. A tile never straddles a cell.
 //! - **Physics LOD is deterministic** — colliders are built at a canonical

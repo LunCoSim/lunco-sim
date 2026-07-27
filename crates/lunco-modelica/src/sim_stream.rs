@@ -114,7 +114,7 @@ impl VarHistory {
     /// in-app verification. NB: this cost is on the **worker
     /// thread**, off the per-frame UI path, so it does not stall
     /// input the way the main-thread findings do.
-    /// See docs/code-quality-remediation.md (CQ-210).
+    /// Tracked in docs/architecture/engineering-backlog-and-standards.md.
     pub fn append(&self, sample: SimSample) -> VarHistory {
         let mut next: Vec<SimSample> = Vec::with_capacity(self.samples.len().saturating_add(1));
         let overflow = (self.samples.len() + 1).saturating_sub(DEFAULT_HISTORY_CAPACITY);

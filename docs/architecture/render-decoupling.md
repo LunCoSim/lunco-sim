@@ -1,6 +1,8 @@
 # Render decoupling — the material is the boundary
 
-**Status: DONE (2026-07-13).** The `--no-ui` server links no GPU stack:
+> Status: Active · Audience: anyone adding a dependency to a domain crate, or touching rendering
+
+The `--no-ui` server links no GPU stack:
 
 ```
 $ cargo tree -e normal -p lunco-sandbox-server -i wgpu               # warning: nothing to print.

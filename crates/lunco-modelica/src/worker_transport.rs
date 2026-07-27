@@ -255,7 +255,7 @@ pub enum WireResult {
 // (per-worker Fast-Run occupancy, run→worker routing, MSL readiness) on top.
 
 /// Process-wide pool of Modelica workers (step 3 of the parallel-experiments
-/// plan, `docs/architecture/26-parallel-experiments.md`).
+/// plan, `docs/architecture/25-experiments.md`).
 ///
 /// Worker 0 is the *primary*: it always handles the compile / parse / MSL
 /// path ([`pump_commands_to_worker`], [`dispatch_parse_to_worker`]). Every

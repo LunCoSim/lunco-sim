@@ -1,6 +1,6 @@
 # Derive — the unified derived-artifact substrate
 
-> Audience: contributors unifying async compute/bake patterns.
+> Status: Active · Audience: contributors unifying async compute/bake patterns
 
 Provides a design for the unified derived-artifact substrate, covering CPU/GPU queuing and asynchronous bakes.
 

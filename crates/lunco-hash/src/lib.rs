@@ -2,7 +2,7 @@
 //! front-end**, with a firewall between them.
 //!
 //! Three hashing jobs recur across the codebase; they are *not* the same job and
-//! must not collapse into one number (see `docs/architecture/hashing-substrate.md`):
+//! must not collapse into one number (see `docs/architecture/efficiency-and-maintainability.md` § Substrate E):
 //!
 //! 1. **Fast change / cache keys** — "did this content change?" / "what's the
 //!    disk-cache key for this bake?". Process-local, non-adversarial, runs at

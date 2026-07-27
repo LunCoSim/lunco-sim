@@ -1,6 +1,8 @@
 # 38 — Domains as Packages (domain-neutral core · generic graph editor · bidirectional projection · USD organization)
 
-Status: **design / analysis** (2026-07-03). The *reframe* behind docs 36 (comms) and 37 (synthesis).
+> Status: Design · Audience: contributors on the domain-neutral core and USD organization
+>
+> The *reframe* behind docs 36 (comms) and 37 (synthesis).
 
 > The rethink: **"electrical" is not a core primitive — it's a convention.** A physical domain
 > (electrical, thermal, RF, data, mechanical) is a **package** defined by domain *data + rules*

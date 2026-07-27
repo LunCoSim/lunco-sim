@@ -2221,7 +2221,7 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(ObstacleFieldPlugin)
             // Streamed, dynamically-LOD'd terrain (DEM tiles + heightfield
             // colliders). Inert at M0 (config only); see lunco-terrain-surface
-            // and docs/terrain-streaming-PLAN.md.
+            // and docs/architecture/terrain-substrate.md.
             .add_plugins(TerrainSurfacePlugin)
             // Celestial stack (doc 43): dormant unless the SCENE asks for it. Bodies
             // are authored in USD (`LunCoCelestialBodyAPI` — reference

@@ -6,9 +6,12 @@ description: Run a multi-domain audit of the workspace (USD compliance, performa
 # Deep audit — multi-domain review → no-shim migration plan → batched execution
 
 Workflow for auditing the whole workspace (or a subsystem) and converting findings into
-executed fixes. Proven shape: the 2026-07-27 audit (`docs/reviews/2026-07-27-deep-review-and-migration-plan.md`)
-ran nine parallel reviewers, produced ~140 findings + a 10-phase plan, and executed
-phases 0–9 with batched fix agents.
+executed fixes. Proven shape: the 2026-07-27 audit ran nine parallel reviewers, produced
+~140 findings + a 10-phase plan, and executed phases 0–9 with batched fix agents.
+
+Reports live in `docs/reviews/`. A closed report is **deleted** once its findings land —
+git keeps it, and a stale report reads as an open problem list. A finding that will not be
+fixed soon graduates to its own `docs/reviews/open-<name>.md`, which stays.
 
 ## Phase A — parallel read-only review
 
@@ -16,7 +19,8 @@ phases 0–9 with batched fix agents.
    "Do NOT run cargo, builds, or tests; do not edit files." Reviewers return RAW structured
    findings (`file:line | severity | dimension | defect | evidence`), max ~30, prioritized,
    plus a 5-line maturity verdict — data for the coordinator, not prose for a human.
-2. **Dedup against prior reviews.** Every reviewer first skims `docs/reviews/*.md` and
+2. **Dedup against prior reviews.** Every reviewer first skims `docs/reviews/*.md` (and
+   `git log -- docs/reviews/` for closed ones) and
    reports only NEW or still-unfixed issues. Have reviewers explicitly re-verify known lore
    (memory items, fixed-bug patterns) and mark each ✅ fixed / ❌ still open — verified-fixed
    findings are as valuable as new ones.

@@ -118,22 +118,28 @@ def Xform "Lander" (PhysicsRigidBodyAPI …)              # rigid body (Avian po
     float inputs:force_local_y.connect = </Lander/GNC.outputs:thrust>   # GNC thrust → body force
 
     def Scope "GNC" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @models/LanderGNC.mo@
+        uniform asset info:sourceAsset = @lunco://models/DescentGuidance.mo@
         uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
         float inputs:altitude.connect     = </Lander.outputs:height>
         float inputs:descent_rate.connect = </Lander.outputs:velocity_y>
-        float inputs:engine_enable.connect = </Lander/Power.outputs:soc>
+        float inputs:engine_enable.connect = </Lander/Power.outputs:soc_out>
         float inputs:g = 1.62                                           # a parameter is an input with a constant
     }
     def Scope "Power" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @models/Battery.mo@
-        float inputs:load.connect = </Lander/GNC.outputs:thrust>
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/Battery.mo@
     }
     def Scope "Therm" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @models/ThermalNode.mo@
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Thermal/ThermalMass.mo@
     }
 }
 ```
+
+Note what `Power` does *not* have: an `inputs:load` wire. `Battery.mo` exposes a
+`Pin`, and a pin carries a `flow` variable — the current is the circuit's answer,
+not a number anyone writes in. Wire a physical bus by `connect()`-ing pins inside
+one Modelica model; only *signals* (a throttle, a setpoint, a temperature reading)
+cross as USD port connections. See
+[54 — The Electrical Domain](../../docs/architecture/54-electrical-domain-and-modelica-libraries.md).
 
 A wire is a native USD connection, authored on the prim that CONSUMES the value. **Do
 not** host N solvers on one entity — that forces `SimComponent` to a multi-instance map

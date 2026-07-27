@@ -2,7 +2,6 @@
 
 > Status: Active · Audience: contributors on cosim, USD assets, and the Modelica library
 > Builds on: [20 — Modelica domain](20-domain-modelica.md), [22 — cosim](22-domain-cosim.md),
-> [37 — model synthesis](37-model-synthesis-and-multidomain-composition.md),
 > [38 — domains as packages](38-domains-as-packages.md)
 
 Two things, one worked example: how a physical subsystem is modelled across the three

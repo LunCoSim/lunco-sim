@@ -355,7 +355,7 @@ pub enum Variability {
 //
 // Implementations are intentionally stubbed for this skeleton commit —
 // the actual Modelica refactor (kill regex, swap projection) lands as
-// follow-up commits. See docs/architecture/REFACTOR_PLAN.md.
+// follow-up commits. See docs/architecture/20-domain-modelica.md §5.
 
 impl ModelicaIndex {
     pub fn new() -> Self {

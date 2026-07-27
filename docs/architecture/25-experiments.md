@@ -4,14 +4,13 @@
 >
 > **TL;DR.** `lunco-experiments` runs a model many times over swept parameters
 > and collects results — the engine behind lunica's batch/sweep runs. Parallel
-> execution lives in `26-parallel-experiments.md`.
+> execution is [§ Parallel execution](#parallel-execution) below.
 
 **Implemented.** `lunco-experiments` shipped — `Experiment`, `RunResult`,
 `RunStatus`, `ExperimentRegistry`, `ExperimentRunner` (trait), `ExperimentsPlugin`,
-with `lunco-modelica` providing the `ModelicaRunner` backend. Parallel execution
-is covered in `26-parallel-experiments.md`.
+with `lunco-modelica` providing the `ModelicaRunner` backend.
 Owner: lunica/modelica.
-Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.md`, `26-parallel-experiments.md`, `30-wasm-web-worker.md`.
+Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.md`, `30-wasm-web-worker.md`.
 
 ## Goal
 
@@ -216,6 +215,56 @@ Existing variable picker is shared across experiments. Each picked variable plot
 - Multiple concurrent runs
 - Interactive runs archiving into Experiments
 - Override of inherited / expression-bound / array / record parameters
+
+## Parallel execution
+
+A sweep runs many points at once, bounded by one scheduler. Two things carry
+most of the win, and both already exist — do not rebuild them.
+
+**Compile once, sweep many.** `experiments_runner.rs` caches the compiled `Dae`
+keyed by source hash (`dae_cache`, `dae_cache_key`) and applies parameter
+overrides at the DAE level (`apply_overrides_to_dae`) rather than reflattening
+per run. A sweep that varies only top-level scalar parameters recompiles
+**zero** times after the first point.
+
+**Per-run demux.** Results route by `run_id` — native: one `crossbeam` channel
+per `RunHandle`, drained by `drain_pending_handles`; wasm: the `RUN_SENDERS`
+map in `worker_transport.rs`, forwarded by `forward_run_update`. Cancel is
+per-run (native `AtomicBool`, wasm `CancelRun{run_id}`).
+
+### One bounded scheduler, one platform-specific spawn
+
+`RunnerState` holds `{max_parallel, in_flight: HashSet, pending: VecDeque<QueuedJob>}`.
+`run_fast` snapshots a `QueuedJob`, pushes it to `pending`, and calls
+`pump_scheduler`, which starts jobs while `in_flight < max_parallel` — outside
+the lock. On a terminal update `finish_run` frees the slot and re-pumps.
+A queued run that is cancelled is caught at `start_job`. The panel shows
+"⏳ Queued"; the Run button queues rather than disabling.
+
+Spawning is the **only** `#[cfg]` split:
+
+| | Native | Wasm |
+|---|---|---|
+| Primitive | `std::thread::spawn` per run (fresh rumoca thread-locals) | persistent `WorkerPool`, reused across runs |
+| Cap | `max_parallel`, default `available_parallelism() - 1` clamped `1..=4` | `max_parallel` clamped `1..=8` (`MAX_WORKERS = 8`) |
+| Note | — | worker 0 is primary (parse/compile/MSL); Fast Runs prefer a free non-primary worker |
+
+**Rayon does not oversubscribe.** rumoca uses one process-wide global rayon
+pool (`available_parallelism() - 2`) shared by every concurrent compile, so it
+self-bounds. Keep `max_parallel` modest anyway — each native run also carries
+orchestration and result buffers. If profiling ever shows compile contention,
+pre-initialise rayon's global pool from the app; do not patch rumoca.
+
+### Known limits
+
+- **Cold-sweep cache race** — two cache-miss runs of the same model can compile
+  the same DAE concurrently. Harmless double work; dedup is optional.
+- **The cap is global**, not per-model — one `max_parallel` across all sweeps.
+- **Memory** — N concurrent runs hold N result buffers and N DAE clones; on
+  wasm each worker also holds an MSL copy. The 20-run registry cap bounds
+  retained results.
+- **Changing the cap at runtime on wasm needs a page reload** to resize the
+  pool — there is no retained MSL bundle to backfill newly installed workers.
 
 ## Future design considerations
 

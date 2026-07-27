@@ -169,7 +169,7 @@ pub mod state;
 
 /// Per-document UI projection — what panels read instead of the AST.
 /// Skeleton; population happens in the upcoming AST-canonical refactor.
-/// See `docs/architecture/REFACTOR_PLAN.md`.
+/// See `docs/architecture/20-domain-modelica.md` §5.
 pub mod index;
 
 /// Pure simulation-target & run-configuration resolution (which class to

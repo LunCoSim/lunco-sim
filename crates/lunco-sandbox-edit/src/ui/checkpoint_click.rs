@@ -1,7 +1,6 @@
 //! Alt+LMB — drop a mission waypoint by **authoring a USD prim**.
 //!
-//! (The gesture moved from Ctrl to Alt; `docs/waypoints-in-usd-design.md` and
-//! `docs/sandbox-control-ui-plan.md` still say Ctrl. The code below is the truth.)
+//! (Design: `docs/architecture/waypoints-in-usd.md`.)
 //!
 //! There is no checkpoint domain. A waypoint is an ordinary prim referencing
 //! `vessels/markers/waypoint.usda`, and the vessel's BT.CPP mission

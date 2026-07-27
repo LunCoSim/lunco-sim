@@ -239,7 +239,7 @@ Three layers (consistent with the S2005 plan, with one correction).
 - [13-twin-and-workflow](13-twin-and-workflow.md) — Twin owns documents; Scenario/Run layers.
 - [21-domain-usd](21-domain-usd.md) — USD scene resolution, `ActiveStage`, `resolve_root_prim`.
 - [22-domain-cosim](22-domain-cosim.md) — master loop, `SimComponent`/`SimConnection`, f64 wires.
-- [26-parallel-experiments](26-parallel-experiments.md) — bounded scheduler, `ExperimentRegistry`.
+- [25-experiments](25-experiments.md) — bounded scheduler, `ExperimentRegistry`.
 - [41-axes-and-units](41-axes-and-units.md) — unit/transform boundary (relates to gap #2).
 
 ## 11. References (external)

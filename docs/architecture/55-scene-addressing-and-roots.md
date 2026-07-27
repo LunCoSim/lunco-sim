@@ -1,6 +1,8 @@
-# Scene Addressing and Roots
+# 55 — Scene Addressing and Roots
 
-**Status:** proposal. Supersedes the ad-hoc "promote an out-of-assets path"
+> Status: Design · Audience: contributors on scene loading, twins, and path resolution
+>
+> Supersedes the ad-hoc "promote an out-of-assets path"
 patching in `normalize_scene_asset_path`.
 
 ## The symptom

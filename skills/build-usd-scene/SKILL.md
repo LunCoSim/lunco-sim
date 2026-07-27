@@ -27,7 +27,7 @@ commands that apply reversible ops), not by mutating ECS directly. Drive it over
 the API (`--api`, port **4101**; launch per [`test-via-api`](../test-via-api/SKILL.md)).
 
 Design background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
-[`usd-source-of-truth-ecs-projection-design.md`](../../docs/usd-source-of-truth-ecs-projection-design.md).
+[`usd-source-of-truth.md`](../../docs/architecture/usd-source-of-truth.md).
 
 ## The one coordinate frame (spec 009)
 

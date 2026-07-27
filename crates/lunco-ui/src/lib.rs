@@ -24,7 +24,7 @@
 //!     └── Provides WorldPanel for 3D space panels
 //! ```
 //!
-//! See `docs/research-ui-ux-architecture.md` for full architecture.
+//! See `docs/architecture/research/ui-ux-inspiration.md` for full architecture.
 
 use bevy::prelude::*;
 

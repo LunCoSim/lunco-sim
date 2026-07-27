@@ -1,6 +1,6 @@
 # Terrain Layered Rendering & Analysis Overlays
 
-> Audience: contributors working on terrain rendering, scientific overlays, or the
+> Status: Active · Audience: contributors working on terrain rendering, scientific overlays, or the
 > comms/illumination map layers. Companion to
 > [`terrain-substrate.md`](terrain-substrate.md) (the height oracle) — this doc is
 > about what gets **drawn on** the surface, not how the surface is shaped.

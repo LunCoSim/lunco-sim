@@ -1,7 +1,9 @@
-# Curvature, Elevation and Gravity — planned improvements
+# 60 — Curvature, Elevation and Gravity
 
-**Status:** PLANNED. Written 2026-07-19 out of a live defect on the Summer Space
-School twin, where a 1 km site rendered as kilometre-tall spikes. The diagnosis
+> Status: Design · Audience: contributors on terrain curvature and gravity
+>
+> Written out of a live defect on the Summer Space
+> School twin, where a 1 km site rendered as kilometre-tall spikes. The diagnosis
 below is measured and confirmed; the fixes are proposals, not decisions.
 
 Companion to [`57-dem-georeferencing.md`](57-dem-georeferencing.md) (where a

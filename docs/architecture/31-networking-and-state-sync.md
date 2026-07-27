@@ -88,8 +88,8 @@ join-critical path never blocks behind bulk transfer:
 Bulk is a **separate reliable channel** specifically so a large asset transfer
 cannot head-of-line-block the `CmdChannel` a joining client needs.
 
-Transport: **lightyear 0.27** (`replication` only, default features off) over
-`aeronet_webtransport 0.20` — WebTransport works in the browser, so the same wire
+Transport: **lightyear 0.28** (`replication` only, default features off) over
+`aeronet_webtransport 0.21` — WebTransport works in the browser, so the same wire
 serves native and web clients.
 
 ### Modes

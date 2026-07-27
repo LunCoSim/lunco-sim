@@ -46,6 +46,7 @@ one directly when doing that kind of task by hand.
 | Skill | Use it when you want to… |
 |---|---|
 | [**usd-projection**](usd-projection/SKILL.md) | Work ON the USD layer — teach it a new prim type or attribute, or fix an edit that saved but didn't show up |
+| [**visualize-physics-with-shaders**](visualize-physics-with-shaders/SKILL.md) | Make a simulated value VISIBLE — a strut that reddens under load, a tyre that glows where it slips |
 
 ## Build workbench UI
 
@@ -53,6 +54,13 @@ one directly when doing that kind of task by hand.
 |---|---|
 | [**lunco-ui**](lunco-ui/SKILL.md) | Build workbench panels using the reactive `Panel`/widget patterns |
 | [**lunco-theme**](lunco-theme/SKILL.md) | Use the centralized design tokens (colours, schematic palette) |
+
+## Work at scale
+
+| Skill | Use it when you want to… |
+|---|---|
+| [**deep-audit**](deep-audit/SKILL.md) | Audit the workspace across domains with parallel reviewers, then execute the fixes as a no-shim migration plan |
+| [**subagent-batches**](subagent-batches/SKILL.md) | Run a multi-finding fix sweep with parallel agents on disjoint file lots — agents never build; the coordinator verifies once |
 
 ## Cross-cutting conventions (baked into every skill)
 
@@ -85,3 +93,24 @@ one directly when doing that kind of task by hand.
 
 New to the codebase? Start with [**repo-map**](repo-map/SKILL.md), then the
 [Documentation Hub](../docs/README.md) and the [AI Agent Guide](../AGENTS.md).
+
+## Writing or changing a skill
+
+A skill is a **runbook**, not a design doc. It answers "walk me through doing
+this"; the *why* lives in `docs/architecture/`, and the skill links to it.
+
+- **The `description` is the trigger.** Write it in the words a user would
+  actually use — "the rover flips over", not "vehicle stability analysis" — and
+  include the mid-code tells an agent would notice. It is matched against the
+  request; a description that only names the subsystem never fires.
+- **Lead with the trap.** The value of a skill is what a competent agent would
+  get wrong from general knowledge alone. If everything in it is derivable from
+  the docs, it should be a doc.
+- **Every claim must be checkable** — a real path, a real command, a real
+  attribute name. A skill that drifts is worse than none, because it is trusted.
+- One skill per task shape. If two skills would trigger on the same request,
+  merge them or make one defer to the other in its description.
+- Every skill belongs in a table above and stays listed there.
+
+`skills/` is symlinked as `.claude/skills/`, so these load automatically in
+Claude Code.

@@ -1,6 +1,8 @@
-# rumoca workarounds — pending upstream fixes
+# 29 — rumoca workarounds — pending upstream fixes
 
-Status: **rumoca `main` @ `e6884d03` (v0.9.20)**, verified 2026-07-14.
+> Status: Active · Audience: contributors compiling Modelica through rumoca
+>
+> Pinned to rumoca `main` @ `e6884d03` (v0.9.20), verified 2026-07-14.
 
 Each entry below is a bug in rumoca that we work around downstream. Every one was
 **re-probed at the 0.9.20 bump** and is still real — none of this is cargo-culted

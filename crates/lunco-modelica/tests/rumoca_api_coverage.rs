@@ -1,6 +1,6 @@
 //! Verifies rumoca's public APIs cover the regex sites we plan to delete.
 //!
-//! Two specific replacements (per `docs/architecture/REFACTOR_PLAN.md`
+//! Two specific replacements (per `docs/architecture/20-domain-modelica.md`
 //! Commit 1):
 //!
 //! 1. `ClassDef::iter_components()` replaces the regex in

@@ -90,7 +90,7 @@ pub enum PanelSlot {
 /// `ui` / `ui_world` split we inherited from `bevy_workbench`, which
 /// forced every nontrivial panel into the `ui_world` branch anyway.
 /// Capability-narrowed render context handed to every panel (WP-8
-/// structural prevention — see `docs/wp8-reactive-egui-design.md`).
+/// structural prevention — see `docs/architecture/11-workbench.md`).
 ///
 /// The whole point: a panel's `render` must be **incapable** of the
 /// per-frame anti-patterns (full-world scans, blocking I/O, serialize-for-

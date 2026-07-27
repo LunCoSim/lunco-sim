@@ -993,7 +993,7 @@ which domains + workspaces this app supports. The workbench uses it to:
 ### What replaces current `setup_sandbox` startup code
 
 Today each binary has a `setup_sandbox` function that hardcodes scene
-setup — spawning a Camera2d, reading `assets/models/Battery.mo`, inserting
+setup — spawning a Camera2d, reading a hardcoded `.mo`, inserting
 a specific `ModelicaModel` component, etc. Under the new model, **all of
 that goes away**. Startup belongs to `lunco-workbench`:
 

@@ -129,3 +129,38 @@ Three regressions/assumptions keep recurring; prefer the by-design fix:
 
 A `run_if`-gated system that still appears in a steady-state profile means its
 gate isn't closing — that's the bug, not the cost.
+
+## 6. Four gates that failed, and the shapes that replaced them
+
+Each of these cost 8–12 ms a frame in steady state with nothing changing. They
+are recorded because every one of them *looked* gated. The code sites carry the
+detail; the shape is the lesson.
+
+**A cadence you cannot forget to state.** A registered producer must declare
+when it runs — the gate is a required argument, not something the author
+remembers to add. A producer that genuinely must run every frame passes
+`every_frame`, which puts the claim at the call site next to its reason, where
+review can see it. (`lunco-sandbox-edit/src/ui/mod.rs`)
+
+**Never gate on a hash of the thing you were deciding whether to build.**
+`produce_usd_canvas` spent 11 ms/frame building a graph and hashing it only to
+learn the graph was unchanged. Gate on a **revision counter** stamped by the
+writers: O(1), and it cannot drift from the truth. Keep hashes for assertions.
+(`lunco-usd-bevy/src/lib.rs`)
+
+**A `Without<Marker>` filter is not an identity check.** Bevy 0.19 stores
+resources as entities, so `Without<GlobalEntityId>` alone minted network
+identities for 688 resource entities (`AppTypeRegistry`, every `Assets<T>`).
+A missing `Provenance` must fail honestly — no id, and whatever needed one says
+so — rather than being auto-filled. (`lunco-core/src/lib.rs`)
+
+**Watch for gates that feed themselves.** An auto-allocated id made an
+`Added<GlobalEntityId>` gate fire on the next frame, which despawned and
+respawned every edge, which minted fresh ids — a full wiring rebuild every
+frame (8.6 ms) with nothing changing. If a system's gate is satisfied by the
+system's own output, it is not a gate. (`lunco-usd-sim/src/cosim.rs`)
+
+**Solve on a cadence when the answer changes slowly.** Ephemeris, solar poses,
+trajectory alignment, sun light and solar-frame anchoring cost ~10 ms/frame
+solved every frame, for increments too small to see.
+(`lunco-celestial/src/cadence.rs`)

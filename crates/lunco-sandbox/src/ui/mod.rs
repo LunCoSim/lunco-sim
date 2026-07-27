@@ -97,7 +97,7 @@ impl Plugin for SandboxUiPlugin {
             // sandbox is a sim app: its single scene is the live `LoadScene` world,
             // viewed by the window camera. Adding the preview built the scene a
             // SECOND time (doubled crater meshes / rocks). A view must not own a
-            // scene — see `docs/usd-source-of-truth-ecs-projection-design.md`.
+            // scene — see `docs/architecture/usd-source-of-truth.md`.
             .add_plugins(lunco_usd::ui::UsdUiPlugin)
             .add_plugins(lunco_sandbox_edit::SandboxEditPlugin)
             .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)

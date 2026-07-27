@@ -1,4 +1,6 @@
-# USD-driven visuals — authored geometry, Rust logic, binding by name
+# 50 — USD-driven visuals — authored geometry, Rust logic, binding by name
+
+> Status: Active · Audience: contributors authoring beams, plumes, ribbons, or any sim-driven visual
 
 A sensor beam, an exhaust plume, a route ribbon: geometry whose *shape* is authored and
 whose *size* tracks a live simulation value. This is the contract for that class of thing.

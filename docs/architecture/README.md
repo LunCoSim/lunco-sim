@@ -6,9 +6,19 @@ these are the reasoning.
 
 > **A doc here describes what IS.** No changelogs, no "recently we fixed…". The
 > short *why* notes are deliberate — they are what stops someone re-introducing a
-> bug that was expensive to find. Where a doc describes something not yet built,
-> it says so in a banner (see [`14-simulation-layers.md`](14-simulation-layers.md)
-> for the pattern).
+> bug that was expensive to find. A doc whose only content is *how we got here*
+> (a migration plan, a completed execution checklist, a closed audit) is deleted
+> once the work lands; git remembers it.
+
+Every doc opens with a status line:
+
+```
+> Status: Active | Design | Draft · Audience: <who should read this>
+```
+
+**Active** = as built (the default). **Design** = agreed shape, not fully built —
+say what is missing (see [`14-simulation-layers.md`](14-simulation-layers.md) for
+the banner pattern). **Draft** = under live review, may be wrong.
 
 ## Start here
 
@@ -48,7 +58,7 @@ these are the reasoning.
 | [`22-domain-cosim.md`](22-domain-cosim.md) | The FMI-CS master loop, the **macro-step contract**, control-plane vs data-plane |
 | [`23-domain-environment.md`](23-domain-environment.md) | Gravity, lighting, the sun feed |
 | [`24-domain-sysml.md`](24-domain-sysml.md) | SysML |
-| [`25-experiments.md`](25-experiments.md) · [`26-parallel-experiments.md`](26-parallel-experiments.md) · [`27-target-resolution.md`](27-target-resolution.md) | Batch runs, sweeps, and how a run resolves its target |
+| [`25-experiments.md`](25-experiments.md) · [`27-target-resolution.md`](27-target-resolution.md) | Batch runs, sweeps, and how a run resolves its target |
 | [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) | The **realtime-safe** promise: which programs may drive predicted physics |
 | [`29-rumoca-workarounds.md`](29-rumoca-workarounds.md) | Confirmed rumoca bugs we work around, the probe that retires each one, and the chokepoint that must not be bypassed |
 
@@ -61,8 +71,7 @@ these are the reasoning.
 | [`33-spacecraft-modeling.md`](33-spacecraft-modeling.md) | The lander slice |
 | [`34-scenario-and-multidomain.md`](34-scenario-and-multidomain.md) | Scenarios, multi-domain vehicles |
 | [`35-animate-perspective.md`](35-animate-perspective.md) | Timeline / sequence editor |
-| [`36-components-and-sky.md`](36-components-and-sky.md) | Reusable components; sky visualization |
-| [`37-model-synthesis-and-multidomain-composition.md`](37-model-synthesis-and-multidomain-composition.md) · [`38-domains-as-packages.md`](38-domains-as-packages.md) | Composition; domain-neutral core |
+| [`38-domains-as-packages.md`](38-domains-as-packages.md) | Composition; the domain-neutral-core thesis (absorbs the deleted 36/37 analyses) |
 | [`39-usd-native-migration-plan.md`](39-usd-native-migration-plan.md) | The USD-native core migration |
 
 ## Subsystems (40–49)
@@ -74,14 +83,14 @@ these are the reasoning.
 | [`42-ui-frame-discipline.md`](42-ui-frame-discipline.md) | Frame discipline for UI |
 | [`43-orbital-view.md`](43-orbital-view.md) | Satellites, ground stations, the site frame; the **IAU/WGCCRE rotation model** |
 | [`44-surface-orbital-spaces.md`](44-surface-orbital-spaces.md) | The surface/celestial space split |
-| [`45-big-space-correct-usage.md`](45-big-space-correct-usage.md) · [`46-bigspace-deep-analysis.md`](46-bigspace-deep-analysis.md) · [`47-bigspace-option-b-execution.md`](47-bigspace-option-b-execution.md) | `big_space` contract, the jitter root cause, and the physics/render split. **`cell_edge_length` and `switching_threshold` are PRECISION knobs, not extent knobs** |
+| [`45-big-space-correct-usage.md`](45-big-space-correct-usage.md) · [`46-bigspace-deep-analysis.md`](46-bigspace-deep-analysis.md) | `big_space` contract and the jitter root cause. **`cell_edge_length` and `switching_threshold` are PRECISION knobs, not extent knobs** |
 | [`48-object-builder.md`](48-object-builder.md) | The object builder |
 | [`49-connectivity-link-kernel.md`](49-connectivity-link-kernel.md) | The generic link kernel (comms is a domain over it, not a kernel) |
 | [`50-usd-driven-visuals.md`](50-usd-driven-visuals.md) | Beams, plumes, ribbons: geometry+look authored in USD, logic in Rust, bound by name (`info:id`). **`radius`/`height` bake at instantiation — live size is `xformOp:scale`**; a `lunco:*` property needs THREE files or it is inert |
 | [`51-cinematic-camera.md`](51-cinematic-camera.md) | Authored camera paths (`UsdGeomBasisCurves` + a per-object driven clock). **`Ts` splines are SCALAR-ONLY** — no `double3` translate; hold via the clock tree, never `Playback.mode` |
-| [`52-connectivity-gaps-and-test-plan.md`](52-connectivity-gaps-and-test-plan.md) | Companion to 49: the connectivity gap audit and what closed it — radio shadow needs an opt-in `LinkOccluder` (occlusion is NOT the physics collider), and link ids are GIDs |
 | [`53-usd-suspension-specification.md`](53-usd-suspension-specification.md) | Wheels and suspensions in canonical PhysX names (`springStrength`/`springDamperRate`), the three `LunCo*API` extensions PhysX doesn't model, and detection **by applied schema, never by attribute presence**. A raycast wheel with no resolvable suspension refuses to spawn — no silent defaults |
 | [`54-electrical-domain-and-modelica-libraries.md`](54-electrical-domain-and-modelica-libraries.md) | USD assembles / Modelica is the maths / rhai is behaviour, worked on EPS. A physical bus is **one acausal circuit** (`Pin` + `flow`, `connect()` → Kirchhoff for free), one `LunCoProgramAPI` under a domain scope. The shipped `LunCo` library loads demand-driven in the compiler; a twin's `<twin>/models` via a `TwinRoots` watcher — both rumoca built-ins |
+| [`55-building-vessels-rovers-and-landers.md`](55-building-vessels-rovers-and-landers.md) | The step-by-step architectural guide for a mission-grade rover or lander — which layer owns which decision |
 | [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.md) · [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md) | **Identity is not location.** A scene is addressed by a root-relative source (`twin://`), a referenced asset by a logical identity (`@lunco://models/x.glb@`) — only the resolver knows paths. A bare relative path outside `assets/` is the failure both close |
 | [`57-dem-georeferencing.md`](57-dem-georeferencing.md) · [`59-georeferenced-rasters-as-assets.md`](59-georeferenced-rasters-as-assets.md) | **The raster carries its own spatial reference.** Writing it out (a self-describing GeoTIFF, never a sidecar restating the transform) and reading it back in (an external GIS raster enters as an asset, not through an import subsystem) |
 | [`58-vessel-envelope-and-routes.md`](58-vessel-envelope-and-routes.md) | Vehicle capability is **derived, not copied** — slip limit is `atan(μ)`, not a constant retyped into six files. HUD derivation and rhai accessors are built; routes and tiers are proposed |
@@ -97,20 +106,22 @@ these are the reasoning.
 | [**`shader-layers-and-params.md`**](shader-layers-and-params.md) | Shader looks: WGSL-reflected `dyn_params` and named texture layers. Parameter names, ranges and defaults come from the shader source — **adding a parameter is editing a shader, not editing Rust** |
 | [`command-journal.md`](command-journal.md) | One op log for identity, undo and sync. **Document-domain ops are journaled; command/session replay is not built** |
 | [`terrain-substrate.md`](terrain-substrate.md) · [`terrain-layered-rendering.md`](terrain-layered-rendering.md) | The height oracle (one `HeightSource` from orbit to rover) and the layered Data→Transfer→Blend rendering pipeline |
-| [`terrain-lod-audit.md`](terrain-lod-audit.md) · [`terrain-precompute-plan.md`](terrain-precompute-plan.md) | The CDLOD streamer audited against the real moonbase DEM (surface only; the globe is out of scope), and the precomputed-tile architecture that replaces its finding #6 |
+| [`terrain-precompute-plan.md`](terrain-precompute-plan.md) | **Design.** Precomputed tiles + monotone progressive refinement — the target streaming architecture, replacing finding #6 of the audit. Its measurement steps are live tests in `lunco-terrain-surface/tests/precompute_*.rs` |
+| [`terrain-lod-audit.md`](terrain-lod-audit.md) | The CDLOD streamer measured against the real moonbase DEM (surface only; the globe is out of scope). Kept because measurement **falsified** the intuitive story — the wrong version will be re-derived by the next reader |
 | [`telemetry-subsystem.md`](telemetry-subsystem.md) | Channels, rates and clock binding. **Phases 0–1 landed; 2–5 are proposal** |
-| [`ports-system-design.md`](ports-system-design.md) | `PortRegistry` — the one scalar-port surface (Substrate D) |
 | [**`lint-substrate.md`**](lint-substrate.md) | Authoring mistakes that have no runtime symptom. **Facts in Rust, rules in rhai policy** (`lint.<domain>`), one linter per domain, findings in one report. Nothing lints on load — `RunLint` is a verb, and a scenario calling it on a cadence is the realtime linter |
-| [`derive-substrate.md`](derive-substrate.md) · [`precompute-substrate.md`](precompute-substrate.md) · [`hashing-substrate.md`](hashing-substrate.md) · [`mobility-substrate.md`](mobility-substrate.md) | The derived-artifact substrates (A–E) |
+| [`derive-substrate.md`](derive-substrate.md) | The unified derived-artifact substrate (async compute/bake patterns) |
 | [`caching-and-precompute-strategy.md`](caching-and-precompute-strategy.md) · [`scenario-program-cache.md`](scenario-program-cache.md) | Caching strategy; the rhai program cache |
-| [`efficiency-and-maintainability.md`](efficiency-and-maintainability.md) | The North Star |
-| [`bevy-0.19-migration.md`](bevy-0.19-migration.md) | Bevy 0.18 → 0.19 migration analysis |
+| [`efficiency-and-maintainability.md`](efficiency-and-maintainability.md) | **The North Star + substrates B–E in full**: the one principle, the tier ladder, `lunco-precompute` (B), `Mobility` (C), ports resolve→handle (D), `lunco-hash` (E) |
+| [`usd-source-of-truth.md`](usd-source-of-truth.md) | **USD is the truth; ECS is a projection of it.** The rule every edit path obeys |
+| [`rhai-integration.md`](rhai-integration.md) | Why rhai, and the as-built scripting surface. The *how-to* is [`../scripting-guide.md`](../scripting-guide.md) |
+| [`command-sequences.md`](command-sequences.md) | Command sequences and the visual sequence editor |
+| [`waypoints-in-usd.md`](waypoints-in-usd.md) | Routes and waypoints as authored USD, not runtime-only state |
 
-## Reviews & posture
+## Open issues & posture
 
-- [`../reviews/2026-07-13-remediation-report.md`](../reviews/2026-07-13-remediation-report.md) — the closing report; the best single summary of the current shape of the system
-- [`../reviews/2026-07-12-full-code-review.md`](../reviews/2026-07-12-full-code-review.md) — the review that drove it
-- [`../reviews/TODO-rbac-not-enforced.md`](../reviews/TODO-rbac-not-enforced.md) — **the project does not enforce access control.** Trusted LAN only; never expose a host to an untrusted network
+- [`../reviews/open-rbac-not-enforced.md`](../reviews/open-rbac-not-enforced.md) — **the project does not enforce access control.** Trusted LAN only; never expose a host to an untrusted network
+- [`../reviews/`](../reviews/) — standing issues (`open-*.md`) and dated audit reports
 
 ## Research
 
@@ -129,4 +140,8 @@ there describes running code.
 | `50`–`59` | Authoring contracts — what a scene, an asset or a vessel may state, and how it resolves |
 | `60`+ | Physical fidelity — planned work on the world model itself |
 | un-numbered | Cross-cutting substrates and boundaries |
-| `research/` | Historical / inspiration |
+| `research/` | Prior art, inspiration, roads not taken — nothing here describes running code |
+
+A number is an ordering hint, not an identifier: docs are linked by filename, so
+gaps (`32`, `47`, `52`) and the two `55-*` docs are harmless and are **not**
+renumbered — renumbering would break every inbound link for no reader benefit.
