@@ -662,6 +662,8 @@ pub fn draw_waypoint_context_menu(
     let mut dwell = menu_state.dwell;
     let mut smooth = route_is_smooth(&xml.0);
     let mut edited: Option<String> = None;
+    // The marker prim a Delete must also un-author, alongside its mission leg.
+    let mut deleted_marker: Option<String> = None;
 
     let response = egui::Area::new(egui::Id::new("waypoint_context_menu"))
         .fixed_pos(pos)
@@ -708,7 +710,16 @@ pub fn draw_waypoint_context_menu(
                 }
                 if ui.button("❌  Delete").clicked() {
                     match remove_waypoint_leaf(&xml.0, &marker_target) {
-                        Ok(new_xml) => edited = Some(new_xml),
+                        Ok(new_xml) => {
+                            edited = Some(new_xml);
+                            // Delete must take the PIN as well as the leg. Since the
+                            // marker became an authored prim it is an object in its
+                            // own right, not a visual derived from the XML — so
+                            // dropping the leg alone left the dome standing on the
+                            // map, belonging to no route. That reads as "delete did
+                            // nothing".
+                            deleted_marker = Some(marker_target.clone());
+                        }
                         Err(err) => warn!("[waypoint] delete failed: {err}"),
                     }
                     open = false;
@@ -753,6 +764,21 @@ pub fn draw_waypoint_context_menu(
     menu_state.dwell = dwell;
 
     if let Some(value) = edited {
+        // UPDATE THE LIVE COMPONENT TOO, not only the document.
+        //
+        // `compile_behavior_xml` watches `Changed<BehaviorXml>`; that component IS
+        // the running mission. Authoring `info:sourceCode` alone only edits the
+        // document, and the ECS does not learn about it until the USD round-trip
+        // projects back — so Delete, Dwell and Smooth all appeared to do nothing:
+        // the rover kept driving the tree it already had.
+        //
+        // The drop (`on_scene_click_checkpoint`) and Insert-after
+        // (`on_scene_click_place_waypoint`) paths have always written both. This
+        // menu was the one edit surface that wrote only one, which is why it was
+        // the one that did not work.
+        commands
+            .entity(marker_vessel)
+            .insert(BehaviorXml(value.clone()));
         commands.trigger(ApplyUsdOp {
             doc,
             op: UsdOp::SetAttribute {
@@ -761,6 +787,20 @@ pub fn draw_waypoint_context_menu(
                 name: "info:sourceCode".to_string(),
                 type_name: "string".to_string(),
                 value,
+            },
+        });
+    }
+
+    // Un-author the pin itself, AFTER the mission no longer references it — the
+    // leg is what makes a marker a waypoint, so dropping it first means the prim
+    // is never briefly a waypoint of a route that no longer names it.
+    if let Some(marker_path) = deleted_marker {
+        info!("[waypoint] deleting marker prim {marker_path}");
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::RemovePrim {
+                edit_target: LayerId::runtime(),
+                path: marker_path,
             },
         });
     }
