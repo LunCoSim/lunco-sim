@@ -46,17 +46,23 @@ pub trait HeightModifier: Send + Sync {
 /// it — the runtime-dynamic, multi-layer terrain surface. Append / remove / reorder
 /// modifiers to add craters, dig pits, or flatten pads; the composed source is always
 /// the current truth, so "modify" and "describe" are the same operation.
+///
+/// The base is a **generic parameter**, not `Arc<dyn HeightSource>`: every bake
+/// inner loop samples the base once per sample, and virtual dispatch there
+/// blocked inlining across whole-grid kernels. Only the modifier LIST stays
+/// dynamic — that is the runtime-editable part. (Values are unchanged either
+/// way; dispatch is not part of the deterministic contract.)
 #[derive(Clone)]
-pub struct LayeredHeightSource {
+pub struct LayeredHeightSource<S> {
     /// The surface everything folds over (DEM, globe, analytic).
-    pub base: Arc<dyn HeightSource>,
+    pub base: S,
     /// Modifiers applied in order — index 0 first, last on top.
     pub modifiers: Vec<Arc<dyn HeightModifier>>,
 }
 
-impl LayeredHeightSource {
+impl<S: HeightSource> LayeredHeightSource<S> {
     /// A stack over `base` with no modifiers (samples `base` directly).
-    pub fn new(base: Arc<dyn HeightSource>) -> Self {
+    pub fn new(base: S) -> Self {
         Self {
             base,
             modifiers: Vec::new(),
@@ -85,7 +91,7 @@ impl LayeredHeightSource {
     }
 }
 
-impl HeightSource for LayeredHeightSource {
+impl<S: HeightSource> HeightSource for LayeredHeightSource<S> {
     fn height_at(&self, x: f64, z: f64) -> f64 {
         let mut h = self.base.height_at(x, z);
         for m in &self.modifiers {
@@ -134,6 +140,7 @@ impl BrushModifier {
 }
 
 impl HeightModifier for BrushModifier {
+    #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         h_in + self.delta_at(x, z)
     }
@@ -177,6 +184,7 @@ impl FlattenModifier {
 }
 
 impl HeightModifier for FlattenModifier {
+    #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         let w = self.weight_at(x, z);
         h_in + (self.target_y - h_in) * w // lerp(h_in, target_y, w)
@@ -258,6 +266,7 @@ impl BodyCurvature {
 }
 
 impl HeightModifier for BodyCurvature {
+    #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
         // The ground rides the sphere at the SITE's radius, not the mean one —
         // a 1.9 km datum offset changes the sagitta by ~0.1% of itself, but it
@@ -304,7 +313,7 @@ mod tests {
 
     #[test]
     fn empty_stack_is_base() {
-        let s = LayeredHeightSource::new(Arc::new(Flat(7.0)));
+        let s = LayeredHeightSource::new(Flat(7.0));
         assert!(s.is_empty());
         assert_eq!(s.height_at(1.0, 2.0), 7.0);
     }
@@ -318,8 +327,8 @@ mod tests {
             "peak at centre"
         );
         assert_eq!(raise.delta_at(20.0, 0.0), 0.0, "zero outside radius");
-        let up = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(raise));
-        let down = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(dig));
+        let up = LayeredHeightSource::new(Flat(0.0)).with(Arc::new(raise));
+        let down = LayeredHeightSource::new(Flat(0.0)).with(Arc::new(dig));
         assert!(up.height_at(0.0, 0.0) > 4.0);
         assert!(down.height_at(0.0, 0.0) < -4.0);
         assert_eq!(up.height_at(100.0, 0.0), 0.0, "far field untouched");
@@ -335,7 +344,7 @@ mod tests {
             }
         }
         let flat = FlattenModifier::new([0.0, 0.0], 20.0, 3.0);
-        let s = LayeredHeightSource::new(Arc::new(Ramp)).with(Arc::new(flat));
+        let s = LayeredHeightSource::new(Ramp).with(Arc::new(flat));
         assert!(
             (s.height_at(0.0, 0.0) - 3.0).abs() < 1e-9,
             "centre pulled to target"
@@ -358,10 +367,10 @@ mod tests {
             bowl_power: 4.0,
         }]);
         let flat = FlattenModifier::new([0.0, 0.0], 30.0, 0.0);
-        let crater_then_flat = LayeredHeightSource::new(Arc::new(Flat(0.0)))
+        let crater_then_flat = LayeredHeightSource::new(Flat(0.0))
             .with(Arc::new(crater.clone()))
             .with(Arc::new(flat));
-        let flat_then_crater = LayeredHeightSource::new(Arc::new(Flat(0.0)))
+        let flat_then_crater = LayeredHeightSource::new(Flat(0.0))
             .with(Arc::new(flat))
             .with(Arc::new(crater));
         // Flatten-last wipes the crater at the centre (pulled to 0); crater-last keeps it.
@@ -397,8 +406,7 @@ mod tests {
             },
         ];
         let field = CraterField::new(Flat(5.0), list.clone());
-        let stack =
-            LayeredHeightSource::new(Arc::new(Flat(5.0))).with(Arc::new(Craters::new(list)));
+        let stack = LayeredHeightSource::new(Flat(5.0)).with(Arc::new(Craters::new(list)));
         for gx in -30..30 {
             for gz in -30..30 {
                 let (x, z) = (gx as f64 * 1.3, gz as f64 * 1.3);
@@ -426,8 +434,8 @@ mod tests {
             softness: 0.0,
             bowl_power: 4.0,
         }]);
-        let one = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(a.clone()));
-        let two = LayeredHeightSource::new(Arc::new(Flat(0.0)))
+        let one = LayeredHeightSource::new(Flat(0.0)).with(Arc::new(a.clone()));
+        let two = LayeredHeightSource::new(Flat(0.0))
             .with(Arc::new(a))
             .with(Arc::new(b));
         assert!((two.height_at(0.0, 0.0) - 2.0 * one.height_at(0.0, 0.0)).abs() < 1e-9);
@@ -498,7 +506,7 @@ mod tests {
 
     #[test]
     fn deterministic() {
-        let s = LayeredHeightSource::new(Arc::new(Flat(1.0)))
+        let s = LayeredHeightSource::new(Flat(1.0))
             .with(Arc::new(BrushModifier::new([2.0, 3.0], 8.0, -1.5)))
             .with(Arc::new(FlattenModifier::new([0.0, 0.0], 5.0, 0.0)));
         assert_eq!(s.height_at(1.0, 1.0), s.height_at(1.0, 1.0));

@@ -24,7 +24,7 @@
 //! in-session chunk path.
 
 use bevy::prelude::*;
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 use lunco_core::NetworkRole;
 
@@ -64,9 +64,19 @@ pub struct AssetHttpFetch {
     revision: Option<[u8; 32]>,
 }
 
+/// Result-queue capacity. BOUNDED for the same reason as lunco-api's HTTP
+/// command queue (see its `channel(256)`): an unbounded channel turns a slow
+/// drain into unbounded memory growth, and this queue is fed by remote HTTP
+/// responses. The drain runs every frame and in-flight fetches are capped at
+/// [`MAX_INFLIGHT_FETCHES`], so 256 sits far above any real backlog while
+/// still capping the worst case ([`MAX_INFLIGHT_FETCHES`] outcomes can be
+/// pending at once, so the bound is a hard safety cap, not a working limit);
+/// if it were ever full the sender task blocks (backpressure), never grows.
+const FETCH_RESULT_QUEUE: usize = 256;
+
 impl Default for AssetHttpFetch {
     fn default() -> Self {
-        let (tx, rx) = unbounded();
+        let (tx, rx) = bounded(FETCH_RESULT_QUEUE);
         Self {
             tx,
             rx,

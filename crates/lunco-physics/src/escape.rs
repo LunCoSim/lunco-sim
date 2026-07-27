@@ -74,10 +74,12 @@
 //!
 //! # Cost
 //!
-//! One `Vector` comparison per dynamic body per tick, and a [`HashSet`] insert
-//! on the first (and only) report per entity. The bounds themselves are
-//! recomputed only when a static collider's AABB actually changes, which after
-//! terrain settles is never. Nothing allocates per frame.
+//! One `Vector` comparison per body whose `Position` was written this tick
+//! (awake dynamics; statics and sleepers are change-tick-filtered out of the
+//! query), and a [`HashSet`] insert on the first (and only) report per entity.
+//! The bounds themselves are recomputed only when a static collider's AABB
+//! actually changes, which after terrain settles is never. Nothing allocates
+//! per frame.
 
 use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
@@ -212,17 +214,31 @@ fn update_world_bounds(
 fn report_escaped_bodies(
     bounds: Res<WorldBounds>,
     mut reported: ResMut<ReportedEscapes>,
-    q: Query<(
-        Entity,
-        &Position,
-        &LinearVelocity,
-        Option<&Name>,
-        &RigidBody,
-    )>,
+    // `Changed<Position>` is the query-level body-kind gate: avian has no
+    // per-variant marker component (`RigidBody` is one enum component), so
+    // "dynamic only" cannot be a `With<>` filter — but a body cannot escape
+    // without its `Position` being written, and the solver writes every awake
+    // dynamic body each step while statics are never written after settle.
+    // Statics (terrain tiles — the bulk of the body count) therefore cost one
+    // change-tick compare instead of a full fetch + enum match per tick. A
+    // sleeping body is skipped too, correctly: escapes accelerate, they never
+    // sleep. (A NaN blow-up is still a write, so it still fires.)
+    q: Query<
+        (
+            Entity,
+            &Position,
+            &LinearVelocity,
+            Option<&Name>,
+            &RigidBody,
+        ),
+        Changed<Position>,
+    >,
 ) {
     for (entity, pos, vel, name, rb) in &q {
-        // Static bodies do not move, and a kinematic body is wherever its driver
-        // put it — neither can "escape", and flagging them would report the
+        // Kinematic bodies pass the change gate whenever their driver moves
+        // them, and an externally teleported static passes it once — but a
+        // kinematic body is wherever its driver put it and a static does not
+        // fall: neither can "escape", and flagging them would report the
         // driver's intent as an engine fault.
         if !matches!(rb, RigidBody::Dynamic) {
             continue;

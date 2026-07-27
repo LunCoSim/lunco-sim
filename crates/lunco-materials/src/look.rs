@@ -65,6 +65,7 @@ use crate::dyn_params::ParamValue;
 use bevy::prelude::*;
 pub use lunco_render::SurfaceAlpha;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// The named texture layers a shader may sample.
 ///
@@ -235,50 +236,56 @@ impl ShaderLook {
     /// Floats are quantised (1e-4) so two looks a rounding error apart still share
     /// one handle instead of quietly minting a second material and killing
     /// batching. This is a *sharing* key, not an identity.
+    ///
+    /// Computed by feeding a `Hasher` directly — no `String` clones, no `Vec`s.
+    /// The old struct-of-clones key allocated a `String` per param per call, and
+    /// the terrain path calls this per tile per `Changed<ShaderLook>`, so key
+    /// construction itself showed up in the frame. A 64-bit content hash makes
+    /// the key `Copy`; the collision odds over the few hundred distinct looks a
+    /// scene holds are negligible for a SHARING key (a collision would merely
+    /// serve one look the other's material — vanishingly unlikely, and this was
+    /// never a correctness identity).
     pub fn key(&self) -> ShaderLookKey {
         const Q: f32 = 1.0e4;
         let q = |v: f32| (v * Q).round() as i32;
-        let mut values: Vec<(String, Vec<i32>)> = Vec::with_capacity(self.values.len());
+        let mut h = DefaultHasher::new();
+        self.shader.hash(&mut h);
+        self.vertex_shader.hash(&mut h);
         for (name, v) in &self.values {
-            let quantised = match v {
-                ParamValue::F32(x) => vec![q(*x)],
-                ParamValue::Vec2(a) => a.iter().copied().map(q).collect(),
-                ParamValue::Vec3(a) => a.iter().copied().map(q).collect(),
-                ParamValue::Vec4(a) => a.iter().copied().map(q).collect(),
+            name.hash(&mut h);
+            match v {
+                ParamValue::F32(x) => q(*x).hash(&mut h),
+                ParamValue::Vec2(a) => a.iter().for_each(|x| q(*x).hash(&mut h)),
+                ParamValue::Vec3(a) => a.iter().for_each(|x| q(*x).hash(&mut h)),
+                ParamValue::Vec4(a) => a.iter().for_each(|x| q(*x).hash(&mut h)),
                 // Integers are exact — do NOT quantise them through the float path.
-                ParamValue::I32(i) => vec![*i],
-                ParamValue::U32(u) => vec![*u as i32],
-            };
-            values.push((name.clone(), quantised));
+                // Discriminant-tagged so `I32(5)` and `U32(5)` don't collide with
+                // a quantised float by lane content alone.
+                ParamValue::I32(i) => (0x49u8, *i).hash(&mut h),
+                ParamValue::U32(u) => (0x55u8, *u).hash(&mut h),
+            }
         }
-        ShaderLookKey {
-            shader: self.shader.clone(),
-            vertex_shader: self.vertex_shader.clone(),
-            values,
-            textures: self.textures.iter().map(|(l, h)| (*l, h.id())).collect(),
-            // `SurfaceAlpha` carries an f32 in one arm, so it is `PartialEq` and not
-            // `Hash`/`Eq`. Quantise the threshold exactly as the values above are
-            // quantised — a mask cutoff a rounding error apart is the same pipeline.
-            alpha: match self.alpha {
-                SurfaceAlpha::Opaque => (0, 0),
-                SurfaceAlpha::Mask(t) => (1, q(t)),
-                SurfaceAlpha::Blend => (2, 0),
-                SurfaceAlpha::Add => (3, 0),
-            },
+        for (layer, image) in &self.textures {
+            (*layer, image.id()).hash(&mut h);
         }
+        // `SurfaceAlpha` carries an f32 in one arm, so it is `PartialEq` and not
+        // `Hash`/`Eq`. Quantise the threshold exactly as the values above are
+        // quantised — a mask cutoff a rounding error apart is the same pipeline.
+        match self.alpha {
+            SurfaceAlpha::Opaque => (0u8, 0i32),
+            SurfaceAlpha::Mask(t) => (1, q(t)),
+            SurfaceAlpha::Blend => (2, 0),
+            SurfaceAlpha::Add => (3, 0),
+        }
+        .hash(&mut h);
+        ShaderLookKey(h.finish())
     }
 }
 
-/// Hashable, quantised form of a [`ShaderLook`] — the material-sharing key.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ShaderLookKey {
-    shader: String,
-    vertex_shader: Option<String>,
-    values: Vec<(String, Vec<i32>)>,
-    textures: Vec<(TextureLayer, AssetId<Image>)>,
-    /// `(discriminant, quantised mask threshold)` — see [`ShaderLook::key`].
-    alpha: (u8, i32),
-}
+/// Quantised 64-bit content hash of a [`ShaderLook`] — the material-sharing key.
+/// See [`ShaderLook::key`] for what is hashed and why a hash suffices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ShaderLookKey(u64);
 
 #[cfg(test)]
 mod tests {

@@ -38,7 +38,9 @@ use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 /// tile origin — one cell off the content — breaking LOD/culling/colliders).
 /// v7: over-zoom craterlet rims sampling-width-widened + reach-tail subtracted
 /// (`crater_profile_rim_limited`) — tile heights changed.
-const CACHE_FORMAT_VERSION: u64 = 7;
+// 8: fine normals moved from fixed 0.5 m probes to the padded-lattice central
+// difference (T14) — identical keys would otherwise ship old-stencil normals.
+const CACHE_FORMAT_VERSION: u64 = 8;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {

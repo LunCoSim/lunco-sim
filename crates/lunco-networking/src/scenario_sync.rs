@@ -78,6 +78,28 @@ pub const ASSET_CHUNK_SIZE: usize = 1024;
 /// chunks actually *received* — the reserved `AssetHave` envelope is the ack.
 pub const MAX_CHUNKS_PER_FRAME: usize = 32;
 
+/// Sender-side high-water mark: max chunks we ESTIMATE lightyear still holds
+/// unacked for one peer before the ferry stops enqueuing to that peer. This is
+/// the missing half of [`MAX_CHUNKS_PER_FRAME`]: the per-frame cap rate-limits
+/// queueing, but for a stalled client the queue still grew without bound (the
+/// measured 27 k-chunk wedge). At ~1 KiB per chunk this bounds the per-peer
+/// reliable backlog to ~1 MiB; undelivered chunks wait in the host's inert
+/// `ready` buffer instead of lightyear's resend bookkeeping.
+///
+/// lightyear exposes no unacked count and the wire has no chunk ack yet (the
+/// reserved `AssetHave` envelope — see the TODO above), so the estimate is
+/// sends minus an assumed drain ([`ASSUMED_DRAIN_CHUNKS_PER_SEC`]).
+pub const MAX_UNACKED_CHUNK_ESTIMATE: f32 = 1024.0;
+
+/// Assumed per-peer delivery rate used to decay the unacked estimate
+/// (chunks/second; ~256 KiB/s at [`ASSET_CHUNK_SIZE`]). A transfer within the
+/// [`MAX_UNACKED_CHUNK_ESTIMATE`] budget (~1 MiB — this path's intended small-
+/// scenario case) is never throttled; beyond it, enqueueing converges to this
+/// rate whether the client is draining or stalled — conservative on purpose,
+/// since without an ack we cannot tell the two apart, and large transfers
+/// belong on the HTTP bytes plane anyway (see the module docs).
+pub const ASSUMED_DRAIN_CHUNKS_PER_SEC: f32 = 256.0;
+
 /// Hard cap on a single asset offer's byte size, enforced at all three points of
 /// the offer path (client send, host inbox drain, host ingest) so no single
 /// unchunked `AssetOffer` can balloon a peer's memory. 96 MiB: the legitimate

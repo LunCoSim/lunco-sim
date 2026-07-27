@@ -68,6 +68,9 @@
 //! by a resource the recorder happens to set.
 
 use crate::{UsdPrimPath, UsdRead};
+use bevy::math::cubic_splines::{
+    CubicBezier, CubicCardinalSpline, CubicGenerator, CyclicCubicGenerator,
+};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -962,29 +965,32 @@ fn eval_linear(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 /// conditions: the first and last CVs are TANGENT PHANTOMS, so the curve spans
 /// p₁…pₙ₋₂ with `n − 3` segments (UsdGeomBasisCurves segment counting). Fewer
 /// than 4 CVs cannot form a cubic segment — degrade to the polygon.
+///
+/// The numeric core is `bevy_math`'s [`CubicCardinalSpline`] at tension 0.5 —
+/// the same generator `lunco-celestial/src/trajectories.rs` uses, and the same
+/// basis matrix the old hand-rolled evaluator carried. Only the USD CV
+/// bookkeeping lives here:
+/// - cyclic: bevy's `to_curve_cyclic` segment `i` reads exactly the window
+///   `(pᵢ₋₁, pᵢ, pᵢ₊₁, pᵢ₊₂) mod n` USD prescribes, so `t = u·n` is direct;
+/// - open: bevy MIRRORS phantom endpoints (n − 1 segments over p₀…pₙ₋₁),
+///   whereas USD says the authored ends ARE the phantoms, so sampling starts
+///   one segment in — `t = 1 + u·(n − 3)` — and bevy's mirrored end segments
+///   are never touched.
 fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     let n = points.len();
     if !periodic && n < 4 {
         return eval_linear(points, false, u);
     }
-    let segs = if periodic { n } else { n - 3 };
-    let (i, f) = segment(segs, u);
-    let idx = |k: isize| -> Vec3 {
-        if periodic {
-            points[(i as isize + k).rem_euclid(n as isize) as usize]
-        } else {
-            // Segment i starts at p[i+1]; k = −1 reaches back to its tangent
-            // phantom p[i], k = 2 forward to p[i+3] — both in range by `segs`.
-            points[(i as isize + 1 + k) as usize]
-        }
+    let u = u.clamp(0.0, 1.0);
+    let spline = CubicCardinalSpline::new_catmull_rom(points.iter().copied());
+    let sampled = if periodic {
+        spline.to_curve_cyclic().map(|c| c.position(u * n as f32))
+    } else {
+        spline.to_curve().map(|c| c.position(1.0 + u * (n - 3) as f32))
     };
-    let (p0, p1, p2, p3) = (idx(-1), idx(0), idx(1), idx(2));
-    let (t, t2, t3) = (f, f * f, f * f * f);
-    // Standard uniform Catmull-Rom basis (tension 0.5).
-    0.5 * ((2.0 * p1)
-        + (-p0 + p2) * t
-        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+    // `n ≥ 2` is guaranteed by the callers above, so this is unreachable — but
+    // the polygon is a saner fallback than a panic in a render-path system.
+    sampled.unwrap_or_else(|_| eval_linear(points, periodic, u))
 }
 
 /// Cubic Bezier: 4 CVs per segment, consecutive segments sharing an endpoint.
@@ -994,20 +1000,31 @@ fn eval_catmull_rom(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
 /// periodic form authors no closing CV — the final segment borrows the first CV
 /// back as its endpoint, which is what makes the loop close rather than stop.
 /// Too few CVs to form even one cubic segment degrades to the control polygon.
+///
+/// Segment windows are gathered here (that indexing IS the USD wrapping rule);
+/// the Bernstein evaluation itself is `bevy_math`'s [`CubicBezier`].
 fn eval_bezier(points: &[Vec3], periodic: bool, u: f32) -> Vec3 {
     let n = points.len();
     let segs = if periodic { n / 3 } else { (n - 1) / 3 };
     if segs == 0 {
         return eval_linear(points, periodic, u);
     }
-    let (i, f) = segment(segs, u);
-    let b = i * 3;
     // Wrapping the index is the whole of periodicity here: only the closing
     // segment's `b + 3` ever reaches `n`, and there it lands back on CV 0.
-    let cv = |k: usize| points[(b + k) % n];
-    let (p0, p1, p2, p3) = (cv(0), cv(1), cv(2), cv(3));
-    let mt = 1.0 - f;
-    p0 * (mt * mt * mt) + p1 * (3.0 * mt * mt * f) + p2 * (3.0 * mt * f * f) + p3 * (f * f * f)
+    let windows = (0..segs).map(|i| {
+        let b = i * 3;
+        [
+            points[b % n],
+            points[(b + 1) % n],
+            points[(b + 2) % n],
+            points[(b + 3) % n],
+        ]
+    });
+    match CubicBezier::new(windows).to_curve() {
+        Ok(curve) => curve.position(u.clamp(0.0, 1.0) * segs as f32),
+        // Unreachable (`segs ≥ 1` above), but degrade rather than panic.
+        Err(_) => eval_linear(points, periodic, u),
+    }
 }
 
 /// Split `u` into (segment index, local fraction).
@@ -1056,6 +1073,41 @@ mod tests {
         assert!(
             (start - end).length() < 1e-5,
             "loop must close: {start:?} vs {end:?}"
+        );
+    }
+
+    /// USD end conditions for a nonperiodic catmullRom: the first and last CVs
+    /// are tangent phantoms, so the curve spans p₁…pₙ₋₂. This pins the segment
+    /// offset into the `bevy_math` curve — bevy's own `to_curve` mirrors extra
+    /// phantoms and spans p₀…pₙ₋₁, so sampling without the `+1` offset would
+    /// wrongly start the shot at the authored phantom p₀.
+    #[test]
+    fn open_catmull_rom_spans_the_interior_cvs_only() {
+        let p = vec![
+            Vec3::new(-1.0, 0.0, 0.0), // tangent phantom
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(3.0, 0.0, 0.0), // tangent phantom
+        ];
+        let start = eval_curve(&p, CurveBasis::CatmullRom, false, 0.0);
+        let end = eval_curve(&p, CurveBasis::CatmullRom, false, 1.0);
+        assert!((start - p[1]).length() < 1e-5, "u=0 is p1, not the phantom p0");
+        assert!((end - p[3]).length() < 1e-5, "u=1 is pₙ₋₂, not the phantom pₙ₋₁");
+        // Interior knot: n − 3 = 2 segments, so u = 0.5 sits exactly on p2.
+        let mid = eval_curve(&p, CurveBasis::CatmullRom, false, 0.5);
+        assert!((mid - p[2]).length() < 1e-5, "interior knot interpolated");
+    }
+
+    /// Fewer than 4 CVs cannot form an open cubic segment — the documented
+    /// degradation is the control polygon.
+    #[test]
+    fn open_catmull_rom_under_four_cvs_degrades_to_the_polygon() {
+        let p = vec![Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 0.0)];
+        let got = eval_curve(&p, CurveBasis::CatmullRom, false, 0.25);
+        assert!(
+            (got - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5,
+            "3 CVs = polygon midpoint of the first edge: {got:?}"
         );
     }
 

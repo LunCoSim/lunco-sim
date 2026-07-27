@@ -6,7 +6,8 @@
 //! canvas substrate.
 //!
 //! ### Time-Series (pure rendering)
-//! Zero-copy, stateless. Domain data → `ChartSeries` → rendered.
+//! Stateless, no per-sample copies (generator-backed `PlotPoints`).
+//! Domain data → `ChartSeries` → rendered.
 //! ```ignore
 //! let series: Vec<ChartSeries> = /* borrow from domain data */;
 //! time_series_plot(ui, "plot_id", &series);

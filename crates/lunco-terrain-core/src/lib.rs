@@ -49,8 +49,8 @@ pub use error::measure_node_error;
 // `FieldKind` is NOT re-exported: it has no definition (optimization removed it as dead
 // code) and nothing referenced it but this line.
 pub use derive::{
-    albedo_map, ao_map, hazard_from_slope, los_hit, normal_map, pack_normal_rgba8,
-    pack_surface_rgba8, roughness_from_slope, slope_map, upsample_bilinear,
+    albedo_map, ao_map, hazard_from_slope, los_hit, normal_map, normal_slope_maps,
+    pack_normal_rgba8, pack_surface_rgba8, roughness_from_slope, slope_map, upsample_bilinear,
 };
 pub use field::{field_map, AspectField, ElevationField, SlopeField, SurfaceField};
 pub use modifier::{

@@ -229,6 +229,16 @@ pub(crate) fn normalize_addr(raw: &str) -> String {
 /// host assigns a server-side `SessionId` at connect; see
 /// `server::AssignedSessions`). Drawn from fresh entropy so two clients can't
 /// collide, fixing the old `std::process::id()` reuse across machines (review H5).
+/// Run condition: is the wire live at all? `Standalone` (single-player — the
+/// overwhelmingly common case) skips the networked schedule instead of paying a
+/// full pass of no-op ferry/RBAC/tutor systems every frame (C12). Re-evaluated
+/// each frame, so `JoinServer`/`LeaveServer` flipping [`NetworkRole`] at runtime
+/// enables/disables the set on the spot. `Option` so a bare test app without
+/// the role resource reads as "no wire" instead of panicking.
+pub(crate) fn wire_is_live(role: Option<Res<lunco_core::NetworkRole>>) -> bool {
+    role.is_some_and(|r| r.is_networked())
+}
+
 pub(crate) fn next_client_id() -> u64 {
     #[cfg(target_family = "wasm")]
     {

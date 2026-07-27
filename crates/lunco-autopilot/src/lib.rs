@@ -624,6 +624,64 @@ fn default_cone() -> f64 {
     60.0
 }
 
+impl BehaviorSpec {
+    /// Collect the [`GlobalEntityId`]s (api_ids) this tree's tracking leaves
+    /// ([`Follow`](Self::Follow) / [`Intercept`](Self::Intercept)) reference
+    /// into `out`. Returns `true` if the tree contains a leaf that scans the
+    /// WHOLE target snapshot ([`ObstacleAhead`](Self::ObstacleAhead)'s
+    /// vessel-proximity sweep), in which case the caller cannot restrict the
+    /// snapshot to `out`.
+    ///
+    /// This is what lets [`drive_autopilots`] snapshot only the entities an
+    /// active goal actually tracks instead of walking every identifiable
+    /// entity's cell chain per fixed tick.
+    pub fn tracked_targets(&self, out: &mut std::collections::HashSet<u64>) -> bool {
+        match self {
+            Self::Follow { target, .. } | Self::Intercept { target, .. } => {
+                out.insert(*target);
+                false
+            }
+            Self::ObstacleAhead { .. } => true,
+            Self::Sequence { children }
+            | Self::Selector { children }
+            | Self::Parallel { children, .. }
+            | Self::ReactiveSequence { children }
+            | Self::ReactiveSelector { children } => {
+                // No short-circuit: every child's gids are still collected even
+                // once a whole-snapshot leaf is found (callers may cache `out`).
+                let mut needs_all = false;
+                for c in children {
+                    needs_all |= c.tracked_targets(out);
+                }
+                needs_all
+            }
+            Self::Forever { child }
+            | Self::Repeat { child, .. }
+            | Self::Invert { child }
+            | Self::ForceSuccess { child }
+            | Self::ForceFailure { child }
+            | Self::Retry { child, .. }
+            | Self::Timeout { child, .. }
+            | Self::Cooldown { child, .. } => child.tracked_targets(out),
+            // Position-targeted / sensor / setpoint leaves: no gid tracking.
+            Self::DriveTo { .. }
+            | Self::Patrol { .. }
+            | Self::Arrived { .. }
+            | Self::Wait { .. }
+            | Self::Cruise { .. }
+            | Self::Brake
+            | Self::Face { .. }
+            | Self::Facing { .. }
+            | Self::Succeed
+            | Self::Fail
+            | Self::Hold
+            | Self::PathBlocked { .. }
+            | Self::SteerClear { .. }
+            | Self::RunTool { .. } => false,
+        }
+    }
+}
+
 /// Compile a [`BehaviorSpec`] (rhai/JSON data) into a tickable tree. The composite
 /// nodes come from the [`lunco_behavior`] kernel; the leaves are this crate's Rust
 /// primitives (steering math). `Send + Sync` throughout, so the tree lives in a
@@ -1491,6 +1549,9 @@ pub fn drive_autopilots(
     q_parents: Query<&ChildOf>,
     q_grids_only: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+    // The mirrored source spec on the VESSEL (see [`AutopilotBehaviorSpec`]) —
+    // read here to learn which gids the tree's tracking leaves reference.
+    q_specs: Query<&AutopilotBehaviorSpec>,
     clearances: Option<Res<ClearanceField>>,
     mut prev: Local<PrevTargets>,
     mut commands: Commands,
@@ -1499,13 +1560,32 @@ pub fn drive_autopilots(
         return; // no autopilots → skip the per-tick target snapshot entirely
     }
     let now = world_time.sim_secs; // the one clock — waits freeze under pause/warp
-                                   // One snapshot of every identifiable entity's world pose + a finite-difference
+                                   // A snapshot of tracked entities' world poses + a finite-difference
                                    // velocity (this pos minus last tick's, over the mission-clock delta), shared
                                    // (cheap Arc clone) into each autopilot's ctx so `follow`/`intercept` can track a
                                    // mover. Velocity is zero on first sighting and under pause (dt == 0).
     let dt = (now - prev.now).max(0.0);
+    // Snapshot only the gids an active tree actually tracks — snapshotting
+    // EVERY `GlobalEntityId` entity was a full cell-chain walk per entity per
+    // fixed tick whether or not any autopilot used follow/intercept. Fallbacks
+    // to the full snapshot: an `obstacle_ahead` leaf (scans every vessel), or
+    // an engaged tree whose vessel carries no mirrored spec (hot-inserted
+    // `AutopilotBehavior` without the `AutopilotBehaviorSpec` mirror — can't
+    // prove what the opaque tree reads, so stay conservative).
+    let mut needed: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut need_all = false;
+    for (ap, behavior) in q.iter() {
+        if !ap.engaged || behavior.is_none() {
+            continue; // constant-cruise autopilots never read the snapshot
+        }
+        match q_specs.get(ap.vessel) {
+            Ok(spec) => need_all |= spec.0.tracked_targets(&mut needed),
+            Err(_) => need_all = true,
+        }
+    }
     let states: TargetStates = q_targets
         .iter()
+        .filter(|(_, gid)| need_all || needed.contains(&gid.get()))
         .filter_map(|(e, gid)| {
             // Root-frame, from the cell chain. A waypoint pin is a plain prim with
             // no physics body, so this (not avian's `Position`) is what resolves
@@ -1647,6 +1727,18 @@ fn collect_hierarchy(root: Entity, q_children: &Query<&Children>, out: &mut Vec<
 pub fn sense_clearance(
     spatial: lunco_physics::spatial::GridSpatialQuery,
     q_children: Query<&Children>,
+    // Cache invalidation for `filters` below: any hierarchy edge changing
+    // (child added, reparent, unparent/despawn) may change some vessel's
+    // exclusion set. Global, not per-vessel — attributing an edge change to a
+    // vessel would need the very hierarchy walk the cache exists to avoid, and
+    // hierarchy changes are spawn-shaped (rare), so a full re-walk next tick
+    // is the cheap side of the trade.
+    q_hierarchy_changed: Query<(), Or<(Changed<Children>, Changed<ChildOf>)>>,
+    mut removed_children: RemovedComponents<Children>,
+    // Per-vessel self-exclusion filter (hierarchy set + layer mask), cached:
+    // rebuilding it was a Vec alloc + full descendant walk per vessel per tick
+    // for a set that only changes when the hierarchy does.
+    mut filters: Local<bevy::ecs::entity::EntityHashMap<avian3d::prelude::SpatialQueryFilter>>,
     registry: Res<SessionRegistry>,
     // Pose from avian `Position`/`Rotation` — already GRID-ABSOLUTE, so the origin
     // goes straight into `cast_ray_grid` as a `GridPos` (never `GlobalTransform`,
@@ -1660,6 +1752,12 @@ pub fn sense_clearance(
     mut field: ResMut<ClearanceField>,
 ) {
     use avian3d::prelude::SpatialQueryFilter;
+    // DRAIN, don't peek: un-drained removal events stay queued for their whole
+    // retention window and would re-clear the cache for several extra frames.
+    let hierarchy_removed = removed_children.read().count() > 0;
+    if hierarchy_removed || !q_hierarchy_changed.is_empty() {
+        filters.clear(); // also drops entries for despawned vessels
+    }
     field.0.clear();
     for (vessel, gid, pos, rot) in &q_vessels {
         // Sense only vessels someone is actually driving (human OR autopilot). An
@@ -1674,14 +1772,17 @@ pub fn sense_clearance(
         if fwd == Vec3::ZERO {
             continue;
         }
-        let mut excluded = Vec::new();
-        collect_hierarchy(vessel, &q_children, &mut excluded);
-        // Trigger volumes and celestial bodies are not obstacles: the former is an
-        // event surface, the latter picking geometry whose sphere can contain the
-        // whole scene (see `NON_PHYSICAL_QUERY_LAYERS`). Unmasked, an obstacle
-        // probe reads "wall at 0 m" in every direction.
-        let mut filter = SpatialQueryFilter::from_excluded_entities(excluded);
-        filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
+        let filter = &*filters.entry(vessel).or_insert_with(|| {
+            let mut excluded = Vec::new();
+            collect_hierarchy(vessel, &q_children, &mut excluded);
+            // Trigger volumes and celestial bodies are not obstacles: the former is
+            // an event surface, the latter picking geometry whose sphere can contain
+            // the whole scene (see `NON_PHYSICAL_QUERY_LAYERS`). Unmasked, an
+            // obstacle probe reads "wall at 0 m" in every direction.
+            let mut filter = SpatialQueryFilter::from_excluded_entities(excluded);
+            filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
+            filter
+        });
         let base = GridPos(pos.0);
         // Cast each lane at every body height, keep the nearest hit across them.
         let lane = |dir: Vec3| -> Option<f32> {
@@ -1692,7 +1793,7 @@ pub fn sense_clearance(
                     // Body-local up-offset: a bare delta onto the grid point.
                     let origin = base + DVec3::Y * *h as f64;
                     spatial
-                        .cast_ray_grid(origin, d, SENSOR_RANGE as f64, true, &filter)
+                        .cast_ray_grid(origin, d, SENSOR_RANGE as f64, true, filter)
                         .map(|hit| hit.distance as f32)
                 })
                 .reduce(f32::min)

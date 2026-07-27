@@ -152,7 +152,13 @@ fn aim_link_beams(
         } else {
             inst.stub
         };
-        *tf = beam_transform(dir_local, len, inst.width);
+        let want = beam_transform(dir_local, len, inst.width);
+        // Compare-gated: an unconditional write marks the `Transform` `Changed`
+        // and re-propagates the beam every frame even when both endpoints are
+        // parked. When they move, the recomputed transform differs and writes.
+        if *tf != want {
+            *tf = want;
+        }
     }
 }
 

@@ -40,7 +40,13 @@ pub(crate) fn register_client_systems(app: &mut App) {
             client_recv_inbox.before(crate::sync::drain_sync_inbox),
             client_send_outbox.after(crate::sync::drain_sync_inbox),
             update_client_netstatus,
-        ),
+        )
+            // Standalone pays nothing for the ferry it can't use (C12). Safe to
+            // gate: `capture_command` only fills the outbox when role == Client,
+            // so no producer runs while this is off. An involuntary drop keeps
+            // role == Client (see `on_client_disconnected`), so the outbox-
+            // clearing arm of `client_send_outbox` still runs then.
+            .run_if(crate::wire_is_live),
     );
     register_all_commands(app);
 
@@ -56,7 +62,16 @@ pub(crate) fn register_client_systems(app: &mut App) {
         Update,
         (
             crate::single_instance::drain_deep_link_inbox,
-            seed_pending_from_deep_link_arg,
+            // The latch lives in `run_if` (the gate.rs pattern), not inside the
+            // system — after the one scan, the scheduler skips it entirely
+            // instead of paying a per-frame no-op call (C13). Condition order
+            // matters: the inbox check comes FIRST so `run_once` only latches
+            // when the scan actually runs (IPC-wired builds skip it forever —
+            // the IPC path already carries the launch arg).
+            seed_pending_from_deep_link_arg.run_if(lunco_core::gate::tracked(
+                "net: deep-link argv scan",
+                not(resource_exists::<crate::single_instance::DeepLinkInbox>).and(run_once),
+            )),
         ),
     );
 }
@@ -64,17 +79,12 @@ pub(crate) fn register_client_systems(app: &mut App) {
 /// Fallback (no IPC wired): scan argv once for a `luncosim:` deep link and stage
 /// it in [`PendingConnect`]. Skipped when a [`DeepLinkInbox`](crate::single_instance::DeepLinkInbox)
 /// exists — the IPC path already carries the launch arg, so this avoids a double
-/// prompt. Runs every frame but guarded by a `done` latch + the inbox check.
+/// prompt. The once-only latch and the inbox check are `run_if` conditions at
+/// the registration site — the system body runs at most once per process.
 #[cfg(not(target_family = "wasm"))]
 fn seed_pending_from_deep_link_arg(
-    inbox: Option<Res<crate::single_instance::DeepLinkInbox>>,
     mut pending: ResMut<lunco_core::session::PendingConnect>,
-    mut done: Local<bool>,
 ) {
-    if *done || inbox.is_some() {
-        return;
-    }
-    *done = true;
     let Some(link) = std::env::args()
         .find(|a| a.starts_with(&format!("{}:", crate::connect_link::SCHEME)))
         .and_then(|a| crate::connect_link::parse_native(&a))
@@ -106,7 +116,8 @@ pub(crate) fn spawn_client(
     server: &str,
     client_id: u64,
     digest: &str,
-) -> Entity {
+    status: &mut NetStatus,
+) -> Option<Entity> {
     // Netcode needs a `SocketAddr` for its token, but never validates it against
     // the transport — the real dial is done by `WtUrlClientIo` below.
     let server_addr = SocketAddr::from(([127, 0, 0, 1], port_of(server)));
@@ -117,7 +128,7 @@ pub(crate) fn spawn_client(
         private_key: PRIVATE_KEY,
         protocol_id: PROTOCOL_ID,
     };
-    let netcode = NetcodeClient::new(
+    let netcode = match NetcodeClient::new(
         auth,
         NetcodeConfig {
             // Match the 30 s server/QUIC timeout. A short 5 s reaper raced the
@@ -126,8 +137,19 @@ pub(crate) fn spawn_client(
             client_timeout_secs: 30,
             ..default()
         },
-    )
-    .expect("netcode client");
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            // A malformed address/config must surface on the status seam, not
+            // panic the app — the Connect UI shows `last_error` (C4).
+            let msg = format!("netcode client setup failed for '{server}': {e}");
+            error!("[net] {msg}");
+            status.connected = false;
+            status.last_error = msg;
+            return None;
+        }
+    };
+    status.last_error = String::new();
 
     let client_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
     let client = {
@@ -158,7 +180,7 @@ pub(crate) fn spawn_client(
     };
     info!("[net] connecting to {server} as client {client_id}");
     commands.trigger(Connect { entity: client });
-    client
+    Some(client)
 }
 
 /// Join a networked session at `address` (`host:port` — a hostname like
@@ -194,12 +216,20 @@ fn on_join_server(
         commands.entity(e).try_despawn();
     }
     let address = crate::normalize_addr(&cmd.address);
-    spawn_client(
+    if spawn_client(
         &mut commands,
         &address,
         crate::next_client_id(),
         &cmd.digest,
-    );
+        &mut status,
+    )
+    .is_none()
+    {
+        // Construction failed — stay Standalone; the error is on
+        // `NetStatus::last_error` for the Connect UI.
+        status.endpoint = address;
+        return;
+    }
     // Standalone→Client: authority follows the role automatically
     // (`is_authoritative()` is now false), so a joined client stops minting ids —
     // no separate flag to flip in lock-step.

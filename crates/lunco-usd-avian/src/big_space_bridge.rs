@@ -335,7 +335,8 @@ fn position_to_pose(
     // Chain nodes that are not bodies or colliders (grids, plain group
     // nodes). Disjoint from `q_dyn`'s `&mut Transform` via the filters.
     q_plain: Query<(Option<&CellCoord>, &Transform), (Without<RigidBody>, Without<Collider>)>,
-    q_poses: Query<(Entity, &Position, &Rotation), With<RigidBody>>,
+    q_poses: Query<(Entity, Ref<Position>, Ref<Rotation>), With<RigidBody>>,
+    mut removed_bodies: RemovedComponents<RigidBody>,
     mut q_dyn: Query<(
         Entity,
         &Position,
@@ -345,22 +346,38 @@ fn position_to_pose(
         &mut BridgeShadow,
         &RigidBody,
     )>,
-    // Scratch reused across ticks. This runs every physics tick over every body,
-    // so building a fresh map per tick and a fresh chain Vec per BODY was a
-    // steady-state allocation cost even when nothing moved. Both are cleared
-    // where they were previously constructed — same contents, same order.
+    // PERSISTENT across ticks, not just scratch: entries for bodies the solver
+    // did not touch this tick (sleeping, settled statics, idle kinematics) are
+    // carried over from the last tick rather than rebuilt — their `Position`
+    // is unchanged by definition, so the retained entry IS the current pose.
+    // Rebuilding the whole map over ALL rigid bodies every physics tick (even
+    // all-sleeping) was a steady-state O(bodies) cost. Despawned bodies are
+    // pruned via `RemovedComponents`, so recycled entity ids never inherit a
+    // stale pose.
     mut body_poses: Local<EntityHashMap<(GridPos, GridRot)>>,
     // NOTE: `chain` stays bare — its entries are parent-frame OFFSETS paired
     // with LOCAL rotations, not grid-absolute points, so typing them `GridPos`
     // would assert a frame they are not in.
     mut chain: Local<Vec<(DVec3, Quat)>>,
 ) {
-    // Pass A: solved world poses of every body — the parent frames for
-    // jointed sub-bodies, fresher than any Transform this tick. avian's
-    // `Position` carries the grid-absolute frame; wrap at the read.
-    body_poses.clear();
+    // Pass A: solved world poses — the parent frames for jointed sub-bodies,
+    // fresher than any Transform this tick. avian's `Position` carries the
+    // grid-absolute frame; wrap at the read.
+    //
+    // Only bodies whose `Position`/`Rotation` actually changed since this
+    // system's last run are (re)written: the solver writes every awake body
+    // each step and skips `Sleeping` ones, so "changed" IS avian's activity
+    // state — sleeping bodies keep their retained entry (which a non-sleeping
+    // jointed descendant may still demand as its anchor), and settled statics
+    // cost nothing. A body with no entry yet (first run, spawned mid-flight)
+    // is inserted unconditionally.
+    for e in removed_bodies.read() {
+        body_poses.remove(&e);
+    }
     for (e, p, r) in &q_poses {
-        body_poses.insert(e, (GridPos(p.0), GridRot(r.0)));
+        if (p.is_changed() || r.is_changed()) || !body_poses.contains_key(&e) {
+            body_poses.insert(e, (GridPos(p.0), GridRot(r.0)));
+        }
     }
 
     'bodies: for (e, pos, rot, cell, mut tf, mut shadow, rb) in &mut q_dyn {
@@ -489,19 +506,59 @@ fn position_to_pose(
 /// the canonical BigSpace root is. Cell offsets are irrelevant here: nodes
 /// between root and body only ever contribute SCALE, and cells do not scale.
 ///
-/// Compare-gated writes: values derive from `Transform`s deterministically,
-/// so an unchanged chain recomputes bit-identical and dirties nothing.
+/// Change-gated at the WALK, not just the write: the composition below is a
+/// pure function of the ancestor chain's `Transform`s, the chain topology
+/// (`ChildOf`), and which nodes are bodies. Recomputing every collider's full
+/// chain every `FixedPostUpdate` with only the final write compare-gated was
+/// O(colliders × depth) even when nothing moved — a static terrain scene paid
+/// the whole walk per tick for nothing. Now a collider recomputes only when it
+/// is new (`is_added`) or some node on its path changed; component REMOVALS
+/// (a `Transform` or `RigidBody` taken off a chain node) are not per-entity
+/// attributable, so any removal marks everything dirty for one tick — removal
+/// is spawn-shaped, so that full pass is rare.
+///
+/// The final write stays compare-gated too: values derive from `Transform`s
+/// deterministically, so an unchanged chain recomputes bit-identical and
+/// dirties nothing.
 #[allow(clippy::type_complexity)]
 fn propagate_collider_transforms_rootless(
     q_parents: Query<&ChildOf>,
     q_transforms: Query<&Transform>,
     q_rb: Query<(), With<RigidBody>>,
+    // Nodes whose contribution to some chain may have changed since this
+    // system's last run. `Changed<Transform>` covers motion (incl. the
+    // writeback pass, which runs earlier in the same tick), `Changed<ChildOf>`
+    // covers reparenting, `Added<RigidBody>` covers a node becoming a
+    // frame-resetting body.
+    q_dirty_nodes: Query<Entity, Or<(Changed<Transform>, Changed<ChildOf>, Added<RigidBody>)>>,
+    mut removed_tf: RemovedComponents<Transform>,
+    mut removed_rb: RemovedComponents<RigidBody>,
     mut q_colliders: Query<(Entity, &mut ColliderTransform)>,
     mut path: Local<Vec<Entity>>,
+    mut dirty: Local<EntityHashSet>,
 ) {
+    // DRAIN, don't peek (see `escape.rs`): un-drained removal events re-fire
+    // for their whole retention window.
+    let all_dirty = removed_tf.read().count() > 0 || removed_rb.read().count() > 0;
+    dirty.clear();
+    if !all_dirty {
+        dirty.extend(q_dirty_nodes.iter());
+    }
+
     for (e, mut ct) in &mut q_colliders {
-        // Path root → collider (inclusive).
-        ancestor_path(e, &q_parents, &mut path);
+        // Path root → collider (inclusive) — built only when it can matter.
+        let recompute = if all_dirty || ct.is_added() {
+            ancestor_path(e, &q_parents, &mut path);
+            true
+        } else if dirty.is_empty() {
+            false
+        } else {
+            ancestor_path(e, &q_parents, &mut path);
+            path.iter().any(|n| dirty.contains(n))
+        };
+        if !recompute {
+            continue;
+        }
 
         let mut acc = ColliderTransform::default();
         for &n in path.iter().rev() {

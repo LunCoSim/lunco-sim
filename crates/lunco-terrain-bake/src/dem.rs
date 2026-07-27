@@ -231,12 +231,24 @@ fn crop_centred(heights: &[f64], w: usize, n: usize) -> Vec<f64> {
 /// visit order, which is deterministic — the oracle's purity depends on this
 /// being a pure function of the raster.
 fn fill_nodata_from_nearest(heights: &mut [f64], w: usize, h: usize) {
-    // Seed the frontier with every measured cell that touches a hole.
+    // Seed the frontier with every measured cell that touches a hole — ONLY
+    // those. Seeding every finite cell queued the whole raster (~10 M usize on
+    // a 3200² DEM for one interior speck) and swept it all; non-adjacent seeds
+    // write nothing, and dropping them preserves the ascending-index order of
+    // the seeds that do, so the fill is byte-identical.
+    let finite_at = |i: usize| heights[i].is_finite();
+    let hole_adjacent = |i: usize| {
+        let (x, y) = (i % w, i / w);
+        (x > 0 && !finite_at(i - 1))
+            || (x + 1 < w && !finite_at(i + 1))
+            || (y > 0 && !finite_at(i - w))
+            || (y + 1 < h && !finite_at(i + w))
+    };
     let mut queue: std::collections::VecDeque<usize> = (0..heights.len())
-        .filter(|&i| heights[i].is_finite())
+        .filter(|&i| finite_at(i) && hole_adjacent(i))
         .collect();
-    if queue.is_empty() || queue.len() == heights.len() {
-        return;
+    if queue.is_empty() {
+        return; // hole-free raster (or no finite cell to extend from)
     }
     while let Some(i) = queue.pop_front() {
         let v = heights[i];
@@ -369,6 +381,24 @@ mod tests {
         }
         // The seam is C0: the filled cell equals the measured one beside it.
         assert_eq!(g[3], g[2]);
+    }
+
+    /// One interior speck must fill from its nearest measured neighbour, with
+    /// the hole-adjacent seeding reproducing the whole-grid seed's visit order
+    /// exactly: seeds pop in ascending index, so the speck takes its
+    /// smallest-index finite 4-neighbour (here: the cell above). Every cell
+    /// that is not a hole stays untouched.
+    #[test]
+    fn interior_speck_fills_from_nearest_and_touches_nothing_else() {
+        let mut g: Vec<f64> = (0..25).map(|i| i as f64).collect();
+        g[12] = f64::NAN;
+        fill_nodata_from_nearest(&mut g, 5, 5);
+        assert_eq!(g[12], 7.0, "ascending seed order → filled from above");
+        for (i, v) in g.iter().enumerate() {
+            if i != 12 {
+                assert_eq!(*v, i as f64, "cell {i} must be untouched");
+            }
+        }
     }
 
     /// Encode a georeferenced `w*h` f32 raster spanning `size_m`, as the DEM
