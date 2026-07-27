@@ -450,6 +450,13 @@ pub struct CelestialBody {
 /// a real altitude/georeferencing bias the moment anything reports a height.
 /// Do not re-type the number; a fourth copy is the bug coming back.
 ///
+/// It is LOAD-BEARING for site placement, not just visuals:
+/// `geodetic_to_body_fixed` derives the site anchor from it and the DEM frame
+/// contract ties that anchor to the baked grid, so perturbing it desyncs the anchor
+/// from the baked DEM (shrinking it by 10 km to lower the rendered globe moved the
+/// anchor ~772 m and tripped the frame check on load). To move the globe shell,
+/// offset the GLOBE RENDER radius (see `lunco_celestial::globe_lod`), never this.
+///
 /// It lives HERE, in the one dependency-light leaf every consumer already sees,
 /// rather than in `lunco-celestial`: the offline `lunco-assets` build tool needs
 /// the same datum for the GeoTIFF it writes and must not take a Bevy-heavy

@@ -5,6 +5,22 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
 
+/// WORKAROUND (2026-07-27): metres the globe shell is sunk below the body datum.
+///
+/// Applied to mesh VERTICES only — the tile entity stays at datum radius. That
+/// asymmetry is deliberate: sinking the value fed to `translation_to_grid` in
+/// `globe_lod` instead moves tiles into different grid cells, desyncing the streamed
+/// surface from the grid-absolute oracle (`report_unreachable_dem_frame` reports the
+/// class of breakage). The DEM frame contract is coupled to the surface grid's cell
+/// layout; do not move tile PLACEMENT to chase this.
+///
+/// Why it exists: surface placements are ABSOLUTE body-datum metres and are never
+/// rebased, so the Apollo 15 valley floor sits at −2242 m while the shell sits at
+/// datum — the shell cut ACROSS the valley, burying its lower half in opaque grey.
+///
+/// UNVERIFIED: −10000 m has not been confirmed to clear the valley on screen.
+const GLOBE_SINK_M: f64 = -10000.0;
+
 /// Generate a mesh for a single QuadSphere tile.
 pub fn create_quadsphere_tile_mesh(
     _body_ent: Entity,
@@ -30,8 +46,8 @@ pub fn create_quadsphere_tile_mesh(
             let u = start_u + (x as f64 / res as f64) * step;
             let v = start_v + (y as f64 / res as f64) * step;
             let pos_sphere = cube_to_sphere(face, u, v);
-            // Simple height: just radius (can be extended with noise/sampling)
-            let h = radius;
+            // Sunk per-vertex so the offset stays continuous across tile seams.
+            let h = radius + GLOBE_SINK_M;
             positions.push((pos_sphere * h - tile_center).as_vec3());
             normals.push(pos_sphere.as_vec3());
 

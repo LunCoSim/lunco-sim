@@ -688,6 +688,14 @@ pub fn sync_terrain_body_curvature(
     // opaque, and at 5 m altitude the near tiles wall off the sky as a brown smear of
     // ~5 km/texel mosaic. The local ground owns the near field; the globe owns the far
     // field and the limb, and the punch is the seam between them.
+    // NOTE: with a DEM this cone punches NOTHING, and that is tolerated by design.
+    // `tile_fully_in_punch` needs a tile's four corners AND centre inside the cone, but
+    // a 1950 m footprint on the Moon is a 0.064° cone while the finest tiles subtend
+    // ~0.35° — no tile can ever fit. So the punch is NOT what keeps the globe off a
+    // site: `GLOBE_SINK_M` (lunco-terrain-globe) is, by sinking the shell below every
+    // surface placement. Do NOT re-size this cone to compensate — enlarging it enough
+    // to bite would delete ~60 km of globe around a 2 km site, invisible at eye height
+    // but an obvious void ring from any altitude above it.
     const SITE_PUNCH_DEG: f64 = 2.0;
     let half_extent = if has_dem {
         q_built_dem

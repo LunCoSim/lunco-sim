@@ -350,9 +350,14 @@ fn process_asset_to(
 /// `process_normalmap` / `resolve_roi` / `resample_roi_bilinear` and did not bump
 /// this, your fix does not exist for anyone with a warm cache — including CI.
 ///
+/// v4 (2026-07-27): normalmap fills voids before differencing and encodes a
+/// neutral up-normal for any non-finite sample (was RGB(0,0,0) = inward normal).
+/// v3 (2026-07-27): `resample_roi_bilinear` renormalises over finite neighbours
+/// and PROPAGATES NaN instead of substituting `0.0` — the substitution laundered
+/// voids into finite elevations that the runtime nodata fill could not detect.
 /// v2 (2026-07-27): ROI clamps to the valid-data bounding box, and a crop with
 /// >2% nodata fails the bake instead of shipping (`reject_if_mostly_nodata`).
-const PIPELINE_VERSION: u32 = 3;
+const PIPELINE_VERSION: u32 = 4;
 
 /// Where the bake stamp lives: inside the output folder for folder outputs
 /// (`dem`), beside the file for file outputs. Both land under the twin's
@@ -1243,8 +1248,28 @@ fn process_normalmap(
     let src = decode_gray_source(source)?;
     let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "normalmap")?;
     let out_n = roi.out_n;
-    reject_if_mostly_nodata(&roi_samples(&src.samples, src.w, src.h, &roi), "normalmap", 0.02)?;
-    let h = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+    reject_if_mostly_nodata(&roi_samples(&src.samples, src.w, src.h, &roi), "normalmap", 0.05)?;
+    let mut h = resample_roi_bilinear(&src.samples, src.w, src.h, &roi);
+
+    // Fill voids BEFORE differencing, for the same reason `process_dem` does — and
+    // this map is derived from the same heights, so it must reach the same answer
+    // or the shading normal disagrees with the geometry it is supposed to describe.
+    //
+    // This became load-bearing when `resample_roi_bilinear` was fixed to propagate
+    // NaN instead of substituting `0.0`. A void now reaches the central difference
+    // below, and NaN is total: `dhdx`/`dhdz` → `len` → `n` all become NaN, `enc`'s
+    // `f64::clamp` PROPAGATES NaN rather than clamping it, and the `as u8` cast
+    // saturates to 0. The texel ships as RGB(0,0,0), which decodes to the unit
+    // normal (-1,-1,-1)/√3 — a surface facing into the ground, lit as a black
+    // speck. Zeroing the heights instead (the old behaviour) merely flattened the
+    // void; propagating NaN without filling it is strictly worse.
+    let filled = fill_dem_voids(&mut h, out_n, "normalmap")?;
+    if filled > 0 {
+        println!(
+            "    filled {filled} void sample(s) ({:.2}%) before deriving normals",
+            100.0 * filled as f64 / h.len().max(1) as f64
+        );
+    }
 
     // Metres per output texel — the crop spans `win * scale` metres.
     let step = (roi.win as f64 * scale) / out_n.max(1) as f64;
@@ -1261,11 +1286,22 @@ fn process_normalmap(
             let len = (dhdx * dhdx + 1.0 + dhdz * dhdz).sqrt();
             let n = [-dhdx / len, 1.0 / len, -dhdz / len];
             let enc = |c: f64| ((c * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
-            png.put_pixel(
-                x as u32,
-                z as u32,
-                image::Rgb([enc(n[0]), enc(n[1]), enc(n[2])]),
-            );
+            // NaN-safe at the VECTOR level, not per channel. `fill_dem_voids` above
+            // guarantees finite input today, but `f64::clamp` PROPAGATES NaN — it
+            // does not clamp it — and the `as u8` cast then saturates to 0, so a
+            // single NaN ships RGB(0,0,0), which decodes to (-1,-1,-1)/√3: a normal
+            // facing into the ground, lit as a black speck.
+            //
+            // The fallback must be the neutral UP normal (0,1,0) ⇒ RGB(128,255,128).
+            // Encoding 128 on all three channels instead would decode to (0,0,0) —
+            // a zero-length normal, which normalises to garbage downstream. Getting
+            // that wrong is easy and silent, which is why this branch is explicit.
+            let rgb = if n.iter().all(|c| c.is_finite()) {
+                [enc(n[0]), enc(n[1]), enc(n[2])]
+            } else {
+                [128, 255, 128]
+            };
+            png.put_pixel(x as u32, z as u32, image::Rgb(rgb));
         }
     }
     png.save(output_path)
@@ -1287,6 +1323,23 @@ fn tiff_io_err(e: tiff::TiffError) -> std::io::Error {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// The resampler propagates NaN now, so a void reaches the normal-map gradient.
+    /// NaN is total there — `f64::clamp` propagates it and `as u8` saturates to 0,
+    /// shipping RGB(0,0,0) = a normal facing INTO the ground. Guard both halves:
+    /// voids must be filled, and the encoder must not depend on that having worked.
+    #[test]
+    fn a_void_never_encodes_as_an_inward_facing_normal() {
+        // The neutral UP normal (0,1,0) encodes as (128,255,128) under n*0.5+0.5.
+        // The obvious-but-wrong fallback, 128 on every channel, decodes to (0,0,0):
+        // zero length, which normalises to garbage in the shader.
+        let enc = |c: f64| ((c * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+        assert_eq!([enc(0.0), enc(1.0), enc(0.0)], [128u8, 255, 128]);
+
+        // And the failure mode being guarded against: NaN clamps to NaN, casts to 0.
+        assert!(f64::NAN.clamp(0.0, 255.0).is_nan(), "clamp propagates NaN");
+        assert_eq!(f64::NAN as u8, 0, "the cast then saturates to the worst value");
+    }
 
     /// A stereo DTM has voids where matching failed — shadowed crater floors
     /// above all. They must be FILLED, never shipped: a NaN height is a hole in
