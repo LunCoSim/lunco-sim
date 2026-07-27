@@ -17,7 +17,6 @@ members = [
     "crates/lunco-celestial-ephemeris",
     "crates/lunco-hardware",
     "crates/lunco-mobility",
-    "crates/lunco-robotics",
     "crates/lunco-modelica",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",

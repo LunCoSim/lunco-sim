@@ -53,7 +53,6 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
-| **`lunco-robotics`** | High-level assembly logic and rover structural definitions (`assembler`). |
 | **`lunco-avatar`** | Human-interaction layer: composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) and control intents. (Camera *selection* / viewport lives in `lunco-usd-bevy` + `lunco-core::SceneViewport`.) |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Translation of raw user input (Keyboard/Gamepad) into typed `VesselIntent` actions for FSW. Yields a vessel to its owning session (spec 034), so the human never fights an autopilot. |
@@ -219,9 +218,6 @@ Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a 
 
 **`lunco-mobility`**
 Physics models for surface mobility and traction — the parameterized substrate (a vehicle is a USD file, not a Rust struct). Raycast wheel model with contact-plane traction (supports leaning single-track bikes), suspension (spring-damper), a data-driven `DriveMix` allocated by a named kernel from this crate's own `ControlKernelRegistry` (`skid`/`linear`), and a soft rocker-bogie `DifferentialCoupling`.
-
-**`lunco-robotics`**
-High-level vessel assembly and spawning logic. Orchestrates the composition of complex robots from constituent parts, linking chassis, wheels, software, and sensors into a cohesive simulation unit.
 
 **`lunco-avatar`**
 Human-interaction layer. Provides composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) with smooth jitter-free transitions and coordinate-grid awareness for avatar-based exploration of celestial bodies. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy` (they compose — possession changes the avatar camera's rig without changing the active view).

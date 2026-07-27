@@ -135,7 +135,6 @@ fn main() {
         .add_plugins(lunco_avatar::ui::AvatarUiPlugin)
         .add_plugins(lunco_hardware::LunCoHardwarePlugin)
         .add_plugins(lunco_mobility::LunCoMobilityPlugin)
-        .add_plugins(lunco_robotics::LunCoRoboticsPlugin)
         .add_plugins(lunco_controller::LunCoControllerPlugin)
         // Autopilot = a headless AiAgent actor that possesses + drives a vessel
         // (spec 034); on the control path, independent of the avatar/UI.

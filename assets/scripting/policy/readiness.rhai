@@ -9,8 +9,14 @@
 //   subject     "world" | "entity"
 //   entity      the entity id, or -1 when subject is "world"
 //   label       a model name / scene path, for rules that care about one thing
-//   elapsed_s   how long this item has been pending (REAL seconds, not sim time)
-//   deadline_s  the engine's own give-up point
+//   elapsed_ticks  how long this item has been pending, in FIXED ticks — the
+//                  authoritative age. Ticks, not wall-clock, so the give-up
+//                  lands on the same tick on every machine and a replay
+//                  reproduces. A paused clock does not burn the deadline down.
+//   deadline_ticks the engine's own give-up point, same units
+//   elapsed_s      elapsed_ticks x the fixed timestep, for rules that prefer
+//                  seconds. Derived, so it is always a whole number of ticks
+//   deadline_s     deadline_ticks x the fixed timestep
 //
 // and must return exactly one of:
 //

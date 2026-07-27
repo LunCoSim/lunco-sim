@@ -72,8 +72,8 @@ use lunco_hooks::HookValue as H;
 /// Hook id for the readiness policy: `(context) -> action name`.
 ///
 /// Authored in `assets/scripting/policy/readiness.rhai`, entry `readiness_action`.
-/// Local-only — never mark it deterministic; it reads wall-clock elapsed time and
-/// two peers may legitimately disagree.
+/// Its `elapsed_s` / `elapsed_ticks` inputs are counted on the **fixed** clock, so
+/// the same run reaches the same verdict at the same tick on every machine.
 pub const READINESS_HOOK: &str = "readiness.action";
 
 /// What a pending item is waiting for. A `&'static str` so it can be matched in
@@ -144,12 +144,16 @@ impl Action {
     /// one is registered but faults). `assets/scripting/policy/readiness.rhai`
     /// states the same rule, so scripted and unscripted hosts agree.
     ///
+    /// `elapsed_s` is fixed-clock seconds (`elapsed_ticks × timestep`), never
+    /// wall-clock: see [`evaluate_readiness`].
+    ///
     /// - A loading scene holds the world: nothing in it is trustworthy yet.
     /// - A program or participant that a *specific object* is waiting on freezes
     ///   that object only. A rover whose script has not compiled must not roll
     ///   away, but a second rover that is ready has no reason to wait for it.
     /// - The same wait for the world as a whole holds the world.
-    /// - Past [`Self::DEADLINE_S`], nothing holds. A hold exists to protect a
+    /// - Past the deadline ([`Self::DEADLINE_TICKS`], stated here in the seconds
+    ///   the caller measures in), nothing holds. A hold exists to protect a
     ///   world that is about to become correct; a wait this long is a failure,
     ///   and a frozen app hides it where a moving one shows it.
     pub fn builtin(kind: &str, subject: Subject, elapsed_s: f64) -> Action {
@@ -166,10 +170,21 @@ impl Action {
         }
     }
 
-    /// How long any single item may hold before the engine stops waiting on it.
-    /// Generous enough for a cold Modelica compile; short enough that a wedged
-    /// one is a visibly moving world rather than a hung app.
-    pub const DEADLINE_S: f64 = 60.0;
+    /// How long any single item may hold before the engine stops waiting on it,
+    /// **in fixed ticks**: 3600 ticks ≈ 60 s at the default 60 Hz fixed rate
+    /// (`lunco_core::FIXED_HZ`). Generous enough for a cold Modelica compile;
+    /// short enough that a wedged one is a visibly moving world rather than a
+    /// hung app.
+    ///
+    /// Counted in ticks rather than wall-clock seconds so the give-up is
+    /// *reproducible*: a slow machine and a fast one both stop holding at the
+    /// same tick, hence at the same simulation state, and a recorded run replays.
+    pub const DEADLINE_TICKS: u64 = 3_600;
+
+    /// [`Self::DEADLINE_TICKS`] expressed in seconds of fixed-clock time, for
+    /// policy and for reporting. Equal to wall-clock seconds only when the fixed
+    /// clock is keeping up; the tick count is the authority.
+    pub const DEADLINE_S: f64 = Self::DEADLINE_TICKS as f64 / 60.0;
 }
 
 /// Handle to one declared wait. Returned by [`ReadinessRegistry::begin`] and
@@ -191,7 +206,12 @@ pub struct PendingItem {
     pub kind: &'static str,
     /// Human-readable detail for diagnostics (a model name, a file stem).
     pub label: String,
-    /// Seconds since this item was declared.
+    /// Fixed ticks since this item was declared. The authoritative age: it is the
+    /// same number on every machine for the same run, which is what makes the
+    /// give-up in [`Action::DEADLINE_TICKS`] reproducible.
+    pub elapsed_ticks: u64,
+    /// [`Self::elapsed_ticks`] in seconds of fixed-clock time (`ticks × timestep`).
+    /// Derived, not measured — kept because policy and the API report seconds.
     pub elapsed_s: f64,
     /// The action currently in force, as decided by policy this frame.
     pub action: Action,
@@ -234,6 +254,7 @@ impl ReadinessRegistry {
                 subject,
                 kind,
                 label,
+                elapsed_ticks: 0,
                 elapsed_s: 0.0,
                 action,
                 warned: false,
@@ -248,8 +269,8 @@ impl ReadinessRegistry {
     pub fn finish(&mut self, ticket: ReadinessTicket) {
         if let Some(item) = self.items.remove(&ticket.0) {
             debug!(
-                "[readiness] ready {} {:?} {} after {:.2}s",
-                item.kind, item.subject, item.label, item.elapsed_s
+                "[readiness] ready {} {:?} {} after {} ticks ({:.2}s)",
+                item.kind, item.subject, item.label, item.elapsed_ticks, item.elapsed_s
             );
         }
     }
@@ -301,7 +322,7 @@ pub struct HeldForReadiness;
 /// Consults [`READINESS_HOOK`] and falls back to [`Action::builtin`] when no hook
 /// is registered, when it faults, or when it answers with something outside the
 /// closed action set.
-fn decide(kind: &str, subject: Subject, label: &str, elapsed_s: f64) -> Action {
+fn decide(kind: &str, subject: Subject, label: &str, elapsed_ticks: u64, elapsed_s: f64) -> Action {
     let entity_bits = match subject {
         Subject::Entity(e) => e.to_bits() as i64,
         Subject::World => -1,
@@ -319,6 +340,10 @@ fn decide(kind: &str, subject: Subject, label: &str, elapsed_s: f64) -> Action {
         ("label", H::str(label)),
         ("elapsed_s", H::Float(elapsed_s)),
         ("deadline_s", H::Float(Action::DEADLINE_S)),
+        // The same two bounds in the unit the engine actually counts in. Policy
+        // may branch on either; seconds are derived from ticks, so they agree.
+        ("elapsed_ticks", H::Int(elapsed_ticks as i64)),
+        ("deadline_ticks", H::Int(Action::DEADLINE_TICKS as i64)),
     ]);
 
     let fallback = || Action::builtin(kind, subject, elapsed_s);
@@ -345,16 +370,41 @@ fn decide(kind: &str, subject: Subject, label: &str, elapsed_s: f64) -> Action {
 
 /// Age every pending item, re-run policy over it, and publish [`ReadinessState`].
 ///
-/// Runs on the **real** clock (`Time<Real>`), not virtual time: a compile takes
-/// as long as it takes regardless of time warp, and a deadline measured in
-/// paused-or-warped seconds would either never fire or fire immediately.
+/// Ages on the **fixed** clock (`Time<Fixed>`), counting whole fixed ticks — the
+/// same steps `lunco_core::SimTick` counts. Wall-clock (`Time<Real>`) was the
+/// obvious choice and the wrong one: a compile does take as long as it takes, but
+/// measuring the *give-up* in wall-clock seconds makes the tick at which physics
+/// is released a function of how fast the machine is, so a slow box starts the
+/// world at a different simulation state than a fast one and a recording does not
+/// replay. Counting ticks gives up at the same tick everywhere.
+///
+/// The trade this makes deliberately: a world whose fixed clock is not stepping
+/// (paused) does not age its waits, so the deadline does not burn down while
+/// paused. That is not a hang — pause is a state the user chose and can see —
+/// whereas a wall-clock deadline expiring behind a pause screen is a hold that
+/// silently released against a frozen world.
+///
+/// Runs in `PreUpdate` (not `FixedPreUpdate`) because the effector reads
+/// [`ReadinessState`] per frame; it simply consumes however many fixed ticks
+/// elapsed since it last ran.
 pub fn evaluate_readiness(
-    time: Res<Time<Real>>,
+    time: Res<Time<Fixed>>,
     entities: &bevy::ecs::entity::Entities,
     mut registry: ResMut<ReadinessRegistry>,
     mut state: ResMut<ReadinessState>,
+    // Fixed-clock elapsed at the previous run. `Time<Fixed>::delta` is one step's
+    // duration whatever happened this frame, so the number of steps has to come
+    // from the difference in elapsed time.
+    mut last_fixed_s: Local<f64>,
 ) {
-    let dt = time.delta_secs_f64();
+    let timestep = time.timestep().as_secs_f64();
+    let now_fixed_s = time.elapsed_secs_f64();
+    let steps = if timestep > 0.0 {
+        (((now_fixed_s - *last_fixed_s) / timestep).round() as i64).max(0) as u64
+    } else {
+        0
+    };
+    *last_fixed_s = now_fixed_s;
     let mut world_hold = false;
     let mut held: Vec<Entity> = Vec::new();
 
@@ -369,15 +419,23 @@ pub fn evaluate_readiness(
     });
 
     for item in registry.items.values_mut() {
-        item.elapsed_s += dt;
-        item.action = decide(item.kind, item.subject, &item.label, item.elapsed_s);
+        item.elapsed_ticks += steps;
+        item.elapsed_s = item.elapsed_ticks as f64 * timestep;
+        item.action = decide(
+            item.kind,
+            item.subject,
+            &item.label,
+            item.elapsed_ticks,
+            item.elapsed_s,
+        );
 
         if !item.warned && item.elapsed_s >= Action::DEADLINE_S {
             item.warned = true;
             warn!(
-                "[readiness] {} {:?} '{}' has been pending {:.0}s — no longer holding. \
-                 Either it never finished, or its ticket was dropped without finish().",
-                item.kind, item.subject, item.label, item.elapsed_s,
+                "[readiness] {} {:?} '{}' has been pending {} fixed ticks ({:.0}s) \
+                 — no longer holding. Either it never finished, or its ticket was \
+                 dropped without finish().",
+                item.kind, item.subject, item.label, item.elapsed_ticks, item.elapsed_s,
             );
         }
 
@@ -466,8 +524,45 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_plugins(ReadinessPlugin);
-        app.init_resource::<Time<Real>>();
+        app.init_resource::<Time<Fixed>>();
         app
+    }
+
+    /// The deadline is authored in ticks; the seconds figure the policy sees must
+    /// be the same bound, not a second opinion.
+    #[test]
+    fn the_deadline_states_one_bound_in_two_units() {
+        assert_eq!(Action::DEADLINE_TICKS, 3_600);
+        assert!((Action::DEADLINE_S - 60.0).abs() < 1e-9);
+    }
+
+    /// Ages come from fixed ticks, so a wait's reported seconds are a multiple of
+    /// the timestep — the property that makes the give-up reproducible.
+    #[test]
+    fn a_waits_age_is_a_whole_number_of_fixed_ticks() {
+        let _guard = policy_lock();
+        let mut app = app();
+        app.world_mut().resource_mut::<ReadinessRegistry>().begin(
+            Subject::World,
+            kinds::SCENE_LOAD,
+            "s",
+        );
+        for _ in 0..8 {
+            app.update();
+        }
+        let timestep = app
+            .world()
+            .resource::<Time<Fixed>>()
+            .timestep()
+            .as_secs_f64();
+        let registry = app.world().resource::<ReadinessRegistry>();
+        let item = registry.pending().next().expect("still pending");
+        assert!(
+            (item.elapsed_s - item.elapsed_ticks as f64 * timestep).abs() < 1e-9,
+            "elapsed_s must be derived from the tick count, got {} s / {} ticks",
+            item.elapsed_s,
+            item.elapsed_ticks
+        );
     }
 
     /// The default rule, stated as behaviour rather than as a table: a loading
