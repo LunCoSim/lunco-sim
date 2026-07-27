@@ -657,6 +657,10 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();
+        // `restore_gizmo_dynamic` clears the drag's physics hold, so the resource
+        // it writes must exist — a bare `App` has none, and the missing init made
+        // the system fail param validation instead of running the case under test.
+        app.init_resource::<lunco_physics::PhysicsHolds>();
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let vessel = app
@@ -709,6 +713,10 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();
+        // `restore_gizmo_dynamic` clears the drag's physics hold, so the resource
+        // it writes must exist — a bare `App` has none, and the missing init made
+        // the system fail param validation instead of running the case under test.
+        app.init_resource::<lunco_physics::PhysicsHolds>();
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let prop = app
@@ -761,6 +769,9 @@ mod tests {
         // persister dispatches into.
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        // Same reason as the tests above: `restore_gizmo_dynamic` writes the
+        // physics hold, so the resource must exist for the system to run at all.
+        app.init_resource::<lunco_physics::PhysicsHolds>();
         app.add_observer(crate::commands::persist_move_to_runtime_layer);
         app.add_systems(Update, restore_gizmo_dynamic);
 
