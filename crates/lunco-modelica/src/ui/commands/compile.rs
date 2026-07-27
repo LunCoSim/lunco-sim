@@ -1337,14 +1337,15 @@ pub struct FastRunActiveModel {
     pub n_intervals: Option<u32>,
     /// Override solver tolerance. `None` = use annotation or fallback.
     pub tolerance: Option<f64>,
-    /// Override solver family: "bdf", "dassl", "ida" → BDF;
-    /// "esdirk34", "rk", "dopri", "trbdf2" → ESDIRK34; "auto" or
-    /// None → backend default (currently BDF in the stepper path).
+    /// Pin the solver to a registered id — `ListSolvers` enumerates them and is
+    /// the only vocabulary accepted. An unregistered id fails the run rather
+    /// than falling back, so a typo cannot silently produce numbers from a
+    /// different backend. `None`/`"auto"` lets the resolver pick from where the
+    /// run executes.
     pub solver: Option<String>,
-    /// Override initial step size (seconds) passed to diffsol's
-    /// `problem.h0`. `None` = use the backend's span-based default
-    /// (`span / 5_000_000`). Useful diagnostic when long-horizon
-    /// runs fail at a stiff transient near `t₀`.
+    /// Override the solver's initial step (seconds). `None` = the backend's
+    /// span-based default. A diagnostic for long-horizon runs that fail at a
+    /// stiff transient near `t₀`.
     pub h0: Option<f64>,
 }
 
@@ -1960,7 +1961,15 @@ pub struct RunExperiment {
     /// `NumberOfIntervals`); takes precedence over `dt` when set.
     pub n_intervals: Option<u32>,
     pub tolerance: Option<f64>,
+    /// Pin the solver to a registered id — `ListSolvers` enumerates them and is
+    /// the only vocabulary accepted. An unregistered id fails the run rather
+    /// than falling back, so a typo cannot silently produce numbers from a
+    /// different backend. `None`/`"auto"` lets the resolver pick from where the
+    /// run executes.
     pub solver: Option<String>,
+    /// Override the solver's initial step (seconds). `None` = the backend's
+    /// span-based default. A diagnostic for long-horizon runs that fail at a
+    /// stiff transient near `t₀`.
     pub h0: Option<f64>,
     /// Optional run name (shown in ListRuns). Defaults to auto "Run N".
     pub label: Option<String>,
