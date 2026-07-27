@@ -55,6 +55,14 @@ def Xform "LinkBeam" (
             # RAY that shoots off toward the peer's true direction and far past the
             # horizon, reading as "the link reaches to Earth". 100 km stays f32-precise.
             custom float lunco:param:stubLen = 100000.0
+            # …but metres only read at ONE zoom. From an Earth-focus camera (~19,000 km
+            # out, where the globe auto-focus sits) a 100 km ray is sub-pixel, so the
+            # Earth end of a lunar link showed nothing at exactly the view that exists to
+            # show it. This is the same length expressed as a fraction of the camera's
+            # distance to the node, and the driver takes whichever is LONGER — so the beam
+            # holds a constant share of the screen when zoomed out, and hands back to the
+            # metre stub above when zoomed in. 0 turns the camera term off.
+            custom float lunco:param:stubCamFrac = 0.35
             # 0 = every connected peer, 1 = only the nearest, 2 = off.
             custom float lunco:param:mode = 0
             # 0 = do not draw down links, 1 = draw them (red). On so up/down colour is

@@ -161,6 +161,44 @@ def Xform "RockerBogie" (
         bool physics:collisionEnabled = false
     }
 
+    # ── Rocker bearing shafts: what the arms actually hang FROM ──────────────
+    #
+    # The rocker pivots sit at x = ∓0.9, y = -0.2. The hull is `size = 1` scaled
+    # (1.2, 0.4, 1.8), so its side faces are at x = ∓0.6 — the pivots stand 0.3 m
+    # OUTBOARD of the body with nothing drawn between them, and the whole suspension
+    # read as floating beside the rover rather than mounted to it. The linkage was
+    # never wrong: the differential, the joints and the colliders all anchor to the
+    # chassis correctly. What was missing was the trunnion that says so on screen.
+    #
+    # One per side, spanning exactly the gap (x = ∓0.6 → ∓0.9, so length 0.3 centred
+    # at ∓0.75) at the pivot's own height. Radius 0.07 sits inside `RockerL/JointCover`
+    # (0.12), so the cover caps the shaft end the way a real bearing housing does.
+    #
+    # Structure, not mechanism: these are children of the CHASSIS and turn with it,
+    # while the arm rotates about them. Collision is off — the rocker's own `Collider`
+    # already occupies this volume, and a second body here would fight it.
+    def Cylinder "RockerShaftL"
+    {
+        uniform token axis = "X"
+        double radius = 0.07
+        double height = 0.3
+        double3 xformOp:translate = (-0.75, -0.2, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+        bool physics:collisionEnabled = false
+    }
+
+    def Cylinder "RockerShaftR"
+    {
+        uniform token axis = "X"
+        double radius = 0.07
+        double height = 0.3
+        double3 xformOp:translate = (0.75, -0.2, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+        bool physics:collisionEnabled = false
+    }
+
     # Shared Earth-tracking antenna. The component owns BOTH its hinges and its
     # mount: being a child of this chassis is the attachment, so there is no
     # antenna joint to author here.
