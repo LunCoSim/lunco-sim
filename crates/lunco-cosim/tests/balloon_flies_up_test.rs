@@ -88,6 +88,7 @@ fn compile_balloon_model(
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
+            realtime_safe: false,
         });
 
         eprintln!("test: dispatched Modelica Compile for '{name}'");

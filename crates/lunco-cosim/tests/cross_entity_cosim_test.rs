@@ -199,6 +199,7 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
             doc_uri: "model.mo".to_string(),
             extra_sources: Vec::new(),
             stream: None,
+            realtime_safe: false,
         });
     }
 
