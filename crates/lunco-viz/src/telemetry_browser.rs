@@ -319,38 +319,68 @@ struct PreviewCache {
 
 // ── Value formatting ─────────────────────────────────────────────────
 
-/// Compact latest-value formatter for list cells: engineering
-/// suffixes in mid-range, scientific outside, so a diverged sim shows
-/// `1.2e260` instead of a wall of digits.
+/// Latest-value formatter: **four significant digits, and the number is
+/// never rescaled**.
+///
+/// It used to apply SI prefixes (`0.9` → `900.000m`), which is wrong the
+/// moment a value has a unit the prefix cannot legally attach to. A state
+/// of charge is `0.9` dimensionless, not 900 milli-anything; a `°C`
+/// reading is never `mdegC`; and a prefix silently produced `km` from an
+/// already-prefixed authored unit. The unit belongs to the CHANNEL — this
+/// function's job is to make the digits readable, not to reinterpret the
+/// quantity.
+///
+/// Wide magnitudes fall back to scientific notation, so a diverged sim
+/// still shows `1.20e260` rather than a wall of digits.
 fn fmt_value(v: f64) -> String {
     if !v.is_finite() {
         return "—".to_string();
     }
-    let av = v.abs();
     if v == 0.0 {
         return "0".to_string();
     }
-    if av >= 1.0e15 || av < 1.0e-9 {
+    let av = v.abs();
+    if !(1.0e-4..1.0e7).contains(&av) {
         return format!("{v:.2e}");
     }
-    let (scale, suffix) = if av >= 1.0e12 {
-        (1.0e12, "T")
-    } else if av >= 1.0e9 {
-        (1.0e9, "G")
-    } else if av >= 1.0e6 {
-        (1.0e6, "M")
-    } else if av >= 1.0e3 {
-        (1.0e3, "k")
-    } else if av >= 1.0 {
-        (1.0, "")
-    } else if av >= 1.0e-3 {
-        (1.0e-3, "m")
-    } else if av >= 1.0e-6 {
-        (1.0e-6, "μ")
+    // Four significant digits: enough to see a value move, few enough that
+    // the column stays a column.
+    let decimals = (3 - av.log10().floor() as i32).clamp(0, 6) as usize;
+    format!("{v:.decimals$}")
+}
+
+/// How a channel's authored unit is DISPLAYED.
+///
+/// Two jobs, both about not lying:
+/// * `"1"` (and the empty string) mean *dimensionless* — SI's own spelling
+///   for a ratio. Printing a literal `1` beside every state of charge reads
+///   as the number one, so the cell stays blank and the tooltip says it.
+/// * `*` is how a unit product is spelled in a `token` attribute (USD is
+///   fine with `·`, but every authored unit in the library uses `*`).
+///   Display uses the typographic middle dot.
+///
+/// Nothing here CONVERTS: a channel publishes the unit it publishes, and a
+/// browser that quietly scaled values would be the bug this replaced.
+fn display_unit(unit: Option<&str>) -> &str {
+    match unit.map(str::trim) {
+        None | Some("") | Some("1") => "",
+        Some(u) => u,
+    }
+}
+
+/// The unit as typeset for a cell — `N*m` → `N·m`.
+fn pretty_unit(unit: Option<&str>) -> String {
+    display_unit(unit).replace('*', "·")
+}
+
+/// Tooltip text for a channel's unit, including the dimensionless case the
+/// cell renders as blank.
+fn unit_tooltip(unit: Option<&str>) -> &'static str {
+    if display_unit(unit).is_empty() {
+        "dimensionless (a ratio — no unit)"
     } else {
-        (1.0e-9, "n")
-    };
-    format!("{:.3}{}", v / scale, suffix)
+        ""
+    }
 }
 
 // ── The panel ────────────────────────────────────────────────────────
@@ -532,73 +562,115 @@ impl Panel for TelemetryBrowserPanel {
                     .id_salt(("tb_group", &group.label))
                     .default_open(true)
                     .show(ui, |ui| {
-                        for row in visible {
-                            let latest = registry
-                                .scalar_history(&row.sig)
-                                .and_then(|h| h.samples.back())
-                                .map(|s| s.value);
-                            let is_sel = self.selected.as_ref() == Some(&row.sig);
-                            let payload = ChannelDragPayload::from_signal(&row.sig);
-                            let drag_id = ui.id().with(("tb_row", &row.sig));
-                            let inner = ui.dnd_drag_source(drag_id, payload.clone(), |ui| {
-                                ui.horizontal(|ui| {
-                                    let resp = ui.selectable_label(
-                                        is_sel,
-                                        egui::RichText::new(&row.sig.path)
-                                            .color(theme.tokens.text),
-                                    );
-                                    let mut cell = match latest {
+                        // THREE ALIGNED COLUMNS — channel, value, unit.
+                        //
+                        // The rows used to be free `horizontal` layouts with the
+                        // value right-pushed and the unit glued onto it, so
+                        // nothing lined up: every number sat at a different x, and
+                        // `0.900 1` read as one token. A `Grid` gives the value
+                        // column a shared right edge (numbers compare by eye) and
+                        // gives the unit its own column, which is also what lets a
+                        // dimensionless channel render an EMPTY unit cell instead
+                        // of a stray `1`.
+                        egui::Grid::new(("tb_grid", &group.label))
+                            .num_columns(3)
+                            .striped(true)
+                            .spacing(egui::vec2(theme.spacing.item_spacing, 2.0))
+                            .show(ui, |ui| {
+                                for row in visible {
+                                    let latest = registry
+                                        .scalar_history(&row.sig)
+                                        .and_then(|h| h.samples.back())
+                                        .map(|s| s.value);
+                                    let is_sel = self.selected.as_ref() == Some(&row.sig);
+                                    let payload = ChannelDragPayload::from_signal(&row.sig);
+                                    let drag_id = ui.id().with(("tb_row", &row.sig));
+
+                                    // Column 1 — the channel, and the drag handle.
+                                    let inner =
+                                        ui.dnd_drag_source(drag_id, payload.clone(), |ui| {
+                                            ui.selectable_label(
+                                                is_sel,
+                                                egui::RichText::new(&row.sig.path)
+                                                    .color(theme.tokens.text),
+                                            )
+                                        });
+                                    let resp = inner.inner;
+
+                                    // Column 2 — the number, monospaced and
+                                    // right-aligned so digits stack by place value.
+                                    let value_text = match latest {
                                         Some(v) => fmt_value(v),
                                         None => "—".to_string(),
                                     };
-                                    if let Some(unit) = &row.unit {
-                                        cell.push(' ');
-                                        cell.push_str(unit);
-                                    }
+                                    let stale = latest.is_none();
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
                                             ui.label(
-                                                egui::RichText::new(cell)
+                                                egui::RichText::new(value_text)
                                                     .monospace()
-                                                    .color(subdued),
-                                            );
+                                                    .color(if stale {
+                                                        subdued
+                                                    } else {
+                                                        theme.tokens.text
+                                                    }),
+                                            )
+                                            .on_hover_text(match latest {
+                                                // Full precision on demand: the cell
+                                                // shows four significant digits, and
+                                                // "is that really zero" is a question
+                                                // the tooltip should answer.
+                                                Some(v) => format!("{v}"),
+                                                None => "no samples yet".to_string(),
+                                            });
                                         },
                                     );
-                                    resp
-                                })
-                                .inner
+
+                                    // Column 3 — the unit, in its own column so the
+                                    // value column keeps a single right edge.
+                                    let unit_cell = pretty_unit(row.unit.as_deref());
+                                    let unit_label = ui.label(
+                                        egui::RichText::new(unit_cell).small().color(subdued),
+                                    );
+                                    let tip = unit_tooltip(row.unit.as_deref());
+                                    if !tip.is_empty() {
+                                        unit_label.on_hover_text(tip);
+                                    }
+                                    ui.end_row();
+
+                                    if resp.double_clicked() {
+                                        // Fallback door: queue a plot-node
+                                        // request; the canvas host drains it
+                                        // and places the node.
+                                        queue_plot_drop(
+                                            ui.ctx(),
+                                            PlotDropRequest {
+                                                payload: payload.clone(),
+                                                world_pos: None,
+                                            },
+                                        );
+                                        clicked = Some(row.sig.clone());
+                                    } else if resp.clicked() {
+                                        clicked = Some(row.sig.clone());
+                                    }
+                                    resp.on_hover_ui(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(&row.sig.path)
+                                                .strong()
+                                                .monospace(),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "drag onto a canvas to plot; \
+                                                 double-click to add at a default spot",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                    });
+                                }
                             });
-                            let resp = inner.inner;
-                            if resp.double_clicked() {
-                                // Fallback door: queue a plot-node
-                                // request; the canvas host drains it
-                                // and places the node.
-                                queue_plot_drop(
-                                    ui.ctx(),
-                                    PlotDropRequest {
-                                        payload: payload.clone(),
-                                        world_pos: None,
-                                    },
-                                );
-                                clicked = Some(row.sig.clone());
-                            } else if resp.clicked() {
-                                clicked = Some(row.sig.clone());
-                            }
-                            resp.on_hover_ui(|ui| {
-                                ui.label(
-                                    egui::RichText::new(&row.sig.path).strong().monospace(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(
-                                        "drag onto a canvas to plot; \
-                                         double-click to add at a default spot",
-                                    )
-                                    .small()
-                                    .weak(),
-                                );
-                            });
-                        }
                     });
                 }
             });
@@ -623,11 +695,20 @@ impl Panel for TelemetryBrowserPanel {
                     .color(theme.tokens.text),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Time is always SECONDS here — it is the channel's own clock
+                // reading (`lunco_time::domain_time`), not a wall-clock stamp, so
+                // it is labelled with its unit like any other quantity.
                 let text = match latest {
-                    Some(s) => match &unit {
-                        Some(u) => format!("{} {}  @ t={}", fmt_value(s.value), u, fmt_value(s.time)),
-                        None => format!("{}  @ t={}", fmt_value(s.value), fmt_value(s.time)),
-                    },
+                    Some(s) => {
+                        let u = pretty_unit(unit.as_deref());
+                        let value = fmt_value(s.value);
+                        let t = fmt_value(s.time);
+                        if u.is_empty() {
+                            format!("{value}   t = {t} s")
+                        } else {
+                            format!("{value} {u}   t = {t} s")
+                        }
+                    }
                     None => "no samples".to_string(),
                 };
                 ui.label(egui::RichText::new(text).monospace().color(subdued));
@@ -864,11 +945,31 @@ mod tests {
     }
 
     #[test]
-    fn fmt_value_is_compact_everywhere() {
+    fn fmt_value_is_four_significant_digits_and_never_rescales() {
         assert_eq!(fmt_value(0.0), "0");
-        assert_eq!(fmt_value(26_000.0), "26.000k");
-        assert_eq!(fmt_value(-0.0042), "-4.200m");
+        // The bug this replaced: a state of charge is 0.9, NOT "900.000m".
+        assert_eq!(fmt_value(0.9), "0.900");
+        assert_eq!(fmt_value(26_000.0), "26000");
+        assert_eq!(fmt_value(-0.0042), "-0.004200");
+        assert_eq!(fmt_value(1.234_5), "1.234");
+        assert_eq!(fmt_value(12.345), "12.35");
+        // Wide magnitudes stay readable rather than becoming a wall of digits.
         assert_eq!(fmt_value(1.2e260), "1.20e260");
         assert_eq!(fmt_value(f64::NAN), "—");
+    }
+
+    #[test]
+    fn dimensionless_units_render_blank_and_products_use_a_middle_dot() {
+        // SI spells a ratio's unit `1`; printing it beside the value reads as
+        // the number one.
+        assert_eq!(pretty_unit(Some("1")), "");
+        assert_eq!(pretty_unit(Some("")), "");
+        assert_eq!(pretty_unit(None), "");
+        assert!(!unit_tooltip(Some("1")).is_empty(), "blank cell must explain itself");
+
+        assert_eq!(pretty_unit(Some("N*m")), "N·m");
+        assert_eq!(pretty_unit(Some("m/s")), "m/s");
+        assert_eq!(pretty_unit(Some("1/s")), "1/s", "a rate is not dimensionless");
+        assert!(unit_tooltip(Some("m/s")).is_empty());
     }
 }

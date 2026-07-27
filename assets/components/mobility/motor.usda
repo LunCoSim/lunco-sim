@@ -244,21 +244,37 @@ def Xform "Motor" (
     float outputs:heat
 
     # --- Telemetry ---
-    # Shaft torque as a RETAINED channel, so a plot of "did this motor actually
-    # pull?" needs no per-vessel authoring: every rover that references this
+    # Drive command as a RETAINED channel, so "was this motor actually being
+    # told to pull?" needs no per-vessel authoring: every rover referencing this
     # component gets it. Authored on the component, not on the six instances in
     # `rocker_bogie.usda`, because a motor is where a motor's instrumentation
     # belongs.
+    #
+    # ⚠ IT IS `demand`, NOT `torque`, AND THAT IS NOT A PREFERENCE.
+    # A channel reads a LIVE port. `inputs:demand` is one: the wire from the
+    # chassis's `outputs:drive_*` writes it every tick. `outputs:torque` is
+    # declared below but NOTHING WRITES IT — the delivered torque is computed in
+    # `lunco_hardware::axle_torque` and handed straight to the joint motor, so a
+    # channel pointed at that attribute would have plotted a flat authored zero
+    # forever and looked like a dead drivetrain. Publishing the shaft torque
+    # needs a port backend on the crate that computes it (the rule in
+    # `docs/architecture/telemetry-subsystem.md` §5b: the backend belongs with
+    # the component that owns the value); until that exists, this channel states
+    # what is true.
     #
     # `Parameter` is a Component — ONE channel per prim — so this names the one
     # quantity worth a mnemonic and a unit. Everything else the model exposes
     # (`heat`, and every INTERNAL Modelica variable) is published wholesale under
     # the `sim.` namespace by `lunco_cosim::telemetry`, which is why there is no
     # temptation here to invent a channel prim per variable.
+    #
+    # Unit `1`: demand is a signed FRACTION of full command (−1..1), a ratio with
+    # no dimension. The browser renders that as a blank unit cell rather than a
+    # literal "1".
     uniform bool lunco:telemetry = true
-    uniform token lunco:telemetry:port = "torque"
-    uniform token lunco:telemetry:name = "motor_torque"
-    uniform token lunco:telemetry:unit = "N*m"
+    uniform token lunco:telemetry:port = "demand"
+    uniform token lunco:telemetry:name = "motor_demand"
+    uniform token lunco:telemetry:unit = "1"
 
     # --- Housing: RENDERS ONLY, deliberately no collider ---
     #

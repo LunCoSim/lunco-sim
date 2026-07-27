@@ -142,12 +142,19 @@ pub struct SceneFileRescan(pub bool);
 /// Resolve a schemed reference to a file. `lunco://` re-roots on the shipped
 /// asset library, `twin://` on the named Twin's root; anything else (a leading
 /// `/`, an unknown scheme) is unreachable and counted by the caller.
-fn resolve_scheme(reference: &str, assets_root: Option<&Path>, twins: &TwinRoots) -> Option<PathBuf> {
+/// `twins` is optional for the same reason the system's `Res` is: a host with no
+/// Twin source mounted can still resolve the shipped library, and `twin://` there
+/// is simply unreachable (counted, not fatal).
+fn resolve_scheme(
+    reference: &str,
+    assets_root: Option<&Path>,
+    twins: Option<&TwinRoots>,
+) -> Option<PathBuf> {
     if let Some(rel) = lunco_assets::parse_lunco_uri(reference) {
         return Some(assets_root?.join(rel));
     }
     if let Some((name, rel)) = lunco_assets::parse_twin_uri(reference) {
-        return Some(twins.root_of(name)?.join(rel));
+        return Some(twins?.root_of(name)?.join(rel));
     }
     None
 }
@@ -187,12 +194,21 @@ fn label_for(path: &Path, assets_root: Option<&Path>, roots: &[PathBuf]) -> Stri
 /// Gated on the ROOT SET (plus an explicit rescan request): the walk parses every
 /// layer it reaches, which is filesystem work that must not ride the frame.
 pub fn produce_scene_file_view(
-    registry: Res<DocumentRegistry<UsdDocument>>,
-    twins: Res<TwinRoots>,
+    registry: Option<Res<DocumentRegistry<UsdDocument>>>,
+    // OPTIONAL, both of them. This plugin is added by panel-level tests and by
+    // hosts that install no asset sources at all; a hard `Res` there is not a
+    // missing feature but a PANIC in `Main`, taking the whole app down to
+    // populate a browser list. Absent registry ⇒ no scene roots ⇒ nothing to
+    // walk; absent `TwinRoots` ⇒ `twin://` arcs are simply unresolvable, which
+    // the view already reports as `unresolved`.
+    twins: Option<Res<TwinRoots>>,
     mut view: ResMut<SceneFileView>,
     mut rescan: ResMut<SceneFileRescan>,
     mut last_roots: Local<Vec<PathBuf>>,
 ) {
+    let Some(registry) = registry else {
+        return;
+    };
     let mut roots: Vec<PathBuf> = registry
         .ids()
         .filter_map(|id| registry.host(id))
@@ -213,7 +229,7 @@ pub fn produce_scene_file_view(
     let assets_root = assets_root_for(&roots);
     let unresolved = std::sync::atomic::AtomicUsize::new(0);
     let files = lunco_usd_bevy::closure::reference_closure_with(&roots, |reference| {
-        let resolved = resolve_scheme(reference, assets_root.as_deref(), &twins);
+        let resolved = resolve_scheme(reference, assets_root.as_deref(), twins.as_deref());
         if resolved.is_none() {
             unresolved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -410,16 +426,21 @@ mod tests {
         let twins = TwinRoots::default();
         let assets = PathBuf::from("/proj/assets");
         assert_eq!(
-            resolve_scheme("lunco://vessels/rover.usda", Some(&assets), &twins),
+            resolve_scheme("lunco://vessels/rover.usda", Some(&assets), Some(&twins)),
+            Some(assets.join("vessels/rover.usda"))
+        );
+        // The shipped library does not need a Twin source to be mounted.
+        assert_eq!(
+            resolve_scheme("lunco://vessels/rover.usda", Some(&assets), None),
             Some(assets.join("vessels/rover.usda"))
         );
         assert_eq!(
-            resolve_scheme("twin://nope/scene.usda", Some(&assets), &twins),
+            resolve_scheme("twin://nope/scene.usda", Some(&assets), Some(&twins)),
             None,
             "an unmounted twin is unreachable, not silently mis-rooted"
         );
         assert_eq!(
-            resolve_scheme("/absolute/from/source/root.usda", Some(&assets), &twins),
+            resolve_scheme("/absolute/from/source/root.usda", Some(&assets), Some(&twins)),
             None
         );
     }
@@ -430,7 +451,7 @@ mod tests {
         let name = twins.register("moonbase", "/twins/moonbase");
         let uri = format!("twin://{name}/scenes/base.usda");
         assert_eq!(
-            resolve_scheme(&uri, None, &twins),
+            resolve_scheme(&uri, None, Some(&twins)),
             Some(PathBuf::from("/twins/moonbase/scenes/base.usda"))
         );
     }
