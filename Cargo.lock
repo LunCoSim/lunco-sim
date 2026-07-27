@@ -7355,14 +7355,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-robotics"
-version = "0.6.0-dev"
-dependencies = [
- "bevy",
- "lunco-core",
-]
-
-[[package]]
 name = "lunco-sandbox"
 version = "0.6.0-dev"
 dependencies = [
@@ -7993,7 +7985,6 @@ dependencies = [
  "lunco-materials",
  "lunco-mobility",
  "lunco-render-bevy",
- "lunco-robotics",
  "lunco-time",
  "lunco-ui",
  "lunco-web",
