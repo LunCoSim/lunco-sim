@@ -7,6 +7,8 @@
 //! `ModelicaResult` messages with it via crossbeam channels.
 
 use std::collections::{BTreeSet, HashMap};
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
@@ -173,7 +175,9 @@ pub enum ModelicaCommand {
     },
     /// Compile Modelica source code into a DAE and create a new SimulationSession.
     ///
-    /// The compiled DAE is cached per entity for instant Reset and fast stepper rebuilds.
+    /// The compiled artifact (`DaeCompilationResult`) is cached per entity so
+    /// Reset and Step auto-init rebuild a fresh stepper from it WITHOUT
+    /// recompiling — see [`CachedModel`].
     Compile {
         entity: Entity,
         session_id: u64,
@@ -231,9 +235,13 @@ pub enum ModelicaCommand {
         model_name: String,
         source: String,
     },
-    /// Reset the stepper to initial conditions using the cached DAE (instant, no recompilation).
+    /// Reset the stepper to initial conditions. Rebuilds a fresh stepper from
+    /// the cached compiled artifact — instant, no recompilation — unless a
+    /// `LoadSourceRoot` has landed since the artifact was built, in which case
+    /// the cached source is recompiled first (see [`rebuild_from_cache`]).
     Reset { entity: Entity, session_id: u64 },
-    /// Remove the stepper and cached DAE (entity despawned).
+    /// Remove the stepper, the cached compiled model, and (native only) the
+    /// entity's on-disk compile temp dirs (entity despawned).
     Despawn { entity: Entity },
     /// Load a Modelica source root into the rumoca compile session
     /// so subsequent Compile commands can resolve types from it.
@@ -250,7 +258,14 @@ pub enum ModelicaCommand {
     ///
     /// Idempotent: rumoca dedups by id. **Blocks the worker thread**
     /// for the duration of the parse (MSL: ~10-60s cold, ~1-3s
-    /// warm-bundle); other commands queue behind it.
+    /// warm-bundle). Other COMPILE-lane commands queue behind it; Steps of
+    /// already-live models jump ahead via the step lane (see
+    /// [`modelica_worker`]'s scheduling contract).
+    ///
+    /// Bumps the worker's library generation: a newly-loaded root can change
+    /// what cached sources resolve to, so every cached compiled artifact is
+    /// invalidated and the next Reset / Step auto-init recompiles instead of
+    /// reusing it.
     LoadSourceRoot {
         /// Library id, e.g. `"Modelica"` or `"AnnotatedRocketStage"`.
         id: String,
@@ -389,17 +404,141 @@ impl ModelicaResult {
 
 /// Cached compilation result per entity.
 ///
-/// Stores the DAE and source hash so we can instantly rebuild a SimulationSession
-/// after Reset without recompiling, and detect when the Step command's
-/// model_path points to stale source.
+/// M3: this holds the ACTUAL compiled artifact, not just the source. rumoca's
+/// `DaeCompilationResult` is `Clone` and carries the DAE behind an `Arc`; a
+/// fresh `SimulationSession` is built from `&dae` alone
+/// ([`crate::simulation_session::live`]), so Reset and Step auto-init rebuild
+/// steppers from `compiled` WITHOUT touching the compiler — instant, where the
+/// old source-only cache recompiled for seconds on MSL-heavy models.
+///
+/// The artifact is valid only for what it was built from: `unit_hash` keys the
+/// assembled [`CompileUnit`] (stripped primary + extras + model name + session
+/// URI), and `library_gen` records the worker's library generation (bumped on
+/// every `LoadSourceRoot`). [`rebuild_from_cache`] recompiles — and refreshes
+/// this entry — when either no longer matches.
 struct CachedModel {
     model_name: String,
     source: Arc<str>,
+    /// Sibling docs the model was compiled with, raw like `source`. Replayed
+    /// on a cache-invalidating recompile so Reset / Step auto-init resolve the
+    /// same cross-doc references the original Compile did (the source-only
+    /// cache silently dropped these and recompiled the primary alone).
+    extra_sources: Vec<(String, String)>,
     /// The document's stable session URI (see `ModelicaCommand::Compile`'s
     /// `doc_uri`). Every cached-source recompile — Reset, Step auto-init,
     /// UpdateParameters — re-seats under this SAME key so the reused rumoca
     /// session never holds the document under two filenames.
     doc_uri: String,
+    /// The compiled artifact steppers are rebuilt from (see struct docs).
+    compiled: Box<rumoca_compile::compile::DaeCompilationResult>,
+    /// [`compile_unit_hash`] of the [`CompileUnit`] `compiled` was built from.
+    unit_hash: u64,
+    /// Worker library generation at the time `compiled` was built.
+    library_gen: u64,
+}
+
+/// Key identifying WHAT a cached artifact was compiled from: the assembled
+/// [`CompileUnit`] (stripped primary + stripped extras), the model name, and
+/// the session URI it was seated under. Library roots are covered separately
+/// by the worker's library generation — they mutate the shared session, not
+/// the unit.
+fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    model_name.hash(&mut h);
+    doc_uri.hash(&mut h);
+    unit.source.hash(&mut h);
+    for (uri, text) in &unit.extras {
+        uri.hash(&mut h);
+        text.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Whether a cached artifact built at (`cached_hash`, `cached_gen`) may be
+/// reused for the unit currently hashing to `hash` under `library_gen`.
+/// Factored out of [`rebuild_from_cache`] so the invalidation rule is
+/// testable without a compiler.
+fn artifact_still_valid(cached_hash: u64, cached_gen: u64, hash: u64, library_gen: u64) -> bool {
+    cached_hash == hash && cached_gen == library_gen
+}
+
+/// One rebuild-from-cache pass: the compiled artifact for `entity`'s CACHED
+/// source set, plus everything the caller needs to seat a fresh stepper.
+struct CacheRebuild {
+    model_name: String,
+    doc_uri: String,
+    /// Assembled from the cached source set — carries the `input_defaults`
+    /// to re-seed and the stripped primary for error diagnostics.
+    unit: CompileUnit,
+    /// `Ok` = artifact to build the stepper from (reused or freshly
+    /// recompiled); `Err` = rumoca's formatted compile summary.
+    outcome: Result<Box<rumoca_compile::compile::DaeCompilationResult>, String>,
+    /// True when the cached artifact was reused as-is (no compiler touched).
+    reused: bool,
+}
+
+/// **The M3 chokepoint**: produce the compiled artifact for an entity's cached
+/// source set, reusing [`CachedModel::compiled`] when nothing it was built
+/// from has changed ([`artifact_still_valid`]) and recompiling + refreshing
+/// the cache entry otherwise. All four rebuild sites — Reset and Step
+/// auto-init, native and wasm — route through here, so none can drift back to
+/// per-Reset recompiles (or drop the cached extras).
+///
+/// Returns `None` when the entity has no cached model at all.
+fn rebuild_from_cache(
+    cached_models: &mut HashMap<Entity, CachedModel>,
+    compiler: &mut Option<ModelicaCompiler>,
+    entity: Entity,
+    library_gen: u64,
+) -> Option<CacheRebuild> {
+    let (model_name, doc_uri, source, extras, cached_hash, cached_gen) = {
+        let c = cached_models.get(&entity)?;
+        (
+            c.model_name.clone(),
+            c.doc_uri.clone(),
+            Arc::clone(&c.source),
+            c.extra_sources.clone(),
+            c.unit_hash,
+            c.library_gen,
+        )
+    };
+    let unit = assemble_compile_unit(&source, extras);
+    let hash = compile_unit_hash(&model_name, &doc_uri, &unit);
+    if artifact_still_valid(cached_hash, cached_gen, hash, library_gen) {
+        let compiled = cached_models
+            .get(&entity)
+            .expect("checked above")
+            .compiled
+            .clone();
+        return Some(CacheRebuild {
+            model_name,
+            doc_uri,
+            unit,
+            outcome: Ok(compiled),
+            reused: true,
+        });
+    }
+    let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+    let outcome = if unit.extras.is_empty() {
+        compiler.compile_str(&model_name, &unit.source, &doc_uri)
+    } else {
+        compiler.compile_str_multi(&model_name, &unit.source, &doc_uri, &unit.extras)
+    };
+    if let Ok(comp_res) = &outcome {
+        if let Some(c) = cached_models.get_mut(&entity) {
+            c.compiled = comp_res.clone();
+            c.unit_hash = hash;
+            c.library_gen = library_gen;
+        }
+    }
+    Some(CacheRebuild {
+        model_name,
+        doc_uri,
+        unit,
+        outcome,
+        reused: false,
+    })
 }
 
 /// Collect every readable variable from the stepper — states, inputs, and
@@ -710,7 +849,127 @@ fn set_input_or_warn(
     }
 }
 
-/// The background worker that owns the !Send SimulationSessions and cached DAEs.
+/// M8 — the worker's two-lane scheduler, on ONE thread.
+///
+/// The `SimulationSession`s are `!Send` and the rumoca `Session` is owned by
+/// the same thread, so a genuine compile-thread/step-thread split would have
+/// to move one of them across threads — not available. The alternative the
+/// architecture does support is PRIORITY scheduling: commands are queued into
+/// two lanes and every runnable Step is processed before the next queued
+/// compile-shaped command, so a slow compile (or a 10-60 s `LoadSourceRoot`)
+/// delays other live models' Steps by at most the command currently executing,
+/// never by the whole queue.
+///
+/// Lanes:
+/// * **step lane** — `Step` for an entity with NO pending compile-lane
+///   command. Drained completely at the top of every scheduling round.
+/// * **compile lane** — everything else (`Compile`, `UpdateParameters`,
+///   `Reset`, `Despawn`, `LoadSourceRoot`), strictly FIFO, ONE per round.
+///
+/// **The per-entity ordering guarantee is preserved**: a `Step` whose entity
+/// has any command pending in the compile lane is appended to the compile lane
+/// instead (at its arrival position), so "Compile then Step sees the compiled
+/// model" (`source_roots.rs` relies on the compile lane's FIFO for
+/// LoadSourceRoot → Compile the same way) still holds command-by-command for
+/// each entity. Only OTHER entities' steps jump the queue.
+#[cfg(not(target_arch = "wasm32"))]
+fn enqueue_command(
+    cmd: ModelicaCommand,
+    compile_lane: &mut VecDeque<ModelicaCommand>,
+    step_lane: &mut VecDeque<ModelicaCommand>,
+    tx: &Sender<ModelicaResult>,
+) {
+    let is_step = matches!(cmd, ModelicaCommand::Step { .. });
+    if is_step {
+        let entity = cmd_entity(&cmd);
+        let blocked = compile_lane.iter().any(|c| cmd_entity(c) == entity);
+        if !blocked {
+            step_lane.push_back(cmd);
+            return;
+        }
+        // Fall through: this entity has pending compile-lane work, so its Step
+        // takes the FIFO slot behind it. (`is_squashable` is false for Step,
+        // so the squash below never collapses it.)
+    }
+    // The setpoint squash, unchanged in meaning: consecutive
+    // Compile/UpdateParameters for the same entity+session collapse to the
+    // latest, acking the dropped one (see `is_squashable`).
+    if let Some(last) = compile_lane.back_mut() {
+        if is_squashable(last, &cmd) && cmd_session(last) == cmd_session(&cmd) {
+            let _ = tx.send(result_ok(cmd_entity(last), cmd_session(last)));
+            *last = cmd;
+            return;
+        }
+    }
+    compile_lane.push_back(cmd);
+}
+
+/// After the compile lane's front command has been taken for execution, hoist
+/// every deferred `Step` that is no longer behind compile-lane work for its
+/// entity back into the step lane (in order), so it runs next round instead of
+/// trickling out one-per-round behind unrelated compiles.
+#[cfg(not(target_arch = "wasm32"))]
+fn promote_unblocked_steps(
+    compile_lane: &mut VecDeque<ModelicaCommand>,
+    step_lane: &mut VecDeque<ModelicaCommand>,
+) {
+    let mut i = 0;
+    while i < compile_lane.len() {
+        if matches!(compile_lane[i], ModelicaCommand::Step { .. }) {
+            let entity = cmd_entity(&compile_lane[i]);
+            let blocked = compile_lane
+                .iter()
+                .take(i)
+                .any(|c| cmd_entity(c) == entity);
+            if !blocked {
+                let cmd = compile_lane.remove(i).expect("index checked");
+                step_lane.push_back(cmd);
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
+/// M11 — prune this entity index's on-disk compile temp dirs
+/// (`modelica_dir()/<index>_<generation>/model.mo`).
+///
+/// Bevy reuses entity indices across generations, so `<index>_<old-gen>` can
+/// never be stepped again once a newer generation writes its dir — and a
+/// despawned entity's dir is dead outright. Called with `keep = Some(dir)`
+/// when a Compile writes generation `dir`, and `keep = None` on Despawn.
+/// Only names of the exact `<index>_<digits>` shape are touched.
+#[cfg(not(target_arch = "wasm32"))]
+fn prune_entity_temp_dirs(
+    base: &std::path::Path,
+    entity_index: impl std::fmt::Display,
+    keep: Option<&str>,
+) {
+    let prefix = format!("{entity_index}_");
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(rest) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        if keep == Some(name) {
+            continue;
+        }
+        if entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// The background worker that owns the !Send SimulationSessions and the
+/// per-entity compiled-artifact cache, scheduling commands over the two-lane
+/// policy documented on [`enqueue_command`].
 ///
 /// **Native only.** It is spawned on a real `std::thread` (see
 /// `ModelicaPlugin::build`) and reads/writes the model file on disk. The browser
@@ -734,7 +993,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     // an algebraic, so an input that never became a runtime slot fails here on
     // EVERY tick while the model quietly keeps its declared default forever.
     let mut rejected_inputs: std::collections::HashSet<(Entity, String)> = Default::default();
-    // DAE cache per entity — enables instant Reset and fast Step auto-init
+    // Compiled-artifact cache per entity (M3) — Reset and Step auto-init
+    // rebuild steppers from `CachedModel::compiled` without recompiling.
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
     // Lock-free publish stream per entity (Phase A of the multi-sim
     // refactor — see `sim_stream.rs`). The UI side holds a clone of
@@ -749,24 +1009,35 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
     // references. No reason to pre-build it.
     let mut compiler: Option<ModelicaCompiler> = None;
 
-    while let Ok(first_cmd) = rx.recv() {
-        let mut pending = vec![first_cmd];
+    // M3: cached compiled artifacts are valid only for the library set they
+    // were compiled against — every LoadSourceRoot bumps this and thereby
+    // invalidates all of them (see `CachedModel::library_gen`).
+    let mut library_gen: u64 = 0;
+    // M8: the two scheduling lanes — see `enqueue_command` for the contract.
+    let mut compile_lane: VecDeque<ModelicaCommand> = VecDeque::new();
+    let mut step_lane: VecDeque<ModelicaCommand> = VecDeque::new();
+
+    loop {
+        // Block only when idle; otherwise just soak up whatever has arrived
+        // since the last command, so Steps that landed during a long compile
+        // are scheduled ahead of older queued compiles.
+        if compile_lane.is_empty() && step_lane.is_empty() {
+            match rx.recv() {
+                Ok(cmd) => enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx),
+                Err(_) => return,
+            }
+        }
         while let Ok(cmd) = rx.try_recv() {
-            pending.push(cmd);
+            enqueue_command(cmd, &mut compile_lane, &mut step_lane, &tx);
         }
 
-        let mut to_process = Vec::new();
-        for cmd in pending {
-            if let Some(last) = to_process.last_mut() {
-                if is_squashable(last, &cmd) {
-                    if cmd_session(last) == cmd_session(&cmd) {
-                        let _ = tx.send(result_ok(cmd_entity(last), cmd_session(last)));
-                        *last = cmd;
-                        continue;
-                    }
-                }
-            }
+        // One scheduling round: every runnable Step, then ONE compile-lane
+        // command. Steps deferred behind their own entity's compile are
+        // hoisted back out once that compile has been taken for execution.
+        let mut to_process: Vec<ModelicaCommand> = step_lane.drain(..).collect();
+        if let Some(cmd) = compile_lane.pop_front() {
             to_process.push(cmd);
+            promote_unblocked_steps(&mut compile_lane, &mut step_lane);
         }
 
         for cmd in to_process {
@@ -789,23 +1060,20 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                     ModelicaCommand::Reset { entity, session_id } => {
                         current_sessions.insert(entity, session_id);
 
-                        if let Some(cached) = cached_models.get(&entity) {
-                            // Strip input defaults from cached source and set them via set_input
-                            let unit = assemble_compile_unit(&cached.source, Vec::new());
-
-                            // Recompile stripped source to get a fresh stepper with input slots
-                            let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
-                            match compiler.compile_str(
-                                &cached.model_name,
-                                &unit.source,
-                                &cached.doc_uri,
-                            ) {
+                        // M3: rebuild the stepper from the cached compiled
+                        // artifact — instant unless a LoadSourceRoot has
+                        // invalidated it, in which case this recompiles the
+                        // cached source set (and refreshes the cache).
+                        if let Some(rb) =
+                            rebuild_from_cache(&mut cached_models, &mut compiler, entity, library_gen)
+                        {
+                            match rb.outcome {
                                 Ok(comp_res) => {
                                     match build_stepper(&comp_res, profile_for(entity, &realtime_models)) {
                                         Ok(mut stepper) => {
                                             apply_input_defaults_validated(
                                                 &mut stepper,
-                                                &unit.input_defaults,
+                                                &rb.unit.input_defaults,
                                                 "Init",
                                             );
                                             let input_names: Vec<String> =
@@ -813,14 +1081,18 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             let symbols = collect_stepper_observables(&stepper);
                                             steppers.insert(
                                                 entity,
-                                                (session_id, cached.model_name.clone(), stepper),
+                                                (session_id, rb.model_name.clone(), stepper),
                                             );
                                             let _ = tx_inner.send(reset_ok(
                                                 entity,
                                                 session_id,
                                                 symbols,
                                                 input_names,
-                                                "Reset complete.",
+                                                if rb.reused {
+                                                    "Reset complete."
+                                                } else {
+                                                    "Reset complete (recompiled: library set changed)."
+                                                },
                                             ));
                                         }
                                         Err(e) => {
@@ -832,7 +1104,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             r.compile_diagnostics =
                                                 crate::diagnostics_from_sim_error(
                                                     &e,
-                                                    &unit.source,
+                                                    &rb.unit.source,
                                                 );
                                             r.is_reset = true;
                                             let _ = tx_inner.send(r);
@@ -844,7 +1116,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     // `e` is rumoca's formatted compile summary string.
                                     r.error = Some(format!("Reset compile error: {e}"));
                                     r.compile_diagnostics = compiler
-                                        .compile_diagnostics(&cached.model_name, &cached.doc_uri);
+                                        .get_or_insert_with(ModelicaCompiler::new)
+                                        .compile_diagnostics(&rb.model_name, &rb.doc_uri);
                                     r.is_reset = true;
                                     let _ = tx_inner.send(r);
                                 }
@@ -904,12 +1177,21 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     );
                                     let input_names: Vec<String> = stepper.input_names().to_vec();
                                     let symbols = collect_stepper_observables(&stepper);
+                                    let unit_hash =
+                                        compile_unit_hash(&model_name, &doc_uri, &unit);
                                     cached_models.insert(
                                         entity,
                                         CachedModel {
                                             model_name: model_name.clone(),
                                             source: Arc::from(source),
+                                            // UpdateParameters compiles the primary alone
+                                            // (parameter substitution rewrites one doc),
+                                            // matching the compile above.
+                                            extra_sources: Vec::new(),
                                             doc_uri: doc_uri.clone(),
+                                            compiled: comp_res.clone(),
+                                            unit_hash,
+                                            library_gen,
                                         },
                                     );
                                     steppers
@@ -977,6 +1259,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             sim_streams.insert(entity, stream);
                         }
 
+                        // Keep the raw sibling docs for the cache: an
+                        // invalidated-artifact recompile (Reset / auto-init
+                        // after a LoadSourceRoot) must replay the SAME source
+                        // set this compile used.
+                        let raw_extras = extra_sources.clone();
                         // Strip input defaults (primary AND extras) so they
                         // become real runtime slots
                         let unit = assemble_compile_unit(&source, extra_sources);
@@ -1041,21 +1328,39 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         let input_names: Vec<String> =
                                             stepper.input_names().to_vec();
                                         let symbols = collect_stepper_observables(&stepper);
-                                        let temp_dir = modelica_dir().join(format!(
+                                        let dir_name = format!(
                                             "{}_{}",
                                             entity.index(),
                                             entity.generation()
-                                        ));
+                                        );
+                                        // M11: a reused entity index leaves
+                                        // `<index>_<older-gen>` dirs behind —
+                                        // prune them before writing this one.
+                                        prune_entity_temp_dirs(
+                                            &modelica_dir(),
+                                            entity.index(),
+                                            Some(&dir_name),
+                                        );
+                                        let temp_dir = modelica_dir().join(&dir_name);
                                         let _ = std::fs::create_dir_all(&temp_dir);
                                         let temp_path = temp_dir.join("model.mo");
                                         let _ = std::fs::write(&temp_path, &source);
 
+                                        let unit_hash = compile_unit_hash(
+                                            &model_name,
+                                            &doc_uri,
+                                            &unit,
+                                        );
                                         cached_models.insert(
                                             entity,
                                             CachedModel {
                                                 model_name: model_name.clone(),
                                                 source: Arc::from(source),
+                                                extra_sources: raw_extras,
                                                 doc_uri: doc_uri.clone(),
+                                                compiled: comp_res.clone(),
+                                                unit_hash,
+                                                library_gen,
                                             },
                                         );
                                         steppers.insert(
@@ -1144,20 +1449,23 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         };
 
                         if needs_init {
-                            // Try cached DAE first — recompile stripped source for input
-                            // slots. Every failure here is sent as a result naming its
-                            // actual cause: the cached source compiled once already, so a
-                            // failure now is a real error, not something to fall through.
-                            if let Some(cached) = cached_models.get(&entity) {
-                                if cached.model_name == model_name {
-                                    let unit = assemble_compile_unit(&cached.source, Vec::new());
-                                    let compiler =
-                                        compiler.get_or_insert_with(ModelicaCompiler::new);
-                                    match compiler.compile_str(
-                                        &cached.model_name,
-                                        &unit.source,
-                                        &cached.doc_uri,
-                                    ) {
+                            // Try the cached compiled artifact first (M3) — a fresh
+                            // stepper is built straight from it; a recompile happens
+                            // only if a LoadSourceRoot invalidated it. Every failure
+                            // here is sent as a result naming its actual cause: the
+                            // cached source compiled once already, so a failure now is
+                            // a real error, not something to fall through.
+                            let cached_name_matches = cached_models
+                                .get(&entity)
+                                .is_some_and(|c| c.model_name == model_name);
+                            if cached_name_matches {
+                                if let Some(rb) = rebuild_from_cache(
+                                    &mut cached_models,
+                                    &mut compiler,
+                                    entity,
+                                    library_gen,
+                                ) {
+                                    match rb.outcome {
                                         Ok(comp_res) => match build_stepper(
                                             &comp_res,
                                             profile_for(entity, &realtime_models),
@@ -1165,7 +1473,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             Ok(mut s) => {
                                                 apply_input_defaults_validated(
                                                     &mut s,
-                                                    &unit.input_defaults,
+                                                    &rb.unit.input_defaults,
                                                     "Init",
                                                 );
                                                 // Then apply any user-provided input overrides
@@ -1187,12 +1495,12 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                 let mut r = result_ok(entity, session_id);
                                                 r.error = Some(format!(
                                                     "Initialization Failed: stepper init from \
-                                                     cached source of `{model_name}`: {e}"
+                                                     cached model of `{model_name}`: {e}"
                                                 ));
                                                 r.compile_diagnostics =
                                                     crate::diagnostics_from_sim_error(
                                                         &e,
-                                                        &unit.source,
+                                                        &rb.unit.source,
                                                     );
                                                 let _ = tx_inner.send(r);
                                                 return;
@@ -1204,10 +1512,12 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                 "Initialization Failed: recompile of cached \
                                                  source of `{model_name}`: {e}"
                                             ));
-                                            r.compile_diagnostics = compiler.compile_diagnostics(
-                                                &cached.model_name,
-                                                &cached.doc_uri,
-                                            );
+                                            r.compile_diagnostics = compiler
+                                                .get_or_insert_with(ModelicaCompiler::new)
+                                                .compile_diagnostics(
+                                                    &rb.model_name,
+                                                    &rb.doc_uri,
+                                                );
                                             let _ = tx_inner.send(r);
                                             return;
                                         }
@@ -1254,6 +1564,13 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                     *val,
                                                 );
                                             }
+                                            let doc_uri =
+                                                model_path.to_string_lossy().into_owned();
+                                            let unit_hash = compile_unit_hash(
+                                                &model_name,
+                                                &doc_uri,
+                                                &unit,
+                                            );
                                             cached_models.insert(
                                                 entity,
                                                 CachedModel {
@@ -1263,9 +1580,11 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                     // here was a second blocking read of bytes we
                                                     // hold (CQ-213).
                                                     source: Arc::from(source.clone()),
-                                                    doc_uri: model_path
-                                                        .to_string_lossy()
-                                                        .into_owned(),
+                                                    extra_sources: Vec::new(),
+                                                    doc_uri,
+                                                    compiled: comp_res.clone(),
+                                                    unit_hash,
+                                                    library_gen,
                                                 },
                                             );
 
@@ -1377,8 +1696,15 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         steppers.remove(&entity);
                         cached_models.remove(&entity);
                         sim_streams.remove(&entity);
+                        // M11: this entity's compile temp dirs are dead —
+                        // delete every generation of its index.
+                        prune_entity_temp_dirs(&modelica_dir(), entity.index(), None);
                     }
                     ModelicaCommand::LoadSourceRoot { id, payload } => {
+                        // M3: a new root can change what every cached source
+                        // resolves to — invalidate all cached compiled
+                        // artifacts (next Reset / auto-init recompiles).
+                        library_gen += 1;
                         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         let t0 = web_time::Instant::now();
                         let report = match payload {
@@ -1575,6 +1901,9 @@ pub struct InlineWorkerInner {
     /// Models that declared the realtime promise — the same per-entity fact the
     /// native worker keeps, so wasm resolves the same solver for the same model.
     realtime_models: std::collections::HashSet<Entity>,
+    /// M3: bumped on every LoadSourceRoot (and compiler reset) to invalidate
+    /// cached compiled artifacts — same contract as the native worker's local.
+    library_gen: u64,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1608,6 +1937,9 @@ impl InlineWorker {
     /// global MSL source.
     pub(crate) fn reset_compiler(&mut self) {
         self.inner.compiler = None;
+        // The fresh compiler will see the just-landed MSL bundle — anything
+        // compiled against the old (possibly MSL-less) session is stale.
+        self.inner.library_gen += 1;
     }
 }
 
@@ -1674,25 +2006,28 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             dt,
             model_path: _,
         } => {
-            // Auto-init: compile if stepper doesn't exist
+            // Auto-init: rebuild from the cached compiled artifact (M3) if
+            // the stepper doesn't exist — recompiles only when invalidated.
             if !w.steppers.contains_key(&entity) {
-                // Try cached DAE first
-                if let Some(cached) = w.cached_models.get(&entity) {
-                    if cached.model_name == model_name {
-                        let unit = assemble_compile_unit(&cached.source, Vec::new());
-                        let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-                        if let Ok(comp_res) = compiler.compile_str(
-                            &cached.model_name,
-                            &unit.source,
-                            &cached.doc_uri,
-                        ) {
+                let cached_name_matches = w
+                    .cached_models
+                    .get(&entity)
+                    .is_some_and(|c| c.model_name == model_name);
+                if cached_name_matches {
+                    if let Some(rb) = rebuild_from_cache(
+                        &mut w.cached_models,
+                        &mut w.compiler,
+                        entity,
+                        w.library_gen,
+                    ) {
+                        if let Ok(comp_res) = rb.outcome {
                             if let Ok(mut s) = build_stepper(
                                 &comp_res,
                                 profile_for(entity, &w.realtime_models),
                             ) {
                                 apply_input_defaults_validated(
                                     &mut s,
-                                    &unit.input_defaults,
+                                    &rb.unit.input_defaults,
                                     "Compile",
                                 );
                                 for (name, val) in &inputs {
@@ -1800,6 +2135,8 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             // Phase A lands on desktop first; TODO(arch-phase-b) wire
             // the wasm path once the inline worker moves off-thread.
             w.current_sessions.insert(entity, session_id);
+            // Raw sibling docs for the cache — see the native Compile arm.
+            let raw_extras = extra_sources.clone();
             let unit = assemble_compile_unit(&source, extra_sources);
 
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
@@ -1817,12 +2154,17 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         apply_input_defaults_validated(&mut stepper, &unit.input_defaults, "Compile");
                         let input_names: Vec<String> = stepper.input_names().to_vec();
                         let symbols = collect_stepper_observables(&stepper);
+                        let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
                         w.cached_models.insert(
                             entity,
                             CachedModel {
                                 model_name: model_name.clone(),
                                 source: Arc::from(source.clone()),
+                                extra_sources: raw_extras,
                                 doc_uri: doc_uri.clone(),
+                                compiled: comp_res.clone(),
+                                unit_hash,
+                                library_gen: w.library_gen,
                             },
                         );
 
@@ -1898,10 +2240,15 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
         ModelicaCommand::Reset { entity, session_id } => {
             w.current_sessions.insert(entity, session_id);
 
-            if let Some(cached) = w.cached_models.get(&entity) {
-                let unit = assemble_compile_unit(&cached.source, Vec::new());
-                let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
-                match compiler.compile_str(&cached.model_name, &unit.source, &cached.doc_uri) {
+            // M3: rebuild from the cached compiled artifact — instant unless a
+            // LoadSourceRoot / compiler reset invalidated it.
+            if let Some(rb) = rebuild_from_cache(
+                &mut w.cached_models,
+                &mut w.compiler,
+                entity,
+                w.library_gen,
+            ) {
+                match rb.outcome {
                     Ok(comp_res) => {
                         if let Ok(mut stepper) = build_stepper(
                             &comp_res,
@@ -1909,13 +2256,13 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         ) {
                             apply_input_defaults_validated(
                                 &mut stepper,
-                                &unit.input_defaults,
+                                &rb.unit.input_defaults,
                                 "Compile",
                             );
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
                             w.steppers
-                                .insert(entity, (session_id, cached.model_name.clone(), stepper));
+                                .insert(entity, (session_id, rb.model_name.clone(), stepper));
                             send(reset_ok(
                                 entity,
                                 session_id,
@@ -1953,8 +2300,10 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                             is_parameter_update: false,
                             is_reset: true,
                             detected_input_names: Vec::new(),
-                            compile_diagnostics: compiler
-                                .compile_diagnostics(&cached.model_name, &cached.doc_uri),
+                            compile_diagnostics: w
+                                .compiler
+                                .get_or_insert_with(ModelicaCompiler::new)
+                                .compile_diagnostics(&rb.model_name, &rb.doc_uri),
                             ..Default::default()
                         });
                     }
@@ -2001,12 +2350,19 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                         apply_input_defaults_validated(&mut stepper, &unit.input_defaults, "Compile");
                         let input_names: Vec<String> = stepper.input_names().to_vec();
                         let symbols = collect_stepper_observables(&stepper);
+                        let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
                         w.cached_models.insert(
                             entity,
                             CachedModel {
                                 model_name: model_name.clone(),
                                 source: Arc::from(source.clone()),
+                                // Parameter substitution rewrites one doc —
+                                // compiled without extras, matching above.
+                                extra_sources: Vec::new(),
                                 doc_uri: doc_uri.clone(),
+                                compiled: comp_res.clone(),
+                                unit_hash,
+                                library_gen: w.library_gen,
                             },
                         );
 
@@ -2076,6 +2432,8 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             // Wasm path: matches the native handler. Worker thread
             // (whether off-main Web Worker or inline) merges the
             // library into its session. Idempotent.
+            // M3: invalidate cached compiled artifacts (see native arm).
+            w.library_gen += 1;
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             let t0 = web_time::Instant::now();
             let report = match payload {
@@ -2912,5 +3270,263 @@ mod macro_step_tests {
             is_squashable(&params(), &params()),
             "UpdateParameters is an idempotent setpoint — it SHOULD squash"
         );
+    }
+}
+
+// ===========================================================================
+// M8 — the two-lane scheduler (see `enqueue_command`)
+// ===========================================================================
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lane_tests {
+    use super::*;
+
+    fn ent(n: u32) -> Entity {
+        Entity::from_raw_u32(n).expect("valid test entity index")
+    }
+
+    fn step(e: Entity) -> ModelicaCommand {
+        ModelicaCommand::Step {
+            entity: e,
+            session_id: 1,
+            model_path: PathBuf::new(),
+            model_name: "M".into(),
+            inputs: Vec::new(),
+            dt: 0.016,
+        }
+    }
+
+    fn compile(e: Entity, session_id: u64) -> ModelicaCommand {
+        ModelicaCommand::Compile {
+            entity: e,
+            session_id,
+            model_name: "M".into(),
+            source: String::new(),
+            realtime_safe: false,
+            doc_uri: "doc.mo".into(),
+            extra_sources: Vec::new(),
+            stream: None,
+        }
+    }
+
+    fn load_root() -> ModelicaCommand {
+        ModelicaCommand::LoadSourceRoot {
+            id: "Modelica".into(),
+            payload: LoadSourceRootPayload::InMemory {
+                label: "t".into(),
+                files: Vec::new(),
+            },
+        }
+    }
+
+    struct Lanes {
+        compile: VecDeque<ModelicaCommand>,
+        step: VecDeque<ModelicaCommand>,
+        tx: Sender<ModelicaResult>,
+        rx: Receiver<ModelicaResult>,
+    }
+
+    impl Lanes {
+        fn new() -> Self {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            Self {
+                compile: VecDeque::new(),
+                step: VecDeque::new(),
+                tx,
+                rx,
+            }
+        }
+        fn push(&mut self, cmd: ModelicaCommand) {
+            enqueue_command(cmd, &mut self.compile, &mut self.step, &self.tx);
+        }
+    }
+
+    /// The M8 point: another entity's Step jumps a queued slow compile.
+    #[test]
+    fn unrelated_step_jumps_queued_compile() {
+        let mut l = Lanes::new();
+        l.push(load_root());
+        l.push(compile(ent(1), 2));
+        l.push(step(ent(2)));
+        assert_eq!(l.step.len(), 1, "entity 2's Step must take the step lane");
+        assert_eq!(l.compile.len(), 2);
+    }
+
+    /// The preserved contract: "Compile then Step sees the compiled model" —
+    /// a Step whose entity has a PENDING compile-lane command stays behind it.
+    #[test]
+    fn step_behind_own_entitys_compile_does_not_jump() {
+        let mut l = Lanes::new();
+        l.push(compile(ent(1), 2));
+        l.push(step(ent(1)));
+        assert!(l.step.is_empty(), "entity 1's Step must wait for its compile");
+        assert_eq!(l.compile.len(), 2);
+        assert!(matches!(l.compile[0], ModelicaCommand::Compile { .. }));
+        assert!(matches!(l.compile[1], ModelicaCommand::Step { .. }));
+    }
+
+    /// A LoadSourceRoot alone blocks nobody's Step — only an entity's own
+    /// queued compile does (its Compile queued BEHIND the root load blocks
+    /// its steps transitively, via the previous test's rule).
+    #[test]
+    fn load_source_root_does_not_block_live_steps() {
+        let mut l = Lanes::new();
+        l.push(load_root());
+        l.push(step(ent(3)));
+        assert_eq!(l.step.len(), 1);
+    }
+
+    /// Once the blocking compile is taken for execution, the deferred Step is
+    /// hoisted back to the step lane (in order) instead of trickling out
+    /// one-per-round behind unrelated compile-lane work.
+    #[test]
+    fn deferred_step_promoted_after_its_compile_is_taken() {
+        let mut l = Lanes::new();
+        l.push(compile(ent(1), 2));
+        l.push(compile(ent(9), 2));
+        l.push(step(ent(1)));
+        assert!(l.step.is_empty());
+
+        // The scheduling round: pop the front compile (entity 1's), promote.
+        let front = l.compile.pop_front().expect("front compile");
+        assert_eq!(cmd_entity(&front), ent(1));
+        promote_unblocked_steps(&mut l.compile, &mut l.step);
+        assert_eq!(
+            l.step.len(),
+            1,
+            "entity 1's Step is runnable once its compile has been taken"
+        );
+        assert_eq!(l.compile.len(), 1, "entity 9's compile still queued");
+    }
+
+    /// The setpoint squash survives the lane split: adjacent same-entity,
+    /// same-session Compiles collapse to the latest and ack the dropped one.
+    #[test]
+    fn compile_lane_still_squashes_setpoints() {
+        let mut l = Lanes::new();
+        l.push(compile(ent(1), 2));
+        l.push(compile(ent(1), 2));
+        assert_eq!(l.compile.len(), 1, "second Compile replaced the first");
+        let ack = l.rx.try_recv().expect("dropped command must be acked");
+        assert_eq!(ack.session_id, 2);
+        // Steps are integrations, never squashed — even in the compile lane.
+        l.push(step(ent(1)));
+        l.push(step(ent(1)));
+        assert_eq!(l.compile.len(), 3);
+        assert!(l.rx.try_recv().is_err(), "no synthetic ack for a Step");
+    }
+}
+
+// ===========================================================================
+// M3 — cached-artifact invalidation key
+// ===========================================================================
+#[cfg(test)]
+mod artifact_cache_tests {
+    use super::*;
+
+    fn hash_of(model: &str, uri: &str, source: &str, extras: Vec<(String, String)>) -> u64 {
+        let unit = assemble_compile_unit(source, extras);
+        compile_unit_hash(model, uri, &unit)
+    }
+
+    /// The hash keys the whole assembled CompileUnit: primary source, extras,
+    /// model name, and session URI each independently invalidate.
+    #[test]
+    fn unit_hash_covers_the_whole_source_set() {
+        let base = hash_of("M", "doc.mo", "model M end M;", Vec::new());
+        assert_eq!(
+            base,
+            hash_of("M", "doc.mo", "model M end M;", Vec::new()),
+            "hash must be deterministic"
+        );
+        assert_ne!(base, hash_of("M", "doc.mo", "model M Real x; end M;", Vec::new()));
+        assert_ne!(base, hash_of("M2", "doc.mo", "model M end M;", Vec::new()));
+        assert_ne!(base, hash_of("M", "other.mo", "model M end M;", Vec::new()));
+        assert_ne!(
+            base,
+            hash_of(
+                "M",
+                "doc.mo",
+                "model M end M;",
+                vec![("sib.mo".into(), "package P end P;".into())]
+            )
+        );
+    }
+
+    /// Artifact reuse requires BOTH an unchanged unit and no LoadSourceRoot
+    /// since the compile (the library generation).
+    #[test]
+    fn artifact_validity_requires_hash_and_generation() {
+        assert!(artifact_still_valid(7, 3, 7, 3));
+        assert!(!artifact_still_valid(7, 3, 8, 3), "source set changed");
+        assert!(!artifact_still_valid(7, 3, 7, 4), "a source root loaded since");
+    }
+}
+
+// ===========================================================================
+// M11 — compile temp dir pruning
+// ===========================================================================
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod temp_dir_tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lunco_modelica_temp_dir_test_{tag}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn mk(base: &std::path::Path, name: &str) {
+        std::fs::create_dir_all(base.join(name).join("inner")).expect("mkdir");
+    }
+
+    /// Writing generation N prunes the same index's older generations and
+    /// nothing else — other indices, and names that merely share a prefix,
+    /// are untouched.
+    #[test]
+    fn newer_generation_prunes_older_same_index_only() {
+        let base = scratch("gen");
+        mk(&base, "3_1");
+        mk(&base, "3_2");
+        mk(&base, "31_1"); // different index sharing a string prefix
+        mk(&base, "4_1"); // different entity
+        mk(&base, "3_notagen"); // not this scheme's shape
+
+        prune_entity_temp_dirs(&base, 3, Some("3_2"));
+
+        assert!(!base.join("3_1").exists(), "older generation pruned");
+        assert!(base.join("3_2").exists(), "current generation kept");
+        assert!(base.join("31_1").exists(), "index 31 is not index 3");
+        assert!(base.join("4_1").exists(), "other entities untouched");
+        assert!(base.join("3_notagen").exists(), "non-scheme names untouched");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Despawn (`keep = None`) removes every generation of the index.
+    #[test]
+    fn despawn_prunes_all_generations_of_the_index() {
+        let base = scratch("despawn");
+        mk(&base, "5_1");
+        mk(&base, "5_2");
+        mk(&base, "6_1");
+
+        prune_entity_temp_dirs(&base, 5, None);
+
+        assert!(!base.join("5_1").exists());
+        assert!(!base.join("5_2").exists());
+        assert!(base.join("6_1").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A missing base dir is a no-op, not a panic (fresh install, nothing
+    /// compiled yet).
+    #[test]
+    fn missing_base_dir_is_a_noop() {
+        let base = std::env::temp_dir().join("lunco_modelica_temp_dir_test_nonexistent");
+        let _ = std::fs::remove_dir_all(&base);
+        prune_entity_temp_dirs(&base, 1, None);
     }
 }

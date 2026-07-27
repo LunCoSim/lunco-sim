@@ -37,11 +37,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use leafwing_input_manager::prelude::ActionState;
+use crate::session::{IncomingSnapshots, SnapshotSample};
 use lunco_core::{
-    authorize, AppliedInputSeq, GlobalEntityId, IncomingSnapshots, LocalAvatar, LocalSession,
-    Mutation, NetReplicate, NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn,
-    SessionId, SessionProfiles, SessionRegistry, SimTick, SnapshotSample, SyncApplyGuard,
-    SyncChannel,
+    authorize, AppliedInputSeq, GlobalEntityId, LocalAvatar, LocalSession, Mutation, NetReplicate,
+    NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn, SessionId,
+    SessionProfiles, SessionRegistry, SimTick, SyncApplyGuard, SyncChannel,
 };
 use lunco_doc::DocumentId;
 
@@ -3037,6 +3037,10 @@ impl Plugin for SyncPlugin {
         app.init_resource::<SyncOutbox>()
             .init_resource::<SyncInbox>()
             .init_resource::<SyncDedup>()
+            // Wire-fed snapshot inbox (review C7: moved out of core's always-on
+            // set — pushed by `drain_sync_inbox` here, drained by the prediction
+            // ingest; nothing outside this crate touches it).
+            .init_resource::<crate::session::IncomingSnapshots>()
             .init_resource::<NetworkConfig>()
             .init_resource::<CursorSettings>()
             .init_resource::<TutorialSettings>()

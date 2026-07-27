@@ -315,6 +315,42 @@ pub(crate) fn render_diagram_canvas(
         }
     }
 
+    // Telemetry-browser → canvas plot drops. Two doors, one node builder
+    // (`lunco_viz::plot_node_at`, the exact shape the context-menu door
+    // builds): a drag released over the canvas lands at the pointer, a
+    // double-click in the browser lands at a fixed default offset.
+    {
+        let drops = lunco_viz::drain_plot_drops(ui.ctx());
+        let dnd = response.dnd_release_payload::<lunco_viz::ChannelDragPayload>();
+        if !drops.is_empty() || dnd.is_some() {
+            let docstate = state.get_mut_for_render(render_tab_id, active_doc);
+            let screen_rect = lunco_canvas::Rect::from_min_max(
+                lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y),
+                lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y),
+            );
+            let pointer_world = ui.ctx().pointer_interact_pos().map(|p| {
+                docstate
+                    .canvas
+                    .viewport
+                    .screen_to_world(lunco_canvas::Pos::new(p.x, p.y), screen_rect)
+            });
+            let scene = &mut docstate.canvas.scene;
+            for req in drops {
+                let id = scene.alloc_node_id();
+                let at = req
+                    .world_pos
+                    .map(|[x, y]| lunco_canvas::Pos::new(x, y))
+                    .unwrap_or_else(|| lunco_canvas::Pos::new(20.0, 20.0));
+                scene.insert_node(lunco_viz::plot_node_at(id, at, &req.payload));
+            }
+            if let Some(p) = dnd {
+                let id = scene.alloc_node_id();
+                let at = pointer_world.unwrap_or_else(|| lunco_canvas::Pos::new(20.0, 20.0));
+                scene.insert_node(lunco_viz::plot_node_at(id, at, &p));
+            }
+        }
+    }
+
     mark("tail (events/menu/fit)", &mut phase_t, &mut phase_log);
     let frame_ms = _frame_t0.elapsed().as_secs_f64() * 1000.0;
     log_frame_times(frame_ms, 0.0);

@@ -49,6 +49,8 @@ pub mod joint_viz;
 #[cfg(feature = "ui")]
 pub mod perf_bridge;
 #[cfg(feature = "ui")]
+pub mod physics_gizmo;
+#[cfg(feature = "ui")]
 pub mod physics_viz;
 #[cfg(feature = "ui")]
 pub mod selection;
@@ -211,6 +213,20 @@ impl Plugin for SandboxEditPlugin {
             (joint_viz::draw_joint_viz, joint_viz::draw_wheel_force_viz),
         );
         joint_viz::register_all_commands(app);
+
+        // Selected-body dynamics gizmo: CoM + inertia ellipsoid + force
+        // arrows, and body-frame triads (`TogglePhysicsGizmo` command /
+        // workbench Settings menu). Draws only for the current selection;
+        // off by default, so idle cost is two early-returns.
+        app.init_resource::<physics_gizmo::PhysicsGizmoSettings>();
+        app.add_systems(
+            Update,
+            (
+                physics_gizmo::draw_physics_gizmo,
+                physics_gizmo::draw_frame_gizmo,
+            ),
+        );
+        physics_gizmo::register_all_commands(app);
 
         // NOTE: waypoints have no gizmo, and no plugin. A waypoint is a USD prim
         // referencing `vessels/markers/waypoint.usda` — the USD scene renders it, the

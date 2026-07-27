@@ -601,7 +601,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                if let Err(e) = cs.author_translate(&sp, *value) {
+                if let Err(e) = cs.projector().author_translate(&sp, *value) {
                     warn!("[twin] author translate {path}: {e}");
                 }
             }
@@ -614,7 +614,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                if let Err(e) = cs.author_rotate(&sp, *value) {
+                if let Err(e) = cs.projector().author_rotate(&sp, *value) {
                     warn!("[twin] author rotate {path}: {e}");
                 }
             }
@@ -647,7 +647,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                Some(cs) => match cs.author_attribute(&sp, name, type_name, v) {
+                Some(cs) => match cs.projector().author_attribute(&sp, name, type_name, v) {
                     Ok(()) => true,
                     Err(e) => {
                         warn!("[twin] author attribute {path}.{name}: {e}");
@@ -739,7 +739,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                if let Err(e) = cs.remove_prim_at(&sp) {
+                if let Err(e) = cs.projector().remove_prim_at(&sp) {
                     warn!("[twin] remove {path}: {e}");
                 }
             }
@@ -766,7 +766,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                Some(cs) => match cs.author_time_sample(&sp, name, type_name, *time, v) {
+                Some(cs) => match cs.projector().author_time_sample(&sp, name, type_name, *time, v) {
                     Ok(()) => true,
                     Err(e) => {
                         warn!("[twin] author keyframe {path}.{name} @ {time}: {e}");
@@ -797,7 +797,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                Some(cs) => match cs.author_relationship(&sp, name, targets) {
+                Some(cs) => match cs.projector().author_relationship(&sp, name, targets) {
                     Ok(()) => true,
                     Err(e) => {
                         warn!("[twin] author relationship {path}.{name}: {e}");
@@ -828,7 +828,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
-                Some(cs) => match cs.author_connection(&sp, name, type_name, sources) {
+                Some(cs) => match cs.projector().author_connection(&sp, name, type_name, sources) {
                     Ok(()) => true,
                     Err(e) => {
                         warn!("[twin] author connection {path}.{name}: {e}");
@@ -908,7 +908,7 @@ fn spawn_prim_op(
             .get_non_send::<CanonicalStages>()
             .and_then(|s| s.get(scene_id))
         {
-            if let Err(e) = cs.author_prim(&sp, type_name.as_deref()) {
+            if let Err(e) = cs.projector().author_prim(&sp, type_name.as_deref()) {
                 warn!("[twin] spawn {prim_path}: {e}");
             }
         }
@@ -941,8 +941,9 @@ fn spawn_prim_op(
                 .and_then(|s| s.get(scene_id))
             {
                 if let Err(e) = cs
+                    .projector()
                     .author_prim(&sp, type_name.as_deref())
-                    .and_then(|_| cs.author_reference(&sp, &asset_path))
+                    .and_then(|_| cs.projector().author_reference(&sp, &asset_path))
                 {
                     warn!("[twin] referenced spawn {prim_path}: {e}");
                 }
@@ -992,7 +993,7 @@ fn author_structural_edit(
             .get_non_send::<CanonicalStages>()
             .and_then(|s| s.get(scene_id))
         {
-            if let Err(e) = cs.remove_prim_at(&sp) {
+            if let Err(e) = cs.projector().remove_prim_at(&sp) {
                 warn!("[twin] remove {path}: {e}");
             }
         }
@@ -1232,8 +1233,9 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         // Inject the closure bytes so PCP can resolve the reference, then author.
         cs.add_layer_bytes(recipe.bytes.clone());
         if let Err(e) = cs
+            .projector()
             .author_prim(&sp, item.type_name.as_deref())
-            .and_then(|_| cs.author_reference(&sp, &item.asset_path))
+            .and_then(|_| cs.projector().author_reference(&sp, &item.asset_path))
         {
             warn!(
                 "[twin] referenced spawn {} (post-fetch): {e}",

@@ -82,6 +82,13 @@ pub struct CosimDiagnostics {
     /// What survives is the wire that never landed at all — the Modelica drive
     /// law writing a port no rover declares, the antenna joint that never
     /// attaches. That is the authoring error, and it is what a gate must fail on.
+    ///
+    /// Two more entry sources share this ledger:
+    /// * `SetPorts` writes to a name the target's port surface doesn't declare
+    ///   (M12) — same `(entity, port)` key and landed-retraction rules as wires.
+    /// * Algebraic loops in the wiring (M6), keyed under a synthetic port name
+    ///   prefixed [`crate::systems::propagate::ALGEBRAIC_LOOP_PORT`]; these are
+    ///   facts about the current fabric, retracted and re-derived on rewire.
     pub faults: std::collections::HashMap<(Entity, String), BrokenConnection>,
     /// `(entity, port)` pairs proven wired by at least one successful write.
     ///

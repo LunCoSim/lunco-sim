@@ -77,13 +77,14 @@ pub(crate) fn register_client_systems(app: &mut App) {
 }
 
 /// Fallback (no IPC wired): scan argv once for a `luncosim:` deep link and stage
-/// it in [`PendingConnect`]. Skipped when a [`DeepLinkInbox`](crate::single_instance::DeepLinkInbox)
+/// it in [`PendingConnect`](crate::session::PendingConnect). Skipped when a
+/// [`DeepLinkInbox`](crate::single_instance::DeepLinkInbox)
 /// exists — the IPC path already carries the launch arg, so this avoids a double
 /// prompt. The once-only latch and the inbox check are `run_if` conditions at
 /// the registration site — the system body runs at most once per process.
 #[cfg(not(target_family = "wasm"))]
 fn seed_pending_from_deep_link_arg(
-    mut pending: ResMut<lunco_core::session::PendingConnect>,
+    mut pending: ResMut<crate::session::PendingConnect>,
 ) {
     let Some(link) = std::env::args()
         .find(|a| a.starts_with(&format!("{}:", crate::connect_link::SCHEME)))
@@ -95,7 +96,7 @@ fn seed_pending_from_deep_link_arg(
         "[net] deep link → pending connect to {} (awaiting confirm)",
         link.address
     );
-    pending.request = Some(lunco_core::session::PendingConnectRequest {
+    pending.request = Some(crate::session::PendingConnectRequest {
         address: link.address,
         digest: link.digest,
     });

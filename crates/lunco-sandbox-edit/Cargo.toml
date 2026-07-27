@@ -58,6 +58,11 @@ lunco-controller = { path = "../lunco-controller" }
 # hardcoded WASD.
 leafwing-input-manager = { workspace = true }
 lunco-mobility = { path = "../lunco-mobility" }
+# Joint State panel reads the SAME actuator surface both wheel realizations
+# share: `SteeringActuator::output_angle` and the authored torque-speed law
+# `axle_torque` — reused, never transcribed. Render-free core-sim crate,
+# already in this crate's closure via lunco-mobility.
+lunco-hardware = { path = "../lunco-hardware" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # `default-features = false` keeps modelica/avatar egui-free for the headless
 # server; the `ui` feature below re-enables them. The egui inspector

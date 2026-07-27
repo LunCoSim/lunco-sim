@@ -21,7 +21,7 @@
 //!     .build();
 //! ```
 
-use lunco_core::diagram::{ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind};
+use crate::diagram_model::{ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind};
 use rumoca_compile::parsing::ast::{
     ClassDef, Component, Equation, Expression, Name, StoredDefinition,
 };
@@ -193,7 +193,7 @@ impl ModelicaComponentBuilder {
                         // this, every MSL connect from a model-level
                         // connector silently drops out of the diagram.
                         let resolve_port =
-                            |n: &lunco_core::diagram::ComponentNode, port: &str| -> Option<usize> {
+                            |n: &crate::diagram_model::ComponentNode, port: &str| -> Option<usize> {
                                 if port.is_empty() && !n.ports.is_empty() {
                                     Some(0)
                                 } else {

@@ -12,8 +12,6 @@ pub mod attach;
 /// through.
 pub mod commands;
 pub mod coords;
-/// Unified diagram data model — pure Rust, no Bevy dependency.
-pub mod diagram;
 /// M1 — deterministic identity from `Provenance`. The only place network
 /// ids are *derived*; the assignment system below is the only place they
 /// are *minted*.
@@ -82,14 +80,12 @@ pub use markers::{
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
-    authorize, AppliedInputSeq, AppliedSlot, ArticulatedLink, ArticulatedVehicle, BodyDivergence,
-    BufferedClientInputs, ContactPredictable, DivergenceStats, IncomingSnapshots, InputFrame,
-    LocalDriveInput, LocalSession, NetConnectRequest, NetDisconnectRequest, NetExcluded,
-    NetReplicate, NetSpawn, NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally,
-    PendingConnect, PendingConnectRequest, PendingCorrection, PendingReplicatedSpawns,
-    PossessionPolicy, PredictedDynamic, PredictionKind, ReplicatedChassisMotion, ReplicatedSpawn,
-    SessionProfiles, SessionRegistry, SkipContentStamp, SnapshotSample, SyncApplyGuard,
-    VesselInputLog, MAX_SEQ_JUMP,
+    authorize, AppliedInputSeq, AppliedSlot, ArticulatedLink, ArticulatedVehicle,
+    BufferedClientInputs, InputFrame, LocalDriveInput, LocalSession, NetConnectRequest,
+    NetDisconnectRequest, NetExcluded, NetReplicate, NetSpawn, NetStatus, NetworkRole,
+    NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns, PossessionPolicy,
+    PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionProfiles, SessionRegistry,
+    SkipContentStamp, SyncApplyGuard, VesselInputLog, MAX_SEQ_JUMP,
 };
 pub use telemetry::Severity;
 pub use world::{
@@ -840,13 +836,11 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<session::LocalSession>()
         .init_resource::<session::SyncApplyGuard>()
         .init_resource::<session::NetStatus>()
-        .init_resource::<session::PendingConnect>()
         .init_resource::<session::SessionRegistry>()
         .init_resource::<session::SessionProfiles>()
         .init_resource::<session::SessionRbac>()
         .init_resource::<session::CommandPolicyRegistry>()
         .init_resource::<session::PendingReplicatedSpawns>()
-        .init_resource::<session::IncomingSnapshots>()
         // Input-sequence bookkeeping is always-on substrate: the
         // lunco-controller observers read/write these every frame whether
         // or not the optional networking wire is present.
@@ -854,10 +848,11 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<session::BufferedClientInputs>()
         .init_resource::<session::LocalDriveInput>()
         .init_resource::<session::AppliedInputSeq>()
-        // Client desync gauge (review N3) — written by the reconcilers, read by the
-        // netcode diagnostics. Always-on substrate: the reconcilers run whether or
-        // not the wire feature is compiled in.
-        .init_resource::<session::DivergenceStats>()
+        // NOTE (review C7): wire-only resources — the deep-link `PendingConnect`
+        // gate, the `IncomingSnapshots` inbox, the `DivergenceStats` desync gauge —
+        // moved to `lunco-networking/src/session.rs` and are initialized by the
+        // plugins whose systems read them. Only resources consumed by systems that
+        // run WITHOUT the networking feature belong in this list.
         // Command-result substrate: result-reporting `#[on_command]` observers
         // require these to exist (same always-on rule as the session resources
         // above — see the AppliedInputSeq fix).
@@ -1042,7 +1037,6 @@ mod ph1_identity_tests {
         assert!(w
             .get_resource::<session::PendingReplicatedSpawns>()
             .is_some());
-        assert!(w.get_resource::<session::IncomingSnapshots>().is_some());
         // The two resources that caused the original panic — nailed down
         // explicitly so a regression names them.
         assert!(w.get_resource::<session::OwnedInputLog>().is_some());

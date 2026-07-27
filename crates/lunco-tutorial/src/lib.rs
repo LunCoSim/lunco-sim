@@ -97,6 +97,31 @@ pub struct TrackMeta {
     pub order: usize,
 }
 
+/// Telemetry event name published when a curriculum or lesson failure would
+/// otherwise live only in the log: an unopenable curriculum layer, a
+/// composition error, a lesson with no script, an unknown tutorial id, a
+/// missing lesson source, a lesson abandoned mid-run. The payload is a
+/// human-readable string naming the tutorial/lesson and the cause.
+///
+/// Published at [`Severity::Error`] so the workbench status bar's error
+/// telemetry observer surfaces it — the same arrangement
+/// `lunco_usd_bevy::SCENE_LOAD_FAILED` uses. A student who clicks a lesson and
+/// sees nothing happen must be told WHY in the UI, not only in a terminal they
+/// are not watching.
+pub const TUTORIAL_FAILED: &str = "TUTORIAL_FAILED";
+
+/// The one shape every [`TUTORIAL_FAILED`] publication takes, so the payload
+/// convention (a cause string naming the lesson) cannot drift between sites.
+fn tutorial_failed(detail: impl Into<String>) -> TelemetryEvent {
+    TelemetryEvent {
+        name: TUTORIAL_FAILED.into(),
+        source: 0,
+        severity: Severity::Error,
+        data: TelemetryValue::String(detail.into()),
+        timestamp: 0.0,
+    }
+}
+
 // ── Curriculum roots: the one extension point ───────────────────────────────
 
 /// Who provided a curriculum. Carried on every registered lesson so its script
@@ -185,8 +210,9 @@ impl CurriculumRoot {
     }
 
     /// Compose this root's layer and register everything it contributes.
-    /// Returns the number of tracks added.
-    fn load_into(&self, registry: &mut TutorialRegistry) -> usize {
+    /// Returns the number of tracks added; user-actionable composition
+    /// failures are appended to `failures` for the caller to surface.
+    fn load_into(&self, registry: &mut TutorialRegistry, failures: &mut Vec<String>) -> usize {
         // A root with no curriculum layer is normal, not an error: most twins
         // ship none, and the app layer is optional for an app with no lessons.
         if !self.layer.is_file() {
@@ -196,6 +222,7 @@ impl CurriculumRoot {
             return 0;
         };
         let composed = curriculum::read(layer);
+        failures.extend(composed.failures);
         let tracks = composed.tracks.len();
         for track in composed.tracks {
             // Keyed by the track's PRIM PATH — the same key each lesson carries
@@ -236,11 +263,12 @@ pub struct CurriculumRoots(pub Vec<CurriculumRoot>);
 /// small layers, and rebuilding makes "what is registered" a pure function of
 /// "which roots exist" — so there is no separate unload rule to keep in step
 /// with the load rule.
-fn rebuild_curriculum(roots: &CurriculumRoots, registry: &mut TutorialRegistry) {
+fn rebuild_curriculum(roots: &CurriculumRoots, registry: &mut TutorialRegistry) -> Vec<String> {
     *registry = TutorialRegistry::default();
+    let mut failures = Vec::new();
     let mut tracks = 0;
     for root in &roots.0 {
-        tracks += root.load_into(registry);
+        tracks += root.load_into(registry, &mut failures);
     }
     if tracks == 0 {
         warn!(
@@ -249,6 +277,15 @@ fn rebuild_curriculum(roots: &CurriculumRoots, registry: &mut TutorialRegistry) 
              curriculum layer; an app shows it by sublayering that layer from its \
              own `assets/tutorials/<app>.usda`."
         );
+        // Surfaced only when a layer FILE is present and yielded nothing: a
+        // host with no curriculum layer made a statement, not a mistake.
+        if roots.0.iter().any(|r| r.layer.is_file()) {
+            failures.push(
+                "no tutorial track composed — a curriculum layer is present but \
+                 contributed nothing (see log for the layer path)"
+                    .into(),
+            );
+        }
     } else {
         info!(
             "[tutorial] curriculum: {tracks} track(s), {} lesson(s), from {} root(s)",
@@ -256,6 +293,7 @@ fn rebuild_curriculum(roots: &CurriculumRoots, registry: &mut TutorialRegistry) 
             roots.0.len()
         );
     }
+    failures
 }
 
 /// The catalog of registered tutorials. Filled by [`TutorialCorePlugin`] from the
@@ -470,6 +508,9 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
         world.resource_mut::<PendingAdvance>().0 = None;
         let Some(meta) = world.resource::<TutorialRegistry>().get(&id) else {
             warn!("[tutorial] StartTutorial: unknown id '{id}'");
+            world.trigger(tutorial_failed(format!(
+                "StartTutorial: unknown id '{id}' — not in the composed curriculum"
+            )));
             return;
         };
         // A lesson's script resolves against the root that CONTRIBUTED it —
@@ -483,10 +524,17 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             .cloned()
         else {
             warn!("[tutorial] '{id}' came from a root that is no longer mounted");
+            world.trigger(tutorial_failed(format!(
+                "'{id}' came from a curriculum root that is no longer mounted"
+            )));
             return;
         };
         let Some(source) = root.read(&meta.script) else {
             warn!("[tutorial] no source for '{id}' ({})", meta.script);
+            world.trigger(tutorial_failed(format!(
+                "no lesson source for '{id}' ({})",
+                meta.script
+            )));
             return;
         };
         // MOUNT THE DECLARED WORLD, if the lesson declares one.
@@ -648,6 +696,7 @@ fn on_scene_load_failed(
     trigger: On<TelemetryEvent>,
     mut progress: ResMut<TutorialProgress>,
     mut pending: ResMut<PendingAdvance>,
+    mut commands: Commands,
 ) {
     if trigger.event().name != "SCENE_LOAD_FAILED" {
         return;
@@ -662,6 +711,13 @@ fn on_scene_load_failed(
          NOT recorded as complete and its successor will not start.",
         trigger.event().data
     );
+    // `SCENE_LOAD_FAILED` itself already reaches the status bar; this adds the
+    // tutorial-side CONSEQUENCE — which lesson was abandoned — that the raw
+    // scene event cannot name. No recursion: observers filter by name.
+    commands.trigger(tutorial_failed(format!(
+        "abandoning '{id}' — its scene failed to load ({:?})",
+        trigger.event().data
+    )));
 }
 
 /// A tidy display name for a tutorial id: prefer its registered title, else the id.
@@ -915,6 +971,7 @@ fn sync_twin_curriculum_root(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut roots: ResMut<CurriculumRoots>,
     mut registry: ResMut<TutorialRegistry>,
+    mut commands: Commands,
 ) {
     let active = workspace.as_ref().and_then(|ws| ws.0.active_twin);
     let mounted = roots.0.iter().find_map(|r| match r.source {
@@ -932,7 +989,9 @@ fn sync_twin_curriculum_root(
             roots.0.push(CurriculumRoot::twin(id, twin.root.clone()));
         }
     }
-    rebuild_curriculum(&roots, &mut registry);
+    for failure in rebuild_curriculum(&roots, &mut registry) {
+        commands.trigger(tutorial_failed(failure));
+    }
 }
 
 // ── Menu + launcher panel ───────────────────────────────────────────────────
@@ -1156,7 +1215,11 @@ impl Plugin for TutorialCorePlugin {
         // engine names no track and knows no lesson.
         let mut roots = CurriculumRoots(vec![CurriculumRoot::bundled(&self.app)]);
         let mut registry = TutorialRegistry::default();
-        rebuild_curriculum(&roots, &mut registry);
+        // Failures found while BUILDING cannot be triggered here: other
+        // plugins' observers (the status bar's error-telemetry one among them)
+        // may not be installed yet. Parked and surfaced at Startup instead.
+        let failures = rebuild_curriculum(&roots, &mut registry);
+        app.insert_resource(BootCurriculumFailures(failures));
         // `roots` is moved in whole so a provider added later (a pack, a
         // classroom server) is a push here and needs no code in this crate.
         roots.0.shrink_to_fit();
@@ -1171,8 +1234,24 @@ impl Plugin for TutorialCorePlugin {
         app.add_observer(on_mission_complete);
         app.add_observer(on_scene_load_failed);
         app.add_observer(resolve_show_tutorial_intent);
+        app.add_systems(Startup, surface_boot_curriculum_failures);
         app.add_systems(Update, sync_twin_curriculum_root);
         app.add_systems(Update, boot_seam);
+    }
+}
+
+/// Curriculum failures met while [`TutorialCorePlugin`] was building, parked
+/// until Startup so every observer that wants them (the status bar's) exists.
+#[derive(Resource, Default)]
+struct BootCurriculumFailures(Vec<String>);
+
+/// Publish the parked boot-time curriculum failures as [`TUTORIAL_FAILED`].
+fn surface_boot_curriculum_failures(
+    mut failures: ResMut<BootCurriculumFailures>,
+    mut commands: Commands,
+) {
+    for failure in failures.0.drain(..) {
+        commands.trigger(tutorial_failed(failure));
     }
 }
 
@@ -1251,5 +1330,44 @@ mod tests {
         app.world_mut().trigger(SkipTutorial {});
         app.update();
         assert!(app.world().resource::<TutorialProgress>().current.is_none());
+    }
+
+    /// Starting an unknown tutorial id must publish [`TUTORIAL_FAILED`] — the
+    /// status bar surfaces every `Severity::Error` telemetry event, so this is
+    /// exactly the contract that puts the failure in front of the user instead
+    /// of leaving it as a `warn!` in a terminal nobody is watching.
+    #[test]
+    fn unknown_tutorial_id_publishes_tutorial_failed() {
+        #[derive(Resource, Default)]
+        struct Seen(Vec<String>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(TutorialCorePlugin {
+                app: "sandbox".into(),
+            });
+        app.init_resource::<Seen>();
+        app.add_observer(
+            |trigger: On<TelemetryEvent>, mut seen: ResMut<Seen>| {
+                let ev = trigger.event();
+                if ev.name == TUTORIAL_FAILED {
+                    assert_eq!(ev.severity, Severity::Error);
+                    if let TelemetryValue::String(s) = &ev.data {
+                        seen.0.push(s.clone());
+                    }
+                }
+            },
+        );
+
+        app.world_mut().trigger(StartTutorial {
+            id: "/No/Such/Lesson".into(),
+        });
+        app.update();
+
+        let seen = &app.world().resource::<Seen>().0;
+        assert!(
+            seen.iter().any(|s| s.contains("/No/Such/Lesson")),
+            "TUTORIAL_FAILED naming the unknown id was not published; saw {seen:?}"
+        );
     }
 }

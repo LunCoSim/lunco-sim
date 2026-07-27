@@ -30,6 +30,9 @@ pub mod command_deck;
 pub mod connection_canvas;
 pub mod entity_list;
 pub mod inspector;
+/// Joint State panel — live joint θ / ω / target / τ table for the selected
+/// vessel (revolute joints + raycast wheels + steering), deep-review §2.7.
+pub mod joint_state;
 pub mod spawn_palette;
 pub mod terrain_tools;
 pub mod usd_mount;
@@ -258,6 +261,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_panel(connection_canvas::UsdCanvasPanel)
             .register_panel(usd_prim_tree::UsdPrimTreePanel)
             .register_panel(command_deck::CommandDeck)
+            .register_panel(joint_state::JointStatePanel)
             .register_panel(ViewportPanel)
             // Order matters for auto-activation — View first so it's
             // the default when the rover binary boots.
@@ -445,6 +449,18 @@ impl Plugin for SandboxEditUiPlugin {
         app.init_resource::<command_deck::CommandDeckView>();
         app.add_view_model(command_deck::populate_command_deck_view, every_frame());
 
+        // Joint State view-model: the selected vessel's joints and wheels are
+        // live physics (θ / ω / τ change every tick), so while something is
+        // selected the producer runs each frame — bounded by the vessel's
+        // joint count, the same scale as the joint_viz gizmo pass. The gate
+        // stands the scan down entirely when nothing is selected (plus one
+        // run after deselect, to empty the view).
+        app.init_resource::<joint_state::JointStateView>();
+        app.add_view_model(
+            joint_state::populate_joint_state_view,
+            joint_state::joint_state_active,
+        );
+
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
 
@@ -568,6 +584,22 @@ fn register_debug_viz_settings(world: &mut World) {
             .on_hover_text("Draw anchor dots + axis lines for every Avian joint");
         ui.checkbox(&mut settings.show_wheel_forces, "Show wheel forces")
             .on_hover_text("Draw a force box + arrow at every wheel");
+        let mut gizmo = world.resource_mut::<crate::physics_gizmo::PhysicsGizmoSettings>();
+        ui.checkbox(&mut gizmo.show_mass, "Selected-body mass")
+            .on_hover_text(
+                "CoM marker + inertia ellipsoid/axes for the selected \
+                 vessel and its rigid-body parts",
+            );
+        ui.checkbox(&mut gizmo.show_forces, "Selected-body forces")
+            .on_hover_text(
+                "Tire, normal-load, gravity and net-force arrows for the \
+                 selected vessel and its rigid-body parts",
+            );
+        ui.checkbox(&mut gizmo.show_frames, "Selected-body frames")
+            .on_hover_text(
+                "XYZ frame triads (RGB = XYZ) + revolute anchors for the \
+                 selected vessel's rigid-body parts",
+            );
     });
 }
 

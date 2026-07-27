@@ -492,10 +492,12 @@ pub fn ensure_loaded(
         }
     };
 
-    // Dispatch + mark Loading. Worker is FIFO so a Compile sent
-    // immediately after this is guaranteed to see the loaded
-    // session. PR-D will add a result message to transition
-    // Loading → Ready based on actual worker progress.
+    // Dispatch + mark Loading. The worker's COMPILE lane is FIFO
+    // (Steps of other live entities may jump ahead, but LoadSourceRoot /
+    // Compile / Reset / UpdateParameters never reorder among themselves —
+    // see `worker::enqueue_command`), so a Compile sent immediately after
+    // this is guaranteed to see the loaded session. PR-D will add a result
+    // message to transition Loading → Ready based on actual worker progress.
     let cmd = crate::worker::ModelicaCommand::LoadSourceRoot {
         id: id.to_string(),
         payload,

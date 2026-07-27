@@ -340,7 +340,7 @@ const INTERP_MAX_EXTRAP_DIST: f64 = 8.0;
 /// correctly-spaced times in the buffer — so [`interpolate_proxies`] brackets them
 /// smoothly instead of collapsing the burst into one sample (the proxy "jumps").
 pub fn ingest_snapshots(
-    mut snaps: ResMut<lunco_core::IncomingSnapshots>,
+    mut snaps: ResMut<crate::session::IncomingSnapshots>,
     mut buffers: ResMut<InterpBuffers>,
 ) {
     if snaps.0.is_empty() {
@@ -1609,7 +1609,7 @@ pub fn reconcile_owned_prediction(
     mut hist: ResMut<PredictedStateLog>,
     mut input_log: ResMut<lunco_core::OwnedInputLog>,
     // Desync detection (review N3): every ack feeds the per-body gauge.
-    mut divergence: ResMut<lunco_core::DivergenceStats>,
+    mut divergence: ResMut<crate::session::DivergenceStats>,
     q_owned: Query<&lunco_core::GlobalEntityId, With<lunco_core::OwnedLocally>>,
     mut q: Query<(
         &mut Transform,
@@ -1696,7 +1696,7 @@ pub fn reconcile_owned_prediction(
         // the healthy baseline too. A sustained metre says so out loud: before this
         // there was no way to observe a desync in the field at all.
         let err_m = (sample.pos - hs.pos).length();
-        if divergence.observe(g, lunco_core::PredictionKind::Owned, err_m) {
+        if divergence.observe(g, crate::session::PredictionKind::Owned, err_m) {
             warn!(
                 "[desync] owned gid={g:x} diverging: {err_m:.2} m at ack seq={ack} for \
                  {} consecutive acks (max {:.2} m). The prediction is not tracking the host.",
@@ -1789,7 +1789,7 @@ pub fn reconcile_owned_prediction(
 
 /// Client Phase B (design in git history): mark **every replicated free dynamic
 /// prop** (a ball / crate / cone — whether runtime-spawned OR authored scene
-/// content) as [`lunco_core::ContactPredictable`] — *eligible* to become a
+/// content) as [`crate::session::ContactPredictable`] — *eligible* to become a
 /// locally-`Dynamic` [`lunco_core::PredictedDynamic`] body, but only transiently,
 /// while an owned body is shoving it (`promote_contacting_proxies`). Until then it
 /// stays a kinematic snapshot proxy, perfectly synced to authority. This is the
@@ -1828,7 +1828,7 @@ pub fn maintain_predicted_dynamic(
             Without<lunco_core::OwnedLocally>,
             // Stamp the eligibility marker at most once (a promoted body carries
             // both `ContactPredictable` and `PredictedDynamic`).
-            Without<lunco_core::ContactPredictable>,
+            Without<crate::session::ContactPredictable>,
             // The cosim/server-only guard: a cosim-driven body (Modelica balloon,
             // CosimTarget, …) has forces we can't reproduce locally, so it must
             // never be predicted — it stays a kinematic, snapshot-driven proxy.
@@ -1844,7 +1844,7 @@ pub fn maintain_predicted_dynamic(
     q_demote: Query<
         Entity,
         (
-            With<lunco_core::ContactPredictable>,
+            With<crate::session::ContactPredictable>,
             With<lunco_core::OwnedLocally>,
         ),
     >,
@@ -1860,11 +1860,11 @@ pub fn maintain_predicted_dynamic(
         // flips it `Dynamic` only while an owned body is touching it.
         commands
             .entity(e)
-            .try_insert(lunco_core::ContactPredictable);
+            .try_insert(crate::session::ContactPredictable);
     }
     for e in q_demote.iter() {
         commands.entity(e).remove::<(
-            lunco_core::ContactPredictable,
+            crate::session::ContactPredictable,
             lunco_core::PredictedDynamic,
             ContactPredictLinger,
         )>();
@@ -1873,7 +1873,7 @@ pub fn maintain_predicted_dynamic(
 
 /// Client Step 4 (`PREDICT_AND_SMOOTH` §5): mark every **remote raycast rover**
 /// (a rover you don't possess and don't own) as
-/// [`lunco_core::ContactPredictable`] — *eligible* for the same transient
+/// [`crate::session::ContactPredictable`] — *eligible* for the same transient
 /// promotion as a free prop, so it **yields** the moment your owned rover shoves
 /// it, then re-syncs.
 ///
@@ -1910,7 +1910,7 @@ pub fn maintain_predicted_vehicles(
             With<lunco_core::ActuatorPorts>,
             Without<lunco_core::OwnedLocally>,
             // Stamp eligibility at most once (a promoted rover carries both).
-            Without<lunco_core::ContactPredictable>,
+            Without<crate::session::ContactPredictable>,
             Without<lunco_core::NotPredictable>,
             // Articulated (Physical/joint) rovers must NOT be single-body
             // predicted: only the chassis is replicated, so making it Dynamic +
@@ -1945,7 +1945,7 @@ pub fn maintain_predicted_vehicles(
         // at which point `promote_contacting_proxies` flips it `Dynamic` to yield.
         commands
             .entity(e)
-            .try_insert(lunco_core::ContactPredictable);
+            .try_insert(crate::session::ContactPredictable);
     }
 }
 
@@ -1963,7 +1963,7 @@ const CONTACT_PREDICT_LINGER: f32 = 0.30;
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ContactPredictLinger(f32);
 
-/// The contact-gate that makes the hybrid work (see [`lunco_core::ContactPredictable`]):
+/// The contact-gate that makes the hybrid work (see [`crate::session::ContactPredictable`]):
 /// promote a `ContactPredictable` kinematic proxy to a locally-`Dynamic`
 /// [`lunco_core::PredictedDynamic`] body **only while an [`lunco_core::OwnedLocally`]
 /// body is touching it** (plus [`CONTACT_PREDICT_LINGER`]), then demote it back.
@@ -1988,7 +1988,7 @@ pub fn promote_contacting_proxies(
     time: Res<Time>,
     collisions: Collisions,
     q_owned: Query<(), With<lunco_core::OwnedLocally>>,
-    q_eligible: Query<(), With<lunco_core::ContactPredictable>>,
+    q_eligible: Query<(), With<crate::session::ContactPredictable>>,
     // Bodies currently promoted (Dynamic) that carry the linger countdown.
     mut q_promoted: Query<(Entity, &mut ContactPredictLinger), With<lunco_core::PredictedDynamic>>,
     mut commands: Commands,
@@ -2088,7 +2088,7 @@ pub fn reconcile_predicted_dynamic(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     // Desync detection (review N3): free predicted bodies feed the same gauge as the
     // owned rover, so a drifting prop is observable instead of silently teleporting.
-    mut divergence: ResMut<lunco_core::DivergenceStats>,
+    mut divergence: ResMut<crate::session::DivergenceStats>,
     q_pred: Query<&lunco_core::GlobalEntityId, With<lunco_core::PredictedDynamic>>,
     mut q: Query<(
         Option<&mut Position>,
@@ -2147,7 +2147,7 @@ pub fn reconcile_predicted_dynamic(
 
         // DESYNC GAUGE (review N3) — same signal as the owned body, for the free
         // predicted set (props, bumped rocks, contact-gated remote rovers).
-        if divergence.observe(g, lunco_core::PredictionKind::Free, dist as f32) {
+        if divergence.observe(g, crate::session::PredictionKind::Free, dist as f32) {
             warn!(
                 "[desync] free predicted gid={g:x} diverging: {dist:.2} m from authority for {} \
                  consecutive ticks — local physics is not reproducing the host",
@@ -2215,19 +2215,14 @@ pub fn reconcile_predicted_dynamic(
     }
 }
 
-/// Step 2 (revised): the residual reconcile correction, drained in **physics
-/// space** a tick at a time by [`drain_pending_corrections`].
-///
-/// The TYPE now lives in `lunco_core::session` (review A6 — it and `SpawnEntity`
-/// were the only two symbols `lunco-networking` needed from this 13.4k-LOC crate,
-/// and that one edge dragged the whole editor closure into every networking build).
-/// The producer (`reconcile_owned_prediction`) and the drain stay here; the
-/// rationale for parking a correction instead of writing `Transform` is on the type.
-/// Re-exported so existing call sites are unchanged.
-///
-/// Frame note (P8): `PendingCorrection::pos` is a world-metres **delta**, not a
-/// point — frame-free by construction, so it deliberately stays a bare `Vec3`.
-pub use lunco_core::PendingCorrection;
+// Step 2 (revised): the residual reconcile correction, drained in **physics
+// space** a tick at a time by `drain_pending_corrections`. The TYPE lives in
+// `crate::session` (review C7 — this crate is its only producer AND consumer;
+// see the A6 history on the type for why it once sat in lunco-core). The
+// rationale for parking a correction instead of writing `Transform` is on the
+// type. Frame note (P8): `PendingCorrection::pos` is a world-metres **delta**,
+// not a point — frame-free by construction, so it deliberately stays a bare `Vec3`.
+use crate::session::PendingCorrection;
 
 /// Time-constant (s) for draining a pending correction: ~63% applied per
 /// `CORRECTION_TAU`, ≈ fully in ~3×. Long enough to be invisible, short enough to
@@ -2365,6 +2360,12 @@ impl Plugin for NetcodePredictionPlugin {
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();
         app.init_resource::<ProxyPlaybackClock>();
+        // Wire-fed session state this plugin consumes (review C7: moved out of
+        // `LunCoCorePlugin`'s always-on set — only this crate touches them).
+        // Also initialized by `shared::build_networking` for the wire boot;
+        // repeated here so the plugin stands alone (tests, net_smoke-style bins).
+        app.init_resource::<crate::session::IncomingSnapshots>();
+        app.init_resource::<crate::session::DivergenceStats>();
         // The netcode `Update` pipeline now spans two crates: `apply_replicated_spawns`
         // (lunco-sandbox-edit) is the chain's first system and stays there, so the
         // ordering it used to get from `.chain()` is expressed as a set relation.
@@ -2581,7 +2582,7 @@ mod pose_write_tests {
         world.init_resource::<InterpBuffers>();
         world.init_resource::<PredictedStateLog>();
         world.init_resource::<lunco_core::OwnedInputLog>();
-        world.init_resource::<lunco_core::DivergenceStats>();
+        world.init_resource::<crate::session::DivergenceStats>();
 
         let gid = 0x00AB_CDEFu64;
         let predicted = Quat::IDENTITY; // == Transform::default().rotation
@@ -2750,7 +2751,7 @@ mod pose_write_tests {
     /// endpoint.
     #[test]
     fn bursty_snapshots_interpolate_in_tick_space() {
-        use lunco_core::{IncomingSnapshots, SnapshotSample};
+        use crate::session::{IncomingSnapshots, SnapshotSample};
 
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
@@ -2833,7 +2834,7 @@ mod pose_write_tests {
     fn predicted_dynamic_snaps_far_body_and_seats_velocity() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
-        world.init_resource::<lunco_core::DivergenceStats>();
+        world.init_resource::<crate::session::DivergenceStats>();
         // reconcile only runs as a connected Client; the clock is the render instant.
         world.insert_resource(lunco_core::NetworkRole::Client);
         world.insert_resource(lunco_core::NetStatus {
@@ -2895,7 +2896,7 @@ mod pose_write_tests {
     fn predicted_dynamic_in_sync_is_left_untouched() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
-        world.init_resource::<lunco_core::DivergenceStats>();
+        world.init_resource::<crate::session::DivergenceStats>();
         world.insert_resource(lunco_core::NetworkRole::Client);
         world.insert_resource(lunco_core::NetStatus {
             connected: true,
@@ -2942,8 +2943,8 @@ mod pose_write_tests {
         );
         // The gauge saw the (tiny) divergence — a healthy body is measured, not just
         // an unhealthy one, so the baseline is visible in the field (review N3).
-        let stats = world.resource::<lunco_core::DivergenceStats>();
-        assert_eq!(stats.bodies[&gid].kind, lunco_core::PredictionKind::Free);
+        let stats = world.resource::<crate::session::DivergenceStats>();
+        assert_eq!(stats.bodies[&gid].kind, crate::session::PredictionKind::Free);
         assert!(stats.bodies[&gid].last_m < 0.1);
         assert_eq!(stats.bodies[&gid].rebaselines, 0);
     }
@@ -2962,7 +2963,7 @@ mod pose_write_tests {
         world.init_resource::<InterpBuffers>();
         world.init_resource::<PredictedStateLog>();
         world.init_resource::<lunco_core::OwnedInputLog>();
-        world.init_resource::<lunco_core::DivergenceStats>();
+        world.init_resource::<crate::session::DivergenceStats>();
 
         let gid = 0x00CC_0001u64;
         let e = world
@@ -3052,7 +3053,7 @@ mod pose_write_tests {
         );
         // …and the rebaseline was counted + announced rather than being silent (N3).
         assert_eq!(
-            world.resource::<lunco_core::DivergenceStats>().bodies[&gid].rebaselines,
+            world.resource::<crate::session::DivergenceStats>().bodies[&gid].rebaselines,
             1
         );
     }

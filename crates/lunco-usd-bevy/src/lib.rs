@@ -74,7 +74,7 @@ pub mod units;
 pub mod usd_data;
 pub mod variants;
 pub mod view;
-pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageRecipe};
+pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageProjector, StageRecipe};
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::{compose_file_to_stage, compose_file_to_stage_with_assets};
 pub use light::{get_attribute_as_bool, UsdAuthoredLight};

@@ -4,6 +4,17 @@
 //! It implements a multi-tier hierarchy that separates high-level user
 //! intent from low-level physical actuation.
 //!
+//! ## Why this lives in `lunco-core` (substrate justification)
+//!
+//! The port/command fabric is consumed by every domain that exchanges a
+//! signal: `lunco-cosim` (SimConnection endpoints ARE [`Port`]s),
+//! `lunco-mobility` (wheel drive/steer ports), `lunco-hardware` (actuators),
+//! `lunco-telemetry` (sampled channels), `lunco-robotics`, `lunco-usd-sim`
+//! (port authoring from USD). No domain crate can own it without inverting
+//! the dependency graph — the same argument recorded for `mobility.rs`'s
+//! avian-free classifier. Domain LOGIC does not belong here; only the shared
+//! currency types and the command registry those domains meet on.
+//!
 //! ## The "Why": Fidelity-Driven Emulation
 //! Signals move between subsystems through **[Port]**: one `f64` value — a
 //! command, an actuator setpoint, a sensor reading, or a value exchanged with a

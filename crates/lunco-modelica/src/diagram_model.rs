@@ -39,7 +39,7 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use lunco_core::diagram::{ComponentGraph, ComponentBuilder, NodeKind};
+//! use lunco_modelica::diagram_model::{ComponentGraph, ComponentBuilder, NodeKind};
 //!
 //! let graph = ComponentGraph::titled("RC Circuit")
 //!     .node("R1", NodeKind::Component)

@@ -144,6 +144,12 @@ impl CanonicalStage {
         &self.stage
     }
 
+    /// The twin-projection op-replay door — the **only** sanctioned way to
+    /// mutate a live stage from outside this crate. See [`StageProjector`].
+    pub fn projector(&self) -> StageProjector<'_> {
+        StageProjector(self)
+    }
+
     /// Monotonic change counter — bumped whenever [`drain_changes`](Self::drain_changes)
     /// commits sink notices. A stage-reading projector (e.g. the policy projector)
     /// gates on this so it re-runs only when the composed stage actually changed.
@@ -162,7 +168,7 @@ impl CanonicalStage {
     /// a structural reload), so authoring here updates the live view + drives the
     /// sink WITHOUT touching the document's save data (`UsdDocument.base`, which
     /// stays the durable/serialized truth).
-    pub fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+    pub(crate) fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
         self.stage
             .create_attribute(format!("{}.xformOp:translate", path.as_str()), "double3")
@@ -182,7 +188,7 @@ impl CanonicalStage {
     /// projection bridge reconciles the new orientation in place, and appends
     /// `xformOp:rotateXYZ` to `xformOpOrder` when not already listed (extends a
     /// stack, never clobbers it).
-    pub fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+    pub(crate) fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
         use anyhow::anyhow;
         self.stage
             .create_attribute(format!("{}.xformOp:rotateXYZ", path.as_str()), "double3")
@@ -199,7 +205,7 @@ impl CanonicalStage {
     /// Define a prim of `type_name` at `path` (root edit target) — fires the sink
     /// so the projection bridge spawns it. For a referenced spawn, follow with
     /// [`author_reference`](Self::author_reference).
-    pub fn author_prim(&self, path: &SdfPath, type_name: Option<&str>) -> anyhow::Result<()> {
+    pub(crate) fn author_prim(&self, path: &SdfPath, type_name: Option<&str>) -> anyhow::Result<()> {
         use anyhow::anyhow;
         let prim = self
             .stage
@@ -214,7 +220,7 @@ impl CanonicalStage {
 
     /// Remove the prim at `path` from the root edit target — fires the sink so the
     /// projection bridge despawns its subtree.
-    pub fn remove_prim_at(&self, path: &SdfPath) -> anyhow::Result<bool> {
+    pub(crate) fn remove_prim_at(&self, path: &SdfPath) -> anyhow::Result<bool> {
         use anyhow::anyhow;
         self.stage
             .remove_prim(path.clone())
@@ -223,7 +229,7 @@ impl CanonicalStage {
 
     /// Inject a spawned asset's layer closure (`id → bytes`, keyed by the same
     /// canonical id [`StageRecipe`] uses) into the live resolver, so a
-    /// subsequently [`author_reference`](Self::author_reference)d arc to any of
+    /// subsequently [`author_reference`](StageProjector::author_reference)d arc to any of
     /// those ids composes on this stage. Returns `false` if this stage has no
     /// injectable resolver (built via [`from_stage`](Self::from_stage) over a
     /// foreign resolver). Merges — existing ids keep their bytes.
@@ -281,7 +287,7 @@ impl CanonicalStage {
     /// `references` field metadata directly (the live-stage counterpart of
     /// [`author::author_reference`](crate::author::author_reference), which
     /// writes the same field into the document's `sdf::Data`).
-    pub fn author_reference(&self, path: &SdfPath, asset_path: &str) -> anyhow::Result<()> {
+    pub(crate) fn author_reference(&self, path: &SdfPath, asset_path: &str) -> anyhow::Result<()> {
         use anyhow::anyhow;
         let reference = openusd::sdf::Reference {
             asset_path: asset_path.to_string(),
@@ -307,7 +313,7 @@ impl CanonicalStage {
     /// assembly and respawning every prim in the world: a physics joint authors
     /// `physics:body0` / `physics:body1`, so a component attach is *two*
     /// relationship edits. Set-semantics — `targets` replaces any prior list.
-    pub fn author_relationship(
+    pub(crate) fn author_relationship(
         &self,
         prim: &SdfPath,
         name: &str,
@@ -339,7 +345,7 @@ impl CanonicalStage {
     /// author for it, so the op reached the document and never the live stage —
     /// a silently dropped edit. Every cosim wire authored at runtime went
     /// nowhere until the next full rebuild.
-    pub fn author_connection(
+    pub(crate) fn author_connection(
         &self,
         prim: &SdfPath,
         name: &str,
@@ -400,7 +406,7 @@ impl CanonicalStage {
     /// tick. Creates the attribute if absent; adds or overwrites the sample at
     /// `time` otherwise (openusd exposes no live-stage sample *removal*, so
     /// `RemoveTimeSample` stays on the projector's rebuild path).
-    pub fn author_time_sample(
+    pub(crate) fn author_time_sample(
         &self,
         prim: &SdfPath,
         name: &str,
@@ -428,6 +434,89 @@ impl CanonicalStage {
             self.generation += 1;
         }
         drained
+    }
+}
+
+/// The twin-projection **op-replay door** onto a [`CanonicalStage`], obtained
+/// via [`CanonicalStage::projector`].
+///
+/// Contract ("author once, replay everywhere"): every mutation of the document
+/// flows through `ApplyUsdOp`; `lunco-usd`'s twin-projection replayer then
+/// mirrors the already-applied op onto the live stage through *this* wrapper —
+/// and through nothing else. The surface below is exactly the set of ops the
+/// replayer mirrors incrementally (everything else takes the rebuild path).
+/// Do not reach for this to author new edits: that bypasses the document,
+/// undo, and persistence.
+pub struct StageProjector<'a>(&'a CanonicalStage);
+
+impl StageProjector<'_> {
+    /// Replay a `SetTranslate` op — see [`CanonicalStage::author_translate`].
+    pub fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        self.0.author_translate(path, value)
+    }
+
+    /// Replay a `SetRotate` op — see [`CanonicalStage::author_rotate`].
+    pub fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        self.0.author_rotate(path, value)
+    }
+
+    /// Replay a `DefinePrim` op — see [`CanonicalStage::author_prim`].
+    pub fn author_prim(&self, path: &SdfPath, type_name: Option<&str>) -> anyhow::Result<()> {
+        self.0.author_prim(path, type_name)
+    }
+
+    /// Replay a `RemovePrim` op — see [`CanonicalStage::remove_prim_at`].
+    pub fn remove_prim_at(&self, path: &SdfPath) -> anyhow::Result<bool> {
+        self.0.remove_prim_at(path)
+    }
+
+    /// Replay an `AddReference` op — see [`CanonicalStage::author_reference`].
+    pub fn author_reference(&self, path: &SdfPath, asset_path: &str) -> anyhow::Result<()> {
+        self.0.author_reference(path, asset_path)
+    }
+
+    /// Replay a `SetRelationship` op — see [`CanonicalStage::author_relationship`].
+    pub fn author_relationship(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        targets: &[String],
+    ) -> anyhow::Result<()> {
+        self.0.author_relationship(prim, name, targets)
+    }
+
+    /// Replay a `SetConnection` op — see [`CanonicalStage::author_connection`].
+    pub fn author_connection(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        sources: &[String],
+    ) -> anyhow::Result<()> {
+        self.0.author_connection(prim, name, type_name, sources)
+    }
+
+    /// Replay a `SetAttribute` op — see [`CanonicalStage::author_attribute`].
+    pub fn author_attribute(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> anyhow::Result<()> {
+        self.0.author_attribute(prim, name, type_name, value)
+    }
+
+    /// Replay a `SetTimeSample` op — see [`CanonicalStage::author_time_sample`].
+    pub fn author_time_sample(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        time: f64,
+        value: openusd::sdf::Value,
+    ) -> anyhow::Result<()> {
+        self.0.author_time_sample(prim, name, type_name, time, value)
     }
 }
 

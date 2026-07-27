@@ -37,7 +37,7 @@
 
 use avian3d::prelude::{LinearVelocity, RigidBody};
 use bevy::prelude::*;
-use lunco_core::PendingCorrection;
+use crate::session::PendingCorrection;
 use std::collections::HashMap;
 
 /// Speed (m/s) above which a replicated body is almost certainly mis-driven — no
@@ -79,13 +79,13 @@ impl Plugin for NetDiagnosticsPlugin {
 }
 
 /// **Desync gauge** (review N3): the per-body divergence the client's reconcilers
-/// measure (`lunco_core::DivergenceStats`), exported as a periodic max + rebaseline
+/// measure ([`crate::session::DivergenceStats`]), exported as a periodic max + rebaseline
 /// census. Before this the netcode had *no* observable desync signal at all — the
 /// only backstop was a silent per-body snap, and the owned-body half of it could be
 /// permanently disabled by a stale input ack (N1). A healthy client shows a max well
 /// under a metre and zero rebaselines; a climbing max or a rebaseline count that
 /// keeps ticking is a desync, named by gid.
-fn report_divergence(stats: Res<lunco_core::DivergenceStats>, mut n: Local<u32>) {
+fn report_divergence(stats: Res<crate::session::DivergenceStats>, mut n: Local<u32>) {
     *n = n.wrapping_add(1);
     if *n % 60 != 0 || stats.bodies.is_empty() {
         return;

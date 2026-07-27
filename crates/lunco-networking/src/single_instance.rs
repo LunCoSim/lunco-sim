@@ -10,7 +10,7 @@
 //!   [`LaunchOutcome::Forwarded`] (the caller exits);
 //! - otherwise → bind the socket, become the primary, and report
 //!   [`LaunchOutcome::Primary`] with a [`DeepLinkInbox`] that a Bevy system
-//!   drains into [`PendingConnect`](lunco_core::session::PendingConnect).
+//!   drains into [`PendingConnect`](crate::session::PendingConnect).
 //!
 //! The link is always *staged for confirmation*, never auto-dialed — the prompt
 //! is the user's gate against a planted link (mirrors the in-app native arg path).
@@ -123,12 +123,13 @@ fn primary_inbox(url: Option<String>) -> DeepLinkInbox {
     DeepLinkInbox(Arc::new(Mutex::new(q)))
 }
 
-/// Drain queued deep-link URLs into [`PendingConnect`] (confirm-gated). Each
+/// Drain queued deep-link URLs into [`PendingConnect`](crate::session::PendingConnect)
+/// (confirm-gated). Each
 /// parses to an address+digest; the newest wins if several arrive at once. Runs
 /// only when a [`DeepLinkInbox`] was inserted (i.e. [`acquire`] ran).
 pub fn drain_deep_link_inbox(
     inbox: Option<Res<DeepLinkInbox>>,
-    mut pending: ResMut<lunco_core::session::PendingConnect>,
+    mut pending: ResMut<crate::session::PendingConnect>,
 ) {
     let Some(inbox) = inbox else {
         return;
@@ -142,7 +143,7 @@ pub fn drain_deep_link_inbox(
                 "[net] deep link → pending connect to {} (awaiting confirm)",
                 link.address
             );
-            pending.request = Some(lunco_core::session::PendingConnectRequest {
+            pending.request = Some(crate::session::PendingConnectRequest {
                 address: link.address,
                 digest: link.digest,
             });

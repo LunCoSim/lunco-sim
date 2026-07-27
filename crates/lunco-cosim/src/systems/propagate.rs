@@ -108,6 +108,24 @@ struct CompiledTarget {
     resolved: Option<ResolvedPort>,
 }
 
+/// Prefix of the synthetic "port name" an algebraic-loop fault is keyed under in
+/// [`crate::diagnostics::CosimDiagnostics::faults`]. No real port can carry this
+/// name, so a loop entry can never be retracted by a landing write — it is
+/// retracted only when a rebuild no longer finds the loop.
+pub const ALGEBRAIC_LOOP_PORT: &str = "<algebraic-loop>";
+
+/// One algebraic loop found at compile time (M6): a cycle in the wire graph
+/// spanning **two or more** participants. `port` is the full human-readable
+/// description (prefixed with [`ALGEBRAIC_LOOP_PORT`]) listing every wire on the
+/// loop; `entity` is a deterministic canonical member, so one loop is ONE ledger
+/// entry however many wires it comprises.
+#[derive(Clone)]
+struct DetectedLoop {
+    entity: Entity,
+    global_id: Option<lunco_core::GlobalEntityId>,
+    port: String,
+}
+
 /// The flattened wiring fabric — the "SignalBus" — cached inside
 /// [`propagate_connections`] and rebuilt only when the [`crate::SimConnection`]
 /// set actually changes.
@@ -122,6 +140,9 @@ pub struct CompiledWiring {
     wires: Vec<CompiledWire>,
     /// Distinct targets, one accumulator slot each.
     targets: Vec<CompiledTarget>,
+    /// Algebraic loops in THIS fabric (M6) — recomputed on every rebuild,
+    /// published into the faults ledger by [`propagate_connections`].
+    loops: Vec<DetectedLoop>,
 }
 
 impl CompiledWiring {
@@ -205,6 +226,139 @@ impl CompiledWiring {
                 .then_with(|| a.src_port.cmp(&b.src_port))
                 .then_with(|| a.src_entity.to_bits().cmp(&b.src_entity.to_bits()))
         });
+
+        self.detect_algebraic_loops(world);
+    }
+
+    /// M6 — algebraic-loop detection over the wire graph (nodes = participant
+    /// entities, one edge per wire), treating every participant as direct
+    /// feedthrough — conservative: the substrate has no causality metadata yet,
+    /// so any cycle MAY be an algebraic loop.
+    ///
+    /// The master is single-pass Jacobi with ZOH inputs: each feedthrough hop on
+    /// a cycle costs one fixed step of delay, and nothing iterates the loop to
+    /// convergence. That 1-step-delay behaviour is the documented contract and
+    /// is NOT changed here — a detected loop only lands one entry in the faults
+    /// ledger so the otherwise invisible coupling error is diagnosable.
+    ///
+    /// Single-entity self-wires (`netForce`→`force_y` on ONE entity — the
+    /// balloon pattern, an engine exchanging with its own body) are the intended
+    /// single-participant co-sim shape and are excluded: a reported cycle must
+    /// span ≥ 2 participants (an SCC of ≥ 2 nodes, via iterative Tarjan).
+    fn detect_algebraic_loops(&mut self, world: &World) {
+        self.loops.clear();
+
+        // Participant graph. Self-edges dropped (see doc above).
+        let mut node_ix: HashMap<Entity, usize> = HashMap::new();
+        let mut nodes: Vec<Entity> = Vec::new();
+        let mut edges: Vec<Vec<usize>> = Vec::new();
+        for w in &self.wires {
+            let dst = self.targets[w.dst_index].entity;
+            if w.src_entity == dst {
+                continue;
+            }
+            for e in [w.src_entity, dst] {
+                node_ix.entry(e).or_insert_with(|| {
+                    nodes.push(e);
+                    edges.push(Vec::new());
+                    nodes.len() - 1
+                });
+            }
+            let (s, d) = (node_ix[&w.src_entity], node_ix[&dst]);
+            if !edges[s].contains(&d) {
+                edges[s].push(d);
+            }
+        }
+
+        // Iterative Tarjan SCC (explicit frame stack — no recursion depth limit).
+        let n = nodes.len();
+        let mut index = vec![usize::MAX; n];
+        let mut low = vec![0usize; n];
+        let mut on_stack = vec![false; n];
+        let mut stack: Vec<usize> = Vec::new();
+        let mut next_index = 0usize;
+        let mut sccs: Vec<Vec<usize>> = Vec::new();
+        for root in 0..n {
+            if index[root] != usize::MAX {
+                continue;
+            }
+            let mut call: Vec<(usize, usize)> = vec![(root, 0)];
+            while let Some(frame) = call.last_mut() {
+                let v = frame.0;
+                if frame.1 == 0 {
+                    index[v] = next_index;
+                    low[v] = next_index;
+                    next_index += 1;
+                    stack.push(v);
+                    on_stack[v] = true;
+                }
+                if frame.1 < edges[v].len() {
+                    let w = edges[v][frame.1];
+                    frame.1 += 1;
+                    if index[w] == usize::MAX {
+                        call.push((w, 0));
+                    } else if on_stack[w] {
+                        low[v] = low[v].min(index[w]);
+                    }
+                } else {
+                    call.pop();
+                    if let Some(parent) = call.last_mut() {
+                        low[parent.0] = low[parent.0].min(low[v]);
+                    }
+                    if low[v] == index[v] {
+                        let mut comp = Vec::new();
+                        loop {
+                            let w = stack.pop().expect("Tarjan stack underflow");
+                            on_stack[w] = false;
+                            comp.push(w);
+                            if w == v {
+                                break;
+                            }
+                        }
+                        if comp.len() >= 2 {
+                            sccs.push(comp);
+                        }
+                    }
+                }
+            }
+        }
+
+        for comp in sccs {
+            let members: std::collections::HashSet<Entity> =
+                comp.iter().map(|&i| nodes[i]).collect();
+            // Every wire whose both endpoints sit inside the SCC IS the coupling;
+            // wires are already in P10 order, so the description is deterministic.
+            let mut parts: Vec<String> = Vec::new();
+            for w in &self.wires {
+                let dst = &self.targets[w.dst_index];
+                if w.src_entity != dst.entity
+                    && members.contains(&w.src_entity)
+                    && members.contains(&dst.entity)
+                {
+                    parts.push(format!(
+                        "{:?}:{} -> {:?}:{}",
+                        w.src_entity, w.src_port, dst.entity, dst.name
+                    ));
+                }
+            }
+            // Canonical member: same network-stable key the P10 sort uses, so the
+            // ledger key does not depend on archetype order.
+            let entity = members
+                .iter()
+                .copied()
+                .min_by_key(|e| {
+                    (
+                        world.get::<lunco_core::GlobalEntityId>(*e).map(|g| g.get()),
+                        e.to_bits(),
+                    )
+                })
+                .expect("SCC has >= 2 members");
+            self.loops.push(DetectedLoop {
+                entity,
+                global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
+                port: format!("{ALGEBRAIC_LOOP_PORT} {}", parts.join(", ")),
+            });
+        }
     }
 }
 
@@ -283,6 +437,36 @@ pub fn propagate_connections(
         if *last_targets != names {
             reported.clear();
             *last_targets = names;
+        }
+
+        // M6 — publish this fabric's algebraic loops into the faults ledger.
+        // Loop entries are facts about THE CURRENT FABRIC (unlike never-landed
+        // wire faults, which are history), so a rewire retracts stale ones and
+        // re-asserts the current set. The synthetic key ([`ALGEBRAIC_LOOP_PORT`]
+        // prefix) keeps them out of the landed-retraction path — no real write
+        // can ever clear one. Propagation is NOT blocked: the loop still runs
+        // with the documented 1-step ZOH delay per feedthrough hop.
+        let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+        diag.faults
+            .retain(|(_, port), _| !port.starts_with(ALGEBRAIC_LOOP_PORT));
+        for l in &compiled.loops {
+            if reported.insert(l.port.clone()) {
+                warn!(
+                    "[cosim] algebraic loop in the wiring — co-simulated with a 1-step \
+                     delay per hop, which may diverge for tight coupling: {}",
+                    l.port
+                );
+            }
+            diag.faults.insert(
+                (l.entity, l.port.clone()),
+                crate::diagnostics::BrokenConnection {
+                    entity: l.entity,
+                    global_id: l.global_id,
+                    port: l.port.clone(),
+                    has_port_surface: true,
+                    dropped_value: 0.0,
+                },
+            );
         }
     }
 
@@ -631,6 +815,114 @@ mod wire_order_tests {
                 .faults
                 .is_empty(),
             "a wire already proven to have landed must not be re-reported"
+        );
+    }
+
+    fn wire(world: &mut World, src: Entity, out: &str, dst: Entity, inp: &str) {
+        world.spawn(SimConnection {
+            start_element: src,
+            start_connector: out.into(),
+            start_is_input: false,
+            end_element: dst,
+            end_connector: inp.into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+    }
+
+    fn loop_faults(world: &World) -> Vec<String> {
+        world
+            .resource::<crate::diagnostics::CosimDiagnostics>()
+            .faults
+            .keys()
+            .filter(|(_, p)| p.starts_with(ALGEBRAIC_LOOP_PORT))
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+
+    /// M6: a feedthrough cycle spanning two participants is an algebraic loop —
+    /// the single-pass ZOH master cannot iterate it to convergence — and must
+    /// land exactly ONE entry in the faults ledger, naming the wires on it.
+    #[test]
+    fn a_two_entity_feedthrough_loop_is_recorded_as_one_fault() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let a = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let b = world.spawn(GlobalEntityId::from_raw(20)).id();
+        wire(&mut world, a, "out", b, "in");
+        wire(&mut world, b, "out", a, "in");
+
+        world.run_system_once(propagate_connections).unwrap();
+
+        let loops = loop_faults(&world);
+        assert_eq!(loops.len(), 1, "one loop, one ledger entry: {loops:?}");
+        assert!(
+            loops[0].contains("out") && loops[0].contains("in"),
+            "the entry names the ports on the loop: {}",
+            loops[0]
+        );
+
+        // Removing the back-edge dissolves the loop; the rebuild retracts it.
+        let conns: Vec<Entity> = {
+            let mut q = world.query_filtered::<Entity, With<SimConnection>>();
+            q.iter(&world).collect()
+        };
+        world.entity_mut(conns[1]).despawn();
+        world.run_system_once(propagate_connections).unwrap();
+        assert!(
+            loop_faults(&world).is_empty(),
+            "a loop entry is a fact about the current fabric — retracted on rewire"
+        );
+    }
+
+    /// M6: an entity wired to ITSELF (`netForce`→`force_y` on one entity — the
+    /// balloon pattern) is the intended single-participant co-sim shape, not an
+    /// algebraic loop. Reporting it would false-positive every balloon scene.
+    #[test]
+    fn a_single_entity_self_wire_is_not_a_loop_fault() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let balloon = world.spawn(GlobalEntityId::from_raw(10)).id();
+        wire(&mut world, balloon, "netForce", balloon, "force_y");
+        wire(&mut world, balloon, "height", balloon, "height");
+
+        world.run_system_once(propagate_connections).unwrap();
+
+        assert!(
+            loop_faults(&world).is_empty(),
+            "self-wires on one entity are the intended pattern, not a loop"
+        );
+    }
+
+    /// M6: an acyclic chain (with a fan-in for good measure) reports nothing.
+    #[test]
+    fn an_acyclic_chain_is_not_a_loop_fault() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<PortRegistry>();
+        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+
+        let a = world.spawn(GlobalEntityId::from_raw(10)).id();
+        let b = world.spawn(GlobalEntityId::from_raw(20)).id();
+        let c = world.spawn(GlobalEntityId::from_raw(30)).id();
+        wire(&mut world, a, "out", b, "in");
+        wire(&mut world, b, "out", c, "in");
+        wire(&mut world, a, "out", c, "bias"); // diamond edge, still acyclic
+
+        world.run_system_once(propagate_connections).unwrap();
+
+        assert!(
+            loop_faults(&world).is_empty(),
+            "no cycle across participants ⇒ no loop fault"
         );
     }
 }

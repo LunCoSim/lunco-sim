@@ -94,6 +94,15 @@ pub(crate) fn peer_to_session(peer: PeerId) -> SessionId {
 /// while `None` stays idle (`NetworkRole::Standalone`, single-player) until a
 /// `JoinServer` command dials a server. `Some(Host)` builds the listen-server.
 pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
+    // Wire-fed session state (review C7: moved out of `LunCoCorePlugin`'s
+    // always-on set — every reader/writer lives in this crate, behind this
+    // feature). Initialized up front so every registration below — client
+    // deep-link seeding, the ui confirm modal, net-diag's divergence report —
+    // can take `Res`/`ResMut` without ordering worries.
+    app.init_resource::<crate::session::PendingConnect>();
+    app.init_resource::<crate::session::IncomingSnapshots>();
+    app.init_resource::<crate::session::DivergenceStats>();
+
     // The transport-agnostic wire (codec, capture/apply, snapshots) the lightyear
     // ferry below drives. Both Host and Client need it.
     app.add_plugins(crate::sync::SyncPlugin);
