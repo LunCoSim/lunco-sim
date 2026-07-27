@@ -248,6 +248,7 @@ fn reconcile_link_beams(
         &Mesh3d,
         &MeshMaterial3d<StandardMaterial>,
         Option<&ScriptParams>,
+        &Visibility,
     )>,
     q_state: Query<&LinkState>,
     q_ids: Query<(Entity, &GlobalEntityId)>,
@@ -263,9 +264,30 @@ fn reconcile_link_beams(
 
     // Pass 1: gather the Up/Down templates + tuning per node.
     let mut nodes: HashMap<Entity, NodeBeams> = HashMap::new();
-    for (tmpl, id, mesh, mat, params) in &q_templates {
+    for (tmpl, id, mesh, mat, params, vis) in &q_templates {
         if id.0 != DRIVER_ID {
             continue;
+        }
+        // A TEMPLATE MUST NEVER DRAW. It is a unit cylinder (radius 1, height 1)
+        // that exists only to carry a mesh + material + params for cloning, and it
+        // sits at the link node's own origin — so when it renders it is a ~1 m
+        // glowing green lozenge stuck to the antenna dish, once per link node.
+        //
+        // The part authors `lunco:placeholder = true` to say this, and the USD
+        // loader maps that to `Visibility::Hidden`. That flag's DEFINED meaning,
+        // though, is the glTF one — "primitive stand-in until an async payload
+        // loads", paired with `GlbPlaceholder` and revealed by
+        // `hide_glb_placeholder_meshes`. Borrowing it for "never draw, ever" makes
+        // this driver's correctness depend on a flag that belongs to a different
+        // feature and could reasonably change with it.
+        //
+        // The driver is what DEFINES a template — this query is the definition —
+        // so the driver states the invariant itself. Authored intent stays in the
+        // asset (and third-party tools still read it); the guarantee lives here.
+        // Compare-gated: an unconditional insert re-marks `Visibility` changed and
+        // re-propagates the subtree on every reconcile.
+        if *vis != Visibility::Hidden {
+            commands.entity(tmpl).try_insert(Visibility::Hidden);
         }
         let Some(node) = node_of(tmpl, &q_parents, &q_state) else {
             continue;
